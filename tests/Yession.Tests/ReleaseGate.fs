@@ -30,8 +30,7 @@ open Thoth.Json.Net
 /// Anchored at the repository root, not at the runner's working directory — the same reading
 /// `DeclaredSetup` does, and for the same reason: the subject is a committed document.
 let private gitToplevel () : string =
-    let options = jsOptions<Node.ChildProcess.ExecOptions> (fun o -> o.encoding <- Some "utf8")
-    unbox<string> (Node.Api.childProcess.execSync ("git rev-parse --show-toplevel", box options))
+    Fable.NodeExtras.SyncChildProcesses.execSync "git rev-parse --show-toplevel" Fable.NodeExtras.SyncOptions.none
 
 let private repoRoot () : string option =
     try
@@ -98,7 +97,7 @@ let private jobs : Decoder<(string * Job) list> =
 /// A file this cannot read is a failure carrying the reason, never an empty list: an empty
 /// list is what a workflow with no jobs looks like, and the two must not read the same.
 let private jobsIn (text: string) : (string * Job) list =
-    match Decode.fromString jobs (JS.JSON.stringify (Fable.Yaml.parse text)) with
+    match Decode.fromString jobs (Fable.Yaml.Plain.json (Fable.Yaml.parse text)) with
     | Error reason -> failwithf "release.yml is not a document this file can read: %s" reason
     | Ok jobs -> jobs
 
@@ -123,7 +122,7 @@ let private concurrencyOf (path: string) : Concurrency option =
     match repoRoot () |> Option.bind (fun root -> try Some (TestFiles.read (root + "/" + path)) with _ -> None) with
     | None -> None
     | Some text ->
-        match Decode.fromString workflowConcurrency (JS.JSON.stringify (Fable.Yaml.parse text)) with
+        match Decode.fromString workflowConcurrency (Fable.Yaml.Plain.json (Fable.Yaml.parse text)) with
         | Error reason -> failwithf "%s is not a document this file can read: %s" path reason
         | Ok found -> found
 

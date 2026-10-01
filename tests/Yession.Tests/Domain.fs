@@ -74,7 +74,7 @@ let private envelopeSerializationTests =
           Offset = EventOffset.zero
           Actor = PeerRef peerId
           Timestamp = DateTimeOffset(2026, 6, 14, 10, 30, 0, TimeSpan.FromHours 10.0)
-          Event = SessionCreated { SessionCreated.SessionId = sessionId } }
+          Event = SessionStarted { MessageId = MessageId.create "msg-started" |> expect } }
 
     testList "Envelope serialization" [
         testCase "EventEnvelope<SessionEvent> round-trips through serialization unchanged" <| fun () ->
@@ -171,8 +171,14 @@ let private notableAct : Act =
 
 let private conversationProjectionTests =
     let sessionId = SessionId.create "session-proj" |> expect
+    let peerId = PeerId.create "ada" |> expect
 
-    /// Ordered envelopes with the given offsets, all SessionCreated.
+    /// Ordered envelopes with the given offsets. The EVENT is presence, deliberately: these
+    /// cases are about offsets — that folding twice changes nothing, that an overlapping page
+    /// adds no items — so the fixture must contribute no conversation items of its own, or the
+    /// assertions are about whatever it does contribute. (It used to be `SessionCreated`, for
+    /// this reason; that event now says a session STARTED and is folded, so presence took over
+    /// the job.)
     let envelopes (offsets: int64 list) : EventEnvelope<SessionEvent> list =
         offsets
         |> List.map (fun n ->
@@ -181,7 +187,7 @@ let private conversationProjectionTests =
               Offset = EventOffset.create n |> expect
               Actor = SessionProcess
               Timestamp = DateTimeOffset(2026, 6, 14, 0, 0, 0, TimeSpan.Zero)
-              Event = SessionCreated { SessionCreated.SessionId = sessionId } })
+              Event = PeerJoined { PeerId = peerId; DisplayName = "swift-heron"; User = None } })
 
     testList "Conversation projection" [
         testCase "folding a fixed ordered sequence is deterministic" <| fun () ->
@@ -224,7 +230,7 @@ let private frameSerializationTests =
           Offset = offset
           Actor = PeerRef peerId
           Timestamp = DateTimeOffset(2026, 6, 14, 0, 0, 0, TimeSpan.Zero)
-          Event = SessionCreated { SessionCreated.SessionId = sessionId } }
+          Event = SessionStarted { MessageId = MessageId.create "msg-started" |> expect } }
 
     let samplePage : EventPage<SessionEvent> =
         { Events = [ sampleEnvelope ]; LastOffset = Some offset; IsEnd = true }
@@ -282,7 +288,7 @@ let private frameSerializationTests =
             // list is caught by the exhaustive-match warning in the projection instead,
             // so keep the two in step when adding events.
             let everyCase : SessionEvent list =
-                [ SessionCreated { SessionCreated.SessionId = sessionId }
+                [ SessionStarted { MessageId = MessageId.create "msg-started" |> expect }
                   PeerJoined { PeerId = peerId; DisplayName = "Ada"; User = None }
                   PeerLeft { PeerId = peerId }
                   MessageSent { MessageId = messageId; QueueId = None; Author = Principal.Peer peerId; Body = "hi" }
@@ -421,6 +427,7 @@ let private frameSerializationTests =
                   ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallFailed "no such tool"; Block = None; Result = None }
                   // Plan 17: the two the operator's declarations produce.
                   McpServerAvailable { MessageId = messageId; Name = McpServerName.create "serial" |> expect }
+                  SessionResumed { MessageId = messageId; LastHeardAt = DateTimeOffset (2026, 9, 25, 4, 0, 0, TimeSpan.Zero) }
                   McpServerUnavailable { MessageId = messageId; Name = McpServerName.create "printer" |> expect }
                   // Watched pull requests: a start (with its baseline snapshot), a stop,
                   // and a transition — including the optional-mergeable both ways.
@@ -436,7 +443,11 @@ let private frameSerializationTests =
                         Mergeable = Some true
                         Review = Some PrReview.ChangesRequested
                         Behind = true
-                        Draft = true }
+                        Draft = true
+                        Times =
+                          { MergedAt = None
+                            ClosedAt = None
+                            ChecksSettledAt = Some (DateTimeOffset (2026, 9, 25, 8, 0, 0, TimeSpan.Zero)) } }
                   |> expect
                   |> PrWatched
                   // The agent's watch, on the turn human's credential: the two halves
@@ -453,7 +464,7 @@ let private frameSerializationTests =
                         Mergeable = None
                         Review = None
                         Behind = false
-                        Draft = false }
+                        Draft = false; Times = PrTimes.none }
                   |> expect
                   |> PrWatched
                   PrUnwatched
@@ -466,7 +477,7 @@ let private frameSerializationTests =
                       Transition = PrTransition.ChecksFailed
                       State = PrOpen
                       Checks = ChecksRed
-                      Watcher = Principal.Peer peerId } ]
+                      Watcher = Principal.Peer peerId; OccurredAt = Some (DateTimeOffset (2026, 9, 25, 8, 0, 0, TimeSpan.Zero)) } ]
             for event in everyCase do
                 let env = { sampleEnvelope with Event = event }
                 let roundTripped =
@@ -524,7 +535,7 @@ let private frameSerializationTests =
                           Transition = t
                           State = PrOpen
                           Checks = ChecksGreen
-                          Watcher = Principal.Peer (PeerId.create "ada" |> expect) }
+                          Watcher = Principal.Peer (PeerId.create "ada" |> expect); OccurredAt = None }
                 Expect.equal (Codec.fromString Codec.sessionEvent (Codec.toString Codec.sessionEvent event) |> expect) event "round-trip"
 
         testCase "a watch recorded before drafts were read decodes as not a draft" <| fun () ->
@@ -562,7 +573,7 @@ let private frameSerializationTests =
                           Transition = t
                           State = PrOpen
                           Checks = ChecksGreen
-                          Watcher = Principal.Peer (PeerId.create "ada" |> expect) }
+                          Watcher = Principal.Peer (PeerId.create "ada" |> expect); OccurredAt = None }
                 Expect.equal (Codec.fromString Codec.sessionEvent (Codec.toString Codec.sessionEvent event) |> expect) event "round-trip"
 
         testCase "a MessageSent persisted before Phase 3 (no queueId field) still decodes" <| fun () ->
@@ -1201,6 +1212,122 @@ let private chapterTests =
             Expect.isNone (Chapters.shaped "   \n  ") "nothing usable, nothing returned"
     ]
 
+/// The session's own account of its life: that it began, that it came back, and what a turn
+/// is told about both. (The doc comment this replaced described the watch contract — it was
+/// copied from the suite below and never said anything about these cases.)
+let private sessionLifecycleTests =
+    let resumedAt = DateTimeOffset (2026, 9, 25, 13, 0, 0, TimeSpan.Zero)
+    let lastHeard = resumedAt.AddHours -9.0
+    let resumed = SessionResumed { MessageId = MessageId.create "r1" |> expect; LastHeardAt = lastHeard }
+    let at (offset: int64) (time: DateTimeOffset) (event: SessionEvent) : EventEnvelope<SessionEvent> =
+        { EventId = EventId.fresh ()
+          SessionId = SessionId.create "resume-session" |> expect
+          Offset = EventOffset.create offset |> expect
+          Actor = ActorRef.SessionProcess
+          Timestamp = time
+          Event = event }
+    let started = SessionStarted { MessageId = MessageId.create "s1" |> expect }
+    let saidIn (projection: ConversationProjection) =
+        projection.Items |> List.map ConversationItem.said |> String.concat "\n"
+    testList "A session's own account of its life" [
+        // This case used to assert the opposite: starting was lifecycle and put nothing on
+        // the timeline. It is an item now because what the first boot brings up names it as
+        // its cause, and a cause is an item a reader can be pointed at.
+        testCase "starting is an item on the timeline" <| fun () ->
+            let projection, _ = ConversationProjection.applyEvents None [ at 0L lastHeard started ] ConversationProjection.empty
+            Expect.stringContains (saidIn projection) "session started" "the item a boot's acts can point at"
+
+        testCase "says so on the timeline, with how long it was stopped" <| fun () ->
+            let projection, _ = ConversationProjection.applyEvents None [ at 1L resumedAt resumed ] ConversationProjection.empty
+            Expect.stringContains (saidIn projection) "stopped for 9h" "the gap, in words the screen and the agent share"
+
+        // What this replaced asserted that `StartedAt` was the timestamp of whatever envelope
+        // came first — an `McpServerAvailable`, in its own fixture. That was the defect, not
+        // the contract: the answer is read from the event that states it.
+        testCase "it began when the session said it did, not when the first event happened" <| fun () ->
+            let began = lastHeard.AddDays -1.0
+            let history =
+                SessionHistory.ofEnvelopes
+                    [ at 0L (began.AddMinutes -1.0) (McpServerAvailable { MessageId = MessageId.create "m" |> expect; Name = McpServerName.create "serial" |> expect })
+                      at 1L began (SessionStarted { MessageId = MessageId.create "msg-started" |> expect })
+                      at 2L resumedAt resumed ]
+            Expect.equal history.StartedAt (Some began) "the SessionStarted envelope's time, not the earlier event's"
+
+        // A page of a log is not a log, and this cannot tell them apart — so absent the event
+        // it says nothing rather than offering the window's beginning as the session's.
+        testCase "a history with no start event claims no start" <| fun () ->
+            let history =
+                SessionHistory.ofEnvelopes
+                    [ at 0L lastHeard (McpServerAvailable { MessageId = MessageId.create "m" |> expect; Name = McpServerName.create "serial" |> expect }) ]
+            Expect.isNone history.StartedAt "no event said so"
+
+        // Two of them, or the name is a claim the fixture cannot support: one resumption
+        // satisfies "the last resumption" and "any resumption" alike.
+        testCase "it last came back at the LATEST resumption, with since when" <| fun () ->
+            let earlier = SessionResumed { MessageId = MessageId.create "r0" |> expect; LastHeardAt = lastHeard.AddDays -2.0 }
+            let history =
+                SessionHistory.ofEnvelopes
+                    [ at 0L (resumedAt.AddDays -1.0) earlier
+                      at 1L resumedAt resumed ]
+            Expect.equal history.LastResumed (Some { At = resumedAt; LastHeardAt = lastHeard }) "the later one, both ends of its gap"
+    ]
+
+let private watchChangedTests =
+    let repo = RepoRef.create "octo/hello" |> expect
+    let pr = PrRef.create repo 12 |> expect
+    let ada = Principal.Peer (PeerId.create "ada" |> expect)
+    let noticedAt = DateTimeOffset (2026, 9, 25, 9, 0, 0, TimeSpan.Zero)
+    let merged (occurredAt: DateTimeOffset option) : SessionEvent =
+        PrTransitioned
+            { MessageId = MessageId.create "t1" |> expect
+              Pr = pr
+              Transition = PrTransition.Merged
+              State = PrMerged
+              Checks = ChecksGreen
+              Watcher = ada
+              OccurredAt = occurredAt }
+    let recorded (offset: int64) (event: SessionEvent) : EventEnvelope<SessionEvent> =
+        { EventId = EventId.fresh ()
+          SessionId = SessionId.create "watch-session" |> expect
+          Offset = EventOffset.create offset |> expect
+          Actor = ActorRef.System
+          Timestamp = noticedAt
+          Event = event }
+    /// What the timeline says about the one change — the sentence the screen shows and the
+    /// agent is given, one and the same (`ConversationItem.said`).
+    let said (event: SessionEvent) =
+        let projection, _ = ConversationProjection.applyEvents None [ recorded 1L event ] ConversationProjection.empty
+        projection.Items |> List.map ConversationItem.said |> String.concat "\n"
+
+    testList "What every watched change keeps" [
+        testCase "a pull request's change keeps the contract, with when it happened" <| fun () ->
+            let at = noticedAt.AddHours -8.0
+            match Watching.WatchChanged.ofEvent (merged (Some at)) with
+            | Some change ->
+                Expect.equal change.Watcher ada "whose watch noticed"
+                Expect.equal change.OccurredAt (Some at) "and when it happened at the source"
+            | None -> failwith "a pull request's change is a watched change"
+
+        // After an outage the first look finds eight hours of news at once. Recorded now, it
+        // would read as happening now; the sentence says when it really did.
+        testCase "a change noticed long after it happened says so" <| fun () ->
+            Expect.stringContains (said (merged (Some (noticedAt.AddHours -8.0)))) "happened 8h before it was noticed" "the gap, in the sentence"
+
+        testCase "a change noticed on time says nothing more" <| fun () ->
+            Expect.isFalse ((said (merged (Some (noticedAt.AddSeconds -20.0)))).Contains "before it was noticed") "a look's own rhythm is not late"
+
+        testCase "a change whose source gave no time says nothing more" <| fun () ->
+            Expect.isFalse ((said (merged None)).Contains "before it was noticed") "not knowing is not lateness"
+
+        testCase "each change is dated by the time that belongs to it" <| fun () ->
+            let merged = noticedAt.AddHours -3.0
+            let settled = noticedAt.AddHours -5.0
+            let times = { MergedAt = Some merged; ClosedAt = Some merged; ChecksSettledAt = Some settled }
+            Expect.equal (PrTransition.occurredAt times PrTransition.Merged) (Some merged) "a merge, when it merged"
+            Expect.equal (PrTransition.occurredAt times PrTransition.ChecksPassed) (Some settled) "a verdict, when the checks settled"
+            Expect.equal (PrTransition.occurredAt times PrTransition.Conflicted) None "a computed conflict has no time of its own"
+    ]
+
 let private prWatchTests =
     let msg n = MessageId.create n |> expect
     let repo = RepoRef.create "octo/hello" |> expect
@@ -1208,7 +1335,7 @@ let private prWatchTests =
     let ada = PeerId.create "ada" |> expect
     let bob = PeerId.create "bob" |> expect
     let snapshotOf state checks route : PrSnapshot =
-        { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Route = route; Mergeable = None; Review = None; Behind = false; Draft = false }
+        { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Route = route; Mergeable = None; Review = None; Behind = false; Draft = false; Times = PrTimes.none }
     let snapshot state checks : PrSnapshot = snapshotOf state checks None
     let autoMerge = Some PrRoute.GitHubAutoMerge
     let inQueue position state = Some (PrRoute.GitHubMergeQueue (position, state))
@@ -1224,7 +1351,7 @@ let private prWatchTests =
         |> PrWatched
     let transitioned transition state checks : SessionEvent =
         PrTransitioned
-            { MessageId = msg "t1"; Pr = pr; Transition = transition; State = state; Checks = checks; Watcher = Principal.Peer ada }
+            { MessageId = msg "t1"; Pr = pr; Transition = transition; State = state; Checks = checks; Watcher = Principal.Peer ada; OccurredAt = None }
     /// The projection folds ENVELOPES, because when a watch last moved is the envelope's
     /// timestamp and nothing in a payload says it. Minute-apart stamps, so a test can tell
     /// which event a `Since` came from.
@@ -1474,6 +1601,12 @@ let private prWatchTests =
                 (PrStatus.word None PrWayIn.Idle (Some PrReview.ChangesRequested) true PrMerged)
                 "merged" "it went in"
 
+        testCase "every status word that wants somebody to act is said loudly" <| fun () ->
+            // One volume per word, read by the table and the header strip alike: a word
+            // that is red in one and grey in the other is a surface understating it.
+            for word in [ "stalled"; "conflicted"; "changes requested"; "behind"; PrStatus.unreachable ] do
+                Expect.equal (PrStatus.tone word) ToneBad (sprintf "%s wants somebody" word)
+
         testCase "a review still required wants a person more than an armed pull request" <| fun () ->
             Expect.equal (PrStatus.worse "armed" "review required") "review required" "a person over machines"
 
@@ -1680,7 +1813,7 @@ let private prWatchTests =
                       Transition = PrTransition.Merged
                       State = PrMerged
                       Checks = ChecksGreen
-                      Watcher = Principal.Peer ada }
+                      Watcher = Principal.Peer ada; OccurredAt = None }
                   SessionEvent.PrUnwatched { MessageId = msg "w3"; Pr = pr; Actor = PeerRef ada } ]
                 |> List.mapi (fun i event ->
                     { EventId = EventId.fresh ()
@@ -1730,6 +1863,10 @@ let private foldCauseTests =
 
         testCase "a connection nobody is named behind is no cause" <| fun () ->
             Expect.isNone (FoldCause.causeFor one (FoldCause.Connected CredentialFor.Deployment)) "nobody to point to"
+
+        testCase "a boot caused every repo's sandboxes, and names which boot" <| fun () ->
+            let boot = MessageId.create "m-boot" |> expect
+            Expect.equal (FoldCause.causeFor two (FoldCause.Booted boot)) (Some (Cause.Item boot)) "the boot's own item"
     ]
 
 let private authorityTests =
@@ -1998,8 +2135,7 @@ let private configTests =
                           "workdir": "./app",
                           "env": { "NODE_ENV": "development" },
                           "uses": [ "npm" ],
-                          "files": { ".config/tool/first-run": "" },
-                          "forward": [ "github" ] } } }"""
+                          "files": { ".config/tool/first-run": "" } } } }"""
                 |> expect
             let dev = file.Sandboxes |> Map.find (sandboxName "dev")
             let container = dev.Container |> Option.get
@@ -2007,7 +2143,16 @@ let private configTests =
             Expect.equal dev.WorkingDirectory (Some "./app") "the workdir is the repo's own"
             Expect.equal container.Command (Some "npm start") "the sandbox's process"
             Expect.equal (dev.Uses |> List.map ResourceName.value) [ "npm" ] "the resources it selects"
-            Expect.equal dev.Forward [ "github" ] "the credentials by name"
+
+        // `forward:` worked yesterday, so the file that still has it is told what replaced
+        // it rather than that it was never a word.
+        testCase "a forward: is refused, naming what a connection is now" <| fun () ->
+            match
+                ConfigFile.parse """
+                    { "version": 2, "sandboxes": { "dev": { "forward": [ "github" ] } } }"""
+            with
+            | Ok _ -> failwith "expected a refusal"
+            | Error e -> Expect.stringContains e "{ connection: { github: [git, api] } }" "it says how an operator offers one"
 
         // `setup:` is a repo MAKING its environment ready rather than describing it and
         // hoping. Deliberately not `container.cmd`, which is beside it in the same file and
@@ -2277,6 +2422,114 @@ let private configTests =
             | Ok _ -> failwith "expected the conflicting pair to refuse"
             | Error e -> Expect.isTrue (e.Contains "/cache") (sprintf "the refusal names the colliding path, said: %s" e)
 
+        // A connection is granted by ROUTE, one grant each, so what a resource grants is
+        // written down rather than inferred from what the source happens to have.
+        testCase "a connection's routes are one grant each" <| fun () ->
+            let profile =
+                OperatorProfile.parse
+                    """{ "version": 1, "resources": { "github": { "connection": { "github": [ "git", "api" ] } } } }"""
+                |> expect
+            let name raw = ResourceName.create raw |> expect
+            Expect.equal
+                (ResourceProfile.grants profile.Resources [] [ name "github" ] [] |> expect |> fst |> Set.ofList)
+                (Set.ofList [ Connection ("github", ConnectionRoute.Git); Connection ("github", ConnectionRoute.Api) ])
+                "git and api, each its own leaf"
+
+        // The bare name meant every route the source had, which nobody wrote down.
+        testCase "a connection named without its routes is refused with the form that names them" <| fun () ->
+            match OperatorProfile.parse """{ "version": 1, "resources": { "github": { "connection": "github" } } }""" with
+            | Ok _ -> failwith "expected a refusal"
+            | Error e -> Expect.stringContains e "{ github: [git, api] }" "it says how to write it"
+
+        testCase "a route that is not one is refused where the file is read" <| fun () ->
+            match
+                OperatorProfile.parse """{ "version": 1, "resources": { "github": { "connection": { "github": [ "gti" ] } } } }"""
+            with
+            | Ok _ -> failwith "expected a refusal"
+            | Error e -> Expect.stringContains e "'gti' is not a route" "it names the word it could not read"
+
+        // What only the session can supply, bound by the operator in a resource's env.
+        testCase "a resource's env can bind the proxy and a connection's token" <| fun () ->
+            let profile =
+                OperatorProfile.parse
+                    """{ "version": 1,
+                         "resources": {
+                           "github": {
+                             "connection": { "github": [ "api" ] },
+                             "env": { "HTTPS_PROXY": "${proxy.https}", "GH_TOKEN": "${github.token}", "CI": "1" } } } }"""
+                |> expect
+            let name raw = ResourceName.create raw |> expect
+            let leaves = ResourceProfile.grants profile.Resources [] [ name "github" ] [] |> expect |> fst |> Set.ofList
+            Expect.isTrue
+                (Set.isSubset
+                    (Set.ofList
+                        [ Variable ("HTTPS_PROXY", VariableValue.Composed [ TemplatePart.Proxy ProxyValue.Https ])
+                          Variable ("GH_TOKEN", VariableValue.Token "github")
+                          Variable ("CI", VariableValue.Text "1") ])
+                    leaves)
+                "each value as what it is"
+
+        // The token is lent through the proxy, so a resource binding it without the route would
+        // be a variable nothing ever fills.
+        testCase "a resource lending a token it does not forward by api is refused where the file is read" <| fun () ->
+            match
+                OperatorProfile.parse
+                    """{ "version": 1,
+                         "resources": {
+                           "github": { "connection": { "github": [ "git" ] }, "env": { "GH_TOKEN": "${github.token}" } } } }"""
+            with
+            | Ok _ -> failwith "expected a refusal"
+            | Error e -> Expect.stringContains e "does not forward github by api" "it names the route"
+
+        testCase "a reference a resource's env cannot read is refused" <| fun () ->
+            match
+                OperatorProfile.parse """{ "version": 1, "resources": { "x": { "env": { "A": "${proxy.nope}" } } } }"""
+            with
+            | Ok _ -> failwith "expected a refusal"
+            | Error e -> Expect.stringContains e "proxy.nope" "it names what it could not read"
+
+        // Two resources granting one connection by different routes do not disagree: they add.
+        testCase "two resources granting a connection by different routes add up" <| fun () ->
+            let profile =
+                OperatorProfile.parse
+                    """{ "version": 1,
+                         "resources": {
+                           "github-git": { "connection": { "github": [ "git" ] } },
+                           "github-api": { "connection": { "github": [ "api" ] } } } }"""
+                |> expect
+            let name raw = ResourceName.create raw |> expect
+            match ResourceProfile.grants profile.Resources [] [ name "github-git"; name "github-api" ] [] with
+            | Error e -> failwithf "two routes of one connection conflicted: %s" e
+            | Ok (leaves, _) -> Expect.equal (List.length leaves) 2 "both routes are held"
+
+        // A connection is a resource like any other: offered by the operator under a name,
+        // selected by a sandbox, and what that selection forwards splits the way the grant
+        // does — needed where something needs it, wanted where only a want reaches it.
+        testCase "an offered connection is needed under uses and wanted under wants" <| fun () ->
+            let profile =
+                OperatorProfile.parse
+                    """{ "version": 1,
+                         "resources": {
+                           "github": { "connection": { "github": [ "git" ] } },
+                           "jira": { "connection": { "jira": [ "api" ] } } } }"""
+                |> expect
+            let name raw = ResourceName.create raw |> expect
+            Expect.equal
+                (ResourceProfile.grants profile.Resources [] [ name "github" ] [ name "jira" ]
+                 |> expect
+                 |> ForwardedConnections.ofGrant)
+                { ForwardedConnections.Needed = [ "github", ConnectionRoute.Git ]
+                  ForwardedConnections.Wanted = [ "jira", ConnectionRoute.Api ] }
+                "each by how it was selected"
+
+        testCase "a connection the host grants always is needed" <| fun () ->
+            Expect.equal
+                (ResourceProfile.grants ResourceProfile.empty [ Connection ("github", ConnectionRoute.Git) ] [] []
+                 |> expect
+                 |> ForwardedConnections.ofGrant)
+                { ForwardedConnections.Needed = [ "github", ConnectionRoute.Git ]; ForwardedConnections.Wanted = [] }
+                "nothing selected it, and every sandbox holds it"
+
         // The file's whole claim: it says nothing a command could not be told. So what a
         // declaration becomes is the ask itself, with the one thing a file cannot know —
         // where the session put the checkout — filled in.
@@ -2290,14 +2543,12 @@ let private configTests =
                           "workdir": "./app",
                           "env": { "NODE_ENV": "development" },
                           "uses": [ "npm" ],
-                          "uses": [ "npm" ],
-                          "forward": [ "github" ] } } }"""
+                          "uses": [ "npm" ] } } }"""
                  |> expect).Sandboxes
                 |> Map.find (sandboxName "dev")
             let request = SandboxDecl.toRequest (checkout "/data/repos/octo/hello") decl |> expect
             Expect.equal request.Spec.WorkingDirectory (Some "/data/repos/octo/hello/app") "the workdir is under the checkout"
             Expect.equal (request.Spec.Uses |> List.map ResourceName.value) [ "npm" ] "the resources it selects"
-            Expect.equal request.Forward [ ConnectionName.create "github" |> expect ] "the credentials by name"
             Expect.equal
                 request.Spec.Runtime
                 (Container { ContainerSpec.defaults with Image = Some { Name = "node"; Tag = Some "24" } })
@@ -2394,8 +2645,8 @@ let private configTests =
 
         testCase "a declaration with no workdir needs no checkout" <| fun () ->
             Expect.equal
-                (SandboxDecl.toRequest None { SandboxDecl.empty with Forward = [ "github" ] } |> expect)
-                { SandboxRequest.defaults with Forward = [ ConnectionName.create "github" |> expect ] }
+                (SandboxDecl.toRequest None SandboxDecl.empty |> expect)
+                SandboxRequest.defaults
                 "which is every ask the agent's own tool can make"
 
         // What crosses the command gate is a declaration, so the gate's args are bounded by
@@ -2415,8 +2666,7 @@ let private configTests =
                           "env": { "NODE_ENV": "development", "DB": { "secret": "db-url" } },
                           "uses": [ "npm" ],
                           "uses": [ "npm" ],
-                          "setup": "npm ci",
-                          "forward": [ "github" ] } } }"""
+                          "setup": "npm ci" } } }"""
                  |> expect).Sandboxes
                 |> Map.find (sandboxName "dev")
             Expect.equal
@@ -2672,8 +2922,7 @@ let private configTests =
 /// A list rather than separate cases because the property under test is about ALL of them
 /// at once: whichever field moved, the refusal has something to say.
 let private variants : (string * SandboxRequest) list =
-    [ "forwarding", { SandboxRequest.defaults with Forward = [ ConnectionName.create "github" |> expect ] }
-      "workdir",
+    [ "workdir",
         { SandboxRequest.defaults with
             Spec = { EnvironmentSpec.defaults with WorkingDirectory = Some "/somewhere" } }
       "environment",
@@ -3343,6 +3592,25 @@ let private contentTests =
             Expect.equal (ContentKind.ofMediaType (Some "application/pdf")) ContentKind.Download "anything else downloads"
             Expect.equal (ContentKind.ofMediaType None) ContentKind.Download "and so does a type nobody knows"
 
+        // Which segment carries the name is not the same question for every kind of path, and
+        // every surface that named one asked the leaf. An artifact version's leaf is a version:
+        // a shared picture came out called `0000-e7f1a6` and typed as a download, so the chip
+        // promising a picture opened nothing and the pane it opened refused to draw one.
+        testCase "an artifact version is named by its artifact; anything else by its leaf" <| fun () ->
+            let pinned = ContentRef.create "artifacts/chart.png/0000-e7f1a6" |> expect
+            Expect.equal (ContentName.ofRef pinned) "chart.png" "the name a person said, not the version"
+            Expect.equal (ContentName.kind pinned) (ContentKind.Image "image/png") "so the pane draws it"
+            let resolving = ContentRef.create "artifacts/chart.png" |> expect
+            Expect.equal (ContentName.ofRef resolving) "chart.png" "the name is the name either way"
+            Expect.equal (ContentName.kind resolving) (ContentKind.Image "image/png") "and means the same kind"
+            let repoFile = ContentRef.create "repos/octo/hello/README.md" |> expect
+            Expect.equal (ContentName.ofRef repoFile) "README.md" "a path that is not an artifact is its leaf"
+            Expect.equal (ContentName.kind repoFile) ContentKind.Download "markdown is not a kind this pane draws"
+            // A leaf that is not a version leaves the path un-artifact-like, and then the leaf
+            // IS the name: nothing here quietly reinterprets a directory called `artifacts`.
+            let notAVersion = ContentRef.create "artifacts/chart.png/notes.txt" |> expect
+            Expect.equal (ContentName.ofRef notAVersion) "notes.txt" "no version, no reinterpretation"
+
         testCase "a size reads the way the cap is written: decimal" <| fun () ->
             Expect.equal (ContentSize.render 0L) "0 bytes" "nothing"
             Expect.equal (ContentSize.render 999L) "999 bytes" "under a kilobyte"
@@ -3461,6 +3729,31 @@ let private artifactTests =
                 Expect.equal (ConversationItem.headline item) "shared artifact file:///artifacts/chart.png/0000-7f2a91 (1.50 kB)" "the act, on the timeline"
                 Expect.equal item.Author ActorRef.Agent "attributed to whoever shared it"
             | items -> failwithf "expected one act, got %d" (List.length items)
+
+        // What the list panel reads. Derived from the acts rather than kept beside them, so
+        // this is the whole rule: one row per NAME at its newest version, newest share first.
+        testCase "the artifacts a session holds are one row per name, at the version last shared" <| fun () ->
+            let at (offset: int64) (event: SessionEvent) : EventEnvelope<SessionEvent> =
+                { EventId = EventId.fresh ()
+                  SessionId = SessionId.create "session-1" |> expect
+                  Offset = EventOffset.create offset |> expect
+                  Actor = ActorRef.Agent
+                  Timestamp = DateTimeOffset (2026, 9, 24, 0, 0, 0, TimeSpan.Zero)
+                  Event = event }
+            let named (name: string) (seq: int) =
+                shared (ArtifactRef.create name seq stamp |> expect)
+            let proj, _ =
+                ConversationProjection.applyEvents
+                    None
+                    [ at 1L (named "chart.png" 0)
+                      at 2L (named "notes.log" 0)
+                      at 3L (named "chart.png" 1) ]
+                    ConversationProjection.empty
+            Expect.equal
+                (ConversationProjection.artifacts proj |> List.map (fun a -> ArtifactRef.content a.Ref |> ContentRef.value))
+                [ "artifacts/chart.png/0001-7f2a91"; "artifacts/notes.log/0000-7f2a91" ]
+                "the updated one is one row at its new version, and it comes first for being the most recent share"
+            Expect.equal (ConversationProjection.artifacts ConversationProjection.empty) [] "a session that has shared nothing offers no rows"
     ]
 
 let tests =
@@ -3479,6 +3772,8 @@ let tests =
         repoTests
         chapterTests
         namingTests
+        sessionLifecycleTests
+        watchChangedTests
         prWatchTests
         deliveryFilterTests
         deliveryDocumentTests

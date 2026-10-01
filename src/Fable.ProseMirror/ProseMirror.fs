@@ -40,10 +40,33 @@ module ProseMirror =
     type [<AllowNullLiteral>] EditorState =
         abstract tr : Transaction
 
+    /// A position's box in viewport coordinates, as `coordsAtPos` answers it.
+    type [<AllowNullLiteral>] Coords =
+        abstract left : float
+        abstract right : float
+        abstract top : float
+        abstract bottom : float
+
     type [<AllowNullLiteral>] EditorView =
         abstract state : EditorState
         abstract dispatch : Transaction -> unit
         abstract destroy : unit -> unit
+        /// The editable element ProseMirror renders into, inside the mount host.
+        abstract dom : Browser.Types.HTMLElement
+        abstract coordsAtPos : int -> Coords
+
+    /// The props an `EditorView` is constructed with — the ones this repository sets. Build
+    /// with `jsOptions<EditorProps>`, so a prop nobody assigned is absent and ProseMirror's
+    /// own default stands.
+    type [<AllowNullLiteral>] EditorProps =
+        abstract state : EditorState with get, set
+        /// Asked with the current state; `false` renders without an edit surface.
+        abstract editable : System.Func<EditorState, bool> with get, set
+        /// `true` when the paste was handled and ProseMirror's own handling must not run.
+        abstract handlePaste : System.Func<EditorView, Browser.Types.ClipboardEvent, bool> with get, set
+        /// Called in place of ProseMirror's scroll-to-caret after a transaction that asked for
+        /// one; `true` when it was handled and the default walk must not run.
+        abstract handleScrollToSelection : System.Func<EditorView, bool> with get, set
 
     // --- prosemirror-markdown: the schema + parser/serializer (markdown round-trip) --------
 
@@ -261,33 +284,106 @@ module ProseMirror =
 
     // --- prosemirror-state / -view ---------------------------------------------------------
 
+    /// What `EditorState.create` is handed — the fields this repository sets. Built by
+    /// `createState`, which is the only thing that needs its shape.
+    type [<AllowNullLiteral>] EditorStateConfig =
+        abstract schema : Schema with get, set
+        abstract plugins : Plugin[] with get, set
+
     [<Import("EditorState", "prosemirror-state")>]
     let private editorStateClass : obj = jsNative
     [<Emit("$0.create($1)")>]
-    let private stateCreate (cls: obj) (config: obj) : EditorState = jsNative
-    let createState (config: obj) : EditorState = stateCreate editorStateClass config
+    let private stateCreate (cls: obj) (config: EditorStateConfig) : EditorState = jsNative
+    /// A fresh state over `schema`, running `plugins` in order.
+    let createState (schema: Schema) (plugins: Plugin[]) : EditorState =
+        stateCreate editorStateClass (jsOptions<EditorStateConfig> (fun config ->
+            config.schema <- schema
+            config.plugins <- plugins))
 
     [<Import("EditorView", "prosemirror-view")>]
     let private editorViewClass : obj = jsNative
     [<Emit("new ($0)($1, $2)")>]
-    let private viewNew (cls: obj) (host: obj) (props: obj) : EditorView = jsNative
-    let createView (host: obj) (props: obj) : EditorView = viewNew editorViewClass host props
+    let private viewNew (cls: obj) (host: Browser.Types.Element) (props: EditorProps) : EditorView = jsNative
+    /// An editor view rendered inside `host`.
+    let createView (host: Browser.Types.Element) (props: EditorProps) : EditorView = viewNew editorViewClass host props
 
     // --- prosemirror-keymap / -commands ----------------------------------------------------
 
+    /// A key as prosemirror-keymap names it. Only the keys this repository binds are cases;
+    /// a printable one is its own character, written as it appears UNSHIFTED (`'z'`, `'['`),
+    /// because Shift is a modifier on the chord and not a different key.
+    [<RequireQualifiedAccess>]
+    type Key =
+        | Char of char
+        | Enter
+        | Tab
+
+    /// The modifiers held with a key. `Mod` is Cmd on macOS and Ctrl everywhere else — the
+    /// platform's own "command" modifier, which prosemirror-keymap resolves at keydown.
+    [<RequireQualifiedAccess>]
+    type Modifiers =
+        | None
+        | Mod
+        | Shift
+        | ModShift
+
+    /// A keystroke a command is bound to: a key and what is held with it.
+    type Chord = Chord of Modifiers * Key
+
+    [<RequireQualifiedAccess>]
+    module Chord =
+
+        let plain (key: Key) : Chord = Chord (Modifiers.None, key)
+        let withMod (key: Key) : Chord = Chord (Modifiers.Mod, key)
+        let withShift (key: Key) : Chord = Chord (Modifiers.Shift, key)
+        let withModShift (key: Key) : Chord = Chord (Modifiers.ModShift, key)
+
+        /// The name prosemirror-keymap reads for this chord — `Mod-Shift-z`, `Shift-Enter`.
+        /// Spelled here and nowhere else, so a key name typed by hand at a call site cannot
+        /// miss the grammar and quietly bind nothing.
+        let name (Chord (modifiers, key)) : string =
+            let prefix =
+                match modifiers with
+                | Modifiers.None -> ""
+                | Modifiers.Mod -> "Mod-"
+                | Modifiers.Shift -> "Shift-"
+                | Modifiers.ModShift -> "Mod-Shift-"
+            let key =
+                match key with
+                | Key.Char c -> string c
+                | Key.Enter -> "Enter"
+                | Key.Tab -> "Tab"
+            prefix + key
+
+    /// A set of key bindings, as prosemirror-keymap takes them. Opaque: built only by
+    /// `KeyBindings.ofList`, or handed over whole by ProseMirror (`baseKeymap`).
+    type KeyBindings = interface end
+
+    [<RequireQualifiedAccess>]
+    module KeyBindings =
+
+        /// Bindings from chords to commands. A chord listed twice is bound to the later
+        /// command, as assigning the same key twice always was.
+        let ofList (bindings: (Chord * Command) list) : KeyBindings =
+            unbox (createObj [ for chord, command in bindings -> Chord.name chord ==> command ])
+
+    /// ProseMirror's own bindings for a bare editor, and the one of them this repository
+    /// hands on by name.
+    type BaseKeymap =
+        inherit KeyBindings
+        /// What plain Enter does in a bare ProseMirror — split the block, make a paragraph,
+        /// lift an empty one, break a line inside code. Read off `baseKeymap` rather than
+        /// reassembled from its four parts, so rebinding Enter can hand the ORIGINAL
+        /// behaviour to another key without a second definition of it drifting from
+        /// ProseMirror's.
+        abstract Enter : Command
+
     [<Import("keymap", "prosemirror-keymap")>]
-    let keymap (bindings: obj) : Plugin = jsNative
+    let keymap (bindings: KeyBindings) : Plugin = jsNative
     [<Import("baseKeymap", "prosemirror-commands")>]
-    let baseKeymap : obj = jsNative
+    let baseKeymap : BaseKeymap = jsNative
     [<Import("toggleMark", "prosemirror-commands")>]
     let toggleMark (mark: MarkType) : Command = jsNative
-
-    /// What plain Enter does in a bare ProseMirror — split the block, make a paragraph,
-    /// lift an empty one, break a line inside code. Read off `baseKeymap` rather than
-    /// reassembled from its four parts, so rebinding Enter can hand the ORIGINAL behaviour
-    /// to another key without a second definition of it drifting from ProseMirror's.
-    [<Emit("$0.Enter")>]
-    let baseEnter (bindings: obj) : Command = jsNative
 
     /// `chainCommands(a, b)`: try `a`, fall through to `b` when it declines. Variadic in JS,
     /// so it is called explicitly rather than imported as a curried F# function.
@@ -327,8 +423,15 @@ module ProseMirror =
 
     // --- prosemirror-inputrules ------------------------------------------------------------
 
+    /// What `inputRules` is handed: the rules, tried in order.
+    type [<AllowNullLiteral>] private InputRulesConfig =
+        abstract rules : InputRule[] with get, set
+
     [<Import("inputRules", "prosemirror-inputrules")>]
-    let inputRules (config: obj) : Plugin = jsNative
+    let private inputRulesFn (config: InputRulesConfig) : Plugin = jsNative
+    /// A plugin that runs `rules` against text as it is typed.
+    let inputRules (rules: InputRule[]) : Plugin =
+        inputRulesFn (jsOptions<InputRulesConfig> (fun config -> config.rules <- rules))
     [<Import("wrappingInputRule", "prosemirror-inputrules")>]
     let wrappingInputRule (regexp: obj) (nodeType: NodeType) : InputRule = jsNative
     /// What ProseMirror hands an input rule's callbacks is the REGEX MATCH that fired it, and
@@ -423,59 +526,120 @@ module ProseMirror =
     let selAnchor (sel: obj) : int = jsNative
     [<Emit("$0.head")>]
     let selHead (sel: obj) : int = jsNative
-    [<Emit("$0.setMeta($1, $2)")>]
-    let trSetMeta (tr: Transaction) (key: obj) (value: obj) : Transaction = jsNative
-    [<Emit("$0.getMeta($1)")>]
-    let trGetMeta (tr: Transaction) (key: obj) : obj = jsNative
     [<Emit("$0.docChanged")>]
     let trDocChanged (tr: Transaction) : bool = jsNative
-    [<Emit("$0.selectionSet")>]
-    let trSelectionSet (tr: Transaction) : bool = jsNative
+    /// How positions moved across a transaction's steps, for carrying decorations through it.
+    type Mapping = interface end
+
     [<Emit("$0.mapping")>]
-    let trMapping (tr: Transaction) : obj = jsNative
+    let trMapping (tr: Transaction) : Mapping = jsNative
     [<Emit("$0.doc")>]
-    let trDoc (tr: Transaction) : obj = jsNative
-    [<Emit("$0")>]
-    let asTransaction (tr: obj) : Transaction = jsNative
+    let trDoc (tr: Transaction) : Node = jsNative
 
     // prosemirror-state: PluginKey + a Plugin carrying state + props.
+
+    /// A plugin's key: what names it in a state, what state it keeps, and what a transaction
+    /// may carry to it as metadata. ProseMirror's own `PluginKey<T>` types only the state; the
+    /// metadata is typed here too, so what `trSetMeta` puts on a transaction is what
+    /// `trGetMeta` reads off it, rather than an `obj` each side agrees about in prose.
+    type PluginKey<'State, 'Meta> = interface end
+
     [<Import("PluginKey", "prosemirror-state")>]
     let private pluginKeyClass : obj = jsNative
     [<Emit("new ($0)($1)")>]
-    let private pluginKeyNew (cls: obj) (name: string) : obj = jsNative
-    let pluginKey (name: string) : obj = pluginKeyNew pluginKeyClass name
+    let private pluginKeyNew<'State, 'Meta> (cls: obj) (name: string) : PluginKey<'State, 'Meta> = jsNative
+    let pluginKey<'State, 'Meta> (name: string) : PluginKey<'State, 'Meta> =
+        pluginKeyNew<'State, 'Meta> pluginKeyClass name
+    /// The state the keyed plugin keeps in `state`. Asked of a state the plugin runs in; one it
+    /// does not run in answers `undefined`, which is not a `'State`.
     [<Emit("$0.getState($1)")>]
-    let pluginKeyGetState (key: obj) (state: EditorState) : obj = jsNative
+    let pluginKeyGetState (key: PluginKey<'State, 'Meta>) (state: EditorState) : 'State = jsNative
+
+    /// `tr` carrying `value` to the plugin `key` names.
+    [<Emit("$0.setMeta($1, $2)")>]
+    let trSetMeta (tr: Transaction) (key: PluginKey<'State, 'Meta>) (value: 'Meta) : Transaction = jsNative
+    /// What `tr` carries to the plugin `key` names, and nothing when it carries nothing.
+    [<Emit("$0.getMeta($1)")>]
+    let trGetMeta (tr: Transaction) (key: PluginKey<'State, 'Meta>) : 'Meta option = jsNative
+
+    // prosemirror-view: Decoration widgets/inlines + a DecorationSet.
+
+    type Decoration = interface end
+    type DecorationSet = interface end
+
+    /// The attributes an inline or node decoration puts on the DOM it covers. ProseMirror
+    /// takes any attribute by name; the ones a caller needs beyond these are declared by that
+    /// caller, on an interface inheriting this one.
+    type [<AllowNullLiteral>] DecorationAttrs =
+        abstract style : string with get, set
+
+    /// How a widget sits against content at its position: a positive `side` keeps it after
+    /// what is typed there, rather than pushing text past it.
+    type [<AllowNullLiteral>] WidgetSpec =
+        abstract side : int with get, set
+
+    /// What a plugin's `view` answers: told of every update, and of its own teardown.
+    type [<AllowNullLiteral>] PluginView =
+        abstract update : System.Func<EditorView, EditorState, unit> with get, set
+        abstract destroy : System.Func<unit, unit> with get, set
+
+    /// DOM event handlers a plugin puts on the view; `true` when the event was handled.
+    type [<AllowNullLiteral>] DomEventHandlers =
+        abstract focus : System.Func<EditorView, Browser.Types.FocusEvent, bool> with get, set
+        abstract blur : System.Func<EditorView, Browser.Types.FocusEvent, bool> with get, set
+
+    type [<AllowNullLiteral>] PluginProps =
+        abstract handleDOMEvents : DomEventHandlers with get, set
+        abstract decorations : System.Func<EditorState, DecorationSet> with get, set
+
+    /// A plugin's state: made once from the config the editor state was created with, then
+    /// carried through every transaction.
+    type [<AllowNullLiteral>] StateField<'State> =
+        abstract init : System.Func<EditorStateConfig, EditorState, 'State> with get, set
+        abstract apply : System.Func<Transaction, 'State, EditorState, EditorState, 'State> with get, set
+
+    /// A plugin, as `new Plugin(spec)` takes it — the fields this repository sets. Build with
+    /// `jsOptions`, so a field nobody assigned is absent. A plugin keeping no state and
+    /// reading no metadata is a `PluginSpec<unit, unit>`.
+    type [<AllowNullLiteral>] PluginSpec<'State, 'Meta> =
+        abstract key : PluginKey<'State, 'Meta> with get, set
+        abstract state : StateField<'State> with get, set
+        abstract props : PluginProps with get, set
+        abstract view : System.Func<EditorView, PluginView> with get, set
+
     [<Import("Plugin", "prosemirror-state")>]
     let private pluginClass : obj = jsNative
     [<Emit("new ($0)($1)")>]
-    let private pluginNew (cls: obj) (spec: obj) : Plugin = jsNative
-    let makePlugin (spec: obj) : Plugin = pluginNew pluginClass spec
+    let private pluginNew (cls: obj) (spec: PluginSpec<'State, 'Meta>) : Plugin = jsNative
+    let makePlugin (spec: PluginSpec<'State, 'Meta>) : Plugin = pluginNew pluginClass spec
 
-    // prosemirror-view: Decoration widgets/inlines + a DecorationSet.
     [<Import("Decoration", "prosemirror-view")>]
     let private decorationClass : obj = jsNative
     [<Emit("$0.widget($1, $2, $3)")>]
-    let private decorationWidget (cls: obj) (pos: int) (dom: obj) (spec: obj) : obj = jsNative
-    let decoWidget (pos: int) (dom: obj) (spec: obj) : obj = decorationWidget decorationClass pos dom spec
+    let private decorationWidget (cls: obj) (pos: int) (dom: Browser.Types.HTMLElement) (spec: WidgetSpec) : Decoration = jsNative
+    /// `dom` drawn at `pos`, between characters rather than over any.
+    let decoWidget (pos: int) (dom: Browser.Types.HTMLElement) (spec: WidgetSpec) : Decoration =
+        decorationWidget decorationClass pos dom spec
     [<Emit("$0.inline($1, $2, $3)")>]
-    let private decorationInline (cls: obj) (from: int) (to': int) (attrs: obj) : obj = jsNative
-    let decoInline (from: int) (to': int) (attrs: obj) : obj = decorationInline decorationClass from to' attrs
+    let private decorationInline (cls: obj) (from: int) (to': int) (attrs: DecorationAttrs) : Decoration = jsNative
+    let decoInline (from: int) (to': int) (attrs: DecorationAttrs) : Decoration =
+        decorationInline decorationClass from to' attrs
     [<Emit("$0.node($1, $2, $3)")>]
-    let private decorationNode (cls: obj) (from: int) (to': int) (attrs: obj) : obj = jsNative
+    let private decorationNode (cls: obj) (from: int) (to': int) (attrs: DecorationAttrs) : Decoration = jsNative
     /// Attributes on the NODE spanning `from..to'` — as opposed to `decoInline`'s span inside
     /// one. What puts a marker on a whole empty paragraph without putting anything in it.
-    let decoNode (from: int) (to': int) (attrs: obj) : obj = decorationNode decorationClass from to' attrs
+    let decoNode (from: int) (to': int) (attrs: DecorationAttrs) : Decoration =
+        decorationNode decorationClass from to' attrs
     [<Import("DecorationSet", "prosemirror-view")>]
     let private decorationSetClass : obj = jsNative
     [<Emit("$0.create($1, $2)")>]
-    let private decorationSetCreate (cls: obj) (doc: obj) (decos: obj[]) : obj = jsNative
-    let decoSetCreate (doc: obj) (decos: obj[]) : obj = decorationSetCreate decorationSetClass doc decos
+    let private decorationSetCreate (cls: obj) (doc: Node) (decos: Decoration[]) : DecorationSet = jsNative
+    let decoSetCreate (doc: Node) (decos: Decoration[]) : DecorationSet = decorationSetCreate decorationSetClass doc decos
     [<Emit("$0.empty")>]
-    let private decorationSetEmpty (cls: obj) : obj = jsNative
-    let decoSetEmpty : obj = decorationSetEmpty decorationSetClass
+    let private decorationSetEmpty (cls: obj) : DecorationSet = jsNative
+    let decoSetEmpty : DecorationSet = decorationSetEmpty decorationSetClass
     [<Emit("$0.map($1, $2)")>]
-    let decoSetMap (set: obj) (mapping: obj) (doc: obj) : obj = jsNative
+    let decoSetMap (set: DecorationSet) (mapping: Mapping) (doc: Node) : DecorationSet = jsNative
 
     /// The two inline colours the caret carries, written through `Fable.BrowserExtras`'s
     /// CSSOM slice — the same one the shell writes its layout number with. `setProperty` is
@@ -490,7 +654,7 @@ module ProseMirror =
     /// The DOM for one caret + name label (a widget decoration). Built through the typed DOM
     /// binding rather than a JavaScript program in a string: an emit binds a platform API, and
     /// assembling elements is logic, which belongs where the compiler reads it.
-    let caretDom (color: string) (name: string) : obj =
+    let caretDom (color: string) (name: string) : Browser.Types.HTMLElement =
         let caret = Browser.Dom.document.createElement "span"
         caret.className <- "pm-caret"
         setBorderColour caret color
@@ -499,58 +663,100 @@ module ProseMirror =
         label.textContent <- name
         setBackground label color
         caret.appendChild label |> ignore
-        box caret
+        caret
 
     // --- Yjs relative positions (survive concurrent edits) + lib0 base64 for the wire --------
 
+    /// A position in a Yjs type that stays put under concurrent edits: yjs's own
+    /// `RelativePosition`, as `Fable.Yjs` declares it.
+    type RelativePosition = Utils.RelativePosition.RelativePosition
+
     [<Import("encodeRelativePosition", "yjs")>]
-    let private encodeRelPos (rp: obj) : JS.Uint8Array = jsNative
+    let private encodeRelPos (rp: RelativePosition) : JS.Uint8Array = jsNative
     [<Import("decodeRelativePosition", "yjs")>]
-    let private decodeRelPos (bytes: JS.Uint8Array) : obj = jsNative
+    let private decodeRelPos (bytes: JS.Uint8Array) : RelativePosition = jsNative
+    /// `Fable.Yjs` declares this over `AbstractType<obj option>`, which neither a `Y.Text` nor
+    /// a `Y.XmlFragment` is to the compiler, so it is declared again here over the type's own
+    /// event parameter — any shared type, and only a shared type.
     [<Import("createRelativePositionFromTypeIndex", "yjs")>]
-    let relPosFromTypeIndex (typ: obj) (index: int) : obj = jsNative
+    let private relPosIn (typ: Types.AbstractType.AbstractType<'event>) (index: int) : RelativePosition = jsNative
     [<Import("createAbsolutePositionFromRelativePosition", "yjs")>]
-    let private createAbsPos (rp: obj) (doc: Y.Doc) : obj = jsNative
+    let private createAbsPos (rp: RelativePosition) (doc: Y.Doc) : Utils.RelativePosition.AbsolutePosition option =
+        jsNative
     let private toBase64 = Lib0.Buffer.toBase64
     let private fromBase64 = Lib0.Buffer.fromBase64
 
+    /// A position `index` items into a shared type (a `Y.Text`'s characters, a
+    /// `Y.XmlFragment`'s children), anchored to the content there rather than the count.
+    let relPosFromTypeIndex (typ: #Types.AbstractType.AbstractType<'event>) (index: int) : RelativePosition =
+        relPosIn (typ :> Types.AbstractType.AbstractType<'event>) index
+
     /// A relative position -> its base64 wire form.
-    let encodeRel (relPos: obj) : string = toBase64 (encodeRelPos relPos)
+    let encodeRel (relPos: RelativePosition) : string = toBase64 (encodeRelPos relPos)
     /// Base64 wire form -> a relative position.
-    let decodeRel (encoded: string) : obj = decodeRelPos (fromBase64 encoded)
+    let decodeRel (encoded: string) : RelativePosition = decodeRelPos (fromBase64 encoded)
     /// The absolute index of a base64 relative position in a `Y.Text`/`Y.XmlFragment` on `doc`,
     /// or `None` if it no longer resolves (its anchor content was deleted).
     let absIndexInDoc (doc: Y.Doc) (encoded: string) : int option =
-        match createAbsPos (decodeRel encoded) doc with
-        | null -> None
-        | abs -> Some (abs?index |> unbox<int>)
+        createAbsPos (decodeRel encoded) doc |> Option.map (fun abs -> int abs.index)
 
     // --- y-prosemirror position bridging (ProseMirror positions <-> Yjs relative positions) --
 
-    [<Import("ySyncPluginKey", "y-prosemirror")>]
-    let ySyncPluginKey : obj = jsNative
-    [<Import("getRelativeSelection", "y-prosemirror")>]
-    let private getRelativeSelection (binding: obj) (state: EditorState) : obj = jsNative
-    [<Import("relativePositionToAbsolutePosition", "y-prosemirror")>]
-    let private relToAbs (doc: Y.Doc) (typ: obj) (relPos: obj) (mapping: obj) : obj = jsNative
+    /// y-prosemirror's map between the editor's nodes and the fragment's items. Opaque: it is
+    /// only ever handed back to y-prosemirror.
+    type YSyncMapping =
+        interface end
 
-    /// The ySync binding for a state (holds the ProseMirror<->Yjs `mapping`, the `type`, `doc`).
-    let syncBinding (state: EditorState) : obj = (pluginKeyGetState ySyncPluginKey state)?binding
+    /// What the ySync plugin binds an editor to: the doc, the fragment, and the map between.
+    [<AllowNullLiteral>]
+    type YSyncBinding =
+        abstract doc : Y.Doc
+        abstract ``type`` : Y.XmlFragment
+        abstract mapping : YSyncMapping
+
+    /// What the ySync plugin keeps in a state. `binding` is absent until the plugin has bound.
+    [<AllowNullLiteral>]
+    type YSyncState =
+        abstract binding : YSyncBinding option
+
+    /// What the ySync plugin's transactions carry under its key. Opaque: nothing here reads
+    /// it; the key is wanted as a transaction origin.
+    type YSyncMeta =
+        interface end
+
+    /// A selection as two relative positions over the editor's fragment.
+    type private RelativeSelection =
+        abstract anchor : RelativePosition
+        abstract head : RelativePosition
+
+    [<Import("ySyncPluginKey", "y-prosemirror")>]
+    let ySyncPluginKey : PluginKey<YSyncState, YSyncMeta> = jsNative
+    [<Import("getRelativeSelection", "y-prosemirror")>]
+    let private getRelativeSelection (binding: YSyncBinding) (state: EditorState) : RelativeSelection = jsNative
+    [<Import("relativePositionToAbsolutePosition", "y-prosemirror")>]
+    let private relToAbs
+        (doc: Y.Doc)
+        (typ: Y.XmlFragment)
+        (relPos: RelativePosition)
+        (mapping: YSyncMapping)
+        : int option =
+        jsNative
+
+    /// The ySync binding for a state, when the plugin runs in it and has bound its fragment.
+    let syncBinding (state: EditorState) : YSyncBinding option =
+        match pluginKeyGetState ySyncPluginKey state with
+        | null -> None
+        | synced -> synced.binding
 
     /// The editor's current selection as base64 relative anchor/head over its body fragment.
     let relSelectionOf (state: EditorState) : (string * string) option =
-        match syncBinding state with
-        | null -> None
-        | binding ->
+        syncBinding state
+        |> Option.map (fun binding ->
             let rs = getRelativeSelection binding state
-            Some (encodeRel rs?anchor, encodeRel rs?head)
+            encodeRel rs.anchor, encodeRel rs.head)
 
     /// Map a base64 relative position back to an absolute ProseMirror position in this editor,
     /// or `None` if it no longer resolves.
     let absPosInBody (state: EditorState) (encoded: string) : int option =
-        match syncBinding state with
-        | null -> None
-        | binding ->
-            match relToAbs binding?doc binding?``type`` (decodeRel encoded) binding?mapping with
-            | null -> None
-            | pos -> Some (unbox<int> pos)
+        syncBinding state
+        |> Option.bind (fun binding -> relToAbs binding.doc binding.``type`` (decodeRel encoded) binding.mapping)

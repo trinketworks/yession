@@ -55,20 +55,12 @@ module private ToolArgs =
                 get.Optional.Field "stdin" Decode.bool |> Option.defaultValue false))
             json
 
-    /// `start_work_sandbox`'s pair: the sandbox name, and the credentials to forward.
     /// `open_terminal`'s pair: what the terminal is for, and which sandbox to open it in.
     let nameSandbox (json: string) : Result<string * string option, string> =
         read
             (Decode.object (fun get ->
                 get.Required.Field "name" Decode.string,
                 get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> "")))
-            json
-
-    let nameForward (json: string) : Result<string * string list, string> =
-        read
-            (Decode.object (fun get ->
-                get.Required.Field "name" Decode.string,
-                get.Optional.Field "forward" (Decode.list Decode.string) |> Option.defaultValue []))
             json
 
     /// `set_shell_profile`'s pair, both optional: where shells opened from now on start,
@@ -644,13 +636,12 @@ module AgentTools =
             })
 
     /// The named-WorkSandbox bodies (Plan 15, stage 2).
-    let private startWorkSandbox (capabilities: AgentCapabilities) (raw: string) (forward: string list) : Async<string> =
+    let private startWorkSandbox (capabilities: AgentCapabilities) (raw: string) : Async<string> =
         withSandbox raw (fun name ->
             async {
-                // The tool's vocabulary is a name and some credentials; everything else a
-                // sandbox can be is the file's to say, so the declaration is an empty one
-                // with the forwarding filled in.
-                match! capabilities.Sandboxes.Start name { SandboxDecl.empty with Forward = forward } with
+                // The tool's vocabulary is a name; everything a sandbox can be is its
+                // declaration's to say, so the declaration asked with is an empty one.
+                match! capabilities.Sandboxes.Start name SandboxDecl.empty with
                 | Ok outcome -> return renderCommandOutcome outcome
                 | Error e -> return sprintf "could not start the sandbox: %s" e
             })
@@ -931,7 +922,7 @@ module AgentTools =
           tool
               "share_artifact"
               "Share a file with the people here — an image you plotted, a screenshot, a report. Takes a path in a sandbox (as read_file takes them) and copies it into the session's artifacts, which everyone can see and nobody has to have a sandbox to read. Answers with the address the copy got, `file:///artifacts/<name>/<version>`: write that in a message to point at it. Sharing the same name again does NOT overwrite it — it adds a version, and the older ones stay where they are, so an address you have already written keeps showing what it showed. At most 100 MB a file; the refusal says how big yours is. The `artifacts` query lists what has been shared."
-              [ ToolField.required "path" "string" "the file to share, e.g. \"$TMPDIR/chart.png\" — as read_file takes a path"
+              [ ToolField.required "path" "string" "the file to share, e.g. \"out/chart.png\" — a literal path, as read_file takes one: it is not a shell word, so an environment variable in it is not expanded"
                 ToolField.optional "name" "string" "what to call it here, e.g. \"coverage.png\"; omit to keep the file's own name (which is where the file type is read from)"
                 ToolField.optional "sandbox" "string" "the work sandbox the file is in; omit for the default one" ]
               (fun args ->
@@ -1019,19 +1010,18 @@ module AgentTools =
 
           tool
               "start_work_sandbox"
-              "Ensure a named work sandbox exists for this session, and return it. Same name and same forwarding returns the running one unchanged — safe to call every time. Same name with DIFFERENT forwarding is refused, not silently recreated (that kills what's running — stop_work_sandbox first). `forward` names credentials to put inside (\"github\" is what lets git push from a terminal there); it uses the credentials of whoever's turn this is, and everyone sees which were forwarded and whose."
-              [ ToolField.required "name" "string" "the sandbox name, e.g. \"default\" or \"test\"; a repo's is \"owner/repo:name\""
-                ToolField.optionalList "forward" "string" "credential names to forward, e.g. [\"github\"]" ]
+              "Ensure a named work sandbox exists for this session, and return it. Returns the running one unchanged when there is one — safe to call every time. What a sandbox is, and which connections (\"github\" lets git push from a terminal) it forwards, is what its repo's yession.yaml or the operator declared for it; each command run there spends the credentials of whoever's turn it is."
+              [ ToolField.required "name" "string" "the sandbox name, e.g. \"default\" or \"test\"; a repo's is \"owner/repo:name\"" ]
               (fun args ->
                   async {
-                      match ToolArgs.nameForward args with
+                      match ToolArgs.string "name" args with
                       | Error e -> return Error e
-                      | Ok (name, forward) -> return! ok (startWorkSandbox capabilities name forward)
+                      | Ok name -> return! ok (startWorkSandbox capabilities name)
                   })
 
           tool
               "stop_work_sandbox"
-              "Stop a named work sandbox, killing anything running in it. The way to change what a sandbox forwards: stop it, then start it again."
+              "Stop a named work sandbox, killing anything running in it."
               [ ToolField.required "name" "string" "the sandbox name" ]
               (fun args ->
                   async {

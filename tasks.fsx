@@ -34,12 +34,29 @@ let tailwind = Path.Combine (binDir, "tailwindcss")
 
 // What a .NET child that died on a SIGNAL left behind, so the next one says more than a number.
 //
-// `dotnet fable` has twice died inside the nix build sandbox with exit 139 and nothing else to
-// read: silently, the instant Fable started compiling, on aarch64-linux with the CoreCLR's W^X
-// left on (release run 753) and on x86_64-linux with it off (run 849). The same signature on
-// either side of the `DOTNET_EnableWriteXorExecute=0` that nix/packages.nix sets is what rules
-// that pairing out as the explanation, and a native crash unwinds nothing and prints nothing,
-// so the third one would say exactly as little and the diagnosis would start over.
+// `dotnet fable` has died inside the nix build sandbox with exit 139 three times, each the
+// instant Fable started compiling: aarch64-linux with the CoreCLR's W^X on (release run 753),
+// x86_64-linux with it off (runs 849 and 946). A native crash unwinds nothing and prints
+// nothing, so the first two said nothing more than that number.
+//
+// Run 946 was the first to leave a report, and it names the fault's neighbourhood: the thread
+// that took the signal was inside `Regex866_Scan`, a method Reflection.Emit had just generated,
+// called from Fable's `Printer.ParsedXmlDoc.Parse`, with two more threads inside its siblings.
+// That function builds a fresh `RegexOptions.Compiled` regex for every XML doc comment it
+// prints, so a compile emits, runs and discards hundreds of dynamic methods across the thread
+// pool. W^X only changes how those pages are mapped, which is why toggling it moved nothing and
+// why the flag that once did so is gone.
+//
+// The cause was the runtime's, and is fixed in it. Symbolized, every report is the JIT's first
+// compile of one of those methods failing in `LCGMethodResolver::GetCodeInfo`, which copies the
+// method's IL out of a managed array the GC did not know was live across a return: a collection
+// on another thread moved or reclaimed it first (dotnet/runtime#131267, a .NET 10 regression,
+// fixed by the backport in 10.0.12). The same fault also compiles whatever bytes it finds, so it
+// does not always crash — `crash-repro` caught freshly compiled regexes answering wrongly and
+// throwing InvalidProgramException, on Microsoft's build of 10.0.10 as much as the nixpkgs one.
+// Both nixpkgs pins moved to a 10.0.12 runtime for that; the report below stays, because an
+// upstream fix that is "not the whole answer" (MeshWeaver still saw one after it) should be
+// caught saying so.
 //
 // The runtime can be told to account for itself: a crash report names the faulting thread's
 // frames, native and managed. Children are started here, so here is where they are told to
@@ -295,15 +312,15 @@ let gitVersion () =
 // don't `npm install` over it. Off-Nix (no such tree) a plain `npm install` materializes the
 // deps; the node-datachannel addon there still comes from Nix or a manual build (the `Native`
 // tier self-skips without it), same as before.
-let restore () =
+let private restoreTools () =
     if not (Directory.Exists (Path.Combine (repoRoot, "node_modules"))) then
         exec "npm" [ "install"; "--ignore-scripts" ]
-    exec "dotnet" [ "tool"; "restore" ]
+    run "dotnet" [ "tool"; "restore" ] |> ignore
 
 /// The version to build with when the caller supplied none. GitVersion is a dotnet local tool,
 /// so the manifest has to be restored before it can be asked.
 let private defaultVersion () =
-    restore ()
+    restoreTools ()
     gitVersion ()
 
 // --- compile: F# -> JS (both entries), the browser client bundle, and the stylesheet --------
@@ -335,8 +352,13 @@ let private packageGraph (project: string) : string =
     let keys = libraries |> Seq.map (fun kv -> kv.Key) |> Seq.sort |> String.concat "\n"
     Convert.ToHexString (Security.Cryptography.SHA256.HashData (Text.Encoding.UTF8.GetBytes keys))
 
-/// Compile an F# project to JS. `quiet` captures Fable's banner — the build verbs print their
-/// own one-line progress; `check` streams it.
+/// Compile an F# project to JS. Captured rather than streamed, because compiles run side by side
+/// (`make`) and two Fables interleaved read as neither; a failure carries what it printed.
+///
+/// `--noRestore`, because the restore is already this function's precondition — `packageGraph`
+/// reads the project's `obj/project.assets.json` before Fable starts, and every caller comes
+/// through `Target.Packages` — so Fable's own restore was a second evaluation of every project in
+/// the graph that changed nothing: twelve of the suite's forty-seven seconds of parsing.
 ///
 /// Fable caches the cracked project and the package sources it copied under
 /// `<out>/fable_modules`, and its cache key does not include the RESOLVED package graph — so
@@ -345,7 +367,7 @@ let private packageGraph (project: string) : string =
 /// still held beta0219, and the build was green against the previous library; it was only loud
 /// because that release changed the API's shape, and a source-compatible bump would have passed
 /// in silence. So key the out dir on the graph here: if it moved, the cached crack is void.
-let private fable (quiet: bool) (project: string) (outDir: string) =
+let private fable (project: string) (outDir: string) =
     let stamp = Path.Combine (outDir, ".package-graph")
     let graph = packageGraph project
     if File.Exists stamp && File.ReadAllText stamp <> graph then
@@ -357,8 +379,7 @@ let private fable (quiet: bool) (project: string) (outDir: string) =
     // pay a full dependency re-copy each time round.
     Directory.CreateDirectory outDir |> ignore
     File.WriteAllText (stamp, graph)
-    if quiet then run "dotnet" [ "fable"; project; "-o"; outDir ] |> ignore
-    else exec "dotnet" [ "fable"; project; "-o"; outDir ]
+    run "dotnet" [ "fable"; project; "-o"; outDir; "--noRestore" ] |> ignore
     declareEsm outDir
 
 // The asset set a build ships. What goes in it is declared once, in `AssetFile` — which this
@@ -389,12 +410,18 @@ let private buildAssets (outDir: string) (minify: bool) =
         at file |> ignore
         File.Copy (Path.Combine (repoRoot, "app", AssetFile.path file), Path.Combine (root, AssetFile.path file), true)
 
+    /// A browser program: one entry of the browser project's Fable output, bundled on its own.
+    let program (entry: string) (file: AssetFile) =
+        run esbuild
+            ([ sprintf "app/out/browser/%s.js" entry; "--bundle"; "--format=esm"; "--outfile=" + at file ] @ extra)
+        |> ignore
+
     let produce (file: AssetFile) =
         match file with
-        | AssetFile.``client`` ->
-            run esbuild
-                ([ "app/out/browser/Browser.js"; "--bundle"; "--format=esm"; "--outfile=" + at file ] @ extra)
-            |> ignore
+        | AssetFile.``client`` -> program "Browser" file
+        // The Manager page. An entry of its own in the browser project, so the page does not
+        // load the session client and the client does not carry it.
+        | AssetFile.``manager-page`` -> program "ManagerPage" file
         // The shell's stylesheet scans the F# sources for composed class names; the player's is
         // its own file because the shell defers it (see `app/player.css`).
         | AssetFile.``app`` -> run tailwind ([ "-i"; "app/tailwind.css"; "-o"; at file ] @ extra) |> ignore
@@ -417,42 +444,6 @@ let private buildAssets (outDir: string) (minify: bool) =
     for file in AssetFile.all do
         if not (File.Exists (Path.Combine (root, AssetFile.path file))) then
             failwithf "%s is declared in AssetFile but no producer wrote it" (AssetFile.path file)
-
-// RESTORED, not built. Fable reads each project's restore (`obj/project.assets.json`, which
-// `packageGraph` hashes before it runs) and cracks every referenced project from source; it never
-// loads an assembly `dotnet build` wrote. This used to build the whole solution anyway — the
-// suite, the analyzers, the tools and the examples, CLR-compiled for nothing that ships — which
-// was about a minute and a half of every `stage`: inside the Nix sandbox on both architectures,
-// in `package`, and ahead of the Node and browser suites in every `check` that stages.
-//
-// Type-checking every project for .NET is still done, by the verbs whose job it is: `build`
-// below, `check`, and `lint`, which all run on every pull request.
-let compile () =
-    printfn "compiling F# -> JS"
-    run "dotnet" [ "restore"; "Yession.slnx" ] |> ignore
-    fable true "app/main/Yession.Host.Main.fsproj" "app/out"
-    fable true "app/browser/Yession.Browser.fsproj" "app/out/browser"
-    buildAssets "app/out/public" true
-
-// The whole solution, for .NET, and then the JS. `lint` sends its reader here when the source did
-// not compile, so this has to report what the compiler says about EVERY project — a fault in the
-// suite or an analyzer included — and not only about the two that compile to what ships.
-let build () =
-    restore ()
-    run "dotnet" [ "build"; "Yession.slnx" ] |> ignore
-    compile ()
-
-// --- start / dev: run the Session Process locally --------------------------------------------
-
-// Local runs are single-machine, so the loopback trust rule is the right default here;
-// the shipped binary defaults to `--auth none` (deny) until the operator chooses.
-let start () =
-    build ()
-    exec "node" [ "app/out/Main.js"; "--auth"; "localhost" ]
-
-let dev () =
-    restore ()
-    exec "dotnet" [ "fable"; "watch"; "app/main/Yession.Host.Main.fsproj"; "-o"; "app/out"; "--runWatch"; "node"; "app/out/Main.js"; "--auth"; "localhost" ]
 
 // --- stage: bundle the two bins (deps external) and assemble dist/npm ------------------------
 
@@ -529,8 +520,8 @@ let private packageJson (version: string) =
   "bin": {
 %s
   },
-  "files": ["bin/", "manager.js", "session.js", "assets/", "README.md"],
-  "engines": { "node": ">=24" },
+  "files": ["bin/", "manager.js", "session.js", "SandboxHost.js", "assets/", "README.md"],
+  "engines": { "node": ">=24.14" },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "%s",
     "@anthropic-ai/sandbox-runtime": "%s",
@@ -552,17 +543,17 @@ let private packageJson (version: string) =
         (depVersion "node-datachannel")
         (depVersion "zod")
 
-let stage (version: string) =
+/// Assemble `dist/npm` from what the compiles left: the two bins bundled, the asset set copied,
+/// the shims and the manifest written. `Target.Package`'s producer — which is what guarantees the
+/// compiles under it ran first.
+let private assemble (version: string) =
     // Every build states what it is — a release number, `test`, `dev`, or a rev. An empty string
     // is no provenance at all, and would reach the published package.json, so it fails here.
     if String.IsNullOrWhiteSpace version then
         failwith "stage: no version (pass one, or set YESSION_VERSION)"
 
-    compile ()
-    printfn "staging yession %s (npm, one package / two bins) -> dist/npm" version
-
     // The two bins. The asset set checks itself, in `buildAssets`, against its declaration.
-    for required in [ "app/out/Main.js"; "app/SessionMain.js" ] do
+    for required in [ "app/out/Main.js"; "app/SessionMain.js"; "app/SandboxHost.js" ] do
         if not (File.Exists (Path.Combine (repoRoot, required))) then
             failwithf "missing %s after compile" required
 
@@ -573,6 +564,10 @@ let stage (version: string) =
 
     bundle version "app/out/Main.js" "manager.js"
     bundle version "app/SessionMain.js" "session.js"
+    // A session's srt host, one process per srt sandbox. Not a bin — a session starts it, found
+    // BESIDE the session's own file (`SrtSandbox.hostEntry`), which is why it keeps the name
+    // its Fable output has: the unbundled session finds `app/SandboxHost.js` the same way.
+    bundle version "app/SandboxHost.js" "SandboxHost.js"
 
     // The asset set, copied whole (read package-relative at runtime by `Assets.load`). A
     // directory rather than a list of files, because which files a build ships is the BUILD's
@@ -592,6 +587,186 @@ let stage (version: string) =
     File.WriteAllText (Path.Combine (pkg, "bin/yession-session.js"), yessionSessionBinJs)
     File.WriteAllText (Path.Combine (pkg, "package.json"), packageJson version)
     File.Copy (Path.Combine (repoRoot, "README.md"), Path.Combine (pkg, "README.md"), true)
+
+// --- the build: what a verb needs, made once, side by side where nothing orders it ------------
+
+/// Something the build leaves on disk. A verb names the targets it needs and `make` makes them —
+/// each once, after everything it stands on, and at the same time as anything nothing orders it
+/// against. So no verb can bundle before the compile under it or forget a restore, and a verb
+/// that needs three compiles waits for the longest rather than for the sum.
+///
+/// That last part is where the time went. `check` used to compile the browser client, then the
+/// server, then the suite, one after another, though none reads anything another writes and a
+/// Fable compile keeps under two of a runner's four cores busy: 317 seconds on a clean tree
+/// against 119 side by side, for byte-identical output.
+///
+/// The cases are what exists afterwards, not the tool that writes it. A new one does not compile
+/// until `needs` says what it stands on and `produce` says how it is made.
+[<RequireQualifiedAccess>]
+type Target =
+    /// The .NET local tools (Fable among them), and `node_modules` where the environment has not
+    /// already provided one.
+    | Tools
+    /// Every project's NuGet restore — `obj/project.assets.json`, which Fable reads and nothing
+    /// else here needs. Deliberately not a BUILD: Fable cracks referenced projects from source and
+    /// never loads an assembly, and no Node suite does either (see `build` for who does).
+    | Packages
+    /// The server's JavaScript: `app/out/Main.js`, the Manager's entry, and `app/SessionMain.js`,
+    /// a session's — with every module both import.
+    | Server
+    /// The browser project's JavaScript, `app/out/browser`: the session client, and the
+    /// Manager's page programs.
+    | Client
+    /// The asset set a build ships, `app/out/public/assets`: the browser programs bundled, the
+    /// stylesheets, the vendored faces.
+    | Assets
+    /// The npm package, `dist/npm`, stamped with the version it states.
+    | Package of version: string
+    /// The test suite's JavaScript, `tests/Yession.Tests/out` — every product module compiled
+    /// again beside the suites, since Fable compiles a project's references into its own output.
+    | Suite
+    /// The page the browser suites drive, `tests/browser/out`: the editor harness bundled, with an
+    /// unminified asset set beside it.
+    | Harness
+
+module private Target =
+
+    /// What a target stands on. Only what it READS: an order kept for any other reason is a
+    /// compile that waits for nothing.
+    let needs (target: Target) : Target list =
+        match target with
+        | Target.Tools
+        | Target.Packages -> []
+        | Target.Server
+        | Target.Client
+        | Target.Suite -> [ Target.Tools; Target.Packages ]
+        | Target.Assets
+        | Target.Harness -> [ Target.Client ]
+        | Target.Package _ -> [ Target.Server; Target.Assets ]
+
+    let describe (target: Target) : string =
+        match target with
+        | Target.Tools -> "the tools"
+        | Target.Packages -> "the package restore"
+        | Target.Server -> "the server"
+        | Target.Client -> "the browser client"
+        | Target.Assets -> "the asset set"
+        | Target.Package version -> sprintf "the npm package (%s)" version
+        | Target.Suite -> "the test suite"
+        | Target.Harness -> "the browser harness"
+
+    /// How a target is made, given that everything it `needs` already has been.
+    let produce (target: Target) =
+        match target with
+        | Target.Tools -> restoreTools ()
+        | Target.Packages -> run "dotnet" [ "restore"; "Yession.slnx" ] |> ignore
+        | Target.Server -> fable "app/main/Yession.Host.Main.fsproj" "app/out"
+        | Target.Client -> fable "app/browser/Yession.Browser.fsproj" "app/out/browser"
+        | Target.Assets -> buildAssets "app/out/public" true
+        | Target.Package version -> assemble version
+        | Target.Suite -> fable "tests/Yession.Tests/Yession.Tests.fsproj" "tests/Yession.Tests/out"
+        | Target.Harness ->
+            Directory.CreateDirectory (Path.Combine (repoRoot, "tests/browser/out")) |> ignore
+            run esbuild
+                [ "app/out/browser/EditorHarness.js"; "--bundle"; "--format=esm"
+                  "--outfile=tests/browser/out/harness.js" ]
+            |> ignore
+            // The harness renders the REAL shell (Plan 14), so it needs the real stylesheet:
+            // without it every Tailwind class is inert, and any layout the browser tier measures
+            // there — a phone viewport most of all — is a layout nobody will ever get.
+            buildAssets "tests/browser/out" false
+
+/// What this process has made, or is making. Once per PROCESS rather than per `make`, because a
+/// verb that makes the tools before it probes the box and then makes what its suites need is
+/// asking for the tools once, not twice.
+let private started = Collections.Concurrent.ConcurrentDictionary<Target, Lazy<Threading.Tasks.Task>> ()
+
+/// Make these targets and everything they stand on: each once, each the moment what it needs
+/// exists. Fails only after everything already started has finished, naming every target that
+/// could not be made — a compile error in the suite must not hide behind one in the client, and
+/// a compile killed half way by somebody else's failure leaves a tree nobody should read.
+let make (targets: Target list) =
+    let failed = Collections.Concurrent.ConcurrentQueue<Target * exn> ()
+    let rec made (target: Target) : Threading.Tasks.Task =
+        let start (target: Target) =
+            lazy
+                (task {
+                    do! Threading.Tasks.Task.WhenAll (Target.needs target |> List.map made |> Array.ofList)
+                    do!
+                        Threading.Tasks.Task.Run (
+                            Action (fun () ->
+                                let clock = Stopwatch.StartNew ()
+                                printfn "make: %s" (Target.describe target)
+                                try
+                                    Target.produce target
+                                    printfn "make: %s, done in %.0fs" (Target.describe target) clock.Elapsed.TotalSeconds
+                                with ex ->
+                                    failed.Enqueue (target, ex)
+                                    reraise ())
+                        )
+                 }
+                 :> Threading.Tasks.Task)
+        started.GetOrAdd(target, fun t -> start t).Value
+    try
+        Threading.Tasks.Task.WhenAll(targets |> List.map made |> Array.ofList).Wait ()
+    with :? AggregateException ->
+        // A target this process already failed to make, asked for again, fails again with nothing
+        // of this call's own to report.
+        if failed.IsEmpty then failwith "make: something this needs could not be made earlier in this run"
+        // Only the targets whose OWN making failed: everything above one of them failed with the
+        // same exception, and saying so again would read as more faults than there are.
+        for target, ex in failed do
+            eprintfn "make: could not make %s:\n%s\n" (Target.describe target) ex.Message
+        failwithf
+            "make: %s"
+            (failed |> Seq.map (fst >> Target.describe) |> String.concat ", " |> sprintf "could not make %s")
+
+// --- the verbs over it -----------------------------------------------------------------------
+
+/// The tools and `node_modules` — what every other verb calls first. Not the package restore,
+/// which is part of whatever needs it.
+let restore () = make [ Target.Tools ]
+
+/// Everything that ships, compiled: the server, the client, and the asset set.
+let compile () = make [ Target.Server; Target.Client; Target.Assets ]
+
+/// The npm package, assembled from what `compile` makes.
+let stage (version: string) = make [ Target.Package version ]
+
+// The whole solution compiled for .NET, and then the JavaScript. `lint` sends its reader here
+// when the source did not compile, so this has to report what the compiler says about EVERY
+// project — a fault in the suite or an analyzer included — and not only about the ones that
+// compile to what ships.
+//
+// Outside the graph, and before it rather than beside it, because nothing the graph makes reads
+// an assembly — and because MSBuild writing every project's `obj/` while Fable reads them is two
+// processes racing over one directory, which no order written in `needs` could express.
+let build () =
+    make [ Target.Tools; Target.Packages ]
+    run "dotnet" [ "build"; "Yession.slnx" ] |> ignore
+    compile ()
+
+// --- start / dev: run the Session Process locally --------------------------------------------
+
+// The resources profile a session this repository runs for itself is under — the suites'
+// and a local `start`/`dev`'s. A session's own sandboxes are the ones its operator declares,
+// so without one it would have no `default` to open a terminal in.
+let ownProfile = Path.Combine (repoRoot, "tests", "resources.yaml")
+
+let private underOwnProfile () =
+    Environment.SetEnvironmentVariable ("YESSION_SESSION_RESOURCES", ownProfile)
+
+// Local runs are single-machine, so the loopback trust rule is the right default here;
+// the shipped binary defaults to `--auth none` (deny) until the operator chooses.
+let start () =
+    build ()
+    underOwnProfile ()
+    exec "node" [ "app/out/Main.js"; "--auth"; "localhost" ]
+
+let dev () =
+    make [ Target.Tools; Target.Packages ]
+    underOwnProfile ()
+    exec "dotnet" [ "fable"; "watch"; "app/main/Yession.Host.Main.fsproj"; "-o"; "app/out"; "--noRestore"; "--runWatch"; "node"; "app/out/Main.js"; "--auth"; "localhost" ]
 
 // --- boot-smoke: run a yession bin with ephemeral ports and assert it comes up ---------------
 
@@ -672,7 +847,6 @@ let bootSmoke (ready: string) (command: string) (arguments: string -> string lis
 // --- package: restore + stage + boot smoke + npm pack ----------------------------------------
 
 let package (version: string) =
-    restore ()
     stage version
     // Every shim the manifest offers runs, then the Manager's boots (it self-sets
     // YESSION_SPAWN_MAIN); externals resolve from the repo node_modules two levels up from
@@ -787,11 +961,11 @@ let example (name: string) =
     else
 
     let project = Directory.GetFiles (dir, "*.fsproj") |> Array.exactlyOne
-    restore ()
+    make [ Target.Tools; Target.Packages ]
     printfn "building example %s" name
     run "dotnet" [ "build"; project ] |> ignore
     let out = Path.Combine (dir, "out")
-    fable true project out
+    fable project out
     // Fable mirrors the project's own source layout under `-o`, so the entry is wherever
     // `Main.fs` sat rather than at the root — found rather than assumed, so an example is free
     // to lay its sources out however reads best. `fable_modules` is excluded because the
@@ -887,6 +1061,24 @@ let private ptyAvailable () =
           "const p=require('node-pty');const t=p.spawn('/bin/sh',['-c','exit 0'],{cols:80,rows:24});t.kill()" ]
 
 // The live agent suites need a real credential; the SDK reads either of these.
+// A GitHub token, and a GitHub that ACCEPTS it. Asked of this repository, which is public and
+// answers anybody — so a 200 with the token attached says the token is good (a bad one is a
+// 401 even here), not merely that the repository exists. HttpClient follows HTTPS_PROXY, which
+// is what lets a sandbox whose proxy holds the real credential behind a placeholder count.
+let private githubAccepts () =
+    match Environment.GetEnvironmentVariable "GITHUB_TOKEN" with
+    | null | "" -> false
+    | token ->
+        try
+            use client = new Net.Http.HttpClient (Timeout = TimeSpan.FromSeconds 30.0)
+            use request =
+                new Net.Http.HttpRequestMessage (Net.Http.HttpMethod.Get, "https://api.github.com/repos/trinketworks/yession")
+            request.Headers.UserAgent.ParseAdd "yession-check"
+            request.Headers.Authorization <- Net.Http.Headers.AuthenticationHeaderValue ("Bearer", token)
+            use response = client.Send request
+            response.IsSuccessStatusCode
+        with _ -> false
+
 let private agentCredentials () =
     [ "ANTHROPIC_API_KEY"; "CLAUDE_CODE_OAUTH_TOKEN" ]
     |> List.exists (fun name -> not (String.IsNullOrEmpty (Environment.GetEnvironmentVariable name)))
@@ -966,6 +1158,9 @@ let private requireCapabilities (caps: string list) =
             "NixBuild: no `nix` on PATH"
           if List.contains "LiveAgent" caps && not (agentCredentials ()) then
             "LiveAgent: no ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in the environment"
+          if List.contains "LiveGitHub" caps && not (githubAccepts ()) then
+            "LiveGitHub: no GITHUB_TOKEN, or GitHub refused it (a workflow passes "
+            + "secrets.GITHUB_TOKEN; a sandbox whose proxy holds the credential needs HTTPS_PROXY)"
           if List.contains "Pty" caps && not (ptyAvailable ()) then
             "Pty: node-pty could not open a pseudo-terminal (is the native addon built, and "
             + "does this box allow /dev/pts?)"
@@ -1027,6 +1222,7 @@ let private nodeBudgetMs (caps: Set<string>) =
     + allowing "Native" 30_000
     + allowing "Srt" 45_000
     + allowing "LiveAgent" 150_000
+    + allowing "LiveGitHub" 30_000
     + allowing "Docker" 150_000
     + allowing "Keyring" 45_000
     + allowing "Pty" 45_000
@@ -1043,7 +1239,7 @@ let private nodeBudgetMs (caps: Set<string>) =
 // Every nix build CI runs goes through a flake, and a flake source copy is what git tracks —
 // so no CI job has ever built the tree a developer actually has, and nothing outside this gate
 // notices when the two diverge (a `node_modules` symlink from the dev shell landing in the
-// derivation; a NuGet FOD hash that no longer matches what a restore produces). release.yml's
+// derivation; a dotnet-tools FOD hash that no longer matches what a tool restore produces). release.yml's
 // package-nix job stays the check of the pure consumer route; this is the check of yours.
 let private buildNixPackage () =
     // A build IS a boot: the derivation's `installCheckPhase` runs every bin it wrapped and
@@ -1056,48 +1252,10 @@ let private buildNixPackage () =
                 "--no-link"; "--print-build-logs" ]
     |> ignore
 
-// A full `verify` spends its first ~80 seconds in restore, build, Fable and stage — tools that
-// are either silent or so chatty their own progress reads as scrollback, so the run looks
-// hung. One line per stage, named for the stage and not the tool, is enough to tell "working"
-// from "wedged"; the stages the caps skip never announce themselves.
+// A run is a few minutes of tools that are either silent or so chatty their own progress reads as
+// scrollback, so it looks hung. One line per step, named for the step and not the tool, is enough
+// to tell "working" from "wedged" — `make` says the same of each target it makes.
 let private progress (label: string) = printfn "check: %s" label
-
-/// Compile the PRODUCT these capabilities need, host-side: whatever the suites will drive, as
-/// opposed to the suites themselves. Split out because a measuring run needs all of this and
-/// none of the suite compile below it.
-let private buildProduct (capSet: Set<string>) =
-    progress "building the solution"
-    exec "dotnet" [ "build"; "Yession.slnx" ]
-
-    // Browser output feeds both the host-spawning Node suites and the editor Browser E2E.
-    //
-    // `Nix` is in both lists for a different reason, and it is the subtle one: `NixSource` asserts
-    // that the derivation's source carries nothing git ignores, and an artefact that is not in the
-    // tree cannot be leaked by a filter that has stopped excluding it. `app/out` and `dist/npm` are
-    // two of the four leaks that contract exists for, so a run that builds neither is asking a
-    // narrower question while printing the same green. That cost nothing while `Nix` only ever rode
-    // along with every other capability; once `check Nix` became a tier of its own, it had to say so
-    // itself. The tree a developer has is the subject, and a developer has built and staged.
-    if hasAny capSet [ "Ports"; "Native"; "Docker"; "LiveAgent"; "Browser"; "Nix" ] then
-        progress "compiling the browser client"
-        fable false "app/browser/Yession.Browser.fsproj" "app/out/browser"
-
-    // Host-spawning Node suites drive the assembled npm package — stage it (compile + bundle).
-    // `test` names what this build is; the suites assert the bins report it back.
-    if hasAny capSet [ "Ports"; "Native"; "Docker"; "LiveAgent"; "Nix" ] then
-        progress "staging the npm package"
-        stage "test"
-
-/// Compile everything the Node suite needs for these capabilities, host-side, and hand back
-/// its entry point. Shared by `check` (which runs it here) and `vm-check` (which runs the same
-/// JS on a Linux target): the compiled JS is portable, so only `node_modules` is
-/// platform-specific — and that is the target's to provide, not this compile's.
-let private buildNodeSuite (capSet: Set<string>) : string =
-    buildProduct capSet
-    // The Node (Fable/JS) path — self-skips suites whose caps/runtime don't match.
-    progress "compiling the suite"
-    fable false "tests/Yession.Tests/Yession.Tests.fsproj" "tests/Yession.Tests/out"
-    "tests/Yession.Tests/out/Main.js"
 
 /// Which of the suite's two runtimes a run executes. Every suite runs on exactly one (`Tag`:
 /// `Browser` pins the .NET CLR, everything else is Node), so a run that names one executes only
@@ -1120,6 +1278,35 @@ type private Runtime =
     | Clr
     | Neither
 
+/// Whether a run executes its Node suites, and whether it executes its browser suites.
+let private runsNode (runtime: Runtime option) = runtime = None || runtime = Some Runtime.Node
+
+let private runsClr (caps: Set<string>) (runtime: Runtime option) =
+    caps.Contains "Browser" && (runtime = None || runtime = Some Runtime.Clr)
+
+/// Where `Target.Suite` leaves the suite's entry.
+let private suiteEntry = "tests/Yession.Tests/out/Main.js"
+
+/// What a run of these capabilities must have made before its first suite starts. Asked of the
+/// graph in ONE `make`, which is the point: the suite, the product the suites drive and the
+/// browser harness stand on nothing of each other's, so they compile side by side.
+///
+/// The product is the assembled npm package because the host-spawning Node suites drive it: a
+/// session spawned from `app/SessionMain.js`, the composition case from `dist/npm`. `test` names
+/// what this build is, and the suites assert the bins report it back.
+///
+/// `Nix` asks for it for a different reason, and it is the subtle one: `NixSource` asserts that
+/// the derivation's source carries nothing git ignores, and an artefact that is not in the tree
+/// cannot be leaked by a filter that has stopped excluding it. `app/out` and `dist/npm` are two
+/// of the four leaks that contract exists for, so a run that builds neither is asking a narrower
+/// question while printing the same green. The tree a developer has is the subject, and a
+/// developer has built and staged.
+let private preparing (caps: Set<string>) (runtime: Runtime option) : Target list =
+    [ if runsNode runtime then Target.Suite
+      if runtime <> Some Runtime.Neither && hasAny caps [ "Ports"; "Native"; "Docker"; "LiveAgent"; "Nix" ] then
+          Target.Package "test"
+      if runsClr caps runtime then Target.Harness ]
+
 let private runCheckOnce (requested: string list) (runtime: Runtime option) =
     let caps = requested
     requireCapabilities caps
@@ -1137,6 +1324,7 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
     | _ -> ()
     let budgetMs = nodeBudgetMs capSet
     Environment.SetEnvironmentVariable ("YESSION_TEST_CAPS", String.concat " " caps)
+    underOwnProfile ()
     // The suite is told its own budget, because a case's deadline is spent out of it: a wait
     // that asks for more than the run can afford is refused at the call rather than taking the
     // runner down later (`Support.settledWithin`).
@@ -1149,30 +1337,18 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
             | Runtime.Neither -> "runtime: none (no suite runs)"
             | r -> sprintf "runtime: %A only" r))
 
-    match runtime with
-    // The derivation builds its own source, offline, in its sandbox: nothing here feeds it.
-    | Some Runtime.Neither -> ()
-    // The browser suites drive the product, not the suite's JS: build that alone.
-    | Some Runtime.Clr -> buildProduct capSet
-    | Some Runtime.Node
-    | None ->
-        let mainJs = buildNodeSuite capSet
-        progress (sprintf "running the Node suite (budget %ds)" (budgetMs / 1000))
-        runNodeSuite mainJs caps budgetMs
+    make (preparing capSet runtime)
 
-    // The .NET CLR (Playwright) path — only when a Browser-tagged suite is enabled.
-    if capSet.Contains "Browser" && (runtime = None || runtime = Some Runtime.Clr) then
-        // No browser install step: Chromium comes from the environment
-        // (PLAYWRIGHT_BROWSERS_PATH, set by devenv.nix from nixpkgs' playwright-driver), like
-        // every other tool the suite needs. `check` used to shell out to `npx playwright
-        // install --with-deps`, which fetched from the network and installed system packages
-        // as root — mid-test-run, and only ever workable on a CI image.
-        Directory.CreateDirectory (Path.Combine (repoRoot, "tests/browser/out")) |> ignore
-        exec esbuild [ "app/out/browser/EditorHarness.js"; "--bundle"; "--format=esm"; "--outfile=tests/browser/out/harness.js" ]
-        // The harness renders the REAL shell (Plan 14), so it needs the real stylesheet:
-        // without it every Tailwind class is inert, and any layout the browser tier measures
-        // there — a phone viewport most of all — is a layout nobody will ever get.
-        buildAssets "tests/browser/out" false
+    if runsNode runtime then
+        progress (sprintf "running the Node suite (budget %ds)" (budgetMs / 1000))
+        runNodeSuite suiteEntry caps budgetMs
+
+    // The .NET CLR (Playwright) path. No browser install step: Chromium comes from the
+    // environment (PLAYWRIGHT_BROWSERS_PATH, set by devenv.nix from nixpkgs' playwright-driver),
+    // like every other tool the suite needs. `check` used to shell out to `npx playwright install
+    // --with-deps`, which fetched from the network and installed system packages as root —
+    // mid-test-run, and only ever workable on a CI image.
+    if runsClr capSet runtime then
         progress "running the browser suite (.NET CLR)"
         // The Microsoft.Playwright .NET package ships `node` as a stock glibc binary under
         // `.playwright/node/<rid>/`, and in a nixos/nix work sandbox — where an agent runs
@@ -1195,7 +1371,7 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
             |> Option.iter (fun node -> Environment.SetEnvironmentVariable ("PLAYWRIGHT_NODEJS_PATH", node))
         exec "dotnet" [ "run"; "--project"; "tests/Yession.Tests/Yession.Tests.fsproj" ]
 
-    // Last, because it is the long pole (a cold NuGet FOD fetch plus the whole compile again,
+    // Last, because it is the long pole (a cold NuGet fetch plus the whole compile again,
     // offline, inside the sandbox) and because the suites are the sharper signal. `Nix` asserts
     // what the derivation is allowed to SEE (NixSource.fs); this asserts that what it sees still
     // builds and boots. Two capabilities because they are two costs: the first is an evaluation
@@ -1316,7 +1492,7 @@ let check (args: string list) =
 /// being worked on without the caller having to restate the tier list and get it subtly wrong.
 let verify (args: string list) =
     check
-        ([ "Browser"; "Ports"; "Native"; "Docker"; "LiveAgent"; "Keyring"; "Nix"; "NixBuild"; "Srt"; "Pty"
+        ([ "Browser"; "Ports"; "Native"; "Docker"; "LiveAgent"; "LiveGitHub"; "Keyring"; "Nix"; "NixBuild"; "Srt"; "Pty"
            "Serial"; "Jumpstarter"; "Caddy" ]
          @ args)
 
@@ -1452,7 +1628,8 @@ let private vmCheck (target: LinuxTarget) (args: string list) =
         | Error reason -> failwithf "vm-check: %s" reason
     let capSet = Set.ofList caps
     // Host-side compile — the JS is portable; only node_modules is the target's to provide.
-    let mainJs = buildNodeSuite capSet
+    make (preparing capSet (Some Runtime.Node))
+    let mainJs = suiteEntry
     let lockHash =
         use sha = System.Security.Cryptography.SHA256.Create ()
         File.ReadAllBytes (Path.Combine (repoRoot, "package-lock.json"))
@@ -1475,7 +1652,9 @@ let private vmCheck (target: LinuxTarget) (args: string list) =
         linkPaths |> List.iter (fun p -> exec "ln" [ "-sfn"; nodeModules; p ])
         let env =
             [ "YESSION_TEST_CAPS", String.concat " " caps
-              "YESSION_NESTED_SANDBOX", "strict" ]
+              "YESSION_NESTED_SANDBOX", "strict"
+              // The same tree, at the same path (`repoPath`), so the same file.
+              "YESSION_SESSION_RESOURCES", Path.Combine (repoPath, "tests", "resources.yaml") ]
             @ (only |> Option.map (fun text -> "YESSION_TEST_ONLY", text) |> Option.toList)
             @ LinuxTarget.sandboxTools target
         progress
@@ -1929,6 +2108,19 @@ let private fixtures =
 let private fixtureProject name =
     Path.Combine ("analyzers", "fixtures", name, name + ".fsproj")
 
+// --- lock: rewrite every packages.lock.json --------------------------------------------------
+
+// The one restore allowed to change a lockfile. Directory.Build.props puts every restore in
+// locked mode, so a package added, removed or bumped fails the next build until this runs; a
+// global property on the command line outranks the one in the props file, and that is the
+// whole switch. Covers every project anything restores: the solution, and the analyzer fixtures
+// that live outside it.
+let private lock () =
+    let projects =
+        "Yession.slnx" :: (fixtures |> List.map (fun (_, name, _) -> fixtureProject name) |> List.distinct)
+    for project in projects do
+        exec "dotnet" [ "restore"; project; "--force-evaluate"; "-p:RestoreLockedMode=false" ]
+
 let private fixtureSource name file =
     Path.Combine (repoRoot, "analyzers", "fixtures", name, file)
 
@@ -2242,7 +2434,8 @@ let cleanDocker () =
 /// Its arguments pass straight through, so the probe states its own usage.
 let probe (args: string list) =
     let out = Path.Combine (repoRoot, "tools", "Yession.Probe", "out")
-    fable false (Path.Combine (repoRoot, "tools", "Yession.Probe", "Yession.Probe.fsproj")) out
+    make [ Target.Tools; Target.Packages ]
+    fable (Path.Combine (repoRoot, "tools", "Yession.Probe", "Yession.Probe.fsproj")) out
     runInherit repoRoot "node" ([ Path.Combine (out, "Probe.js") ] @ args) |> ignore
 
 /// The camera: a session's first load against a real deployment, every painted frame and every
@@ -2252,8 +2445,173 @@ let probe (args: string list) =
 /// makes.
 let frames (args: string list) =
     let out = Path.Combine (repoRoot, "tools", "Yession.Frames", "out")
-    fable false (Path.Combine (repoRoot, "tools", "Yession.Frames", "Yession.Frames.fsproj")) out
+    make [ Target.Tools; Target.Packages ]
+    fable (Path.Combine (repoRoot, "tools", "Yession.Frames", "Yession.Frames.fsproj")) out
     runInherit repoRoot "node" ([ Path.Combine (out, "Frames.js") ] @ args) |> ignore
+
+// --- crash-repro: the fable SIGSEGV, run until it happens --------------------------------------
+
+// `dotnet fable` dies with SIGSEGV about once in a hundred release builds (runs 753, 849, 946 —
+// the header of this file has the evidence). Once in a hundred cannot be bisected, and cannot be
+// said to be fixed, so this verb turns it into something that can: it does, over and over and
+// in parallel, what the faulting thread was doing, and stops at the first child that dies.
+//
+// Two layers, tightest first:
+//
+//   regex — what Fable's `Printer.ParsedXmlDoc.Parse` does, with no Fable in it: construct a
+//           `RegexOptions.Compiled` regex over the same pattern, match one doc comment, drop it,
+//           from thread-pool work items as Fable's printer does. Each construction is a
+//           Reflection.Emit dynamic method generated, run and made collectible. Alone, that
+//           churn did not crash (about 20M regexes on both architectures, crash-repro run 1) —
+//           under fsi's Server GC. Under the workstation collector Fable uses, and with `heapMb`
+//           standing in for the rest of a compiler (a live object graph of that size, rewritten
+//           by mutator threads), it does: 6 of 8 x86_64 jobs in crash-repro run 9, three by
+//           SIGSEGV with run 946's stack and three by a compiled regex answering wrongly.
+//   fable — the real compiler over the real browser client, `--noCache` so every run prints
+//           (and so parses) every doc comment again. This one crashes: two x86_64 children in
+//           about 130 compiles (crash-repro run 2), with run 946's stack.
+//
+// Each round spawns `workers` children side by side; a child is a fresh process, because the
+// runtime state that goes wrong dies with the process that corrupted it. Children run under the
+// same crash-report instrumentation as every other child here, so a hit comes back with stacks.
+// Any `NAME=value` argument is set in every child's environment, which is how a runtime knob
+// (`DOTNET_TieredCompilation=0`, `DOTNET_gcServer=1`) is tried against the crash rate.
+//
+//   crash-repro regex [rounds] [workers] [seconds] [heapMb] [NAME=value …]   defaults 20, cores, 60, 2000
+//   crash-repro fable [rounds] [workers] [NAME=value …]                      defaults 10, 2
+//
+// Exit 0: no child died in the budget. Exit 1: one did, and its report is printed. The nix
+// sandbox, where every crash so far has happened, is reached through `nix build --file
+// nix/worktree.nix crashRepro` (and `--rebuild` to run it again); `crash-repro.yml` fans either
+// out across both architectures.
+
+/// The pattern and the input shape Fable matches for every declaration with a doc comment.
+let private summaryPattern = @"<summary>([\s\S]*?)</summary>"
+
+let private docComment (i: int) =
+    sprintf "<summary>\n Declaration %d, %s\n</summary>\n<param name=\"x\">%s</param>" i (String ('w', i % 400)) (string i)
+
+/// A live graph of roughly `heapMb` megabytes that stays reachable until `until`, with mutator
+/// threads replacing random nodes so the old generation keeps acquiring pointers into the new
+/// one — the write-barrier and card-marking traffic a compiler's heap produces and a regex loop
+/// alone does not. Returns the threads so the caller can wait on them.
+let private liveHeap (heapMb: int) (until: DateTime) : Threading.Thread list =
+    if heapMb <= 0 then []
+    else
+        // A node is 64 references and a payload: about half a kilobyte.
+        let nodes : obj array array = Array.init (heapMb * 2000) (fun i -> Array.zeroCreate 64)
+        for i in 1 .. nodes.Length - 1 do
+            nodes.[i].[0] <- box nodes.[i - 1]
+        [ for m in 0 .. max 1 (Environment.ProcessorCount / 2) - 1 ->
+            let t =
+                Threading.Thread (fun () ->
+                    let random = Random (m)
+                    while DateTime.UtcNow < until do
+                        let fresh : obj array = Array.zeroCreate 64
+                        fresh.[1] <- box (String ('h', random.Next 256))
+                        fresh.[2] <- box nodes.[random.Next nodes.Length]
+                        nodes.[random.Next nodes.Length] <- fresh)
+            t.IsBackground <- true
+            t.Start ()
+            t ]
+
+/// One child's work: until the deadline, thread-pool work items compile, match and discard,
+/// over a live heap when one is asked for. Prints how many regexes it got through, which is the
+/// rate a fix has to be judged at.
+let private regexChurn (seconds: float) (heapMb: int) =
+    let deadline = DateTime.UtcNow.AddSeconds seconds
+    let mutators = liveHeap heapMb deadline
+    let workers = Environment.ProcessorCount * 2
+    let built = ref 0L
+    let work (w: int) =
+        Threading.Tasks.Task.Run (fun () ->
+            let mutable i = w
+            while DateTime.UtcNow < deadline do
+                let regex = Regex (summaryPattern, RegexOptions.Compiled)
+                let m = regex.Match (docComment i)
+                // A miss here is not a bug in the pattern — it matches every comment this makes —
+                // but the same fault answering wrongly instead of crashing: the JIT compiled this
+                // regex from some other method's IL (crash-repro run 9 got three of these).
+                if not m.Success then
+                    failwithf "crash-repro: WRONG RESULT: a freshly compiled regex did not match comment %d" i
+                Threading.Interlocked.Increment &built.contents |> ignore
+                i <- i + workers)
+    Threading.Tasks.Task.WaitAll (Array.init workers work)
+    mutators |> List.iter (fun t -> t.Join ())
+    printfn "crash-repro: %d compiled regexes in %.0fs on %d work items, %d MB live" built.Value seconds workers heapMb
+
+/// Rounds of children, side by side; the first death ends the run with its evidence.
+let private rounds
+    (layer: string)
+    (count: int)
+    (workers: int)
+    (env: (string * string) list)
+    (child: int -> string * string list)
+    =
+    let clock = Stopwatch.StartNew ()
+    env |> List.iter (fun (name, value) -> printfn "crash-repro %s: children run with %s=%s" layer name value)
+    for round in 1 .. count do
+        let children =
+            [ for w in 1 .. workers ->
+                let command, args = child w
+                let psi = ProcessStartInfo (command)
+                args |> List.iter psi.ArgumentList.Add
+                psi.WorkingDirectory <- repoRoot
+                psi.RedirectStandardOutput <- true
+                psi.RedirectStandardError <- true
+                env |> List.iter (fun (name, value) -> psi.Environment.[name] <- value)
+                let p = Process.Start (accountsForItself psi)
+                let out = p.StandardOutput.ReadToEndAsync ()
+                let err = p.StandardError.ReadToEndAsync ()
+                p, out, err ]
+        let died =
+            [ for p, out, err in children do
+                p.WaitForExit ()
+                let output = out.Result.Trim ()
+                if layer = "regex" && output <> "" then printfn "%s" output
+                if p.ExitCode <> 0 then yield p.ExitCode, output + "\n" + err.Result.Trim ()
+                p.Dispose () ]
+        match died with
+        | (code, output) :: _ ->
+            failwithf
+                "crash-repro %s: a child died (%s) in round %d of %d, after %.0fs:\n%s%s"
+                layer (diedOf code) round count clock.Elapsed.TotalSeconds output (crashEvidence ())
+        | [] -> printfn "crash-repro %s: round %d of %d clean (%d children, %.0fs)" layer round count workers clock.Elapsed.TotalSeconds
+    printfn "crash-repro %s: no crash in %d rounds of %d children" layer count workers
+
+let crashRepro (args: string list) =
+    let isSetting (a: string) = a.Contains "="
+    let env =
+        args
+        |> List.filter isSetting
+        |> List.map (fun a -> let i = a.IndexOf '=' in a.[.. i - 1], a.[i + 1 ..])
+    let positional = args |> List.filter (isSetting >> not)
+    let number (i: int) (fallback: int) =
+        positional |> List.tryItem i |> Option.map int |> Option.defaultValue fallback
+    match positional with
+    | "regex" :: _ ->
+        let seconds = number 3 60
+        let heapMb = number 4 2000
+        // `dotnet fsi` runs with Server GC (its runtimeconfig says so), and under Server GC the
+        // fault has never shown — not in fsi and not in Fable. Fable runs with the workstation
+        // collector, so that is what a child gets unless the arguments say otherwise.
+        let env = if env |> List.exists (fst >> (=) "DOTNET_gcServer") then env else ("DOTNET_gcServer", "0") :: env
+        rounds "regex" (number 1 20) (number 2 Environment.ProcessorCount) env (fun _ ->
+            "dotnet", [ "fsi"; Path.Combine (repoRoot, "tasks.fsx"); "crash-repro-child"; string seconds; string heapMb ])
+    | "fable" :: _ ->
+        make [ Target.Tools; Target.Packages ]
+        let project = Path.Combine (repoRoot, "app", "browser", "Yession.Browser.fsproj")
+        // One compile before the rounds, uncounted: Fable's project cracker writes each
+        // project's `obj/` on first sight, and two children cracking side by side race on it
+        // (MSB3491, a SIGABRT in round 1 that is not the fault this is chasing).
+        let warm = Path.Combine (Path.GetTempPath (), "yession-crash-repro-warm")
+        run "dotnet" [ "fable"; project; "-o"; warm; "--noRestore" ] |> ignore
+        rounds "fable" (number 1 10) (number 2 2) env (fun w ->
+            let out = Path.Combine (Path.GetTempPath (), sprintf "yession-crash-repro-%d" w)
+            "dotnet", [ "fable"; project; "-o"; out; "--noRestore"; "--noCache" ])
+    | _ ->
+        failwith
+            "crash-repro regex [rounds] [workers] [seconds] [heapMb] [NAME=value …] | crash-repro fable [rounds] [workers] [NAME=value …]"
 
 // --- dispatch --------------------------------------------------------------------------------
 
@@ -2264,6 +2622,7 @@ let rest i = if argv.Length > i then argv.[i..] |> Array.toList else []
 match arg 1 with
 | Some "compile" -> compile ()
 | Some "restore" -> restore ()
+| Some "lock" -> lock ()
 | Some "build" -> build ()
 | Some "start" -> start ()
 | Some "dev" -> dev ()
@@ -2275,6 +2634,9 @@ match arg 1 with
 | Some "lint" -> lint ()
 | Some "probe" -> probe (rest 2)
 | Some "frames" -> frames (rest 2)
+| Some "crash-repro" -> crashRepro (rest 2)
+| Some "crash-repro-child" ->
+    regexChurn (arg 2 |> Option.map float |> Option.defaultValue 60.0) (arg 3 |> Option.map int |> Option.defaultValue 0)
 | Some "bench" -> bench (rest 2)
 | Some "bench-guard" -> benchGuard ()
 | Some "bench-publish" -> benchPublish (arg 2 |> Option.defaultWith defaultVersion)

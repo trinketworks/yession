@@ -56,6 +56,18 @@ type RepoSandboxes =
       /// Sandboxes this session is running that no file declares any more. Named rather
       /// than stopped.
       Undeclared : unit -> SandboxRef list
+      /// Every declaration the last fold read, in a stable order. Answered here because this
+      /// is what holds declarations; the sandbox manager holds none and asks.
+      ///
+      /// The whole list rather than a lookup, because the two questions a start asks are one
+      /// question: what this name was declared as, and — when it was declared as nothing —
+      /// which names its repo does declare, which is the only useful half of that refusal.
+      ///
+      /// A start that NAMES a repo's sandbox has to bring it up as the file says, and only
+      /// this knows what the file said. Naming `octo/hello:dev` started it from the empty
+      /// declaration the tool carries — no container — and was refused as a repo sandbox
+      /// declaring none, which sends whoever reads it to a `yession.yaml` that declares one.
+      Declared : unit -> (SandboxRef * SandboxDecl) list
       /// What a checkout said one of its sandboxes is FOR, from the last fold. Answered here
       /// because this is what holds declarations; the sandbox manager holds none and asks.
       Described : SandboxRef -> string option
@@ -76,6 +88,7 @@ let none : RepoSandboxes =
     { Fold = fun _ _ -> async { return () }
       Outcomes = fun () -> []
       Undeclared = fun () -> []
+      Declared = fun () -> []
       Described = fun _ -> None
       ReposAt = fun _ -> None
       Approve = fun _ _ _ -> async { return Error "this session has no repos to approve anything for" } }
@@ -111,6 +124,16 @@ let private lastRefusal (events: SessionEvent list) (repo: RepoRef) (sandbox: Sa
         | _ -> None)
     |> List.tryLast
     |> Option.flatten
+
+/// Whether the log already carries this exact note about this repo's file — the same words,
+/// at the same place. A note moves when its file does, and a moved one is news.
+let private alreadyNoted (events: SessionEvent list) (repo: RepoRef) (where: string) (warning: string) : bool =
+    events
+    |> List.exists (fun event ->
+        match event with
+        | SessionEvent.RepoConfigWarned w ->
+            RepoRef.value w.Repo = RepoRef.value repo && w.Where = where && w.Warning = warning
+        | _ -> false)
 
 /// What the log already says this repo asks for.
 ///
@@ -197,24 +220,21 @@ let create
         }
 
     let mutable outcomes : FoldOutcome list = []
-    // Which refs the last fold saw declared. Compared against what is RUNNING to answer
-    // "no longer declared", which is a question about the difference between the two and
-    // so belongs to whoever holds both.
-    let mutable declaredRefs : Set<string> = Set.empty
-    // What the last fold read each declaration as saying it is for. Kept beside the refs for
-    // the same reason they are: a description is a fact about the FILE as it stood when it
-    // was folded, and re-reading it later would answer about a file that has since changed.
-    let mutable describedRefs : Map<string, string> = Map.empty
-    let mutable reposAtRefs : Map<string, string> = Map.empty
+    // What the last fold read, by rendered ref: the DECLARATIONS themselves, which is the one
+    // fact every answer below is a slice of.
+    //
+    // It is a fact about the FILES as they stood when they were folded, so it is kept rather
+    // than re-read: reading again later would answer about a file that has since changed. It
+    // was three maps — the refs, the descriptions, and the `repos:` paths — each a projection
+    // of this one, and each able to disagree with the others about which fold it came from.
+    let mutable declarations : Map<SandboxRef, SandboxDecl> = Map.empty
 
     let foldOnce (cause: FoldCause) (onBehalfOf: CredentialFor) : Async<unit> =
         async {
             match repos () with
             | None ->
                 outcomes <- []
-                declaredRefs <- Set.empty
-                describedRefs <- Map.empty
-                reposAtRefs <- Map.empty
+                declarations <- Map.empty
             | Some service ->
                 match! service.ListRepos () with
                 // A listing that failed says nothing about any repo in particular, so there
@@ -223,23 +243,14 @@ let create
                 // saying nothing.
                 | Error _ -> ()
                 | Ok listings ->
-                    let declared, unreadable =
-                        RepoConfig.readAll reposDir (listings |> List.map (fun listing -> listing.Repo))
-                    // Read off the declarations BEFORE anything is started, so a sandbox that
-                    // comes up in this fold can be described as it comes up rather than on the
-                    // next one.
-                    describedRefs <-
-                        declared
-                        |> Map.toList
-                        |> List.choose (fun (ref, decl) ->
-                            decl.Description |> Option.map (fun said -> SandboxRef.render ref, said))
-                        |> Map.ofList
-                    reposAtRefs <-
-                        declared
-                        |> Map.toList
-                        |> List.choose (fun (ref, decl) ->
-                            decl.Repos |> Option.map (fun at -> SandboxRef.render ref, at))
-                        |> Map.ofList
+                    let read = RepoConfig.readAll reposDir (listings |> List.map (fun listing -> listing.Repo))
+                    let declared = read.Declared
+                    let unreadable = read.Refused
+                    // Kept BEFORE anything is started, so a sandbox that comes up in this fold
+                    // can be described as it comes up rather than on the next one — and so a
+                    // start in this fold can be answered about, which is what a declaration is
+                    // read for at all.
+                    declarations <- declared
                     let fileProblems =
                         unreadable
                         |> List.map (fun (repo, reason) ->
@@ -295,7 +306,7 @@ let create
                                 Some (RepoRef.value repo, capabilities.Granted)
                             | _ -> None)
                         |> Map.ofList
-                    let! declarations =
+                    let! rows =
                         declared
                         |> Map.toList
                         |> List.map (fun (ref, decl) ->
@@ -359,8 +370,7 @@ let create
                         // own timeline events interleave by completion, which is the coming-up
                         // happening at once made visible.
                         |> Async.Parallel
-                    outcomes <- fileProblems @ (declarations |> Array.toList |> List.choose id)
-                    declaredRefs <- declared |> Map.toList |> List.map (fst >> SandboxRef.render) |> Set.ofList
+                    outcomes <- fileProblems @ (rows |> Array.toList |> List.choose id)
                     // Say the refusals that are NEW. A start already announces itself, so
                     // without this the two outcomes of a declaration were split — one on the
                     // timeline, one behind a query nobody opens until they suspect a problem,
@@ -391,6 +401,25 @@ let create
                                           RepoConfigRefused.Reason = reason
                                           RepoConfigRefused.Actor = actor
                                           RepoConfigRefused.CausedBy = FoldCause.causeFor outcome.Repo cause })
+                    // What the analyzers had to say, each said ONCE: a note already in the log
+                    // is not news on the next fold, and re-announcing it every time anybody
+                    // touched a repo would train people to stop reading them.
+                    for repo, located in read.Findings do
+                        let sandbox = located.Finding.Sandbox |> Option.map (SandboxRef.inScope repo)
+                        let where = LocatedFinding.where located
+                        if not (alreadyNoted told repo where located.Finding.Message) then
+                            let actor = ActorRef.Configured repo
+                            do!
+                                append
+                                    actor
+                                    (SessionEvent.RepoConfigWarned
+                                        { RepoConfigWarned.MessageId = mintMessageId ()
+                                          RepoConfigWarned.Repo = repo
+                                          RepoConfigWarned.Sandbox = sandbox
+                                          RepoConfigWarned.Where = where
+                                          RepoConfigWarned.Warning = located.Finding.Message
+                                          RepoConfigWarned.Actor = actor
+                                          RepoConfigWarned.CausedBy = FoldCause.causeFor repo cause })
         }
 
     // One fold at a time. Folding is idempotent by construction, but only ONE AT A TIME:
@@ -450,8 +479,7 @@ let create
                 match! service.ListRepos () with
                 | Error reason -> return Error reason
                 | Ok listings ->
-                    let declared, _ =
-                        RepoConfig.readAll reposDir (listings |> List.map (fun listing -> listing.Repo))
+                    let declared = (RepoConfig.readAll reposDir (listings |> List.map (fun listing -> listing.Repo))).Declared
                     match askedBy declared repo with
                     | None -> return Error (sprintf "%s asks for nothing this session can resolve" (RepoRef.value repo))
                     // The set that arrived is the set a person read. If it is not what
@@ -496,13 +524,16 @@ let create
         |> List.filter (fun ref ->
             match SandboxRef.scope ref with
             | SessionOwned -> false
-            | RepoOwned _ -> not (Set.contains (SandboxRef.render ref) declaredRefs))
+            | RepoOwned _ -> not (Map.containsKey ref declarations))
+
+    let declaredAs (ref: SandboxRef) = Map.tryFind ref declarations
 
     { Fold = fold
       Outcomes = fun () -> outcomes
       Undeclared = undeclared
-      Described = fun ref -> Map.tryFind (SandboxRef.render ref) describedRefs
-      ReposAt = fun ref -> Map.tryFind (SandboxRef.render ref) reposAtRefs
+      Declared = fun () -> Map.toList declarations
+      Described = fun ref -> declaredAs ref |> Option.bind (fun decl -> decl.Description)
+      ReposAt = fun ref -> declaredAs ref |> Option.bind (fun decl -> decl.Repos)
       Approve = approve }
 
 // --- the `repo_config` query ------------------------------------------------------------

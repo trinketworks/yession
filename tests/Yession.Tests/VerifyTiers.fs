@@ -35,8 +35,7 @@ open Thoth.Json.Net
 /// Anchored at the repository root, not at the runner's working directory — the same reading
 /// `ReleaseGate` does, and for the same reason: the subject is a committed document.
 let private gitToplevel () : string =
-    let options = jsOptions<Node.ChildProcess.ExecOptions> (fun o -> o.encoding <- Some "utf8")
-    unbox<string> (Node.Api.childProcess.execSync ("git rev-parse --show-toplevel", box options))
+    Fable.NodeExtras.SyncChildProcesses.execSync "git rev-parse --show-toplevel" Fable.NodeExtras.SyncOptions.none
 
 let private repoRoot () : string option =
     try

@@ -23,6 +23,9 @@ namespace Yession.App
 type AssetFile =
     /// The browser client bundle (esbuild over the Fable output).
     | ``client``
+    /// The Manager page's program — the fragment swaps, the rows stream, focus kept through
+    /// both — bundled the same way from its own entry in the browser project.
+    | ``manager-page``
     /// The shell's stylesheet (Tailwind over `app/tailwind.css`).
     | ``app``
     /// The replay player's stylesheet, its own file because the shell defers it.
@@ -62,6 +65,7 @@ module AssetFile =
     let describe (file: AssetFile) : string * string =
         match file with
         | AssetFile.``client`` -> "client.js", javascript
+        | AssetFile.``manager-page`` -> "manager-page.js", javascript
         | AssetFile.``app`` -> "app.css", stylesheet
         | AssetFile.``player`` -> "player.css", stylesheet
         | AssetFile.``noto-sans-200`` -> "fonts/noto-sans-latin-200-normal.woff2", woff2
@@ -83,6 +87,7 @@ module AssetFile =
     /// fails when one is missing here. The same shape the route contract's `every` uses.
     let all =
         [ AssetFile.``client``
+          AssetFile.``manager-page``
           AssetFile.``app``
           AssetFile.``player``
           AssetFile.``noto-sans-200``

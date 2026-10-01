@@ -12,6 +12,7 @@ module Yession.Tests.Queries
 //   * the door is shut: reading session state needs a session identity.
 
 open Fable.Core
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Tools
@@ -360,14 +361,14 @@ let private stubAuth () : SessionAuth.Auth =
 let private startQueryRoutes (registry: Queries.QueryRegistry) (feed: Queries.PanelFeed) =
     async {
         let route = Queries.routes (stubAuth ()) registry feed ""
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             if not (route req res) then
-                res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        return sprintf "http://127.0.0.1:%d" (Interop.serverPort listening)
+        return sprintf "http://127.0.0.1:%d" (serverPort listening)
     }
 
 /// Wait until `predicate` holds over the frames received so far, or give up. The stream is
@@ -482,14 +483,14 @@ let private routeTests =
         testCaseAsync "a refusal the caller calls permanent is asked ONCE, not in a loop" <|
             async {
                 let attempts = ResizeArray<int> ()
-                let handler (_req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+                let handler (_req: IncomingMessage) (res: ServerResponse) =
                     attempts.Add 1
-                    res.writeHead (405, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                    res.writeHead (405, [ ResponseHeader.ContentType "text/plain" ])
                     res.``end`` "no stream here"
-                let server = Interop.createServer handler
+                let server = createServer handler
                 let! listening =
                     Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-                let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
+                let url = sprintf "http://127.0.0.1:%d/stream" (serverPort listening)
                 let subscription = Sse.subscribeWhile url [] optionalStream ignore
                 // The retry delay is one second, so anything past it that still reads ONE is
                 // a subscription that gave up rather than one that has not come round yet.
@@ -504,14 +505,14 @@ let private routeTests =
                 // CALLER's, so a change that made every refusal permanent would pass the
                 // test above and silently stop the control legs from ever reconnecting.
                 let attempts = ResizeArray<int> ()
-                let handler (_req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+                let handler (_req: IncomingMessage) (res: ServerResponse) =
                     attempts.Add 1
-                    res.writeHead (503, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                    res.writeHead (503, [ ResponseHeader.ContentType "text/plain" ])
                     res.``end`` "not yet"
-                let server = Interop.createServer handler
+                let server = createServer handler
                 let! listening =
                     Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-                let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
+                let url = sprintf "http://127.0.0.1:%d/stream" (serverPort listening)
                 let subscription = Sse.subscribeWhile url [] optionalStream ignore
                 let! _ = Async.Sleep 2500
                 Expect.isTrue (Seq.length attempts > 1) "a server that is merely down is still coming back"

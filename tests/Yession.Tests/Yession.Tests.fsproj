@@ -16,6 +16,10 @@
 
   <ItemGroup>
     <Compile Include="Tags.fs" />
+    <!-- How a run ENDS, as opposed to what it found. Beside `Tags.fs` because they answer
+         the two halves of one question — which cases this run executes, and whether it
+         executed them — and early, because `Main.fs` is the only caller of either. -->
+    <Compile Include="RunEnd.fs" />
     <!-- The one HTTP client the suites drive routes with. Early, because everything that
          serves something uses it. -->
     <Compile Include="TestHttp.fs" />
@@ -45,6 +49,7 @@
     <!-- Finding a repository: the provider lookups and the gated route over them. The same
          shape as Models.fs — a stub provider behind a session surface — for the same reason. -->
     <Compile Include="GitHubRepos.fs" />
+    <Compile Include="LiveGitHub.fs" />
     <!-- What every provider request says on the wire and what this host makes of the answer
          — the decisions that used to live inside `[<Emit>]` strings, where nothing could
          reach them. After the suites whose modules it reads, and cheap: no socket. -->
@@ -74,6 +79,8 @@
     <Compile Include="Attach.fs" />
     <Compile Include="NodeExtras.fs" />
     <Compile Include="Timeline.fs" />
+    <!-- The waits the client model declares, on a hand-turned clock. -->
+    <Compile Include="Timers.fs" />
     <!-- The launch surface, through the model a browser folds and the renderer it serves. -->
     <Compile Include="LaunchSurface.fs" />
     <Compile Include="Editor.fs" />
@@ -96,6 +103,7 @@
     <Compile Include="SrtIntegration.fs" />
     <Compile Include="GitIntegration.fs" />
     <Compile Include="GitGateway.fs" />
+    <Compile Include="CredentialProxy.fs" />
     <Compile Include="PtyIntegration.fs" />
     <Compile Include="Phase3.fs" />
     <Compile Include="EventsHttp.fs" />
@@ -110,6 +118,7 @@
     <Compile Include="ProxyMap.fs" />
     <Compile Include="Hedgehog.fs" />
     <Compile Include="Resources.fs" />
+    <Compile Include="VolumeLeases.fs" />
     <Compile Include="SeededFiles.fs" />
     <Compile Include="Properties.fs" />
     <Compile Include="Acceptance.fs" />
@@ -160,6 +169,13 @@
          app/ calls them yet — the call sites migrate one at a time — and a binding
          project nothing calls is a project nothing proves. -->
     <ProjectReference Include="..\..\src\Fable.NodeExtras\Fable.NodeExtras.fsproj" />
+    <!-- The web-platform bindings: `Phase4` resolves a page's links, and the OIDC cookie jar a
+         redirect's `Location`, the way a browser does — through the WHATWG `URL` that Node
+         ships too. -->
+    <ProjectReference Include="..\..\src\Fable.BrowserExtras\Fable.BrowserExtras.fsproj" />
+    <!-- The fetch surface `Fable.Fetch` does not bind: the OIDC cookie jar reads every
+         `set-cookie` apart through it. -->
+    <ProjectReference Include="..\..\src\Fable.FetchExtras\Fable.FetchExtras.fsproj" />
     <!-- The zod bindings. The product calls them now (app/Agent.fs turns a tool
          descriptor's JSON Schema into a zod shape), so this reference is only so the
          suite can name them directly. -->

@@ -361,7 +361,9 @@ let create (config: ReposConfig) : Result<ReposService, string> =
               Realisation = []
               Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
               WorkingDirectory = Some reposDir
-              Filesystem = Confined }
+              Filesystem = Confined
+              Derived = Map.empty
+              Intercept = None }
 
         /// Every git this service spawns, built in the one place that carries the hardened
         /// env (`gitExec`) — so the probe below cannot drift from the verbs it speaks for.

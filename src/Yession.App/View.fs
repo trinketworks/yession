@@ -10,6 +10,7 @@ open Yession.Domain.Collab
 open Yession.Domain.Tools
 open Yession.Domain.Chat
 open Yession.Domain.Content
+open Yession.Domain.Artifacts
 open Yession.Domain.Files
 open Yession.Domain.Prs
 open Fable.BrowserExtras
@@ -17,7 +18,7 @@ open Lit
 
 /// The client shell as Fable.Lit templates. The view is a total function of the model
 /// (plus injected `ViewActions` for the few things a template cannot derive from the
-/// model: fresh ids, the interrupt round-trip, the sidebar toggle). In the browser Lit
+/// model: the draft sends, the sidebar toggle, focus moves). In the browser Lit
 /// renders it into `#app` on every model change (no manual innerHTML, no delegation, no
 /// focus juggling — Lit diffs); the host renders the same templates to a string for the
 /// served bootstrap (`Yession.Host.Ssr`).
@@ -41,8 +42,6 @@ type ViewActions =
       /// the slot alone (what the button used to do) left the text sitting in the composer and
       /// the next keystroke published it straight back, so the button looked broken.
       DiscardDraft : PeerId -> unit
-      /// Ask the Session Process to cancel the running agent turn.
-      Interrupt : AgentTurnId -> unit
       /// Collapse or reveal the sidebar column (a presentation bit on the shell root, not
       /// model; the browser also remembers a desktop collapse and moves focus to whichever
       /// control replaces the one that was pressed).
@@ -67,64 +66,9 @@ type ViewActions =
       /// is on screen whenever a credential needs one — including while the settings face is
       /// already open — so a toggle there would shut the panel it is pointing at.
       RevealSettings : unit -> unit
-      /// Claude connection panel (Plan 08). Imperative because they read panel inputs and
-      /// drive the /claude round-trips; the reducer only folds the resulting messages.
-      /// Begin the sign-in flow for the scope in the panel's selector.
-      ClaudeConnect : unit -> unit
-      /// Complete a flow with the pasted `code#state` from the panel's code input.
-      ClaudeComplete : unit -> unit
-      /// Store the pasted setup-token/API key from the panel's token input.
-      ClaudePasteToken : unit -> unit
-      /// Disconnect the credential stored for a scope choice ("session" | "mine").
-      ClaudeDisconnect : string -> unit
-      /// GitHub connection panel (Plan 14). Same imperative shape as the Claude set;
-      /// the flow differs (device code, no paste-back) so there is no Complete — the
-      /// browser polls while awaiting approval.
-      /// Begin the device-flow sign-in for the scope in the panel's selector.
-      GitHubConnect : unit -> unit
-      /// Store the pasted personal-access/user token from the panel's token input.
-      GitHubPasteToken : unit -> unit
-      /// Disconnect the credential stored for a scope choice ("session" | "mine").
-      GitHubDisconnect : string -> unit
-      /// Put a value on the system clipboard, and say so on the box it came from — the hook
-      /// of that box is the key (`ClientModel.Copied`), the second argument is the text.
-      ///
-      /// Imperative, and both halves for the same reason: the clipboard is a permission the
-      /// browser may refuse, so only the browser knows whether there is anything to confirm,
-      /// and the confirmation is a MOMENT, which needs a timer the reducer cannot hold.
-      Copy : string -> string -> unit
-      // The Repos panel's three actions (Plan 14) were RETIRED by Plan 15: adding,
-      // removing and switching a repo are commands, and commands belong to the agent, so
-      // a human asks and reads the act-line in the timeline. What is left of that panel is
-      // the `repos` QUERY, which needs no action at all.
-      /// Try the session again NOW, rather than when the supervised loop next would.
-      ///
-      /// A trigger, never a second schedule (Plan 20): it shortens the wait the lifecycle is
-      /// already in. It earns its place on the one client the loop deliberately will not
-      /// carry — a peer whose token was refused, which no amount of waiting fixes and which
-      /// therefore parks until somebody asks.
-      RetryNow : unit -> unit
-      /// Ask the Session Process to open a terminal (Plan 13). A command, so imperative:
-      /// the terminal's id is minted by the Process and comes back as an event.
-      OpenTerminal : string -> unit
-      /// Consent to what a repo asks for. Takes the set that is on screen, so a file that
-      /// changed under the reader cannot be approved by a click meant for something else.
-      ApproveRepoCapabilities : RepoRef -> string list -> unit
-      /// Ask the Session Process to close a terminal.
-      CloseTerminal : TerminalId -> unit
       /// Send a terminal composer slot: enqueue its command. Imperative for exactly the
       /// reason `SendDraft` is — the command text is a shared type the reducer cannot move.
       SendTerminalDraft : TerminalId -> PeerId -> unit
-      /// Take the terminal's stdin — enter live mode (Plan 13, stage 2e). Also the STEAL:
-      /// there is one control because there is one act, and any peer may perform it.
-      TakeTerminal : TerminalId -> unit
-      /// Hand it back to block mode.
-      ReleaseTerminal : TerminalId -> unit
-      /// Type the shell instrumentation in again after the terminal stopped marking (Plan 13,
-      /// stage 2f). Any peer may — it repairs rather than takes.
-      RearmTerminal : TerminalId -> unit
-      /// Ask the provider for a closed terminal's stream again (Plan 19, step 4).
-      ReattachTerminal : TerminalId -> unit
       /// Send keystrokes to a terminal this peer holds (Plan 14, stage 6). Imperative
       /// because it is a frame, and deliberately not acknowledged: a keystroke that needed a
       /// reply would make typing a round trip. The Session Process checks the lease, which
@@ -133,64 +77,7 @@ type ViewActions =
       TypeIntoTerminal : TerminalId -> string -> unit
       /// Report the holder's viewport size, so the pty and the program inside it agree about
       /// the screen (Plan 14, stage 6).
-      ResizeTerminal : TerminalId -> int -> int -> unit
-      /// Move focus into the side pane after a chip opened a tab there (Plan 14, stage 2).
-      /// Imperative because it is a focus move: the model says which tab is showing, and the
-      /// browser has to wait for the render that put it on screen. A chip that opened a pane
-      /// and left focus behind it is the failure the WCAG floor names.
-      FocusPane : unit -> unit
-      /// Return focus to the chat item that opened a tab, once that tab is closed. Takes the
-      /// tab's key, which is the only thing the chip and the tab share — the browser turns it
-      /// back into a selector. Without this, closing a tab strands focus on a control that
-      /// has just been removed from the document.
-      FocusChat : string -> unit
-      /// Hand focus to a terminal's watch toggle when the reader has been stranded (Plan 14,
-      /// stage 7; Plan 25, stage 3).
-      ///
-      /// The toggle itself never needs this: it relabels in place, so a press keeps its own
-      /// focus. What does is the AUTOMATIC catch-up — a rewound cast playing off its end
-      /// unmounts the player under whoever was focused inside it — and that is the only
-      /// caller left now the four differently-named exits have become one control.
-      FocusWatch : unit -> unit
-      /// Scroll a terminal's history to one of its commands and mark it (Plan 25, stage 3) —
-      /// the browser's half of "show in terminal". Imperative for the same reason `FocusPane`
-      /// is: the model moves the reader's position, and only the document can scroll.
-      RevealBlock : TerminalId -> BlockId -> unit
-      /// Scroll the conversation to one message and mark it — the rail's half of "take me
-      /// back there". Imperative for the reason `RevealBlock` is: the model says where the
-      /// chapters are, and only the document can scroll to one.
-      RevealMessage : MessageId -> unit
-      /// Scroll the conversation to its own tail — the "jump to latest" float's press.
-      /// Imperative for the same reason its siblings above are: how far the reader has
-      /// scrolled is a fact the document holds, not the model (`Render.fs` watches it and
-      /// shows or hides the float accordingly), so reaching the end is a document act too.
-      ScrollToLatest : unit -> unit
-      /// Put focus back on one item's actions control, after the menu it opened has gone.
-      /// Imperative for the reason every focus move here is: the model says the menu is
-      /// shut, and only the document knows where the cursor went. Without it, dismissing a
-      /// menu strands focus on `body` — the failure the WCAG floor names, and the one a
-      /// keyboard reader hits on the very first Escape.
-      FocusItemActions : MessageId -> unit
-      /// The launch surface's five effects. Ask the session for the repos this person can
-      /// choose from — theirs when the text is empty, a search otherwise; the answer comes
-      /// back as `LaunchListingArrived`.
-      LaunchSearch : string -> unit
-      /// Ask for the page a cursor names (`LaunchMoreArrived`). The cursor is the session's
-      /// own and is carried back unread — see `Repos.RepoPage`.
-      LaunchMore : string -> unit
-      /// Ask for one repo's branches (`LaunchBranchesArrived`), and for the page a branch
-      /// cursor names (`LaunchBranchMoreArrived`). The repo rides the second because a page
-      /// that landed after the pane moved on belongs to a question nobody is asking.
-      LaunchBranches : RepoRef -> unit
-      LaunchBranchesMore : RepoRef -> string -> unit
-      /// Send the choice: the `AddRepo` command, on the branch when one other than the
-      /// default was picked. The request leaves as `LaunchSent`; its admission comes back as
-      /// `CommandAnsweredMsg`, and its outcome as events.
-      LaunchStart : LaunchTarget -> unit
-      /// Launch what a pasted link asks for. A repo or a branch is sent as it stands; a pull
-      /// request is first asked about (`LaunchResolving`), since its head is the provider's
-      /// to say.
-      LaunchLink : Repos.RepoLink -> unit }
+      ResizeTerminal : TerminalId -> int -> int -> unit }
 
 module ViewActions =
     /// A no-op action set for rendering the view to a string (SSR + tests). The handlers
@@ -198,43 +85,13 @@ module ViewActions =
     let ssr : ViewActions =
         { SendDraft = ignore
           DiscardDraft = ignore
-          Interrupt = ignore
           ToggleNav = ignore
           ReportFieldSelection = fun _ _ -> ()
           ToggleSettings = ignore
           RevealSettings = ignore
-          ClaudeConnect = ignore
-          ClaudeComplete = ignore
-          ClaudePasteToken = ignore
-          ClaudeDisconnect = ignore
-          GitHubConnect = ignore
-          GitHubPasteToken = ignore
-          GitHubDisconnect = ignore
-          Copy = fun _ _ -> ()
-          LaunchSearch = ignore
-          LaunchMore = ignore
-          LaunchBranches = ignore
-          LaunchBranchesMore = fun _ _ -> ()
-          LaunchStart = ignore
-          LaunchLink = ignore
-          RetryNow = ignore
-          OpenTerminal = ignore
-          ApproveRepoCapabilities = fun _ _ -> ()
-          CloseTerminal = ignore
           SendTerminalDraft = fun _ _ -> ()
-          TakeTerminal = ignore
-          ReleaseTerminal = ignore
-          RearmTerminal = ignore
-          ReattachTerminal = ignore
           TypeIntoTerminal = fun _ _ -> ()
-          ResizeTerminal = fun _ _ _ -> ()
-          FocusPane = ignore
-          FocusChat = ignore
-          FocusWatch = ignore
-          RevealBlock = fun _ _ -> ()
-          RevealMessage = fun _ -> ()
-          ScrollToLatest = ignore
-          FocusItemActions = fun _ -> () }
+          ResizeTerminal = fun _ _ _ -> () }
 
 module View =
 
@@ -342,7 +199,7 @@ module View =
                        data-session-reopen="{target}">{Dom.Text.reopenSession}</a>""")
         | _ -> None
 
-    let private reconnectOffer (actions: ViewActions) (model: ClientModel) : TemplateResult option =
+    let private reconnectOffer (model: ClientModel) : TemplateResult option =
         match model.Connection, reopenAction model Style.noAgentAction with
         | Disconnected (Some reason), Some action ->
             // What reopening actually costs. Under a `{id}` template the session returns to
@@ -451,7 +308,7 @@ module View =
                           aria-valuemin="0" aria-valuemax="{string known}" aria-valuenow="{string folded}"
                           data-catch-up-bar style="{width}"></div>"""
 
-    let private connectionSection (actions: ViewActions) (model: ClientModel) : TemplateResult =
+    let private connectionSection (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let consumer = model.EventConsumer
         let showsCatchUp = showsCatchUp model
         let catchUp =
@@ -466,12 +323,12 @@ module View =
             | Disconnected _ ->
                 html $"""
                   <button type="button" class="{Style.btn}" data-retry-now
-                          @click={Ev(fun _ -> actions.RetryNow ())}>{Dom.Text.retryNow}</button>"""
+                          @click={Ev(fun _ -> dispatch RetryNowMsg)}>{Dom.Text.retryNow}</button>"""
             | _ -> Lit.nothing
         // The offer REPLACES the report rather than sitting over it: a status reading "not
         // connected", its reason, and a button to fix it would be saying one thing three
         // times. The offer carries the same promise and the same disclosure.
-        let offer = reconnectOffer actions model
+        let offer = reconnectOffer model
         let report = connectionReport model
         // Whichever of the two this column has to show, it is ONE mount of one report, so it
         // wears one hook and one visibility rule. Anything narrower and the rule stops being
@@ -583,7 +440,7 @@ module View =
                   <dl class="{Style.queryLegendEntries}">{rows}</dl>
                 </details>"""
 
-    let private peopleSection (actions: ViewActions) (model: ClientModel) : TemplateResult =
+    let private peopleSection (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         // The agent's row says whether a turn can RUN, which is not the same question as
         // whether a credential is stored. `agentAvailable` answers the second (any relevant
         // credential, or the host's ambient one), so a Claude sign-in that has stopped
@@ -660,7 +517,7 @@ module View =
                           <ul class="{Style.cls [ Style.label; "w-full min-w-0 whitespace-normal" ]}">{lines}</ul>
                           <button type="button" class="{Style.cls [ Style.btnPrimary; Style.noAgentAction; "w-full min-w-0" ]}"
                                   data-repo-approve="{RepoRef.value repo}"
-                                  @click={Ev(fun _ -> actions.ApproveRepoCapabilities repo granted)}>Approve</button>
+                                  @click={Ev(fun _ -> dispatch (ApproveRepoCapabilitiesMsg (repo, granted)))}>Approve</button>
                         </div>
                       </div>
                     </div>""")
@@ -761,12 +618,12 @@ module View =
     /// The Claude connection panel (Plan 08), living in the settings drawer: status per
     /// sign-in scope, the OAuth flow (approve on claude.ai → paste the shown code), and
     /// the paste-a-token fallback.
-    let private claudeSection (actions: ViewActions) (dispatch: ClientMsg -> unit) (claude: ClaudeViewState) : TemplateResult =
+    let private claudeSection (dispatch: ClientMsg -> unit) (claude: ClaudeViewState) : TemplateResult =
         let connectedRow (label: string) (scopeChoice: string) (credential: CredentialRow option) =
             match credential with
             | Some credential ->
                 html $"""
-                    <div class="{Style.sideRow}" data-claude-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.btnIconBareDanger}" aria-label="Disconnect" data-claude-disconnect="{scopeChoice}" @click={Ev(fun _ -> actions.ClaudeDisconnect scopeChoice)}>{Icon.close}</button></div>
+                    <div class="{Style.sideRow}" data-claude-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.btnIconBareDanger}" aria-label="Disconnect" data-claude-disconnect="{scopeChoice}" @click={Ev(fun _ -> dispatch (ClaudePressedMsg (ClaudePress.Disconnect scopeChoice)))}>{Icon.close}</button></div>
                     {credentialReason Dom.Hooks.claudeSignInRequired scopeChoice credential}"""
             | None -> html $""""""
         let controls =
@@ -781,22 +638,27 @@ module View =
                     <a class="{Style.btnPrimary}" href="{url}" target="_blank" rel="noreferrer" data-claude-authorize>Approve on claude.ai</a>
                     <label class="{Style.label}" for="claude-code">code from claude.ai</label>
                     <input id="claude-code" type="text" class="{Style.field}" data-claude-code placeholder="code#state"
-                           autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+                           autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
+                           .value={claude.Code}
+                           @input={EvVal(fun v -> dispatch (ClaudeCodeTyped v))} />
                     <div class="flex gap-2">
-                      <button type="button" class="{Style.btnPrimary}" data-claude-complete @click={Ev(fun _ -> actions.ClaudeComplete ())}>Complete</button>
+                      <button type="button" class="{Style.btnPrimary}" data-claude-complete @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Complete))}>Complete</button>
                       <button type="button" class="{Style.btn}" data-claude-cancel @click={Ev(fun _ -> dispatch (ClaudeFlowMsg ClaudeIdle))}>Cancel</button>
                     </div>"""
             | ClaudeIdle ->
                 html $"""
                     <label class="{Style.label}" for="claude-scope">sign in for</label>
-                    <select id="claude-scope" class="{Style.field}" data-claude-scope aria-label="Sign-in scope">
-                      <option value="mine">{sharedScopeLabel (claude.Status |> Option.map (fun panel -> panel.Owner))}</option>
-                      <option value="session">This session only</option>
+                    <select id="claude-scope" class="{Style.field}" data-claude-scope aria-label="Sign-in scope"
+                            @change={EvVal(fun v -> dispatch (ClaudeScopeChosen v))}>
+                      <option value="mine" ?selected={claude.Scope = "mine"}>{sharedScopeLabel (claude.Status |> Option.map (fun panel -> panel.Owner))}</option>
+                      <option value="session" ?selected={claude.Scope = "session"}>This session only</option>
                     </select>
-                    <button type="button" class="{Style.btnPrimary}" data-claude-connect @click={Ev(fun _ -> actions.ClaudeConnect ())}>Connect Claude</button>
+                    <button type="button" class="{Style.btnPrimary}" data-claude-connect @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Connect))}>Connect Claude</button>
                     <label class="{Style.label} pt-2" for="claude-token">setup token / api key</label>
-                    <input id="claude-token" type="password" class="{Style.field}" data-claude-token placeholder="sk-ant-…" />
-                    <button type="button" class="{Style.btn}" data-claude-save-token @click={Ev(fun _ -> actions.ClaudePasteToken ())}>Save token</button>"""
+                    <input id="claude-token" type="password" class="{Style.field}" data-claude-token placeholder="sk-ant-…"
+                           .value={claude.Token}
+                           @input={EvVal(fun v -> dispatch (ClaudeTokenTyped v))} />
+                    <button type="button" class="{Style.btn}" data-claude-save-token @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.SaveToken))}>Save token</button>"""
         let error =
             match Pending.refusal claude.Pending with
             | Some reason -> html $"""<span class="{Style.statusErr}" data-claude-error>{reason}</span>"""
@@ -878,14 +740,14 @@ module View =
     let private githubSection
         (actions: ViewActions)
         (dispatch: ClientMsg -> unit)
-        (copied: string option)
+        (copied: Copy option)
         (github: GitHubViewState)
         : TemplateResult =
         let connectedRow (label: string) (scopeChoice: string) (credential: CredentialRow option) =
             match credential with
             | Some credential ->
                 html $"""
-                    <div class="{Style.sideRow}" data-github-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.btnIconBareDanger}" aria-label="Disconnect GitHub" data-github-disconnect="{scopeChoice}" @click={Ev(fun _ -> actions.GitHubDisconnect scopeChoice)}>{Icon.close}</button></div>
+                    <div class="{Style.sideRow}" data-github-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.btnIconBareDanger}" aria-label="Disconnect GitHub" data-github-disconnect="{scopeChoice}" @click={Ev(fun _ -> dispatch (GitHubPressedMsg (GitHubPress.Disconnect scopeChoice)))}>{Icon.close}</button></div>
                     {credentialReason Dom.Hooks.githubSignInRequired scopeChoice credential}"""
             | None -> html $""""""
         let controls =
@@ -903,14 +765,14 @@ module View =
                 // one: an `aria-label` becomes the accessible name, so it would be announced
                 // in place of the very change it is here to report. The code is the box's
                 // contents and the caps label above says what it is.
-                let justCopied = copied = Some Dom.Hooks.githubUserCode
+                let justCopied = copied |> Option.exists (fun copy -> copy.Box = Dom.Hooks.githubUserCode)
                 html $"""
                     <span class="{Style.label}">code for github.com</span>
                     <div class="{Style.fieldActionWrap}">
                       <span class="{Style.fieldWithAction}" data-github-user-code aria-live="polite">{if justCopied then Dom.Text.copied else userCode}</span>
                       <button type="button" class="{Style.fieldAction}" data-github-copy-code
                               aria-label="{if justCopied then "Device code copied" else "Copy the device code"}"
-                              @click={Ev(fun _ -> actions.Copy Dom.Hooks.githubUserCode userCode)}>{if justCopied then Icon.check else Icon.copy}</button>
+                              @click={Ev(fun _ -> dispatch (CopyMsg (Dom.Hooks.githubUserCode, userCode)))}>{if justCopied then Icon.check else Icon.copy}</button>
                     </div>
                     <div class="flex gap-2">
                       <a class="{Style.btnPrimary}" href="{verificationUri}" target="_blank" rel="noreferrer" data-github-authorize>Approve on github.com</a>
@@ -919,14 +781,17 @@ module View =
             | GitHubIdle ->
                 html $"""
                     <label class="{Style.label}" for="github-scope">sign in for</label>
-                    <select id="github-scope" class="{Style.field}" data-github-scope aria-label="GitHub sign-in scope">
-                      <option value="mine">{sharedScopeLabel (github.Status |> Option.map (fun panel -> panel.Owner))}</option>
-                      <option value="session">This session only</option>
+                    <select id="github-scope" class="{Style.field}" data-github-scope aria-label="GitHub sign-in scope"
+                            @change={EvVal(fun v -> dispatch (GitHubScopeChosen v))}>
+                      <option value="mine" ?selected={github.Scope = "mine"}>{sharedScopeLabel (github.Status |> Option.map (fun panel -> panel.Owner))}</option>
+                      <option value="session" ?selected={github.Scope = "session"}>This session only</option>
                     </select>
-                    <button type="button" class="{Style.btnPrimary}" data-github-connect @click={Ev(fun _ -> actions.GitHubConnect ())}>Connect GitHub</button>
+                    <button type="button" class="{Style.btnPrimary}" data-github-connect @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.Connect))}>Connect GitHub</button>
                     <label class="{Style.label} pt-2" for="github-token">personal access token</label>
-                    <input id="github-token" type="password" class="{Style.field}" data-github-token placeholder="github_pat_…" />
-                    <button type="button" class="{Style.btn}" data-github-save-token @click={Ev(fun _ -> actions.GitHubPasteToken ())}>Save token</button>"""
+                    <input id="github-token" type="password" class="{Style.field}" data-github-token placeholder="github_pat_…"
+                           .value={github.Token}
+                           @input={EvVal(fun v -> dispatch (GitHubTokenTyped v))} />
+                    <button type="button" class="{Style.btn}" data-github-save-token @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.SaveToken))}>Save token</button>"""
         let error =
             match Pending.refusal github.Pending with
             | Some reason -> html $"""<span class="{Style.statusErr}" data-github-error>{reason}</span>"""
@@ -942,6 +807,16 @@ module View =
               {error}
               {controls}
             </section>"""
+
+    /// The one place a tone becomes an ink. Exhaustive on purpose: a fifth tone fails
+    /// the build HERE, where somebody has to choose a colour and prove its contrast,
+    /// rather than rendering as whatever the fall-through happened to be.
+    let private ink (tone: QueryTone) : string =
+        match tone with
+        | ToneOk -> Style.toneOk
+        | ToneBusy -> Style.toneBusy
+        | ToneBad -> Style.toneBad
+        | ToneMuted -> Style.toneMuted
 
     /// The generated read surface (Plan 15): ONE renderer for every query this session
     /// declares, now and later. Registering a query is what puts it on this screen —
@@ -959,15 +834,6 @@ module View =
             |> List.tryFind (fun (key, _) -> key = column.Key)
             |> Option.map snd
             |> Option.defaultValue CellAbsent
-        // The one place a tone becomes an ink. Exhaustive on purpose: a fifth tone fails
-        // the build HERE, where somebody has to choose a colour and prove its contrast,
-        // rather than rendering as whatever the fall-through happened to be.
-        let ink (tone: QueryTone) =
-            match tone with
-            | ToneOk -> Style.toneOk
-            | ToneBusy -> Style.toneBusy
-            | ToneBad -> Style.toneBad
-            | ToneMuted -> Style.toneMuted
         let face (cell: QueryCell) =
             match cell with
             | CellStatus (_, tone) -> Style.queryValueIn (ink tone)
@@ -1063,7 +929,7 @@ module View =
                 <span class="{Style.settingsTitle}">settings</span>
                 <button type="button" class="{Style.navChevronBack}" aria-label="Collapse sidebar" data-nav-toggle="hide" @click={Ev(fun _ -> actions.ToggleNav ())}>{Icon.left}</button>
               </div>
-              {claudeSection actions dispatch model.Claude}
+              {claudeSection dispatch model.Claude}
               {modelSection dispatch model}
               {githubSection actions dispatch model.Copied model.GitHub}
               {queriesSection model.Queries}
@@ -1083,7 +949,7 @@ module View =
     ///
     /// Absent until there is a chapter. A heading over nothing teaches a reader to skip the
     /// place the list will appear.
-    let private chaptersSection (actions: ViewActions) (model: ClientModel) : TemplateResult =
+    let private chaptersSection (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         match ClientModel.chapters model with
         | [] -> Lit.nothing
         | chapters ->
@@ -1095,7 +961,7 @@ module View =
                 html $"""
                     <button type="button" class="{Style.chapterEntry}"
                             data-chapter-entry="{MessageId.value item.MessageId}"
-                            @click={Ev(fun _ -> actions.RevealMessage item.MessageId)}>
+                            @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealMessage item.MessageId)))}>
                       <span class="{Style.chapterEntryDot}"></span>
                       <span class="truncate min-w-0">{ClientModel.chapterName model item}</span>
                     </button>"""
@@ -1106,16 +972,16 @@ module View =
                 </section>"""
 
     /// The workspace face of the column: identity, sync health, membership, environment, log.
-    let private navPane (actions: ViewActions) (model: ClientModel) : TemplateResult =
+    let private navPane (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         html $"""
             <div class="{Style.navPane}">
               <div class="{Style.cls [ Style.sideHead; Style.navLane0 ]}">
                 <span class="{Style.lockup}"><span class="{Style.lockupMark}" aria-hidden="true">{Brand.mark}</span><span class="{Style.wordmark}">yession</span></span>
                 <button type="button" class="{Style.navChevronBack}" aria-label="Collapse sidebar" data-nav-toggle="hide" @click={Ev(fun _ -> actions.ToggleNav ())}>{Icon.left}</button>
               </div>
-              {connectionSection actions model}
-              {peopleSection actions model}
-              {chaptersSection actions model}
+              {connectionSection dispatch model}
+              {peopleSection actions dispatch model}
+              {chaptersSection dispatch model}
               {environmentSection model.Environment}
               <div class="flex-1"></div>
               <button type="button" class="{Style.cls [ Style.navPivot; Style.navLane2 ]}" data-settings-toggle="open" @click={Ev(fun _ -> actions.ToggleSettings ())}>settings<span class="{Style.pivotMarkForward}">{Icon.pivotRight}</span></button>
@@ -1126,7 +992,7 @@ module View =
         html $"""
             <div class="{Style.scrim}" data-nav-toggle="hide" @click={Ev(fun _ -> actions.ToggleNav ())}></div>
             <aside class="{Style.sidebar}">
-              {navPane actions model}
+              {navPane actions dispatch model}
               {settingsPane actions dispatch model}
             </aside>"""
 
@@ -1260,12 +1126,12 @@ module View =
     /// One collaborator's title caret+selection marker: a selection highlight span and a caret
     /// bar with a name label. The browser positions all three by measurement after render (from
     /// the peer's relative positions, decoded against the title `Y.Text`); colour is fixed here.
-    let private remoteCursor (who: ActorRef) (presence: RemotePresence) : TemplateResult =
-        let colour = EditorColour.ofEditor who
+    let private remoteCursor (model: ClientModel) (who: ActorRef) (presence: RemotePresence) : TemplateResult =
+        let colour = Entity.presenceColour model who
         // Container = the translucent selection highlight (positioned `lo..hi` by the browser);
         // the caret bar is offset to `head` inside it; the label rides above the caret.
         html $"""
-            <span class="{Style.remoteCursor}" data-cursor-peer="{ActorRef.token who}" style="background:{EditorColour.translucent who}">
+            <span class="{Style.remoteCursor}" data-cursor-peer="{ActorRef.token who}" style="background:{Entity.presenceSelection model who}">
               <span class="{Style.remoteCursorCaret}" style="background:{colour}">
                 <span class="{Style.remoteCursorLabel}" style="background:{colour}">{presence.DisplayName}</span>
               </span>
@@ -1299,25 +1165,22 @@ module View =
         match PrStatus.summarize standings with
         | "" -> Lit.nothing
         | line ->
+            // The worst live word's tone — `PrStatus.tone`, the same volume the table
+            // behind this strip says that word at.
             let worst = standings |> List.map snd |> List.filter PrStatus.live
-            let tone =
-                match worst |> List.fold (fun acc word -> PrStatus.worse acc word) "closed" with
-                | "stalled" -> Style.toneBad
-                | word when word = PrStatus.unreachable -> Style.toneBad
-                | "queued" -> Style.toneBusy
-                | _ -> Style.toneMuted
+            let tone = worst |> List.fold PrStatus.worse "closed" |> PrStatus.tone |> ink
             html $"""
                 <button type="button" class="{Style.prStripIn tone}" aria-label="Pull requests"
                         data-pr-strip @click={Ev(fun _ -> actions.ToggleSettings ())}>{line}</button>"""
 
-    /// The way back into the terminals column once it is shut. Present only while it IS
+    /// The way back into the content column once it is shut. Present only while it IS
     /// shut, so there are never two controls for the one column on screen at once.
-    let private terminalsReopen (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+    let private contentReopen (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         if model.TerminalsOpen then Lit.nothing
         else
             html $"""
-                <button type="button" class="{Style.terminalReopen}" aria-label="Show terminals"
-                        data-terminal-toggle="show" @click={Ev(fun _ -> dispatch ToggleTerminalsMsg)}>{Icon.left}terminals</button>"""
+                <button type="button" class="{Style.terminalReopen}" aria-label="Show the content pane"
+                        data-content-toggle="show" @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.left}content</button>"""
 
     let private header (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let titleStr = Ylmish.Text.toString model.Synced.Title
@@ -1328,7 +1191,7 @@ module View =
             model.Presence
             |> Map.toList
             |> List.filter (fun (_, p) -> p.Focus |> Option.exists (fun f -> f.Field = Title))
-            |> List.map (fun (who, p) -> remoteCursor who p)
+            |> List.map (fun (who, p) -> remoteCursor model who p)
         html $"""
             <header class="{Style.header}">
               <button type="button" class="{Style.cls [ Style.navChevronForward; Style.navReopen ]}" aria-label="Show sidebar" data-nav-toggle="show" @click={Ev(fun _ -> actions.ToggleNav ())}>{Icon.right}</button>
@@ -1355,7 +1218,7 @@ module View =
               <div class="{Style.headerAside}">
                 {prStrip actions model}
                 {agentAbsence actions model.Claude}
-                {terminalsReopen dispatch model}
+                {contentReopen dispatch model}
               </div>
               {catchUpBar model}
             </header>"""
@@ -1400,7 +1263,7 @@ module View =
     /// It rides the composer's dock rather than the streaming message because a message
     /// scrolls and the dock does not: a stop control that leaves the screen when the
     /// conversation moves is one nobody can reach at the moment they want it.
-    let private interrupt (actions: ViewActions) (model: ClientModel) : TemplateResult =
+    let private interrupt (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         match model.Agent.ActiveTurn with
         | None -> Lit.nothing
         | Some turn ->
@@ -1408,7 +1271,7 @@ module View =
                 <div class="{Style.interruptBand}">
                   <button type="button" class="{Style.btnInterrupt}" aria-label="{Dom.Text.interruptLabel}"
                           data-interrupt-turn="{AgentTurnId.value turn}"
-                          @click={Ev(fun _ -> actions.Interrupt turn)}>interrupt</button>
+                          @click={Ev(fun _ -> dispatch (InterruptTurnMsg turn))}>interrupt</button>
                 </div>"""
 
     /// The composer: ONE draft open, everyone else's as a line you can open.
@@ -1424,14 +1287,14 @@ module View =
             ClientModel.editorsOf peerId model
             |> List.map (fun (editor, name) ->
                 html $"""
-                    <span class="{Style.draftEditorDot}" style="background:{EditorColour.ofEditor editor}"
+                    <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model editor}"
                           title="{name}" data-draft-editor-peer="{ActorRef.token editor}"></span>""")
         // A collapsed draft: whose it is, one clamped line of it (the same read-only editor the
         // browser mounts everywhere, so the CRDT keeps it current), and who is in it. Opening it
         // collapses whatever was open — including your own composer.
         let summary (peerId: PeerId) =
             html $"""
-                <button type="button" class="{Style.draftSummary}" style="border-left-color:{EditorColour.ofEditor (ActorRef.PeerRef peerId)}"
+                <button type="button" class="{Style.draftSummary}" style="border-left-color:{Entity.presenceColour model (ActorRef.PeerRef peerId)}"
                         data-draft-summary="{PeerId.value peerId}"
                         data-draft-expand="{PeerId.value peerId}" @click={Ev(fun _ -> dispatch (ExpandDraftMsg peerId))}>
                   <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model (PeerRef peerId) ]}"></span>
@@ -1644,7 +1507,7 @@ module View =
                     data-chat-pending="{QueueId.value entry.QueueId}"
                     data-chat-pending-status="{statusToken}"
                     data-terminal-id="{TerminalId.value entry.Terminal}"
-                    @click={Ev(fun _ -> dispatch (ShowInPaneMsg (Reading (TerminalTab entry.Terminal))); actions.FocusPane ())}>
+                    @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading (TerminalTab entry.Terminal))))}>
               <span class="{Style.terminalPrompt}">$</span>
               <code class="{Style.chatChipCommand}" data-terminal-text="{BodyKey.terminalQueued entry.QueueId}"></code>
               <span class="{Style.chatChipSubject}" data-pending-subject="terminal:{TerminalId.value entry.Terminal}">{what}</span>
@@ -1686,21 +1549,11 @@ module View =
             let key : string = (e :?> Browser.Types.KeyboardEvent).key
             if key = "Enter" && not busy then
                 e.preventDefault ()
-                match Launch.linkOf launch.Query with
-                | Some link -> actions.LaunchLink link
-                | None -> actions.LaunchSearch launch.Query
-        let hold (candidate: Repos.RepoCandidate) =
-            dispatch (LaunchMsg (LaunchSelected candidate))
-            // Branches are asked for on holding, so the pane is full by the time it is
-            // opened — and once per row, whatever is held and let go.
-            if launch.Selected <> Some candidate.Repo && not (launch.Branches |> Map.containsKey candidate.Repo) then
-                actions.LaunchBranches candidate.Repo
-        // Going to the branch pane, from the link on a held row. The listing is asked for
-        // here as well as on holding, because a row can be held by a pasted link rather than
-        // a press and that path never went through `hold`.
-        let openBranches (repo: RepoRef) =
-            if not (launch.Branches |> Map.containsKey repo) then actions.LaunchBranches repo
-            dispatch (LaunchMsg (LaunchBranchPaneOpened repo))
+                dispatch (LaunchMsg LaunchSubmitted)
+        // Holding a row asks for its branches, and so does opening its pane: `Launch.update`
+        // keeps that to once per row.
+        let hold (candidate: Repos.RepoCandidate) = dispatch (LaunchMsg (LaunchSelected candidate))
+        let openBranches (repo: RepoRef) = dispatch (LaunchMsg (LaunchBranchPaneOpened repo))
         // The held row's branch, at the row's trailing edge: the name it will launch on, and
         // a way into the pane that changes it. A LINK rather than the field this used to be —
         // a field inside a row is a second thing to operate in a surface whose whole grammar
@@ -1786,7 +1639,7 @@ module View =
                               <div class="{Style.askFootLine}">
                                 <span class="{Style.statusErr}" role="status">{reason}</span>
                                 <button type="button" class="{Style.askLink}" data-repo-picker-again
-                                        @click={Ev(fun _ -> Launch.wanting { launch with More = MoreIdle } |> Option.iter actions.LaunchMore)}>{Dom.Text.repoPickerAgain}</button>
+                                        @click={Ev(fun _ -> dispatch (LaunchMsg LaunchMoreRetried))}>{Dom.Text.repoPickerAgain}</button>
                               </div>
                             </div>"""
                     | Some _, (MoreIdle | MoreFetching) ->
@@ -1814,7 +1667,7 @@ module View =
             html $"""
                 <button type="button" class="{Style.askStart}" data-repo-picker-start
                         ?disabled={target.IsNone || busy} aria-busy="{if busy then "true" else "false"}"
-                        @click={Ev(fun _ -> target |> Option.iter actions.LaunchStart)}>
+                        @click={Ev(fun _ -> dispatch (LaunchMsg LaunchStartPressed))}>
                   <span class="{Style.whenReady}">{Dom.Text.repoPickerStart}</span><span class="{Style.whenBusy}">{Dom.Text.repoPickerCloning}</span>
                 </button>"""
         let actionsRow =
@@ -1919,9 +1772,7 @@ module View =
                                       <div class="{Style.askFootLine}">
                                         <span class="{Style.statusErr}" role="status">{reason}</span>
                                         <button type="button" class="{Style.askLink}" data-repo-branch-again
-                                                @click={Ev(fun _ ->
-                                                               Launch.wantingBranches { launch with BranchMore = MoreIdle }
-                                                               |> Option.iter (fun (repo, cursor) -> actions.LaunchBranchesMore repo cursor))}>{Dom.Text.repoPickerAgain}</button>
+                                                @click={Ev(fun _ -> dispatch (LaunchMsg LaunchBranchMoreRetried))}>{Dom.Text.repoPickerAgain}</button>
                                       </div>
                                     </div>"""
                             | Some _, (MoreIdle | MoreFetching), _ ->
@@ -2033,7 +1884,7 @@ module View =
                                                  // does: the entry is removed by the render
                                                  // that follows, and a keyboard that pressed
                                                  // Enter on it is left on `body`.
-                                                 actions.FocusItemActions item.MessageId)}>
+                                                 dispatch (MoveMsg (DomMove.FocusItemActions item.MessageId)))}>
                             {if isChapter then Dom.Text.removeChapter else Dom.Text.makeChapter}
                           </button>
                         </div>"""
@@ -2044,7 +1895,7 @@ module View =
                                                        let key = (unbox<Browser.Types.KeyboardEvent> e).key
                                                        if key = "Escape" && opened then
                                                            dispatch CloseItemMenuMsg
-                                                           actions.FocusItemActions item.MessageId)}>
+                                                           dispatch (MoveMsg (DomMove.FocusItemActions item.MessageId)))}>
                   <button type="button" class="{dress}"
                           data-item-actions="{MessageId.value item.MessageId}"
                           aria-haspopup="menu" aria-expanded="{if opened then "true" else "false"}"
@@ -2211,7 +2062,7 @@ module View =
             html $"""
                 <div id="fold-{FoldKey.value key}" class="{width opened}"
                      data-fold-body="{FoldKey.value key}" data-fold-open="{if opened then "yes" else "no"}">
-                  <div class="{inner}">{body}</div>
+                  <div class="{inner}">{if opened then body else []}</div>
                 </div>"""
         let foldBody = foldBodyIn (fun opened -> if opened then Style.foldBodyOpen else Style.foldBodyShut)
         let foldBodyWide = foldBodyIn (fun opened -> if opened then Style.foldBodyWideOpen else Style.foldBodyWideShut)
@@ -2249,7 +2100,11 @@ module View =
                       <span class="{Style.causeMark}">{mark}</span>
                       <span class="{Style.cls [ Style.foldContent; Style.causeSaid ]}"><span class="{Style.srOnly}">{Dom.Text.causedBy}</span><span class="{Style.replyRefQuote}">{said}</span></span>
                     </div>"""
-            let still = html $"""<span aria-hidden="true">{Icon.caused}</span>"""
+            // The corner, drawn as the chain is: one-pixel boxes for the turn and the stem, so
+            // they sit on the gutter's centre line exactly, and the same head at the foot.
+            let corner =
+                html $"""<span class="{Style.causeCornerTurn}"></span><span class="{Style.causeCornerStem}"></span><span class="{Style.causeChainHead}">{Icon.chained}</span>"""
+            let still = html $"""<span class="{Style.causeCorner}" aria-hidden="true">{corner}</span>"""
             let drawn cause =
                 match cause with
                 | Cause.Item target ->
@@ -2257,12 +2112,21 @@ module View =
                     | Some cause ->
                         let said =
                             match cause.Content with
+                            // A boot is nobody's act: the session's own sentence, not the
+                            // process's name in front of a phrase.
+                            | ItemContent.Act (Act.SessionStarted _) -> [ html $"""{Dom.Text.causeBooted}""" ]
+                            | ItemContent.Act (Act.SessionResumed _) -> [ html $"""{Dom.Text.causeResumed}""" ]
                             | ItemContent.Act act ->
                                 Entity.phrase model cause.Author (Segment.Ref (EntityRef.Actor cause.Author) :: Segment.Text " " :: Act.phrase act)
                             | _ -> [ html $"""{ConversationItem.said cause}""" ]
                         let jump =
-                            html $"""<button type="button" class="{Style.causeJump}" data-cause-jump aria-label="{Dom.Text.causeJumpLabel}" @click={Ev(fun _ -> actions.RevealMessage target)}>{Icon.caused}</button>"""
-                        line jump said (MessageId.value target)
+                            html $"""<button type="button" class="{Style.cls [ Style.causeCorner; Style.causeJump ]}" data-cause-jump aria-label="{Dom.Text.causeJumpLabel}" @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealMessage target)))}>{corner}</button>"""
+                        // The session starting is not drawn, so there is nothing to jump to.
+                        let mark =
+                            match cause.Content with
+                            | ItemContent.Act (Act.SessionStarted _) -> still
+                            | _ -> jump
+                        line mark said (MessageId.value target)
                     | None -> line still [ html $"""{Dom.Text.causeMissing}""" ] (MessageId.value target)
                 | Cause.Booted -> line still [ html $"""{Dom.Text.causeBooted}""" ] "booted"
                 | Cause.Connected principal ->
@@ -2278,23 +2142,31 @@ module View =
             | Some CauseLink.Chained ->
                 html $"""
                     <div class="{Style.causeRow}" data-cause-chain>
-                      <span class="{Style.causeChainMark}" aria-hidden="true"><span class="{Style.causeChainBody}"></span>{Icon.chained}</span>
+                      <span class="{Style.causeChainMark}" aria-hidden="true"><span class="{Style.causeChainBody}"></span><span class="{Style.causeChainHead}">{Icon.chained}</span></span>
                       <span class="{Style.srOnly}">{Dom.Text.causeChained}</span>
                     </div>"""
             | Some CauseLink.Unlinked
             | None -> Lit.nothing
         let actNoteItem (act: Act) (item: ConversationItem) =
             let by = item.Author
-            // A slow act coming up pulses in the LEFT gutter — a quiet dot on the margin
-            // rather than a mark trailing the line, so the running ones read as a column down
-            // the edge. A failed act still says so inline, where its reason sits: a terminal
+            // A slow act coming up is marked in the LEFT gutter — the agent's diamond when it
+            // is the agent's act and a circle when it is anybody else's (the diamond is the
+            // agent's alone), on the margin rather than trailing the line, so the running
+            // ones read as a column down the edge. A failed act still says so inline, where its reason sits: a terminal
             // state wants a word, not a dot. A settled act says nothing here — its body is the
             // whole account. `data-act-status` on the article is the stable hook a test counts
             // running work by, wherever the design puts the cue.
             let running =
                 match item.Status with
                 | ConversationItemStatus.Running ->
-                    html $"""<span class="{Style.actNoteRunning}"><span class="{Style.actNoteRunningDot}"></span><span class="{Style.srOnly}">{Dom.Text.running}</span></span>"""
+                    // Who is doing it, as the hook says it too: whose mark this is is the
+                    // promise, whatever the marks look like.
+                    let mark, whose =
+                        match by with
+                        | ActorRef.Agent -> Style.actNoteRunningAgent, "agent"
+                        | PeerRef _ | UserRef _ | ActorRef.SessionProcess | ActorRef.System | ActorRef.Configured _ ->
+                            Style.actNoteRunningOther, "other"
+                    html $"""<span class="{Style.actNoteRunning}"><span class="{mark}" data-act-running="{whose}"></span><span class="{Style.srOnly}">{Dom.Text.running}</span></span>"""
                 | Complete | Streaming | ConversationItemStatus.Failed -> Lit.nothing
             let failedMark =
                 match item.Status with
@@ -2314,7 +2186,7 @@ module View =
                 | Act.FileChanged { FileChanged.Diff = Some diff } -> Act.deed act, [], fileChangeFacts act diff
                 | _ -> Act.deed act, actNoteParticulars by act, [ toldRow act ]
             // The fold (`foldArrow`/`foldBody`): the particulars under the title, behind the
-            // arrow on the gutter. While the act is still RUNNING the gutter holds the pulse
+            // arrow on the gutter. While the act is still RUNNING the gutter holds the mark
             // instead: an act in flight is not one to unfold, and its account is about to
             // change under the reader anyway.
             let key = FoldKey.Act item.MessageId
@@ -2413,8 +2285,11 @@ module View =
                 match item.Status with
                 | Streaming ->
                     // The one visible statement that a turn is in flight, and the hook that
-                    // says so is what a test counts: there must never be a second.
-                    Style.messageBodyStreaming, html $"""<span class="{Style.caretWorking}" data-agent-writing></span>"""
+                    // says so is what a test counts: there must never be a second. Turning
+                    // while it thinks — nothing said yet, or what it said has gone quiet
+                    // (`ClientModel.agentThinking`) — and still while the words are arriving.
+                    let mark = if ClientModel.agentThinking model item then Style.agentCaretThinking else Style.agentCaret
+                    Style.messageBodyStreaming, html $"""<span class="{mark}" data-agent-writing></span>"""
                 | _ -> Style.messageBody, Lit.nothing
             let bodyClass = Style.cls [ bodyClass; Style.messageVoice isAgent ]
             // The author line is the GROUP's to say (see `group` below); a message's own meta
@@ -2453,7 +2328,7 @@ module View =
                         html $"""
                             <button type="button" class="{Style.replyRefJump}" data-reply-ref="{MessageId.value target}" data-reply-jump
                                     aria-label="{Dom.Text.replyRefJumpLabel}"
-                                    @click={Ev(fun _ -> actions.RevealMessage target)}>
+                                    @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealMessage target)))}>
                               <span class="{Style.replyRefMark}" aria-hidden="true">↩</span>
                               <span class="{Style.replyRefQuote}">{ConversationItem.said parent}</span>
                             </button>"""
@@ -2468,7 +2343,7 @@ module View =
                   {itemActions item}
                   {meta}
                   {replyRef}
-                  <div class="{bodyClass}" data-message-body>{RichText.render (contentChip item.Author) body}{caret}</div>
+                  <div class="{bodyClass}" data-message-body>{RichText.renderTrailed (contentChip item.Author) caret body}</div>
                 </article>"""
         // One line: who ran what, and how it went. No output — a tail inline would make the
         // chat noisiest exactly when it is busiest, and would put everything a command
@@ -2487,7 +2362,7 @@ module View =
                         data-chat-block="{BlockId.value blockId}"
                         data-chat-block-status="{terminalBlockStatusLabel block.Status}"
                         data-terminal-id="{TerminalId.value terminalId}"
-                        @click={Ev(fun _ -> dispatch (ShowInPaneMsg (Reading (BlockTab (terminalId, blockId)))); actions.FocusPane ())}>
+                        @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading (BlockTab (terminalId, blockId)))))}>
                   <span class="{Style.terminalPrompt}">$</span>
                   <code class="{Style.chatChipCommand}">{block.Command}</code>
                   <span class="shrink-0">{terminalBlockStatus model block.Status}</span>
@@ -2499,7 +2374,7 @@ module View =
                         data-chat-stretch="{TerminalStretch.key stretch}"
                         data-chat-stretch-end="{stretchEndLabel stretch.End}"
                         data-terminal-id="{TerminalId.value stretch.TerminalId}"
-                        @click={Ev(fun _ -> dispatch (ShowInPaneMsg (Reading (StretchTab stretch))); actions.FocusPane ())}>
+                        @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading (StretchTab stretch))))}>
                   <span class="{Style.chatChipText}">typed in {stretch.Title} for {length}</span>
                   <span class="shrink-0">{stretchEnding model stretch.End}</span>
                 </button>"""
@@ -2657,6 +2532,31 @@ module View =
         // against is what the session HOLDS (`Chapters.written`), never the guess on screen,
         // so the first keystroke on a chapter nobody has named writes a name rather than
         // editing one nobody chose.
+        // A stretch with nothing running, drawn where it happened. Not an act note: nobody
+        // performed it, so it wears no author and no mark, and `entryOf` hands it up with
+        // `None` for the author the way a chapter rule does.
+        //
+        // The label is the only control, and the whole of it: a duration that does not look
+        // like a button still has to BE one, so it is a real `<button>` with an accessible
+        // name saying what pressing it does — the visible words are "7 hours later", which
+        // announces nothing. The tooltip carries the moment even while the label shows the
+        // duration, so hovering answers the question without changing anything.
+        let sessionBreak (resumed: SessionResumed) (at: System.DateTimeOffset) (item: ConversationItem) =
+            let showingMoment = Set.contains item.MessageId model.DatedBreaks
+            let elapsed = sprintf "%s later" (Elapsed.inWords (at - resumed.LastHeardAt))
+            let moment = Moment.stamp at
+            let said, reading, label =
+                if showingMoment then moment, Dom.Text.breakMoment, Dom.Text.sessionBreakShowElapsed
+                else elapsed, Dom.Text.breakElapsed, Dom.Text.sessionBreakShowMoment
+            html $"""
+                <div class="{Style.sessionBreak}" data-session-break="{reading}"
+                     data-message-id="{MessageId.value item.MessageId}">
+                  <span class="{Style.sessionBreakLine}" aria-hidden="true"></span>
+                  <button type="button" class="{Style.sessionBreakLabel}"
+                          aria-label="{label}" title="{moment}"
+                          @click={Ev(fun _ -> dispatch (ToggleBreakTimeMsg item.MessageId))}>{said}</button>
+                  <span class="{Style.sessionBreakLine}" aria-hidden="true"></span>
+                </div>"""
         let chapterRule (item: ConversationItem) =
             let held = Chapters.written model.Synced.Chapters item
             let named = ClientModel.chapterName model item
@@ -2667,7 +2567,7 @@ module View =
                 model.Presence
                 |> Map.toList
                 |> List.filter (fun (_, p) -> p.Focus |> Option.exists (fun f -> f.Field = ChapterName item.MessageId))
-                |> List.map (fun (who, p) -> remoteCursor who p)
+                |> List.map (fun (who, p) -> remoteCursor model who p)
             html $"""
                 <div class="{Style.chapterRule}" data-chapter-rule="{MessageId.value item.MessageId}">
                   <span class="{Style.chapterDot}" aria-hidden="true"></span>
@@ -2697,6 +2597,14 @@ module View =
             match row with
                 | RowItem (TimelineMessage item) ->
                     match item.Content with
+                    // Before the general act rendering, because this act is not drawn as one:
+                    // the session being away is a gap in the page, not a line in it.
+                    | ItemContent.Act (Act.SessionResumed (resumed, at)) ->
+                        Some (None, sessionBreak resumed at item)
+                    // Not drawn: the top of a timeline already says the session began. It
+                    // stays an item because a first boot's work names it as its cause, and
+                    // that cause line is where it is said.
+                    | ItemContent.Act (Act.SessionStarted _) -> None
                     | ItemContent.Act act -> Some (Some item.Author, actNoteItem act item)
                     | ItemContent.Message _ -> Some (Some item.Author, messageItem item)
                     | ItemContent.Stopped stop -> Some (Some item.Author, stoppedItem stop item)
@@ -2861,19 +2769,18 @@ module View =
                 match ContentRef.create (el.getAttribute Dom.Hooks.content) with
                 | Error _ -> ()
                 | Ok ref ->
-                    match ContentKind.ofMediaType (ContentMedia.ofRef ref) with
+                    match ContentName.kind ref with
                     | ContentKind.Download -> ()
                     | ContentKind.Image _ ->
                         e.preventDefault ()
-                        dispatch (ShowInPaneMsg (Reading (ContentTab ref)))
-                        actions.FocusPane ()
+                        dispatch (OpenInPaneMsg (Reading (ContentTab ref)))
         html $"""
             <div class="{Style.chatRegion}">
               <section class="{Style.timeline}" data-conversation @click={Ev(contentOpen)}>{body}</section>
               <div class="{Style.chatJumpToLatestSlot}" data-jump-to-latest>
                 <div class="{Style.chatJumpToLatestRail}">
                   <button type="button" class="{Style.chatJumpToLatest}" aria-label="{Dom.Text.jumpToLatest}"
-                          @click={Ev(fun _ -> actions.ScrollToLatest ())}>{Icon.down}</button>
+                          @click={Ev(fun _ -> dispatch (MoveMsg DomMove.ScrollToLatest))}>{Icon.down}</button>
                 </div>
               </div>
             </div>"""
@@ -2933,7 +2840,7 @@ module View =
         // and with the facts behind a disclosure there was nothing on the line to say so.
         let author =
             let who = Authority.author block.Authority
-            if who = ActorRef.PeerRef model.Peer.PeerId then Lit.nothing
+            if ClientModel.isMine who model then Lit.nothing
             else
                 html $"""
                     <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model who ]}" title="{Entity.actorName model who}"
@@ -3030,8 +2937,8 @@ module View =
     /// The lease bar (Plan 13, stage 2e): who is typing here, and the one control that
     /// changes it. Shown in place of the command lines — never in place of the queue, which
     /// keeps working while a peer is live and is precisely what the release will run.
-    let private terminalLeaseBar (actions: ViewActions) (model: ClientModel) (terminal: TerminalId) (holder: ActorRef) : TemplateResult =
-        let mine = ActorRef.PeerRef model.Peer.PeerId
+    let private terminalLeaseBar (dispatch: ClientMsg -> unit) (model: ClientModel) (terminal: TerminalId) (holder: ActorRef) : TemplateResult =
+        let mine = ClientModel.me model
         // The hook keeps the stable token (a test asserting WHO holds a lease should not have
         // to know what this client happens to have learned about their name); the words get
         // the name, like every other person on screen.
@@ -3044,14 +2951,14 @@ module View =
             if holder = mine then
                 html $"""
                     <button type="button" class="{Style.btnPrimary}" data-terminal-release="{TerminalId.value terminal}"
-                            @click={Ev(fun _ -> actions.ReleaseTerminal terminal)}>Hand it back</button>"""
+                            @click={Ev(fun _ -> dispatch (ReleaseTerminalMsg terminal))}>Hand it back</button>"""
             else
                 // Any peer may take it, and no permission is asked for: collaborators are
                 // trusted, so a steal needs to be VISIBLE rather than authorised — which the
                 // event log is, and this button says so plainly.
                 html $"""
                     <button type="button" class="{Style.btn}" data-terminal-take="{TerminalId.value terminal}"
-                            @click={Ev(fun _ -> actions.TakeTerminal terminal)}>Take over</button>"""
+                            @click={Ev(fun _ -> dispatch (TakeTerminalMsg terminal))}>Take over</button>"""
         html $"""
             <div class="{Style.terminalBandRow}" data-terminal-lease="{label}" aria-live="polite">
               <span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>live</span>
@@ -3072,7 +2979,7 @@ module View =
     /// read-only, which is the whole point of a shared terminal: watching is not a lesser
     /// mode, it is the ordinary one.
     let private terminalScreenView (actions: ViewActions) (model: ClientModel) (terminal: TerminalId) (holder: ActorRef option) : TemplateResult =
-        let mine = ActorRef.PeerRef model.Peer.PeerId
+        let mine = ClientModel.me model
         let id = TerminalId.value terminal
         let body =
             match ClientModel.terminalScreen terminal model with
@@ -3118,14 +3025,14 @@ module View =
             ClientModel.terminalEditorsOf terminal author model
             |> List.map (fun (editor, name) ->
                 html $"""
-                    <span class="{Style.draftEditorDot}" style="background:{EditorColour.ofEditor editor}"
+                    <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model editor}"
                           title="{name}" data-terminal-draft-editor="{ActorRef.token editor}"></span>""")
         // Someone else mid-command: their live text, read-only here. Watching a collaborator
         // type a command is the same affordance as watching them type a message, which is
         // the whole reason the terminal composer is built out of the message composer's parts.
         let peerDraft (author: PeerId) =
             html $"""
-                <div class="{Style.terminalPeerDraft}" style="border-left-color:{EditorColour.ofEditor (ActorRef.PeerRef author)}"
+                <div class="{Style.terminalPeerDraft}" style="border-left-color:{Entity.presenceColour model (ActorRef.PeerRef author)}"
                      data-terminal-draft-author="{PeerId.value author}">
                   <span class="{Style.terminalPrompt}">$</span>
                   <input type="text" class="{Style.fieldMonoBare}" readonly aria-label="{ClientModel.nameOf author model}'s command"
@@ -3148,7 +3055,7 @@ module View =
         // comes back.
         let commandLines =
             match lease with
-            | Some holder -> terminalLeaseBar actions model terminal holder
+            | Some holder -> terminalLeaseBar dispatch model terminal holder
             | None ->
                 html $"""
                     <div>
@@ -3191,7 +3098,7 @@ module View =
                       {detailNote "terminal-lost" [ Dom.Text.terminalNotMarkingWhy ]}
                       <div class="ml-auto flex items-center gap-2">
                         <button type="button" class="{Style.btnPrimary}" data-terminal-rearm="{TerminalId.value terminal}"
-                                @click={Ev(fun _ -> actions.RearmTerminal terminal)}>Re-arm</button>
+                                @click={Ev(fun _ -> dispatch (RearmTerminalMsg terminal))}>Re-arm</button>
                       </div>
                     </div>"""
         // What is left here is what this region is FOR: what is waiting to run, and the line
@@ -3228,11 +3135,14 @@ module View =
     /// (`ReplayIsTheRead`) has no text behind it, and a terminal with nothing recorded has no
     /// recording to go to. Both are rules about the terminal, asked here rather than decided
     /// here.
+    /// `None` rather than an empty render, because the answer is read by the action row, which
+    /// must know whether it has anything to draw at all: a row that cannot tell "no verbs" from
+    /// "a verb that rendered nothing" draws a bordered strip saying there are no controls.
     let private terminalWatchToggle
         (dispatch: ClientMsg -> unit)
         (model: ClientModel)
         (view: TerminalView)
-        : TemplateResult =
+        : TemplateResult option =
         let tab = TerminalTab view.TerminalId
         let feed = ClientModel.terminalFeed view.TerminalId model
         let rewound = ClientModel.isRewound view.TerminalId model
@@ -3250,14 +3160,15 @@ module View =
             elif ClientModel.playable tab model then Some ("watch", "Watch", Some (Watching tab))
             else None
         match offer with
-        | None -> Lit.nothing
+        | None -> None
         | Some (face, label, next) ->
-            html $"""
-                <button type="button" class="{Style.terminalBarAct}" data-terminal-watch="{face}"
+            Some (
+                html $"""
+                <button type="button" class="{Style.btn}" data-terminal-watch="{face}"
                         @click={Ev(fun _ ->
                                       match next with
                                       | Some mode -> dispatch (ShowInPaneMsg mode)
-                                      | None -> dispatch (RewindTerminalMsg view.TerminalId))}>{label}</button>"""
+                                      | None -> dispatch (RewindTerminalMsg view.TerminalId))}>{label}</button>""")
 
     let private terminalClosedBand (model: ClientModel) (view: TerminalView) : TemplateResult =
         let feed = ClientModel.terminalFeed view.TerminalId model
@@ -3334,14 +3245,18 @@ module View =
         | Some next ->
             tabs.[next].focus ()
             // Only for a key the walk CLAIMED. Preventing unconditionally would swallow the
-            // strip's other keys — including the Delete/Backspace unpin below, whose own
+            // strip's other keys — including the Delete/Backspace close below, whose own
             // prevention belongs with it.
             e.preventDefault ()
 
-    /// Delete/Backspace on a focused tab — the keyboard's unpin (Plan 20, stage 1). Returns
+    /// Delete/Backspace on a focused tab — the keyboard's close (Plan 20, stage 1). Returns
     /// the tab's key, or `""` when this keypress is not that: the strip's other keys are the
-    /// arrow walk above, and typing must not unpin anything.
-    let private unpinKeyOn (e: Browser.Types.KeyboardEvent) : string =
+    /// arrow walk above, and typing must not close anything.
+    ///
+    /// It closes a KEPT tab too, where the close control will not: a stray tap in a strip
+    /// that scrolls sideways is exactly what a pin protects against, and Delete on a tab a
+    /// person has deliberately focused is not a stray anything.
+    let private closeKeyOn (e: Browser.Types.KeyboardEvent) : string =
         if e.key <> "Delete" && e.key <> "Backspace" then ""
         else
             match focusedWithin "[data-pane-tab]" with
@@ -3382,50 +3297,11 @@ module View =
         | Some block ->
             let tab = BlockTab (terminalId, blockId)
             let playing = ClientModel.playsRecording tab model
-            // The reader's OTHER question about this command: not what it printed, which the
-            // text above already answers, but what was going on around it. That is a question
-            // about POSITION, and the answer is more of the same text — the terminal's own
-            // history, scrolled to this command — not a recording of it.
-            //
-            // It used to be "play whole terminal", which answered a text question with a
-            // video, mounted a player twenty seconds of dead air away from the command it
-            // named, and left the reader with no way back to the block they stepped out of.
-            // Watching from here is still one press away: this moves them, and the toggle
-            // below is then the same toggle, at the command they were sent to.
-            let showInTerminal =
-                if List.isEmpty (Projection.tryFind terminalId model.Terminals
-                                 |> Option.map (fun v -> v.Blocks)
-                                 |> Option.defaultValue []) then Lit.nothing
-                else
-                    html $"""
-                        <button type="button" class="{Style.btn}" data-pane-show-in-terminal="{BlockId.value blockId}"
-                                @click={Ev(fun _ ->
-                                              dispatch (ShowInPaneMsg (ReadingAt (terminalId, blockId)))
-                                              actions.RevealBlock terminalId blockId
-                                              actions.FocusPane ())}>Show in terminal</button>"""
-            // Text, then the recording behind one press — the same rule the terminal's own
-            // panel follows, because a block IS the case that made it: a command and its
-            // result, printed, needed no player of the same two lines under it.
-            //
-            // ONE control rather than a pair, so the press that swaps the body leaves focus
-            // where it was: it is the same button in the same slot, saying the other thing.
-            // Offered only where there is something to play, which for a block means it ran
-            // and finished — a refusal never ran, and a recording still being written has no
-            // end to replay to.
-            let watchToggle =
-                if not (ClientModel.playable tab model) then Lit.nothing
-                else
-                    let face = if playing then "output" else "watch"
-                    let label = if playing then "Show output" else "Watch"
-                    html $"""
-                        <button type="button" class="{Style.btn}" data-pane-watch="{face}"
-                                @click={Ev(fun _ ->
-                                              dispatch (ShowInPaneMsg (if playing then Reading tab else Watching tab)))}>{label}</button>"""
-            // A bordered strip with nothing in it is a control bar that says there are no
-            // controls. An open terminal's block has no whole recording to step out into, and
-            // a refusal has nothing to play.
-            let actionsRow =
-                html $"""<div class="{Style.paneActions}">{watchToggle}{showInTerminal}</div>"""
+            // What this block affords — the recording of it, and its place in the terminal's
+            // own history — is the ACTION ROW's, at the bottom of the column with every other
+            // kind's verbs (`paneActionsView`). It used to be a strip of this body's own, which
+            // is how a reader who had learnt where "download" lives under a picture found
+            // nothing in that place under a command.
             let body =
                 if playing then replayMount "Command output, played" tab
                 else
@@ -3444,7 +3320,6 @@ module View =
                     </div>
                   </div>
                   {body}
-                  {actionsRow}
                 </section>"""
 
     /// A stretch's facts: who held the terminal, for how long, and how it ended. The
@@ -3495,23 +3370,28 @@ module View =
     /// it), so the browser fetches the bytes itself with the session cookie it already has.
     /// A pinned artifact version is immutable at its address, which is what lets an `<img>`
     /// be right without this knowing that versions exist.
+    /// The way to HAVE the file, wherever it is offered. `download` names it the way a person
+    /// knows it, not the way it is addressed: saved from a pinned version the browser would
+    /// otherwise write `0003-7f2a91` to disk.
+    let private contentDownloadLink (ref: ContentRef) : TemplateResult =
+        let url = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative (SessionRoute.Content ref))
+        html $"""
+            <a class="{Style.btn}" href="{url}" download="{ContentName.ofRef ref}"
+               data-content-download="{ContentRef.value ref}">{Dom.Text.download}</a>"""
+
     let private paneContentView (ref: ContentRef) : TemplateResult =
         let url = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative (SessionRoute.Content ref))
-        let name = ContentRef.fileName ref
-        // `download` names the file the way a person knows it, not the way it is addressed:
-        // saved from a pinned version the browser would otherwise write `0003-7f2a91` to disk.
-        let save =
-            html $"""
-                <a class="{Style.btn}" href="{url}" download="{name}"
-                   data-content-download="{ContentRef.value ref}">{Dom.Text.download}</a>"""
-        match ContentKind.ofMediaType (ContentMedia.ofRef ref) with
+        let name = ContentName.ofRef ref
+        // The download is NOT here: it is a verb about the thing on screen, and those are the
+        // action row's, at the bottom of the column whatever kind is showing. A file that
+        // carried its own copy would be the one kind whose verbs moved when you opened it.
+        match ContentName.kind ref with
         | ContentKind.Image _ ->
             html $"""
                 <section class="{Style.paneBody}" data-pane-content="{ContentRef.value ref}">
                   <div class="{Style.contentImageBox}">
                     <img class="{Style.contentImage}" src="{url}" alt="{name}" data-content-image="{ContentRef.value ref}">
                   </div>
-                  <div class="{Style.paneActions}">{save}</div>
                 </section>"""
         | ContentKind.Download ->
             html $"""
@@ -3519,9 +3399,83 @@ module View =
                   <div class="{Style.contentDownload}">
                     <span class="{Style.entityMark}" aria-hidden="true">{Icon.fileSm}</span>
                     <span class="{Style.small}">{name}</span>
-                    {save}
                   </div>
                 </section>"""
+
+    /// The pane's ACTION ROW: the acts about the thing on screen, in one place at the bottom of
+    /// the column whatever kind that thing is — take a terminal's keyboard, watch its
+    /// recording, step from a block to its place in the history, have a file.
+    ///
+    /// They were in three places, one per kind: a terminal's in the head, a block's inside its
+    /// own body, a file's inside its own body. Three places is three things for a reader to
+    /// learn, and the cost is paid by whoever learnt one of them — having found `Download`
+    /// under a picture, they look under a command and find nothing there.
+    ///
+    /// ABSENT rather than empty when the selected tab affords nothing: a bordered strip with no
+    /// controls in it is a control bar saying there are none. That is why the verbs are built
+    /// as a LIST and the row asks whether it is empty, rather than each verb rendering its own
+    /// nothing into a strip that is drawn regardless.
+    let private paneActionsView
+        (actions: ViewActions)
+        (dispatch: ClientMsg -> unit)
+        (model: ClientModel)
+        (tab: PaneTab)
+        : TemplateResult =
+        let verbs =
+            match tab with
+            | TerminalTab id ->
+                match Projection.tryFind id model.Terminals with
+                | None -> []
+                | Some view ->
+                    // Taking the keyboard changes what this terminal IS, not what the next
+                    // command says, so it is an act about the terminal. The STEAL — taking it
+                    // from whoever holds it — stays on the lease bar, where the name of the
+                    // person you would be taking it from is.
+                    let take =
+                        if not view.IsOpen || Option.isSome view.Lease then []
+                        else
+                            [ html $"""
+                                <button type="button" class="{Style.btn}" data-terminal-take="{TerminalId.value view.TerminalId}"
+                                        @click={Ev(fun _ -> dispatch (TakeTerminalMsg view.TerminalId))}>{Dom.Text.takeControl}</button>""" ]
+                    take @ Option.toList (terminalWatchToggle dispatch model view)
+            | BlockTab (terminalId, blockId) ->
+                let blocks =
+                    Projection.tryFind terminalId model.Terminals
+                    |> Option.map (fun v -> v.Blocks)
+                    |> Option.defaultValue []
+                let playing = ClientModel.playsRecording tab model
+                // ONE control rather than a pair, so the press that swaps the body leaves focus
+                // where it was: the same button in the same slot, saying the other thing.
+                // Offered only where there is something to play — a refusal never ran, and a
+                // recording still being written has no end to replay to.
+                let watch =
+                    if not (ClientModel.playable tab model) then []
+                    else
+                        let face = if playing then "output" else "watch"
+                        let label = if playing then "Show output" else "Watch"
+                        [ html $"""
+                            <button type="button" class="{Style.btn}" data-pane-watch="{face}"
+                                    @click={Ev(fun _ ->
+                                                  dispatch (ShowInPaneMsg (if playing then Reading tab else Watching tab)))}>{label}</button>""" ]
+                // The reader's OTHER question about this command: not what it printed, which
+                // the body already answers, but what was going on around it. Text answers it —
+                // the terminal's own history, scrolled here — so there has to be a history.
+                let showInTerminal =
+                    if List.isEmpty blocks then []
+                    else
+                        [ html $"""
+                            <button type="button" class="{Style.btn}" data-pane-show-in-terminal="{BlockId.value blockId}"
+                                    @click={Ev(fun _ ->
+                                                  dispatch (ShowInTerminalMsg (terminalId, blockId)))}>Show in terminal</button>""" ]
+                watch @ showInTerminal
+            // A stretch is always its recording and it plays without being asked: there is no
+            // other read of it to offer, and nothing to step out to.
+            | StretchTab _ -> []
+            | ContentTab ref -> [ contentDownloadLink ref ]
+        if List.isEmpty verbs then Lit.nothing
+        else
+            html $"""
+                <div class="{Style.paneActions}" data-pane-actions="{PaneTab.key tab}">{verbs}</div>"""
 
     /// The terminal LIST (Plan 20, stage 0): every terminal the session has ever had, and
     /// every verb one of them affords.
@@ -3536,7 +3490,7 @@ module View =
     /// blue dot is a command running, a peer's own colour is that peer typing, a play outline
     /// is a recording, and the one state with no glyph — a recording the cap ate — is the only
     /// one that says a word, in the voice this design keeps for facts that are wrong.
-    let private terminalListView (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+    let private contentListView (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let row (view: TerminalView) =
             let id = TerminalId.value view.TerminalId
             let affords = ClientModel.affordances view model
@@ -3556,7 +3510,7 @@ module View =
                     // Whoever is typing, in their own colour — the same dot the roster and the
                     // tabs wear, so one person is one mark on every surface at once.
                     | Some (PeerRef peer) ->
-                        html $"""<span class="{Style.syncDot}" style="background:{EditorColour.ofEditor (ActorRef.PeerRef peer)}"
+                        html $"""<span class="{Style.syncDot}" style="background:{Entity.presenceColour model (ActorRef.PeerRef peer)}"
                                        title="{Entity.actorName model (PeerRef peer)}"></span>"""
                     | Some holder ->
                         html $"""<span class="{Style.statusRun}" title="{Entity.actorName model holder}"><span class="{Style.statusDot}"></span></span>"""
@@ -3565,7 +3519,7 @@ module View =
                 ClientModel.editorsInTerminal view.TerminalId model
                 |> List.map (fun (who, name) ->
                     html $"""
-                        <span class="{Style.draftEditorDot}" style="background:{EditorColour.ofEditor who}"
+                        <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model who}"
                               title="{name}" data-terminal-tab-peer="{ActorRef.token who}"></span>""")
             let rewind =
                 if not affords.CanRewind then Lit.nothing
@@ -3580,54 +3534,93 @@ module View =
                                               // but leave the list. The rewind states the whole
                                               // face now, list included.
                                               dispatch (RewindTerminalMsg view.TerminalId)
-                                              actions.FocusPane ())}>{Icon.rewind}</button>"""
+                                              dispatch (MoveMsg DomMove.FocusPane))}>{Icon.rewind}</button>"""
             let reattach =
                 if not affords.CanReattach then Lit.nothing
                 else
                     html $"""
                         <button type="button" class="{Style.btnIconBare}" data-terminal-reattach="{id}"
                                 aria-label="Attach {TerminalTitle.value view.Title} again"
-                                @click={Ev(fun _ -> actions.ReattachTerminal view.TerminalId)}>{Icon.attach}</button>"""
+                                @click={Ev(fun _ -> dispatch (ReattachTerminalMsg view.TerminalId))}>{Icon.attach}</button>"""
             let kill =
                 if not affords.CanKill then Lit.nothing
                 else
                     html $"""
                         <button type="button" class="{Style.btnIconBareDanger}" data-terminal-close="{id}"
                                 aria-label="Kill {TerminalTitle.value view.Title}"
-                                @click={Ev(fun _ -> actions.CloseTerminal view.TerminalId)}>{Icon.stop}</button>"""
+                                @click={Ev(fun _ -> dispatch (CloseTerminalMsg view.TerminalId))}>{Icon.stop}</button>"""
             let nameClass = if view.IsOpen then Style.terminalListName else Style.terminalListNameClosed
             html $"""
                 <div class="{Style.terminalListRow}" role="listitem">
                   {state}
                   <span class="min-w-0 flex items-center">
                     <button type="button" class="{nameClass}" data-terminal-list-row="{id}"
-                            @click={Ev(fun _ -> dispatch (ShowInPaneMsg (Reading (TerminalTab view.TerminalId))); actions.FocusPane ())}>{TerminalTitle.value view.Title}</button>
+                            @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading (TerminalTab view.TerminalId))))}>{TerminalTitle.value view.Title}</button>
                     <span class="{Style.terminalTabPeers}">{peers}</span>
                   </span>
                   <span class="{Style.terminalListVerbs}">{rewind}{reattach}{kill}</span>
                 </div>"""
-        match ClientModel.terminalRows model with
-        | [] ->
+        // An artifact's row, in the same grid as a terminal's. Reachability is the whole point
+        // of it: an artifact is otherwise findable only by its chip in a message, so one shared
+        // two hundred messages ago cannot be opened again at all.
+        //
+        // The mark is `ContentKind`'s, the same rule the chip and the pane body use, so what a
+        // row promises and what opening it draws cannot disagree. The row is a BUTTON that
+        // selects the pane tab (a person here is choosing what to look at, not navigating away)
+        // and the size sits beside the name because it is what decides between looking at it
+        // here and taking it away.
+        let artifactRow (a: ArtifactShared) =
+            let content = ArtifactRef.content a.Ref
+            let mark = Icon.ofContent (ContentKind.ofMediaType a.MediaType)
             html $"""
-                <div class="{Style.terminalListEmpty}" data-terminal-list>
+                <div class="{Style.artifactListRow}" role="listitem">
+                  <span class="{Style.statusFaint}" aria-hidden="true">{mark}</span>
+                  <span class="min-w-0 flex items-center">
+                    <button type="button" class="{Style.terminalListName}"
+                            data-artifact-list-row="{ContentRef.value content}"
+                            @click={Ev(fun _ ->
+                                          dispatch (OpenInPaneMsg (Reading (ContentTab content))))}>{ArtifactRef.name a.Ref}</button>
+                  </span>
+                  <span class="{Style.artifactListSize}">{ContentSize.render a.Bytes}</span>
+                </div>"""
+        let terminals = ClientModel.terminalRows model
+        let artifacts = ClientModel.artifactRows model
+        // Headings only when there are two kinds to tell apart: over a list of terminals alone,
+        // "Terminals" names the only thing on screen, which is a word that says nothing.
+        let heading (label: string) =
+            if List.isEmpty artifacts then Lit.nothing
+            else html $"""<div class="{Style.listSectionLabel}">{label}</div>"""
+        match terminals, artifacts with
+        | [], [] ->
+            html $"""
+                <div class="{Style.contentListEmpty}" data-content-list>
                   <span class="font-terminal text-[28px] leading-8 text-ink-faint select-none" aria-hidden="true">$</span>
                   <button type="button" class="{Style.btnPrimary}" data-terminal-new
-                          @click={Ev(fun _ -> actions.OpenTerminal "terminal")}>New terminal</button>
+                          @click={Ev(fun _ -> dispatch (OpenTerminalMsg "terminal"))}>New terminal</button>
                 </div>"""
-        | rows ->
+        | rows, shared ->
             let items = rows |> List.map row
+            let files = shared |> List.map artifactRow
             html $"""
-                <div class="{Style.terminalListBody}" data-terminal-list role="list"
-                     aria-label="Every terminal in this session">
+                <div class="{Style.contentListBody}" data-content-list role="list"
+                     aria-label="Everything in this session">
+                  {if List.isEmpty rows then Lit.nothing else heading "Terminals"}
                   {items}
+                  {if List.isEmpty shared then Lit.nothing else heading "Artifacts"}
+                  {files}
                 </div>"""
 
-    /// The side pane: a tab strip over three kinds of thing — a terminal, a block's
-    /// read-only view, and a stretch's replay (Plan 14, stage 2).
+    /// The content pane: a tab strip over four kinds of thing — a terminal, a block's
+    /// read-only view, a stretch's replay (Plan 14, stage 2), and a file shared into the
+    /// session. Kind is a mark on the tab rather than a mode over the strip: the strip answers
+    /// "what am I holding open", where kind is incidental, and a segmented control there would
+    /// make you choose a kind before choosing a thing — and hide a running build behind a mode
+    /// while you look at a picture. The LIST behind the toggle is where kind is the axis, and
+    /// it groups by kind for exactly the same reason.
     ///
     /// Every terminal the session has ever had is furniture in the strip; the read-only tabs
     /// are the ones this client opened by tapping a chip, and only those can be closed.
-    let private terminals (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+    let private contentPane (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let tabs = ClientModel.paneTabs model
         let selected = ClientModel.selectedPane model
         let isOn (tab: PaneTab) =
@@ -3645,7 +3638,7 @@ module View =
             |> List.filter (fun (who, _) -> not (List.contains who excluding))
             |> List.map (fun (who, name) ->
                 html $"""
-                    <span class="{Style.paneViewerDot}" style="border-color:{EditorColour.ofEditor who}"
+                    <span class="{Style.paneViewerDot}" style="border-color:{Entity.presenceColour model who}"
                           title="{name} is watching" data-pane-viewer="{ActorRef.token who}"></span>""")
         let terminalTabButton (activate: unit -> unit) (pinMark: TemplateResult) (pinnedAttr: string) (hint: string) (view: TerminalView) =
             let on = isOn (TerminalTab view.TerminalId)
@@ -3662,7 +3655,7 @@ module View =
                 (editors
                  |> List.map (fun (who, name) ->
                      html $"""
-                         <span class="{Style.draftEditorDot}" style="background:{EditorColour.ofEditor who}"
+                         <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model who}"
                                title="{name}" data-terminal-tab-peer="{ActorRef.token who}"></span>"""))
                 @ viewerDots (editors |> List.map fst) (TerminalTab view.TerminalId)
             // Two literal spellings of one button, because lit-html cannot inject an
@@ -3697,16 +3690,27 @@ module View =
             // The file's own name, which is what the reader asked for. Not the path: a tab
             // strip is narrow, and `artifacts/chart.png/0003-7f2a91` truncates to the part
             // that says least.
-            | ContentTab ref -> ContentRef.fileName ref
+            | ContentTab ref -> ContentName.ofRef ref
         let readonlyTabButton (activate: unit -> unit) (pinMark: TemplateResult) (pinnedAttr: string) (hint: string) (tab: PaneTab) =
             let on = isOn tab
             let label = tabLabel tab
+            // The strip holds both kinds at once, so a content tab says which it is — wearing
+            // the SAME `ContentKind` mark as its chip in the message and its row in the list,
+            // so the three cannot promise different things about one file. A terminal-shaped
+            // tab wears none: it is what the strip is mostly made of, and a mark on every tab
+            // is a column of marks that distinguishes nothing.
+            let kindMark =
+                match tab with
+                | ContentTab ref ->
+                    let glyph = Icon.ofContent (ContentName.kind ref)
+                    html $"""<span class="{Style.paneTabKindMark}" aria-hidden="true">{glyph}</span>"""
+                | TerminalTab _ | BlockTab _ | StretchTab _ -> Lit.nothing
             html $"""
                 <button type="button" role="tab" class="{if on then Style.terminalTabActive else Style.terminalTab}"
                         data-pane-tab="{PaneTab.key tab}" title="{hint}"
                         data-pane-tab-pinned="{pinnedAttr}"
                         aria-selected="{if on then "true" else "false"}" tabindex="{if on then "0" else "-1"}"
-                        @click={Ev(fun _ -> activate ())}>{label}{pinMark}<span class="{Style.terminalTabPeers}">{viewerDots [] tab}</span></button>"""
+                        @click={Ev(fun _ -> activate ())}>{kindMark}{label}{pinMark}<span class="{Style.terminalTabPeers}">{viewerDots [] tab}</span></button>"""
         /// Activating the tab you are ALREADY on is how a tab gets kept, or released.
         ///
         /// The pin used to be a second button beside every keepable tab. On a touch screen
@@ -3715,18 +3719,19 @@ module View =
         /// target of its own: a tab already takes a tap, a click and an Enter, and the second
         /// one on the same tab is unambiguous because the first has nothing left to do.
         ///
-        /// Offered where a pin would MEAN something: a live terminal, or a recording somebody
-        /// opened from the chat. A closed terminal appears here only as the preview — its home
-        /// is the list — so pinning one would be kept by nothing, and an act whose effect the
-        /// next event undoes is worse than no act.
+        /// Offered on every tab in the strip. It used to be offered only on a LIVE terminal's
+        /// or a recording opened from the chat, because a pin on a closed terminal was dropped
+        /// by the next fold and "an act whose effect the next event undoes is worse than no
+        /// act". That was true of the pin as it was; the fold no longer takes pins away, so
+        /// the only thing left to say about a closed terminal is that somebody wanted to keep
+        /// watching it, which is exactly what they are asking for.
         let tabButton (tab: PaneTab) =
-            let pinnable = PaneTab.isLive model.Terminals tab
-            let pinned = pinnable && ClientModel.isPinned tab model
+            let pinned = ClientModel.isPinned tab model
             // One message whichever kind of tab it is: showing a tab is showing a tab, and
             // the two spellings only ever differed in which fields they remembered to clear.
             let select () = dispatch (ShowInPaneMsg (Reading tab))
             let activate () =
-                if isOn tab && pinnable then dispatch (TogglePinMsg tab) else select ()
+                if isOn tab then dispatch (TogglePinMsg tab) else select ()
             // The mark says the tab is kept, and only when it is. `role="img"` with a name,
             // because a colour and a glyph are not a fact anything that cannot see them can
             // read — and the state is not on the button itself: a `tab` cannot also be a
@@ -3737,10 +3742,10 @@ module View =
             // Said where a pointer can find it, since a gesture with no target has nowhere
             // else to announce itself. Only on the tab it would act on — the selected one.
             let hint =
-                if not (isOn tab && pinnable) then ""
+                if not (isOn tab) then ""
                 elif pinned then Dom.Text.unpinHint
                 else Dom.Text.pinHint
-            let pinnedAttr = if not pinnable then "" elif pinned then "true" else "false"
+            let pinnedAttr = if pinned then "true" else "false"
             match tab with
             | TerminalTab id ->
                 match Projection.tryFind id model.Terminals with
@@ -3856,7 +3861,7 @@ module View =
                     <div class="{Style.terminalEmpty}">
                       <span class="font-terminal text-[28px] leading-8 text-ink-faint select-none" aria-hidden="true">$</span>
                       <button type="button" class="{Style.btnPrimary}" data-terminal-new
-                              @click={Ev(fun _ -> actions.OpenTerminal "terminal")}>New terminal</button>
+                              @click={Ev(fun _ -> dispatch (OpenTerminalMsg "terminal"))}>New terminal</button>
                     </div>"""
             | Some tab ->
                 let inner =
@@ -3876,31 +3881,16 @@ module View =
                          data-pane-panel="{PaneTab.key tab}">
                       {inner}
                     </div>"""
-        // The acts that are about the terminal rather than about the command you are
-        // writing.
-        let properties =
+        // The acts about the thing on screen are the ACTION ROW's, at the foot of the column
+        // (`paneActionsView`) — a terminal's take and watch used to be here in the head, which
+        // put one kind's verbs somewhere no other kind's could follow. The head keeps what it
+        // is: a readout of which thing this is, and the two ways out of it.
+        //
+        // Not while the LIST is showing: the row states what the selected tab affords, and the
+        // list is not that tab — its rows carry their own verbs, from the same fold.
+        let paneActions =
             match selected with
-            | Some (TerminalTab id) ->
-                match Projection.tryFind id model.Terminals with
-                | None -> Lit.nothing
-                | Some view ->
-                    // Taking the keyboard changes what this terminal IS, not what the next
-                    // command says, so it belongs here rather than over the command line. The
-                    // STEAL — taking it from whoever holds it — stays on the lease bar, where
-                    // the name of the person you would be taking it from is.
-                    let take =
-                        if not view.IsOpen || Option.isSome view.Lease then Lit.nothing
-                        else
-                            html $"""
-                                <button type="button" class="{Style.terminalBarAct}" data-terminal-take="{TerminalId.value view.TerminalId}"
-                                        @click={Ev(fun _ -> actions.TakeTerminal view.TerminalId)}>take</button>"""
-                    // The one control between this terminal's two reads, in one slot whatever
-                    // it is doing (Plan 25, stage 3). In the bar rather than in the content
-                    // because it is an act about the TERMINAL, and because live mode has no
-                    // spatial home for it: what is on screen there is a screen, not a
-                    // scrollback, so there is no top of the history to scroll up to.
-                    let watch = terminalWatchToggle dispatch model view
-                    html $"""<span class="{Style.terminalBarActs}">{take}{watch}</span>"""
+            | Some tab when not (ClientModel.showsList model) -> paneActionsView actions dispatch model tab
             | _ -> Lit.nothing
         // The bar names the SELECTED tab, which is the thing a reader cannot work out for
         // themselves. It used to say "terminals" — the largest text on a phone screen, telling
@@ -3908,7 +3898,10 @@ module View =
         let paneName =
             match selected with
             | Some tab -> tabLabel tab
-            | None -> "terminals"
+            // Nothing is selected, so the name has to describe the SURFACE — and the surface
+            // holds more than terminals now. "Everything here" says what the list behind the
+            // toggle will show, which is the only thing left to say at that moment.
+            | None -> "everything here"
         // The strip's kill and its attach-again are GONE (Plan 20, stage 1): both are verbs
         // about a terminal rather than about which tab you are reading, and both now live on
         // that terminal's row in the list, offered from the one fold that decides what a
@@ -3923,27 +3916,33 @@ module View =
         let strip =
             html $"""
                 <div class="{Style.terminalTabs}">
-                  <div class="{Style.terminalTabList}" role="tablist" aria-label="Terminals and recordings"
+                  <div class="{Style.terminalTabList}" role="tablist" aria-label="Open content"
                        @keydown={Ev(fun (e: Browser.Types.Event) ->
                                         let pressed = e :?> Browser.Types.KeyboardEvent
                                         moveTabFocus pressed
-                                        // Delete/Backspace unpins what is focused. The index
+                                        // Delete/Backspace closes what is focused. The index
                                         // is taken BEFORE the dispatch and the focus handed
-                                        // back after it, because the tab being released may
-                                        // be the one leaving the document.
-                                        match unpinKeyOn pressed with
+                                        // back after it, because the tab being closed is the
+                                        // one leaving the document.
+                                        //
+                                        // Only a tab that is OPEN: the preview is whatever is
+                                        // being looked at, and "close" said of it would mean
+                                        // closing the pane, which is not a thing this strip
+                                        // does.
+                                        match closeKeyOn pressed with
                                         | "" -> ()
                                         | key ->
                                             tabs
                                             |> List.tryFind (fun tab -> PaneTab.key tab = key)
-                                            |> Option.filter (fun tab -> ClientModel.isPinned tab model)
+                                            |> Option.filter (fun tab ->
+                                                model.Tabs |> List.exists (fun open' -> PaneTab.key open' = PaneTab.key tab))
                                             |> Option.iter (fun tab ->
                                                 focusNeighbourTab pressed
-                                                dispatch (TogglePinMsg tab)))}>
+                                                dispatch (CloseTabMsg tab)))}>
                     {tabs |> List.map tabButton}
                   </div>
                   <button type="button" class="{Style.terminalTabNew}" data-terminal-new
-                          @click={Ev(fun _ -> actions.OpenTerminal "terminal")}>+ new</button>
+                          @click={Ev(fun _ -> dispatch (OpenTerminalMsg "terminal"))}>+ new</button>
                 </div>"""
         // ONE control with two faces rather than a pair that swap places: it never leaves the
         // document, so pressing it can never strand the focus that is on it. Its value is the
@@ -3953,34 +3952,34 @@ module View =
             let showingList = ClientModel.showsList model
             html $"""
                 <button type="button" class="{Style.cls [ Style.btnIcon; "w-8 h-8 ml-auto" ]}"
-                        data-terminal-list-toggle="{if showingList then "pane" else "list"}"
+                        data-content-list-toggle="{if showingList then "pane" else "list"}"
                         aria-pressed="{if showingList then "true" else "false"}"
-                        aria-label="Every terminal in this session"
-                        @click={Ev(fun _ -> dispatch ToggleTerminalListMsg)}>{Icon.list}</button>"""
+                        aria-label="Everything in this session"
+                        @click={Ev(fun _ -> dispatch ToggleContentListMsg)}>{Icon.list}</button>"""
         html $"""
-            <aside class="{Style.terminalPanel}" data-terminal-panel>
+            <aside class="{Style.contentPanel}" data-content-panel>
               <!-- The split, as a real separator: `aria-valuenow` and the arrow keys are what
                    make a splitter reachable without a pointer, and the shell keeps the value
                    in step (`PaneShell.installPaneResize`). -->
               <div class="{Style.terminalResize}" data-term-resize role="separator" tabindex="0"
-                   aria-orientation="vertical" aria-label="Resize the terminals column"
+                   aria-orientation="vertical" aria-label="Resize the content column"
                    aria-valuemin="320" aria-valuenow="420" aria-valuemax="1080"></div>
               <div class="{Style.terminalPane}">
                 <div class="{Style.terminalHead}">
                   <span class="{Style.terminalHeadName}">{paneName}</span>
-                  {properties}
                   {listToggle}
                   <button type="button" class="{Style.navChevronForward}" aria-label="Back to the chat"
-                          data-terminal-toggle="hide"
+                          data-content-toggle="hide"
                           @click={Ev(fun _ ->
-                                        dispatch ToggleTerminalsMsg
+                                        dispatch ToggleContentMsg
                                         // On a phone this control IS the way back, and it is
                                         // about to leave the screen — so focus goes where the
                                         // reader came from, exactly as closing a tab does.
-                                        selected |> Option.iter (PaneTab.key >> actions.FocusChat))}>{Icon.right}</button>
+                                        selected |> Option.iter (fun tab -> dispatch (MoveMsg (DomMove.FocusChat (PaneTab.key tab)))))}>{Icon.right}</button>
                 </div>
                 {if ClientModel.showsList model then Lit.nothing else strip}
-                {if ClientModel.showsList model then terminalListView actions dispatch model else body ()}
+                {if ClientModel.showsList model then contentListView actions dispatch model else body ()}
+                {paneActions}
               </div>
             </aside>"""
 
@@ -4002,8 +4001,8 @@ module View =
               {chat actions dispatch model}
               {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
               {queue dispatch model}
-              {interrupt actions model}
+              {interrupt dispatch model}
               {drafts actions dispatch model}
             </div>
-            {terminals actions dispatch model}
+            {contentPane actions dispatch model}
             </div>"""

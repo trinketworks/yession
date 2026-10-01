@@ -54,7 +54,6 @@ let private endpointTests =
                 do! append (2 * EventChunk.size + 5)
                 let at (route: SessionRoute) (token: string) =
                     sprintf "%s?token=%s" (SessionRoute.at (sprintf "http://127.0.0.1:%d" h.Port) route) token
-                let offset (n: int64) = EventOffset.create n |> expect
 
                 // The cursor itself: no events, never cached, and it says where to look.
                 let! start = TestHttp.getUnredirected [] (at (EventsAfter None) mintedToken)
@@ -89,8 +88,13 @@ let private endpointTests =
                 let! unreached = TestHttp.get (at (Events (10_000L, 10_009L)) mintedToken)
                 Expect.equal unreached.Status 404 "a range beyond the log does not exist yet"
 
-                // Current: nothing to keep, so nothing to give an address to.
-                let! current = TestHttp.getUnredirected [] (at (EventsAfter (Some (offset (2L * int64 EventChunk.size + 14L)))) mintedToken)
+                // Current: nothing to keep, so nothing to give an address to. The end is READ
+                // rather than counted from the appends above — the session writes its own start
+                // before any of them, and an arithmetic answer here would be off by exactly
+                // that and fail as a cache bug.
+                let! page = h.Log.Read None Int32.MaxValue
+                let latest = page.Events |> List.last |> fun e -> e.Offset
+                let! current = TestHttp.getUnredirected [] (at (EventsAfter (Some latest)) mintedToken)
                 Expect.equal current.Status 204 "a caller at the end is told it is current"
                 Expect.equal (TestHttp.requiredHeader "cache-control" current) "no-store" "and emptiness is never kept"
 
@@ -126,7 +130,7 @@ let private endpointTests =
                 a.Connection.SendDraft a.Hello.PeerId
                 do! a.Runner.WaitFor (fun m ->
                         not m.EventConsumer.IsCatchingUp
-                        && (m.Conversation.Items |> List.map (fun i -> (Yession.Domain.Chat.ConversationItem.said i))) = [ "fetched over http" ])
+                        && Support.saidOn m = [ "fetched over http" ])
                 do! a.Channel.Close ()
                 do! h.Stop ()
             })
@@ -198,7 +202,7 @@ let private storeTests =
                                   EventConsumer =
                                     { (ClientModel.init { PeerId = PeerId.create "p" |> expect; DisplayName = "P" }).EventConsumer with
                                         Feed = FeedStalled "offline" } }
-                let folded = seen |> Seq.fold (fun m msg -> ClientModel.update msg m) stalled
+                let folded = seen |> Seq.fold (fun m msg -> Support.step msg m) stalled
                 Expect.equal folded.EventConsumer.Feed (FeedStalled "offline") "the feed's health is untouched by a local read"
                 Expect.equal
                     (folded.Conversation.Items |> List.length)
@@ -332,7 +336,7 @@ let private storeTests =
                 let model =
                     seen
                     |> Seq.fold
-                        (fun m msg -> ClientModel.update msg m)
+                        (fun m msg -> Support.step msg m)
                         (ClientModel.init { PeerId = PeerId.create "p" |> expect; DisplayName = "P" })
                 Expect.equal
                     (model.EventConsumer.MissingBefore |> Option.map EventOffset.value)
@@ -343,7 +347,7 @@ let private storeTests =
                     | Ok envelopes -> envelopes
                     | Error fault -> failwith (Client.FeedFault.describe fault)
                 let filled =
-                    ClientModel.update
+                    Support.step
                         (EventsPageMsg
                             { Events = fill
                               LastOffset = fill |> List.tryLast |> Option.map (fun e -> e.Offset)

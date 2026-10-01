@@ -216,7 +216,7 @@ let tests =
         // What a stream reports is an `Error` by convention only, and the sentence built from
         // it is read by a person — so the two answers are pinned apart. The ordinary one:
         testCase "a stream error describes as the message it carries" <| fun () ->
-            let refused : StreamError = !!{| message = "connect ECONNREFUSED 127.0.0.1:1" |}
+            let refused = StreamError.ofThrown (Thrown.errorWith "connect ECONNREFUSED 127.0.0.1:1")
             Expect.equal
                 (StreamError.describe refused)
                 "connect ECONNREFUSED 127.0.0.1:1"
@@ -232,6 +232,11 @@ let tests =
         // for two of these were `[object Object]` and the bare word `Error`.
         testCase "an object thrown describes as its JSON rather than as [object Object]" <| fun () ->
             Expect.equal (Thrown.describe (box {| code = 7 |})) """{"code":7}""" "the value, not the kind of thing it is"
+
+        // Fable's `exn` is not an `Error`, so it is not caught by the case above — and it used
+        // to fall through to the JSON, saying `{"message":"…"}` where a sentence wanted words.
+        testCase "an F# exception describes as its message" <| fun () ->
+            Expect.equal (Thrown.describe (box (exn "the lease was taken"))) "the lease was taken" "its message, not its JSON"
 
         testCase "an error carrying no message describes as its name" <| fun () ->
             Expect.equal (Thrown.describe (box (Thrown.errorWith ""))) "Error" "the one word an empty error has"
@@ -455,30 +460,37 @@ let eventTests =
 
         testCase "what the relay emits reaches the listener, arguments and all" <| fun () ->
             let relay = createRelay ()
-            let seen = ResizeArray<obj * obj> ()
-            relay.on ("exit", box (System.Func<obj, obj, unit> (fun code signal -> seen.Add (code, signal))))
-            relay.emit ("exit", [| box 3; box null |])
-            Expect.equal (List.ofSeq seen) [ box 3, box null ] "both arguments arrived, in order"
+            let seen = ResizeArray<int option * string option> ()
+            relay.on ("exit", RelayListener.onExit (fun code signal -> seen.Add (code, signal)))
+            relay.exited (Some 3, Some "SIGTERM")
+            Expect.equal (List.ofSeq seen) [ Some 3, Some "SIGTERM" ] "both arguments arrived, in order"
 
-        // The promise the `obj` listener exists to keep: `off` can only remove the function
+        testCase "what the relay reports failing reaches the error listener" <| fun () ->
+            let relay = createRelay ()
+            let seen = ResizeArray<string> ()
+            relay.on ("error", RelayListener.onError (fun error -> seen.Add (StreamError.describe error)))
+            relay.failed (StreamError.ofThrown (errorWith "boom"))
+            Expect.equal (List.ofSeq seen) [ "boom" ] "the error, as a listener reads it"
+
+        // The promise the opaque listener exists to keep: `off` can only remove the function
         // `on` was given, so a binding that adapted it on the way in would leak every
         // listener anybody tried to remove.
         testCase "a listener removed through the relay stops hearing" <| fun () ->
             let relay = createRelay ()
             let mutable heard = 0
-            let listener = box (System.Func<obj, unit> (fun _ -> heard <- heard + 1))
+            let listener = RelayListener.onExit (fun _ _ -> heard <- heard + 1)
             relay.on ("exit", listener)
-            relay.emit ("exit", [| box 0 |])
+            relay.exited (Some 0, None)
             relay.off ("exit", listener)
-            relay.emit ("exit", [| box 0 |])
+            relay.exited (Some 0, None)
             Expect.equal heard 1 "the listener heard the first and not the second"
 
         testCase "a listener registered once hears once" <| fun () ->
             let relay = createRelay ()
             let mutable heard = 0
-            relay.once ("exit", box (System.Func<obj, unit> (fun _ -> heard <- heard + 1)))
-            relay.emit ("exit", [| box 0 |])
-            relay.emit ("exit", [| box 0 |])
+            relay.once ("exit", RelayListener.onExit (fun _ _ -> heard <- heard + 1))
+            relay.exited (Some 0, None)
+            relay.exited (Some 0, None)
             Expect.equal heard 1 "the second emit found no listener"
 
         // JavaScript admits a `throw` of any value, and F#'s `exn` is a class of Fable's own
@@ -506,7 +518,7 @@ let seamTests =
         // gets. A `Map` round trip would read as the same test and drop everything a map
         // cannot hold.
         testCaseAsync "the environment OBJECT given is the environment the child has" <| async {
-            let env = Fable.Core.JsInterop.createObj [ "YESSION_MARK", box "set" ]
+            let env = VerbatimEnv.ofMap (Map.ofList [ "YESSION_MARK", "set" ])
 
             let child =
                 spawnWithEnv
@@ -528,7 +540,7 @@ let seamTests =
                 spawnWithEnv
                     ``process``.execPath
                     [ "-e"; "process.exit(process.env.PATH === undefined ? 6 : 7)" ]
-                    (Fable.Core.JsInterop.createObj [])
+                    (VerbatimEnv.ofMap Map.empty)
                     None
                     Pipe
                     false
@@ -546,7 +558,7 @@ let seamTests =
                     [ "-e"
                       "const fs = require('node:fs'); process.exit(fs.realpathSync(process.cwd()) === fs.realpathSync(process.argv[1]) ? 8 : 9)"
                       directory ]
-                    (Fable.Core.JsInterop.createObj [])
+                    (VerbatimEnv.ofMap Map.empty)
                     (Some directory)
                     Pipe
                     false

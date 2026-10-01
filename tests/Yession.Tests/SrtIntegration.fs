@@ -12,7 +12,6 @@ module Yession.Tests.SrtIntegration
 // it starts in milliseconds, and a regression there is a regression in the reason.
 
 open Fable.Core
-open Fable.Core.JsInterop
 open Fable.Pyxpecto
 open Fable.NodeExtras
 open Yession.Domain
@@ -68,7 +67,9 @@ let private policyIn (workspace: string) (domains: string list) : SandboxPolicy 
       Realisation = []
       Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
       WorkingDirectory = Some workspace
-      Filesystem = Confined }
+      Filesystem = Confined
+      Derived = Map.empty
+      Intercept = None }
 
 /// How this box confines, as the run's environment configures it — the same parse the
 /// Session Process does at boot, so the suite exercises the deployed shape.
@@ -106,25 +107,25 @@ module Sdk = Fable.ClaudeAgentSdk
 /// arrives — so the answer settles once, and a child that never ran says its message where
 /// its output would have been, with -1 where an exit code would have been.
 let private driveSpawner
-    (spawner: obj)
+    (spawner: Sdk.Spawner)
     (command: string)
     (args: string array)
     (cwd: string)
-    (env: (string * string) array)
+    (env: Map<string, string>)
     (stdin: string)
     : Async<string * int> =
     Async.FromContinuations (fun (cont, _, _) ->
-        // The seam's own option shape, as the SDK hands it over. `signal` is null rather than
-        // missing: a spawner reads it as "nothing will abort this" either way, and Fable will
-        // not cast a record that is short of a field the interface declares.
-        let options : Sdk.SpawnOptions =
-            !!{| command = command
-                 args = args
-                 cwd = cwd
-                 env = createObj (env |> Array.map (fun (name, value) -> name ==> value) |> List.ofArray)
-                 signal = (null: obj) |}
+        // The seam's own option shape, as the SDK hands it over — but with no signal: a
+        // spawner reads that as "nothing will abort this".
+        let options =
+            { new Sdk.SpawnOptions with
+                member _.command = command
+                member _.args = args
+                member _.cwd = Some cwd
+                member _.env = Sdk.Environment.ofMap env
+                member _.signal = None }
 
-        let spawned = (unbox<System.Func<Sdk.SpawnOptions, Sdk.SpawnedProcess>> spawner).Invoke options
+        let spawned = spawner.Invoke options
 
         let out = System.Text.StringBuilder ()
         let mutable settled = false
@@ -136,21 +137,14 @@ let private driveSpawner
 
         // `setEncoding` rather than converting each chunk: it puts a decoder in front of the
         // stream, so a multi-byte character split across two reads still arrives whole.
-        let stdout : Node.Stream.Readable<string> = !!spawned.stdout
-        stdout.setEncoding Node.Buffer.BufferEncoding.Utf8
-        stdout.on ("data", fun (chunk: string) -> out.Append chunk |> ignore) |> ignore
+        spawned.stdout.setEncoding Node.Buffer.BufferEncoding.Utf8
+        spawned.stdout.on ("data", fun (chunk: string) -> out.Append chunk |> ignore) |> ignore
 
-        spawned.on (
-            "exit",
-            box (
-                System.Func<obj, obj, unit> (fun code _ ->
-                    settle (out.ToString (), (if isNullOrUndefined code then -1 else unbox<int> code)))))
+        Sdk.SpawnedProcess.onExit spawned (fun code _ -> settle (out.ToString (), defaultArg code -1))
+        Sdk.SpawnedProcess.onError spawned (fun error -> settle (Fable.NodeExtras.StreamError.describe error, -1))
 
-        spawned.on ("error", box (System.Func<obj, unit> (fun error -> settle (Fable.NodeExtras.StreamError.describe !!error, -1))))
-
-        let stdin' : Node.Stream.Writable<string> = !!spawned.stdin
-        stdin'.write stdin |> ignore
-        stdin'.``end`` ())
+        spawned.stdin.write stdin |> ignore
+        spawned.stdin.``end`` ())
 
 // --- The suite ------------------------------------------------------------------------------
 
@@ -162,11 +156,12 @@ let tests =
             // and the same fault wearing a different hat: srt reads the socket allowance from
             // the config the MANAGER was initialized with, not the one a spawn carries, so a
             // sandbox that names a socket the FIRST sandbox of the session did not would hold
-            // a grant that exists only in its own config object.
+            // a grant that exists only in its own config object — which is what it was while
+            // one manager served every sandbox, and why each now starts its own.
             //
             // Deliberately the second sandbox, and deliberately a socket outside the
             // workspace: inside it, the workspace's own read/write grant would satisfy the
-            // connect and this would pass with the union deleted.
+            // connect and this would pass whoever's config the grant was read from.
             // Only where the grant is PATH-SCOPED, which is macOS. On Linux srt filters unix
             // sockets with seccomp-bpf, which cannot read a socket path out of user-space
             // memory, so the wrapper takes `allowAllUnixSockets` and ignores the path list
@@ -446,7 +441,7 @@ let tests =
                 let policy = policyIn workspace []
                 let spawner =
                     Sandboxes.AgentSandbox.srtClaudeSpawner (Sandboxes.SrtSandbox.wrapperFor (srtTools ()) policy)
-                let! out, code = driveSpawner spawner "/bin/cat" [||] workspace (Map.toArray policy.Env) "round-trip"
+                let! out, code = driveSpawner spawner "/bin/cat" [||] workspace policy.Env "round-trip"
                 Expect.equal code 0 "the confined process exited cleanly"
                 Expect.equal out "round-trip" "stdin reached it and its stdout came back"
             })
@@ -467,10 +462,9 @@ let tests =
              else
              testCaseAsync "a probe that could not run is not an answer, and is not remembered" (async {
                 let workspace = TestFiles.tempDir "yession-srt-"
-                // A manager is already up by now, and `initialize` returns early once srt
-                // has one — probe included. So the question can only be asked of a process
-                // that has none, which is what forgetting both halves leaves behind.
-                do! Sandboxes.SrtSandbox.forgetManager ()
+                // Each sandbox's manager starts in a process of its own, inheriting this
+                // one's environment as it stands — so the empty PATH below is the host's,
+                // and its probe is asked fresh.
                 let! refused =
                     Support.withEnv [ "PATH", Some "" ] (fun () ->
                         Sandboxes.SrtSandbox.create (srtTools ()) (policyIn workspace []))
@@ -511,3 +505,52 @@ let tests =
                 do! sandbox.Dispose ()
              }))
         ])
+
+// --- [Srt, Ports]: two sandboxes, one session ----------------------------------------------
+
+let siblings =
+    testList "Srt sandboxes side by side" [
+
+        // Each sandbox's network policy is its own. srt reads the allowlist from the config
+        // its manager was initialized with, and one manager used to serve every sandbox of a
+        // session — so a second sandbox widened the first's, and each could reach whatever
+        // either was allowed. Asked of the NARROWER sandbox while the wider one is still up,
+        // which is the shape the union leaked in; the wider one reaching the same server
+        // first is what says the refusal is the policy's and not a route this box lacks.
+        testCaseAsync "a sibling's allowlist is not this sandbox's" (async {
+            let host =
+                match Sandboxes.hostAddressHere (Interop.hostname ()) SrtBackend with
+                | Some host -> host
+                | None -> failwith "srt is a backend with a route to the host"
+            let server =
+                createServer (fun _ res ->
+                    res.writeHead (200, [ ResponseHeader.ContentType "text/plain" ])
+                    res.``end`` "reached")
+            // Every interface: on Linux srt's route to the host is `127.0.0.2`, which a
+            // listener on `127.0.0.1` alone does not answer (`hostAddressFrom`).
+            do! Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "0.0.0.0", fun () -> cont ()) |> ignore)
+            let url = sprintf "http://%s:%d/" host (serverPort server)
+            let workspace = TestFiles.tempDir "yession-srt-"
+            let! wider = startSandbox (policyIn workspace [ host ])
+            let! narrower = startSandbox (policyIn workspace [])
+            // Node's `fetch` takes the proxy srt names only when told to.
+            let fetch (sandbox: Sandbox) =
+                runInSandbox
+                    sandbox
+                    (nodePath ())
+                    [ "-e"
+                      sprintf
+                          "fetch('%s').then(r => r.text()).then(t => { process.stdout.write(t); process.exit(0) }, e => { console.error(String(e.cause ?? e)); process.exit(9) })"
+                          url ]
+                    (Map.ofList [ "NODE_USE_ENV_PROXY", "1" ])
+                    None
+            let! reached, reachedOut, reachedErr = fetch wider
+            let! _, refusedOut, _ = fetch narrower
+            do! wider.Dispose ()
+            do! narrower.Dispose ()
+            do! Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ()))
+            if exitCode reached <> 0 || not (reachedOut.Contains "reached") then
+                failwithf "the sandbox that named the host could not reach it, so nothing below means anything: %s" reachedErr
+            Expect.isFalse (refusedOut.Contains "reached") "the sibling that named no host did not reach it"
+        })
+    ]

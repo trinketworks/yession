@@ -97,16 +97,26 @@ here) — the `Native` cap works too (see Testing).
 ## Build interface
 
 Every Yession build function lives in `tasks.fsx` — the complete, standalone build interface
-(`restore`/`build`/`start`/`dev`/`check`/`vm-check`/`verify`/`lint`/`version`/`stage`/`package`/
+(`restore`/`lock`/`build`/`start`/`dev`/`check`/`vm-check`/`verify`/`lint`/`version`/`stage`/`package`/
 `install-smoke`/`boot-smoke`/`example`/`clean`/`clean-docker`). The devenv scripts, the GitHub Actions
 workflows, and the Nix `outputs` are thin wrappers over it — throw devenv and CI away and
 `dotnet fsi tasks.fsx <verb>` still drives everything.
+
+Under the verbs is a graph. A `Target` is something the build leaves on disk — the tools, the
+package restore, the server, the browser client, the asset set, the npm package, the suite, the
+browser harness — and each says what it `needs` and how it is `produce`d, matched exhaustively
+so a new one does not compile until it says both. A verb names the targets it wants and `make`
+builds them: each once, after what it stands on, and side by side with whatever nothing orders
+it against. `check` is the clearest reader: `preparing` turns a run's capabilities into the
+targets its suites need, and one `make` compiles the suite, the product and the harness at once.
+When adding a build step, add a target and its `needs` rather than a call in some verb's body —
+an order written only in a function body is one the next verb will not know about.
 
 The derivations themselves (`nix/packages.nix`) have three consumers, and the difference
 between them is which SOURCE they build: `flake.nix` and `devenv.nix` both build a store copy
 of the repo (git-filtered for the flake, whole-directory for devenv), while
 `nix/worktree.nix` evaluates in place, against the tree as it stands — `nix build --file
-nix/worktree.nix nix|npm|staged|nugetDeps`. That last route is what `check Nix NixBuild` drives and the
+nix/worktree.nix nix|npm|staged|nugetTools`. That last route is what `check Nix NixBuild` drives and the
 only one that can catch a `src` filter that has stopped matching what git tracks.
 
 **No new helper scripts.** New build/dev/repo functionality is a `tasks.fsx` verb, not a shell
@@ -386,8 +396,8 @@ check Docker Dogfood         # + the self-hosting run: this repo's whole suite i
                              #   container, through the real docker backend). ~11 min warm, up to an hour cold; in NO scheduled
                              #   tier — run it when the container environment story changes,
                              #   locally or via a verify.yml dispatch naming both caps.
-verify                       # == check Browser Ports Native Docker LiveAgent Keyring Nix
-                             #    NixBuild Srt Pty Serial Jumpstarter Caddy. Release gate; what
+verify                       # == check Browser Ports Native Docker LiveAgent LiveGitHub
+                             #    Keyring Nix NixBuild Srt Pty Serial Jumpstarter Caddy. Release gate; what
                              #    CI runs on master (spread over the tiers in
                              #    .github/verify-tiers.json).
                              #    Takes check's trailing args, so `verify --only "<text>"` works.
@@ -671,6 +681,13 @@ Capabilities:
   file there"). The dev container has none, so ask for `Docker` here and the run refuses.
 - `LiveAgent` — real model credentials: `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`.
   release.yml passes the repository secret; absent, a tier that asked for it fails.
+- `LiveGitHub` — a `GITHUB_TOKEN` GitHub accepts, probed by asking GitHub with it. The live
+  GitHub suite (`LiveGitHub.fs`) asks the real API what the product asks, read-only, against
+  this repository — the contract every stubbed GitHub suite assumes and none can check.
+  verify.yml passes the run's own `secrets.GITHUB_TOKEN`. In a Claude Code container the
+  variable is a placeholder the agent proxy swaps for the real credential, which is why it
+  works only through `HTTPS_PROXY` — as `check` and the product's requests both go. The
+  proxy authenticates EVERY request to GitHub, so an anonymous case cannot be run there.
 - `Keyring` — a usable OS credential manager (the secrets KEK lives there). On a desktop,
   `check Keyring` drives the genuine Keychain / Credential Manager / Secret Service; headless
   (this container, CI), it re-execs itself under a private D-Bus session + gnome-keyring
@@ -728,7 +745,7 @@ Capabilities:
   symlink or 176MB of `obj/`/Fable output into the derivation is green everywhere in CI and
   broken on the laptop. `check Nix` asserts the source contract (`NixSource.fs`) against the
   tree this run built; `NixBuild` builds `nix/worktree.nix` and boot-smokes the result — which
-  is also what re-checks the NuGet FOD hash, the other thing a devenv-only `check` cannot see.
+  is also what re-checks the dotnet-tools FOD hash, the other thing a devenv-only `check` cannot see.
   Two capabilities because they are two costs: the contract is an evaluation that belongs
   beside the suites that built the tree it reads, the build is minutes of sandboxed compile
   that belongs on a runner of its own.

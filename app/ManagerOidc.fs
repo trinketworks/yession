@@ -18,6 +18,7 @@ module Yession.Host.ManagerOidc
 
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Access
 open Yession.Oidc
@@ -47,11 +48,11 @@ let private jwksJson (publicJwk: Fable.Jose.Jwk) (kid: string) : string =
                 JwksKey.Use = "sig" } ] }
 
 let private respond (res: ServerResponse) (status: int) (contentType: string) (body: string) =
-    res.writeHead (status, createObj [ "content-type", box contentType; "cache-control", box "no-store" ]) |> ignore
+    res.writeHead (status, [ ResponseHeader.ContentType contentType; ResponseHeader.CacheControl "no-store" ])
     res.``end`` body
 
 let private redirect (res: ServerResponse) (location: string) =
-    res.writeHead (302, createObj [ "location", box location; "cache-control", box "no-store" ]) |> ignore
+    res.writeHead (302, [ ResponseHeader.Location location; ResponseHeader.CacheControl "no-store" ])
     res.``end`` ""
 
 type Provider =
@@ -77,7 +78,9 @@ let create
     : Async<Provider> =
     async {
         // Ed25519 via WebCrypto; the `false` here is the non-extractability invariant.
-        let! keys = Fable.Jose.generateKeyPair "EdDSA" (createObj [ "extractable" ==> false ]) |> Interop.awaitPromise
+        let! keys =
+            Fable.Jose.generateKeyPair "EdDSA" (jsOptions<Fable.Jose.GenerateKeyPairOptions> (fun o -> o.extractable <- false))
+            |> Interop.awaitPromise
         let! publicJwk = Fable.Jose.exportJWK keys.publicKey |> Interop.awaitPromise
         let kid = randomSecret ()
 
@@ -142,20 +145,26 @@ let create
                     // Standard profile claims when the strategy attributed a real user,
                     // plus `yession_attribution` — the RP-side discriminator between a
                     // durable user identity and shared unattributed access.
+                    // A claim with no value is left unset rather than set empty, so the
+                    // token omits it.
                     let payload =
-                        [ yield "yession_attribution",
-                                box (match grant.Identity.Claims with Some _ -> "user" | None -> "unattributed")
-                          match grant.Identity.Claims with
-                          | Some claims ->
-                              match claims.DisplayName with Some v -> yield "name", box v | None -> ()
-                              match claims.Email with Some v -> yield "email", box v | None -> ()
-                              match claims.Picture with Some v -> yield "picture", box v | None -> ()
-                          | None -> () ]
+                        jsOptions<Fable.Jose.JwtPayload> (fun p ->
+                            p.yession_attribution <-
+                                (match grant.Identity.Claims with Some _ -> "user" | None -> "unattributed")
+                            match grant.Identity.Claims with
+                            | Some claims ->
+                                claims.DisplayName |> Option.iter (fun v -> p.name <- v)
+                                claims.Email |> Option.iter (fun v -> p.email <- v)
+                                claims.Picture |> Option.iter (fun v -> p.picture <- v)
+                            | None -> ())
                     Async.StartImmediate (
                         async {
                             let! idToken =
-                                (Fable.Jose.signJwt (createObj payload))
-                                    .setProtectedHeader(createObj [ "alg" ==> "EdDSA"; "kid" ==> kid ])
+                                (Fable.Jose.signJwt payload)
+                                    .setProtectedHeader(
+                                        jsOptions<Fable.Jose.JwsHeaderParameters> (fun h ->
+                                            h.alg <- "EdDSA"
+                                            h.kid <- kid))
                                     .setIssuer(issuerOf ())
                                     .setSubject(grant.Identity.Subject)
                                     .setAudience(grant.Client.ClientId)

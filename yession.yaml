@@ -56,12 +56,13 @@ sandboxes:
       # and ~4 min of substitution cold, and it was once a `setup:` line whose whole
       # purpose was to be run behind this entrypoint before there was one.
       entrypoint: nix develop --impure --command
-    forward: [ github ]              # so `git push` works from a terminal
-    # A wish, not a need: where the operator offers a warm nix store volume under this
-    # name, the container mounts it and the first build substitutes into a store that
-    # outlives the sandbox; where nobody offers it, this line selects nothing and the
-    # build runs cold. `uses:` would refuse on every host that offers none.
-    wants: [ nix-container-store ]
+    # Wishes, not needs. `github` is the operator's GitHub connection, so `git push` works
+    # from a terminal where one is offered. Where the operator offers a warm nix store
+    # volume under `nix-container-store`, the container mounts it and the first build
+    # substitutes into a store that outlives the sandbox. Where nobody offers either, the
+    # line selects nothing and the build runs cold. `uses:` would refuse on every host
+    # that offers none.
+    wants: [ github, nix-container-store ]
 
     # Which nix features this repo's build needs, plus where its artifacts substitute
     # from. In the container this is the whole nix configuration the devshell sees —
@@ -83,6 +84,12 @@ sandboxes:
         extra-trusted-public-keys = yession.cachix.org-1:Dj6jHWpEaqcGyrEEC3/qy/D3UQN8sZW1RXUOCRJ41oI=
         build-users-group =
         sandbox = false
+      # devenv's own state — its task cache is a SQLite database — on this container's
+      # disk rather than in the checkout every sandbox in the session shares. With it in
+      # the checkout, `dev` and `gate` entering their devshells at once raced for one
+      # database across the host's file share and one sandbox failed to start, "database
+      # is locked". devenv.nix reads this; see `devenv.dotfile` there.
+      CONTAINER_DEVENV_DOTFILE: /root/.devenv
 
   # `verify` is minutes long. A second sandbox on the same configuration means the gate
   # runs beside interactive work instead of holding the shell.
@@ -93,8 +100,7 @@ sandboxes:
     container:
       image: nixos/nix
       entrypoint: nix develop --impure --command
-    forward: [ github ]
-    wants: [ nix-container-store ]
+    wants: [ github, nix-container-store ]
 
     # The same reasons as `dev`; `like:` does not exist yet, so both are written twice.
     env:
@@ -104,3 +110,4 @@ sandboxes:
         extra-trusted-public-keys = yession.cachix.org-1:Dj6jHWpEaqcGyrEEC3/qy/D3UQN8sZW1RXUOCRJ41oI=
         build-users-group =
         sandbox = false
+      CONTAINER_DEVENV_DOTFILE: /root/.devenv   # as in `dev`: one per container

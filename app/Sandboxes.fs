@@ -18,6 +18,11 @@ open Fable.Core.JsInterop
 open Fable.NodeExtras
 open Fable.SandboxRuntime
 open Node.ChildProcess
+#if FABLE_COMPILER
+open Thoth.Json
+#else
+open Thoth.Json.Net
+#endif
 open Yession.Domain
 open Yession.Domain.Content
 open Yession.Domain.Sandboxes
@@ -92,21 +97,39 @@ let withGitConfig (entries: (string * string) list) (env: Map<string, string>) :
 /// Resolve the spec's environment variables: plain values verbatim, secret references
 /// through the injected resolver. Called fresh at every sandbox (re)creation — the
 /// resolved plaintext goes into the policy env and nowhere else.
+/// A declaration's variables, as far as the session can settle them: every plain value and
+/// resolved secret, and apart from them the templates only a backend can resolve.
+[<RequireQualifiedAccess>]
+type ResolvedVariables =
+    { Settled : Map<string, string>
+      Derived : Map<string, EnvTemplate> }
+
 let resolveVariables
     (resolveSecret: SecretName -> Async<Result<string, string>>)
     (variables: Map<string, EnvironmentVariableRef>)
-    : Async<Result<Map<string, string>, string>> =
-    let rec walk acc entries =
+    : Async<Result<ResolvedVariables, string>> =
+    let rec walk (settled: Map<string, string>) (derived: Map<string, EnvTemplate>) entries =
         async {
             match entries with
-            | [] -> return Ok (Map.ofList (List.rev acc))
-            | (name, PlainValue value) :: rest -> return! walk ((name, value) :: acc) rest
+            | [] -> return Ok { ResolvedVariables.Settled = settled; ResolvedVariables.Derived = derived }
+            | (name, PlainValue value) :: rest -> return! walk (Map.add name value settled) derived rest
+            | (name, Derived template) :: rest -> return! walk settled (Map.add name template derived) rest
+            // Not the sandbox's to hold: lent to each command instead (`WorkSandboxes`).
+            | (_, Lent _) :: rest -> return! walk settled derived rest
             | (name, SecretRef secret) :: rest ->
                 match! resolveSecret secret with
                 | Error e -> return Error (sprintf "%s: %s" (SecretName.value secret) e)
-                | Ok value -> return! walk ((name, value) :: acc) rest
+                | Ok value -> return! walk (Map.add name value settled) derived rest
         }
-    walk [] (Map.toList variables)
+    walk Map.empty Map.empty (Map.toList variables)
+
+/// What a sandbox's processes are given: its policy's environment, with each template it
+/// carries resolved over what lies beneath it — `image` (a container image's own `ENV`,
+/// empty for a backend with no image) under everything the policy settled. The one place a
+/// template becomes a value, so the three backends cannot resolve one three ways.
+let environment (image: Map<string, string>) (policy: SandboxPolicy) : Map<string, string> =
+    let beneath = mergeEnv image (policy.Env |> Map.filter (fun name _ -> not (Map.containsKey name policy.Derived)))
+    mergeEnv policy.Env (EnvTemplate.resolveAll beneath policy.Derived)
 
 /// Assemble a sandbox policy for the configured backend. Host (and srt) sandboxes get
 /// the baseline allowlist under the spec's variables; a docker image supplies its own
@@ -316,6 +339,27 @@ module SessionLayout =
     /// policy directly). It is what srt would use in that case, so they still agree.
     let tmpDir () : string = Interop.envOr "CLAUDE_CODE_TMPDIR" "/tmp/claude"
 
+    /// Where the credential proxy listens. In the system temp and SHORT, for the reason srt's
+    /// own bridge sockets are: a unix socket's path is capped (`sun_path`, 104 bytes on
+    /// macOS), and a session directory alone can be deeper than that. Named for the process,
+    /// which is the session, AND a random word: a process killed before it closed leaves its
+    /// socket behind, and a later one handed the same pid — which a container recycles — would
+    /// find the name taken.
+    let credentialProxySocket () : string =
+        sprintf
+            "%s/yession-%s-%s.sock"
+            (Node.Api.os.tmpdir ())
+            (string Node.Api.``process``.pid)
+            ((Interop.randomSecret ()).Substring (0, 8))
+
+    /// Where the credential proxy's trust bundle is written, the directory made — canonical,
+    /// because srt matches the read grant a sandbox is given against the path as written, and
+    /// on macOS the session directory can sit behind a symlink.
+    let prepareTrustBundle (dataDir: string) : string =
+        let directory = sprintf "%s/credential-proxy" dataDir
+        Fs.ensureDir directory
+        sprintf "%s/trust.pem" (Fs.canonical directory |> Option.defaultValue directory)
+
     /// Where a session that predates the layout above left its checkouts: beside the
     /// workspace instead of inside it.
     let legacyReposDir (dataDir: string) : string = sprintf "%s/repos" dataDir
@@ -399,6 +443,23 @@ let artifactsVisibleAt (backend: SandboxBackend) (hostArtifactsDir: string) : st
     | HostBackend
     | SrtBackend -> hostArtifactsDir
     | DockerBackend -> "/artifacts"
+
+/// The same answer for a SANDBOX, which is the form every caller outside this module wants.
+///
+/// A share is copied in by the sandbox, so the path it is told to write to has to be the store
+/// as THAT sandbox sees it — and which backend a sandbox runs on is not the one the session was
+/// configured with: a repo-owned sandbox is work, and work runs in a container whatever
+/// `default` runs under (`SandboxRuntime.scopedBackend`). Taking the sandbox rather than a
+/// backend is what makes that unforgettable, because the composition root has no backend left
+/// to get wrong.
+///
+/// It is the fault this exists to prevent, and it shipped: the root answered with the SESSION's
+/// backend for every sandbox, so a share out of a repo container was told to write to a
+/// host-shaped path. Inside a container that path is writable, so `mkdir -p` and `cp` both
+/// succeeded and the bytes landed in the container's own filesystem — a copy that reported
+/// success, with nothing in the mount the store reads.
+let artifactsVisibleTo (configured: SandboxBackend) (hostArtifactsDir: string) (sandbox: SandboxRef) : string =
+    artifactsVisibleAt (SandboxRuntime.scopedBackend configured (SandboxRef.scope sandbox)) hostArtifactsDir
 
 /// What the SESSION adds to whatever was asked for. The checkouts are the session's,
 /// shared by every sandbox in it, so they are not part of anybody's ask: a repo that
@@ -591,12 +652,20 @@ let grantsFrom (leaves: ResourceLeaf list) : Result<GrantedLeaves, string> =
                         Sockets = path :: acc.Sockets }
                     rest
             | Endpoint host -> fold { acc with Domains = host :: acc.Domains } rest
-            | Variable (name, value) -> fold { acc with Env = Map.add name value acc.Env } rest
+            | Variable (name, VariableValue.Text value) -> fold { acc with Env = Map.add name value acc.Env } rest
+            // What only the session can supply is not text a policy can carry: it reaches the
+            // sandbox through its declaration, provided and lent there (`SelectionGrant`).
+            | Variable (_, VariableValue.Composed _)
+            | Variable (_, VariableValue.Token _) -> fold acc rest
             | Exec path -> fold { acc with Reads = path :: acc.Reads } rest
             // Only the container backend can hold one — everywhere else the realisation
             // withheld it before this fold ran — so this channel is filled exactly where
             // it can be consumed.
             | Volume (name, at) -> fold { acc with Volumes = (name, at) :: acc.Volumes } rest
+            // A connection is provisioned by the credential source that forwards it — a
+            // route and a per-block loan (`WorkSandboxes`) — and puts nothing into the
+            // policy of its own.
+            | Connection _ -> fold acc rest
     fold
         { Reads = []; Writes = []; Domains = []; Sockets = []; Env = Map.empty; Binds = []; Volumes = [] }
         leaves
@@ -875,7 +944,10 @@ let policyFor
           // The write root stays the workspace either way (`WritePaths` above): a
           // sandbox that starts in its checkout still writes where it always did.
           WorkingDirectory = SandboxPath.resolvedFrom workspace spec.WorkingDirectory
-          Filesystem = Confined }
+          Filesystem = Confined
+          Derived = Map.empty
+          // What a forwarded credential provisions, joined where the provision is.
+          Intercept = None }
 
 /// A one-line description of the backend + spec for the start-requested event.
 let summaryFor (backend: SandboxBackend) (spec: EnvironmentSpec) : string =
@@ -917,7 +989,8 @@ let preparePolicy
         async {
             match! resolveVariables resolveSecret spec.EnvironmentVariables with
             | Error e -> return Error e
-            | Ok resolved ->
+            | Ok variables ->
+                let resolved = variables.Settled
                 // What a sandbox is told it is. A file that has to work on a laptop, in CI,
                 // in a Claude Code container and in one of these can then BRANCH rather than
                 // sniff — and sniffing is what it did, badly: an agent in this repo's own
@@ -938,6 +1011,7 @@ let preparePolicy
                             backend (limitsHere backend) (ambientEnv ()) resolved
                             layout.Workspace layout.SharedRepos layout.Home
                             granted optional spec
+                        |> Result.map (fun policy -> { policy with Derived = variables.Derived })
         }
 
 // --- A buffered one-shot: settle once, deliver to every (even late) awaiter --------------
@@ -1057,10 +1131,10 @@ module private Pty =
 
     /// Absent is an ANSWER here, not a failure: `null` is what `available` reads, and a
     /// throw — no addon, or a require that is not defined at all — is the same answer.
-    /// `Interop.require` rather than a static `import`: node-pty is CJS-only, and a missing
-    /// package would fail the whole module's load rather than this one lookup.
+    /// `Interop.loadNodePty` rather than a static `import`: node-pty is CJS-only, and a
+    /// missing package would fail the whole module's load rather than this one lookup.
     let private tryRequire () : Fable.NodePty.Exports =
-        try unbox<Fable.NodePty.Exports> (Interop.require "node-pty") with _ -> null
+        try Interop.loadNodePty () with _ -> null
 
     /// Resolved once. `require` is not free and the answer cannot change within a process.
     let private modul = lazy (tryRequire ())
@@ -1108,8 +1182,7 @@ module private Pty =
                           Fable.NodePty.ForkOptions.cols = cols
                           Fable.NodePty.ForkOptions.rows = rows
                           Fable.NodePty.ForkOptions.cwd = startIn cwd
-                          Fable.NodePty.ForkOptions.env =
-                            createObj [ for name, value in Map.toList env -> name ==> value ] }
+                          Fable.NodePty.ForkOptions.env = Fable.NodePty.Environment.ofMap env }
                     )
                 proc.onData onOutput
                 proc.onExit (fun exit -> exited.Settle (SandboxExited (exitCode exit)))
@@ -1134,7 +1207,7 @@ module HostSandbox =
                 let children = Children.Registry ()
                 let spawn (exec: SandboxExec) (onChunk: OutputStream * string -> unit) =
                     async {
-                        let env = mergeEnv policy.Env exec.Env
+                        let env = mergeEnv (environment Map.empty policy) exec.Env
                         let cwd =
                             SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
                             |> Option.toObj
@@ -1149,7 +1222,7 @@ module HostSandbox =
                             else
                                 Some (fun exec cols rows onOutput ->
                                     async {
-                                        let env = mergeEnv policy.Env exec.Env
+                                        let env = mergeEnv (environment Map.empty policy) exec.Env
                                         let cwd =
                                             SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
                                             |> Option.toObj
@@ -1190,17 +1263,24 @@ module DockerSandbox =
         | None -> "alpine:3"
 
     /// One `HostConfig.Mounts` entry from a typed mount.
-    let private mountObj (name: string) (m: ContainerMount) : obj =
+    let private mountFor (name: string) (m: ContainerMount) : DK.Mount =
         let source, kind =
             match m.Source with
-            | HostPath p -> p, "bind"
-            | NamedVolume v -> v, "volume"
-            | SessionWorkspace -> name, "volume"
-        createObj
-            [ "Type", box kind
-              "Source", box source
-              "Target", box m.Target
-              "ReadOnly", box (m.Mode = ReadOnly) ]
+            | HostPath p -> p, DK.MountType.Bind
+            | NamedVolume v -> v, DK.MountType.Volume
+            | SessionWorkspace -> name, DK.MountType.Volume
+        jsOptions<DK.Mount> (fun mount ->
+            mount.Type <- kind
+            mount.Source <- source
+            mount.Target <- m.Target
+            mount.ReadOnly <- (m.Mode = ReadOnly))
+
+    /// What every docker object this module makes is labelled with: the session it belongs
+    /// to, which is what the cleanup sweep and `countByLabel` find it by.
+    let private sessionLabels (name: string) : DK.Labels = DK.Labels.ofList [ "yession-session", name ]
+
+    /// Removed even while it runs.
+    let private forced () : DK.RemoveOptions = jsOptions<DK.RemoveOptions> (fun o -> o.force <- true)
 
     /// Drain a build/pull progress stream; resolves when Docker signals completion.
     let private drainProgress (client: DK.Docker) (stream: DK.Stream) : Async<Result<unit, string>> =
@@ -1216,7 +1296,11 @@ module DockerSandbox =
         async {
             let client = DK.create ()
             let! arr =
-                client.listContainers (createObj [ "all", box true; "filters", box (createObj [ "label", box [| label |] ]) ])
+                client.listContainers (
+                    jsOptions<DK.ListContainersOptions> (fun o ->
+                        o.all <- true
+                        o.filters <- jsOptions<DK.ContainerFilters> (fun f -> f.label <- [| label |]))
+                )
                 |> Interop.awaitPromise
             return arr.Length
         }
@@ -1298,7 +1382,14 @@ module DockerSandbox =
     let private awaitStarted (client: DK.Docker) (container: DK.Container) : Async<Result<unit, string>> =
         async {
             try
-                let! stream = container.logs (createObj [ "follow", box true; "stdout", box true; "stderr", box true ]) |> Interop.awaitPromise
+                let! stream =
+                    container.logs (
+                        jsOptions<DK.LogsOptions> (fun o ->
+                            o.follow <- true
+                            o.stdout <- true
+                            o.stderr <- true)
+                    )
+                    |> Interop.awaitPromise
                 let stdout = DK.createPassThrough ()
                 let stderr = DK.createPassThrough ()
                 client.modem.demuxStream (stream, stdout, stderr)
@@ -1383,6 +1474,23 @@ module DockerSandbox =
             | Ok handle ->
                 match! handle.Exited with
                 | SandboxRunFailed reason -> return Error (sprintf "could not look for a shell behind the entrypoint: %s" reason)
+                // The look itself ends `; true`, so it exits 0 whatever it found: any other
+                // code is the ENTRYPOINT failing before the look ran — `nix develop` losing a
+                // fetch, say. Reported as that, with its code, rather than as "found none",
+                // which sent a reader hunting for a missing shell in a devshell that was never
+                // assembled.
+                | SandboxExited code when code <> 0 ->
+                    let what =
+                        match container.Entrypoint with
+                        | Some prefix -> sprintf "the entrypoint (%s)" (String.concat " " prefix)
+                        | None -> "the look for a shell"
+                    return
+                        Error
+                            (sprintf
+                                "%s exited %d before a shell could be looked for behind it. It said: %s"
+                                what
+                                code
+                                (let text = said.ToString().Trim () in if text = "" then "nothing" else text))
                 | SandboxExited _ ->
                     let found =
                         said.ToString().Split '\n'
@@ -1424,13 +1532,15 @@ module DockerSandbox =
                             | Some build ->
                                 let tag = "yession-build-" + name.ToLower ()
                                 let src = Node.Api.fs.readdirSync (U2.Case1 build.ContextPath) |> Array.ofSeq
+                                let context =
+                                    jsOptions<DK.BuildContext> (fun c ->
+                                        c.context <- build.ContextPath
+                                        c.src <- src)
                                 let opts =
-                                    [ "t", box tag ]
-                                    @ (match build.DockerfilePath with Some d -> [ "dockerfile", box d ] | None -> [])
-                                    |> createObj
-                                let! stream =
-                                    client.buildImage (createObj [ "context", box build.ContextPath; "src", box src ], opts)
-                                    |> Interop.awaitPromise
+                                    jsOptions<DK.BuildOptions> (fun o ->
+                                        o.t <- tag
+                                        build.DockerfilePath |> Option.iter (fun d -> o.dockerfile <- d))
+                                let! stream = client.buildImage (context, opts) |> Interop.awaitPromise
                                 let! drained = drainProgress client stream
                                 return drained |> Result.map (fun () -> tag)
                             | None ->
@@ -1461,74 +1571,90 @@ module DockerSandbox =
                         // and by accident: docker is the backend that passes no workspace.
                         let workspaceTarget =
                             policy.WorkingDirectory |> Option.defaultValue "/workspace"
-                        let mounts = mountPlan workspaceTarget container.Mounts policy |> List.map (mountObj name)
+                        let mounts = mountPlan workspaceTarget container.Mounts policy |> List.map (mountFor name)
+                        // What lies beneath a template is the image's own `ENV`, which is
+                        // only knowable now that the image is here.
+                        let! imageEnv =
+                            async {
+                                if Map.isEmpty policy.Derived then return Map.empty
+                                else
+                                    let! inspected = client.getImage(image).inspect () |> Interop.awaitPromise
+                                    return DK.ImageInspect.environment inspected
+                            }
                         let env =
-                            policy.Env |> Map.toList |> List.map (fun (k, v) -> sprintf "%s=%s" k v) |> List.toArray
+                            environment imageEnv policy |> Map.toList |> List.map (fun (k, v) -> sprintf "%s=%s" k v) |> List.toArray
                         // The named volume persists across container restarts by design;
                         // the label lets cleanup find it (see the workflow teardown).
-                        do! client.createVolume (createObj [ "Name", box name; "Labels", box (createObj [ "yession-session", box name ]) ]) |> Interop.awaitPromise |> Async.Ignore
+                        do!
+                            client.createVolume (
+                                jsOptions<DK.VolumeCreateOptions> (fun o ->
+                                    o.Name <- name
+                                    o.Labels <- sessionLabels name)
+                            )
+                            |> Interop.awaitPromise
+                            |> Async.Ignore
                         // Clear a same-named crash leftover so `createContainer` can reuse the name.
-                        try do! client.getContainer(name).remove (createObj [ "force", box true ]) |> Interop.awaitPromise |> Async.Ignore
+                        try do! client.getContainer(name).remove (forced ()) |> Interop.awaitPromise |> Async.Ignore
                         with _ -> ()
                         let! container =
                             client.createContainer (
-                                createObj
-                                    [ "name", box name
-                                      "Image", box image
-                                      "Labels", box (createObj [ "yession-session", box name ])
-                                      "Env", box env
-                                      "WorkingDir", box workspaceTarget
-                                      // The sandbox's own process when it declared one, and
-                                      // otherwise the idle command that has always kept the
-                                      // container up for `exec` to reach — either way behind
-                                      // the daemon workaround (`startCommand`).
-                                      "Cmd", box (startCommand entrypoint container.Command)
-                                      "HostConfig",
-                                      box (
-                                          createObj
-                                              [ "Mounts", box (List.toArray mounts)
-                                                // The host, by the name `hostAddressFrom`
-                                                // promises. Colima and Docker Desktop
-                                                // resolve it unasked; a native Linux daemon
-                                                // does not, and `host-gateway` is the
-                                                // daemon's own answer on all three.
-                                                "ExtraHosts", box [| "host.docker.internal:host-gateway" |]
-                                                // Everything dropped, then the file-ownership
-                                                // capabilities added back. "Nothing it runs
-                                                // legitimately needs a capability" was measured
-                                                // false: a nix source build's tar unpack
-                                                // preserves the archive's uid/gid (CHOWN), later
-                                                // chmods the result (FOWNER), and root then
-                                                // reads files it just gave away (DAC_OVERRIDE).
-                                                // All three verified against a raw container;
-                                                // still far below docker's own default set — no
-                                                // NET_RAW, no SETUID/SETGID, no MKNOD — and
-                                                // no-new-privileges stays.
-                                                "CapDrop", box [| "ALL" |]
-                                                "CapAdd", box [| "CHOWN"; "FOWNER"; "DAC_OVERRIDE" |]
-                                                "SecurityOpt", box [| "no-new-privileges" |]
-                                                // /dev/shm, above docker's 64MB default.
-                                                // Chromium composites through shared memory
-                                                // and starves the moment more than one page
-                                                // paints at once: measured under this exact
-                                                // HostConfig, six concurrent headless pages
-                                                // leave two standing at 64MB and all six at
-                                                // 1GB, that being the only thing changed. A
-                                                // repo cannot reach this from its yession.yaml
-                                                // — the container block is image/build/volumes/
-                                                // cmd/entrypoint and nothing else — so a browser
-                                                // suite run in here (Playwright, Cypress) could
-                                                // not fix a too-small /dev/shm from the outside.
-                                                // tmpfs is a ceiling, not a reservation: a
-                                                // container that never opens a browser writes
-                                                // nothing here and pays nothing for the headroom.
-                                                "ShmSize", box 1073741824 ]) ])
+                                jsOptions<DK.ContainerCreateOptions> (fun o ->
+                                    o.name <- name
+                                    o.Image <- image
+                                    o.Labels <- sessionLabels name
+                                    o.Env <- env
+                                    o.WorkingDir <- workspaceTarget
+                                    // The sandbox's own process when it declared one, and
+                                    // otherwise the idle command that has always kept the
+                                    // container up for `exec` to reach — either way behind
+                                    // the daemon workaround (`startCommand`).
+                                    o.Cmd <- startCommand entrypoint container.Command
+                                    o.HostConfig <-
+                                        jsOptions<DK.HostConfig> (fun host ->
+                                            host.Mounts <- List.toArray mounts
+                                            // The host, by the name `hostAddressFrom`
+                                            // promises. Colima and Docker Desktop
+                                            // resolve it unasked; a native Linux daemon
+                                            // does not, and `host-gateway` is the
+                                            // daemon's own answer on all three.
+                                            host.ExtraHosts <- [| "host.docker.internal:host-gateway" |]
+                                            // Everything dropped, then the file-ownership
+                                            // capabilities added back. "Nothing it runs
+                                            // legitimately needs a capability" was measured
+                                            // false: a nix source build's tar unpack
+                                            // preserves the archive's uid/gid (CHOWN), later
+                                            // chmods the result (FOWNER), and root then
+                                            // reads files it just gave away (DAC_OVERRIDE).
+                                            // All three verified against a raw container;
+                                            // still far below docker's own default set — no
+                                            // NET_RAW, no SETUID/SETGID, no MKNOD — and
+                                            // no-new-privileges stays.
+                                            host.CapDrop <- [| "ALL" |]
+                                            host.CapAdd <- [| "CHOWN"; "FOWNER"; "DAC_OVERRIDE" |]
+                                            host.SecurityOpt <- [| "no-new-privileges" |]
+                                            // /dev/shm, above docker's 64MB default.
+                                            // Chromium composites through shared memory
+                                            // and starves the moment more than one page
+                                            // paints at once: measured under this exact
+                                            // HostConfig, six concurrent headless pages
+                                            // leave two standing at 64MB and all six at
+                                            // 1GB, that being the only thing changed. A
+                                            // repo cannot reach this from its yession.yaml
+                                            // — the container block is image/build/volumes/
+                                            // cmd/entrypoint and nothing else — so a browser
+                                            // suite run in here (Playwright, Cypress) could
+                                            // not fix a too-small /dev/shm from the outside.
+                                            // tmpfs is a ceiling, not a reservation: a
+                                            // container that never opens a browser writes
+                                            // nothing here and pays nothing for the headroom.
+                                            host.ShmSize <- 1073741824))
+                            )
                             |> Interop.awaitPromise
                         do! container.start () |> Interop.awaitPromise |> Async.Ignore
                         match! awaitStarted client container with
                         | Error reason ->
                             try
-                                do! client.getContainer(container.id).remove (createObj [ "force", box true ]) |> Interop.awaitPromise |> Async.Ignore
+                                do! client.getContainer(container.id).remove (forced ()) |> Interop.awaitPromise |> Async.Ignore
                             with _ -> ()
                             return Error reason
                         | Ok () ->
@@ -1553,25 +1679,29 @@ module DockerSandbox =
                             async {
                                 try
                                     let execOpts =
-                                        [ "Cmd", box (List.toArray (argvFor entrypoint exec))
-                                          "AttachStdin", box true
-                                          "AttachStdout", box true
-                                          "AttachStderr", box true
-                                          "Env", box (execEnv exec) ]
-                                        // Resolved against the container's own working
-                                        // directory, which is what it was CREATED with — so
-                                        // an exec naming nothing lands exactly where it
-                                        // always did, and one naming a relative directory
-                                        // means the same thing here as it does everywhere
-                                        // else in the session.
-                                        @ (match execWorkingDir exec with
-                                           | Some w -> [ "WorkingDir", box w ]
-                                           | None -> [])
-                                        |> createObj
+                                        jsOptions<DK.ExecOptions> (fun o ->
+                                            o.Cmd <- List.toArray (argvFor entrypoint exec)
+                                            o.AttachStdin <- true
+                                            o.AttachStdout <- true
+                                            o.AttachStderr <- true
+                                            o.Env <- execEnv exec
+                                            // Resolved against the container's own working
+                                            // directory, which is what it was CREATED with — so
+                                            // an exec naming nothing lands exactly where it
+                                            // always did, and one naming a relative directory
+                                            // means the same thing here as it does everywhere
+                                            // else in the session.
+                                            execWorkingDir exec |> Option.iter (fun w -> o.WorkingDir <- w))
                                     let! started = container.exec execOpts |> Interop.awaitPromise
                                     // Hijack the connection so stdin rides the same socket the
                                     // output is demuxed from.
-                                    let! stream = started.start (createObj [ "hijack", box true; "stdin", box true ]) |> Interop.awaitPromise
+                                    let! stream =
+                                        started.start (
+                                            jsOptions<DK.ExecStartOptions> (fun o ->
+                                                o.hijack <- true
+                                                o.stdin <- true)
+                                        )
+                                        |> Interop.awaitPromise
                                     let stdout = DK.createPassThrough ()
                                     let stderr = DK.createPassThrough ()
                                     client.modem.demuxStream (stream, stdout, stderr)
@@ -1590,7 +1720,7 @@ module DockerSandbox =
                                     stream.onError (fun error -> ended.Settle (SandboxRunFailed (StreamError.describe error)))
                                     return
                                         Ok
-                                            { WriteStdin = fun text -> stream.write (box text) |> ignore
+                                            { WriteStdin = fun text -> stream.write text |> ignore
                                               CloseStdin = fun () -> stream.``end`` ()
                                               // The Engine API cannot signal an exec's process;
                                               // closing our side of the stream is the most a
@@ -1615,16 +1745,14 @@ module DockerSandbox =
                             async {
                                 try
                                     let execOpts =
-                                        [ "Cmd", box (List.toArray (argvFor entrypoint exec))
-                                          "AttachStdin", box true
-                                          "AttachStdout", box true
-                                          "AttachStderr", box true
-                                          "Tty", box true
-                                          "Env", box (execEnv exec) ]
-                                        @ (match execWorkingDir exec with
-                                           | Some w -> [ "WorkingDir", box w ]
-                                           | None -> [])
-                                        |> createObj
+                                        jsOptions<DK.ExecOptions> (fun o ->
+                                            o.Cmd <- List.toArray (argvFor entrypoint exec)
+                                            o.AttachStdin <- true
+                                            o.AttachStdout <- true
+                                            o.AttachStderr <- true
+                                            o.Tty <- true
+                                            o.Env <- execEnv exec
+                                            execWorkingDir exec |> Option.iter (fun w -> o.WorkingDir <- w))
                                     let! started = container.exec execOpts |> Interop.awaitPromise
                                     // `Tty` on the START as well as on the create: the Engine
                                     // API's exec-start takes its own, and without it the daemon
@@ -1633,7 +1761,14 @@ module DockerSandbox =
                                     // middle of a shell's output. Unseen for as long as no
                                     // docker terminal ran a shell through the Host; the first
                                     // one printed `\x01\x00…\x14sed (GNU sed) 4.10`.
-                                    let! stream = started.start (createObj [ "hijack", box true; "stdin", box true; "Tty", box true ]) |> Interop.awaitPromise
+                                    let! stream =
+                                        started.start (
+                                            jsOptions<DK.ExecStartOptions> (fun o ->
+                                                o.hijack <- true
+                                                o.stdin <- true
+                                                o.Tty <- true)
+                                        )
+                                        |> Interop.awaitPromise
                                     Readables.text stream onOutput
                                     // Size it before anything runs: a program that reads its
                                     // dimensions at startup must not read 80x24 and then be
@@ -1661,7 +1796,7 @@ module DockerSandbox =
                                             // is a very long command line — but a caller that
                                             // starts streaming bytes through this should
                                             // chunk rather than assume the write survives.
-                                            { Write = fun text -> stream.write (box text) |> ignore
+                                            { Write = fun text -> stream.write text |> ignore
                                               Resize = fun c r -> execResize started r c
                                               // As with the piped exec: the Engine API cannot
                                               // signal an exec's process, so closing our side
@@ -1673,7 +1808,7 @@ module DockerSandbox =
                         let dispose () =
                             async {
                                 try
-                                    do! client.getContainer(container.id).remove (createObj [ "force", box true ]) |> Interop.awaitPromise |> Async.Ignore
+                                    do! client.getContainer(container.id).remove (forced ()) |> Interop.awaitPromise |> Async.Ignore
                                 with ex ->
                                     eprintfn "[sandbox %s] docker remove failed: %s" name ex.Message
                             }
@@ -1757,17 +1892,22 @@ type SrtConfig =
       /// above is not read at all, so this is the only way a granted socket works there, and
       /// it is set only when the policy already SAID it would be.
       AllowAllUnixSockets : bool
+      /// srt's `network.mitmProxy`: the hosts whose `CONNECT`s its proxy hands to another
+      /// proxy's socket instead of dialling — the credential proxy. Read from the config the
+      /// manager was initialized with, like the allowlist — which is this sandbox's own,
+      /// because each sandbox's manager runs in a process of its own (`HostWire`).
+      MitmProxy : Interception option
       Bwrap : string option
       Socat : string option
       Ripgrep : string option
       WeakNesting : bool
       /// srt denies writes to `.git/config` unless told otherwise, and a `git clone`
-      /// writes one. So this is on — and it is on for EVERY sandbox, because srt reads
-      /// the flag from the session config the first sandbox initialized the manager with
-      /// and ignores the per-spawn one, which makes any per-sandbox answer a lie about
-      /// which sandbox got it. What that costs is stated in docs/GAPS.md; the hooks deny
-      /// (the execution vector) is separate and stays. Undo when srt reads the flag from
-      /// the per-spawn config: then only the git sandbox asks for it.
+      /// writes one. So this is on — and it is on for EVERY sandbox. It was forced there
+      /// while one manager served a whole session, because srt reads the flag from the
+      /// config the manager was initialized with; each sandbox now initializes its own, so
+      /// the git sandbox alone could ask for it, and has not yet been made to. What that
+      /// costs is stated in docs/GAPS.md; the hooks deny (the execution vector) is separate
+      /// and stays.
       AllowGitConfig : bool
       /// srt's `filesystem.disabled`: no read or write rules, and none of the mandatory
       /// denies either — the only way to write a checkout carrying a name srt refuses.
@@ -1969,6 +2109,7 @@ module SrtSandbox =
                 match leaf, outcome with
                 | Socket _, LeafRealisation.Coarsened _ -> true
                 | _ -> false)
+          MitmProxy = policy.Intercept
           Bwrap = tools.Bwrap
           Socat = tools.Socat
           Ripgrep = tools.Ripgrep
@@ -2035,42 +2176,42 @@ module SrtSandbox =
 
     /// The config object srt itself reads.
     ///
-    /// Built here rather than in a macro, because which FIELDS it has is a decision: every
-    /// optional one is omitted when this policy has nothing to say about it, and omitted is
-    /// what srt reads as "you decide" — `bwrapPath ?? 'bwrap'`, a ripgrep default parameter,
-    /// `if (!enableWeakerNestedSandbox)`. A blank tool path is an absent one, as the
-    /// ternaries this replaced read it: `toolsFrom` already refuses to make one, and a
-    /// config that slipped one through would fail srt's own schema instead of falling back.
-    let private toJs (config: SrtConfig) : obj =
-        let strings (values: string list) : obj = box (List.toArray values)
-        let entry (key: string) (encode: string -> obj) (value: string option) : (string * obj) list =
-            value
-            |> Option.filter (fun named -> named <> "")
-            |> Option.map (fun named -> key, encode named)
-            |> Option.toList
-        let flag (key: string) (asked: bool) : (string * obj) list = if asked then [ key, box true ] else []
-        createObj
-            [ yield
-                ("network",
-                 createObj
-                     [ yield ("allowedDomains", strings config.AllowedDomains)
-                       yield ("deniedDomains", strings [])
-                       yield ("strictAllowlist", box true)
-                       yield ("allowUnixSockets", strings config.AllowUnixSockets)
-                       yield! flag "allowAllUnixSockets" config.AllowAllUnixSockets ])
-              yield
-                ("filesystem",
-                 createObj
-                     [ "denyRead", strings config.DenyRead
-                       "allowRead", strings config.AllowRead
-                       "allowWrite", strings config.AllowWrite
-                       "denyWrite", strings []
-                       "allowGitConfig", box config.AllowGitConfig
-                       "disabled", box config.FilesystemDisabled ])
-              yield! entry "bwrapPath" box config.Bwrap
-              yield! entry "socatPath" box config.Socat
-              yield! entry "ripgrep" (fun command -> createObj [ "command", box command ]) config.Ripgrep
-              yield! flag "enableWeakerNestedSandbox" config.WeakNesting ]
+    /// Which FIELDS it has is a decision: every optional one is left unassigned when this
+    /// policy has nothing to say about it, and unassigned is absent, which is what srt reads
+    /// as "you decide" (see `Fable.SandboxRuntime`). A flag this policy does not raise is
+    /// absent rather than `false`, for the same reason. A blank tool path is an absent one,
+    /// as the ternaries this replaced read it: `toolsFrom` already refuses to make one, and
+    /// a config that slipped one through would fail srt's own schema instead of falling back.
+    /// An interception as srt spells it.
+    let private mitmConfig (interception: Interception) : MitmProxyConfig =
+        jsOptions<MitmProxyConfig> (fun mitm ->
+            mitm.socketPath <- interception.Socket
+            mitm.domains <- List.toArray interception.Hosts)
+
+    let private toJs (config: SrtConfig) : RuntimeConfig =
+        let named (value: string option) : string option = value |> Option.filter (fun named -> named <> "")
+        jsOptions<RuntimeConfig> (fun srt ->
+            srt.network <-
+                jsOptions<NetworkConfig> (fun network ->
+                    network.allowedDomains <- List.toArray config.AllowedDomains
+                    network.deniedDomains <- [||]
+                    network.strictAllowlist <- true
+                    network.allowUnixSockets <- List.toArray config.AllowUnixSockets
+                    if config.AllowAllUnixSockets then network.allowAllUnixSockets <- true
+                    config.MitmProxy |> Option.iter (fun interception -> network.mitmProxy <- mitmConfig interception))
+            srt.filesystem <-
+                jsOptions<FilesystemConfig> (fun filesystem ->
+                    filesystem.denyRead <- List.toArray config.DenyRead
+                    filesystem.allowRead <- List.toArray config.AllowRead
+                    filesystem.allowWrite <- List.toArray config.AllowWrite
+                    filesystem.denyWrite <- [||]
+                    filesystem.allowGitConfig <- config.AllowGitConfig
+                    filesystem.disabled <- config.FilesystemDisabled)
+            named config.Bwrap |> Option.iter (fun path -> srt.bwrapPath <- path)
+            named config.Socat |> Option.iter (fun path -> srt.socatPath <- path)
+            named config.Ripgrep
+            |> Option.iter (fun command -> srt.ripgrep <- jsOptions<RipgrepConfig> (fun ripgrep -> ripgrep.command <- command))
+            if config.WeakNesting then srt.enableWeakerNestedSandbox <- true)
 
     /// How srt is told "no directory": its wrapper takes the child's start directory and
     /// reads a missing one as "wherever this process is". This seam is handed the empty
@@ -2084,38 +2225,9 @@ module SrtSandbox =
 
     let private wrapCwd (directory: string option) : string option = directory
 
-    /// The confined command line for `command` under this policy's `customConfig`.
-    let private wrapArgv (srt: SandboxManager) (command: string) (custom: obj) (cwd: string option) : JS.Promise<Wrapped> =
+    /// The confined command line for `command` under this sandbox's config.
+    let private wrapArgv (srt: SandboxManager) (command: string) (custom: RuntimeConfig) (cwd: string option) : JS.Promise<Wrapped> =
         srt.wrapWithSandboxArgv (command, None, custom, None, cwd)
-
-    /// A copy of the manager's config carrying the two network fields this session widens.
-    /// The rest of the config — the filesystem rules, the credential scrubbing, srt's own
-    /// proxy state — is copied through rather than restated, because `updateConfig` REPLACES
-    /// what it is given; `Object.assign` copies every field, a record would copy the ones it
-    /// declares. Read once: `getConfig` hands back the manager's own object, so the config
-    /// and the network it carries are two views of one read rather than two reads that could
-    /// have disagreed.
-    let private widenAllowlist (srt: SandboxManager) (allowedDomains: string array) (allowUnixSockets: string array) : unit =
-        match srt.getConfig () with
-        | None -> failwith "srt's manager has no config to widen: it has not been initialized"
-        | Some config ->
-            let network =
-                JS.Constructors.Object.assign (
-                    obj (),
-                    box config.network,
-                    box {| allowedDomains = allowedDomains; allowUnixSockets = allowUnixSockets |}
-                )
-            srt.updateConfig (unbox<RuntimeConfig> (JS.Constructors.Object.assign (obj (), box config, box {| network = network |})))
-
-    // srt's manager is a PROCESS-WIDE singleton: one filtering proxy pair, one egress
-    // allowlist, initialized once. Filesystem policy is per-spawn (it rides `customConfig`
-    // into the bwrap profile), so two sandboxes in a session confine their files exactly;
-    // their egress allowlists, though, can only be the union — see docs/GAPS.md.
-    let mutable private starting : JS.Promise<SandboxManager> option = None
-    let mutable private allowed : Set<string> = Set.empty
-    /// The sockets every sandbox of this session may connect to. Session-scoped for the
-    /// same reason `allowed` is: srt reads it from the manager's config, not the spawn's.
-    let mutable private sockets : Set<string> = Set.empty
 
     /// The tools this config names srt must run. macOS names none — Seatbelt ships with
     /// the OS — so the list is empty there, and so is what a failed start there settles.
@@ -2166,98 +2278,6 @@ module SrtSandbox =
             reason
             (namedTools config |> String.concat ", ")
 
-    /// Forget the process-wide manager: this module's memo AND srt's own, which the memo
-    /// only fronts. Both, because `initialize` returns early once srt has a manager — the
-    /// dependency probe included — so forgetting one half is not a fresh start, it is a
-    /// start that skips the very thing a fresh one exists to redo. Called when a start
-    /// settled nothing, and by tests that drive a fresh session in the same process;
-    /// production starts once and keeps it until the process ends.
-    let forgetManager () : Async<unit> =
-        async {
-            match starting with
-            | None -> ()
-            | Some promise ->
-                starting <- None
-                allowed <- Set.empty
-                sockets <- Set.empty
-                try
-                    let! srt = Interop.awaitPromise promise
-                    do! Interop.awaitPromise (srt.reset ())
-                with _ -> ()
-        }
-
-    let private managerFor (config: SrtConfig) : Async<SandboxManager> =
-        match starting with
-        | Some promise ->
-            async {
-                let! srt = Interop.awaitPromise promise
-                // Sockets widen with the domains, and for the same reason: srt reads BOTH
-                // from the session config the manager was initialized with and ignores the
-                // per-spawn one (`getAllowUnixSockets` reads the module-level config). A
-                // second sandbox that named a socket the first did not would otherwise hold
-                // a grant that exists only in its own config object — which is exactly what
-                // happened: a policy carrying the nix daemon socket, a `test -S` that
-                // passed, and "could not connect to any lix socket".
-                //
-                // The union is the same compromise docs/GAPS.md records for egress: every
-                // sandbox of a session can reach what any of them may. Undo when srt reads
-                // the network config per spawn.
-                let widerDomains = Set.union allowed (Set.ofList config.AllowedDomains)
-                let widerSockets = Set.union sockets (Set.ofList config.AllowUnixSockets)
-                if widerDomains <> allowed || widerSockets <> sockets then
-                    allowed <- widerDomains
-                    sockets <- widerSockets
-                    widenAllowlist srt (Set.toArray widerDomains) (Set.toArray widerSockets)
-                return srt
-            }
-        | None ->
-            allowed <- Set.ofList config.AllowedDomains
-            sockets <- Set.ofList config.AllowUnixSockets
-            // Started once, here, and memoized as its promise — including a start that
-            // failed BECAUSE THIS HOST CANNOT CONFINE, so every later sandbox reports the
-            // reason instead of rediscovering it. A start that settled nothing is not
-            // that: it is asked again below, and forgotten if it still cannot answer.
-            let promise =
-                Async.StartAsPromise (
-                    async {
-                        let! exports = Interop.awaitPromise (Fable.SandboxRuntime.load ())
-                        let srt = exports.SandboxManager
-                        if not (srt.isSupportedPlatform ()) then
-                            return failwith "this platform has no srt sandbox"
-                        let attempt (_: unit) =
-                            async {
-                                try
-                                    // Always CONFINED, whichever sandbox got here first: srt
-                                    // reads the session config for anything a spawn does not
-                                    // name, so an exempt one initializing the manager would
-                                    // hand its exemption to the session. The exemption rides
-                                    // `customConfig` per spawn, which wins outright over this.
-                                    do! Interop.awaitPromise (srt.initialize (toJs { config with FilesystemDisabled = false }))
-                                    return Ok srt
-                                with ex ->
-                                    return Error (startFailure Fs.executable config, ex)
-                            }
-                        // The schedule decides how many times and how long apart; what a
-                        // settled failure MEANS is still this module's own answer.
-                        match! Resilience.Policy.guard (startPolicy Resilience.Policy.sleep) attempt () with
-                        | Ok srt -> return srt
-                        // The provider's own error, unwrapped: a host missing a tool is told
-                        // which one by srt, and a sentence written here would only paraphrase.
-                        | Error (HostCannotConfine, ex) -> return raise ex
-                        | Error (NothingSettled, ex) ->
-                            return failwith (probeDidNotRun config startAttempts ex.Message)
-                    })
-            starting <- Some promise
-            // The forgetting rides the PROMISE rather than a caller: attached before anyone
-            // else can be handed it, it runs once and ahead of every awaiter's continuation,
-            // so no caller can clear a start that is not the one it watched fail.
-            promise
-            |> Promise.catchEnd (fun _ ->
-                match startFailure Fs.executable config with
-                | HostCannotConfine -> ()
-                | NothingSettled -> forgetManager () |> Async.StartImmediate)
-            Interop.awaitPromise promise
-
     /// Name srt's own egress bridge sockets in the read set, so a confined command can
     /// reach them.
     ///
@@ -2286,6 +2306,315 @@ module SrtSandbox =
         | [] -> config
         | _ -> { config with AllowRead = List.distinct (config.AllowRead @ sockets) }
 
+    /// What passes between a session and the process that holds ONE sandbox's srt manager:
+    /// a line of JSON each way, over the host's stdin and stdout.
+    ///
+    /// srt's manager is a process-wide singleton — one filtering proxy pair, one allowlist,
+    /// one set of intercepted hosts, all read from the config it was initialized with and
+    /// never from a spawn's own. One manager per sandbox is therefore one PROCESS per
+    /// sandbox, and this is how the session talks to it. The session still spawns every
+    /// command itself — the pty, the process group and the transcript stay where they are;
+    /// what crosses is a command line in and a confined command line out.
+    module HostWire =
+
+        type Request =
+            /// Initialize the manager with this sandbox's config. The first line, and once.
+            | Start of SrtConfig
+            | Wrap of id: int * command: string * cwd: string option
+
+        type Reply =
+            | Ready
+            /// The manager did not start, in words; the host exits after saying so.
+            | Refused of reason: string
+            | Confined of id: int * argv: string list
+            | Unconfined of id: int * reason: string
+
+        let private strings (values: string list) : JsonValue = values |> List.map Encode.string |> Encode.list
+
+        let private encodeConfig (config: SrtConfig) : JsonValue =
+            let optional name (value: string option) = value |> Option.map (fun value -> name, Encode.string value)
+            Encode.object (
+                [ "denyRead", strings config.DenyRead
+                  "allowRead", strings config.AllowRead
+                  "allowWrite", strings config.AllowWrite
+                  "allowedDomains", strings config.AllowedDomains
+                  "allowUnixSockets", strings config.AllowUnixSockets
+                  "allowAllUnixSockets", Encode.bool config.AllowAllUnixSockets
+                  "weakNesting", Encode.bool config.WeakNesting
+                  "allowGitConfig", Encode.bool config.AllowGitConfig
+                  "filesystemDisabled", Encode.bool config.FilesystemDisabled ]
+                @ List.choose
+                    id
+                    [ optional "bwrap" config.Bwrap
+                      optional "socat" config.Socat
+                      optional "ripgrep" config.Ripgrep
+                      config.MitmProxy
+                      |> Option.map (fun interception ->
+                          "mitmProxy",
+                          Encode.object [ "socket", Encode.string interception.Socket; "hosts", strings interception.Hosts ]) ]
+            )
+
+        let private decodeConfig : Decoder<SrtConfig> =
+            let strings = Decode.list Decode.string
+            let interception : Decoder<Interception> =
+                Decode.object (fun get ->
+                    { Interception.Socket = get.Required.Field "socket" Decode.string
+                      Interception.Hosts = get.Required.Field "hosts" strings })
+            Decode.object (fun get ->
+                { DenyRead = get.Required.Field "denyRead" strings
+                  AllowRead = get.Required.Field "allowRead" strings
+                  AllowWrite = get.Required.Field "allowWrite" strings
+                  AllowedDomains = get.Required.Field "allowedDomains" strings
+                  AllowUnixSockets = get.Required.Field "allowUnixSockets" strings
+                  AllowAllUnixSockets = get.Required.Field "allowAllUnixSockets" Decode.bool
+                  MitmProxy = get.Optional.Field "mitmProxy" interception
+                  Bwrap = get.Optional.Field "bwrap" Decode.string
+                  Socat = get.Optional.Field "socat" Decode.string
+                  Ripgrep = get.Optional.Field "ripgrep" Decode.string
+                  WeakNesting = get.Required.Field "weakNesting" Decode.bool
+                  AllowGitConfig = get.Required.Field "allowGitConfig" Decode.bool
+                  FilesystemDisabled = get.Required.Field "filesystemDisabled" Decode.bool })
+
+        let request (request: Request) : string =
+            match request with
+            | Start config -> Encode.object [ "start", encodeConfig config ]
+            | Wrap (id, command, cwd) ->
+                Encode.object [
+                    "wrap",
+                    Encode.object (
+                        [ "id", Encode.int id; "command", Encode.string command ]
+                        @ (cwd |> Option.map (fun cwd -> "cwd", Encode.string cwd) |> Option.toList)
+                    )
+                ]
+            |> Encode.toString 0
+
+        let private decodeRequest : Decoder<Request> =
+            Decode.oneOf [
+                Decode.field "start" decodeConfig |> Decode.map Start
+                Decode.field
+                    "wrap"
+                    (Decode.object (fun get ->
+                        Wrap (
+                            get.Required.Field "id" Decode.int,
+                            get.Required.Field "command" Decode.string,
+                            get.Optional.Field "cwd" Decode.string
+                        )))
+            ]
+
+        let reply (reply: Reply) : string =
+            match reply with
+            | Ready -> Encode.object [ "ready", Encode.bool true ]
+            | Refused reason -> Encode.object [ "refused", Encode.string reason ]
+            | Confined (id, argv) -> Encode.object [ "confined", Encode.object [ "id", Encode.int id; "argv", strings argv ] ]
+            | Unconfined (id, reason) ->
+                Encode.object [ "unconfined", Encode.object [ "id", Encode.int id; "reason", Encode.string reason ] ]
+            |> Encode.toString 0
+
+        let private decodeReply : Decoder<Reply> =
+            Decode.oneOf [
+                Decode.field "ready" Decode.bool |> Decode.map (fun _ -> Ready)
+                Decode.field "refused" Decode.string |> Decode.map Refused
+                Decode.field
+                    "confined"
+                    (Decode.object (fun get ->
+                        Confined (get.Required.Field "id" Decode.int, get.Required.Field "argv" (Decode.list Decode.string))))
+                Decode.field
+                    "unconfined"
+                    (Decode.object (fun get ->
+                        Unconfined (get.Required.Field "id" Decode.int, get.Required.Field "reason" Decode.string)))
+            ]
+
+        /// A line the host was sent. `None` for anything else: the session writes nothing
+        /// else to it, so a line that is not a request is a fault the host reports and skips.
+        let parseRequest (line: string) : Request option = Decode.fromString decodeRequest line |> Result.toOption
+
+        /// A line the host printed. `None` for anything else — srt's own debug output, a
+        /// warning from Node — which is a line for a person and is passed on as one.
+        let parseReply (line: string) : Reply option = Decode.fromString decodeReply line |> Result.toOption
+
+    /// Complete lines out of a stream of text chunks: each whole line to `onLine`, the
+    /// unfinished tail kept for the next chunk.
+    let private lines (onLine: string -> unit) : string -> unit =
+        let mutable buffer = ""
+        fun chunk ->
+            buffer <- buffer + chunk
+            let parts = buffer.Split '\n'
+            buffer <- parts.[parts.Length - 1]
+            for line in parts.[0 .. parts.Length - 2] do
+                if line.Trim().Length > 0 then onLine line
+
+    /// The host side: THIS process holds one sandbox's manager. `SandboxHost.fs` is the
+    /// entry that runs it.
+    module Host =
+
+        /// Start srt's manager on exactly this sandbox's config. Nothing else will ever run
+        /// under it, so the config it is initialized with is the whole of its network policy
+        /// — the allowlist, the sockets and the interception are this sandbox's and no
+        /// sibling's — and the filesystem profile rides each wrap as before.
+        let private start (config: SrtConfig) : Async<Result<SandboxManager * SrtConfig, string>> =
+            async {
+                let! exports = Interop.awaitPromise (Fable.SandboxRuntime.load ())
+                let srt = exports.SandboxManager
+                if not (srt.isSupportedPlatform ()) then
+                    return Error "this platform has no srt sandbox"
+                else
+                    let attempt (_: unit) =
+                        async {
+                            try
+                                do! Interop.awaitPromise (srt.initialize (toJs config))
+                                return Ok ()
+                            with ex ->
+                                return Error (startFailure Fs.executable config, ex)
+                        }
+                    // The schedule decides how many times and how long apart; what a
+                    // settled failure MEANS is still this module's own answer.
+                    match! Resilience.Policy.guard (startPolicy Resilience.Policy.sleep) attempt () with
+                    // The bridge sockets are the manager's, settled once it is up: fold them
+                    // into the config every wrap here uses.
+                    | Ok () -> return Ok (srt, withBridgeSockets srt config)
+                    // The provider's own error, unwrapped: a host missing a tool is told
+                    // which one by srt, and a sentence written here would only paraphrase.
+                    | Error (HostCannotConfine, ex) -> return Error ex.Message
+                    | Error (NothingSettled, ex) -> return Error (probeDidNotRun config startAttempts ex.Message)
+            }
+
+        let private say (reply: HostWire.Reply) : unit = printfn "%s" (HostWire.reply reply)
+
+        /// Serve wraps for one sandbox until the session closes stdin — by `Close`, or by
+        /// dying, which closes it all the same (the kernel does, even on SIGKILL). Then the
+        /// manager is reset, which takes srt's bridges and proxies down with it, and the
+        /// process ends: a host never outlives the sandbox it confines.
+        let serve () : unit =
+            let mutable manager : Async<Result<SandboxManager * SrtConfig, string>> option = None
+            let finish () =
+                async {
+                    match manager with
+                    | None -> ()
+                    | Some started ->
+                        match! started with
+                        | Ok (srt, _) -> try do! Interop.awaitPromise (srt.reset ()) with _ -> ()
+                        | Error _ -> ()
+                    Interop.exit 0
+                }
+                |> Async.StartImmediate
+            let handle (request: HostWire.Request) =
+                match request, manager with
+                | HostWire.Start config, None ->
+                    let started = start config |> Async.StartAsPromise
+                    manager <- Some (Interop.awaitPromise started)
+                    async {
+                        match! Interop.awaitPromise started with
+                        | Ok _ -> say HostWire.Ready
+                        | Error reason -> say (HostWire.Refused reason)
+                    }
+                    |> Async.StartImmediate
+                | HostWire.Start _, Some _ -> eprintfn "srt host: a second start was ignored; this host confines one sandbox"
+                | HostWire.Wrap (id, _, _), None -> say (HostWire.Unconfined (id, "the srt host has not been started"))
+                | HostWire.Wrap (id, command, cwd), Some started ->
+                    async {
+                        match! started with
+                        | Error reason -> say (HostWire.Unconfined (id, reason))
+                        | Ok (srt, config) ->
+                            try
+                                let! wrapped = Interop.awaitPromise (wrapArgv srt command (toJs config) cwd)
+                                match List.ofArray wrapped.argv with
+                                | [] -> say (HostWire.Unconfined (id, "srt returned an empty argv"))
+                                | argv -> say (HostWire.Confined (id, argv))
+                            with ex ->
+                                say (HostWire.Unconfined (id, ex.Message))
+                    }
+                    |> Async.StartImmediate
+            let stdin = ProcessStreams.stdin ()
+            stdin.onEnd finish
+            Readables.text
+                stdin
+                (lines (fun line ->
+                    match HostWire.parseRequest line with
+                    | Some request -> handle request
+                    | None -> eprintfn "srt host: not a request, skipped: %s" line))
+
+    /// One sandbox's srt manager, running in a process of its own (`Host`). What the
+    /// session holds of it: a way to confine a command line, and a way to let it go.
+    type private Confiner =
+        { Wrap : string -> string option -> Async<Result<string list, string>>
+          /// End the host's input. It resets its manager and exits.
+          Close : unit -> unit }
+
+    /// Where the host's entry is: beside this module, which a bundle flattens into the
+    /// bin's own file — so the packaged host sits beside the packaged session.
+    let private hostEntry () : string = FileUrls.toPath (Interop.urlBesideModule "./SandboxHost.js")
+
+    /// Start a host for one sandbox's config, and answer once its manager is up or has
+    /// refused. A host that dies afterwards fails every wrap in flight and every one after
+    /// it, in words: the sandbox it confined is gone with it, and nothing starts another
+    /// behind the session's back.
+    let private confine (config: SrtConfig) : Async<Result<Confiner, string>> =
+        Async.FromContinuations (fun (cont, _, _) ->
+            // stdin is a pipe on purpose: the host exits when it closes, so a host never
+            // outlives the session that started it. Its stderr is this process's own.
+            let child =
+                ChildProcesses.spawn
+                    (execPath ())
+                    [ hostEntry () ]
+                    { Cwd = None
+                      Env = ChildEnv.Adding Map.empty
+                      Streams = { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Inherit }
+                      Detached = false }
+            let input = ChildProcessStreams.stdin child
+            let mutable nextId = 0
+            let pending = Collections.Generic.Dictionary<int, Result<string list, string> -> unit> ()
+            let mutable gone : string option = None
+            let mutable settled = false
+            let settle (result: Result<Confiner, string>) =
+                if not settled then
+                    settled <- true
+                    cont result
+            let lost (reason: string) =
+                if Option.isNone gone then
+                    gone <- Some reason
+                    settle (Error reason)
+                    let waiting = List.ofSeq pending.Values
+                    pending.Clear ()
+                    waiting |> List.iter (fun answer -> answer (Error reason))
+            let send (request: HostWire.Request) = input.writeText (HostWire.request request + "\n") |> ignore
+            let confiner =
+                { Wrap =
+                    fun command cwd ->
+                        Async.FromContinuations (fun (answer, _, _) ->
+                            match gone with
+                            | Some reason -> answer (Error reason)
+                            | None ->
+                                nextId <- nextId + 1
+                                pending.[nextId] <- answer
+                                send (HostWire.Wrap (nextId, command, cwd)))
+                  Close = fun () -> if Option.isNone gone then input.finish () }
+            let answered (id: int) (result: Result<string list, string>) =
+                match pending.TryGetValue id with
+                | true, answer ->
+                    pending.Remove id |> ignore
+                    answer result
+                | _ -> ()
+            // A write to a host that has already gone is an EPIPE on this stream; the exit
+            // below is what reports it, so the stream's own error is only kept from
+            // becoming an uncaught one.
+            input.onError ignore
+            ChildProcessStreams.onError child (fun error ->
+                lost (sprintf "the srt host could not start: %s" (StreamError.describe error)))
+            ChildProcessStreams.onExit child (fun code ->
+                lost (sprintf "the srt host for this sandbox exited (%s)" (code |> Option.map string |> Option.defaultValue "signalled")))
+            Readables.text
+                (ChildProcessStreams.stdout child)
+                (lines (fun line ->
+                    match HostWire.parseReply line with
+                    | Some HostWire.Ready -> settle (Ok confiner)
+                    | Some (HostWire.Refused reason) ->
+                        settle (Error reason)
+                        input.finish ()
+                    | Some (HostWire.Confined (id, argv)) -> answered id (Ok argv)
+                    | Some (HostWire.Unconfined (id, reason)) -> answered id (Error reason)
+                    | None -> eprintfn "[srt host %d] %s" (int child.pid) line))
+            send (HostWire.Start config))
+
     let create (tools: SrtTools) : CreateSandbox =
         fun policy ->
             async {
@@ -2293,69 +2622,70 @@ module SrtSandbox =
                     policy.WorkingDirectory |> Option.iter Fs.ensureDir
                     Fs.ensureDir (SessionLayout.tmpDir ())
                     let config = configFor tools policy
-                    let! srt = managerFor config
-                    // The bridge sockets are the manager's, settled once it is up: fold
-                    // them into the config every wrap here uses.
-                    let config = withBridgeSockets srt config
-                    let children = Children.Registry ()
-                    let spawn (exec: SandboxExec) (onChunk: OutputStream * string -> unit) =
-                        async {
-                            try
-                                let env = mergeEnv policy.Env exec.Env
+                    match! confine config with
+                    | Error reason -> return Error (sprintf "srt sandbox failed: %s" reason)
+                    | Ok confiner ->
+                        let children = Children.Registry ()
+                        let confined (exec: SandboxExec) =
+                            async {
+                                let env = mergeEnv (environment Map.empty policy) exec.Env
                                 let cwd =
                                     SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
                                     |> Option.toObj
-                                // This sandbox's own filesystem policy rides every spawn:
-                                // the manager was initialized by whichever sandbox came
-                                // first, and `customConfig` is what makes the profile this
-                                // one's rather than that one's.
-                                let! wrapped =
-                                    Interop.awaitPromise (wrapArgv srt (commandLine exec.Executable exec.Arguments) (toJs config) (startIn cwd))
-                                match List.ofArray wrapped.argv with
-                                | [] -> return Error "srt returned an empty argv"
-                                | executable :: arguments ->
-                                    return Ok (children.Spawn (executable, arguments, cwd, env) onChunk)
-                            with ex -> return Error ex.Message
-                        }
-                    return
-                        Ok
-                            { Ref = "srt"
-                              Spawn = spawn
-                              // srt confines by REWRITING the argv, so a pty costs nothing
-                              // extra here: wrap exactly as `spawn` does, then open the pty
-                              // on what came back. The confinement is in the argv, not in
-                              // how the process is attached to a terminal.
-                              SpawnPty =
-                                if not (Pty.available ()) then None
-                                else
-                                    Some (fun exec cols rows onOutput ->
+                                let! wrapped = confiner.Wrap (commandLine exec.Executable exec.Arguments) (startIn cwd)
+                                return wrapped |> Result.map (fun argv -> argv, cwd, env)
+                            }
+                        let spawn (exec: SandboxExec) (onChunk: OutputStream * string -> unit) =
+                            async {
+                                try
+                                    match! confined exec with
+                                    | Error reason -> return Error reason
+                                    | Ok ([], _, _) -> return Error "srt returned an empty argv"
+                                    | Ok (executable :: arguments, cwd, env) ->
+                                        return Ok (children.Spawn (executable, arguments, cwd, env) onChunk)
+                                with ex -> return Error ex.Message
+                            }
+                        return
+                            Ok
+                                { Ref = "srt"
+                                  Spawn = spawn
+                                  // srt confines by REWRITING the argv, so a pty costs nothing
+                                  // extra here: wrap exactly as `spawn` does, then open the pty
+                                  // on what came back. The confinement is in the argv, not in
+                                  // how the process is attached to a terminal.
+                                  SpawnPty =
+                                    if not (Pty.available ()) then None
+                                    else
+                                        Some (fun exec cols rows onOutput ->
+                                            async {
+                                                try
+                                                    match! confined exec with
+                                                    | Error reason -> return Error reason
+                                                    | Ok ([], _, _) -> return Error "srt returned an empty argv"
+                                                    | Ok (executable :: arguments, cwd, env) ->
+                                                        return Pty.spawn executable arguments cwd env cols rows onOutput
+                                                with ex -> return Error ex.Message
+                                            })
+                                  Shell = None
+                                  // The host goes with the sandbox: its manager — the proxies
+                                  // and bridges every command here reached the network through
+                                  // — confined this sandbox and nothing else.
+                                  Dispose =
+                                    fun () ->
                                         async {
-                                            try
-                                                let env = mergeEnv policy.Env exec.Env
-                                                let cwd =
-                                                    SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
-                                                    |> Option.toObj
-                                                let! wrapped =
-                                                    Interop.awaitPromise
-                                                        (wrapArgv srt (commandLine exec.Executable exec.Arguments) (toJs config) (startIn cwd))
-                                                match List.ofArray wrapped.argv with
-                                                | [] -> return Error "srt returned an empty argv"
-                                                | executable :: arguments ->
-                                                    return Pty.spawn executable arguments cwd env cols rows onOutput
-                                            with ex -> return Error ex.Message
-                                        })
-                              Shell = None
-                              // The manager stays up: it is process-wide, and a sibling
-                              // sandbox may still be running under it. Its proxies die
-                              // with the Session Process, which is the lifetime they are
-                              // scoped to anyway.
-                              Dispose = fun () -> async { children.KillAll () } }
+                                            children.KillAll ()
+                                            confiner.Close ()
+                                        } }
                 with ex -> return Error (sprintf "srt sandbox failed: %s" ex.Message)
             }
 
     /// Wrap one command under a policy, yielding the argv that runs it confined. The
     /// agent CLI's spawner needs exactly this and nothing else around it: it is handed a
     /// command by the SDK and has to produce a confined process from it.
+    ///
+    /// Its host starts on the first wrap and is kept for the rest of the session — the
+    /// agent sandbox lives as long as the session does. A start that failed is not kept:
+    /// the next wrap asks again, which is what a start that settled nothing needs.
     ///
     /// The start directory arrives as an option — a child that starts wherever this process is
     /// is a case, not a path — and `wrapCwd` puts it in srt's own spelling below.
@@ -2364,16 +2694,25 @@ module SrtSandbox =
         (policy: SandboxPolicy)
         : string -> string list -> string option -> Async<string list> =
         let config = configFor tools policy
+        let started : JS.Promise<Result<Confiner, string>> option ref = ref None
         fun executable arguments directory ->
             async {
-                let! srt = managerFor config
-                let config = withBridgeSockets srt config
-                let! wrapped =
-                    Interop.awaitPromise
-                        (wrapArgv srt (commandLine executable arguments) (toJs config) (wrapCwd directory))
-                match List.ofArray wrapped.argv with
-                | [] -> return failwith "srt returned an empty argv"
-                | argv -> return argv
+                let promise =
+                    match started.Value with
+                    | Some promise -> promise
+                    | None ->
+                        let promise = Async.StartAsPromise (confine config)
+                        started.Value <- Some promise
+                        promise
+                match! Interop.awaitPromise promise with
+                | Error reason ->
+                    started.Value <- None
+                    return failwith reason
+                | Ok confiner ->
+                    match! confiner.Wrap (commandLine executable arguments) (wrapCwd directory) with
+                    | Ok [] -> return failwith "srt returned an empty argv"
+                    | Ok argv -> return argv
+                    | Error reason -> return failwith reason
             }
 
 // --- The AgentSandbox: where the agent CLI process runs ----------------------------------
@@ -2439,7 +2778,9 @@ module AgentSandbox =
           Realisation = []
           Env = env
           WorkingDirectory = None
-          Filesystem = Confined }
+          Filesystem = Confined
+          Derived = Map.empty
+          Intercept = None }
 
     /// Where a spawn request says to start the child: `None` for a request that named no
     /// directory. Both spawners read the request here and hand this on as it is — each
@@ -2450,7 +2791,10 @@ module AgentSandbox =
     /// difference is not cosmetic: `spawn` handed `cwd: ''` fails with ENOENT rather than
     /// inheriting this process's directory.
     let startDirectory (options: Sdk.SpawnOptions) : string option =
-        if isNullOrUndefined options.cwd || options.cwd = "" then None else Some options.cwd
+        match options.cwd with
+        | None
+        | Some "" -> None
+        | Some directory -> Some directory
 
     /// Take the child's whole process GROUP down, and tell Node the child was asked to die.
     ///
@@ -2468,13 +2812,6 @@ module AgentSandbox =
         try Node.Api.``process``.kill (-child.pid, !^signal) with _ -> ()
         try child.kill signal with _ -> ()
 
-    /// Whatever was thrown, as the `Error` a listener registered on `error` is written
-    /// against. JavaScript admits a `throw` of any value at all, and an `error` event
-    /// carrying a string is how a handler reading `.message` gets `undefined` instead of a
-    /// reason.
-    let private asError (thrown: exn) : obj =
-        if isError (box thrown) then box thrown else box (errorWith (describe (box thrown)))
-
     // The SDK's `spawnClaudeCodeProcess` seam. The env arriving in `options.env` IS the
     // policy env (it flows from the query's `env` option), so the spawner passes it
     // verbatim — which is what `spawnWithEnv` is for. `detached: true` makes the CLI a
@@ -2483,19 +2820,18 @@ module AgentSandbox =
     // the force-kill never pre-empts the CLI's graceful shutdown.
 
     /// The host-backend agent spawner, handed to the SDK as `spawnClaudeCodeProcess`.
-    let hostClaudeSpawner () : obj =
-        box (
-            Func<Sdk.SpawnOptions, Sdk.SpawnedProcess> (fun options ->
-                let child =
-                    spawnWithEnv options.command (List.ofArray options.args) options.env (startDirectory options) Pipe true
+    let hostClaudeSpawner () : Sdk.Spawner =
+        Sdk.Spawner (fun options ->
+            let child =
+                spawnWithEnv options.command (List.ofArray options.args) options.env (startDirectory options) Pipe true
 
-                let abort () = killTree child "SIGKILL"
-                let signal : AbortSignal = !!options.signal
+            let abort () = killTree child "SIGKILL"
 
-                if not (isNullOrUndefined signal) then
-                    if signal.aborted then abort () else signal.onAbort abort
+            match options.signal with
+            | Some signal -> if signal.aborted then abort () else signal.onAbort abort
+            | None -> ()
 
-                !!child))
+            Sdk.SpawnedProcess.ofChild child)
 
     // The srt spawner has one problem the host spawner does not: the SDK's seam is
     // SYNCHRONOUS (`options => process`) and srt's wrap is asynchronous (it resolves the
@@ -2517,17 +2853,17 @@ module AgentSandbox =
         let mutable kill : (string -> unit) option = None
         let mutable killed = false
         let mutable pending : string option = None
-        let mutable exited : obj = null
+        let mutable exited : int option = None
 
         /// Whether `Kill` has been CALLED. Node's own meaning of `child.killed`: true from
         /// the moment the SDK asks, not from the moment anything dies.
         member _.Killed = killed
 
-        /// The code the child ended with, `null` until it has — Node's spelling, which is
-        /// what the SDK reads.
+        /// The code the child ended with, `None` until it has — and for a child a signal
+        /// ended, which Node reports without a code.
         member _.ExitCode = exited
 
-        member _.Exited (code: obj) = exited <- code
+        member _.Exited (code: int option) = exited <- code
 
         /// The child has arrived. Joining and flushing are ONE verb because a caller that
         /// could do the first without the second is the caller that loses a kill.
@@ -2551,70 +2887,69 @@ module AgentSandbox =
 
     /// The srt-backend agent spawner: the same seam, with the CLI coming up inside the
     /// sandbox `wrap` describes.
-    let srtClaudeSpawner (wrap: string -> string list -> string option -> Async<string list>) : obj =
-        box (
-            Func<Sdk.SpawnOptions, Sdk.SpawnedProcess> (fun options ->
-                let relay = createRelay ()
-                let stdin = Node.Api.stream.PassThrough.Create<string> ()
-                let stdout = Node.Api.stream.PassThrough.Create<string> ()
-                let stderr = Node.Api.stream.PassThrough.Create<string> ()
-                let standin = Standin ()
+    let srtClaudeSpawner (wrap: string -> string list -> string option -> Async<string list>) : Sdk.Spawner =
+        Sdk.Spawner (fun options ->
+            let relay = createRelay ()
+            let stdin = Node.Api.stream.PassThrough.Create<string> ()
+            let stdout = Node.Api.stream.PassThrough.Create<string> ()
+            let stderr = Node.Api.stream.PassThrough.Create<string> ()
+            let standin = Standin ()
 
-                let join (executable: string) (arguments: string list) =
-                    let child =
-                        spawnWithEnv executable arguments options.env (startDirectory options) Pipe true
+            let join (executable: string) (arguments: string list) =
+                let child =
+                    spawnWithEnv executable arguments options.env (startDirectory options) Pipe true
 
-                    stdin.pipe child.stdin |> ignore
-                    child.stdout.pipe stdout |> ignore
-                    child.stderr.pipe stderr |> ignore
+                stdin.pipe child.stdin |> ignore
+                child.stdout.pipe stdout |> ignore
+                child.stderr.pipe stderr |> ignore
 
-                    child.on (
-                        "exit",
-                        (fun (code: obj) (signal: obj) ->
-                            standin.Exited code
-                            relay.emit ("exit", [| code; signal |])))
-                    |> ignore
+                // Relayed as the values Node handed over, not as F# rebuilt them: the SDK's
+                // own listener compares the code against `null`.
+                child.on (
+                    "exit",
+                    (fun (code: int option) (signal: string option) ->
+                        standin.Exited code
+                        relay.exited (code, signal)))
+                |> ignore
 
-                    child.on ("error", (fun (error: obj) -> relay.emit ("error", [| error |]))) |> ignore
-                    standin.Joined (killTree child)
+                ChildProcessStreams.onError child (fun error -> relay.failed error)
+                standin.Joined (killTree child)
 
-                async {
-                    try
-                        match! wrap options.command (List.ofArray options.args) (startDirectory options) with
-                        | executable :: arguments -> join executable arguments
-                        // Unreachable: `wrapperFor` refuses an empty argv before it returns
-                        // one. Said rather than assumed, because the alternative is a
-                        // stand-in nothing ever joins and a turn that hangs instead of
-                        // reporting.
-                        | [] -> failwith "srt returned an empty argv"
-                    with error ->
-                        relay.emit ("error", [| asError error |])
-                }
-                |> Async.StartImmediate
+            async {
+                try
+                    match! wrap options.command (List.ofArray options.args) (startDirectory options) with
+                    | executable :: arguments -> join executable arguments
+                    // Unreachable: `wrapperFor` refuses an empty argv before it returns
+                    // one. Said rather than assumed, because the alternative is a
+                    // stand-in nothing ever joins and a turn that hangs instead of
+                    // reporting.
+                    | [] -> failwith "srt returned an empty argv"
+                with error ->
+                    relay.failed (StreamError.ofThrown error)
+            }
+            |> Async.StartImmediate
 
-                let proxy =
-                    { new Sdk.SpawnedProcess with
-                        member _.stdin = box stdin
-                        member _.stdout = box stdout
-                        member _.stderr = box stderr
-                        member _.killed = standin.Killed
-                        member _.exitCode = standin.ExitCode
-                        member _.kill signal = standin.Kill signal
-                        member _.on (``event``, listener) = relay.on (``event``, listener)
-                        member _.once (``event``, listener) = relay.once (``event``, listener)
-                        member _.off (``event``, listener) = relay.off (``event``, listener) }
+            let proxy =
+                Sdk.SpawnedProcess.standingIn
+                    stdin
+                    stdout
+                    stderr
+                    (fun () -> standin.Killed)
+                    (fun () -> standin.ExitCode)
+                    standin.Kill
+                    relay
 
-                let signal : AbortSignal = !!options.signal
+            match options.signal with
+            | Some signal ->
+                let abort () = proxy.kill "SIGKILL" |> ignore
+                if signal.aborted then abort () else signal.onAbort abort
+            | None -> ()
 
-                if not (isNullOrUndefined signal) then
-                    let abort () = proxy.kill "SIGKILL" |> ignore
-                    if signal.aborted then abort () else signal.onAbort abort
-
-                proxy))
+            proxy)
 
     /// The spawner for the configured agent backend. Docker is not one: `parseAgent`
     /// refused it at boot.
-    let claudeSpawnerFor (backend: SandboxBackend) (ambient: Map<string, string>) (home: string) (env: Map<string, string>) : obj =
+    let claudeSpawnerFor (backend: SandboxBackend) (ambient: Map<string, string>) (home: string) (env: Map<string, string>) : Sdk.Spawner =
         match backend with
         | SrtBackend ->
             // The tools parse fail-closed, and SessionMain has already had this value
@@ -2646,7 +2981,7 @@ module AgentSandbox =
         (backend: SandboxBackend)
         (dataDir: string)
         (credential: (string * string) option)
-        : {| Env : Map<string, string>; Spawner : obj |} =
+        : {| Env : Map<string, string>; Spawner : Sdk.Spawner |} =
         let home = SessionLayout.agentHome dataDir
         Fs.ensureDir home
         let ambient = ambientEnv ()

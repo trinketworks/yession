@@ -282,9 +282,60 @@ sandboxes:
     workdir: ./packages/web
     env:
       DATABASE_URL: { secret: db-url }   # a name, never a value
+      PATH: ${env.PATH}:/opt/tools       # composed over what lies beneath; `$${` is a literal `${`
     uses: [ npm-cache ]
-    forward: [ github ]
+    wants: [ github ]                     # the operator's `{ connection: { github: [git, api] } }`, where offered
 ```
+
+A connection — what lets `git push` and `gh` in a sandbox act as whoever each command runs for
+— is a resource like any other: the operator offers it (`github: { connection: { github: [git,
+api] } }`), a sandbox selects it under `uses` or `wants`, and what it forwards is what that
+selection reaches (`ForwardedConnections`, `WorkSandboxes.provisionSelection`). The operator
+names the ROUTES it is forwarded by (`ConnectionRoute`), each its own grant (`conn:github/git`):
+`git` is the git gateway, `api` the credential proxy, and a sandbox holding `git` alone is lent
+nothing its API client could spend. A route the provider does not offer is refused where a
+sandbox needs it.
+
+`${env.NAME}` in a value is what NAME would be in this sandbox without that line — the image's
+own `ENV` under docker, which is only known once the image is pulled or built, so the backend
+resolves it (`Sandboxes.environment`; the grammar is `EnvTemplate.fs`).
+
+`${proxy.https}`, `${proxy.ca-file}` and `${proxy.ca-dir}` ask the session's credential proxy
+for its URL (this sandbox's own, admitting it), a whole trust bundle, and a directory holding
+its authority alone — each as the sandbox sees it, so a container is told mounted paths
+(`CredentialProxy.provide`). Only a sandbox that names one is provided for, and it composes
+like any value:
+
+```yaml
+    env:
+      HTTPS_PROXY: ${proxy.https}
+      SSL_CERT_DIR: ${env.SSL_CERT_DIR}:${proxy.ca-dir}
+```
+
+Under srt, whose own proxy already routes the hosts this one answers, `${proxy.https}` is
+refused and the trust references are all a sandbox needs.
+
+`${github.token}` — any connection's `.token` — is a variable's whole value and nothing else:
+a stand-in the credential proxy swaps for the credential of whoever each command runs for,
+lent per command and returned with it (`EnvironmentVariableRef.Lent`). The sandbox must forward
+that connection by `api`, or it refuses to start. Why it rotates, and whether that is worth it,
+is an open question in docs/GAPS.md.
+
+An operator may bind the same references in a resource's `env:`, so a sandbox selecting it is
+given them without its repo writing them (`VariableValue`, `SelectionGrant`):
+
+```yaml
+resources:
+  github:
+    connection: { github: [ git, api ] }
+    env:
+      HTTPS_PROXY: ${proxy.https}
+      GH_TOKEN: ${github.token}
+```
+
+They join the sandbox's declaration under its own lines — a repo's line for the same variable
+wins — and are provided and lent exactly as a repo's are. A resource lending a token it does
+not itself forward by `api` is refused where the file is read.
 
 A container's `entrypoint` is read the way compose reads it — a list of words, or one
 string split as a shell would split it, with nothing expanded — and it governs what compose

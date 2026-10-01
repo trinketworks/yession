@@ -24,26 +24,19 @@ module Client =
             return { model with Synced = synced }
         }
 
-    /// The client Elmish program for a given Yjs doc: the pure `ClientModel.update`
-    /// under `Program.withYlmish`, so local draft edits flow out as CRDT deltas and
-    /// remote transactions fold back in as ordinary `Set` messages. The view is supplied
-    /// by `Program.withSetState` (the browser renders `View.view` with Lit; the headless
-    /// test harness captures the model), so the program itself carries a unit view.
-    /// `initial` is usually `ClientModel.init peer`.
-    let makeProgram (doc: Y.Doc) (initial: ClientModel) =
-        Program.mkProgram
-            (fun () -> initial, Cmd.none)
-            (fun msg model -> ClientModel.update msg model, Cmd.none)
-            (fun _ _ -> ())
-        |> Ylmish.Program.withYlmish
-            { Doc = doc
-              Create = fun (m: ClientModel) -> SyncedStateSync.create m.Synced
-              Update = fun a m -> SyncedStateSync.update a m.Synced
-              // Rich bodies are NOT encoded here — they are sibling `Y.XmlFragment` roots the
-              // app manages directly (RichText.fs), so the sync boundary carries only structure.
-              Encode = SyncedStateSync.encode
-              Decode = decodeModel
-              OnError = Ylmish.Program.OnError.log }
+    /// Run the waits the model declares (`ClientModel.timers`) on `clock`, beside whatever the
+    /// program already subscribes to — Ylmish's own binding to the doc among them, which is
+    /// why this MAPS the subscription rather than setting one (`withSubscription` replaces).
+    ///
+    /// Applied by a composition root, never inside `makeProgram`: the root is what owns a
+    /// clock. The browser hands in `Timer.system`; a test hands in one it advances itself and
+    /// runs the product's timers without waiting on anything.
+    let withTimers (clock: Timer.Clock) (program: Program<'arg, ClientModel, Ylmish.Program.Message<ClientMsg>, 'view>) =
+        program
+        |> Program.mapSubscription (fun existing model ->
+            Sub.batch
+                [ existing model
+                  ClientModel.timers model |> Timer.subscribe clock |> Sub.map "timers" Ylmish.Program.Message.User ])
 
     /// A wired client connection: the frame pump to run, plus the actions that speak
     /// over it.
@@ -120,6 +113,184 @@ module Client =
           /// call repeatedly: records fold by sequence number, so a re-read costs bytes and
           /// changes nothing.
           FetchTranscript : TerminalId -> unit }
+
+    /// The launch surface's reads (`LaunchEffect`): GETs answered by the session on this
+    /// person's own credential. Each is total — a failure is an answer the surface shows, not
+    /// an exception — and the cursors are the session's, carried back unread.
+    [<RequireQualifiedAccess>]
+    type LaunchReads =
+        { /// The listing for what was typed; empty is "my repos".
+          Listing : string -> Async<LaunchListing>
+          /// The page a listing cursor names. A failure says whether signing in would help.
+          Page : string -> Async<Result<Repos.RepoPage, string * bool>>
+          /// One repo's branches.
+          Branches : RepoRef -> Async<LaunchBranches>
+          /// The page a branch cursor names.
+          BranchPage : RepoRef -> string -> Async<Result<Repos.BranchPage, string>>
+          /// Where a pull request's head lives, so a link to one can be launched.
+          PullHead : RepoRef -> int -> Async<Result<Repos.PullHead, string>> }
+
+    /// The connection panels' writes: POSTs to the session's own routes, answered as the
+    /// panel's next step — refused, an authorize URL to open, or accepted. `Now` is the clock
+    /// an accepted command's wait is measured from (`Pending.Awaiting`), read where the answer
+    /// lands rather than in the reducer, which has none.
+    [<RequireQualifiedAccess>]
+    type PanelWrites =
+        { Claude : ClaudeAction -> ClaudeRequest -> Async<ClaudeAnswer>
+          GitHub : GitHubAction -> GitHubRequest -> Async<GitHubAnswer>
+          /// One device-flow poll for a scope: the write that makes GitHub hand the grant over.
+          GitHubPoll : string -> Async<GitHubPollAnswer>
+          Now : unit -> int64 }
+
+    /// What the program's effects are carried out against (`ClientEffect`).
+    ///
+    /// A getter rather than a connection because the program exists first: a client is local
+    /// first, and renders, edits and syncs before — and without — a channel to its session.
+    /// An effect asked for while there is none goes nowhere, which is what a press on a
+    /// control that needs the session did before it was a message.
+    [<RequireQualifiedAccess>]
+    type Ports =
+        { Connection : unit -> Connection option
+          /// `None` where there is no page to read from: a headless peer, a test.
+          Launch : LaunchReads option
+          /// `None` where there is no page to post to, as for `Launch`.
+          Panels : PanelWrites option
+          /// The document's own moves (`DomMove`); `ignore` where there is no document.
+          Moves : DomMove -> unit
+          /// Put text on the system clipboard, answering whether the platform let it — a
+          /// permission it may refuse, and the only place that knows whether it did.
+          Clipboard : string -> Async<bool>
+          /// Cut short whatever wait the connection's lifecycle is in (`ClientEffect.RetryNow`).
+          Retry : unit -> unit }
+
+    module Ports =
+
+        /// A client with no session to ask: every request goes nowhere.
+        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None; Ports.Panels = None; Ports.Moves = ignore; Ports.Clipboard = (fun _ -> async.Return false); Ports.Retry = ignore }
+
+        /// A launch read, answered as the message that carries its result.
+        let private launchRead (reads: LaunchReads) (dispatch: ClientMsg -> unit) (effect: LaunchEffect) : Async<unit> =
+            let answer msg = dispatch (LaunchMsg msg)
+            async {
+                match effect with
+                | LaunchEffect.Search query ->
+                    let! listing = reads.Listing query
+                    answer (LaunchListingArrived listing)
+                | LaunchEffect.More cursor ->
+                    match! reads.Page cursor with
+                    | Ok page -> answer (LaunchMoreArrived page)
+                    | Error (reason, _) -> answer (LaunchMoreFailed reason)
+                | LaunchEffect.Branches repo ->
+                    let! branches = reads.Branches repo
+                    answer (LaunchBranchesArrived (repo, branches))
+                | LaunchEffect.BranchesMore (repo, cursor) ->
+                    match! reads.BranchPage repo cursor with
+                    | Ok page -> answer (LaunchBranchMoreArrived (repo, page))
+                    | Error reason -> answer (LaunchBranchMoreFailed reason)
+                | LaunchEffect.Resolve link ->
+                    // A pull request is asked about first, since which fork its branch lives
+                    // in only the provider knows; then the one name is looked up in the same
+                    // listing a search reads, which answers the row under the provider's
+                    // current name with its real default branch.
+                    let! resolved =
+                        match link with
+                        | Repos.RepoLink.Repo repo -> async.Return (Ok (repo, None))
+                        | Repos.RepoLink.Branch (repo, branch) -> async.Return (Ok (repo, Some branch))
+                        | Repos.RepoLink.PullRequest (repo, number) ->
+                            async {
+                                match! reads.PullHead repo number with
+                                | Ok head -> return Ok (head.Repo, Some head.Branch)
+                                | Error reason -> return Error reason
+                            }
+                    match resolved with
+                    | Error reason -> answer (LaunchFailed reason)
+                    | Ok (repo, branch) ->
+                        let! listing = reads.Listing (RepoRef.value repo)
+                        answer (LaunchResolved (repo, branch, listing))
+                // The command goes over the connection, not a read; `perform` sends it.
+                | LaunchEffect.Start _ -> ()
+            }
+
+        /// Carry out one effect, answering through `dispatch` where it has an answer. The whole
+        /// map from what a message asked for to the verb that does it, so that no caller holding
+        /// a connection decides it a second time.
+        let perform (ports: Ports) (dispatch: ClientMsg -> unit) (effect: ClientEffect) : unit =
+            let connected (send: Connection -> unit) = ports.Connection () |> Option.iter send
+            match effect with
+            | ClientEffect.TakeTerminal terminal -> connected (fun c -> c.TakeTerminal terminal)
+            | ClientEffect.ReleaseTerminal terminal -> connected (fun c -> c.ReleaseTerminal terminal)
+            | ClientEffect.RearmTerminal terminal -> connected (fun c -> c.RearmTerminal terminal)
+            | ClientEffect.ReattachTerminal terminal -> connected (fun c -> c.ReattachTerminal terminal)
+            | ClientEffect.CloseTerminal terminal -> connected (fun c -> c.CloseTerminal terminal)
+            | ClientEffect.OpenTerminal title -> connected (fun c -> c.OpenTerminal title)
+            | ClientEffect.InterruptTurn turn -> connected (fun c -> c.InterruptTurn turn)
+            | ClientEffect.ApproveRepoCapabilities (repo, granted) -> connected (fun c -> c.ApproveRepoCapabilities repo granted)
+            | ClientEffect.Launch (LaunchEffect.Start target) ->
+                connected (fun c -> dispatch (LaunchMsg (LaunchSent (c.AddRepo target.Repo target.Branch, target))))
+            | ClientEffect.Launch read ->
+                ports.Launch |> Option.iter (fun reads -> Async.StartImmediate (launchRead reads dispatch read))
+            | ClientEffect.Claude call ->
+                ports.Panels
+                |> Option.iter (fun panels ->
+                    Async.StartImmediate (
+                        async {
+                            let! answer = panels.Claude call.Action call.Request
+                            dispatch (ClaudeAnsweredMsg (call, answer, panels.Now ()))
+                        }))
+            | ClientEffect.GitHub call ->
+                ports.Panels
+                |> Option.iter (fun panels ->
+                    Async.StartImmediate (
+                        async {
+                            let! answer = panels.GitHub call.Action call.Request
+                            dispatch (GitHubAnsweredMsg (call, answer, panels.Now ()))
+                        }))
+            | ClientEffect.Move move -> ports.Moves move
+            | ClientEffect.Copy (box, text) ->
+                Async.StartImmediate (
+                    async {
+                        // Only a write that HAPPENED is confirmed. A refused clipboard leaves the
+                        // box showing the value, which is what a person falls back to reading —
+                        // a "copied" over an empty clipboard would send them to the other tab
+                        // with nothing to paste.
+                        let! written = ports.Clipboard text
+                        if written then dispatch (CopiedMsg (Some box))
+                    })
+            | ClientEffect.RetryNow -> ports.Retry ()
+            | ClientEffect.GitHubPoll (round, scope) ->
+                ports.Panels
+                |> Option.iter (fun panels ->
+                    Async.StartImmediate (
+                        async {
+                            let! answer = panels.GitHubPoll scope
+                            dispatch (GitHubPolledMsg (round, answer))
+                        }))
+
+    /// The client Elmish program for a given Yjs doc: the pure `ClientModel.update`
+    /// under `Program.withYlmish`, so local draft edits flow out as CRDT deltas and
+    /// remote transactions fold back in as ordinary `Set` messages. The view is supplied
+    /// by `Program.withSetState` (the browser renders `View.view` with Lit; the headless
+    /// test harness captures the model), so the program itself carries a unit view.
+    /// `initial` is usually `ClientModel.init peer`. What a message asks of the world
+    /// (`ClientEffect`) is carried out against `ports`, after the model it came with.
+    let makeProgram (ports: Ports) (doc: Y.Doc) (initial: ClientModel) =
+        let commandOf (effects: ClientEffect list) : Cmd<ClientMsg> =
+            effects |> List.map (fun effect -> Cmd.ofEffect (fun dispatch -> Ports.perform ports dispatch effect)) |> Cmd.batch
+        Program.mkProgram
+            (fun () -> initial, Cmd.none)
+            (fun msg model ->
+                let model, effects = ClientModel.update msg model
+                model, commandOf effects)
+            (fun _ _ -> ())
+        |> Ylmish.Program.withYlmish
+            { Doc = doc
+              Create = fun (m: ClientModel) -> SyncedStateSync.create m.Synced
+              Update = fun a m -> SyncedStateSync.update a m.Synced
+              // Rich bodies are NOT encoded here — they are sibling `Y.XmlFragment` roots the
+              // app manages directly (RichText.fs), so the sync boundary carries only structure.
+              Encode = SyncedStateSync.encode
+              Decode = decodeModel
+              OnError = Ylmish.Program.OnError.log }
 
     /// The platform's HTTP GET, as a TOTAL function: the body, the status it refused with,
     /// or the transport error it never got past. Totality is the whole point — the old port

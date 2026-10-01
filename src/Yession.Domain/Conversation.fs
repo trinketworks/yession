@@ -1,7 +1,10 @@
 namespace Yession.Domain.Chat
 
+open Yession.Domain.Watching
 open Yession.Domain
 open Yession.Domain.Agent
+open Yession.Domain.Artifacts
+open Yession.Domain.Content
 open Yession.Domain.Prs
 
 /// The conversation is a *projection* of the event log — never read from Yjs/draft state.
@@ -123,7 +126,7 @@ type ConversationItem =
 /// How an act's cause is drawn, read off the act above it (`ConversationItem.causeLinks`).
 [<RequireQualifiedAccess>]
 type CauseLink =
-    /// Nothing to draw: no cause, or the cause is the item directly above.
+    /// Nothing to draw: no cause, or the cause is the item directly above, by the same author.
     | Unlinked
     /// The cause, drawn above the act.
     | Drawn of Cause
@@ -158,7 +161,9 @@ module ConversationItem =
     /// How each act's cause is drawn, keyed by the act. One pass over `items` in screen
     /// order, because a link is a fact about an act AND the one above it:
     ///
-    /// - the cause is the item directly above → nothing; the eye already sees it.
+    /// - the cause is the item directly above, by the same author → nothing; the eye already
+    ///   sees it. A different author puts that author's header between the two, and the
+    ///   link is no longer something the eye can see, so it is drawn.
     /// - the act above has the same cause → a link in its chain, so the cause is said once
     ///   over a run of acts it produced (a repo's ask and each sandbox it starts).
     /// - otherwise → the cause, drawn.
@@ -173,7 +178,7 @@ module ConversationItem =
         let linkOf (above: ConversationItem option) (item: ConversationItem) =
             match item.CausedBy, above with
             | None, _ -> CauseLink.Unlinked
-            | Some (Cause.Item target), Some a when a.MessageId = target -> CauseLink.Unlinked
+            | Some (Cause.Item target), Some a when a.MessageId = target && a.Author = item.Author -> CauseLink.Unlinked
             | Some cause, Some a when isAct a && a.CausedBy = Some cause -> CauseLink.Chained
             | Some cause, _ -> CauseLink.Drawn cause
         items
@@ -617,6 +622,14 @@ module ConversationProjection =
 
     let private noted messageId actor act envelope proj = causedNote messageId None actor act envelope proj
 
+    /// An act that reports a watched change, wrapped to say it was noticed late when it was
+    /// (`Lateness`). Keyed off the event's `WatchChanged` contract rather than its kind, so a
+    /// watch of a new kind is late the same way the moment it keeps the contract.
+    let private noticed (envelope: EventEnvelope<SessionEvent>) (act: Act) : Act =
+        match Lateness.ofEnvelope envelope with
+        | Some late -> Act.Noticed (late, act)
+        | None -> act
+
     /// An act that RESOLVES a running one in place — the same id, a settled status and the
     /// facts of how it settled. A log written before the running half existed has no such
     /// item, so the act is appended as it always was; an id is either there or not, so the
@@ -723,7 +736,6 @@ module ConversationProjection =
     /// adding a case forces this projection to account for it.
     let private applyEvent (proj: ConversationProjection) (envelope: EventEnvelope<SessionEvent>) : ConversationProjection =
         match envelope.Event with
-        | SessionCreated _ -> proj // session lifecycle, not a conversation item
         | PeerJoined _ -> proj     // presence, not a conversation item
         | PeerLeft _ -> proj       // presence, not a conversation item
         | SessionNamed _ -> proj   // what a chapter is CALLED, not something said in one
@@ -834,6 +846,8 @@ module ConversationProjection =
         | SessionEvent.RepoCapabilitiesApproved a -> proj |> noted a.MessageId a.Actor (Act.RepoCapabilitiesApproved a) envelope
         | SessionEvent.RepoConfigRefused r ->
             proj |> causedNote r.MessageId r.CausedBy r.Actor (Act.RepoConfigRefused r) envelope
+        | SessionEvent.RepoConfigWarned w ->
+            proj |> causedNote w.MessageId w.CausedBy w.Actor (Act.RepoConfigWarned w) envelope
         | SessionEvent.WorkSandboxStopped s -> proj |> noted s.MessageId s.Actor (Act.SandboxStopped s) envelope
         // Where new terminals start (Plan 25) folds in for the repo notes' reason: it is a
         // session-shaping act everyone is affected by — the next terminal a PERSON opens
@@ -875,6 +889,15 @@ module ConversationProjection =
         // its own events, against the newly resolved set, so a boot, a reconnect and a
         // restart all emit nothing and only a genuine change by the operator is loud.
         | SessionEvent.McpServerAvailable m -> proj |> noted m.MessageId ActorRef.System (Act.McpServerAvailable m) envelope
+        // That the session began is an item, for its pair's reason and one more: what the
+        // first boot brings up (a repo's sandboxes) names it as its cause, and a cause is an
+        // item a reader can be pointed at. It draws as a rule, not a line anybody said.
+        | SessionEvent.SessionStarted s ->
+            proj |> noted s.MessageId ActorRef.SessionProcess (Act.SessionStarted (s, envelope.Timestamp)) envelope
+        // Coming BACK is a different matter: it says a stretch passed in which nothing ran,
+        // which nothing else on the screen says.
+        | SessionEvent.SessionResumed r ->
+            proj |> noted r.MessageId ActorRef.SessionProcess (Act.SessionResumed (r, envelope.Timestamp)) envelope
         | SessionEvent.McpServerUnavailable m -> proj |> noted m.MessageId ActorRef.System (Act.McpServerUnavailable m) envelope
         // Watched pull requests fold in for the repo notes' reason: a watch is a
         // session-shaping act, and a transition is exactly what a joining human or the
@@ -884,7 +907,7 @@ module ConversationProjection =
         // Attributed to the WATCHER rather than the envelope's System: the person whose
         // watch noticed is who the news is for, and whose name it should wear.
         | SessionEvent.PrTransitioned p ->
-            proj |> noted p.MessageId (Principal.toActor p.Watcher) (Act.PrTransitioned p) envelope
+            proj |> noted p.MessageId (Principal.toActor p.Watcher) (noticed envelope (Act.PrTransitioned p)) envelope
         | AgentMessageStarted a ->
             // A message that follows another is that other one's close: the model has moved
             // on, so what the antecedent streamed is what it said. Only a streaming item
@@ -970,6 +993,32 @@ module ConversationProjection =
                 else
                     proj, highWater)
             (projection, appliedThrough)
+
+    /// Every artifact this session holds, at its latest version, most recently shared first.
+    ///
+    /// DERIVED rather than kept: the share is already an act in `Items`, and a second copy in
+    /// the projection would be a list that could disagree with the timeline it was folded from.
+    /// A reader wants the newest version of each name — the older ones are still addressable,
+    /// and the way to ask for one is the act that put it there, which is on the timeline where
+    /// it happened.
+    ///
+    /// It lives here rather than in the view because it is the answer to "what has been shared",
+    /// which is a question about the log — and a cheap test can ask it without a browser.
+    let artifacts (proj: ConversationProjection) : ArtifactShared list =
+        proj.Items
+        |> List.choose (fun item ->
+            match item.Content with
+            | ItemContent.Act (Act.ArtifactShared a) -> Some (EventOffset.value item.Offset, a)
+            | _ -> None)
+        // Later in the log wins: shares of one name arrive in the order they were made, so the
+        // last mention is the newest version without comparing sequence numbers here.
+        |> List.fold (fun byName (at, a) -> Map.add (ArtifactRef.name a.Ref) (at, a) byName) Map.empty
+        |> Map.toList
+        |> List.map snd
+        // Newest first, because the list is read to find the thing just shared far more often
+        // than to find one from an hour ago.
+        |> List.sortByDescending fst
+        |> List.map snd
 
 /// What a person in this session still has to decide about.
 ///

@@ -70,9 +70,6 @@ type SandboxDecl =
       /// `HomePath` is what keeps that true: it cannot be absolute and cannot contain `..`,
       /// so nothing declared here lands outside the home.
       Files : Map<HomePath, string>
-      /// Credential NAMES to forward. Resolved for a human at spawn; a value never appears
-      /// in a file, and could not: the type is a name.
-      Forward : string list
       /// One command to run in this sandbox before anything else does — the repo's chance
       /// to make the environment ready rather than describe it and hope.
       ///
@@ -113,7 +110,6 @@ module SandboxDecl =
           Uses = []
           Wants = []
           Files = Map.empty
-          Forward = []
           Setup = None
           Description = None
           Repos = None }
@@ -178,8 +174,11 @@ module SandboxDecl =
             |> List.map (fun (name, value) ->
                 name,
                 match value with
+                | PlainValue plain when EnvTemplate.composes plain -> Encode.string (EnvTemplate.escape plain)
                 | PlainValue plain -> Encode.string plain
-                | SecretRef secret -> Encode.object [ "secret", Encode.string (SecretName.value secret) ])
+                | SecretRef secret -> Encode.object [ "secret", Encode.string (SecretName.value secret) ]
+                | Derived template -> Encode.string (EnvTemplate.render template)
+                | Lent connection -> Encode.string (sprintf "${%s.token}" (ConnectionName.value connection)))
         let strings (names: string list) = Encode.list (names |> List.map Encode.string)
         Encode.toString 0 (
             Encode.object
@@ -197,7 +196,6 @@ module SandboxDecl =
                         decl.Files
                         |> Map.toList
                         |> List.map (fun (path, content) -> HomePath.value path, Encode.string content))
-                  if not (List.isEmpty decl.Forward) then "forward", strings decl.Forward
                   if decl.Setup.IsSome then "setup", Encode.string decl.Setup.Value
                   if decl.Description.IsSome then "description", Encode.string decl.Description.Value
                   if decl.Repos.IsSome then "repos", Encode.string decl.Repos.Value ])
@@ -286,10 +284,7 @@ module SandboxDecl =
                       Files = decl.Files
                       Runtime = runtime
                       Setup = decl.Setup
-                      ReposAt = decl.Repos }
-                  // As written becomes as asked, here and nowhere else: what the registry
-                  // compares has already been normalised by construction.
-                  Forward = ConnectionName.normalise decl.Forward }
+                      ReposAt = decl.Repos } }
 
 /// One repo's whole file.
 type ConfigFile =
@@ -358,12 +353,29 @@ module ConfigFile =
     let private stringList : Decoder<string list> =
         Decode.oneOf [ Decode.list Decode.string; Decode.string |> Decode.map List.singleton ]
 
-    /// `NAME: value` or `NAME: { secret: name }`. Two forms and no third — a plain string
-    /// is a value, a mapping names a secret, and there is no interpolation syntax that
-    /// could be either.
+    /// `NAME: value` or `NAME: { secret: name }`. A string carrying `${` composes
+    /// (`EnvTemplate`): `${env.NAME}` is what NAME would be without this line, and `$${` a
+    /// literal `${`. A reference this build cannot read refuses the file rather than being
+    /// kept as text somebody meant as a reference.
     let private envValue : Decoder<EnvironmentVariableRef> =
         Decode.oneOf
-            [ Decode.string |> Decode.map PlainValue
+            [ Decode.string
+              |> Decode.andThen (fun text ->
+                  match EnvTemplate.lent text with
+                  | Some connection ->
+                      match ConnectionName.create connection with
+                      | Ok name -> Decode.succeed (Lent name)
+                      | Error e -> Decode.fail (sprintf "'%s' does not name a connection: %s" text e)
+                  | None ->
+                  if not (EnvTemplate.composes text) then Decode.succeed (PlainValue text)
+                  else
+                      match EnvTemplate.parse text with
+                      | Error e -> Decode.fail e
+                      | Ok template ->
+                          match template with
+                          | [] -> Decode.succeed (PlainValue "")
+                          | [ TemplatePart.Literal text ] -> Decode.succeed (PlainValue text)
+                          | template -> Decode.succeed (Derived template))
               Decode.field "secret" Decode.string
               |> Decode.andThen (fun raw ->
                   match SecretName.create raw with
@@ -521,7 +533,19 @@ module ConfigFile =
             | _ -> Decode.succeed spec)
 
     let private sandboxKeys =
-        [ "container"; "dialect"; "workdir"; "env"; "uses"; "wants"; "files"; "forward"; "setup"; "description"; "repos" ]
+        [ "container"; "dialect"; "workdir"; "env"; "uses"; "wants"; "files"; "setup"; "description"; "repos" ]
+
+    /// `forward:` said which connections a sandbox forwarded, and a connection is a resource
+    /// now: offered by the operator and selected like every other. Refused by name rather
+    /// than left to the unknown-key sentence, because the file that has it worked yesterday
+    /// and its author needs to be told what replaced it, not that it was never a word.
+    let private noForward : Decoder<unit> =
+        Decode.optional "forward" Decode.value
+        |> Decode.andThen (function
+            | Some _ ->
+                Decode.fail
+                    "`forward:` is gone — a connection is a resource now: the operator offers it (`github: { connection: { github: [git, api] } }`) and a sandbox selects it under `uses` or `wants`"
+            | None -> Decode.succeed ())
 
     /// `dialect:` — one of the shells a terminal can instrument, by name.
     let private dialect : Decoder<string> =
@@ -554,7 +578,8 @@ module ConfigFile =
             fold [] pairs)
 
     let private sandbox : Decoder<SandboxDecl> =
-        noUnknownKeys sandboxKeys
+        noForward
+        |> Decode.andThen (fun () -> noUnknownKeys sandboxKeys)
         |> Decode.andThen (fun () ->
             Decode.object (fun get ->
                 let container = get.Optional.Field "container" container
@@ -566,7 +591,6 @@ module ConfigFile =
                   Uses = get.Optional.Field "uses" resourceNames |> Option.defaultValue []
                   Wants = get.Optional.Field "wants" resourceNames |> Option.defaultValue []
                   Files = get.Optional.Field "files" seededFiles |> Option.defaultValue Map.empty
-                  Forward = get.Optional.Field "forward" stringList |> Option.defaultValue []
                   Setup = get.Optional.Field "setup" Decode.string
                   Description =
                     get.Optional.Field "description" Decode.string
@@ -588,6 +612,9 @@ module ConfigFile =
     /// This is the only place a clash can happen — across files the scope keeps them apart —
     /// and it is refused here, where the person who wrote both is standing and can pick
     /// another name, rather than resolved at read time by a precedence rule.
+    /// The `sandboxes:` block, which an operator's profile carries in the same form
+    /// (`OperatorProfile`, through `parseSandboxes`): one decoder, so one declaration means
+    /// one thing whoever wrote it.
     let private sandboxes : Decoder<Map<SandboxName, SandboxDecl>> =
         // Decoded a field at a time rather than with `keyValuePairs`, for the PATH. That
         // combinator decodes each value without putting its key on the path, so every
@@ -631,6 +658,11 @@ module ConfigFile =
                         { Version = version
                           Sandboxes =
                             get.Optional.Field "sandboxes" sandboxes |> Option.defaultValue Map.empty }))))
+
+    /// A `sandboxes:` block on its own, from JSON text — how the operator's profile, which
+    /// is decoded with a different JSON library on .NET, hands its block to the one decoder.
+    let parseSandboxes (json: string) : Result<Map<SandboxName, SandboxDecl>, string> =
+        Decode.fromString sandboxes json
 
     /// Decode one repo's file from already-parsed JSON text.
     let parse (json: string) : Result<ConfigFile, string> =

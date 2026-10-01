@@ -65,6 +65,53 @@ module SecretName =
 type EnvironmentVariableRef =
     | PlainValue of string
     | SecretRef of SecretName
+    /// A value composed over what lies beneath (`EnvTemplate`).
+    | Derived of EnvTemplate
+    /// `${<connection>.token}` as a variable's whole value: a stand-in for that connection's
+    /// credential, lent to each command for the act it runs as and returned when the next one
+    /// starts — never a value the sandbox holds, so it is not in the sandbox's environment at
+    /// all but in each command's. docs/GAPS.md asks whether the rotation earns its keep.
+    | Lent of connection: ConnectionName
+
+/// What a selection grants a sandbox beyond its policy: the connections it forwards, and the
+/// variables an operator bound to something only the session can supply (a resource's
+/// `${proxy.…}` or `${<connection>.token}`), as the same references a repo's declaration
+/// would carry — so the session supplies them through one path whoever wrote them.
+[<RequireQualifiedAccess>]
+type SelectionGrant =
+    { Connections : ForwardedConnections
+      Bound : Map<string, EnvironmentVariableRef>
+      /// The bound variables reached through `wants:` alone. A want is silent where it cannot
+      /// be had, so one of these whose connection is not forwarded is left out rather than
+      /// refusing the sandbox; one something NEEDS refuses it.
+      WantedOnly : Set<string> }
+
+module SelectionGrant =
+
+    let none : SelectionGrant =
+        { SelectionGrant.Connections = ForwardedConnections.none
+          SelectionGrant.Bound = Map.empty
+          SelectionGrant.WantedOnly = Set.empty }
+
+    /// Out of `ResourceProfile.grants`' answer.
+    let ofGrant (leaves: ResourceLeaf list, wantedOnly: Set<ResourceLeaf>) : SelectionGrant =
+        let bound (leaf: ResourceLeaf) =
+            match leaf with
+            | Variable (variable, VariableValue.Composed template) -> Some (variable, Derived template)
+            | Variable (variable, VariableValue.Token connection) ->
+                // `load` already refused a name no connection could carry, through the
+                // connection leaf this one needs beside it.
+                ConnectionName.create connection |> Result.toOption |> Option.map (fun name -> variable, Lent name)
+            | Variable (_, VariableValue.Text _)
+            | Mount _
+            | Socket _
+            | Endpoint _
+            | Exec _
+            | Volume _
+            | Connection _ -> None
+        { SelectionGrant.Connections = ForwardedConnections.ofGrant (leaves, wantedOnly)
+          SelectionGrant.Bound = leaves |> List.choose bound |> Map.ofList
+          SelectionGrant.WantedOnly = wantedOnly |> Set.toList |> List.choose bound |> List.map fst |> Set.ofList }
 
 /// What a CONTAINER is. Every field here is one only a container has — an image to run, a
 /// filesystem to build, volumes to mount, a process to be.
@@ -301,33 +348,25 @@ module EnvironmentSpec =
     let container : EnvironmentSpec =
         { defaults with Runtime = Container ContainerSpec.defaults }
 
-/// One ask for a sandbox: what it should BE, and which credentials to forward into it.
-///
-/// Two fields rather than one because they are resolved by different parties — the spec is
-/// what the session builds the sandbox from, `Forward` is a list of credential NAMES the
-/// composition resolves against whoever is asking, at spawn, and never carries a value.
-///
-/// They travel together because together they are what "is this the same sandbox I already
-/// have" compares. A comparison assembled at each call site is a comparison that will be
-/// assembled differently at one of them, and the answer decides whether somebody's build
+/// One ask for a sandbox: what it should BE, which is what "is this the same sandbox I
+/// already have" compares. A comparison assembled at each call site is a comparison that will
+/// be assembled differently at one of them, and the answer decides whether somebody's build
 /// gets killed.
-type SandboxRequest =
-    { Spec : EnvironmentSpec
-      /// Constructed, so already normalised (`ConnectionName.normalise`): the registry
-      /// compares requests, and a comparison over raw spellings refused asks nobody changed.
-      Forward : ConnectionName list }
+///
+/// What it forwards is not a separate field: a connection is a resource, so it is in the
+/// spec's `uses`/`wants`, and what those come to on this host is the registry's to resolve
+/// (`WorkSandboxesConfig.Connections`). An ask cannot name a credential the selection did not.
+type SandboxRequest = { Spec : EnvironmentSpec }
 
 module SandboxRequest =
 
     /// An ask that named nothing in particular — which is also what `default` is.
-    let defaults : SandboxRequest = { Spec = EnvironmentSpec.defaults; Forward = [] }
+    let defaults : SandboxRequest = { Spec = EnvironmentSpec.defaults }
 
     let private list (names: string list) =
         match names with
         | [] -> "nothing"
         | some -> String.concat ", " some
-
-    let private connections (names: ConnectionName list) = list (names |> List.map ConnectionName.value)
 
     let private mountsOf (runtime: SandboxRuntime) =
         match runtime with
@@ -354,9 +393,7 @@ module SandboxRequest =
         let names (vars: Map<string, EnvironmentVariableRef>) =
             vars |> Map.toList |> List.map fst |> list
         let clauses =
-            [ if running.Forward <> wanted.Forward then
-                sprintf "it forwards %s, not %s" (connections running.Forward) (connections wanted.Forward)
-              if running.Spec.WorkingDirectory <> wanted.Spec.WorkingDirectory then
+            [ if running.Spec.WorkingDirectory <> wanted.Spec.WorkingDirectory then
                 sprintf
                     "it starts in %s, not %s"
                     (where running.Spec.WorkingDirectory)

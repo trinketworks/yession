@@ -135,12 +135,13 @@ let empty : QueryRegistry =
 // made a browser read its own write off a cache the Manager had not finished filling.
 
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Yession.App
 open Yession.Host.Interop
 open Yession.SessionProcess
 
 let private respondText (res: ServerResponse) (status: int) (text: string) =
-    res.writeHead (status, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+    res.writeHead (status, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
     res.``end`` text
 
 /// The connection panels as a read model: the pair for one identity now, and the pair

@@ -203,15 +203,14 @@ let private droppedDownstream = set [ "connection"; "keep-alive"; "transfer-enco
 /// that set and so cannot already be there.
 ///
 /// Node lowercases a header name on the way in, so the comparison is against lowercase and
-/// does no folding of its own. A value passes through as it arrived: a string, or an array of
-/// them for a header that repeated.
-let upstreamHeaders (sent: (string * obj)[]) (authorization: string) : (string * obj)[] =
+/// does no folding of its own. A value passes through as it arrived: said once, or repeated.
+let upstreamHeaders (sent: (string * HeaderValue)[]) (authorization: string) : (string * HeaderValue)[] =
     Array.append
         (sent |> Array.filter (fun (name, _) -> not (Set.contains name droppedUpstream)))
-        [| "authorization", box authorization |]
+        [| "authorization", HeaderValue.Single authorization |]
 
 /// The headers it carries back DOWN: github.com's, as they came, less the three above.
-let downstreamHeaders (received: (string * obj)[]) : (string * obj)[] =
+let downstreamHeaders (received: (string * HeaderValue)[]) : (string * HeaderValue)[] =
     received |> Array.filter (fun (name, _) -> not (Set.contains name droppedDownstream))
 
 /// Whether an upstream status is relayed to the sandbox's git as it stands. Nearly every one
@@ -263,7 +262,7 @@ let private forward
         let up =
             httpRequest url req.``method`` (upstreamHeaders (req.headerEntries ()) authorization) (fun answer ->
                 if relayed answer.statusCode then
-                    res.writeHead (answer.statusCode, createObj (downstreamHeaders (answer.headerEntries ()))) |> ignore
+                    res.relayHead (answer.statusCode, downstreamHeaders (answer.headerEntries ()))
                     answer.pipe res
                     answer.onEnd (fun () -> finish Forwarded.Answered)
                     answer.onError (fun _ ->
@@ -343,15 +342,13 @@ let start (upstream: string) (report: string -> unit) : Async<Gateway> =
         live <- live |> Map.filter (fun _ loan -> loan.Terminal <> terminal)
 
     let answer (res: ServerResponse) (status: int) (contentType: string) (body: string) =
-        res.writeHead (status, createObj [ "content-type", box contentType; "cache-control", box "no-store" ]) |> ignore
+        res.writeHead (status, [ ResponseHeader.ContentType contentType; ResponseHeader.CacheControl "no-store" ])
         res.``end`` body
 
     let notFound (res: ServerResponse) = answer res 404 "text/plain" "not found"
 
     /// The loan a request carries, if git sent one.
-    let loanOf (req: IncomingMessage) : string option =
-        req.headerEntries ()
-        |> Array.tryPick (fun (name, value) -> if name = loanHeader then Some (unbox<string> value) else None)
+    let loanOf (req: IncomingMessage) : string option = headerOf req loanHeader
 
     let handler (req: IncomingMessage) (res: ServerResponse) =
         let url = req.url

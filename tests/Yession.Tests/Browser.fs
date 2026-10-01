@@ -638,7 +638,7 @@ let tests =
             async {
                 // The column starts shut, so the header control is the way back in — and
                 // that this can find it is the test that one exists at all.
-                do! awaitU (pageA.Locator("[data-terminal-toggle='show']").First.ClickAsync ())
+                do! awaitU (pageA.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 // `.First`: a session with no terminal open offers "new" twice — in the tab
                 // strip and in the empty state — and either will do.
                 do! awaitU (pageA.Locator("[data-terminal-new]").First.ClickAsync ())
@@ -820,7 +820,7 @@ let tests =
                         | _ -> return failwithf "the render counter answered '%s', which is not a count" settled
                     }
 
-                do! awaitU (page.Locator("[data-terminal-toggle='show']").First.ClickAsync ())
+                do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
                 let! _ = await (page.WaitForFunctionAsync "!!document.querySelector('[data-terminal-tab]')")
 
@@ -885,6 +885,97 @@ let tests =
                         perRecord rendersSmall recordsSmall rendersLarge recordsLarge budget
             })
 
+        // What one render costs does not grow with the number of terminals open.
+        //
+        // The after-render pass measures each open terminal's box, and it used to FIND each
+        // one by asking the whole document for it — a compound attribute selector, once per
+        // open terminal, per render. The pane draws one terminal at a time, so every other
+        // question was a MISS, and a miss is the expensive answer: neither clause is indexed,
+        // so the walk visits every node and cannot stop early. Measured on a session of 20,650
+        // events (54k nodes, twelve terminals open): 616 of those scans costing 5.3 seconds, a
+        // third of all the CPU a cold open spent, and 20s before the page stopped changing on
+        // a phone-speed CPU. One scan that finds them all costs 10s.
+        //
+        // What this pins is the SHAPE — scans per render, which is one however many terminals
+        // are open, and was one per terminal — and deliberately not a duration: a millisecond
+        // budget on a shared runner is the flaky test this repository warns about, while a
+        // count is the same number on every box.
+        //
+        // Both counts are per DOCUMENT, so the reload is what makes them comparable: a fresh
+        // document starts them at zero and a reopen is a burst of renders worth measuring.
+        //
+        // `Srt` because opening a terminal starts a shell in the session's work sandbox: on a
+        // box that cannot host one no terminal ever appears, and this would wait out its
+        // timeout rather than skip.
+        Tag.needs "measuring several terminals" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        sessionCase "measuring the terminals costs one look at the document, however many are open" <|
+            fun page ->
+            async {
+                let opened = 4
+                let enough = sprintf "document.querySelectorAll('[data-terminal-tab]').length >= %d" opened
+                do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
+                for _ in 1 .. opened do
+                    do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
+                do! await (page.WaitForFunctionAsync enough) |> Async.Ignore
+
+                let! _ = await (page.ReloadAsync ())
+                do! waitFor "the reopened session to connect" page connected
+                do! waitFor (sprintf "the reopened session to offer its %d terminals" opened) page enough
+
+                // Settled when the render count has stopped moving, which is also when the
+                // scans have: they are made in the same pass.
+                let! settled =
+                    await (page.EvaluateAsync<string> """() => new Promise(resolve => {
+                      let last = -1, still = 0, waited = 0
+                      const tick = () => {
+                        const n = globalThis.__yessionRenders ?? -1
+                        if (n === last) still++ ; else { still = 0; last = n }
+                        waited += 250
+                        if (still >= 6 || waited >= 30000)
+                          resolve([n, globalThis.__yessionViewportScans ?? -1, still >= 6].join(','))
+                        else setTimeout(tick, 250)
+                      }
+                      tick()
+                    })""")
+                match settled.Split ',' with
+                | [| r; q; s |] ->
+                    let renders, scans = int r, int q
+                    // Anti-vacuity, both ways this passes while measuring nothing: a counter
+                    // the app stopped publishing (which reads -1, or 0 for a pass that never
+                    // ran), and a page still rendering when time ran out.
+                    if renders <= 0 then
+                        failwithf
+                            "the page reports %d renders — `app/browser/Render.fs` publishes \
+                             `globalThis.__yessionRenders` and this budget means nothing without it"
+                            renders
+                    if scans <= 0 then
+                        failwithf
+                            "the page reports %d viewport scans — `app/browser/Screens.fs` publishes \
+                             `globalThis.__yessionViewportScans` and this budget means nothing without it"
+                            scans
+                    if s <> "true" then
+                        failwithf
+                            "the reopened session was still rendering after 30s (%d renders, %d scans)"
+                            renders scans
+                    let perRender = float scans / float renders
+                    printfn "  reopen with %d terminals open: %d scans over %d renders — %.2f per render"
+                            opened scans renders perRender
+                    // One per render, plus whatever the resize observer added — it fires on a
+                    // box changing rather than on a render, and a load moves boxes. The line
+                    // sits at two, which is well over what one scan a render plus a settling
+                    // layout costs and well under the FOUR this case opens: a scan that goes
+                    // back to being per-terminal cannot pass it, and neither can one that
+                    // creeps to a second question per pass.
+                    let budget = 2.0
+                    if perRender > budget then
+                        failwithf
+                            "the after-render pass asked the document where the terminal boxes are %.2f times \
+                             per render with %d terminals open (%d scans over %d renders); the budget is %.1f. \
+                             Measuring is finding them ONCE — see `viewports` in `app/browser/Screens.fs`."
+                            perRender opened scans renders budget
+                | _ -> failwithf "the counters answered '%s', which is not two counts and a verdict" settled
+            })
+
         // A command line belongs to ONE terminal. The domain says so — a draft is keyed by
         // terminal AND author precisely so a person can be mid-command in two at once
         // (`BodyKey.terminalDraft`) — and the browser is the only place that promise can
@@ -907,7 +998,7 @@ let tests =
                 // is there and there are no terminals yet. (It used to ask whether something
                 // before it had left the column open, which is a question a case that arranges
                 // its own session does not have.)
-                do! awaitU (page.Locator("[data-terminal-toggle='show']").First.ClickAsync ())
+                do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
                 do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
                 do!
@@ -1469,6 +1560,30 @@ let editorTests =
                 Expect.equal afterSend broken "Ctrl+Enter sent without touching the document"
             }
 
+        // The prompt an empty composer shows is a node decoration: an attribute on the empty
+        // paragraph that the stylesheet paints from, so it is never text anyone can select,
+        // copy or send. The harness host is not a `[data-rich-body]`, so nothing paints here;
+        // what is read is the hook the stylesheet reads.
+        editorCase "an empty composer offers its prompt without it becoming content" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#host .ProseMirror [data-placeholder]")
+                let! prompt =
+                    await (page.EvaluateAsync<string>
+                        "() => document.querySelector('#host .ProseMirror [data-placeholder]').getAttribute('data-placeholder')")
+                let! text = await (page.EvaluateAsync<string> "() => document.querySelector('#host .ProseMirror').textContent")
+                Expect.equal prompt Yession.App.Dom.Text.composerPlaceholder "the empty composer carries its prompt"
+                Expect.equal text "" "and the prompt is not in the document"
+            }
+
+        editorCase "a composer written in stops offering its prompt" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#host .ProseMirror [data-placeholder]")
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "x")
+                let! _ = await (page.WaitForFunctionAsync "!document.querySelector('#host .ProseMirror [data-placeholder]')")
+                return ()
+            }
+
         editorCase "a remote peer's selection renders as a caret widget, label, and highlight" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
@@ -1519,6 +1634,20 @@ let editorTests =
                 // convergence happens un-stormed.
                 do! awaitU (page.EvaluateAsync "() => window.__caretStorm(true)")
 
+                // Anti-vacuity, first half: the storm is really running before a key is
+                // pressed, so the convergence below happens under one rather than beside it.
+                //
+                // WAITED for, not counted afterwards. The storm pushes one per animation
+                // frame, so "at least five by the end of the typing window" measures how many
+                // frames the MACHINE delivered inside a fixed wall-clock window — it went red
+                // twice here on a loaded box with nothing wrong with the code, and would go
+                // green on a fast one with the storm broken in a way this says nothing about.
+                // A wait makes the same claim about the code and none about the box: a page
+                // the browser never paints times out here saying which, and a storm that
+                // never dispatches never arrives.
+                do! waitFor "the caret storm to push frames at all" page "window.__caretPushes >= 5"
+                let! stormedBefore = await (page.EvaluateAsync<int> "() => window.__caretPushes")
+
                 // A types into its own composer. Real key events, so every keystroke is its own
                 // doc update and its own relay — the drip a collaborator actually produces,
                 // rather than one paste the mirror could absorb in a single frame.
@@ -1543,16 +1672,17 @@ let editorTests =
                 // content and not of an editor nobody decorated.
                 do! waitFor "the author's caret to be drawn in the mirror" page "!!document.querySelector('#peer-b .pm-caret')"
 
-                do! awaitU (page.EvaluateAsync "() => window.__caretStorm(false)")
+                // Anti-vacuity, second half, and the reason a green here means anything: a
+                // storm that stopped before the words arrived converges beautifully. Frames
+                // landing DURING the convergence are what raced it — waited for with the storm
+                // still on, so the first one settles it, rather than counted against a window
+                // that was only ever a guess at how fast this machine is.
+                do! waitFor
+                        "the caret storm to push a frame while the content was arriving"
+                        page
+                        (sprintf "window.__caretPushes > %d" stormedBefore)
 
-                // Anti-vacuity, and the reason a green here means anything: a storm that never
-                // ran converges beautifully. Frames are not free to assume — a page the browser
-                // decided not to paint would push none of them.
-                let! pushes = await (page.EvaluateAsync<int> "() => window.__caretPushes")
-                if pushes < 5 then
-                    failwithf
-                        "the caret storm pushed %d times — too few for convergence to have been raced at all, so this case proved nothing"
-                        pushes
+                do! awaitU (page.EvaluateAsync "() => window.__caretStorm(false)")
             }
 
         // The other half of the same story, and the one the whole `pushPresences` debate turned
@@ -1571,6 +1701,12 @@ let editorTests =
             async {
                 do! waitFor "both peers to mount" page "!!document.querySelector('#peer-a .ProseMirror') && !!document.querySelector('#peer-b .ProseMirror')"
                 do! awaitU (page.EvaluateAsync "() => window.__caretStorm(true)")
+                // The storm is dispatching before anything is typed, and keeps dispatching
+                // while the words arrive — both waited for rather than counted at the end, for
+                // the reason the case above gives: a push is one animation frame, so a count
+                // inside a fixed window is a measurement of the machine.
+                do! waitFor "the caret storm to push frames at all" page "window.__caretPushes >= 5"
+                let! stormedBefore = await (page.EvaluateAsync<int> "() => window.__caretPushes")
                 do! awaitU (page.ClickAsync "#peer-a .ProseMirror")
                 do! awaitU (page.Keyboard.TypeAsync "# Heading one")
                 // Over CONTENT: an empty document is the case y-prosemirror short-circuits
@@ -1579,11 +1715,13 @@ let editorTests =
                         "the co-editor to render the author's remote content"
                         page
                         (sprintf "%s === 'Heading one'" (ownText "#peer-b .ProseMirror h1"))
+                do! waitFor
+                        "the caret storm to push a frame while the content was arriving"
+                        page
+                        (sprintf "window.__caretPushes > %d" stormedBefore)
                 do! awaitU (page.EvaluateAsync "() => window.__caretStorm(false)")
 
                 let! pushes = await (page.EvaluateAsync<int> "() => window.__caretPushes")
-                if pushes < 5 then
-                    failwithf "the caret storm pushed %d times — too few to have exercised the write-back at all" pushes
                 // The doc really moved under the storm — otherwise a write-back count of zero
                 // says the observer was never wired, not that nothing was written.
                 let! updates = await (page.EvaluateAsync<int> "() => window.__docUpdates")
@@ -1706,6 +1844,49 @@ let editorTests =
                         return Math.abs(nameBaseline - baseline)
                     }""")
                 Expect.isTrue (drift < 0.5) (sprintf "the name's baseline is the line's, it was %.2fpx off" drift)
+            }
+
+        // The same question of an act still RUNNING, whose gutter holds a mark rather than
+        // an arrow (the fixture's is the session's circle; the agent's diamond is measured at
+        // the end of a message, by the caret case). A mark beside a title is read against that title's letters,
+        // so it spans them: lower point on the title's baseline, upper at its x-height —
+        // measured by an inline-block `1ex` tall dropped into the title's first line, whose
+        // bottom rests on that baseline and whose top is where an `x` ends — and it stays
+        // inside the gutter it marks. The first cut of this case checked the baseline alone
+        // and passed a gutter set a size larger than its title, whose mark was 2.8px too
+        // tall and centred onto the baseline by coincidence.
+        editorCase "a running act's mark spans its title's letters, in the gutter" <| fun page ->
+            async {
+                do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
+                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-status=\"running\"] [data-act-running]")
+                let! misplaced =
+                    await (page.EvaluateAsync<string> """() => {
+                        const note = document.querySelector('#shell [data-act-status="running"]')
+                        const mark = note.querySelector('[data-act-running]')
+                        const gutter = mark.parentElement.getBoundingClientRect()
+                        const title = note.querySelector('.col-start-2')
+                        const walk = document.createTreeWalker(title, NodeFilter.SHOW_TEXT)
+                        let first = null
+                        while (!first && walk.nextNode()) if (walk.currentNode.textContent.trim()) first = walk.currentNode
+                        if (!first) return 'the title has no words'
+                        const probe = document.createElement('span')
+                        probe.style.cssText = 'display:inline-block;width:0;height:1ex'
+                        first.parentNode.insertBefore(probe, first)
+                        const letters = probe.getBoundingClientRect()
+                        probe.remove()
+                        const at = mark.getBoundingClientRect()
+                        const em = parseFloat(getComputedStyle(first.parentElement).fontSize)
+                        const wrong = []
+                        if (Math.abs(at.bottom - letters.bottom) > 0.05 * em)
+                          wrong.push('its lower point is ' + (at.bottom - letters.bottom) + 'px off the title\'s baseline')
+                        if (Math.abs(at.top - letters.top) > 0.05 * em)
+                          wrong.push('its upper point is ' + (at.top - letters.top) + 'px off the title\'s x-height')
+                        if (at.left < gutter.left || at.right > gutter.right)
+                          wrong.push('it is outside its gutter (' + at.left + '-' + at.right + ' against ' + gutter.left + '-' + gutter.right + ')')
+                        return wrong.join('; ')
+                    }""")
+                Expect.equal misplaced "" "the running act's mark stands on its title's line"
             }
 
         // EVERY fold's arrow sits on the centre of its own title's line, and every arrow on
@@ -1874,14 +2055,14 @@ let editorTests =
                 // The pane starts off screen, as it does for a fresh client.
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        "document.querySelector('#shell [data-terminal-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
+                        "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
 
                 // A chip brings it on, and it takes the WHOLE column.
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
                 let! _ =
                     await (page.WaitForFunctionAsync
                         """(() => {
-                             const r = document.querySelector('#shell [data-terminal-panel]').getBoundingClientRect()
+                             const r = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
                              return r.left <= 1 && Math.round(r.width) === window.innerWidth
                            })()""")
                 // …with the tab strip retained, which is what keeps phone and desktop one
@@ -1912,10 +2093,10 @@ let editorTests =
 
                 // And the way back to the chat is a control, not a dismissal: it returns
                 // focus to the chip that opened the pane.
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='hide']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='hide']")
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        "document.querySelector('#shell [data-terminal-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
+                        "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
                 let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-chat-block') === true""")
                 return ()
             }
@@ -1929,6 +2110,49 @@ let editorTests =
         // The document-level check the case above makes cannot see this: the timeline's own
         // scrollbox absorbs the overflow, so `documentElement.scrollWidth` stays honest while
         // the conversation is unreadable. What is asserted is the column, and only the column.
+        // Typing into the composer with a phone keyboard up never scrolls the page past the
+        // shell. Photographed on iOS as a band of empty page between the composer and the
+        // keyboard, which stayed after the keyboard went: ProseMirror's scroll-to-caret
+        // scrolled the WINDOW, measured against the visual viewport's height without its
+        // offset, so a caret the platform had already brought into view was scrolled for
+        // again — on a send (the cleared draft) and on typing, neither of which the update
+        // loop sees.
+        //
+        // A keyboard is the visual viewport shrinking under a layout that does not, which a
+        // page scale is here. iOS also lets the page scroll into the keyboard's height; the
+        // room below the shell stands in for that, and is the room the double scroll spent.
+        editorCaseIn 390 844 "typing in the composer with the keyboard up never scrolls the page past the shell" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor] .ProseMirror")
+                do! awaitU (
+                        page.EvaluateAsync
+                            """() => {
+                                 const room = document.createElement('div')
+                                 room.style.height = '400px'
+                                 document.body.appendChild(room)
+                                 document.getElementById('shell').scrollIntoView({ block: 'end' })
+                               }""")
+                do! awaitU (page.ClickAsync "#shell [data-draft-editor] .ProseMirror")
+                let! cdp = await (page.Context.NewCDPSessionAsync page)
+                let scale = Collections.Generic.Dictionary<string, obj> ()
+                scale.["pageScaleFactor"] <- box 1.6
+                let! _ = await (cdp.SendAsync ("Emulation.setPageScaleFactor", scale))
+                let! _ = await (page.WaitForFunctionAsync "visualViewport.height < innerHeight")
+
+                // How far the visible area runs past the shell's foot, in CSS pixels: the gap.
+                let pastShell () =
+                    page.EvaluateAsync<float>
+                        """() => {
+                             const shell = document.getElementById('shell').getBoundingClientRect()
+                             return (visualViewport.offsetTop + visualViewport.height) - shell.bottom
+                           }"""
+                    |> await
+                do! awaitU (page.Keyboard.TypeAsync "one")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do! awaitU (page.Keyboard.TypeAsync "two")
+                let! typed = pastShell ()
+                Expect.isTrue (typed <= 1.0) (sprintf "typing left %.0fpx of page under the shell" typed)
+            }
         editorCaseIn 390 844 "a message no line break fits inside never scrolls the timeline sideways" <| fun page ->
             async {
                 let! width = await (page.EvaluateAsync<int> "() => window.innerWidth")
@@ -2202,7 +2426,7 @@ let editorTests =
                 // Waited for on the CONTROL, never on the panel: a shut pane is `w-0`, which
                 // Playwright reports as hidden, so waiting for the panel to be visible before
                 // opening it waits for something that only happens afterwards.
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-toggle='show']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='show']")
                 // This page carries two other fixtures ABOVE the shell — the editor host and
                 // the player — so the shell starts a viewport and a half down. Every control
                 // in it is reachable by scroll, which is fine for a person and a trap for a
@@ -2215,7 +2439,7 @@ let editorTests =
                                    const el = document.getElementById(id)
                                    if (el) el.style.display = 'none'
                                  }
-                                 document.querySelector('#shell [data-terminal-toggle="show"]').click()
+                                 document.querySelector('#shell [data-content-toggle="show"]').click()
                                  return true
                                }""")
                 // Read on `aria-valuenow`, not on the rendered width.
@@ -2280,7 +2504,7 @@ let editorTests =
                     await (page.WaitForFunctionAsync
                             """() => {
                                  const h = document.querySelector('#shell [data-term-resize]')
-                                 const pane = document.querySelector('#shell [data-terminal-panel]')
+                                 const pane = document.querySelector('#shell [data-content-panel]')
                                  const said = Number(h.getAttribute('aria-valuenow'))
                                  return Math.abs(pane.getBoundingClientRect().width - said) <= 1
                                }""")
@@ -2294,7 +2518,7 @@ let editorTests =
         editorCase "the holder types into the live screen, and the keys reach it as a pty expects" <| fun page ->
             async {
                 // The column starts shut, as it does for a fresh client.
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 // The terminal the harness holds the lease on renders its screen, and the
                 // screen shows what the program drew.
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
@@ -2351,7 +2575,7 @@ let editorTests =
                 // `term-harness` is the pane's opening tab, and it holds no lease: a terminal
                 // in block mode, which is where somebody who wants to type is standing. Not
                 // clicked — activating the tab you are already on is the PIN gesture.
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-take='term-harness']")
 
                 // The press that hands this peer the lease — and removes itself doing it.
@@ -2373,7 +2597,7 @@ let editorTests =
         // somebody's caret out of the message they are writing.
         editorCase "a terminal going live does not take the keyboard from what someone is writing" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-take='term-harness']")
 
                 // Somebody's keyboard is somewhere else in the pane — on the splitter, which
@@ -2399,7 +2623,7 @@ let editorTests =
         // whether Alt was down when a key went by.
         editorCase "word-navigation keys reach the pty as the escape sequences they are" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
                 let screen = "#shell [data-terminal-screen='term-live']"
                 let! _ = await (page.WaitForSelectorAsync screen)
@@ -2430,7 +2654,7 @@ let editorTests =
         // line, and would have read 79 for both back when the snapshot carried no size.
         editorCase "the live screen is the shape the process says it is" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
 
@@ -2471,7 +2695,7 @@ let editorTests =
         // rather than because anything was dispatched.
         editorCaseIn 1440 900 "a pane the reader resized tells the pty its new width" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
 
@@ -2498,7 +2722,7 @@ let editorTests =
         // at all, and that the number follows the reader's own splitter.
         editorCaseIn 1440 900 "a pane showing blocks measures itself, with no lease to report through" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 let! _ =
                     await (
                         page.WaitForSelectorAsync
@@ -3100,6 +3324,62 @@ let editorTests =
                 Expect.isTrue (shown < 25.0) (sprintf "the spoken sentence is not painted for anyone (%f px²)" shown)
                 return ()
             }
+        // Where the caret stands is the whole of what it says: the next word lands THERE. It
+        // was appended after the rendered body, which is after the last paragraph's box, so
+        // it stood on a line of its own under the text — and a mark aligned "by eye" to a
+        // baseline sits wherever its centre puts it, which on a phone is a pixel off. Both
+        // are geometry a cheap tier cannot see: the markup is the same either way.
+        //
+        // The letters are measured, not assumed: an empty inline-block rests its bottom
+        // edge on the baseline of the line it is in, so one `1ex` tall dropped after the
+        // last word spans exactly where that word's lowercase stands — baseline to the top
+        // of an `x` — and the diamond is held to both, within the overshoot a point is
+        // carried past its line.
+        editorCaseIn 390 844 "the agent's caret spans its last line's letters, just after the last word" <| fun page ->
+            async {
+                // Held still, so the mark is measured at rest rather than mid-turn.
+                do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
+                do! awaitU (page.EvaluateAsync "() => window.__agentTurn()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
+                let! misplaced =
+                    await (page.EvaluateAsync<string>
+                            """() => {
+                                 const caret = document.querySelector('#shell [data-agent-writing]')
+                                 const body = caret.closest('[data-message-body]')
+                                 const walk = document.createTreeWalker(body, NodeFilter.SHOW_TEXT)
+                                 let last = null
+                                 while (walk.nextNode()) if (walk.currentNode.textContent.trim()) last = walk.currentNode
+                                 if (!last) return 'the body has no words to stand after'
+                                 const end = last.textContent.trimEnd().length
+                                 const range = document.createRange()
+                                 range.setStart(last, end - 1)
+                                 range.setEnd(last, end)
+                                 const glyph = range.getBoundingClientRect()
+                                 const probe = document.createElement('span')
+                                 probe.style.cssText = 'display:inline-block;width:0;height:1ex'
+                                 last.after(probe)
+                                 const letters = probe.getBoundingClientRect()
+                                 const baseline = letters.bottom
+                                 probe.remove()
+                                 const at = caret.getBoundingClientRect()
+                                 const em = parseFloat(getComputedStyle(last.parentElement).fontSize)
+                                 const wrong = []
+                                 if (at.top < glyph.top || at.bottom > glyph.bottom)
+                                   wrong.push('it is not on the last line (' + at.top + '-' + at.bottom + ' against ' + glyph.top + '-' + glyph.bottom + ')')
+                                 // Within an overshoot: a point is carried a hair past its
+                                 // line, as the round letters beside it are.
+                                 if (Math.abs(at.bottom - baseline) > 0.05 * em)
+                                   wrong.push('its lower point is ' + (at.bottom - baseline) + 'px off the baseline')
+                                 if (Math.abs(at.top - letters.top) > 0.05 * em)
+                                   wrong.push('its upper point is ' + (at.top - letters.top) + 'px off the x-height')
+                                 if (at.left < glyph.right) wrong.push('it starts before the last word ends')
+                                 if (at.left - glyph.right > em) wrong.push('it stands ' + (at.left - glyph.right) + 'px after the last word')
+                                 return wrong.join('; ')
+                               }""")
+                Expect.equal misplaced "" "the caret stands where the next word lands"
+                return ()
+            }
         // What the band it replaced could not take away, and what a control arriving in a band
         // can: the composer. A turn starting must not push what a person types with off the
         // screen, or the one thing to do while the agent writes — queue the next message — is
@@ -3190,14 +3470,43 @@ let editorTests =
                 // The blur IS the gesture under test: it is what a tap on a button does
                 // first, on every browser that does not focus one.
                 do! awaitU (page.EvaluateAsync "() => document.activeElement.blur()")
+                // …and then the composer is left to finish reacting to it. The hit-test aims
+                // at a point in VIEWPORT coordinates, so it is a question about stacking only
+                // once the box it aims at has stopped moving: read mid-collapse it answers
+                // about wherever Send was passing through, or — if the row is between renders
+                // and the box is empty — about the origin of the page, which in this stacked
+                // harness is another mount's field entirely. That is what the flake was: an
+                // `INPUT` from the terminal command line answering for a Send nobody had
+                // finished laying out. A settled box is a question about the code; an
+                // unsettled one is a question about how fast this machine re-rendered.
+                do! waitFor
+                        "Send's box to settle after the blur"
+                        page
+                        """(() => {
+                             const send = document.querySelector('#shell [data-send-draft]')
+                             if (!send) { window.__sendBox = null; return false }
+                             const b = send.getBoundingClientRect()
+                             if (b.width === 0 || b.height === 0) { window.__sendBox = null; return false }
+                             const now = [b.top, b.left, b.width, b.height].join(',')
+                             const settled = window.__sendBox === now
+                             window.__sendBox = now
+                             return settled
+                           })()"""
+                // On failure it says WHERE both were, because "an INPUT answered" alone cannot
+                // tell an overlay from a hit-test aimed at the wrong point.
                 let! answered =
                     await (page.EvaluateAsync<string>
                             """() => {
                                  const send = document.querySelector('#shell [data-send-draft]')
                                  const b = send.getBoundingClientRect()
                                  const at = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)
-                                 if (at === null) return 'nothing'
-                                 return send.contains(at) ? 'send' : at.tagName + '.' + (at.getAttribute('class') ?? '')
+                                 if (at !== null && send.contains(at)) return 'send'
+                                 const box = r => `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`
+                                 const who =
+                                   at === null
+                                     ? 'nothing'
+                                     : at.tagName + '.' + (at.getAttribute('class') ?? '') + ' at ' + box(at.getBoundingClientRect())
+                                 return who + ' (send at ' + box(b) + ')'
                                }""")
                 Expect.equal answered "send" "a press at Send's own centre reaches Send once the editor has let focus go"
                 return ()
@@ -3241,7 +3550,7 @@ let editorTests =
         // and that playing off the pinned end catches the reader back up to live by itself.
         editorCase "a live terminal rewinds to its pinned edge, and playing off it catches back up" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
 
@@ -3347,11 +3656,11 @@ let editorTests =
             }
 
         // Pins (Plan 20, stage 1). The pin's STATE is a rendered attribute the cheap tier can
-        // read; what needs a browser is the keyboard release — Delete on a focused tab
-        // removes that tab from the document, and focus has to land on what took its place
-        // rather than on `body`. Same floor the DVR's control swap answers, in the surface a
+        // read; what needs a browser is the keyboard close — Delete on a focused tab removes
+        // that tab from the document, and focus has to land on what took its place rather
+        // than on `body`. Same floor the DVR's control swap answers, in the surface a
         // keyboard user actually walks.
-        editorCase "a tab is kept by its pin and released from the keyboard, without stranding focus" <| fun page ->
+        editorCase "a tab is kept by its pin and closed from the keyboard, without stranding focus" <| fun page ->
             async {
                 // A chip's tab arrives previewed — kept by nothing — and selected, since
                 // tapping the chip is what put it there.
@@ -3378,8 +3687,9 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-harness']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab^='block:']")
 
-                // Delete on the focused tab releases it. The tab leaves the strip, and focus
-                // lands on whatever took its position — never nowhere.
+                // Delete on the focused tab closes it — a kept tab included, which the close
+                // control itself will not do. The tab leaves the strip, and focus lands on
+                // whatever took its position — never nowhere.
                 do! awaitU (page.FocusAsync "#shell [data-pane-tab^='block:']")
                 do! awaitU (page.Keyboard.PressAsync "Delete")
                 let! _ =
@@ -3398,12 +3708,12 @@ let editorTests =
         // on `body`. That is the WCAG floor, not a nicety.
         editorCase "the list opens a terminal and hands focus to the pane it replaced itself with" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-terminal-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-terminal-list-toggle='list']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-list-toggle='list']")
 
                 // One surface at a time: the tablist promises a panel showing one of its
                 // tabs, and it must not be left standing over a list that replaced it.
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-list]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
                 let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [role='tablist']")""")
 
                 // Every terminal the session has is reachable here, whether or not the strip
@@ -3419,7 +3729,7 @@ let editorTests =
                 // for when the pressed control leaves the document.
                 do! awaitU (page.FocusAsync "#shell [data-terminal-list-row='term-live']")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector('#shell [data-terminal-list]')""")
+                let! _ = await (page.WaitForFunctionAsync """!document.querySelector('#shell [data-content-list]')""")
                 let! _ =
                     await (page.WaitForFunctionAsync
                         """document.querySelector('#shell [data-pane-panel]')?.getAttribute('data-pane-panel') === 'terminal:term-live'""")
@@ -4165,7 +4475,7 @@ let mountedTests =
             "the session is gone, the page is still there, and so is what its terminal printed"
             (fun page ->
                 async {
-                    do! awaitU (page.Locator("[data-terminal-toggle='show']").First.ClickAsync ())
+                    do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                     do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
                     let composerInput = "[data-terminal-input^='term-draft:']:not([readonly])"
                     let! _ = await (page.WaitForSelectorAsync composerInput)
@@ -4180,10 +4490,78 @@ let mountedTests =
                     // The column starts shut on a fresh load, so this also says the replayed
                     // records are there to be shown BEFORE anyone opens it — which is what a
                     // store read before the network buys.
-                    do! awaitU (page.Locator("[data-terminal-toggle='show']").First.ClickAsync ())
+                    do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                     do! waitFor "the terminal output to come back offline" page terminalPrinted
                 }))
     ]
+
+// --- Spawning a piece of a deployment ----------------------------------------------------
+
+/// A child process of the deployment, kept with what it has said so the failure report can
+/// say which of three processes went wrong, in its own words.
+type private Deployed =
+    { Label: string
+      Process: Process
+      /// The origin its readiness line carried, where it carried one. A piece told `--port 0`
+      /// states its address there and nowhere else, so this is the only thing that knows it.
+      Origin: string option
+      Said: Text.StringBuilder }
+    /// Where it came up, for a caller that has to address it. A piece whose readiness line
+    /// named no address cannot be addressed, and says so rather than answering with a guess.
+    member this.At (path: string) : string =
+        match this.Origin with
+        | Some origin -> origin + path
+        | None -> failwithf "%s never said where it came up" this.Label
+    /// The port it came up on, for the rare assertion that is about the port itself.
+    member this.Port : int = Uri(this.At "/").Port
+    member this.Stop () =
+        try if not this.Process.HasExited then this.Process.Kill true with _ -> ()
+
+/// Spawn one piece of the deployment and wait for the line that says it is up. A piece that
+/// dies on its arguments fails here, naming itself, rather than as a wait downstream that
+/// never settles.
+///
+/// The URL in that line, where there is one, is the address it really came up on — which is
+/// what lets a piece be told `--port 0` and asked afterwards rather than assigned a number.
+let private deploy
+    (label: string)
+    (command: string)
+    (args: string list)
+    (env: (string * string) list)
+    (ready: string -> bool)
+    : Deployed =
+    let psi = ProcessStartInfo command
+    args |> List.iter psi.ArgumentList.Add
+    env |> List.iter (fun (name, value) -> psi.EnvironmentVariables.[name] <- value)
+    psi.UseShellExecute <- false
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    let p = new Process (StartInfo = psi)
+    let said = Text.StringBuilder ()
+    let up = TaskCompletionSource<bool> ()
+    // A `ref` rather than a `let mutable`, because `heard` is a closure and F# will not let one
+    // capture a mutable local.
+    let origin = ref None
+    let heard (line: string) =
+        if line <> null then
+            lock said (fun () -> said.AppendLine line |> ignore)
+            if ready line then
+                origin.Value <- urlIn line |> Option.map (fun url -> url.TrimEnd '/')
+                up.TrySetResult true |> ignore
+    p.OutputDataReceived.Add (fun e -> heard e.Data)
+    p.ErrorDataReceived.Add (fun e -> heard e.Data)
+    p.EnableRaisingEvents <- true
+    p.Exited.Add (fun _ -> up.TrySetResult false |> ignore)
+    p.Start () |> ignore
+    p.BeginOutputReadLine ()
+    p.BeginErrorReadLine ()
+    if not (up.Task.Wait 60000) || not up.Task.Result then
+        try if not p.HasExited then p.Kill true with _ -> ()
+        failwithf "%s never came up; it said:\n%s" label (string said)
+    // Read AFTER the wait: the readiness line is where the address is stated, so there is
+    // nothing to read until it has arrived.
+    { Label = label; Process = p; Origin = origin.Value; Said = said }
+
 
 // --- Creating a session behind a front door (browser) -------------------------------------
 //
@@ -4326,30 +4704,21 @@ let mutable private frontedHost : Process = null
 /// where to forward that before the Manager has said anything at all. (It was tried the other
 /// way, and the session exited on a 502 from a door forwarding to port 0.)
 let private startFrontedHost (publicOrigin: string) (managerPort: int) : unit =
-    let psi = ProcessStartInfo "node"
-    psi.ArgumentList.Add "app/out/Main.js"
-    psi.ArgumentList.Add "--auth"
-    psi.ArgumentList.Add "localhost"
-    psi.ArgumentList.Add "--port"
-    psi.ArgumentList.Add (string managerPort)
-    psi.ArgumentList.Add "--default-session"
-    psi.ArgumentList.Add FRONT_SESSION
-    psi.ArgumentList.Add "--data-dir"
-    psi.ArgumentList.Add frontDataDir
-    psi.UseShellExecute <- false
-    psi.RedirectStandardOutput <- true
-    psi.EnvironmentVariables.["YESSION_MANAGER_URL"] <- publicOrigin
-    psi.EnvironmentVariables.["YESSION_SESSION_URL"] <- publicOrigin + "/s/{id}"
-    let p = new Process (StartInfo = psi)
-    let ready = TaskCompletionSource<bool> ()
     // The management UI's line, not the session's: this case drives the Manager, and that line
     // is the last thing a completed boot prints.
-    p.OutputDataReceived.Add (fun e ->
-        if e.Data <> null && e.Data.Contains "management UI at" then ready.TrySetResult true |> ignore)
-    p.Start () |> ignore
-    p.BeginOutputReadLine ()
-    frontedHost <- p
-    if not (ready.Task.Wait 60000) then failwith "fronted host never reported readiness"
+    let host =
+        deploy
+            "fronted host"
+            "node"
+            [ "app/out/Main.js"
+              "--auth"; "localhost"
+              "--port"; string managerPort
+              "--default-session"; FRONT_SESSION
+              "--data-dir"; frontDataDir ]
+            [ "YESSION_MANAGER_URL", publicOrigin
+              "YESSION_SESSION_URL", publicOrigin + "/s/{id}" ]
+            (fun line -> line.Contains "management UI at")
+    frontedHost <- host.Process
 
 let frontDoorTests =
     testList "Creating a session behind a front door (browser)" [
@@ -4450,70 +4819,6 @@ let private frontedMapDir = frontedDataDir + "/proxy"
 let private FRONTED_LOGIN = "alice@example.com"
 let private FRONTED_NAME = "Alice Example"
 
-/// A child process of the deployment, kept with what it has said so the failure report can
-/// say which of three processes went wrong, in its own words.
-type private Deployed =
-    { Label: string
-      Process: Process
-      /// The origin its readiness line carried, where it carried one. A piece told `--port 0`
-      /// states its address there and nowhere else, so this is the only thing that knows it.
-      Origin: string option
-      Said: Text.StringBuilder }
-    /// Where it came up, for a caller that has to address it. A piece whose readiness line
-    /// named no address cannot be addressed, and says so rather than answering with a guess.
-    member this.At (path: string) : string =
-        match this.Origin with
-        | Some origin -> origin + path
-        | None -> failwithf "%s never said where it came up" this.Label
-    /// The port it came up on, for the rare assertion that is about the port itself.
-    member this.Port : int = Uri(this.At "/").Port
-    member this.Stop () =
-        try if not this.Process.HasExited then this.Process.Kill true with _ -> ()
-
-/// Spawn one piece of the deployment and wait for the line that says it is up. A piece that
-/// dies on its arguments fails here, naming itself, rather than as a wait downstream that
-/// never settles.
-///
-/// The URL in that line, where there is one, is the address it really came up on — which is
-/// what lets a piece be told `--port 0` and asked afterwards rather than assigned a number.
-let private deploy
-    (label: string)
-    (command: string)
-    (args: string list)
-    (env: (string * string) list)
-    (ready: string -> bool)
-    : Deployed =
-    let psi = ProcessStartInfo command
-    args |> List.iter psi.ArgumentList.Add
-    env |> List.iter (fun (name, value) -> psi.EnvironmentVariables.[name] <- value)
-    psi.UseShellExecute <- false
-    psi.RedirectStandardOutput <- true
-    psi.RedirectStandardError <- true
-    let p = new Process (StartInfo = psi)
-    let said = Text.StringBuilder ()
-    let up = TaskCompletionSource<bool> ()
-    // A `ref` rather than a `let mutable`, because `heard` is a closure and F# will not let one
-    // capture a mutable local.
-    let origin = ref None
-    let heard (line: string) =
-        if line <> null then
-            lock said (fun () -> said.AppendLine line |> ignore)
-            if ready line then
-                origin.Value <- urlIn line |> Option.map (fun url -> url.TrimEnd '/')
-                up.TrySetResult true |> ignore
-    p.OutputDataReceived.Add (fun e -> heard e.Data)
-    p.ErrorDataReceived.Add (fun e -> heard e.Data)
-    p.EnableRaisingEvents <- true
-    p.Exited.Add (fun _ -> up.TrySetResult false |> ignore)
-    p.Start () |> ignore
-    p.BeginOutputReadLine ()
-    p.BeginErrorReadLine ()
-    if not (up.Task.Wait 60000) || not up.Task.Result then
-        try if not p.HasExited then p.Kill true with _ -> ()
-        failwithf "%s never came up; it said:\n%s" label (string said)
-    // Read AFTER the wait: the readiness line is where the address is stated, so there is
-    // nothing to read until it has arrived.
-    { Label = label; Process = p; Origin = origin.Value; Said = said }
 
 /// The deployment, and the one address a person on the tailnet ever sees of it.
 type private Fronted =

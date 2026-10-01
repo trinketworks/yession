@@ -50,6 +50,13 @@ type CommandServices =
       /// the view of the session's own sandboxes, where their answers are acted on,
       /// and a repo's sandbox is a container with a view of its own.
       WorkCheckout : RepoRef -> string option -> CheckoutViews
+      /// What the checkouts declare their sandboxes to be, as the last fold read it (Plan 27);
+      /// empty in a session with nothing to fold.
+      ///
+      /// Needed because a repo's sandbox is its FILE's to describe, and the tool that names
+      /// one carries a declaration with nothing in it — so a start given the caller's
+      /// declaration verbatim came up, or refused, as something the repo never wrote.
+      DeclaredSandboxes : unit -> (SandboxRef * SandboxDecl) list
       /// The terminal manager, which owns the shell profile (Plan 25).
       Terminals : unit -> SessionTerminals.SessionTerminals
       /// The files inside each sandbox, for the two commands that change one.
@@ -113,8 +120,8 @@ let private andRefold
     : Async<Result<'a, string>> =
     async {
         match! outcome with
-        // Whoever the verb ran on the authority of. A `forward:` in a file the fold picks up
-        // resolves for THEM, by the same Plan 08 precedence the verb itself used.
+        // Whoever the verb ran on the authority of: a sandbox the fold starts from a file it
+        // picks up is started on THEIR authority, as the verb itself was.
         | Ok (answer, recordedAs) ->
             do! services.Refold (FoldCause.Changed (repo, recordedAs)) (Authority.credential invocation.Authority)
             return Ok answer
@@ -171,13 +178,13 @@ let startWorkSandboxCall (authority: Authority) (causedBy: Cause option) (sandbo
             [ SandboxRef.render sandbox; SandboxDecl.encode decl ]
             @ (causedBy |> Option.map (Codec.toString Codec.cause) |> Option.toList))
       Summary =
-        match ConnectionName.normalise decl.Forward with
+        match decl.Uses with
         | [] -> sprintf "start_work_sandbox %s" (SandboxRef.render sandbox)
-        | names ->
+        | uses ->
             sprintf
-                "start_work_sandbox %s forwarding %s"
+                "start_work_sandbox %s using %s"
                 (SandboxRef.render sandbox)
-                (names |> List.map ConnectionName.value |> String.concat ", ")
+                (uses |> List.map ResourceName.value |> String.concat ", ")
       Authority = authority }
 
 /// `startWorkSandboxCall`'s arguments read back: the sandbox, its declaration, and what caused
@@ -579,9 +586,8 @@ let dispatch (services: CommandServices) : CommandDispatch =
                                             }
                                         | _ -> async { return "" }
                                     let forwarding =
-                                        match entry.Request.Forward with
-                                        | [] -> "nothing forwarded into it"
-                                        | names -> "forwarding " + (names |> List.map ConnectionName.value |> String.concat ", ")
+                                        if Map.isEmpty entry.Forwarded then "nothing forwarded into it"
+                                        else "forwarding " + WorkSandboxes.ForwardedRoutes.describe entry.Forwarded
                                     return
                                         Ok (
                                             sprintf
@@ -966,7 +972,81 @@ let private repoCapabilitiesFor
 
 /// The turn's sandbox commands (Plan 15, stage 2) and the shell profile (Plan 25), bound to
 /// the acting party.
-let private sandboxCapabilitiesFor (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
+/// A repo's sandbox is its file's to describe, so a start that names one starts it as the
+/// file says, whatever the caller's declaration held.
+///
+/// Resolved where the gated call is MINTED, not where it is carried out, so what the gate
+/// records and shows to whoever approves it is what will actually run.
+///
+/// A name no file declares is refused here, naming what that repo does declare — the fold
+/// would otherwise start it from an empty declaration and refuse it further down for having
+/// no container, which reads as a complaint about a `yession.yaml` that declares one.
+///
+/// It also settles WHICH sandbox a bare name means, which is the same question one step
+/// earlier. `dev` is what an agent writes after reading "started sandbox octo/hello:dev",
+/// and when this session holds no sandbox of its own by that name and exactly one checkout
+/// declares one, there is nothing else it could mean — `WorkSandboxes.resolve` already reads
+/// it that way for every verb that reaches a RUNNING sandbox. Starting was the one door that
+/// did not: a bare `dev` whose repo sandbox was stopped fell through to a new session-owned
+/// sandbox with none of the file's container, silently, under a name that says it is the
+/// repo's. Two checkouts declaring `dev` is ambiguous and refuses, naming both.
+///
+/// Answers the REF as well as the declaration, because the two are one decision: a name that
+/// resolved to a repo's sandbox must be started as that repo's, and the gated call has to
+/// carry the resolved name or the approval shows one sandbox and the start makes another.
+let private startAs
+    (services: CommandServices)
+    (name: SandboxRef)
+    (asked: SandboxDecl)
+    : Result<SandboxRef * SandboxDecl, string> =
+    let declared =
+        services.DeclaredSandboxes ()
+        |> List.filter (fun (ref, _) -> SandboxRef.scope ref <> SessionOwned)
+    let asDeclared (ref: SandboxRef) (decl: SandboxDecl) = Ok (ref, decl)
+    match SandboxRef.scope name with
+    | SessionOwned ->
+        // The session's own name wins when it has one: `start_work_sandbox "dev"` in a
+        // session that already runs a `dev` is that sandbox being re-asked for, and
+        // redirecting it at a repo's would answer about a sandbox nobody named.
+        let held = (services.Sandboxes ()).Listed ()
+        if held |> List.exists (fun entry -> entry.Ref = name) then Ok (name, asked)
+        else
+            match declared |> List.filter (fun (ref, _) -> SandboxRef.name ref = SandboxRef.name name) with
+            | [ (ref, decl) ] -> asDeclared ref decl
+            | [] -> Ok (name, asked)
+            | ambiguous ->
+                Error (
+                    sprintf
+                        "'%s' is ambiguous — %s each declare a sandbox by that name; name the one you mean in full"
+                        (SandboxName.value (SandboxRef.name name))
+                        (ambiguous |> List.map (fst >> SandboxRef.render) |> String.concat ", "))
+    | RepoOwned repo ->
+        match declared |> List.tryFind (fun (ref, _) -> ref = name) with
+        | Some (ref, decl) -> asDeclared ref decl
+        | None ->
+            let siblings =
+                declared
+                |> List.filter (fun (ref, _) -> SandboxRef.scope ref = RepoOwned repo)
+                |> List.map (fst >> SandboxRef.render)
+            match siblings with
+            | [] ->
+                Error (
+                    sprintf
+                        "%s declares no sandboxes — a repo's work sandbox comes from its yession.yaml, and `repo_config` says what this session made of that file"
+                        (RepoRef.value repo))
+            | names ->
+                Error (
+                    sprintf
+                        "%s declares no sandbox named '%s' — it declares %s"
+                        (RepoRef.value repo)
+                        (SandboxName.value (SandboxRef.name name))
+                        (String.concat ", " names))
+
+let private sandboxCapabilitiesFor
+    (services: CommandServices)
+    (turnActor: Principal)
+    (capabilities: AgentCapabilities)
+    : AgentCapabilities =
     let gated (tool: string) (args: string list) (summary: string) =
         capabilities.RunGated
             { Tool = tool
@@ -977,7 +1057,11 @@ let private sandboxCapabilitiesFor (turnActor: Principal) (capabilities: AgentCa
         Sandboxes =
           { capabilities.Sandboxes with
               Start =
-                fun name decl -> capabilities.RunGated (startWorkSandboxCall (Authority.agentFor turnActor) None name decl)
+                fun name decl ->
+                  match startAs services name decl with
+                  | Error e -> async { return Error e }
+                  | Ok (name, decl) ->
+                      capabilities.RunGated (startWorkSandboxCall (Authority.agentFor turnActor) None name decl)
               Stop =
                 fun name ->
                   gated
@@ -1045,6 +1129,6 @@ let private artifactCapabilitiesFor (turnActor: Principal) (capabilities: AgentC
 let bindFor (services: CommandServices) (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
     capabilities
     |> repoCapabilitiesFor services turnActor
-    |> sandboxCapabilitiesFor turnActor
+    |> sandboxCapabilitiesFor services turnActor
     |> fileCapabilitiesFor turnActor
     |> artifactCapabilitiesFor turnActor

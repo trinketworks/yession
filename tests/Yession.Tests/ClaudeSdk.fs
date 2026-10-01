@@ -24,10 +24,11 @@ open Yession.Host
 
 /// Whether a JS object HAS a key, which is the question `jsOptions` exists to answer: an
 /// option nobody set must be absent, not present and empty.
-let private hasKey (name: string) (value: obj) : bool =
-    JS.Constructors.Object.keys value |> Seq.contains name
+let private hasKey (name: string) (options: Options) : bool =
+    JS.Constructors.Object.keys options |> Seq.contains name
 
-let private noArguments : obj = createObj []
+/// The raw shape of a tool that takes no arguments.
+let private noArguments : Fable.Zod.RawShape = Fable.Zod.rawShape []
 
 /// A tool that answers the same way every time. The handler is what proves the SDK's
 /// two-argument call reaches an F# function at all.
@@ -56,13 +57,26 @@ let private constructionTests =
             async {
                 // A curried F# lambda would answer this call with a FUNCTION, and the SDK
                 // would await something that is not a promise.
-                let! answer = (ping ()).handler.Invoke (noArguments, noArguments) |> Interop.awaitPromise
+                // `extra` is the MCP request context, which nothing reads.
+                let! answer = (ping ()).handler.Invoke (ToolInput.ofJson "{}", null) |> Interop.awaitPromise
                 Expect.equal answer.content.[0].text "pong" "the handler ran and its text came back"
             }
 
         testCase "the server carries the namespace it was named with" <| fun () ->
             let server = createSdkMcpServer "yession" "1.0.0" [| ping () |]
             Expect.equal server.name "yession" "the namespace the model sees in mcp__<ns>__<tool>"
+    ]
+
+let private inputTests =
+    testList "what a tool is called with" [
+        testCase "the arguments read back as the JSON they arrived as" <| fun () ->
+            let text = """{"cwd":"repos/octocat/hello-world","depth":3}"""
+            Expect.equal (ToolInput.json (ToolInput.ofJson text)) (Some text) "key order and all"
+
+        testCase "arguments that are not an object still read back as what they are" <| fun () ->
+            // Refusing a non-object is the adapter's decision, and it can only make it over
+            // the text this hands over.
+            Expect.equal (ToolInput.json (ToolInput.ofJson "[1,2]")) (Some "[1,2]") "an array is an array"
     ]
 
 let private answerTests =
@@ -104,13 +118,20 @@ let private optionTests =
 
 // --- narrowing what the query yields ------------------------------------------------------
 
-let private messageOf (tag: string) : Message =
-    createObj [ "type" ==> tag ] |> unbox
+let private messageOf (tag: string) : Message = jsOptions<Message> (fun m -> m.``type`` <- tag)
 
-let private deltaOf (delta: obj) : Delta = unbox delta
+/// A delta carrying the tag and whichever of its fields the case sets.
+let private deltaOf (tag: string) (fill: Delta -> unit) : Delta =
+    jsOptions<Delta> (fun d ->
+        d.``type`` <- tag
+        fill d)
 
-let private streamEventOf (tag: string) (delta: obj) : StreamEvent =
-    createObj [ "type" ==> tag; "delta" ==> delta ] |> unbox
+let private streamEventOf (tag: string) (delta: Delta option) : StreamEvent =
+    jsOptions<StreamEvent> (fun e ->
+        e.``type`` <- tag
+        match delta with
+        | Some delta -> e.delta <- delta
+        | None -> ())
 
 let private classificationTests =
     testList "narrowing a message off the query" [
@@ -132,23 +153,23 @@ let private classificationTests =
             | other -> failwithf "expected an unread message, got %A" other
 
         testCase "the model beginning a message classifies as a message start" <| fun () ->
-            match StreamEvent.classify (streamEventOf "message_start" null) with
+            match StreamEvent.classify (streamEventOf "message_start" None) with
             | StreamEventCase.MessageStart -> ()
             | other -> failwithf "expected a message start, got %A" other
 
         testCase "a content block delta classifies with its delta" <| fun () ->
-            let delta = createObj [ "type" ==> "text_delta"; "text" ==> "hi" ]
-            match StreamEvent.classify (streamEventOf "content_block_delta" delta) with
+            let delta = deltaOf "text_delta" (fun d -> d.text <- "hi")
+            match StreamEvent.classify (streamEventOf "content_block_delta" (Some delta)) with
             | StreamEventCase.ContentBlockDelta d -> Expect.equal d.text "hi" "the delta comes with it"
             | other -> failwithf "expected a content block delta, got %A" other
 
         testCase "the end of a content block classifies as a stop" <| fun () ->
-            match StreamEvent.classify (streamEventOf "content_block_stop" null) with
+            match StreamEvent.classify (streamEventOf "content_block_stop" None) with
             | StreamEventCase.ContentBlockStop -> ()
             | other -> failwithf "expected a content block stop, got %A" other
 
         testCase "a text delta classifies as text" <| fun () ->
-            match Delta.classify (deltaOf (createObj [ "type" ==> "text_delta"; "text" ==> "pong" ])) with
+            match Delta.classify (deltaOf "text_delta" (fun d -> d.text <- "pong")) with
             | DeltaCase.Text text -> Expect.equal text "pong" "the text the model said"
             | other -> failwithf "expected text, got %A" other
 
@@ -156,12 +177,12 @@ let private classificationTests =
             // Reasoning arrives on the same stream under its own delta. Told apart by the
             // tag, never by which field happens to hold a string — that test is what let a
             // thinking delta look exactly like an event nobody cared about.
-            match Delta.classify (deltaOf (createObj [ "type" ==> "thinking_delta"; "thinking" ==> "hmm" ])) with
+            match Delta.classify (deltaOf "thinking_delta" (fun d -> d.thinking <- "hmm")) with
             | DeltaCase.Thinking thought -> Expect.equal thought "hmm" "what was thought"
             | other -> failwithf "expected thinking, got %A" other
 
         testCase "a delta kind this repository does not read keeps its tag" <| fun () ->
-            match Delta.classify (deltaOf (createObj [ "type" ==> "signature_delta" ])) with
+            match Delta.classify (deltaOf "signature_delta" ignore) with
             | DeltaCase.Other tag -> Expect.equal tag "signature_delta" "the tag survives"
             | other -> failwithf "expected an unread delta, got %A" other
     ]
@@ -169,6 +190,7 @@ let private classificationTests =
 let tests =
     testList "Claude Agent SDK binding" [
         constructionTests
+        inputTests
         answerTests
         optionTests
         classificationTests

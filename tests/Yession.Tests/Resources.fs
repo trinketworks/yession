@@ -17,6 +17,7 @@ module Yession.Tests.Resources
 // no representation in `ResourceDecl`, so a case asserting it could only prove that the test
 // file compiles.
 
+open System
 open Fable.Pyxpecto
 open Hedgehog
 open Yession.Domain
@@ -53,12 +54,13 @@ let private leafShapesFor (i: int) (mode: ResourceMountMode) : ResourceLeaf list
         [ Mount { From = sprintf "/from/%d" i; At = sprintf "/at/%d" i; Mode = mode }
           Socket (sprintf "/run/%d.sock" i)
           Endpoint (sprintf "h%d.example.com" i)
-          Variable (sprintf "V%d" i, sprintf "value-%d" i)
+          Variable (sprintf "V%d" i, VariableValue.Text (sprintf "value-%d" i))
           Volume (sprintf "vol%d" i, sprintf "/vol/%d" i)
-          Exec (sprintf "/bin/tool%d" i) ]
+          Exec (sprintf "/bin/tool%d" i)
+          Connection (sprintf "conn%d" i, ConnectionRoute.Git) ]
     for shape in shapes do
         match shape with
-        | Mount _ | Socket _ | Endpoint _ | Variable _ | Volume _ | Exec _ -> ()
+        | Mount _ | Socket _ | Endpoint _ | Variable _ | Volume _ | Exec _ | Connection _ -> ()
     shapes
 
 /// Every mount mode, proved total the same way.
@@ -362,8 +364,8 @@ let tests =
                 let b = ResourceName.create "cc-gcc" |> expect
                 let both = ResourceName.create "cc-both" |> expect
                 let clashing =
-                    [ a, ResourceDecl.Leaf ([ Variable ("CC", "clang") ], Sensitivity.Ordinary)
-                      b, ResourceDecl.Leaf ([ Variable ("CC", "gcc") ], Sensitivity.Ordinary)
+                    [ a, ResourceDecl.Leaf ([ Variable ("CC", VariableValue.Text "clang") ], Sensitivity.Ordinary)
+                      b, ResourceDecl.Leaf ([ Variable ("CC", VariableValue.Text "gcc") ], Sensitivity.Ordinary)
                       both, ResourceDecl.Composition [ a; b ] ]
                 match ResourceProfile.load (declarations @ clashing) with
                 | Ok _ -> failwith "expected a refusal"
@@ -489,6 +491,52 @@ let tests =
                 Expect.equal name "yession-nix" "docker's name for it"
                 Expect.equal at "/nix" "and where the operator says it belongs"
             | other -> failwithf "expected one volume, got %A" other
+
+        // Maintenance is a fact about the volume, not the grant: what a sandbox is told it
+        // holds does not change, and the pin is looked up by the volume's name.
+        testCase "a volume's maintain decodes onto the profile by volume name, leaving the leaf as it was" <| fun () ->
+            let profile =
+                OperatorProfile.parse
+                    """{ "version": 1, "resources": { "warm-store": { "volume": { "name": "yession-nix", "at": "/nix", "maintain": { "pin": "/nix/var/yession/pin", "every": "10m" } } } } }"""
+                |> expect
+            Expect.equal
+                (Map.tryFind "yession-nix" profile.Maintenance)
+                (Some { Pin = "/nix/var/yession/pin"; Every = TimeSpan.FromMinutes 10.0 })
+                "the pin and its interval, under docker's name for the volume"
+            match ResourceProfile.resolve profile.Resources [ ResourceName.create "warm-store" |> expect ] |> expect |> ResourceClosure.leaves |> Set.toList with
+            | [ Volume (name, at) ] -> Expect.equal (name, at) ("yession-nix", "/nix") "the grant is the plain volume"
+            | other -> failwithf "expected one volume, got %A" other
+
+        testCase "a volume with no maintain is not maintained" <| fun () ->
+            let profile =
+                OperatorProfile.parse """{ "version": 1, "resources": { "v": { "volume": { "name": "x", "at": "/x" } } } }"""
+                |> expect
+            Expect.isEmpty profile.Maintenance "nothing is run in a sandbox the operator did not ask for"
+
+        testCase "maintain refuses what it cannot run: a relative pin, a unitless or zero interval, an unknown key" <| fun () ->
+            let withMaintain (m: string) =
+                OperatorProfile.parse (sprintf """{ "version": 1, "resources": { "v": { "volume": { "name": "x", "at": "/x", "maintain": %s } } } }""" m)
+            Expect.isError (withMaintain """{ "pin": "pin.sh", "every": "10m" }""") "relative to whatever the container's working directory is"
+            Expect.isError (withMaintain """{ "pin": "/p", "every": "10" }""") "ten what: a unit is always written"
+            Expect.isError (withMaintain """{ "pin": "/p", "every": "0m" }""") "a pin run continuously"
+            Expect.isError (withMaintain """{ "pin": "/p", "every": "1d" }""") "s, m or h"
+            Expect.isError (withMaintain """{ "pin": "/p" }""") "an interval is required"
+            Expect.isError (withMaintain """{ "pin": "/p", "every": "1h", "keep": "7d" }""") "retention is the sweep's, not the product's"
+            Expect.isOk (withMaintain """{ "pin": "/p", "every": "90s" }""") "seconds are a unit"
+
+        testCase "one volume maintained two ways is refused; the same way twice is one maintenance" <| fun () ->
+            let two (a: string) (b: string) =
+                OperatorProfile.parse (
+                    sprintf
+                        """{ "version": 1, "resources": { "a": { "volume": { "name": "x", "at": "/x", "maintain": %s } }, "b": { "volume": { "name": "x", "at": "/x", "maintain": %s } } } }"""
+                        a b)
+            Expect.isError
+                (two """{ "pin": "/p", "every": "10m" }""" """{ "pin": "/q", "every": "10m" }""")
+                "which pin runs would depend on which resource a repo selected"
+            Expect.equal
+                (two """{ "pin": "/p", "every": "10m" }""" """{ "pin": "/p", "every": "10m" }""" |> Result.map (fun p -> Map.count p.Maintenance))
+                (Ok 1)
+                "agreeing declarations are one"
 
         testCase "a volume with no target is refused" <| fun () ->
             Expect.isError
@@ -701,7 +749,7 @@ let tests =
                    Socket "/run/docker.sock"
                    Endpoint "registry.npmjs.org"
                    Volume ("yession-nix", "/nix")
-                   Variable ("CI", "1")
+                   Variable ("CI", VariableValue.Text "1")
                    Exec "/usr/bin/git" ]
                  |> List.map ResourceLeaf.describe)
                 [ "path:/nix:ro"
@@ -720,10 +768,10 @@ let tests =
         // to read past them, which is how the one that means something gets missed.
         testCase "a value that could be mistaken for the end of a grant is quoted" <| fun () ->
             Expect.equal
-                ([ Variable ("A", "1")
-                   Variable ("B", "a b")
-                   Variable ("C", "x;y")
-                   Variable ("D", "say \"hi\"") ]
+                ([ Variable ("A", VariableValue.Text "1")
+                   Variable ("B", VariableValue.Text "a b")
+                   Variable ("C", VariableValue.Text "x;y")
+                   Variable ("D", VariableValue.Text "say \"hi\"") ]
                  |> List.map ResourceLeaf.describe)
                 [ "env:A=1"; "env:B=\"a b\""; "env:C=\"x;y\""; "env:D=\"say \\\"hi\\\"\"" ]
                 "quoted exactly where it is ambiguous"
@@ -739,7 +787,7 @@ let tests =
                   Socket "/run/docker.sock"
                   Endpoint "registry.npmjs.org"
                   Volume ("yession-nix", "/nix")
-                  Variable ("CI", "1")
+                  Variable ("CI", VariableValue.Text "1")
                   Exec "/usr/bin/git" ] do
                 let written = ResourceLeaf.describe leaf
                 let kind = written.Substring (0, written.IndexOf ':' + 1)
@@ -817,7 +865,8 @@ let tests =
                 for leaf in differing do
                     match leaf with
                     | Variable _
-                    | Exec _ -> failwithf "%A cannot depend on the host" leaf
+                    | Exec _
+                    | Connection _ -> failwithf "%A cannot depend on the host" leaf
                     | Mount mount ->
                         Expect.equal mount.Mode ResourceMountMode.Overlay
                             "only an overlay mount can, and only because no backend has a union mount"

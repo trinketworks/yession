@@ -52,10 +52,16 @@ let all =
         // Finding a repo is an HTTP conversation on both sides — the provider's listing and
         // the session's own gated route — with no in-memory stand-in for what the cases turn on.
         Tag.needs "GitHubRepos over HTTP" [ Tag.Ports ] (fun () -> GitHubRepos.portsTests)
+        // The same conversations against GitHub itself: what no stub can say is that the
+        // provider still answers the way the stubs were written to.
+        Tag.needs "GitHub, for real" [ Tag.LiveGitHub ] (fun () -> LiveGitHub.tests)
         // What each provider request says on the wire, and what this host makes of the
         // answer. Cheap because none of it needs a provider: these are the decisions taken
         // BEFORE a conversation, and they used to be unreachable inside `[<Emit>]` strings.
         Tag.needs "Requests" [] (fun () -> Requests.tests)
+        // The one decision above that only a socket can settle: that a request follows the
+        // proxy the environment names.
+        Tag.needs "Requests over a socket" [ Tag.Ports ] (fun () -> Requests.portsTests)
         Tag.needs "Tools" [] (fun () -> Tools.tests)
         // The layers above join here: what a model calls, and what it is told back.
         Tag.needs "Tool calls" [] (fun () -> ToolCalls.tests)
@@ -87,6 +93,7 @@ let all =
         Tag.needs "Keystrokes" [] (fun () -> Keystrokes.tests)
         Tag.needs "TabStrips" [] (fun () -> TabStrips.tests)
         Tag.needs "Timeline" [] (fun () -> Timeline.tests)
+        Tag.needs "Timers" [] (fun () -> Timers.tests)
         // What the client makes of a frame needs no socket; carrying one does.
         Tag.needs "Foreign terminal attach, reading the wire" [] (fun () -> Attach.tests)
         // The upgrade IS the thing being tested, and there is no in-memory stand-in for it.
@@ -116,10 +123,14 @@ let all =
         Tag.needs "The declared dev container" [ Tag.Docker ] (fun () -> DevContainer.tests)
         Tag.needs "The dev container, self-hosting" [ Tag.Docker; Tag.Dogfood ] (fun () -> DevContainer.dogfood)
         Tag.needs "Srt integration" [ Tag.Srt ] (fun () -> SrtIntegration.tests)
+        Tag.needs "Srt sandboxes side by side" [ Tag.Srt; Tag.Ports ] (fun () -> SrtIntegration.siblings)
         Tag.needs "Git integration" [] (fun () -> GitIntegration.tests)
         // The route a sandbox's git takes to github.com without holding a credential. Its
         // git-driven half asks for `Ports` inside.
         Tag.needs "The git gateway" [] (fun () -> GitGateway.tests)
+        // The same idea for any HTTPS client: a stand-in in the sandbox, the credential swapped
+        // in on the way to the provider. Its client-driven half asks for `Ports` inside.
+        Tag.needs "The credential proxy" [] (fun () -> CredentialProxy.tests)
         Tag.needs "Pty integration" [ Tag.Pty ] (fun () -> PtyIntegration.tests)
         Tag.needs "Phase3" [] (fun () -> Phase3.tests)
         Tag.needs "EventsHttp" [] (fun () -> EventsHttp.tests)
@@ -129,6 +140,7 @@ let all =
         Tag.needs "Oidc" [] (fun () -> Oidc.tests)
         Tag.needs "Phase4" [] (fun () -> Phase4.tests)
         Tag.needs "the resources algebra" [] (fun () -> Resources.tests)
+        Tag.needs "Volume leases" [] (fun () -> VolumeLeases.tests)
         Tag.needs "seeded files" [] (fun () -> SeededFiles.tests)
         Tag.needs "Properties" [] (fun () -> Properties.tests)
         Tag.needs "Acceptance" [] (fun () -> Acceptance.tests)
@@ -179,4 +191,4 @@ let all =
     ]
 
 [<EntryPoint>]
-let main argv = !! Pyxpecto.runTests [||] (Tag.narrowed all)
+let main argv = !! Pyxpecto.runTests [||] (Tag.narrowed all |> RunEnd.guarded)

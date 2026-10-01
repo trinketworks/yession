@@ -233,7 +233,14 @@ let private sendControl (socket: WebSocket) (json: string) =
     with _ ->
         ()
 
-let private toJson (value: obj) : string = JS.JSON.stringify value
+/// The two words this side ever says, as the text frames that say them. Encoded rather than
+/// stringified off an anonymous record, so the wire shape is written here and nowhere else.
+let private resizeFrame (cols: int) (rows: int) : string =
+    Encode.object [ "type", Encode.string "resize"; "cols", Encode.int cols; "rows", Encode.int rows ]
+    |> Encode.toString 0
+
+let private killFrame : string =
+    Encode.object [ "type", Encode.string "kill" ] |> Encode.toString 0
 
 /// Close on a deadline — never in this tick.
 ///
@@ -366,16 +373,16 @@ let attach : AttachTerminal =
                 // not declare `CanResize` is never told a size at all — inventing 80x24 for a
                 // serial line would be a fact nobody could check.
                 if ticket.Capabilities.CanResize then
-                    sendControl socket (toJson {| ``type`` = "resize"; cols = cols; rows = rows |})
+                    sendControl socket (resizeFrame cols rows)
 
                 return
                     Ok
                         { Write = writeBytes socket
                           Resize =
-                            fun c r -> sendControl socket (toJson {| ``type`` = "resize"; cols = c; rows = r |})
+                            fun c r -> sendControl socket (resizeFrame c r)
                           Kill =
                             fun () ->
-                                sendControl socket (toJson {| ``type`` = "kill" |})
+                                sendControl socket killFrame
                                 closeOnDeadline socket
                           // ^ asks, then holds the provider to a deadline. See the wire note
                           //   above: termination is the provider's frame, not our close.

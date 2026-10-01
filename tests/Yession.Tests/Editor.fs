@@ -181,7 +181,7 @@ let private cursorWireTests =
             let doc = Y.Doc.Create ()
             let text = doc.getText "title"
             text.insert (0, "hello world")
-            let encoded = ProseMirror.relPosFromTypeIndex (box text) 6 |> ProseMirror.encodeRel
+            let encoded = ProseMirror.relPosFromTypeIndex text 6 |> ProseMirror.encodeRel
             Expect.equal (ProseMirror.absIndexInDoc doc encoded) (Some 6) "the caret resolves back to its own index"
 
         testCase "a relative position follows its anchor past a concurrent insert before it" <| fun () ->
@@ -189,7 +189,7 @@ let private cursorWireTests =
             let text = doc.getText "title"
             text.insert (0, "world")
             // A caret at the end of "world" (index 5), captured as a relative position.
-            let encoded = ProseMirror.relPosFromTypeIndex (box text) 5 |> ProseMirror.encodeRel
+            let encoded = ProseMirror.relPosFromTypeIndex text 5 |> ProseMirror.encodeRel
             // Another edit inserts six characters ahead of the caret; a plain index would now be
             // wrong, but the relative position tracks the content it was anchored to.
             text.insert (0, "hello ")
@@ -199,7 +199,7 @@ let private cursorWireTests =
             let doc = Y.Doc.Create ()
             let text = doc.getText "title"
             text.insert (0, "abcdef")
-            let encoded = ProseMirror.relPosFromTypeIndex (box text) 3 |> ProseMirror.encodeRel
+            let encoded = ProseMirror.relPosFromTypeIndex text 3 |> ProseMirror.encodeRel
             // Re-encoding the decoded position yields the same bytes — the wire form is stable.
             let reEncoded = ProseMirror.decodeRel encoded |> ProseMirror.encodeRel
             Expect.equal reEncoded encoded "decode∘encode is identity on the wire form"

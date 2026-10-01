@@ -65,8 +65,8 @@ let private pendingMap (doc: Y.Doc) : Y.Map<obj> = doc.getMap "pending"
 /// A queue entry field, set to whatever a peer we do not control might have written.
 let private setQueuedFieldInDoc (doc: Y.Doc) (id: QueueId) (field: string) (value: string) : unit =
     (pendingMap doc).get (QueueId.value id)
-    |> Option.filter (isNull >> not)
-    |> Option.iter (fun entry -> (unbox<Y.Map<obj>> entry).set (field, box value) |> ignore)
+    |> Option.bind Y.Map.tryOf
+    |> Option.iter (fun entry -> entry.set (field, box value) |> ignore)
 
 /// A raw pending entry, written the way a build we no longer ship would have written one.
 /// No production writer has this shape any more — that is the point — so the only way to
@@ -98,15 +98,15 @@ let private allOpen (_: TerminalId) = true
 /// No lane cap in play. These cases are about the drain's other holds; the cap has its own.
 let private noLaneCap (_: TerminalId) = false
 let private planWith consumed busy isOpen entries =
-    TerminalQueueDrain.plan consumed busy Set.empty Set.empty isOpen (queueOf entries)
+    TerminalQueueDrain.plan consumed Set.empty busy Set.empty Set.empty isOpen (queueOf entries)
 
 /// The same plan with a lease in play (Plan 13, stage 2e).
 let private planLeased consumed busy leased isOpen entries =
-    TerminalQueueDrain.plan consumed busy leased Set.empty isOpen (queueOf entries)
+    TerminalQueueDrain.plan consumed Set.empty busy leased Set.empty isOpen (queueOf entries)
 
 /// ...and with the shell's marks gone (Plan 13, stage 2f).
 let private planLost consumed lost isOpen entries =
-    TerminalQueueDrain.plan consumed Set.empty Set.empty lost isOpen (queueOf entries)
+    TerminalQueueDrain.plan consumed Set.empty Set.empty Set.empty lost isOpen (queueOf entries)
 
 let private drainTests =
     testList "Terminal drain plan" [
@@ -154,6 +154,34 @@ let private drainTests =
                 "the closed terminal's unconsumed entries, in queue order"
             Expect.equal (plan.Ready |> List.map (fun (_, e) -> QueueId.value e.QueueId)) [ "q-b1" ] "the open one runs as before"
             Expect.equal (plan.Removals |> List.map QueueId.value) [ "q-a0" ] "and the consumed one is repaired, not refused"
+
+        // A drain takes an entry some while before its block is on the record — the shell may
+        // still be starting — and a drain re-entered in that window used to take the entry for
+        // a crash's leftover and remove it: its block then started a moment later, but the
+        // waiter had already read it gone, and answered that the command was withdrawn.
+        testCase "an entry a drain has taken is not removed before its block is on the record" <| fun () ->
+            let plan =
+                TerminalQueueDrain.plan
+                    Set.empty
+                    (Set.singleton "q-a1")
+                    (Set.singleton (TerminalId.value terminalA))
+                    Set.empty
+                    Set.empty
+                    allOpen
+                    (queueOf [ entry "a1" terminalA byAda 1.0 ])
+            Expect.isEmpty plan.Removals "it is still queued, as far as anybody waiting on it can tell"
+
+        testCase "an entry a drain has taken is not started a second time" <| fun () ->
+            let plan =
+                TerminalQueueDrain.plan
+                    Set.empty
+                    (Set.singleton "q-a1")
+                    Set.empty
+                    Set.empty
+                    Set.empty
+                    allOpen
+                    (queueOf [ entry "a1" terminalA byAda 1.0 ])
+            Expect.isEmpty plan.Ready "the taken one is not run again"
 
         testCase "an entry already named by a started block is repaired away, never re-run" <| fun () ->
             // The crash window: the block event was appended and the doc removal was not.
@@ -2559,7 +2587,7 @@ let private composing (model: ClientModel) : ClientModel =
 
 /// Send that slot and read back the entry it queued.
 let private sent (model: ClientModel) : PendingAct =
-    let after = ClientModel.update (SendTerminalDraftMsg (terminalA, ada)) model
+    let after = Support.step (SendTerminalDraftMsg (terminalA, ada)) model
     match after.Synced.Pending |> Map.toList |> List.map snd with
     | [ entry ] -> entry
     | other -> failwithf "expected one queued command, got %d" (List.length other)
@@ -2653,7 +2681,7 @@ let private viewportTests =
             // in the transcript for ever, so the width belongs to whoever asked for it.
             let model =
                 client ()
-                |> ClientModel.update (TerminalViewportMsg (terminalA, { Cols = 132; Rows = 43 }))
+                |> Support.step (TerminalViewportMsg (terminalA, { Cols = 132; Rows = 43 }))
                 |> composing
             Expect.equal (sent model).Size (Some { Cols = 132; Rows = 43 }) "the author's own viewport"
 
@@ -2669,8 +2697,8 @@ let private viewportTests =
             // unreadable for ever.
             let model =
                 client ()
-                |> ClientModel.update (TerminalViewportMsg (terminalA, { Cols = 132; Rows = 43 }))
-                |> ClientModel.update (TerminalViewportMsg (terminalA, { Cols = 0; Rows = 0 }))
+                |> Support.step (TerminalViewportMsg (terminalA, { Cols = 132; Rows = 43 }))
+                |> Support.step (TerminalViewportMsg (terminalA, { Cols = 0; Rows = 0 }))
                 |> composing
             Expect.equal (sent model).Size (Some { Cols = 132; Rows = 43 }) "the last real measurement stands"
 
@@ -2678,9 +2706,26 @@ let private viewportTests =
             // Two terminals are two panes, and the reader may have looked at only one of them.
             let model =
                 client ()
-                |> ClientModel.update (TerminalViewportMsg (terminalB, { Cols = 132; Rows = 43 }))
+                |> Support.step (TerminalViewportMsg (terminalB, { Cols = 132; Rows = 43 }))
                 |> composing
             Expect.isNone (sent model).Size "terminal B's pane says nothing about terminal A's"
+    ]
+
+let private leaseRequestTests =
+    let client () = ClientModel.init { PeerId = ada; DisplayName = "ada" }
+
+    testList "Asking the session about a terminal's lease" [
+        testCase "taking a terminal asks the session for its lease" <| fun () ->
+            let _, effects = ClientModel.update (TakeTerminalMsg terminalA) (client ())
+            Expect.equal effects [ ClientEffect.TakeTerminal terminalA ] "one request, for that terminal"
+
+        testCase "a take is not a lease until the session says so" <| fun () ->
+            // The lease arrives as `TerminalLeaseTaken`, which every peer folds alike. A client
+            // that marked itself live on the press would be the one peer believing it held a
+            // keyboard somebody else may already have taken.
+            let before = client ()
+            let after, _ = ClientModel.update (TakeTerminalMsg terminalA) before
+            Expect.equal after.Terminals before.Terminals "no terminal changed on this side"
     ]
 
 let private syncTests =
@@ -3888,6 +3933,99 @@ let private lostOverALateShellWaking (mayOweWake: unit -> unit) (loans: SessionT
         return terminals, id, log, clock, mark, writtenAt, lost
     }
 
+/// A shell the CASE ends — which `Kill` cannot express, because the question is what
+/// happens when a shell goes without anybody closing the terminal: a command that reached
+/// `exit`, an out-of-memory kill, a container that stopped. It marks its prompt, so the
+/// terminal adopts it, and renders a block's line without ever marking it finished — what a
+/// shell that died under a command leaves behind.
+let private exitingShell () =
+    let environment, _, _ = profileEnvironment (fun () -> Set.empty)
+    let ending, ended = latch ()
+    let mutable code = 0
+    let shell : SessionEnvironment.SessionEnvironment =
+        { environment with
+            SpawnPty =
+                fun _ _ _ onOutput ->
+                    async {
+                        return
+                            Ok
+                                { Write =
+                                    fun line ->
+                                        if line.Contains "__y_c; " then onOutput ("$ " + line.Trim () + "\r\n")
+                                        else onOutput "\u001b]133;A;y=test-nonce\u0007"
+                                  Resize = fun _ _ -> ()
+                                  Kill = ending
+                                  Exited =
+                                    async {
+                                        do! ended
+                                        return SandboxExited code
+                                    } } } }
+    shell,
+    fun (exitCode: int) ->
+        code <- exitCode
+        ending ()
+
+/// One block, typed at such a shell and still running, and the switch that ends the shell
+/// under it.
+///
+/// Every wait here is BOUNDED and fails as itself. A latch would read more directly, and it
+/// is the wrong tool for exactly this case: the thing under test is a block nothing finishes,
+/// so a regression leaves the latch unfired, and an unfired latch schedules nothing — the
+/// event loop empties, Node exits 0, and the run reports no verdict at all rather than a red
+/// one. A poll keeps a timer on the loop and names what never happened.
+let private blockOverAnExitingShell () =
+    async {
+        let log = newLog ()
+        let shell, endShell = exitingShell ()
+        let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+        let terminals, _, _ = makeTerminals log shell openTranscript readTranscript []
+        let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+        let id = opened |> expect
+        let mutable started = false
+        Async.StartImmediate (terminals.RunBlock id (entry "b1" id byAda 1.0) "echo hi" (fun () -> started <- true))
+        do! waitUntilWithin 2_000 "the block to be typed at the shell" (fun () -> started)
+        Expect.isTrue (terminals.Busy () |> Set.contains (TerminalId.value id)) "the block is running before the shell goes"
+        return terminals, id, log, endShell
+    }
+
+/// What a shell's exit does to the terminal it was the shell of. Two facts, because they
+/// fail apart: a block left running for ever is an agent waiting on news that never comes,
+/// and a terminal left open over a dead pty is a queue the drain keeps offering work to.
+let private shellExitTests =
+    testList "A shell that exits under its terminal" [
+        // The block's end is the shell's `D` mark, so a shell that exits takes the only thing
+        // that could have finished it. Nothing else settled a block, so the terminal never
+        // left `busy` and every command queued behind it waited for ever.
+        testCaseAsync "a shell that exits ends the block it was running" <|
+            async {
+                let! terminals, id, log, endShell = blockOverAnExitingShell ()
+                endShell 0
+                do!
+                    waitUntilWithin 2_000 "the block to end when its shell did" (fun () ->
+                        not (terminals.Busy () |> Set.contains (TerminalId.value id)))
+                let! events = eventsOf log
+                match events |> List.tryPick (function SessionEvent.TerminalBlockCompleted e -> Some e.Result | _ -> None) with
+                | Some (CommandExecutionFailed reason) ->
+                    Expect.isTrue (reason.Contains "the shell exited with code 0") "and says what happened to it"
+                | other -> failwithf "expected the block to end when its shell did, got %A" other
+            }
+
+        // A terminal whose pty is gone can run nothing — nothing to type into, nothing to
+        // mark a command finished — so it closes, the way an attached source's terminal does
+        // when its stream ends. That is also what refuses the queue: the drain leaves nothing
+        // queued on a closed terminal.
+        testCaseAsync "a shell that exits closes its terminal, saying how the shell went" <|
+            async {
+                let! terminals, id, log, endShell = blockOverAnExitingShell ()
+                endShell 3
+                do!
+                    waitUntilWithin 2_000 "the terminal to close when its shell exited" (fun () ->
+                        not (terminals.IsOpen id))
+                let! reasons = closureReasons log
+                Expect.equal reasons [ "the shell exited with code 3" ] "closed for the reason the shell gave"
+            }
+    ]
+
 let private lostOverALateShellLent (loans: SessionTerminals.BlockLoans) = lostOverALateShellWaking ignore loans
 
 let private lostOverALateShell () = lostOverALateShellLent SessionTerminals.BlockLoans.none
@@ -4664,6 +4802,7 @@ let tests =
         agentVerbTests
         shellStartTests
         shellProfileTests
+        shellExitTests
         lostEvidenceTests
         codecTests
         orderTests
@@ -4673,6 +4812,7 @@ let tests =
         syncTests
         commandLineCaretTests
         viewportTests
+        leaseRequestTests
         transcriptCursorTests
         terminalTitleTests
     ]

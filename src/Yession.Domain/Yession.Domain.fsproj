@@ -43,6 +43,9 @@
     <Compile Include="AgentFacts.fs" />
     <Compile Include="TerminalsFacts.fs" />
     <Compile Include="Events.fs" />
+    <!-- What every watched thing's change keeps, whatever kind it is: after Events.fs, whose
+         cases it reads, and before Acts.fs, whose sentences it lengthens. -->
+    <Compile Include="WatchChanges.fs" />
     <Compile Include="Attribution.fs" />
     <Compile Include="MeProbe.fs" />
     <!-- Terminal output as styled text, and the durable transcript that records it.
@@ -54,6 +57,8 @@
          because a POLICY carries what this host could actually make of a selection and so
          has to know what a leaf is. Depends on nothing but Identity.fs — it knows nothing
          of sandboxes, backends or toolchains, which is what lets it sit this early. -->
+    <!-- Before Resources.fs, whose variable leaves can hold a template. -->
+    <Compile Include="EnvTemplate.fs" />
     <Compile Include="Resources.fs" />
     <Compile Include="Sandbox.fs" />
     <!-- Where a terminal's bytes come from (Plan 16, part D). Right after Sandbox.fs
@@ -99,6 +104,10 @@
          chapters it is about, and after Summaries.fs, whose ask it builds. -->
     <Compile Include="Naming.fs" />
     <Compile Include="Repos.fs" />
+    <!-- The read half of the imperative session API (Plan 15). Depends on nothing but
+         System: a query is a declaration, and what it declares about is somebody else's.
+         Before PrWatches.fs, whose status words say how loudly they are said in its tones. -->
+    <Compile Include="Queries.fs" />
     <!-- Watched pull requests (the projection and the transition algebra). After
          Events.fs like every projection; beside Repos.fs, whose shape it mirrors. -->
     <Compile Include="PrWatches.fs" />
@@ -106,16 +115,17 @@
          (a declaration is an `EnvironmentSpec` serialization), Identity.fs (it is keyed
          by `SandboxRef`) and Repos.fs, which owns the repo it belongs to. Pure and
          parser-free: it decodes a tree somebody else parsed. -->
-    <!-- What an OPERATOR writes: the counterpart of Config.fs, and the only place a
-         path or a hostname is named. After Resources.fs, whose algebra it decodes
-         into and whose refusals it reaches through rather than repeating. -->
-    <Compile Include="OperatorProfile.fs" />
     <!-- A compose-style command line read into words, for `entrypoint`/`command` strings. -->
     <Compile Include="ShellWords.fs" />
     <Compile Include="Config.fs" />
-    <!-- The read half of the imperative session API (Plan 15). Depends on nothing but
-         System: a query is a declaration, and what it declares about is somebody else's. -->
-    <Compile Include="Queries.fs" />
+    <!-- What is worth SAYING about a file that decoded: the analyzers, and the key path a
+         finding is about. After Config.fs, whose `ConfigFile` they read. -->
+    <Compile Include="ConfigAnalysis.fs" />
+    <!-- What an OPERATOR writes: the counterpart of Config.fs, and the only place a
+         path or a hostname is named. After Resources.fs, whose algebra it decodes
+         into and whose refusals it reaches through rather than repeating; after
+         Config.fs, whose sandbox declarations an operator writes in the same form. -->
+    <Compile Include="OperatorProfile.fs" />
     <!-- Before SessionState: the synced state carries the approval mode and the subject
          this declares, so the policy types precede the collaborative state that holds
          them. Before Terminals.fs too, because a terminal's mode is one case of it. -->

@@ -7,6 +7,7 @@ module Yession.Tests.Connections
 
 open System
 open Fable.Core
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Sandboxes
@@ -555,23 +556,23 @@ let private startTokenEndpoint () : Async<TokenEndpoint> =
         let mutable failing = 0
         let requests = ResizeArray<string> ()
         let contentTypes = ResizeArray<string option> ()
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             Interop.readBody req (fun acc ->
                 requests.Add acc
                 contentTypes.Add (Interop.headerOf req "content-type")
                 if failing > 0 then
                     failing <- failing - 1
-                    res.writeHead (503, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                    res.writeHead (503, [ ResponseHeader.ContentType "text/plain" ])
                     res.``end`` "the provider is having a moment"
                 else
                     let status = if response.StartsWith "{" then 200 else 400
-                    res.writeHead (status, Fable.Core.JsInterop.createObj [ "content-type", box "application/json" ]) |> ignore
+                    res.writeHead (status, [ ResponseHeader.ContentType "application/json" ])
                     res.``end`` response) |> ignore
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
         return
-            { Url = sprintf "http://127.0.0.1:%d/token" (Interop.serverPort listening)
+            { Url = sprintf "http://127.0.0.1:%d/token" (serverPort listening)
               SetResponse = (fun r -> response <- r)
               FailNext = (fun n -> failing <- n)
               Requests = requests
@@ -587,14 +588,14 @@ type private StatusEndpoint =
 let private startStatusEndpoint () : Async<StatusEndpoint> =
     async {
         let mutable status = 200
-        let handler (_: Interop.IncomingMessage) (res: Interop.ServerResponse) =
-            res.writeHead (status, Fable.Core.JsInterop.createObj [ "content-type", box "application/json" ]) |> ignore
+        let handler (_: IncomingMessage) (res: ServerResponse) =
+            res.writeHead (status, [ ResponseHeader.ContentType "application/json" ])
             res.``end`` "{}"
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
         return
-            { Url = sprintf "http://127.0.0.1:%d/user" (Interop.serverPort listening)
+            { Url = sprintf "http://127.0.0.1:%d/user" (serverPort listening)
               SetStatus = fun s -> status <- s }
     }
 
@@ -610,15 +611,15 @@ let private startProfileEndpoint () : Async<ProfileEndpoint> =
     async {
         let mutable status = 200
         let authorizations = ResizeArray<string option> ()
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             authorizations.Add (Interop.headerOf req "authorization")
-            res.writeHead (status, Fable.Core.JsInterop.createObj [ "content-type", box "application/json" ]) |> ignore
+            res.writeHead (status, [ ResponseHeader.ContentType "application/json" ])
             res.``end`` """{"login":"octocat","id":583231,"name":"The Octocat","email":null}"""
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
         return
-            { Url = sprintf "http://127.0.0.1:%d/user" (Interop.serverPort listening)
+            { Url = sprintf "http://127.0.0.1:%d/user" (serverPort listening)
               SetStatus = fun s -> status <- s
               Authorizations = authorizations }
     }
@@ -1211,7 +1212,7 @@ let private startConnectionsServer (callers: (string * Control.ControlCaller) li
         apiRef.Value <- Some api
         let dummyRegister (_: string) (_: SessionId) (_: string) : Yession.Oidc.RegisterClientResponse =
             { ClientId = "unused"; ClientSecret = "unused"; Issuer = "unused" }
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             if not (Control.tryHandle
                         (fun secret -> Map.tryFind secret table)
                         (fun _ _ -> async { return Ok () })
@@ -1227,12 +1228,12 @@ let private startConnectionsServer (callers: (string * Control.ControlCaller) li
                         (fun _ _ -> false)
                         ignore
                         req res) then
-                res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        return sprintf "http://127.0.0.1:%d" (Interop.serverPort listening)
+        return sprintf "http://127.0.0.1:%d" (serverPort listening)
     }
 
 let private routeTests =
@@ -1743,7 +1744,7 @@ let private startStubGitHub () : Async<StubGitHub> =
     async {
         let mutable tokenReply = """{"error":"authorization_pending"}"""
         let tokenRequests = ResizeArray<string> ()
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             Interop.readBody req (fun acc ->
                 let reply =
                     if (req.url.Split('?').[0]) = "/device/code" then
@@ -1752,12 +1753,12 @@ let private startStubGitHub () : Async<StubGitHub> =
                     else
                         tokenRequests.Add acc
                         tokenReply
-                res.writeHead (200, Fable.Core.JsInterop.createObj [ "content-type", box "application/json" ]) |> ignore
+                res.writeHead (200, [ ResponseHeader.ContentType "application/json" ])
                 res.``end`` reply) |> ignore
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        let origin = sprintf "http://127.0.0.1:%d" (Interop.serverPort listening)
+        let origin = sprintf "http://127.0.0.1:%d" (serverPort listening)
         return
             { DeviceUrl = origin + "/device/code"
               TokenUrl = origin + "/token"
@@ -1832,14 +1833,14 @@ let private startGitHubRoutesOver
     =
     async {
         let route = GitHubConnection.routes sessionA (stubAuth ()) connections post ""
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             if not (route req res) then
-                res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        return sprintf "http://127.0.0.1:%d" (Interop.serverPort listening)
+        return sprintf "http://127.0.0.1:%d" (serverPort listening)
     }
 
 let private startGitHubRoutes (connections: ControlClient.SessionConnections) =
@@ -2141,7 +2142,7 @@ let private prOne = PrRef.create prRepo 12 |> expect
 let private topicDraft = PrDraft.create prRepo "topic" "master" "Add feature" (Some "why") false |> expect
 
 let private snapshotWith state checks route : PrSnapshot =
-    { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Route = route; Mergeable = None; Review = None; Behind = false; Draft = false }
+    { State = state; Title = "Add feature"; HeadSha = "abc123"; Checks = checks; Route = route; Mergeable = None; Review = None; Behind = false; Draft = false; Times = PrTimes.none }
 
 let private snapshotOf state checks : PrSnapshot = snapshotWith state checks None
 
@@ -2253,6 +2254,22 @@ let private prPollTests =
             let plain = """{"state":"open","merged":false,"title":"WIP","head":{"sha":"d00d"}}"""
             Expect.isTrue (Decode.fromString GitHubPrs.prDecoder draft |> expect).Draft "a stated draft is carried"
             Expect.isFalse (Decode.fromString GitHubPrs.prDecoder plain |> expect).Draft "no draft field is not a draft"
+
+        testCase "a merged pull request is dated by when github says it merged" <| fun () ->
+            let body = """{"state":"closed","merged":true,"merged_at":"2026-09-25T01:00:00Z","closed_at":"2026-09-25T01:00:00Z","title":"T","head":{"sha":"d00d"}}"""
+            let fields = Decode.fromString GitHubPrs.prDecoder body |> expect
+            Expect.equal fields.MergedAt (Some (DateTimeOffset (2026, 9, 25, 1, 0, 0, TimeSpan.Zero))) "github's own clock"
+
+        testCase "checks are dated when the last of them finished, and not while any runs" <| fun () ->
+            let settled =
+                """{"check_runs":[{"status":"completed","conclusion":"success","completed_at":"2026-09-25T01:00:00Z"},{"status":"completed","conclusion":"success","completed_at":"2026-09-25T02:00:00Z"}]}"""
+            let running =
+                """{"check_runs":[{"status":"completed","conclusion":"success","completed_at":"2026-09-25T01:00:00Z"},{"status":"in_progress","conclusion":null,"completed_at":null}]}"""
+            Expect.equal
+                (Decode.fromString GitHubPrs.checksSettledDecoder settled |> expect)
+                (Some (DateTimeOffset (2026, 9, 25, 2, 0, 0, TimeSpan.Zero)))
+                "the verdict is as late as its last run"
+            Expect.equal (Decode.fromString GitHubPrs.checksSettledDecoder running |> expect) None "no verdict yet, no time"
 
         testCase "the checks rollup is pending until every run has completed" <| fun () ->
             Expect.equal (GitHubPrs.rollupOf []) ChecksNone "a commit with no checks has none, not pending forever"
@@ -2635,7 +2652,7 @@ let private prPollTests =
                           Transition = PrTransition.ChecksPassed
                           State = PrOpen
                           Checks = ChecksGreen
-                          Watcher = ada }) ]
+                          Watcher = ada; OccurredAt = None }) ]
                 |> List.fold PrWatchesProjection.applyEvent PrWatchesProjection.empty
             let poller =
                 pollerOver fixedNow (scriptedFetch []).Fetch (RecordedTransitions ()) (ResizeArray ())
@@ -2795,23 +2812,22 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
         let mutable allowance : (int * int64 * string) option = None
         let requests = ResizeArray<string * string option> ()
         let posted = ResizeArray<string * string> ()
-        let withAllowance (pairs: (string * obj) list) =
+        let withAllowance (pairs: (string * string) list) =
             match allowance with
             | None -> pairs
             | Some (remaining, resets, resource) ->
                 pairs
-                @ [ "x-ratelimit-remaining", box (string remaining)
-                    "x-ratelimit-reset", box (string resets)
-                    "x-ratelimit-resource", box resource ]
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+                @ [ "x-ratelimit-remaining", string remaining
+                    "x-ratelimit-reset", string resets
+                    "x-ratelimit-resource", resource ]
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             let path = req.url.Split('?').[0]
             requests.Add (path, Interop.headerOf req "authorization")
             let refuse () =
-                res.writeHead (status, Fable.Core.JsInterop.createObj (withAllowance [ "content-type", box "application/json" ])) |> ignore
+                res.writeNamedHead (status, withAllowance [ "content-type", "application/json" ])
                 res.``end`` """{"message":"nope"}"""
             let answer (code: int) (json: string) =
-                res.writeHead (code, Fable.Core.JsInterop.createObj (withAllowance [ "content-type", box "application/json" ]))
-                |> ignore
+                res.writeNamedHead (code, withAllowance [ "content-type", "application/json" ])
                 res.``end`` json
             let body, version = if path.Contains "/check-runs" then checksBody, checksVersion else prBody, prVersion
             let etag = sprintf "\"v%d\"" version
@@ -2835,19 +2851,16 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
             elif status <> 200 then
                 refuse ()
             elif Interop.headerOf req "if-none-match" = Some etag then
-                res.writeHead (304, Fable.Core.JsInterop.createObj (withAllowance [ "etag", box etag ])) |> ignore
+                res.writeNamedHead (304, withAllowance [ "etag", etag ])
                 res.``end`` ""
             else
-                res.writeHead (
-                    200,
-                    Fable.Core.JsInterop.createObj (withAllowance [ "content-type", box "application/json"; "etag", box etag ]))
-                |> ignore
+                res.writeNamedHead (200, withAllowance [ "content-type", "application/json"; "etag", etag ])
                 res.``end`` body
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
         return
-            { Url = sprintf "http://127.0.0.1:%d" (Interop.serverPort listening)
+            { Url = sprintf "http://127.0.0.1:%d" (serverPort listening)
               SetPr = (fun body -> prBody <- body; prVersion <- prVersion + 1)
               SetCheckRuns = (fun body -> checksBody <- body; checksVersion <- checksVersion + 1)
               SetStatus = (fun s -> status <- s)
@@ -3063,7 +3076,7 @@ let private prFetchTests =
                 let last =
                     { State = PrOpen; Title = "Add feature"; HeadSha = "abc123"; Checks = ChecksGreen
                       Route = Some PrRoute.GitHubAutoMerge; Mergeable = Some true; Review = None; Behind = false
-                      Draft = false }
+                      Draft = false; Times = PrTimes.none }
                 match! fetch (Some "token-abc") prOne PrWatches.PrEtags.none (Some last) with
                 | PrWatches.PrChanged (snapshot, _) -> Expect.equal snapshot.Route (Some PrRoute.GitHubAutoMerge) "carried"
                 | other -> failwithf "expected a snapshot, got %A" other
@@ -4283,7 +4296,7 @@ let private catalogueTests =
             let model =
                 ClientModel.init peer
                 |> fun model -> { model with Claude = { model.Claude with Status = Some known } }
-                |> ClientModel.update (ClaudeStatusMsg (claudeStatus None (Some connected)))
+                |> Support.step (ClaudeStatusMsg (claudeStatus None (Some connected)))
             Expect.equal
                 (model.Claude.Status |> Option.map (fun panel -> panel.Models))
                 (Some (ModelsLoaded offered))
@@ -4303,14 +4316,14 @@ let private panelFoldTests =
             let model =
                 ClientModel.init peer
                 |> awaiting
-                |> ClientModel.update (ClaudeStatusMsg (claudeStatus None None))
+                |> Support.step (ClaudeStatusMsg (claudeStatus None None))
             Expect.equal model.Claude.Pending awaitingMine "the wait survives a probe that says nothing yet"
 
         testCase "the probe that shows the connected account ends the wait" <| fun () ->
             let model =
                 ClientModel.init peer
                 |> awaiting
-                |> ClientModel.update (ClaudeStatusMsg (claudeStatus None (Some connected)))
+                |> Support.step (ClaudeStatusMsg (claudeStatus None (Some connected)))
             Expect.equal model.Claude.Pending Pending.Ready "the status shows it, so the panel is done"
 
         testCase "one tick answers for every panel waiting at once" <| fun () ->
@@ -4318,9 +4331,100 @@ let private panelFoldTests =
                 ClientModel.init peer
                 |> awaiting
                 |> fun model -> { model with GitHub = { model.GitHub with Pending = awaitingMine } }
-                |> ClientModel.update (PendingWaitedMsg (1_000L + Pending.deadlineMillis))
+                |> Support.step (PendingWaitedMsg (1_000L + Pending.deadlineMillis))
             Expect.equal model.Claude.Pending (Pending.Refused Pending.unseen) "claude gave up"
             Expect.equal model.GitHub.Pending (Pending.Refused Pending.unseen) "and so did github"
+    ]
+
+/// What the Claude panel's presses ask the session for, decided by the reducer from the
+/// fields it holds — the fields used to be read off the document at the press, where no
+/// test could reach the rule refusing an empty one.
+let private claudePressTests =
+    let peer : PeerState = { PeerId = PeerId.create "press-peer" |> expect; DisplayName = "Ada" }
+    let press (p: ClaudePress) (model: ClientModel) = ClientModel.update (ClaudePressedMsg p) model
+    testList "the claude panel's presses" [
+        testCase "completing with no code pasted is refused on the panel, and asks nothing" <| fun () ->
+            let model, effects = ClientModel.init peer |> press ClaudePress.Complete
+            Expect.equal (model.Claude.Pending, effects) (Pending.Refused "paste the code first", []) "refused here"
+
+        testCase "a token saved goes to the scope chosen, expecting that scope to connect" <| fun () ->
+            let typed =
+                ClientModel.init peer
+                |> Support.step (ClaudeScopeChosen "session")
+                |> Support.step (ClaudeTokenTyped "sk-ant-oat01-x")
+            let _, effects = press ClaudePress.SaveToken typed
+            Expect.equal
+                effects
+                [ ClientEffect.Claude
+                    { Action = ClaudeAction.Token
+                      Request = { Scope = "session"; Code = None; Token = Some "sk-ant-oat01-x" }
+                      Expect = Some { Scope = "session"; Connected = true } } ]
+                "one write, for the credential slot that was chosen"
+
+        testCase "a token sent does not stay in the field" <| fun () ->
+            let model, _ = ClientModel.init peer |> Support.step (ClaudeTokenTyped "sk-ant-oat01-x") |> press ClaudePress.SaveToken
+            Expect.equal model.Claude.Token "" "a secret already sent is not one to offer sending again"
+
+        testCase "a sign-in answered with an authorize url waits on the human in that tab" <| fun () ->
+            let model, effects = ClientModel.init peer |> press ClaudePress.Connect
+            let call =
+                match effects with
+                | [ ClientEffect.Claude call ] -> call
+                | other -> failwithf "expected one claude write, got %A" other
+            let answered = model |> Support.step (ClaudeAnsweredMsg (call, Ok (Some "https://claude.ai/authorize"), 5_000L))
+            Expect.equal answered.Claude.Flow (ClaudeAwaitingCode ("https://claude.ai/authorize", "mine")) "the flow carries the scope it began with"
+
+        testCase "an accepted write waits for the status from the moment it answered" <| fun () ->
+            let call : ClaudeCall =
+                { Action = ClaudeAction.Disconnect; Request = ClaudeRequest.scoped "mine"; Expect = Some disconnectMine }
+            let model = ClientModel.init peer |> Support.step (ClaudeAnsweredMsg (call, Ok None, 5_000L))
+            Expect.equal model.Claude.Pending (Pending.Awaiting (disconnectMine, 5_000L)) "the deadline runs from the answer"
+    ]
+
+/// The GitHub device flow's poll, as the model's own timer. It used to be a loop of sleeps in
+/// the browser reading back whatever model it last saw; the rules it carried — ask at GitHub's
+/// interval, keep the code through a bad moment, give it up only when the session says so,
+/// stop once the grant lands — are the reducer's now, and reachable without a browser.
+let private githubPollTests =
+    let peer : PeerState = { PeerId = PeerId.create "poll-peer" |> expect; DisplayName = "Ada" }
+    let begun : GitHubCall = { Action = GitHubAction.Begin; Request = GitHubRequest.scoped "mine"; Expect = None }
+    let flow interval = GitHubAwaitingApproval ("ABCD-1234", "https://github.com/login/device", "mine", interval)
+    let showing =
+        ClientModel.init peer |> Support.step (GitHubAnsweredMsg (begun, Ok (Some (flow 5)), 1_000L))
+    let polls (model: ClientModel) =
+        ClientModel.timers model |> List.filter (fun timer -> List.head timer.Key = "github-poll")
+    let asked = showing |> Support.step (GitHubPollDueMsg 0)
+    testList "the github device flow's poll" [
+        testCase "a code on screen waits GitHub's interval before asking" <| fun () ->
+            Expect.equal
+                (polls showing |> List.map (fun timer -> timer.After, timer.Fire))
+                [ 5_000, GitHubPollDueMsg 0 ]
+                "one wait, as long as GitHub asked"
+
+        testCase "the poll that falls due asks the session, for the scope the flow began with" <| fun () ->
+            Expect.equal (ClientModel.update (GitHubPollDueMsg 0) showing |> snd) [ ClientEffect.GitHubPoll (0, "mine") ] "one poll"
+
+        testCase "a round already asked is not asked again" <| fun () ->
+            Expect.equal (ClientModel.update (GitHubPollDueMsg 0) asked |> snd) [] "the first answer is still out"
+
+        testCase "a bad moment keeps the code on screen and waits again" <| fun () ->
+            let after = asked |> Support.step (GitHubPolledMsg (0, PollFailed))
+            Expect.equal (after.GitHub.Flow, polls after |> List.map (fun timer -> timer.Fire)) (flow 5, [ GitHubPollDueMsg 1 ]) "the code the human may have approved stays"
+
+        testCase "a flow the session ended takes the code away, with its reason" <| fun () ->
+            let after = asked |> Support.step (GitHubPolledMsg (0, PollEnded "the code expired"))
+            Expect.equal (after.GitHub.Flow, after.GitHub.Pending) (GitHubIdle, Pending.Refused "the code expired") "over, and said why"
+
+        testCase "slow_down widens the wait" <| fun () ->
+            let after = asked |> Support.step (GitHubPolledMsg (0, PollPending 10))
+            Expect.equal (polls after |> List.map (fun timer -> timer.After)) [ 10_000 ] "asked less often"
+
+        testCase "the grant landing stops the asking" <| fun () ->
+            let after = asked |> Support.step (GitHubPolledMsg (0, PollConnected))
+            Expect.isEmpty (polls after) "the status closes the flow; nothing more to ask"
+
+        testCase "cancelling stops the asking" <| fun () ->
+            Expect.isEmpty (polls (showing |> Support.step (GitHubFlowMsg GitHubIdle))) "no code, no poll"
     ]
 
 /// What a listing asks for, and what it says — pure, so no capability.
@@ -4398,10 +4502,140 @@ let private prListingTests =
             Expect.isFalse reached "and nothing was asked" }
     ]
 
+
+/// The beat a catch-up hangs off: its first look is the one that matters most.
+let private clockTests =
+    testList "Beats on the session's clock" [
+        testCase "a beat from now beats at once, and then at every interval" <| fun () ->
+            let clock = virtualClock (DateTimeOffset (2026, 9, 25, 0, 0, 0, TimeSpan.Zero))
+            let mutable beats = 0
+            let stop = Clock.everyFromNow clock.Clock (TimeSpan.FromSeconds 15.0) (fun () -> beats <- beats + 1)
+            Expect.equal beats 1 "before the clock has moved at all"
+            clock.Advance (TimeSpan.FromSeconds 15.0)
+            Expect.equal beats 2 "and again an interval later"
+            stop ()
+
+        testCase "a plain beat waits its first interval" <| fun () ->
+            let clock = virtualClock (DateTimeOffset (2026, 9, 25, 0, 0, 0, TimeSpan.Zero))
+            let mutable beats = 0
+            let stop = Clock.every clock.Clock (TimeSpan.FromSeconds 15.0) (fun () -> beats <- beats + 1)
+            Expect.equal beats 0 "nothing until the interval has passed"
+            stop ()
+    ]
+
+/// The engine every kind of watch shares, driven by a kind that is not a pull request — a
+/// counter at a source — so what is pinned is the engine, and a second kind is shown to need
+/// nothing but its own five parts.
+let private watchEngineTests =
+    let ada = Principal.Peer (PeerId.create "ada" |> expect)
+    let started = DateTimeOffset (2026, 9, 25, 0, 0, 0, TimeSpan.Zero)
+    /// A source whose value the case sets, and a record of what the engine recorded.
+    let counterKind (source: int ref) (refusal: Watches.Refusal option ref) (recorded: ResizeArray<int * int list>) =
+        { Watches.Kind.Look =
+            fun _ _ _ _ _ ->
+                async {
+                    match refusal.Value with
+                    | Some r -> return Watches.Refused r
+                    | None -> return Watches.Read (source.Value, ())
+                }
+          Watches.Kind.Detect = fun (known: int) (fresh: int) -> if fresh <> known then [ fresh ] else []
+          Watches.Kind.Advance = fun _ change -> change
+          Watches.Kind.DueIn = fun _ -> 60L
+          Watches.Kind.NoCursor = ()
+          Watches.Kind.Describe = fun key -> sprintf "counter %d" key
+          Watches.Kind.Record = fun _ key _ changes -> async { recorded.Add (key, changes) } }
+    /// A source that answers "nothing has changed" — the conditional reply every settled
+    /// watch gets — unless the case has set a refusal.
+    let quietKind (refusal: Watches.Refusal option ref) =
+        { counterKind (ref 0) refusal (ResizeArray ()) with
+            Watches.Kind.Look =
+                fun _ _ _ _ _ ->
+                    async {
+                        match refusal.Value with
+                        | Some r -> return Watches.Refused r
+                        | None -> return Watches.Unmoved
+                    } }
+    let engine (kind: Watches.Kind<int, int, int, unit, int>) =
+        Watches.create (fun () -> started) (fun _ -> async { return None }) (fun _ -> async { return () }) kind
+    let watching (known: int) : Watches.Watch<int, int> list =
+        [ { Key = 7; Watcher = ada; Known = known; Since = started } ]
+
+    testList "The watch engine" [
+        // Catch-up is not a path of its own: a process that starts over a log looks at once,
+        // and compares against what the log last knew — so what moved while nothing was
+        // running is found the way a routine look finds anything.
+        testCaseAsync "the first look after a restart finds what moved since the log's last word" <|
+            async {
+                let recorded = ResizeArray ()
+                let watchers = engine (counterKind (ref 5) (ref None) recorded)
+                watchers.Apply (watching 3)
+                let! moved = watchers.Poll ()
+                Expect.isTrue moved "a query has something new to show"
+                Expect.equal (List.ofSeq recorded) [ 7, [ 5 ] ] "the change from the log's 3 to the source's 5, recorded"
+            }
+
+        testCaseAsync "a watch this process has not looked at shows no reading at all" <|
+            async {
+                let watchers = engine (counterKind (ref 5) (ref None) (ResizeArray ()))
+                watchers.Apply (watching 3)
+                Expect.isNone (List.exactlyOne (watchers.Rows ())).Snapshot "the log's last word is not a reading of the world"
+            }
+
+        testCaseAsync "nothing is looked at twice within its cadence" <|
+            async {
+                let recorded = ResizeArray ()
+                let source = ref 5
+                let watchers = engine (counterKind source (ref None) recorded)
+                watchers.Apply (watching 3)
+                let! _ = watchers.Poll ()
+                source.Value <- 9
+                let! _ = watchers.Poll ()
+                Expect.equal (List.ofSeq recorded) [ 7, [ 5 ] ] "not due again until its cadence says"
+            }
+
+        testCaseAsync "a hold the source named is kept, pokes included" <|
+            async {
+                let recorded = ResizeArray ()
+                let refusal = ref (Some { Watches.Refusal.Health = "rate limited"; Watches.Refusal.HoldUntilEpoch = Some (started.ToUnixTimeSeconds () + 600L); Watches.Refusal.CredentialRejected = false })
+                let watchers = engine (counterKind (ref 5) refusal recorded)
+                watchers.Apply (watching 3)
+                let! _ = watchers.Poll ()
+                refusal.Value <- None
+                let! _ = watchers.Poke (fun _ -> true)
+                Expect.isEmpty (List.ofSeq recorded) "nothing asked inside the window the source named"
+                Expect.equal (List.exactlyOne (watchers.Rows ())).Health (Some "rate limited") "and the reason is what the row says"
+            }
+
+        // The health set by a failure is cleared by the next look that WORKED, and a look
+        // answering "nothing has changed" is one of those. It used not to count, and one
+        // transient refusal was therefore permanent: every later look at a settled watch is
+        // conditional and answers not-modified, so nothing after the failure reached the
+        // branch that clears it, and the row said `unreachable` until the process restarted.
+        testCaseAsync "a watch that failed once is readable again when the source says nothing has changed" <|
+            async {
+                let refusal =
+                    ref (Some { Watches.Refusal.Health = "github answered 502"
+                                Watches.Refusal.HoldUntilEpoch = None
+                                Watches.Refusal.CredentialRejected = false })
+                let watchers = engine (quietKind refusal)
+                watchers.Apply (watching 3)
+                let! _ = watchers.Poll ()
+                Expect.equal (List.exactlyOne (watchers.Rows ())).Health (Some "github answered 502") "the failure is what the row says"
+                refusal.Value <- None
+                let! moved = watchers.Poke (fun _ -> true)
+                Expect.isTrue moved "the row has something new to show"
+                Expect.isNone (List.exactlyOne (watchers.Rows ())).Health "a source that answered is a source that was reached"
+            }
+    ]
+
 let tests =
     testList "Connections" [
+        clockTests
+        watchEngineTests
         panelTests
         panelFoldTests
+        claudePressTests
+        githubPollTests
         panelWireTests
         catalogueTests
         codecTests

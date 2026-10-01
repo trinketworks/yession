@@ -46,35 +46,38 @@ let private gappyReplayHost : Browser.Types.Element = Browser.Dom.document.getEl
 /// scenario's entry, not a global something forgot to scope. A function of more than one
 /// argument is a delegate, because that is a JavaScript function of that many parameters
 /// and an F# function of that type is not.
-type private Harness =
-    abstract __md : (unit -> string) with get, set
-    abstract __pushRemote : (string -> unit) with get, set
+[<RequireQualifiedAccess>]
+module private Published =
+    let md : PageGlobal<unit -> string> = PageGlobal.named "__md"
+    let pushRemote : PageGlobal<string -> unit> = PageGlobal.named "__pushRemote"
     /// How many times Ctrl+Enter has asked to send. The harness mounts the editor exactly as
     /// the COMPOSER does (`onSubmit` supplied), so the E2E drives the real binding: plain
     /// Enter opens a paragraph and Ctrl+Enter (Cmd+Enter on macOS) sends. A counter rather
     /// than a callback because what the test needs to know is "did it fire", and the send
     /// itself belongs to the app.
-    abstract __sends : int with get, set
+    let sends : PageGlobal<int> = PageGlobal.named "__sends"
     /// Start or stop pushing presence decorations into the MIRROR on every animation frame.
-    abstract __caretStorm : (bool -> unit) with get, set
+    let caretStorm : PageGlobal<bool -> unit> = PageGlobal.named "__caretStorm"
     /// How many frames the storm has actually pushed on. Anti-vacuity: a convergence assertion
     /// passes trivially if the storm never ran, and "never ran" and "ran and was harmless" look
     /// identical from the outside.
-    abstract __caretPushes : int with get, set
+    let caretPushes : PageGlobal<int> = PageGlobal.named "__caretPushes"
     /// The two counters are on `window` because that is this instrument's INTERFACE: the browser
     /// case reads them out of a Playwright `evaluate`, which can see a global and cannot see a
     /// module binding. They are the measurement's output, not a global something forgot to scope.
-    abstract __docUpdates : int with get, set
-    abstract __writebacks : int with get, set
-    abstract __convState : (unit -> string) with get, set
-    abstract __benchDiagState : obj with get, set
-    abstract __benchDiag : (unit -> string) with get, set
-    abstract __benchSeed : (int -> JS.Promise<int>) with get, set
-    abstract __benchCarets : (int -> JS.Promise<string>) with get, set
-    abstract __benchReset : (unit -> unit) with get, set
-    abstract __benchTyping : (unit -> string) with get, set
-    abstract __benchTranscript : System.Func<int, int, int, string> with get, set
-    abstract __benchSettle : (unit -> JS.Promise<unit>) with get, set
+    let docUpdates : PageGlobal<int> = PageGlobal.named "__docUpdates"
+    let writebacks : PageGlobal<int> = PageGlobal.named "__writebacks"
+    let convState : PageGlobal<unit -> string> = PageGlobal.named "__convState"
+    /// The typing diagnostic's counters, republished on every change (`TypingDiagnostic`).
+    let benchDiagState : PageGlobal<{| hostKeydowns : int; docKeydowns : int; rafs : int; focus : string array |}> =
+        PageGlobal.named "__benchDiagState"
+    let benchDiag : PageGlobal<unit -> string> = PageGlobal.named "__benchDiag"
+    let benchSeed : PageGlobal<int -> JS.Promise<int>> = PageGlobal.named "__benchSeed"
+    let benchCarets : PageGlobal<int -> JS.Promise<string>> = PageGlobal.named "__benchCarets"
+    let benchReset : PageGlobal<unit -> unit> = PageGlobal.named "__benchReset"
+    let benchTyping : PageGlobal<unit -> string> = PageGlobal.named "__benchTyping"
+    let benchTranscript : PageGlobal<System.Func<int, int, int, string>> = PageGlobal.named "__benchTranscript"
+    let benchSettle : PageGlobal<unit -> JS.Promise<unit>> = PageGlobal.named "__benchSettle"
     /// Begin the scroll scenario: a conversation of `items`, `records` transcript records arriving
     /// one every `everyMs`, and the frame clock and render clock running. The FLING is the driver's
     /// to make, with real touch input, once this returns.
@@ -83,21 +86,21 @@ type private Harness =
     /// running its setup behind a shut pane — so every one of them is a render that leaves the
     /// conversation exactly as it was. Off, they land in the burst card's running block, and the
     /// conversation grows under the reader with each.
-    abstract __benchScrollBegin : System.Action<int, int, int, bool> with get, set
+    let benchScrollBegin : PageGlobal<System.Action<int, int, int, bool>> = PageGlobal.named "__benchScrollBegin"
     /// How many records the stream has sent so far. The driver flings until the stream is spent,
     /// so every size is measured over the same records rather than over however long one fling
     /// through it happened to take.
-    abstract __benchScrollSent : (unit -> int) with get, set
+    let benchScrollSent : PageGlobal<unit -> int> = PageGlobal.named "__benchScrollSent"
     /// End it: stop the stream and the clocks, and hand back what they recorded.
-    abstract __benchScrollEnd : (unit -> string) with get, set
+    let benchScrollEnd : PageGlobal<unit -> string> = PageGlobal.named "__benchScrollEnd"
     /// Open a session the way the app opens one it has been to before — from what it kept — and
     /// say what the page did between its first paint and its connection: `items` conversation
     /// items' worth of events in the kept store, `perAnswer` events to each kept answer.
-    abstract __benchOpen : System.Func<int, int, JS.Promise<string>> with get, set
+    let benchOpen : PageGlobal<System.Func<int, int, JS.Promise<string>>> = PageGlobal.named "__benchOpen"
     /// Open a session the way the app opens one it has never seen — everything over the
     /// network, `pageSize` events to a page, a page every `everyMs` — and say what the page did.
-    abstract __benchOpenCold : System.Func<int, int, int, JS.Promise<string>> with get, set
-    abstract __typed : string with get, set
+    let benchOpenCold : PageGlobal<System.Func<int, int, int, JS.Promise<string>>> = PageGlobal.named "__benchOpenCold"
+    let typed : PageGlobal<string> = PageGlobal.named "__typed"
     /// Hand the shell a terminal SCREEN, as the Session Process does over the data channel
     /// (Plan 14, stage 6). Exposed so the E2E can drive the one path that puts a real emulator
     /// in a real browser: without it this bundle contains no xterm at all, and the browser tier
@@ -106,46 +109,46 @@ type private Harness =
     ///
     /// The size is the caller's to leave out — a case that only wants a screen on the page says
     /// nothing about how big it is, and the harness's own 80x24 is what it gets.
-    abstract __snapshot : System.Action<string, int, string, int option, int option> with get, set
+    let snapshot : PageGlobal<System.Action<string, int, string, int option, int option>> = PageGlobal.named "__snapshot"
     /// Hand the shell one transcript record, as the Session Process does as a terminal speaks.
     /// The companion to the snapshot: a snapshot is where a screen STARTS and records are what
     /// move it, and composing the two — including a resize reshaping the emulator mid-stream —
     /// is the client's own fold.
-    abstract __record : System.Action<string, int, string, string> with get, set
+    let record : PageGlobal<System.Action<string, int, string, string>> = PageGlobal.named "__record"
     /// The size this client last told the Session Process its screen is. Read back by the E2E,
     /// because the question there is whether a box that changed without the model changing — a
     /// splitter dragged, a window resized — reached the pty at all.
-    abstract __resized : string with get, set
+    let resized : PageGlobal<string> = PageGlobal.named "__resized"
     /// The size this client last measured its OWN view of a terminal at — the width a command
     /// queued from that pane would claim (`PendingAct.Size`). A second hook rather than a reading
     /// of `window.__resized`, because the two are different facts: that one is what was sent to the
     /// pty for a lease this peer holds, and this one is measured in BLOCK mode, where nobody holds
     /// anything and nothing is sent at all.
-    abstract __viewport : string with get, set
+    let viewport : PageGlobal<string> = PageGlobal.named "__viewport"
     /// Start an agent turn in the shell, as the Session Process does when the model begins to
     /// answer: the turn, the message it opens, and the first words of it, folded through the same
     /// page the real client reads. Exposed because the browser tier boots its session with NO
     /// model credential (deliberately — see `Browser.fs`), so a turn in flight is a state no
     /// amount of typing on this page can reach, and how many marks a person sees while one is
     /// running is a question only a laid-out page can answer.
-    abstract __agentTurn : (unit -> unit) with get, set
+    let agentTurn : PageGlobal<unit -> unit> = PageGlobal.named "__agentTurn"
     /// Hand a terminal's lease to this peer WITHOUT a press, as the alt-screen flip does: a block
     /// takes the screen and the Session Process gives its author the keyboard. Exposed for the
     /// same reason the snapshot is — it is the arrival of a fact from elsewhere, and a test that
     /// could only reach live mode by pressing `take` could never exercise the route that has no
     /// press to make.
-    abstract __take : (string -> unit) with get, set
+    let take : PageGlobal<string -> unit> = PageGlobal.named "__take"
     /// Swap the shell between the session's first screen and a conversation. Both, from one hook,
     /// because the question the card raises is about the two TOGETHER: the ask card stands only
     /// where nothing has been said and a message body only where something has, so the one column
     /// they are both supposed to start on can be measured no other way on one page.
-    abstract __launch : (bool -> unit) with get, set
+    let launch : PageGlobal<bool -> unit> = PageGlobal.named "__launch"
     /// Swap in the shell with one ACT on its timeline — a sandbox start whose sentence
     /// points at a sandbox and a connection — for the case that measures where a reference
     /// sits on its line. Its own hook rather than an item in the shared fixture, because
     /// every other case measures that fixture's geometry and an act note is a different
     /// shape of row to have standing in it.
-    abstract __acts : (unit -> unit) with get, set
+    let acts : PageGlobal<unit -> unit> = PageGlobal.named "__acts"
     /// A collaborator's caret in a chapter's NAME, with no session to relay one from. The
     /// positions handed over are real relative positions over a real `Y.Text` on this page's doc,
     /// which is the whole of what the placement reads: it resolves them against the doc and
@@ -156,10 +159,8 @@ type private Harness =
     /// Where a name lives IN the doc is the codec's answer and is pinned where it can be tested
     /// for a penny (`SyncedStateSync.chapterNameText`), not restated here: a fixture that wrote
     /// the layout out by hand would be a second copy of it, and the wrong one the day it moved.
-    abstract __chapterCaret : System.Action<string, int, int> with get, set
+    let chapterCaret : PageGlobal<System.Action<string, int, int>> = PageGlobal.named "__chapterCaret"
 
-/// The page, as the interface above.
-let private harness () : Harness = unbox Browser.Dom.window
 
 let private doc = Y.Doc.Create ()
 let private fragment = doc.getXmlFragment "body"
@@ -169,7 +170,7 @@ do
     // as a remote peer's cursor on demand.
     let mutable lastSelection : (string * string) option = None
     let mutable sends = 0
-    (harness ()).__sends <- 0
+    PageGlobal.set Published.sends 0
     let handle =
         Editor.mountEditor
             host
@@ -178,12 +179,12 @@ do
             (fun sel -> lastSelection <- sel)
             (Some (fun () ->
                 sends <- sends + 1
-                (harness ()).__sends <- sends))
+                PageGlobal.set Published.sends sends))
             // The harness IS the composer, so it wears the composer's prompt: the browser
             // tier can then read the placeholder where the editor really draws it.
             Dom.Text.composerPlaceholder
-    (harness ()).__md <- (fun () -> Markdown.ofFragment fragment)
-    (harness ()).__pushRemote <- (fun name ->
+    PageGlobal.set Published.md (fun () -> Markdown.ofFragment fragment)
+    PageGlobal.set Published.pushRemote (fun name ->
         match lastSelection with
         | Some (anchor, head) ->
             handle.PushPresences
@@ -270,9 +271,6 @@ let private peerBHost : Browser.Types.HTMLElement = Browser.Dom.document.getElem
 let private onFrame (f: unit -> unit) : unit =
     Browser.Dom.window.requestAnimationFrame (fun _ -> f ()) |> ignore
 
-[<Import("ySyncPluginKey", "y-prosemirror")>]
-let private ySyncPluginKey : obj = jsNative
-
 /// Count the Yjs updates a doc takes from `ySyncPlugin`'s OWN write-back — the ones whose
 /// origin is `ySyncPluginKey`, which is what `_prosemirrorChanged` tags its transaction with.
 ///
@@ -286,23 +284,26 @@ let private ySyncPluginKey : obj = jsNative
 /// update this doc took, `__writebacks` only those the write-back produced. A write-back count
 /// of zero means "drawing a caret wrote nothing" only if the doc was moving at all — otherwise
 /// it means the observer was never wired up, and the two look identical from a test.
-let private countWritebacks (doc: Y.Doc) (syncKey: obj) : unit =
+///
+/// Answers the write-back count so far, for the harness's own reading of it.
+let private countWritebacks (doc: Y.Doc) (syncKey: ProseMirror.PluginKey<'State, 'Meta>) : unit -> int =
     let mutable updates = 0
     let mutable writebacks = 0
-    (harness ()).__docUpdates <- updates
-    (harness ()).__writebacks <- writebacks
+    PageGlobal.set Published.docUpdates updates
+    PageGlobal.set Published.writebacks writebacks
     doc.onUpdate (Y.UpdateHandler (fun _ origin _ _ ->
         updates <- updates + 1
-        (harness ()).__docUpdates <- updates
+        PageGlobal.set Published.docUpdates updates
         if System.Object.ReferenceEquals (origin, syncKey) then
             writebacks <- writebacks + 1
-            (harness ()).__writebacks <- writebacks))
+            PageGlobal.set Published.writebacks writebacks))
+    fun () -> writebacks
 
 /// The two docs' content and the two editors' rendered text, side by side. `docA`/`docB` are
 /// what the CRDT holds; `pmA`/`pmB` are what each editor actually put on screen. A gap between
 /// a doc and its own editor is a binding that stopped rendering; a gap between the two docs is
 /// a relay that stopped carrying.
-let private convStateJson (docA: string) (docB: string) (pushes: int) : string =
+let private convStateJson (docA: string) (docB: string) (pushes: int) (writebacks: int) : string =
     /// What an editor put on screen, or `null` for an editor that is not mounted.
     let rendered (selector: string) : JsonValue =
         match Browser.Dom.document.querySelector selector with
@@ -313,7 +314,7 @@ let private convStateJson (docA: string) (docB: string) (pushes: int) : string =
         [ "docA", Encode.string docA
           "docB", Encode.string docB
           "caretPushes", Encode.int pushes
-          "writebacks", Encode.int (harness ()).__writebacks
+          "writebacks", Encode.int writebacks
           "pmA", rendered "#peer-a .ProseMirror"
           "pmB", rendered "#peer-b .ProseMirror" ]
     |> Encode.toString 0
@@ -355,14 +356,13 @@ module private TypingDiagnostic =
     let mutable private rafs = 0
     let private focus = ResizeArray<string> ()
 
-    let private state () : obj =
-        Fable.Core.JsInterop.createObj
-            [ "hostKeydowns", box hostKeydowns
-              "docKeydowns", box docKeydowns
-              "rafs", box rafs
-              "focus", box (focus.ToArray ()) ]
+    let private state () =
+        {| hostKeydowns = hostKeydowns
+           docKeydowns = docKeydowns
+           rafs = rafs
+           focus = focus.ToArray () |}
 
-    let private publish () : unit = (harness ()).__benchDiagState <- (state ())
+    let private publish () : unit = PageGlobal.set Published.benchDiagState (state ())
 
     /// Where focus sat when a key was pressed: the co-editor by name, anything else by its id
     /// or, having none, by its tag — and `none` for a page whose focus is nowhere at all.
@@ -415,13 +415,11 @@ module private TypingDiagnostic =
 /// Two listeners, both capturing (`true`) so a keystroke is counted and timed from before the
 /// editor sees it, and they measure different things: the document-level one counts every
 /// keydown the page took and records where focus was, the host-level one counts the ones that
-/// arrived here and times each to the frame it paints on. `host` is `obj` because that is what
-/// the harness's mounts are — `Editor.mountEditor` takes one.
-let private onKeystrokePainted (host: obj) (take: float -> unit) : unit =
+/// arrived here and times each to the frame it paints on.
+let private onKeystrokePainted (host: Browser.Types.HTMLElement) (take: float -> unit) : unit =
     TypingDiagnostic.reset ()
     Browser.Dom.document.addEventListener ("keydown", (fun _ -> TypingDiagnostic.recordPageKey ()), true)
-    let target : Browser.Types.EventTarget = unbox host
-    target.addEventListener (
+    host.addEventListener (
         "keydown",
         (fun event ->
             TypingDiagnostic.recordHostKey ()
@@ -431,13 +429,16 @@ let private onKeystrokePainted (host: obj) (take: float -> unit) : unit =
                 take (now () - pressed))),
         true)
 
+/// One number series, as the JSON array the driver reads.
+let private series (xs: float[]) : JsonValue = xs |> Array.map Encode.float |> Encode.array
+
 /// Two named number series as one JSON object — the shape every scenario returns.
 let private twoSeries (a: string) (xs: float[]) (b: string) (ys: float[]) : string =
-    JS.JSON.stringify (Fable.Core.JsInterop.createObj [ a, box xs; b, box ys ])
+    Encode.object [ a, series xs; b, series ys ] |> Encode.toString 0
 
 /// One named number series as JSON — `twoSeries` for a scenario that measures one thing.
 let private oneSeries (a: string) (xs: float[]) : string =
-    JS.JSON.stringify (Fable.Core.JsInterop.createObj [ a, box xs ])
+    Encode.object [ a, series xs ] |> Encode.toString 0
 
 /// What the scroll scenario recorded, in the series shape the driver reads everywhere else,
 /// plus the counts that say whether it measured anything: renders against records sent, and
@@ -528,7 +529,7 @@ do
 
     // Watch the MIRROR: it is the one whose carets are pushed, so it is the one whose
     // write-back would race the content arriving into it.
-    countWritebacks docB ySyncPluginKey
+    let writebacksSoFar = countWritebacks docB ProseMirror.ySyncPluginKey
 
     let fragmentA = docA.getXmlFragment "shared"
     let fragmentB = docB.getXmlFragment "shared"
@@ -544,7 +545,7 @@ do
 
     let mutable storming = false
     let mutable pushes = 0
-    (harness ()).__caretPushes <- 0
+    PageGlobal.set Published.caretPushes 0
     // A's caret, drawn in B — decoded against B's own doc, so the positions are real rather
     // than replayed constants. Before A has reported a selection there is nothing to draw and
     // the frame still counts as a push: what is under test is the dispatch, not the geometry.
@@ -560,20 +561,21 @@ do
                           Head = head } : Editor.RemoteBodyCursor) ]
              | None -> mirror.PushPresences [])
             pushes <- pushes + 1
-            (harness ()).__caretPushes <- pushes
+            PageGlobal.set Published.caretPushes pushes
             onFrame storm
     // What each side holds, as one JSON blob. A convergence failure has four candidate
     // stories — the author never wrote it, the relay never carried it, the co-editor's doc has
     // it but its editor never rendered it, or something wrote over it — and they are
     // indistinguishable from the DOM alone. This tells them apart in the failure message
     // instead of in a debugging session.
-    (harness ()).__convState <- (fun () ->
+    PageGlobal.set Published.convState (fun () ->
         convStateJson
             (Markdown.ofFragment fragmentA)
             (Markdown.ofFragment fragmentB)
-            pushes)
+            pushes
+            (writebacksSoFar ()))
 
-    (harness ()).__caretStorm <- (fun on ->
+    PageGlobal.set Published.caretStorm (fun on ->
         if on && not storming then
             storming <- true
             onFrame storm
@@ -607,14 +609,14 @@ do
         let t0 = now ()
         onFrame (fun () -> receiveSamples.Add (now () - t0))
 
-    (harness ()).__benchReset <- (fun () ->
+    PageGlobal.set Published.benchReset (fun () ->
         typeSamples.Clear ()
         receiveSamples.Clear ()
         TypingDiagnostic.reset ())
 
-    (harness ()).__benchTyping <- (fun () ->
+    PageGlobal.set Published.benchTyping (fun () ->
         twoSeries "type" (typeSamples.ToArray ()) "receive" (receiveSamples.ToArray ()))
-    (harness ()).__benchDiag <- TypingDiagnostic.asJson
+    PageGlobal.set Published.benchDiag TypingDiagnostic.asJson
 
     // Drain this burst's pending sample frames before the driver reads the series. Every `type`
     // and `receive` sample lands in a `requestAnimationFrame` callback, and the driver reads the
@@ -625,7 +627,7 @@ do
     // frames — every scheduled frame has fired — and it also stops a size's late frames leaking
     // into the next size's reset window. Bounded so it can never hang: a genuinely empty series
     // settles at zero and the driver's `< 5` guard still refuses it.
-    (harness ()).__benchSettle <- (fun () ->
+    PageGlobal.set Published.benchSettle (fun () ->
         async {
             let mutable last = -1
             let mutable stable = 0
@@ -659,7 +661,7 @@ do
     //
     // Nothing is rendered — this is the read the render does, isolated, so a change in what the
     // pane draws cannot be mistaken for a change in what the transcript costs to read.
-    (harness ()).__benchTranscript <- System.Func<_, _, _, _> (fun records blockSize samples ->
+    PageGlobal.set Published.benchTranscript (System.Func<_, _, _, _> (fun records blockSize samples ->
         let feed =
             Seq.fold
                 (fun f seq ->
@@ -682,11 +684,11 @@ do
                     "the transcript sweep read no output at all — the feed or the block ranges are \
                      empty, and this series would be a measurement of nothing"
             taken.Add elapsed
-        oneSeries "transcript.read" (taken.ToArray ()))
+        oneSeries "transcript.read" (taken.ToArray ())))
 
     // Fill BOTH docs to roughly `chars`, through the real relay, and settle. One write rather
     // than a keystroke drip: this is setup, and nothing here is timed.
-    (harness ()).__benchSeed <- (fun chars ->
+    PageGlobal.set Published.benchSeed (fun chars ->
         async {
             Markdown.intoFragment (filler chars) fragmentA
             do! nextFrame () |> Async.AwaitPromise
@@ -700,7 +702,7 @@ do
     //
     // A frame is yielded between samples so the browser can actually paint. A tight loop would
     // measure a hot cache and a starved compositor, which is nobody's experience.
-    (harness ()).__benchCarets <- (fun samples ->
+    PageGlobal.set Published.benchCarets (fun samples ->
         async {
             let push = ResizeArray<float> ()
             let paint = ResizeArray<float> ()
@@ -1072,16 +1074,19 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
         // SHUT to begin with, like a fresh client: the phone case is about what happens when
         // a chip brings the pane on screen, which is nothing to watch if it is already there.
         TerminalScreens = Map.ofList [ liveId, "\u001b[32mvim ~/notes\u001b[0m" ]
-        // The two terminals this peer opened, pinned as the events fold would have pinned
-        // them (Plan 20, stage 1). Set by hand because this model is BUILT rather than folded
-        // — and without them the strip would hold only whatever is being previewed, which is
-        // a fresh client's state rather than a working one.
-        Pins = [ TerminalTab terminalId; TerminalTab liveId ]
+        // The two terminals this peer opened, as tabs — which is what the fold would have
+        // made of them (Plan 20, stage 1). Set by hand because this model is BUILT rather
+        // than folded, and without them the strip would hold only whatever is being
+        // previewed, which is a fresh client's state rather than a working one. Neither is
+        // KEPT: the harness drives the pin gesture, so starting pinned would leave it with
+        // nothing to prove.
+        Tabs = [ TerminalTab terminalId; TerminalTab liveId ]
+        Pinned = Set.empty
         TerminalsOpen = false }
 
 let private shellModel : ClientModel = shellModelOf Lines 16
 
-/// The shell with one act whose sentence points at things — a sandbox, a connection — so
+/// The shell with an act whose sentence points at things — a sandbox, a connection — so
 /// the page holds a reference drawn INSIDE a line of words. What a rendered string cannot
 /// say about one is where it sits: a reference is part of the sentence, and only a browser
 /// knows whether its name shares the line's baseline or rides above it.
@@ -1104,7 +1109,25 @@ let private actsModel : ClientModel =
           Status = Complete
           Offset = offset 31L
           Woke = None; CausedBy = None }
-    { shellModel with Conversation = { shellModel.Conversation with Items = shellModel.Conversation.Items @ [ start ] } }
+    // And one still coming up, so the page holds the mark an act in flight wears in its
+    // gutter — which, like a reference's name, is a question of where on the line it stands.
+    // The session's, as a sandbox brought up at boot is: the agent's own mark stands at the
+    // end of a message, where the caret case measures it.
+    let starting : ConversationItem =
+        { MessageId = MessageId.create "msg-act-starting" |> expect
+          Author = ActorRef.SessionProcess
+          Content =
+            ItemContent.Act (
+                Act.SandboxStarting
+                    { MessageId = MessageId.create "msg-act-starting" |> expect
+                      Sandbox = SandboxRef.defaultRef
+                      Backend = "srt"
+                      Description = None
+                      Actor = ActorRef.SessionProcess; OnBehalfOf = None; CausedBy = None })
+          Status = ConversationItemStatus.Running
+          Offset = offset 32L
+          Woke = None; CausedBy = None }
+    { shellModel with Conversation = { shellModel.Conversation with Items = shellModel.Conversation.Items @ [ start; starting ] } }
 
 /// The session's FIRST screen: connected, the log read to an end holding nothing, and the
 /// provider's listing arrived — so the ask card stands where the timeline's first line will
@@ -1135,14 +1158,16 @@ let private launchModel : ClientModel =
           Timestamp = System.DateTimeOffset (2026, 9, 12, 0, 0, 0, System.TimeSpan.Zero)
           Event = event }
     let events =
-        [ at 0L (SessionCreated { SessionCreated.SessionId = sessionId })
+        [ at 0L (SessionStarted { MessageId = MessageId.create "msg-started" |> expect })
           at 1L (PeerJoined { PeerId = peerId; DisplayName = "swift-heron"; User = None }) ]
+    // A fixture of states, built by the reducer the page runs; nothing here has anyone to ask.
+    let folded msg model = ClientModel.update msg model |> fst
     ClientModel.init { PeerId = peerId; DisplayName = "swift-heron" }
-    |> ClientModel.update
+    |> folded
         (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (offset 1L) })
-    |> ClientModel.update HistoryReadMsg
-    |> ClientModel.update (EventsPageMsg { Events = events; LastOffset = Some (offset 1L); IsEnd = true })
-    |> ClientModel.update
+    |> folded HistoryReadMsg
+    |> folded (EventsPageMsg { Events = events; LastOffset = Some (offset 1L); IsEnd = true })
+    |> folded
         (LaunchMsg
             (LaunchListingArrived
                 (ListingLoaded
@@ -1284,13 +1309,13 @@ let mutable private typed = ""
 /// something a rendered string has.
 let private recordTyped (_terminal: TerminalId) (data: string) : unit =
     typed <- typed + data
-    (harness ()).__typed <- typed
+    PageGlobal.set Published.typed typed
 
 let private recordResized (_terminal: TerminalId) (cols: int) (rows: int) : unit =
-    (harness ()).__resized <- (sprintf "%dx%d" cols rows)
+    PageGlobal.set Published.resized (sprintf "%dx%d" cols rows)
 
 let private recordViewport (_terminal: TerminalId) (cols: int) (rows: int) : unit =
-    (harness ()).__viewport <- (sprintf "%dx%d" cols rows)
+    PageGlobal.set Published.viewport (sprintf "%dx%d" cols rows)
 
 do
     dressShell Style.app
@@ -1304,22 +1329,7 @@ do
     /// reference `takeRef` is, for the same reason.
     let mutable moreRef : string -> unit = ignore
     let actions =
-        { ViewActions.ssr with
-            FocusPane = PaneShell.toPane
-            FocusChat = PaneShell.toChatItem
-            FocusWatch = PaneShell.toWatchToggle
-            RevealBlock = fun id blockId -> PaneShell.revealBlock (TerminalId.value id) (BlockId.value blockId)
-            RevealMessage = fun id -> PaneShell.revealMessage (MessageId.value id)
-            ScrollToLatest = PaneShell.scrollToLatest
-            FocusItemActions = fun id -> PaneShell.toItemActions (MessageId.value id)
-            TakeTerminal = fun id -> takeRef id
-            // The listing's next page, answered here because this harness has no session to
-            // ask: a page arrives with two more rows and no cursor after it, which is what
-            // the browser tier needs in order to watch REACHING the foot bring rows in
-            // without a press. What the cursor says is the session's business; that it is
-            // carried back unread is what the harness stands in for.
-            LaunchMore = fun cursor -> moreRef cursor
-            TypeIntoTerminal = recordTyped }
+        { ViewActions.ssr with TypeIntoTerminal = recordTyped }
     // The forward reference is the same shape `Browser.fs` uses: the render needs dispatch
     // (a rewound cast that plays off its end jumps back to live) and dispatch's render needs
     // the render.
@@ -1358,7 +1368,34 @@ do
     /// after it — because that is the task a frame waits on when a record lands mid-scroll.
     let mutable renderTimes : ResizeArray<float> option = None
     let rec dispatch (msg: ClientMsg) : unit =
-        model <- ClientModel.update msg model
+        let next, effects = ClientModel.update msg model
+        model <- next
+        // What the page asked of a session, answered here because there is none — and only the
+        // take, which is what puts a screen in front of a keyboard. The rest go nowhere, as they
+        // would in a client whose channel has not opened.
+        effects
+        |> List.iter (function
+            | ClientEffect.TakeTerminal id -> takeRef id
+            | ClientEffect.ReleaseTerminal _
+            | ClientEffect.RearmTerminal _
+            | ClientEffect.ReattachTerminal _
+            | ClientEffect.CloseTerminal _
+            | ClientEffect.OpenTerminal _
+            | ClientEffect.InterruptTurn _
+            | ClientEffect.ApproveRepoCapabilities _ -> ()
+            // The listing's next page, answered here because this harness has no session to
+            // ask: a page arrives with two more rows and no cursor after it, which is what
+            // the browser tier needs in order to watch REACHING the foot bring rows in
+            // without a press. What the cursor says is the session's business; that it is
+            // carried back unread is what the harness stands in for.
+            | ClientEffect.Launch (LaunchEffect.More cursor) -> moreRef cursor
+            | ClientEffect.Launch _
+            | ClientEffect.Claude _
+            | ClientEffect.GitHub _
+            | ClientEffect.GitHubPoll _ -> ()
+            | ClientEffect.Move move -> PaneShell.move move
+            | ClientEffect.Copy _
+            | ClientEffect.RetryNow -> ())
         // Read back off the MODEL rather than out of the message: a measurement the reducer
         // refused is not a width anything would claim, and a hook that reported it anyway
         // would say the opposite of what happened.
@@ -1386,14 +1423,14 @@ do
                     { TerminalId = id; By = ActorRef.PeerRef model.Peer.PeerId; FromSeq = 0 }
             model <- { model with Terminals = Projection.applyEvent model.Terminals taken }
             render ()
-    (harness ()).__snapshot <- System.Action<_, _, _, _, _> (fun id seq screen cols rows ->
+    PageGlobal.set Published.snapshot (System.Action<_, _, _, _, _> (fun id seq screen cols rows ->
         match TerminalId.create id with
         | Ok terminal ->
             renderer.Screens.Snapshot
                 terminal
                 { Seq = seq; Cols = defaultArg cols 80; Rows = defaultArg rows 24; Screen = screen }
-        | Error _ -> ())
-    (harness ()).__agentTurn <- (fun () ->
+        | Error _ -> ()))
+    PageGlobal.set Published.agentTurn (fun () ->
         let expect = function Ok v -> v | Error e -> failwith e
         let turn : AgentTurnId = AgentTurnId.create "turn-live" |> expect
         let messageId : MessageId = MessageId.create "msg-live" |> expect
@@ -1416,25 +1453,24 @@ do
                       envelope 42L (SessionEvent.AgentMessageDelta { AgentTurnId = turn; MessageId = messageId; Delta = "Looking at it" }) ]
                   LastOffset = EventOffset.create 42L |> expect |> Some
                   IsEnd = true }))
-    (harness ()).__take <- (fun id ->
+    PageGlobal.set Published.take (fun id ->
         match TerminalId.create id with
         | Ok terminal -> takeRef terminal
         | Error _ -> ())
     moreRef <-
         fun _ ->
-            dispatch (LaunchMsg LaunchMoreStarted)
             dispatch (
                 LaunchMsg (
                     LaunchMoreArrived
                         { Repos.RepoPage.Candidates = [ candidateRow "octo/next-one"; candidateRow "octo/next-two" ]
                           Repos.RepoPage.Next = None }))
-    (harness ()).__launch <- (fun asking ->
+    PageGlobal.set Published.launch (fun asking ->
         model <- (if asking then launchModel else shellModel)
         render ())
-    (harness ()).__acts <- (fun () ->
+    PageGlobal.set Published.acts (fun () ->
         model <- actsModel
         render ())
-    (harness ()).__chapterCaret <- System.Action<_, _, _> (fun id anchor head ->
+    PageGlobal.set Published.chapterCaret (System.Action<_, _, _> (fun id anchor head ->
         match MessageId.create id, PeerId.create "brave-owl" with
         | Ok messageId, Ok peerId ->
             let text = shellDoc.getText ("harness-chapter-name-" + id)
@@ -1442,19 +1478,19 @@ do
             // empty one, and a caret taken over an empty text is a caret at index nothing.
             if text.length = 0 then
                 ClientModel.chapterNameAt messageId model |> Option.iter (fun named -> text.insert (0, named))
-            let at (index: int) = ProseMirror.relPosFromTypeIndex (box text) index |> ProseMirror.encodeRel
+            let at (index: int) = ProseMirror.relPosFromTypeIndex text index |> ProseMirror.encodeRel
             dispatch (
                 RemotePresenceMsg
                     { Who = ActorRef.PeerRef peerId
                       DisplayName = "brave-owl"
                       Focus = Some { Field = ChapterName messageId; Pos = { Anchor = at anchor; Head = at head } }
                       Viewing = None })
-        | _ -> ())
-    (harness ()).__record <- System.Action<_, _, _, _> (fun id seq kind data ->
+        | _ -> ()))
+    PageGlobal.set Published.record (System.Action<_, _, _, _> (fun id seq kind data ->
         match TerminalId.create id, TranscriptKind.parse kind with
         | Ok terminal, Some kind ->
             dispatch (TerminalRecordMsg (terminal, seq, { At = 0.0; Kind = kind; Data = data }))
-        | _ -> ())
+        | _ -> ()))
     render ()
     // The shell harness drives the real render, so it gets the real page listeners too — a
     // splitter, a pinned surface or a rail that only worked in the app is one no browser-tier
@@ -1486,7 +1522,7 @@ do
     let mutable finish : (unit -> string) option = None
     let mutable sentSoFar : unit -> int = fun () -> 0
     let elsewhereTerminal : TerminalId = TerminalId.create "term-elsewhere" |> expect
-    (harness ()).__benchScrollBegin <- System.Action<_, _, _, _> (fun items records everyMs elsewhere ->
+    PageGlobal.set Published.benchScrollBegin (System.Action<_, _, _, _> (fun items records everyMs elsewhere ->
         model <- shellModelOf Replies items
         render ()
         let surface = conversation ()
@@ -1523,9 +1559,9 @@ do
                 running <- false
                 Browser.Dom.window.clearInterval interval
                 renderTimes <- None
-                scrollReport (frames.ToArray ()) (times.ToArray ()) times.Count sent scrolledFrom (conversation ()).scrollTop))
-    (harness ()).__benchScrollSent <- (fun () -> sentSoFar ())
-    (harness ()).__benchScrollEnd <- (fun () ->
+                scrollReport (frames.ToArray ()) (times.ToArray ()) times.Count sent scrolledFrom (conversation ()).scrollTop)))
+    PageGlobal.set Published.benchScrollSent (fun () -> sentSoFar ())
+    PageGlobal.set Published.benchScrollEnd (fun () ->
         match finish with
         | Some report ->
             finish <- None
@@ -1654,7 +1690,7 @@ do
             { SessionId = SessionId.create "harness" |> expect
               AssignedDisplayName = "swift-heron"
               LatestOffset = fixture.Log |> List.tryLast |> Option.map (fun e -> e.Offset) }
-    (harness ()).__benchOpen <- System.Func<_, _, _> (fun items perAnswer ->
+    PageGlobal.set Published.benchOpen (System.Func<_, _, _> (fun items perAnswer ->
         let fixture = openFixture items perAnswer
         measureOpen (
             async {
@@ -1663,7 +1699,7 @@ do
                 // asked for it — a task later at the very least.
                 do! Async.AwaitPromise (nextTask ())
                 dispatch (accepted fixture)
-            }))
+            })))
 
     // --- Opening a session from nothing (the `bench` cold-open scenario) ---------------------
     //
@@ -1680,7 +1716,7 @@ do
     // accepted (which is what tells the model how far behind it is), then the pages. Pacing
     // a render while the client is catching up is the change this would show, and it lives
     // in `Render`, which this runs.
-    (harness ()).__benchOpenCold <- System.Func<_, _, _, _> (fun items pageSize everyMs ->
+    PageGlobal.set Published.benchOpenCold (System.Func<_, _, _, _> (fun items pageSize everyMs ->
         let fixture = openFixture items pageSize
         let pages = fixture.Log |> List.chunkBySize pageSize
         let last = List.length pages - 1
@@ -1696,4 +1732,4 @@ do
                             { Events = page
                               LastOffset = Some (List.last page).Offset
                               IsEnd = i = last })
-            }))
+            })))

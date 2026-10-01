@@ -13,9 +13,11 @@ module Yession.Tests.Support
 open System
 open Elmish
 open Fable.Core
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yjs
 open Yession.Domain
+open Yession.Domain.Chat
 open Yession.Domain.Sandboxes
 open Yession.Domain.Link
 open Yession.Domain.Collab
@@ -52,11 +54,11 @@ let user msg = Ylmish.Program.Message.User msg
 /// and cannot be run twice at once at all.
 let freePort () : Async<int> =
     async {
-        let server = Interop.createServer (fun _ res -> res.``end`` "")
+        let server = createServer (fun _ res -> res.``end`` "")
         let! listening =
             Async.FromContinuations (fun (cont, _, _) ->
                 server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        let port = Interop.serverPort listening
+        let port = serverPort listening
         do! Async.FromContinuations (fun (cont, _, _) -> listening.close (fun _ -> cont ()))
         return port
     }
@@ -81,7 +83,9 @@ let emptyPolicy : SandboxPolicy =
       Realisation = []
       Env = Map.empty
       WorkingDirectory = None
-      Filesystem = Confined }
+      Filesystem = Confined
+      Derived = Map.empty
+      Intercept = None }
 
 let preparedEmptyPolicy : unit -> Async<Result<SandboxPolicy, string>> =
     fun () -> async { return Ok emptyPolicy }
@@ -186,7 +190,92 @@ let runInSandbox
 /// Render the client view to an HTML string for markup assertions — through the very
 /// renderer the served bootstrap uses (`Ssr`), so tests exercise the shipped SSR path.
 /// The view's `ViewActions` are no-ops (handlers fire on live browser events only).
+/// A log without the session's own account of its life: that it started, and that it came
+/// back after being away. Every case asking "what did this peer append?" or "what did that
+/// turn write?" means this — a fresh session's log opens with `SessionStarted` before anybody
+/// could have appended anything, so a case comparing whole logs would be pinning the session's
+/// lifecycle in the middle of an assertion about something else.
+///
+/// Deliberately not a filter over kinds in general: these two are the only events nothing in
+/// the session asked for, and a case that wanted to ignore anything more would be saying it
+/// does not know what it is asserting.
+let appended (events: SessionEvent list) : SessionEvent list =
+    events
+    |> List.filter (fun event ->
+        match event with
+        | SessionStarted _
+        | SessionResumed _ -> false
+        | _ -> true)
+
+/// This client's timeline without the session's own notes that it started or came back —
+/// `appended`'s rule on the other side of the wire. Only those two acts are dropped, never acts
+/// in general: a repo added or a command refused is something that happened in the session,
+/// and a case listing the timeline wants to see it.
+let timelineOf (model: ClientModel) : Chat.ConversationItem list =
+    model.Conversation.Items
+    |> List.filter (fun item ->
+        match item.Content with
+        | ItemContent.Act (Act.SessionResumed _)
+        | ItemContent.Act (Act.SessionStarted _) -> false
+        | _ -> true)
+
+/// What was said on it, in order — the form most cases want.
+let saidOn (model: ClientModel) : string list =
+    timelineOf model |> List.map Chat.ConversationItem.said
+
 let render (model: ClientModel) : string = Ssr.renderModel model
+
+/// The model after one message, for a case that asserts on state. What the message asked of
+/// the world outside the model is `ClientModel.update`'s other half, and a case about that
+/// reads it there.
+let step (msg: ClientMsg) (model: ClientModel) : ClientModel = ClientModel.update msg model |> fst
+
+/// Open one fold, and answer only what is behind it.
+///
+/// A shut fold builds NOTHING (`View.foldBodyIn`): the wrapper is always there, so every
+/// hook and `aria-controls` resolves, but its contents exist only while it is open. That is
+/// what keeps a session of two thousand shut disclosures from building forty thousand
+/// elements nobody asked to see.
+///
+/// So a case about what a disclosure HOLDS opens it, and a case about what a LINE says reads
+/// the line. Said once, here, because it was said five times in five slightly different
+/// hand-rolled `IndexOf` walks — and each of those broke on the day the body stopped being
+/// rendered, in a way that read as "the content is gone" rather than "you have to open it".
+///
+/// The answer is scoped to the fold, which the hand-rolled versions were not: a bare
+/// `.Contains` over the whole page is satisfied by any other surface that happens to say the
+/// same words, and one of them was — the act's own headline, one line above the disclosure
+/// quoting it.
+let behindFold (key: FoldKey) (model: ClientModel) : string =
+    let html = render (step (ToggleFoldMsg key) model)
+    let hook = sprintf "data-fold-body=\"%s\"" (FoldKey.value key)
+    match html.IndexOf hook with
+    | -1 ->
+        failwithf
+            "no fold is drawn for %s — `behindFold` opens a disclosure that exists, and this \
+             model has none by that key"
+            (FoldKey.value key)
+    | at ->
+        // The element's own subtree, balanced rather than cut at the first `</div>`: a fold's
+        // body holds divs, so the naive cut returns the first line of it and an assertion
+        // about the rest passes or fails by accident.
+        let opensAt = html.LastIndexOf ('<', at)
+        let bodyFrom = html.IndexOf ('>', at) + 1
+        let mutable depth = 1
+        let mutable i = bodyFrom
+        let mutable endsAt = -1
+        while endsAt < 0 && i < html.Length do
+            if i + 4 <= html.Length && html.Substring (i, 4) = "<div" then depth <- depth + 1
+            elif i + 6 <= html.Length && html.Substring (i, 6) = "</div>" then
+                depth <- depth - 1
+                if depth = 0 then endsAt <- i
+            i <- i + 1
+        ignore opensAt
+        if endsAt < 0 then html.Substring bodyFrom else html.Substring (bodyFrom, endsAt - bodyFrom)
+
+/// The words a reader READS in some markup, with the tags taken out.
+let readable (markup: string) : string =
+    System.Text.RegularExpressions.Regex.Replace(markup, "<[^>]*>", " ").Replace("  ", " ").Trim ()
 
 /// One template, rendered the same way — for a piece of the view that can be asked about
 /// on its own (an entity, a phrase) without standing up the whole page around it.
@@ -208,17 +297,13 @@ module OidcHttp =
     let cookieHeader (jar: Jar) : string =
         jar.Cookies |> Map.toList |> List.map (fun (k, v) -> sprintf "%s=%s" k v) |> String.concat "; "
 
-    /// Resolve a (possibly relative) URL against a base, exactly as a browser resolves a
-    /// `Location` header against the request URI.
-    [<Fable.Core.Emit("new URL($0, $1).href")>]
-    let private resolveUrl (location: string) (baseUrl: string) : string = Fable.Core.Util.jsNative
-
-    /// `Headers.getSetCookie()` — every `Set-Cookie` the reply carried, one string each.
-    /// `Headers.get` cannot answer this and `Fable.Fetch` does not bind it: `get` joins
-    /// repeated headers with a comma, and a cookie's `Expires` date contains one, so the
-    /// joined form cannot be taken apart again.
-    [<Fable.Core.Emit("$0.getSetCookie()")>]
-    let private setCookiesOf (headers: Fetch.Types.Headers) : string [] = Fable.Core.Util.jsNative
+    /// Every `Set-Cookie` the reply carried, one string each — `Headers.get` joins repeated
+    /// headers with a comma, and a cookie's `Expires` date contains one, so the joined form
+    /// cannot be taken apart again. A runtime with no `getSetCookie` cannot run these cases at
+    /// all, which is a failure to report rather than a reply that set nothing.
+    let private setCookiesOf (headers: Fetch.Types.Headers) : string [] =
+        Fable.FetchExtras.setCookies headers
+        |> Option.defaultWith (fun () -> failwith "this runtime's Headers has no getSetCookie")
 
     /// One GET that does not follow redirects, as the parts of the reply the OIDC cases read.
     ///
@@ -288,7 +373,7 @@ module OidcHttp =
             async {
                 let! reply = getWithJarAs headers jar url
                 if reply.Status >= 300 && reply.Status < 400 && hops < 10 then
-                    return! go (resolveUrl reply.Location url) (hops + 1)
+                    return! go (Fable.BrowserExtras.Urls.resolve reply.Location url) (hops + 1)
                 else
                     return reply
             }
@@ -510,7 +595,9 @@ let connectInMemoryClientVia
         let local = peer id name
         let registry = BodyRegistry doc
         let texts = TextRegistry doc
-        let runner = Harness.run (Client.makeProgram doc (ClientModel.init local))
+        // Read through a getter, for the reason `connectClientWith` gives.
+        let wired : Client.Connection option ref = ref None
+        let runner = Harness.run (Client.makeProgram { Client.Ports.Connection = (fun () -> wired.Value); Client.Ports.Launch = None; Client.Ports.Panels = None; Client.Ports.Moves = ignore; Client.Ports.Clipboard = (fun _ -> async.Return false); Client.Ports.Retry = ignore } doc (ClientModel.init local))
         // As the browser wires it (see `connectClientWith`).
         DraftSlot.follow doc registry local.PeerId (user >> runner.Dispatch) |> ignore
         let hello = { PeerId = local.PeerId; DisplayName = name; Token = host.MintPeerToken () }
@@ -519,6 +606,7 @@ let connectInMemoryClientVia
             { makeOptions dispatch with
                 ReadPosition = Some (fun () -> (runner.Model ()).EventConsumer.LastProcessedOffset) }
         let connection = Client.connect options doc registry texts hello dispatch clientEnd
+        wired.Value <- Some connection
         Async.StartImmediate connection.Run
         do! runner.WaitFor (fun m -> m.Connection = Connected)
         return { Runner = runner; Connection = connection; Registry = registry; Texts = texts; Channel = clientEnd; Doc = doc; Hello = hello }

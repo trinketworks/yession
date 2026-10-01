@@ -10,7 +10,7 @@ module Bootstrap =
     /// Smoke helper proving the shared domain vocabulary is reachable from the process.
     let describe (event: SessionEvent) : string =
         match event with
-        | SessionCreated _ -> "session-created"
+        | SessionStarted _ -> "session-started"
         | PeerJoined _ -> "peer-joined"
         | PeerLeft _ -> "peer-left"
         | MessageSent _ -> "message-sent"
@@ -54,6 +54,7 @@ module Bootstrap =
         | SessionEvent.WorkSandboxStartFailed _ -> "work-sandbox-start-failed"
         | SessionEvent.WorkSandboxStopped _ -> "work-sandbox-stopped"
         | SessionEvent.RepoConfigRefused _ -> "repo-config-refused"
+        | SessionEvent.RepoConfigWarned _ -> "repo-config-warned"
         | SessionEvent.RepoCapabilitiesChanged _ -> "repo-capabilities-changed"
         | SessionEvent.RepoCapabilitiesApproved _ -> "repo-capabilities-approved"
         | SessionEvent.ShellProfileSet _ -> "shell-profile-set"
@@ -64,6 +65,7 @@ module Bootstrap =
         | SessionEvent.ToolUseStarted _ -> "tool-use-started"
         | SessionEvent.ToolUseFinished _ -> "tool-use-finished"
         | SessionEvent.McpServerAvailable _ -> "mcp-server-available"
+        | SessionEvent.SessionResumed _ -> "session-resumed"
         | SessionEvent.McpServerUnavailable _ -> "mcp-server-unavailable"
         | SessionEvent.PrWatched _ -> "pr-watched"
         | SessionEvent.PrUnwatched _ -> "pr-unwatched"

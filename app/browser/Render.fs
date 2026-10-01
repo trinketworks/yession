@@ -50,27 +50,22 @@ open Yession.App
 //
 // It is `globalThis.__yessionRenders`, and the two readers outside this project — the
 // render-budget case in `Browser.fs`, and the frames tool's recorder — read it by that
-// name in the page. The harness reads it through `renders` below.
-type private RenderCounter =
-    /// Absent until the first render of this document.
-    abstract __yessionRenders : int option with get, set
-
-let private counter () : RenderCounter = unbox Browser.Dom.window
+// name in the page. The harness reads it through `renders` below. Absent until the first
+// render of this document.
+let private rendersPublished : PageGlobal<int> = PageGlobal.named "__yessionRenders"
 
 let private countRender () : unit =
-    let page = counter ()
-    page.__yessionRenders <-
-        Some (
-            match page.__yessionRenders with
-            | Some n -> n + 1
-            | None -> 1
-        )
+    PageGlobal.set
+        rendersPublished
+        (match PageGlobal.tryGet rendersPublished with
+         | Some n -> n + 1
+         | None -> 1)
 
 /// How many times the whole view has been rendered since this document loaded — the count
 /// published above, read back so a scenario counts the renders the APP made rather than a
 /// count of its own. Zero before the first.
 let renders () : int =
-    match (counter ()).__yessionRenders with
+    match PageGlobal.tryGet rendersPublished with
     | Some n -> n
     | None -> 0
 
@@ -191,14 +186,14 @@ let private keepSurfacesPinned (selector: string) : unit =
             // A capture listener on the document hears the DOCUMENT's own scroll as well as
             // the surfaces inside it, and a document has no `matches` to be asked — so what
             // the event reached says whether it is an element before it is asked anything.
-            let node = unbox<Browser.Types.Node> event.target
-            if node.nodeType = node.ELEMENT_NODE then
-                let el = unbox<Browser.Types.HTMLElement> event.target
+            match EventTargets.asHTMLElement event.target with
+            | Some el ->
                 if el.matches selector then pinned.set (el, atEnd el) |> ignore
                 // The chat is one of the two surfaces this selector matches, and the float
                 // is its own: a reader scrolling a terminal's scrollback has no "jump to
                 // latest" to show or hide.
-                if el.matches "[data-conversation]" then syncJumpToLatest ()),
+                if el.matches "[data-conversation]" then syncJumpToLatest ()
+            | None -> ()),
         true)
     Browser.Dom.window.addEventListener (
         "resize",
@@ -294,7 +289,7 @@ let private selectionSpan (length: int) (anchor: int) (head: int) : int * int * 
 /// A native <input> has no per-character DOM geometry, so the pixel offset of a substring is
 /// measured on a canvas in the input's own font. Given a peer's decoded selection
 /// (`anchor`,`head` indices), size its highlight span to `lo..hi` and offset the caret bar to
-/// `head`. Colour is set by the view (`EditorColour`); this only positions. Called per peer
+/// `head`. Colour is set by the view (`Entity.presenceColour`); this only positions. Called per peer
 /// whose caret is in a collaborative input after every render — the DOM is up to date
 /// synchronously.
 ///
@@ -348,16 +343,10 @@ let private placeInputCursor (field: string) (peer: string) (anchor: int) (head:
 let internal raf (f: unit -> unit) : unit =
     Browser.Dom.window.requestAnimationFrame (fun _ -> f ()) |> ignore
 
-// An armed deadline: something is true NOW and only worth saying if it is still true then
-// (see `syncCatchUpTimer`). Nothing debounces on it any more — what needs pacing is paced by
-// the frame (`raf`).
+// The render hold's clock: how long since the last render (see `setState`). What waits on the
+// model's own state is the model's to declare (`ClientModel.timers`); what needs pacing is
+// paced by the frame (`raf`).
 let private now () : float = Browser.Performance.performance.now ()
-
-/// How long catch-up must run before it is worth SAYING (see `EventConsumerState.CatchUpIsSlow`).
-/// Long enough that a send — which puts this client one event behind itself for a round trip —
-/// never lights it; short enough that a real wait is reported rather than sat through in
-/// silence.
-let private catchUpQuietMs = 500
 
 // --- Rich-text editor mount ------------------------------------------------------------
 // The view renders empty `[data-rich-body="<key>"]` hosts; the editor is mounted imperatively
@@ -543,7 +532,7 @@ type Deps =
       Texts : TextRegistry
       PeerId : PeerId
       /// Where the view goes. Lit diffs into it; whatever is there on the first render stays.
-      Root : obj
+      Root : Browser.Types.Element
       Actions : ViewActions
       Dispatch : ClientMsg -> unit
       Links : Links }
@@ -672,8 +661,7 @@ let create (deps: Deps) : Renderer =
                 | Some key ->
                     match fieldOfKey key, inputSelection el with
                     | Some field, Some (anchor, head) ->
-                        let root = box (texts.Text key)
-                        let enc i = ProseMirror.relPosFromTypeIndex root i |> ProseMirror.encodeRel
+                        let enc i = ProseMirror.relPosFromTypeIndex (texts.Text key) i |> ProseMirror.encodeRel
                         sendFocus (Some { Field = field; Pos = { Anchor = enc anchor; Head = enc head } })
                     | _ -> sendFocus None
                 | None -> sendFocus None
@@ -757,37 +745,13 @@ let create (deps: Deps) : Renderer =
             |> List.choose (fun (peerId, p) ->
                 match p.Focus with
                 | Some focus when focus.Field = field ->
-                    Some ({ Colour = EditorColour.ofEditor peerId
-                            Selection = EditorColour.translucent peerId
+                    Some ({ Colour = Entity.presenceColour model peerId
+                            Selection = Entity.presenceSelection model peerId
                             Name = p.DisplayName
                             Anchor = focus.Pos.Anchor
                             Head = focus.Pos.Head } : Editor.RemoteBodyCursor)
                 | _ -> None)
         | _ -> []
-
-    // Catch-up is the normal state for a moment after anything happens — your own send
-    // puts you behind your own event until the page comes back — so the status is armed
-    // rather than mirrored: a timer starts when catch-up begins and only if it is STILL
-    // running when the timer fires does the UI say so. Without this the header flickered
-    // "up to date" → "catching up" → "up to date" on every message sent, which reads as a
-    // fault. Disarmed the moment catch-up ends, and the reducer refuses a late `true`
-    // anyway (`CatchUpSlowMsg`), so a fire that races a landing page changes nothing.
-    let mutable catchUpTimer = 0
-    let syncCatchUpTimer (model: ClientModel) =
-        let consumer = model.EventConsumer
-        if consumer.IsCatchingUp && not consumer.CatchUpIsSlow then
-            // Idempotent: an armed timer is left to run, or a stream of pages would keep
-            // pushing the deadline out and it would never fire.
-            if catchUpTimer = 0 then
-                catchUpTimer <-
-                    JS.setTimeout
-                        (fun () ->
-                            catchUpTimer <- 0
-                            dispatch (CatchUpSlowMsg true))
-                        catchUpQuietMs
-        elif catchUpTimer <> 0 then
-            JS.clearTimeout catchUpTimer
-            catchUpTimer <- 0
 
     // Overlay each body's remote cursors, PACED BY THE FRAME: a render marks the push wanted
     // and the next animation frame performs it, at most once per frame however many renders
@@ -863,7 +827,7 @@ let create (deps: Deps) : Renderer =
     // the reader never asked for, scrolling past under their eye — 116 of them on a session
     // of 97 items, forty-nine thousand pixels of words moving. None of them is the tail,
     // and the tail is what an open is for. So a render that would show a client still
-    // behind is HELD, and one render is made at most every `catchUpQuietMs` while that
+    // behind is HELD, and one render is made at most every `ClientModel.catchUpQuietMs` while that
     // lasts — a long catch-up still shows its progress and its indicator — and the render
     // that shows the client caught up is immediate, whatever the hold. A send puts a client
     // one event behind itself for a round trip, and the page that answers it lands caught
@@ -872,9 +836,9 @@ let create (deps: Deps) : Renderer =
     // the same node across renders while the foot is drawn, so that is once when the listing
     // gains a page to come and once when it runs out.
     //
-    // What the watch asks is `latest`, not a cursor from the render that made it: one observer
-    // outlives many renders, and `Launch.wanting` is where "should I ask" lives (a page to
-    // come, nothing in flight, no attempt under way).
+    // What the watch sends is a sighting, not a cursor from the render that made it: one
+    // observer outlives many renders, and `Launch.wanting`, read by the reducer, is where
+    // "should I ask" lives (a page to come, nothing in flight, no attempt under way).
     // Two feet, one per pane, watched the same way and independently — the branch pane's list
     // pages exactly as the repo pane's does, and both are in the document at once because the
     // track slides rather than swapping.
@@ -899,18 +863,16 @@ let create (deps: Deps) : Renderer =
                             foot
                             wanted)
     let syncListingFoot () =
-        watchFoot Dom.Hooks.repoPickerBody Dom.Hooks.repoPickerFoot (fun () ->
-            latest |> Option.bind (fun model -> Launch.wanting model.Launch) |> Option.iter deps.Actions.LaunchMore)
-        watchFoot Dom.Hooks.repoBranchBody Dom.Hooks.repoBranchFoot (fun () ->
-            latest
-            |> Option.bind (fun model -> Launch.wantingBranches model.Launch)
-            |> Option.iter (fun (repo, cursor) -> deps.Actions.LaunchBranchesMore repo cursor))
+        // Every sighting is sent: whether it asks for a page is the reducer's rule
+        // (`Launch.wanting`), and the watcher fires many times for one scroll.
+        watchFoot Dom.Hooks.repoPickerBody Dom.Hooks.repoPickerFoot (fun () -> dispatch (LaunchMsg LaunchMoreAsked))
+        watchFoot Dom.Hooks.repoBranchBody Dom.Hooks.repoBranchFoot (fun () -> dispatch (LaunchMsg LaunchBranchMoreAsked))
 
     let mutable renderedAt = -infinity
     let mutable held = 0
     let rec setState (model: ClientModel) =
         let since = now () - renderedAt
-        if model.EventConsumer.IsCatchingUp && since < float catchUpQuietMs then
+        if model.EventConsumer.IsCatchingUp && since < float ClientModel.catchUpQuietMs then
             latest <- Some model
             if held = 0 then
                 held <-
@@ -918,7 +880,7 @@ let create (deps: Deps) : Renderer =
                         (fun () ->
                             held <- 0
                             latest |> Option.iter render)
-                        (catchUpQuietMs - int since)
+                        (ClientModel.catchUpQuietMs - int since)
         else
             if held <> 0 then
                 JS.clearTimeout held
@@ -929,7 +891,7 @@ let create (deps: Deps) : Renderer =
         countRender ()
         latest <- Some model
         let scroll = surfaceScroll PinnedSurfaces
-        Lit.render (unbox deps.Root) (View.view deps.Actions model dispatch)
+        Lit.render deps.Root (View.view deps.Actions model dispatch)
         restoreSurfaceScroll PinnedSurfaces scroll
         // A message can arrive below a reader who is not pinned to the tail (that is the
         // whole reason `restoreSurfaceScroll` above leaves them where they were), which is
@@ -955,7 +917,6 @@ let create (deps: Deps) : Renderer =
         // Keep a slot rule running for every open terminal: a person may be mid-command
         // in more than one, and each slot follows its own command line.
         syncTerminalSlots model
-        syncCatchUpTimer model
         // After the render, because the foot it watches is a node this render just drew.
         syncListingFoot ()
         pushPresences ()

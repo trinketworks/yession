@@ -228,11 +228,11 @@ module Codec =
             | Ok authority -> Decode.succeed authority
             | Error reason -> Decode.fail reason)
 
-    let private sessionCreated : Codec<SessionCreated> =
-        { Encode = fun (p: SessionCreated) -> Encode.object [ "sessionId", sessionId.Encode p.SessionId ]
+    let private sessionStarted : Codec<SessionStarted> =
+        { Encode = fun (p: SessionStarted) -> Encode.object [ "messageId", messageId.Encode p.MessageId ]
           Decode =
             Decode.object (fun get ->
-                { SessionCreated.SessionId = get.Required.Field "sessionId" sessionId.Decode }) }
+                { SessionStarted.MessageId = get.Required.Field "messageId" messageId.Decode }) }
 
     let private peerJoined : Codec<PeerJoined> =
         { Encode =
@@ -282,6 +282,15 @@ module Codec =
                 | "chapter" -> Decode.field "messageId" messageId.Decode |> Decode.map NamingSubject.Chapter
                 | "title" -> Decode.succeed NamingSubject.Title
                 | other -> Decode.fail (sprintf "Not a naming subject: %s" other)) }
+
+    let private sessionResumed : Codec<SessionResumed> =
+        { Encode =
+            fun (p: SessionResumed) ->
+                Encode.object [ "messageId", messageId.Encode p.MessageId; "lastHeardAt", timestamp.Encode p.LastHeardAt ]
+          Decode =
+            Decode.object (fun get ->
+                { SessionResumed.MessageId = get.Required.Field "messageId" messageId.Decode
+                  SessionResumed.LastHeardAt = get.Required.Field "lastHeardAt" timestamp.Decode }) }
 
     let private sessionNamed : Codec<SessionNamed> =
         { Encode =
@@ -1243,7 +1252,12 @@ module Codec =
                       "mergeable", Encode.option Encode.bool s.Mergeable
                       "review", Encode.option prReview.Encode s.Review
                       "behind", Encode.bool s.Behind
-                      "draft", Encode.bool s.Draft ]
+                      "draft", Encode.bool s.Draft
+                      "times",
+                      Encode.object
+                          [ "mergedAt", Encode.option timestamp.Encode s.Times.MergedAt
+                            "closedAt", Encode.option timestamp.Encode s.Times.ClosedAt
+                            "checksSettledAt", Encode.option timestamp.Encode s.Times.ChecksSettledAt ] ]
           Decode =
             Decode.object (fun get ->
                 { PrSnapshot.State = get.Required.Field "state" prState.Decode
@@ -1268,7 +1282,17 @@ module Codec =
                   // Optional because a watch recorded before drafts were read has none: it
                   // reads as not a draft, so an undrafting it began over goes unannounced —
                   // the honest `Stalled` rule, since nobody watching saw it as a draft.
-                  PrSnapshot.Draft = get.Optional.Field "draft" Decode.bool |> Option.defaultValue false }) }
+                  PrSnapshot.Draft = get.Optional.Field "draft" Decode.bool |> Option.defaultValue false
+                  // Optional throughout: a baseline recorded before times were read has none,
+                  // and they only ever date a change — they never decide one.
+                  PrSnapshot.Times =
+                      get.Optional.Field
+                          "times"
+                          (Decode.object (fun t ->
+                              { MergedAt = t.Optional.Field "mergedAt" timestamp.Decode
+                                ClosedAt = t.Optional.Field "closedAt" timestamp.Decode
+                                ChecksSettledAt = t.Optional.Field "checksSettledAt" timestamp.Decode }))
+                      |> Option.defaultValue PrTimes.none }) }
 
     let private prTransition : Codec<PrTransition> =
         { Encode =
@@ -1350,7 +1374,8 @@ module Codec =
                       "transition", prTransition.Encode p.Transition
                       "state", prState.Encode p.State
                       "checks", checksRollup.Encode p.Checks
-                      "watcher", principal.Encode p.Watcher ]
+                      "watcher", principal.Encode p.Watcher
+                      "occurredAt", Encode.option timestamp.Encode p.OccurredAt ]
           Decode =
             Decode.object (fun get ->
                 { PrTransitioned.MessageId = get.Required.Field "messageId" messageId.Decode
@@ -1358,7 +1383,10 @@ module Codec =
                   PrTransitioned.Transition = get.Required.Field "transition" prTransition.Decode
                   PrTransitioned.State = get.Required.Field "state" prState.Decode
                   PrTransitioned.Checks = get.Required.Field "checks" checksRollup.Decode
-                  PrTransitioned.Watcher = get.Required.Field "watcher" principal.Decode }) }
+                  PrTransitioned.Watcher = get.Required.Field "watcher" principal.Decode
+                  // Absent on every change recorded before the source's time was read, which
+                  // reads as not knowing it — never as having happened when it was written.
+                  PrTransitioned.OccurredAt = get.Optional.Field "occurredAt" timestamp.Decode }) }
 
     let private sandboxSetupQueued : Codec<SandboxSetupQueued> =
         { Encode =
@@ -1566,6 +1594,27 @@ module Codec =
                   // Optional in: a refusal said before causes were recorded names none.
                   RepoConfigRefused.CausedBy =
                     get.Optional.Field "causedBy" (Decode.option cause.Decode) |> Option.flatten }) }
+
+    let private repoConfigWarned : Codec<RepoConfigWarned> =
+        { Encode =
+            fun (p: RepoConfigWarned) ->
+                Encode.object
+                    [ "messageId", messageId.Encode p.MessageId
+                      "repo", repoRef.Encode p.Repo
+                      "sandbox", Encode.option sandboxRef.Encode p.Sandbox
+                      "where", Encode.string p.Where
+                      "warning", Encode.string p.Warning
+                      "actor", actor.Encode p.Actor
+                      "causedBy", Encode.option cause.Encode p.CausedBy ]
+          Decode =
+            Decode.object (fun get ->
+                { RepoConfigWarned.MessageId = get.Required.Field "messageId" messageId.Decode
+                  RepoConfigWarned.Repo = get.Required.Field "repo" repoRef.Decode
+                  RepoConfigWarned.Sandbox = get.Required.Field "sandbox" (Decode.option sandboxRef.Decode)
+                  RepoConfigWarned.Where = get.Required.Field "where" Decode.string
+                  RepoConfigWarned.Warning = get.Required.Field "warning" Decode.string
+                  RepoConfigWarned.Actor = get.Required.Field "actor" actor.Decode
+                  RepoConfigWarned.CausedBy = get.Required.Field "causedBy" (Decode.option cause.Decode) }) }
 
     let private workSandboxStopped : Codec<WorkSandboxStopped> =
         { Encode =
@@ -1776,8 +1825,8 @@ module Codec =
         { Encode =
             (fun e ->
                 match e with
-                | SessionCreated p ->
-                    Encode.object [ "type", Encode.string "sessionCreated"; "payload", sessionCreated.Encode p ]
+                | SessionStarted p ->
+                    Encode.object [ "type", Encode.string "sessionStarted"; "payload", sessionStarted.Encode p ]
                 | PeerJoined p ->
                     Encode.object [ "type", Encode.string "peerJoined"; "payload", peerJoined.Encode p ]
                 | PeerLeft p ->
@@ -1868,6 +1917,8 @@ module Codec =
                     Encode.object [ "type", Encode.string "workSandboxStopped"; "payload", workSandboxStopped.Encode p ]
                 | RepoConfigRefused p ->
                     Encode.object [ "type", Encode.string "repoConfigRefused"; "payload", repoConfigRefused.Encode p ]
+                | RepoConfigWarned p ->
+                    Encode.object [ "type", Encode.string "repoConfigWarned"; "payload", repoConfigWarned.Encode p ]
                 | RepoCapabilitiesChanged p ->
                     Encode.object
                         [ "type", Encode.string "repoCapabilitiesChanged"
@@ -1892,6 +1943,8 @@ module Codec =
                     Encode.object [ "type", Encode.string "toolUseFinished"; "payload", toolUseFinished.Encode p ]
                 | McpServerAvailable p ->
                     Encode.object [ "type", Encode.string "mcpServerAvailable"; "payload", mcpServerNoted.Encode p ]
+                | SessionResumed p ->
+                    Encode.object [ "type", Encode.string "sessionResumed"; "payload", sessionResumed.Encode p ]
                 | McpServerUnavailable p ->
                     Encode.object [ "type", Encode.string "mcpServerUnavailable"; "payload", mcpServerNoted.Encode p ]
                 | SessionEvent.PrWatched p ->
@@ -1904,7 +1957,7 @@ module Codec =
             Decode.field "type" Decode.string
             |> Decode.andThen (fun t ->
                 match t with
-                | "sessionCreated" -> Decode.field "payload" sessionCreated.Decode |> Decode.map SessionCreated
+                | "sessionStarted" -> Decode.field "payload" sessionStarted.Decode |> Decode.map SessionStarted
                 | "peerJoined" -> Decode.field "payload" peerJoined.Decode |> Decode.map PeerJoined
                 | "peerLeft" -> Decode.field "payload" peerLeft.Decode |> Decode.map PeerLeft
                 | "messageSent" -> Decode.field "payload" messageSent.Decode |> Decode.map MessageSent
@@ -1951,6 +2004,7 @@ module Codec =
                 | "sandboxSetupQueued" -> Decode.field "payload" sandboxSetupQueued.Decode |> Decode.map SandboxSetupQueued
                 | "gitCredentialSpent" -> Decode.field "payload" gitCredentialSpent.Decode |> Decode.map GitCredentialSpent
                 | "repoConfigRefused" -> Decode.field "payload" repoConfigRefused.Decode |> Decode.map RepoConfigRefused
+                | "repoConfigWarned" -> Decode.field "payload" repoConfigWarned.Decode |> Decode.map RepoConfigWarned
                 | "repoCapabilitiesChanged" ->
                     Decode.field "payload" repoCapabilitiesChanged.Decode |> Decode.map RepoCapabilitiesChanged
                 | "repoCapabilitiesApproved" ->
@@ -1964,6 +2018,7 @@ module Codec =
                 | "gatedCommandFailed" -> Decode.field "payload" gatedCommandFailed.Decode |> Decode.map SessionEvent.GatedCommandFailed
                 | "toolUseStarted" -> Decode.field "payload" toolUseStarted.Decode |> Decode.map ToolUseStarted
                 | "toolUseFinished" -> Decode.field "payload" toolUseFinished.Decode |> Decode.map ToolUseFinished
+                | "sessionResumed" -> Decode.field "payload" sessionResumed.Decode |> Decode.map SessionResumed
                 | "mcpServerAvailable" ->
                     Decode.field "payload" mcpServerNoted.Decode |> Decode.map McpServerAvailable
                 | "mcpServerUnavailable" ->

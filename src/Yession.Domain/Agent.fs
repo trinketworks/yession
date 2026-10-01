@@ -17,6 +17,47 @@ open Yession.Domain.Repos
 /// deterministic scripted runner are interchangeable (docs/design.md §1 "Capabilities
 /// are scoped, not ambient", "Verification is automated end-to-end").
 
+/// One resumption, both ends of the gap it names: when the session came back, and when the
+/// process before it was last heard from. A pair rather than a span because the prompt says
+/// all three numbers, and a span cannot be asked what it was measured between.
+type Resumption =
+    { At : System.DateTimeOffset
+      LastHeardAt : System.DateTimeOffset }
+
+/// What the log says about the session's own time: when it began, and when it last came back
+/// after being stopped. The agent is told both, because an agent that does not know a night
+/// passed reads "checks pending" from before it as if it were a minute old.
+///
+/// Both are read from the EVENT that states them, never from a position in the list. A log's
+/// first envelope is the session's start only while every caller passes the whole log, which
+/// is a habit and not an invariant — and this function cannot tell a log from a page of one,
+/// so it would answer a window's beginning as a session's and no reader could tell. A named
+/// event is found wherever it sits, and absent it the answer is `None` rather than a guess.
+type SessionHistory =
+    { StartedAt : System.DateTimeOffset option
+      LastResumed : Resumption option }
+
+module SessionHistory =
+
+    let none : SessionHistory = { StartedAt = None; LastResumed = None }
+
+    let ofEnvelopes (envelopes: EventEnvelope<SessionEvent> list) : SessionHistory =
+        { StartedAt =
+            envelopes
+            |> List.tryPick (fun e ->
+                match e.Event with
+                | SessionStarted _ -> Some e.Timestamp
+                | _ -> None)
+          // The LAST resumption: a log holds one per boot, and what the agent is told is
+          // where this process came in.
+          LastResumed =
+            envelopes
+            |> List.rev
+            |> List.tryPick (fun e ->
+                match e.Event with
+                | SessionResumed r -> Some { At = e.Timestamp; LastHeardAt = r.LastHeardAt }
+                | _ -> None) }
+
 /// Everything the agent is given for one turn. Phase 1: no tools, no environment.
 type AgentContextPack =
     { SessionId      : SessionId
@@ -61,6 +102,10 @@ type AgentContextPack =
       /// turn, re-read from the collaborative register each time — so a person changing it
       /// mid-session changes the next turn, with nothing to relaunch.
       Model          : ModelId option
+      /// When this turn is running, on the session's clock — the timestamp its own start was
+      /// written with.
+      Now            : System.DateTimeOffset
+      History        : SessionHistory
       SystemPrompt   : string }
 
 /// What a runner streams, in the order it arrives. `Text` is the model speaking. A
@@ -596,14 +641,13 @@ type ListSessionSecrets = unit -> Async<Result<SecretMetadata list, string>>
 type DeleteSessionSecret = SecretName -> Async<Result<bool, string>>
 
 /// Start (or get) one of the session's named WorkSandboxes (Plan 15, stage 2). ENSURE
-/// semantics: the same name with the same forwarding hands back the one already running
+/// semantics: the same name with the same declaration hands back the one already running
 /// and records nothing, so folding a declarative file into these commands at every boot
-/// converges instead of accumulating. The same name with DIFFERENT forwarding is refused,
-/// naming the difference — recreating would kill whatever is running inside it.
+/// converges instead of accumulating. The same name declared DIFFERENTLY is refused, naming
+/// the difference — recreating would kill whatever is running inside it.
 ///
-/// The request's `Forward` is a list of credential NAMES. Each resolves for the turn human
-/// (Plan 08 precedence) into that sandbox's environment; the value goes nowhere else, and
-/// the event records which names and whose, never what.
+/// What it forwards is the connections its selection reaches (`ResourceLeaf.Connection`):
+/// a route and a per-block loan each, never a value, and the event records which names.
 ///
 /// A whole `SandboxDecl` rather than a name and a list, because the same verb is what
 /// `yession.yaml` folds into and a file says more about a sandbox than a tool call does.

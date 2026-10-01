@@ -8,6 +8,7 @@ module Yession.Tests.Phase4
 
 open System
 open Fable.Core
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Sandboxes
@@ -24,9 +25,9 @@ open Yession.Host
 open Yession.Tests.Support
 open Yession.Peer
 
-/// What a browser makes of a link on a page: the href resolved against the page's own URL.
-[<Emit("new URL($1, $0).href")>]
-let private resolveUrl (pageUrl: string) (href: string) : string = Fable.Core.Util.jsNative
+/// What a browser makes of a link on a page: the href resolved against the page's own URL —
+/// the WHATWG `URL` constructor, which Node ships as the browser does.
+let private resolveUrl (pageUrl: string) (href: string) : string = Fable.BrowserExtras.Urls.resolve href pageUrl
 
 let private statePath (name: string) =
     sprintf "tests/Yession.Tests/out/.data/%s-%d.manager.json" name (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
@@ -501,7 +502,7 @@ let private processTests =
 let private startControlServerOver
     (endpoints: WebhookRelay.HookEndpoint list)
     (secrets: (string * SessionId) list)
-    : Async<Interop.HttpServer * string * NotificationHub.NotificationHub<SessionNotification> * KeyedRetainedHub.KeyedRetainedHub<McpServerSet> * WebhookRelay.Relay> =
+    : Async<HttpServer * string * NotificationHub.NotificationHub<SessionNotification> * KeyedRetainedHub.KeyedRetainedHub<McpServerSet> * WebhookRelay.Relay> =
     async {
         let table =
             secrets
@@ -521,16 +522,16 @@ let private startControlServerOver
             WebhookRelay.create endpoints hub.NotifySecret (fun () ->
                 minted <- minted + 1
                 sprintf "sub-%d" minted)
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             if not (
                 WebhookRelay.tryHandle relay req res
                 || Control.tryHandle (fun secret -> Map.tryFind secret table) (fun _ _ -> async { return Ok () }) (fun _ _ -> async { return Ok () }) (fun _ _ -> async { return Ok () }) hub.Register mcp.Register registerClient None None (fun _ _ -> Subscription.none) relay.Subscribe relay.Unsubscribe ignore req res) then
-                res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        return listening, sprintf "http://127.0.0.1:%d" (Interop.serverPort listening), hub, mcp, relay
+        return listening, sprintf "http://127.0.0.1:%d" (serverPort listening), hub, mcp, relay
     }
 
 /// The common case: no hook endpoints declared.
@@ -708,6 +709,7 @@ let private uiRenderTests =
             let html =
                 ManagerUi.page
                     "app.css"
+                    "manager-page.js"
                     PublicAccess.Loopback
                     SessionQuery.defaults
                     [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
@@ -728,6 +730,7 @@ let private uiRenderTests =
             let html =
                 ManagerUi.page
                     "app.css"
+                    "manager-page.js"
                     (PublicAccess.create "https://yession.example.com" "https://{id}.example.com" |> expect)
                     SessionQuery.defaults
                     [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
@@ -742,6 +745,7 @@ let private uiRenderTests =
             let html =
                 ManagerUi.page
                     "app.css"
+                    "manager-page.js"
                     PublicAccess.Loopback
                     SessionQuery.defaults
                     [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
@@ -749,18 +753,25 @@ let private uiRenderTests =
                     []
             Expect.isFalse (html.Contains "data-hooks") "an empty table would imply there is something to fill in"
 
-        testCase "the page is self-contained: an inline script drives it, no external sources" <| fun () ->
+        // The page's program is the one it was handed an address for, and nothing else: not a
+        // program in a string (which nothing type-checks), and not one fetched from off this
+        // Manager (local-first). Every `<script>` on the page is counted, so an inline body
+        // coming back fails here as surely as a CDN link would.
+        testCase "the page runs the program it was given the address of, and no other" <| fun () ->
             let html =
                 ManagerUi.page
                     "app.css"
+                    "manager-page.js"
                     PublicAccess.Loopback
                     SessionQuery.defaults
                     [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
                     []
                     []
-            Expect.isTrue (html.Contains "<script>") "an inline script drives the UI (no bundle)"
-            Expect.isFalse (html.Contains "src=\"http") "no external/CDN scripts (local-first)"
-            Expect.isTrue (html.Contains Dom.Manager.createSession) "the create form renders"
+            let scripts =
+                System.Text.RegularExpressions.Regex.Matches (html, "<script[^>]*>")
+                |> Seq.map (fun m -> m.Value)
+                |> List.ofSeq
+            Expect.equal scripts [ "<script type=\"module\" src=\"manager-page.js\">" ] "one script, a module, at the address the page was given"
 
         // The page and the server are one declaration (`ManagerRoute`): every address the
         // page carries — on a control, a form, the section the rows stream fills — is a
@@ -780,6 +791,7 @@ let private uiRenderTests =
             let html =
                 ManagerUi.page
                     "app.css"
+                    "manager-page.js"
                     PublicAccess.Loopback
                     { SessionQuery.defaults with Show = Both }
                     views
@@ -1064,6 +1076,17 @@ let private peopleMarkTests =
                 for tone in [ light; dark ] do
                     Expect.isFalse (inBlueBand tone) (sprintf "%s reads as the agent's blue (hue %A); a person's checker may not wear it" tone (hue tone))
 
+        // A caret is the other place a person's colour is drawn, and it was drawn from a hue
+        // of its own, hashed over the whole wheel — so a person with an amber checker could
+        // type in the agent's blue. Many seeds, because which one lands where is the hash's
+        // business; that none of them can is the rule.
+        testCase "no person's caret is drawn in the agent's blue" <| fun () ->
+            let model = ClientModel.init { PeerId = PeerId.create "peer-caret" |> expect; DisplayName = "Grace" }
+            for i in 0 .. 199 do
+                let who = PeerRef (PeerId.create (sprintf "peer-%d" i) |> expect)
+                let colour = Entity.presenceColour model who
+                Expect.isFalse (inBlueBand colour) (sprintf "peer-%d's caret is %s, the agent's blue (hue %A)" i colour (hue colour))
+
         testCase "every person's checker is declared to Tailwind" <| fun () ->
             // The checkers are assembled at runtime, so the stylesheet generates only the ones
             // app/tailwind.css names inline; one it does not name paints nothing at all.
@@ -1096,20 +1119,20 @@ let private managerWithUi (name: string) =
 /// answers are different facts. A reconciler driven by `/sessions/stream` reaches a
 /// just-created session a few hundred milliseconds after the Manager has launched it, and
 /// everything that arrives in that window meets this.
-let private startFrontDoor () : Async<Interop.HttpServer * string * (unit -> unit)> =
+let private startFrontDoor () : Async<HttpServer * string * (unit -> unit)> =
     async {
         let mutable mapped = false
-        let handler (_: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (_: IncomingMessage) (res: ServerResponse) =
             if mapped then
-                res.writeHead (200, Fable.Core.JsInterop.createObj [ "content-type", box "text/html; charset=utf-8" ]) |> ignore
+                res.writeHead (200, [ ResponseHeader.ContentType "text/html; charset=utf-8" ])
                 res.``end`` "<!doctype html><title>a session</title>"
             else
-                res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        return listening, sprintf "http://127.0.0.1:%d" (Interop.serverPort listening), (fun () -> mapped <- true)
+        return listening, sprintf "http://127.0.0.1:%d" (serverPort listening), (fun () -> mapped <- true)
     }
 
 /// A Manager publishing its sessions at a front door this test owns, with one session created
@@ -1138,6 +1161,17 @@ let private managerBehindFrontDoor (name: string) =
         let! launched = pm.Launch sessionId
         Expect.isTrue (Result.isOk launched) "the session launches"
         return pm, origin, mapIt, door
+    }
+
+/// The one module script a Manager page names, resolved from the page's own address, answers
+/// as JavaScript.
+let private expectServedProgram (pageUrl: string) (page: string) : Async<unit> =
+    async {
+        let named = System.Text.RegularExpressions.Regex.Match (page, "<script type=\"module\" src=\"([^\"]+)\">")
+        Expect.isTrue named.Success "the page names its program"
+        let! program = TestHttp.get (resolveUrl pageUrl named.Groups.[1].Value)
+        Expect.equal program.Status 200 "the Manager serves it at that address"
+        Expect.stringContains (TestHttp.requiredHeader "content-type" program) "text/javascript" "as a program a browser will run"
     }
 
 /// `/sessions/{id}/ready`: whether this deployment's front door reaches the session yet.
@@ -1257,6 +1291,37 @@ let private readinessTests =
                 Expect.stringContains page.Body "data-mark-intro" "the intro is on the screen"
                 Expect.stringContains page.Body "data-mark-static" "and the still mark, for a reader who declined motion"
                 Expect.stringContains page.Body (sprintf "href=\"%s\"" (ManagerRoute.path ManagerRoute.Home)) "the way back is a link to the manager"
+                do! pm.StopAll ()
+            }
+
+        // A page's program is a file of the Manager's asset set, and a module script at an
+        // address that 404s — or answers at a type that is not JavaScript — is refused without
+        // a word: the page paints and nothing on it moves. RESOLVED from the page's own address
+        // and fetched, for the reason the stylesheet case above gives: a Manager page under
+        // `/sessions/{id}/` would 404 on a link that is right at `/`.
+        testCaseAsync "the Manager page's program is served from where the page is" <|
+            async {
+                let! pm = managerWithUi "manager-program"
+                let pageUrl = sprintf "http://127.0.0.1:%d/" pm.EndpointPort.Value
+                let! page = TestHttp.get pageUrl
+                do! expectServedProgram pageUrl page.Body
+                do! pm.StopAll ()
+            }
+
+        // The opening screen's dwell is timed from when its program runs, so the program runs
+        // as the page is PARSED — inline, at the end of the body — and never as a script the
+        // browser must fetch or defer first, which starts the dwell late and holds the screen
+        // past the intro it waits for (`ManagerUi.openingProgram`). Every `<script>` is counted.
+        testCaseAsync "the opening page's program runs as the page is parsed, not after it" <|
+            async {
+                let! pm = managerWithUi "opening-program"
+                pm.CreateSession "opening-program" "" |> expect |> ignore
+                let! page = TestHttp.get (sprintf "http://127.0.0.1:%d/sessions/opening-program/open" pm.EndpointPort.Value)
+                let scripts =
+                    System.Text.RegularExpressions.Regex.Matches (page.Body, "<script[^>]*>")
+                    |> Seq.map (fun m -> m.Value)
+                    |> List.ofSeq
+                Expect.equal scripts [ "<script>" ] "one script, a classic inline one: no src, no module, no defer"
                 do! pm.StopAll ()
             }
 
@@ -1478,6 +1543,55 @@ let private launchOnceTests =
             }
     ]
 
+/// A Manager with its management endpoint up over stub sessions, and a session in it already
+/// running. The stub reports port 1, so the address `/open` names is known in advance.
+let private runningBehindUi (name: string) =
+    let dataDir =
+        sprintf "tests/Yession.Tests/out/.data/%s-%d" name (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+    Fs.ensureDir dataDir
+    let ledger = dataDir + "/spawned"
+    async {
+        let! pm =
+            ProcessManager.createWithUi
+                { ProcessManager.Options.defaults dataDir nodePath (stubSession ledger (readyThenWait 0)) with
+                    Strategy = Some Strategy.localhost }
+                (Some ManagerUi.tryHandle)
+        let record = pm.CreateSession name "" |> expect
+        let! launched = pm.Launch record.SessionId
+        Expect.isTrue (Result.isOk launched) (sprintf "the stub launched: %A" launched)
+        let openUrl =
+            sprintf "http://127.0.0.1:%d%s" pm.EndpointPort.Value (ManagerRoute.path (ManagerRoute.OpenSession record.SessionId))
+        return pm, ledger, openUrl
+    }
+
+// `/open` on a session that is already up. The opening screen covers a launch and a front
+// door's mapping appearing; a running session has both, so the screen would only be a
+// delay — the answer is where the screen would have sent the browser, at once.
+let private openRunningTests =
+    testList "Opening a session that is already running" [
+        testCaseAsync "/open on a running session answers 303 straight to its sign-in address" <|
+            async {
+                let! pm, ledger, openUrl = runningBehindUi "open-running"
+                let! answer = TestHttp.getUnredirected [] openUrl
+                do! pm.StopAll ()
+                spawnedChildren ledger |> ignore
+                Expect.equal
+                    (answer.Status, TestHttp.header "location" answer)
+                    (303, Some "http://127.0.0.1:1/login")
+                    "a redirect to the session's sign-in entry, with no screen in front of it"
+            }
+
+        // What makes the URL safe to keep clicking: asking for a session that is up is not
+        // asking for it to be started again.
+        testCaseAsync "/open on a running session does not relaunch it" <|
+            async {
+                let! pm, ledger, openUrl = runningBehindUi "open-again"
+                let! _ = TestHttp.getUnredirected [] openUrl
+                do! pm.StopAll ()
+                Expect.equal (List.length (spawnedChildren ledger)) 1 "one child, spawned by the launch before /open"
+            }
+    ]
+
 let private uiFlowTests =
     testList "Management UI flow (Step 25)" [
         testCaseAsync "create -> launch -> open -> stop -> resume -> crash, all over the management endpoint, with live status pushed on the rows stream" <|
@@ -1606,14 +1720,8 @@ let private uiFlowTests =
                     (opened.Contains (sprintf "http://127.0.0.1:%d/login" launchedPort))
                     "the landing page names the session's sign-in entry"
 
-                // Already running: /open is not a relaunch — it hands back the same address,
-                // which is what makes the URL safe to keep clicking.
-                let! again = Interop.getText (baseUrl + "/sessions/open-1/open") |> Interop.awaitPromise
-                match (pm.TryFind sessionId).Value.Status with
-                | ProcessManager.Running (port, _, _) ->
-                    Expect.equal port launchedPort "the running session was not restarted"
-                    Expect.isTrue (again.Contains (sprintf "http://127.0.0.1:%d/login" port)) "same address"
-                | other -> failwithf "expected it to still be running, got %A" other
+                // What /open does with a session that is ALREADY running is its own pair of
+                // cases (`openRunningTests`): a redirect, and not a relaunch.
 
                 // An unknown session is a 404, not a launch attempt.
                 let! missing = TestHttp.get (baseUrl + "/sessions/nope-nope/open")
@@ -1648,7 +1756,7 @@ let private reapingTests =
                     sprintf "tests/Yession.Tests/out/.data/reap-%d" (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
                 // Every lifecycle event the Manager emits, so the reap's REASON is read from
                 // the telemetry that operators read, not inferred from the session being gone.
-                let events = ResizeArray<string * (string * obj) list> ()
+                let events = ResizeArray<string * (string * Telemetry.AttributeValue) list> ()
                 // A free port rather than a fixed one, like the fronted registry test below:
                 // the Manager must actually ANSWER on the origin it declares, because a
                 // launched session fetches OIDC discovery against it (Plan 10).
@@ -1696,7 +1804,10 @@ let private reapingTests =
                         |> Seq.filter (fun (name, _) -> name = "session exited")
                         |> Seq.tryLast
                         |> Option.bind (fun (_, attrs) ->
-                            attrs |> List.tryPick (fun (k, v) -> if k = "yession.session.stop_reason" then Some (string v) else None)))
+                            attrs
+                            |> List.tryPick (function
+                                | "yession.session.stop_reason", Telemetry.AttributeValue.String reason -> Some reason
+                                | _ -> None)))
                 Expect.equal reason (Some "idle") "a session that reports must be reaped as idle, never as never-reported"
 
                 // And the way back returns it to the SAME address. This is the property that
@@ -1726,9 +1837,6 @@ let private reapingTests =
 // everything. This is what gates a release.
 // -----------------------------------------------------------------------------
 
-[<Fable.Core.Import("spawn", "node:child_process")>]
-let private spawnRaw : obj = Fable.Core.Util.jsNative
-
 // Run the packaged manager bundle on this Node, pointing it at the packaged session
 // bundle (what the `yession` bin shim does in an install). `--auth localhost` mirrors a
 // single-machine operator's choice — the shipped default (`none`) denies everything.
@@ -1736,20 +1844,16 @@ let private spawnRaw : obj = Fable.Core.Util.jsNative
 // `args` and `env` are both here because the shipped bin reads both: what this Manager
 // decides is argv, what its children inherit is the environment. `YESSION_SPAWN_MAIN` is
 // on the env side for the same reason it is in the real shim — packaging tells the Manager
-// where the packaged session bundle is; an operator does not.
-[<Emit("$0(process.execPath, [$1, '--auth', 'localhost', ...$2], { env: { ...process.env, YESSION_SPAWN_MAIN: $4, ...Object.fromEntries($3) }, stdio: ['pipe', 'pipe', 'inherit'] })")>]
-let private spawnBundle (spawn: obj) (managerJs: string) (args: string array) (env: (string * string) array) (sessionJs: string) : obj = Fable.Core.Util.jsNative
-
-/// The spawned bundle's stdout, as the `Readable` it is — so the stream is told to decode,
-/// rather than each chunk being asked whether it already has been.
-[<Emit("$0.stdout")>]
-let private stdoutOf (child: obj) : Fable.NodeExtras.Readable = Fable.Core.Util.jsNative
-
-[<Emit("$0.kill('SIGKILL')")>]
-let private killBinary (child: obj) : unit = Fable.Core.Util.jsNative
-
-[<Emit("$0.on('exit', $1)")>]
-let private onBinaryExit (child: obj) (handler: obj -> unit) : unit = Fable.Core.Util.jsNative
+// where the packaged session bundle is; an operator does not. It goes first, so an `env`
+// that names it too is the one that wins.
+let private spawnBundle (managerJs: string) (args: string list) (env: (string * string) list) (sessionJs: string) : Node.ChildProcess.ChildProcess =
+    ChildProcesses.spawn
+        Node.Api.``process``.execPath
+        (managerJs :: "--auth" :: "localhost" :: args)
+        { Cwd = None
+          Env = ChildEnv.Adding (Map.ofList (("YESSION_SPAWN_MAIN", sessionJs) :: env))
+          Streams = { Stdin = Stdio.Pipe; Stdout = Stdio.Pipe; Stderr = Stdio.Inherit }
+          Detached = false }
 
 /// A running packaged manager: its two announced URLs and a kill that resolves once
 /// the process is gone.
@@ -1760,25 +1864,24 @@ type private PackagedManager =
 
 let private startPackagedManager (args: string list) (env: (string * string) list) : Async<PackagedManager> =
     Async.FromContinuations (fun (cont, econt, _) ->
-        let child =
-            spawnBundle spawnRaw "dist/npm/manager.js" (Array.ofList args) (Array.ofList env) "dist/npm/session.js"
+        let child = spawnBundle "dist/npm/manager.js" args env "dist/npm/session.js"
         let mutable sessionUrl = None
         let mutable uiUrl = None
         let mutable settled = false
         let urlIn (line: string) =
             let m = System.Text.RegularExpressions.Regex.Match (line, "http://[0-9.:]+/")
             if m.Success then Some m.Value else None
-        onBinaryExit child (fun _ ->
+        ChildProcessStreams.onExit child (fun _ ->
             if not settled then
                 settled <- true
                 econt (Exception "packaged manager exited before announcing its endpoints"))
         // A missing/unrunnable binary is a loud test failure, not a crashed runner.
-        Fable.Core.JsInterop.emitJsExpr (child, (fun (e: obj) ->
+        ChildProcessStreams.onError child (fun e ->
             if not settled then
                 settled <- true
-                econt (Exception (sprintf "packaged manager failed to start: %A" e)))) "$0.on('error', $1)"
+                econt (Exception (sprintf "packaged manager failed to start: %s" (StreamError.describe e))))
         let mutable buffer = ""
-        Fable.NodeExtras.Readables.text (stdoutOf child) (fun chunk ->
+        Readables.text (ChildProcessStreams.stdout child) (fun chunk ->
             buffer <- buffer + chunk
             let parts = buffer.Split '\n'
             buffer <- parts.[parts.Length - 1]
@@ -1794,8 +1897,8 @@ let private startPackagedManager (args: string list) (env: (string * string) lis
                           Shutdown =
                             fun () ->
                                 Async.FromContinuations (fun (kcont, _, _) ->
-                                    onBinaryExit child (fun _ -> kcont ())
-                                    killBinary child) }
+                                    ChildProcessStreams.onExit child (fun _ -> kcont ())
+                                    child.kill "SIGKILL" |> ignore) }
                 | _ -> ()))
 
 /// Which port the launched child answers on, read off the row's OPEN LINK.
@@ -1804,15 +1907,15 @@ let private startPackagedManager (args: string list) (env: (string * string) lis
 /// (the summary has that column now). The link is the better source and always was: it is
 /// the row's actual promise — press it and you reach this session — so a row whose href
 /// named the wrong port would be broken for a person, not just for this test.
-/// Which port a session answers on, read off its `/open` page — the one place the Manager
-/// spells a session's address to a browser. A row never does: its name links to `/open`
-/// itself, so that a relaunch cannot break the link.
+/// Which port a RUNNING session answers on, read off where `/open` redirects — the one place
+/// the Manager spells a session's address to a browser. A row never does: its name links to
+/// `/open` itself, so that a relaunch cannot break the link.
 let private portOfOpen (openUrl: string) : Async<int> =
     async {
-        let! reply = TestHttp.get openUrl
-        let page = reply.Body
-        let m = System.Text.RegularExpressions.Regex.Match (page, "href=\"http://127\\.0\\.0\\.1:(\\d+)/")
-        if m.Success then return int m.Groups.[1].Value else return failwithf "no session address on the open page: %s" page
+        let! reply = TestHttp.getUnredirected [] openUrl
+        let location = TestHttp.requiredHeader "location" reply
+        let m = System.Text.RegularExpressions.Regex.Match (location, "^http://127\\.0\\.0\\.1:(\\d+)/")
+        if m.Success then return int m.Groups.[1].Value else return failwithf "/open named no session address: %d %s" reply.Status location
     }
 
 let private compositionTests =
@@ -1831,8 +1934,8 @@ let private compositionTests =
 
                 // Create and launch a session over the Manager's HTTP API. The redirect is
                 // not followed: creating now launches and opens, and this case wants the
-                // launch to be its own act; the port is then read off `/open`, the one page
-                // that spells it.
+                // launch to be its own act; the port is then read off where `/open` sends a
+                // browser, the one answer that spells it.
                 let! created = postFormHere (manager.UiUrl + "sessions") "id=composed&name=Composed"
                 Expect.equal created.Status 303 "created via the UI"
                 let! launched = TestHttp.postForm "" (manager.UiUrl + "sessions/composed/launch")
@@ -1847,14 +1950,34 @@ let private compositionTests =
                 let! a = connectClient (sprintf "http://127.0.0.1:%d/signal" sessionPort) openedA.PeerToken "ada" "Ada"
                 do! compose a a.Hello.PeerId "built binaries talking"
                 a.Connection.SendDraft a.Hello.PeerId
-                do! a.Runner.WaitFor (fun m ->
-                        (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "built binaries talking"))
-                        && (m.Conversation.Items
-                            |> List.exists (fun i -> i.Author = ActorRef.Agent && i.Status = Complete && (ConversationItem.said i).Contains "diagnostic-ok"))
-                        && (match m.Environment with EnvironmentRunning _ -> true | _ -> false)
-                        && (m.Terminals.Terminals
-                            |> List.exists (fun t ->
-                                t.Blocks |> List.exists (fun b -> b.Status = BlockFinished (CommandSucceeded 0)))))
+                do!
+                    Harness.waitForAll
+                        a.Runner
+                        [ "the message is on the timeline",
+                          fun m -> m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "built binaries talking")
+                          "the agent's turn completed",
+                          fun m -> m.Conversation.Items |> List.exists (fun i -> i.Author = ActorRef.Agent && i.Status = Complete)
+                          "its answer says diagnostic-ok",
+                          fun m ->
+                              m.Conversation.Items
+                              |> List.exists (fun i -> i.Author = ActorRef.Agent && (ConversationItem.said i).Contains "diagnostic-ok")
+                          "the environment is running",
+                          fun m -> (match m.Environment with EnvironmentRunning _ -> true | _ -> false)
+                          "a block finished with 0",
+                          fun m ->
+                              m.Terminals.Terminals
+                              |> List.exists (fun t -> t.Blocks |> List.exists (fun b -> b.Status = BlockFinished (CommandSucceeded 0))) ]
+                        // What the agent said and how its turn stands, and every block's status:
+                        // the difference between a command whose output read back empty and one
+                        // that did not succeed, which is the question this wait has timed out on.
+                        (fun m ->
+                            let agent =
+                                m.Conversation.Items
+                                |> List.filter (fun i -> i.Author = ActorRef.Agent)
+                                |> List.map (fun i -> sprintf "%A %A" i.Status (ConversationItem.said i))
+                            let blocks =
+                                m.Terminals.Terminals |> List.collect (fun t -> t.Blocks |> List.map (fun b -> sprintf "%A" b.Status))
+                            sprintf "agent items: %s; blocks: %s" (String.concat " | " agent) (String.concat " | " blocks))
                 do! a.Channel.Close ()
 
                 // Stop and resume from the UI; history replays into the fresh child.
@@ -2049,9 +2172,8 @@ let private sseStreamTests =
                 // Split mid-payload AND before the blank line that ends the event, so NEITHER
                 // piece is an event on its own: a loop that dropped what it held back would
                 // deliver nothing at all, and one that dispatched the half would deliver it twice.
-                let handler (_req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
-                    res.writeHead (200, Fable.Core.JsInterop.createObj [ "content-type", box "text/event-stream" ])
-                    |> ignore
+                let handler (_req: IncomingMessage) (res: ServerResponse) =
+                    res.writeHead (200, [ ResponseHeader.ContentType "text/event-stream" ])
                     res.write "data: half a lo" |> ignore
                     // The gap is what makes this two reads rather than one: written back to back,
                     // the two pieces would reach the client in a single chunk and the case would
@@ -2061,11 +2183,11 @@ let private sseStreamTests =
                         res.write "af\n\n" |> ignore
                     })
 
-                let server = Interop.createServer handler
+                let server = createServer handler
                 let! listening =
                     Async.FromContinuations (fun (cont, _, _) ->
                         server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-                let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
+                let url = sprintf "http://127.0.0.1:%d/stream" (serverPort listening)
 
                 let payloads = ResizeArray<string> ()
                 let subscription = Sse.subscribe url [] payloads.Add
@@ -2098,17 +2220,16 @@ let private aThrowingSubscriber () =
     async {
         let connections = ResizeArray<int> ()
 
-        let handler (_req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (_req: IncomingMessage) (res: ServerResponse) =
             connections.Add 1
-            res.writeHead (200, Fable.Core.JsInterop.createObj [ "content-type", box "text/event-stream" ])
-            |> ignore
+            res.writeHead (200, [ ResponseHeader.ContentType "text/event-stream" ])
             res.write "data: one\n\ndata: two\n\n" |> ignore
 
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) ->
                 server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
+        let url = sprintf "http://127.0.0.1:%d/stream" (serverPort listening)
 
         let received = ResizeArray<string> ()
         let mutable thrown = false
@@ -2155,20 +2276,21 @@ let private sseThrowingSinkTests =
 /// Watch the socket a request arrived on, from the server's end: this fires when the far
 /// side lets go of the connection. The honest observation of "the client is no longer
 /// holding this open", where a client-side handle would only say what the client thinks.
-[<Emit("$0.socket.on('close', $1)")>]
-let private onRequestSocketClosed (req: Interop.IncomingMessage) (closed: unit -> unit) : unit =
-    Fable.Core.Util.jsNative
+let private onRequestSocketClosed (req: IncomingMessage) (closed: unit -> unit) : unit =
+    match req.socket with
+    | Some socket -> socket.onClose closed
+    | None -> failwith "the request arrived with no socket to watch"
 
 /// A URL nothing is listening on: a port this box held for a moment and let go, so a connect
 /// to it is REFUSED rather than merely slow — which is what makes the outcome under test a
 /// connect nobody answered, and not a deadline the case would have to wait out.
 let private aDeadUrl () : Async<string> =
     async {
-        let server = Interop.createServer (fun _ res -> res.``end`` "")
+        let server = createServer (fun _ res -> res.``end`` "")
         let! listening =
             Async.FromContinuations (fun (cont, _, _) ->
                 server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        let port = Interop.serverPort listening
+        let port = serverPort listening
         do! Async.FromContinuations (fun (cont, _, _) -> listening.close (fun _ -> cont ()))
         return sprintf "http://127.0.0.1:%d/stream" port
     }
@@ -2216,16 +2338,15 @@ let private sseGiveUpTests =
             async {
                 // A stream that is open and stays open: the only way this connection can end is
                 // the teardown, so anything reaching `retry` came from the unsubscribe.
-                let handler (_req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
-                    res.writeHead (200, Fable.Core.JsInterop.createObj [ "content-type", box "text/event-stream" ])
-                    |> ignore
+                let handler (_req: IncomingMessage) (res: ServerResponse) =
+                    res.writeHead (200, [ ResponseHeader.ContentType "text/event-stream" ])
                     res.write ": subscribed\n\n" |> ignore
 
-                let server = Interop.createServer handler
+                let server = createServer handler
                 let! listening =
                     Async.FromContinuations (fun (cont, _, _) ->
                         server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-                let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
+                let url = sprintf "http://127.0.0.1:%d/stream" (serverPort listening)
 
                 let asked = ResizeArray<Sse.Refusal> ()
                 let recording : Sse.Retry = fun refusal -> asked.Add refusal; true
@@ -2248,19 +2369,18 @@ let private sseGiveUpTests =
                 // way, where nothing the subscription does can be seen from here.
                 let mutable socketClosed = false
 
-                let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+                let handler (req: IncomingMessage) (res: ServerResponse) =
                     onRequestSocketClosed req (fun () -> socketClosed <- true)
-                    res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ])
-                    |> ignore
+                    res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                     // Node holds a head until something is written, so this is what puts the
                     // status on the wire — and it deliberately does not end the response.
                     res.write "no stream here" |> ignore
 
-                let server = Interop.createServer handler
+                let server = createServer handler
                 let! listening =
                     Async.FromContinuations (fun (cont, _, _) ->
                         server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-                let url = sprintf "http://127.0.0.1:%d/stream" (Interop.serverPort listening)
+                let url = sprintf "http://127.0.0.1:%d/stream" (serverPort listening)
 
                 // What a caller that knows its peer says about a 404: this endpoint is not
                 // here, and asking again every second is a hot loop against a server that is
@@ -2349,7 +2469,7 @@ let private hookRelayTests =
                 sprintf "sub-%d" minted)
         relay, pushed
     let signedWith (secret: string) (body: string) =
-        [ "x-hub-signature-256", "sha256=" + Interop.hmacSha256 secret body "hex" ]
+        [ "x-hub-signature-256", "sha256=" + Interop.hmacSha256 secret body BinaryToTextEncoding.Hex ]
     let aBody = """{"repository":{"full_name":"trinketworks/yession"},"number":7}"""
 
     testList "The hook relay" [
@@ -2379,9 +2499,9 @@ let private hookRelayTests =
             let specs : WebhookRelay.EndpointSpec list =
                 [ { Name = "github"; Rotation = 0; Signature = WebhookRelay.SignatureSpec.webSub }
                   { Name = "ci-2"; Rotation = 7
-                    Signature = { Header = "x-sig"; Encoding = "base64"; Prefix = "" } }
+                    Signature = { Header = "x-sig"; Encoding = WebhookRelay.SignatureEncoding.Base64; Prefix = "" } }
                   { Name = "shop_a"; Rotation = 1
-                    Signature = { Header = "x-shop-hmac"; Encoding = "hex"; Prefix = "v1=" } } ]
+                    Signature = { Header = "x-shop-hmac"; Encoding = WebhookRelay.SignatureEncoding.Hex; Prefix = "v1=" } } ]
             for spec in specs do
                 let text = WebhookRelay.EndpointSpec.encode spec
                 match WebhookRelay.EndpointSpec.decode text with
@@ -2604,7 +2724,7 @@ let private hookDeliveryStreamTests =
                 let deliver () =
                     postDelivery
                         (sprintf "%s/hooks/github" url)
-                        [ "x-hub-signature-256", "sha256=" + Interop.hmacSha256 secret body "hex" ]
+                        [ "x-hub-signature-256", "sha256=" + Interop.hmacSha256 secret body BinaryToTextEncoding.Hex ]
                         body
 
                 // The relay's answer is checked BEFORE the wait: a delivery that never
@@ -3096,9 +3216,9 @@ let private registryStreamTests =
                             Expect.isTrue
                                 (rendered.Contains "href=\"/sessions/reg-1/open\"")
                                 "the row links to the open route on the Manager's own origin"
-                            let! opening = TestHttp.get (baseUrl + "/sessions/reg-1/open")
+                            let! opening = TestHttp.getUnredirected [] (baseUrl + "/sessions/reg-1/open")
                             Expect.isTrue
-                                (opening.Body.Contains (sprintf "href=\"http://home.example.ts.net:%d/" port))
+                                ((TestHttp.requiredHeader "location" opening).StartsWith (sprintf "http://home.example.ts.net:%d/" port))
                                 "and /open hands the browser to the public origin"
                             let! login = OidcHttp.getWithJar (OidcHttp.newJar ()) (sprintf "http://127.0.0.1:%d/login" port)
                             Expect.equal login.Status 302 "/login redirects into the authorize chain"
@@ -3208,6 +3328,7 @@ let tests =
         // here launches a child — the invariant is about the moment BEFORE the first launch.
         Tag.needs "Registry writes announce themselves (UX review P0)" [ Tag.Ports ] (fun () -> registryPublishTests)
         Tag.needs "One session, one child (the launch in flight)" [ Tag.Ports ] (fun () -> launchOnceTests)
+        Tag.needs "Opening a session that is already running" [ Tag.Ports ] (fun () -> openRunningTests)
         Tag.needs "Idle reaping over the process boundary (Plan 11)" [ Tag.Ports; Tag.Native ] (fun () -> reapingTests)
         // `Srt` for the same reason: the packaged child picks the sandbox DEFAULT, and this
         // suite waits on an environment that reached Running and a command that exited 0 —

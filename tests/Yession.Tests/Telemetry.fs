@@ -8,7 +8,6 @@ module Yession.Tests.Telemetry
 // Every process is a direct emitter now (no Manager-side collector); the stub stands in for a
 // real OpenTelemetry Collector.
 
-open Fable.Core
 open Fable.Core.JsInterop
 open Fable.Pyxpecto
 open Fable.OpenTelemetry
@@ -38,16 +37,18 @@ type private Emitted =
       /// reported no model for carries no model KEY, not an empty one.
       Model : string option }
 
-let private emitted : Decoder<Emitted> =
+/// The attributes half of a record; the body is read on its own, since the SDK hands the two
+/// back as separate values.
+let private emitted (body: string) : Decoder<Emitted> =
     Decode.object (fun get ->
-        { Body = get.Required.Field "body" Decode.string
-          SessionId = get.Required.At [ "attributes"; "yession.session.id" ] Decode.string
-          TurnId = get.Required.At [ "attributes"; "yession.agent.turn.id" ] Decode.string
-          InputTokens = get.Required.At [ "attributes"; "gen_ai.usage.input_tokens" ] Decode.int
-          OutputTokens = get.Required.At [ "attributes"; "gen_ai.usage.output_tokens" ] Decode.int
-          CacheReadTokens = get.Required.At [ "attributes"; "anthropic.usage.cache_read_input_tokens" ] Decode.int
-          CacheCreationTokens = get.Required.At [ "attributes"; "anthropic.usage.cache_creation_input_tokens" ] Decode.int
-          Model = get.Optional.At [ "attributes"; "gen_ai.response.model" ] Decode.string })
+        { Body = body
+          SessionId = get.Required.Field "yession.session.id" Decode.string
+          TurnId = get.Required.Field "yession.agent.turn.id" Decode.string
+          InputTokens = get.Required.Field "gen_ai.usage.input_tokens" Decode.int
+          OutputTokens = get.Required.Field "gen_ai.usage.output_tokens" Decode.int
+          CacheReadTokens = get.Required.Field "anthropic.usage.cache_read_input_tokens" Decode.int
+          CacheCreationTokens = get.Required.Field "anthropic.usage.cache_creation_input_tokens" Decode.int
+          Model = get.Optional.Field "gen_ai.response.model" Decode.string })
 
 /// The per-model breakdown a turn that ran several carries. OTel attributes are flat, so N
 /// models cross as five arrays of N, aligned by index — this reads them back as the one thing
@@ -55,18 +56,18 @@ let private emitted : Decoder<Emitted> =
 /// rather than indexing past the end of the shorter one.
 let private breakdown (record: ReadableLogRecord) : (string * int * int * int * int) list =
     let counts (suffix: string) : Decoder<int list> =
-        Decode.optional "attributes" (Decode.optional ("yession.agent.turn.models." + suffix) (Decode.list Decode.int))
-        |> Decode.map (Option.flatten >> Option.defaultValue [])
+        Decode.optional ("yession.agent.turn.models." + suffix) (Decode.list Decode.int)
+        |> Decode.map (Option.defaultValue [])
     let decoder =
         Decode.map5
             (fun models input output cacheRead cacheCreation -> models, input, output, cacheRead, cacheCreation)
-            (Decode.optional "attributes" (Decode.optional "yession.agent.turn.models" (Decode.list Decode.string))
-             |> Decode.map (Option.flatten >> Option.defaultValue []))
+            (Decode.optional "yession.agent.turn.models" (Decode.list Decode.string)
+             |> Decode.map (Option.defaultValue []))
             (counts "input_tokens")
             (counts "output_tokens")
             (counts "cache_read_input_tokens")
             (counts "cache_creation_input_tokens")
-    match Decode.fromString decoder (JS.JSON.stringify (createObj [ "attributes", record.attributes ])) with
+    match Decode.fromString decoder (Attributes.toJson record.attributes) with
     | Error reason -> failwithf "the emitter emitted a breakdown this suite cannot read: %s" reason
     | Ok (models, input, output, cacheRead, cacheCreation) ->
         let n = List.length models
@@ -82,9 +83,20 @@ let private breakdown (record: ReadableLogRecord) : (string * int * int * int * 
 /// name here — where `unbox<int>` off an `$0[$1]` would have compared `undefined` to the
 /// expected number and reported only that they differed.
 let private read (record: ReadableLogRecord) : Emitted =
-    match Decode.fromString emitted (JS.JSON.stringify (createObj [ "body", record.body; "attributes", record.attributes ])) with
+    let body =
+        match Decode.fromString Decode.string (LogBody.toJson record.body) with
+        | Ok body -> body
+        | Error reason -> failwithf "the emitter emitted a body this suite cannot read: %s" reason
+    match Decode.fromString (emitted body) (Attributes.toJson record.attributes) with
     | Ok emitted -> emitted
     | Error reason -> failwithf "the emitter emitted a record this suite cannot read: %s" reason
+
+/// A log record as the emitter builds one: INFO, a text body, typed attributes.
+let private infoRecord (body: string) (attributes: (string * AttributeValue) list) : LogRecord =
+    jsOptions<LogRecord> (fun r ->
+        r.severityNumber <- severityInfo
+        r.body <- body
+        r.attributes <- Attributes.ofList attributes)
 
 /// The ordinary turn: one model, and it spent all of it. Named so a fixture says which case
 /// it is — the interesting one is the turn that ran TWO, and it is built by hand.
@@ -100,7 +112,7 @@ let private inMemoryLogger () : Logger * InMemoryLogRecordExporter =
     let mem = inMemoryExporter ()
     let provider =
         loggerProvider
-            (resource (createObj [ "service.name", box "yession-test" ]))
+            (resource (Attributes.ofList [ "service.name", AttributeValue.String "yession-test" ]))
             (simpleProcessor (mem :> LogRecordExporter))
     provider.getLogger "yession-test", mem
 
@@ -108,13 +120,7 @@ let private bindingTests =
     testList "bindings" [
         testCase "a logger emits one record into the in-memory exporter" <| fun () ->
             let logger, mem = inMemoryLogger ()
-            logger.emit (
-                createObj [
-                    "severityNumber", box severityInfo
-                    "body", box "agent turn usage"
-                    "attributes", box (createObj [ "gen_ai.usage.input_tokens", box 11 ])
-                ]
-            )
+            logger.emit (infoRecord "agent turn usage" [ "gen_ai.usage.input_tokens", AttributeValue.Int 11 ])
             Expect.equal (mem.getFinishedLogRecords ()).Length 1 "exactly one record reached the exporter"
 
         testCase "a two-processor provider tees one emit to both exporters (console + in-memory)" <| fun () ->
@@ -122,11 +128,11 @@ let private bindingTests =
             let mem = inMemoryExporter ()
             let provider =
                 loggerProviderMulti
-                    (resource (createObj [ "service.name", box "yession-test" ]))
+                    (resource (Attributes.ofList [ "service.name", AttributeValue.String "yession-test" ]))
                     [ simpleProcessor (consoleLogExporter ())
                       simpleProcessor (mem :> LogRecordExporter) ]
             let logger = provider.getLogger "yession-test"
-            logger.emit (createObj [ "severityNumber", box severityInfo; "body", box "tee"; "attributes", box (createObj []) ])
+            logger.emit (infoRecord "tee" [])
             Expect.equal (mem.getFinishedLogRecords ()).Length 1 "the in-memory leg of the tee received the record"
     ]
 
@@ -207,7 +213,7 @@ let private emitterTests =
             let turnId = AgentTurnId.create "turn-2" |> expect
             Telemetry.disabled.Emit turnId
                 { InputTokens = 1; OutputTokens = 1; CacheReadTokens = 0; CacheCreationTokens = 0; Models = [] }
-            Telemetry.disabled.Log "manager started" [ "k", box "v" ]
+            Telemetry.disabled.Log "manager started" [ "k", AttributeValue.String "v" ]
 
         testCaseAsync "OTEL_LOGS_EXPORTER=none (or OTEL_SDK_DISABLED) yields a disabled emitter" <|
             async {

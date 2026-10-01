@@ -257,6 +257,20 @@ module PrReview =
 /// value moves anything — `Some false` announces `Conflicted`, `Some true` clears it — and
 /// `None` holds the baseline where it was, so the window between a push and the provider
 /// recomputing raises no false alarm. `PrTransitions.detect` is where that rule lives.
+/// When the provider says a pull request's changes happened, on ITS clock. A look finds a
+/// change whenever it next looks — fifteen seconds later, or eight hours later after a stop —
+/// and this is what lets the record say both: when it happened, and (on the envelope) when
+/// this session noticed. `None` where the provider does not say.
+type PrTimes =
+    { MergedAt : DateTimeOffset option
+      ClosedAt : DateTimeOffset option
+      /// When the head commit's checks last reached a verdict: the latest completion, once
+      /// every run has completed. `None` while any is still running.
+      ChecksSettledAt : DateTimeOffset option }
+
+module PrTimes =
+    let none : PrTimes = { MergedAt = None; ClosedAt = None; ChecksSettledAt = None }
+
 type PrSnapshot =
     { State : PrState
       Title : string
@@ -280,7 +294,10 @@ type PrSnapshot =
       Behind : bool
       /// A draft: on the record, and not asking for review or a merge yet. Stated outright
       /// by the provider, like `Route`, so its movement is announced.
-      Draft : bool }
+      Draft : bool
+      /// When its changes happened at the provider — read with the look, used to date what
+      /// the look finds (`PrTransition.occurredAt`), never to decide whether anything moved.
+      Times : PrTimes }
 
 module PrSnapshot =
 
@@ -345,6 +362,17 @@ type PrTransition =
     | Drafted
 
 module PrTransition =
+
+    /// Which of the provider's times a change happened at. A change the provider only
+    /// COMPUTES (a conflict), or states without a time (a route, a draft flag), has none.
+    let occurredAt (times: PrTimes) (transition: PrTransition) : DateTimeOffset option =
+        match transition with
+        | PrTransition.Merged -> times.MergedAt
+        | PrTransition.Closed -> times.ClosedAt
+        | PrTransition.ChecksPassed
+        | PrTransition.ChecksFailed -> times.ChecksSettledAt
+        | _ -> None
+
     let describe (transition: PrTransition) : string =
         match transition with
         | PrTransition.Merged -> "merged"
@@ -460,7 +488,10 @@ type PrTransitioned =
       Checks : ChecksRollup
       /// `PrWatched.watcher`, carried forward: whose credential noticed, and who the turn
       /// this wakes runs as.
-      Watcher : Principal }
+      Watcher : Principal
+      /// When it happened at the provider, where the provider says (`PrTimes.occurredAt`).
+      /// Part of the `WatchChanged` contract every watched change keeps.
+      OccurredAt : DateTimeOffset option }
 
 // --- What each pull-request act SAYS (see RepoFacts.fs for why prose lives beside the event) ---
 

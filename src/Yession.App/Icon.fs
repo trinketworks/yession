@@ -1,6 +1,7 @@
 namespace Yession.App
 
 open Lit
+open Yession.Domain.Content
 
 /// The client's icons, as inline SVG.
 ///
@@ -33,14 +34,10 @@ module Icon =
     let private closePath = "M4 4 L12 12 M12 4 L4 12"
     let private upPath = "M8 12.5 L8 4 M4.25 7.75 L8 4 L11.75 7.75"
     let private downPath = "M8 3.5 L8 12 M4.25 8.25 L8 12 L11.75 8.25"
-    /// The marks of an act's cause. Both come down the gutter's CENTRE line, where the fold
-    /// chevron sits, and end in one small head, so the corner that opens a chain and the
-    /// links that continue it read as one line.
-    let private causeHeadPath = "M6 10.5 L8 12.5 L10 10.5"
-    /// From the sentence on the right, left and then down into the act below.
-    let private causedPath = "M14 3.5 L8 3.5 L8 12.5 " + causeHeadPath
-    /// The last stretch of a chain's line, from the top of the cell into the act below.
-    let private chainedPath = "M8 0 L8 12.5 " + causeHeadPath
+    /// The head of a cause's mark alone, tip at the foot of the box. The corner that opens a
+    /// chain and the links that continue it both draw their line as one-pixel boxes on the
+    /// gutter's centre, so no stem here can sit a sub-pixel off it.
+    let private chainedPath = "M6 13.5 L8 15.5 L10 13.5"
     let private leftPath = "M9.75 3.5 L5.25 8 L9.75 12.5"
     let private rightPath = "M6.25 3.5 L10.75 8 L6.25 12.5"
     /// Two chevrons, one behind the other: the mark of a disclosure with SEVERAL things
@@ -132,7 +129,6 @@ module Icon =
     let down = stroked "w-3.5 h-3.5" downPath
     /// A lighter stroke than the chevrons': a cause's marks say how acts are linked, and
     /// recede behind the controls beside them.
-    let caused = strokedAt "1.25" "w-3.5 h-3.5" causedPath
     let chained = strokedAt "1.25" "w-3.5 h-3.5" chainedPath
     let left = stroked "w-3.5 h-3.5" leftPath
     let right = stroked "w-3.5 h-3.5" rightPath
@@ -193,6 +189,16 @@ module Icon =
     let prSm = stroked "w-3.5 h-3.5 block" prPath
     let imageSm = stroked "w-3.5 h-3.5 block" imagePath
     let fileSm = stroked "w-3.5 h-3.5 block" filePath
+
+    /// The mark a piece of content wears wherever it is NAMED — a chip in a message, a row in
+    /// the content list, a tab in the strip. One function rather than the same two-armed match
+    /// written at each surface: what the mark promises is what the pane will do with it
+    /// (a picture opens, anything else downloads), and three copies of that rule are three
+    /// chances for a chip to promise a view the pane refuses to give.
+    let ofContent (kind: ContentKind) =
+        match kind with
+        | ContentKind.Image _ -> imageSm
+        | ContentKind.Download -> fileSm
 
     /// GitHub's mark, as GitHub draws it: the one FILLED shape in this file, and the one
     /// exception to its vocabulary, because a brand's mark is not ours to redraw in strokes

@@ -30,22 +30,51 @@ open Fable.Core.JsInterop
 /// return — MCP's `CallToolResult` admits images and embedded resources, and nothing here
 /// produces one.
 type [<AllowNullLiteral>] ToolContent =
-    abstract ``type`` : string
-    abstract text : string
+    abstract ``type`` : string with get, set
+    abstract text : string with get, set
 
 /// What a tool handler resolves to (MCP's `CallToolResult`). `isError` is the PROTOCOL
 /// failure flag — no such tool, unreadable arguments — not "the tool ran and it went
 /// badly", which is ordinary text the model should read and act on.
 type [<AllowNullLiteral>] ToolResult =
-    abstract content : ToolContent array
-    abstract isError : bool
+    abstract content : ToolContent array with get, set
+    abstract isError : bool with get, set
 
 module ToolResult =
 
     /// The single-text-block answer, the only shape this repository's tools produce.
     let ofText (isError: bool) (text: string) : ToolResult =
-        let block = createObj [ "type" ==> "text"; "text" ==> text ]
-        createObj [ "content" ==> [| block |]; "isError" ==> isError ] |> unbox
+        let block =
+            jsOptions<ToolContent> (fun b ->
+                b.``type`` <- "text"
+                b.text <- text)
+        jsOptions<ToolResult> (fun r ->
+            r.content <- [| block |]
+            r.isError <- isError)
+
+/// The arguments a call carried, as the SDK hands them to a handler: already validated
+/// against the raw shape the tool was declared with. Opaque, because the only honest reading
+/// of it is a DECODER's — `ToolInput.json` is the text one reads.
+type ToolInput =
+    interface end
+
+/// The MCP request context the SDK passes as a handler's second argument. Nothing here reads
+/// it; it is declared so the two-argument call has a type for each argument.
+type [<AllowNullLiteral>] ToolExtra =
+    interface end
+
+module ToolInput =
+
+    /// The arguments as JSON text, for a decoder to read. `None` when there is nothing
+    /// JSON can say about them — which is what `JSON.stringify` answers `undefined` for — so
+    /// an absent argument object arrives as an absence rather than as the text "undefined".
+    let json (input: ToolInput) : string option =
+        let text = JS.JSON.stringify input
+        if isNullOrUndefined text then None else Some text
+
+    /// Arguments from JSON text, the way the SDK would hand them over — for a caller that
+    /// drives a handler the SDK's way without the SDK: a suite.
+    let ofJson (text: string) : ToolInput = JS.JSON.parse text |> unbox
 
 /// The hints a tool carries into the model's context. Built with `jsOptions`, so a hint
 /// nobody set is ABSENT rather than false — which is what the SDK's optional fields mean
@@ -62,33 +91,38 @@ type [<AllowNullLiteral>] ToolDefinition =
     abstract name : string
     abstract description : string
     abstract annotations : ToolAnnotations
-    abstract handler : Func<obj, obj, JS.Promise<ToolResult>>
+    abstract handler : Func<ToolInput, ToolExtra, JS.Promise<ToolResult>>
+
+/// `tool()`'s trailing options bag, of which this repository sets one member.
+type private ToolExtras =
+    abstract annotations : ToolAnnotations with get, set
 
 [<Import("tool", "@anthropic-ai/claude-agent-sdk")>]
 let private toolRaw
     (name: string)
     (description: string)
-    (inputSchema: obj)
-    (handler: Func<obj, obj, JS.Promise<ToolResult>>)
-    (extras: obj)
+    (inputSchema: Fable.Zod.RawShape)
+    (handler: Func<ToolInput, ToolExtra, JS.Promise<ToolResult>>)
+    (extras: ToolExtras)
     : ToolDefinition = jsNative
 
 /// Declare one tool. `inputSchema` is a zod RAW SHAPE — a plain object whose values are zod
-/// types, one per argument (`{}` for a tool that takes none); `Fable.Zod` is what builds one
-/// from the JSON Schema every other boundary a descriptor crosses speaks.
+/// types, one per argument (`Zod.rawShape []` for a tool that takes none); `Fable.Zod` is
+/// what builds one.
 ///
 /// The SDK calls the handler with two arguments, `(args, extra)`; `extra` carries the MCP
-/// request context and nothing here reads it, so it is dropped rather than declared. Passing
+/// request context and nothing here reads it, so it is dropped on the way to `handler`. Passing
 /// the handler as a `Func` is not decoration: a curried F# lambda would answer the SDK's
 /// two-argument call with a FUNCTION rather than a promise.
 let tool
     (name: string)
     (description: string)
-    (inputSchema: obj)
+    (inputSchema: Fable.Zod.RawShape)
     (annotations: ToolAnnotations)
-    (handler: obj -> JS.Promise<ToolResult>)
+    (handler: ToolInput -> JS.Promise<ToolResult>)
     : ToolDefinition =
-    toolRaw name description inputSchema (Func<_, _, _> (fun args _extra -> handler args)) (createObj [ "annotations" ==> annotations ])
+    let extras = jsOptions<ToolExtras> (fun e -> e.annotations <- annotations)
+    toolRaw name description inputSchema (Func<_, _, _> (fun args _extra -> handler args)) extras
 
 /// An in-process MCP server, as `createSdkMcpServer` builds one: the value that goes into
 /// `Options.mcpServers` under the name the model sees in `mcp__<name>__<tool>`. Its `type`
@@ -98,61 +132,186 @@ type [<AllowNullLiteral>] McpServer =
     abstract ``type`` : string
     abstract name : string
 
+type private McpServerOptions =
+    abstract name : string with get, set
+    abstract version : string with get, set
+    abstract tools : ToolDefinition array with get, set
+
 [<Import("createSdkMcpServer", "@anthropic-ai/claude-agent-sdk")>]
-let private createSdkMcpServerRaw (options: obj) : McpServer = jsNative
+let private createSdkMcpServerRaw (options: McpServerOptions) : McpServer = jsNative
 
 /// Build one in-process MCP server over a set of tools.
 let createSdkMcpServer (name: string) (version: string) (tools: ToolDefinition array) : McpServer =
-    createSdkMcpServerRaw (createObj [ "name" ==> name; "version" ==> version; "tools" ==> tools ])
+    createSdkMcpServerRaw (
+        jsOptions<McpServerOptions> (fun o ->
+            o.name <- name
+            o.version <- version
+            o.tools <- tools)
+    )
+
+/// `Options.mcpServers`: namespace -> server, as the plain JS object the SDK reads as a
+/// record. Opaque, and made only by `McpServers.ofList`.
+type McpServers =
+    interface end
+
+[<RequireQualifiedAccess>]
+module McpServers =
+
+    /// The servers under the namespaces given, in the order given — a JS object keeps
+    /// insertion order, and it is the order the SDK meets them in.
+    let ofList (servers: (string * McpServer) list) : McpServers =
+        createObj [ for ns, server in servers -> ns, box server ] |> unbox
 
 // --- the process seam ---------------------------------------------------------------------
 
-/// What the SDK asks a spawner for. `signal` is the SDK's OWN forwarded abort signal, not
-/// the caller's: it fires only after stdin EOF and the SDK's grace window, so a kill hung on
-/// it never pre-empts the CLI's graceful shutdown.
+/// A spawned CLI's environment COMPLETE, as the SDK carries one: a plain object of names to
+/// values. The same object travels both ways across the seam — `Options.env` in, the spawn
+/// request's `env` out — and it REPLACES the child's environment rather than merging with
+/// `process.env`, so there is no such thing as a partial one.
+///
+/// Opaque, and made only by `Environment.ofMap`: the spawners hand it on to the child exactly
+/// as it arrived, and nothing here reads it back. It is `Fable.NodeExtras`' `VerbatimEnv`
+/// under the SDK's name, because that is what it IS — an environment complete, as the object
+/// Node reads one from — and a spawner hands it to `spawnWithEnv` with no conversion between.
+type Environment = Fable.NodeExtras.VerbatimEnv
+
+[<RequireQualifiedAccess>]
+module Environment =
+
+    let ofMap (variables: Map<string, string>) : Environment = Fable.NodeExtras.VerbatimEnv.ofMap variables
+
+/// What the SDK asks a spawner for.
 type [<AllowNullLiteral>] SpawnOptions =
     abstract command : string
     abstract args : string array
-    abstract cwd : string
-    abstract env : obj
-    abstract signal : obj
+
+    /// Where to start the child. The SDK leaves the field out, or spells it `""`, when it has
+    /// no directory to name — so `Some ""` is a request that named none, and reading it is
+    /// the spawner's business (`AgentSandbox.startDirectory`), not this binding's.
+    abstract cwd : string option
+
+    abstract env : Environment
+
+    /// The SDK's OWN forwarded abort signal, not the caller's: it fires only after stdin EOF
+    /// and the SDK's grace window, so a kill hung on it never pre-empts the CLI's graceful
+    /// shutdown. The SDK always sends one; `None` is a request built by somebody else — a
+    /// suite driving the seam by hand — and means "nothing will abort this".
+    abstract signal : Fable.NodeExtras.AbortSignal option
+
+/// Node's `number | null` for a process's exit code, spelled as Node spells it.
+///
+/// Its own type because F# cannot write that down any other way. Fable spells an `int option`
+/// member's `None` as `undefined`, which the SDK's `exitCode === null` reads as "exited"; and
+/// it passes whatever an `int` member answers through `| 0` on the way out, so even a `null`
+/// smuggled in arrives as `0` — a still-running stand-in reading as one that exited cleanly.
+/// Both were tried; the cheap tier pins the result.
+[<AllowNullLiteral>]
+type ExitCode =
+    interface end
+
+[<RequireQualifiedAccess>]
+module ExitCode =
+
+    /// `None` as `null`, which is Node's answer for "still running" (and for a process a
+    /// signal ended); a code as itself.
+    [<Emit("$0 ?? null")>]
+    let ofOption (code: int option) : ExitCode = jsNative
+
+    /// What an F# reader makes of one: `None` while running. Fable's test for `None` is
+    /// `== null`, which is both of JavaScript's absences, so Node's `null` reads as `None`
+    /// with no conversion — the cast is to what the value already is.
+    let toOption (code: ExitCode) : int option = unbox code
 
 /// The process a spawner hands back: Node's `ChildProcess` as far as the SDK reads one.
 ///
-/// Declared rather than opaque because F# now IMPLEMENTS it — the srt spawner's stand-in is
-/// an object expression over this interface, standing in for a child that srt has not
-/// finished wrapping — and what the SDK reads off a process is the only statement of what a
-/// stand-in has to answer for. The host spawner hands back a real `ChildProcess`, which
-/// satisfies the same shape natively.
+/// Declared rather than opaque because F# IMPLEMENTS it — the srt spawner's stand-in answers
+/// for a child that srt has not finished wrapping — and what the SDK reads off a process is
+/// the only statement of what a stand-in has to answer for. Implemented through
+/// `SpawnedProcess.standingIn` rather than an object expression at the call site, because what
+/// it answers is read afresh on every access and a relay's listeners are handed on verbatim;
+/// the host spawner hands back a real `ChildProcess` through `SpawnedProcess.ofChild`.
 type [<AllowNullLiteral>] SpawnedProcess =
-    /// The three streams, opaque: the SDK writes a turn into `stdin` and reads the CLI's
-    /// answer off `stdout`, and nothing in this repository reads any of them.
-    abstract stdin : obj
-    abstract stdout : obj
-    abstract stderr : obj
+    /// The SDK writes a turn into `stdin` and reads the CLI's answer off `stdout`. The chunk
+    /// type is `Fable.Node`'s, which is what a `ChildProcess`'s streams carry there: text is
+    /// what the SDK writes, and what it reads is text once somebody has called `setEncoding`.
+    abstract stdin : Node.Stream.Writable<string>
+    abstract stdout : Node.Stream.Readable<string>
+    abstract stderr : Node.Stream.Readable<string>
 
     /// Whether a kill has been ASKED for — Node's own meaning, true from the moment `kill`
     /// is called rather than from the moment anything dies.
     abstract killed : bool
 
-    /// The code the process ended with. `obj` rather than `int option` because Node's answer
-    /// for "still running" and for "a signal ended it" is `null`, and `null` is what the SDK
-    /// tests for: an `int option` would hand it `undefined`, the same F# value and a
-    /// different answer to `=== null`.
-    abstract exitCode : obj
+    /// The code the process ended with; `null` while it is still running, and for one a
+    /// signal ended — WRITTEN as Node writes it, because the SDK asks `exitCode === null` and
+    /// F#'s `None` is `undefined`: a stand-in that answered `None` as-is would be a process
+    /// the SDK believes has exited, and whose stdin it then refuses to write. `ExitCode` says
+    /// why it is its own type, and `ExitCode.toOption` is how F# reads one.
+    abstract exitCode : ExitCode
 
     /// Signal the process; `true` for "the signal was sent". Node's own default when the
     /// caller names none is `SIGTERM`.
     abstract kill : signal: string -> bool
 
-    /// A listener is `obj` for the reason `Fable.NodeExtras.EventRelay` gives: it is somebody
-    /// else's function, forwarded, and adapting it would change which function `off` can
-    /// remove. It is also the only way to have one member per verb rather than one per event,
-    /// since the two events the SDK waits on carry different arities — `exit` a code and a
-    /// signal, `error` an error.
-    abstract on : ``event``: string * listener: obj -> unit
-    abstract once : ``event``: string * listener: obj -> unit
-    abstract off : ``event``: string * listener: obj -> unit
+    /// The SDK LISTENS — for `exit` and `error` — and a listener is its own function, handed
+    /// on verbatim (`Fable.NodeExtras.RelayListener` says why adapting one would break `off`).
+    /// A listener written in F# goes through `SpawnedProcess.onExit` and `onError` instead,
+    /// which say what each event carries.
+    abstract on : ``event``: string * listener: Fable.NodeExtras.RelayListener -> unit
+    abstract once : ``event``: string * listener: Fable.NodeExtras.RelayListener -> unit
+    abstract off : ``event``: string * listener: Fable.NodeExtras.RelayListener -> unit
+
+/// What `spawnClaudeCodeProcess` is: one request in, one process out, synchronously.
+type Spawner = Func<SpawnOptions, SpawnedProcess>
+
+module SpawnedProcess =
+
+    /// A real Node child, as the process the SDK was promised. The SDK's own declaration of
+    /// `SpawnedProcess` is the slice of `ChildProcess` it reads, so a child IS one; F# has no
+    /// structural typing to say so, and this is the one place that asserts it.
+    let ofChild (child: Node.ChildProcess.ChildProcess) : SpawnedProcess = unbox child
+
+    /// A process F# answers for, over streams it owns and a relay its events come from.
+    /// `killed` and `exitCode` are asked afresh on every read, as the SDK reads them — a
+    /// value captured here would be the answer at the moment of spawning, forever.
+    let standingIn
+        (stdin: Node.Stream.Writable<string>)
+        (stdout: Node.Stream.Readable<string>)
+        (stderr: Node.Stream.Readable<string>)
+        (killed: unit -> bool)
+        (exitCode: unit -> int option)
+        (kill: string -> bool)
+        (events: Fable.NodeExtras.EventRelay)
+        : SpawnedProcess =
+        { new SpawnedProcess with
+            member _.stdin = stdin
+            member _.stdout = stdout
+            member _.stderr = stderr
+            member _.killed = killed ()
+            member _.exitCode = ExitCode.ofOption (exitCode ())
+            member _.kill signal = kill signal
+            member _.on (``event``, listener) = events.on (``event``, listener)
+            member _.once (``event``, listener) = events.once (``event``, listener)
+            member _.off (``event``, listener) = events.off (``event``, listener) }
+
+    [<Emit("$0.on('exit', $1)")>]
+    let private listenExit (proc: SpawnedProcess) (listener: Func<int option, string option, unit>) : unit =
+        jsNative
+
+    [<Emit("$0.on('error', $1)")>]
+    let private listenError (proc: SpawnedProcess) (listener: Func<Fable.NodeExtras.StreamError, unit>) : unit =
+        jsNative
+
+    /// Listen for the process ending: the code it ended with, or the signal that ended it.
+    /// A `Func` because the event hands over two arguments at once, and a curried F#
+    /// function would answer the first with a function rather than take both.
+    let onExit (proc: SpawnedProcess) (handler: int option -> string option -> unit) : unit =
+        listenExit proc (Func<int option, string option, unit> handler)
+
+    /// Listen for the process failing — a spawn that never happened, or a stand-in whose
+    /// wrap refused.
+    let onError (proc: SpawnedProcess) (handler: Fable.NodeExtras.StreamError -> unit) : unit =
+        listenError proc (Func<Fable.NodeExtras.StreamError, unit> handler)
 
 // --- the turn's options -------------------------------------------------------------------
 
@@ -164,8 +323,8 @@ type ThinkingDisplay =
     | Omitted
 
 type [<AllowNullLiteral>] Thinking =
-    abstract ``type`` : string
-    abstract display : string
+    abstract ``type`` : string with get, set
+    abstract display : string with get, set
 
 module Thinking =
 
@@ -176,7 +335,9 @@ module Thinking =
             match display with
             | Summarized -> "summarized"
             | Omitted -> "omitted"
-        createObj [ "type" ==> "adaptive"; "display" ==> display ] |> unbox
+        jsOptions<Thinking> (fun t ->
+            t.``type`` <- "adaptive"
+            t.display <- display)
 
 /// The options one query runs under. Build with `jsOptions<Options>`, which starts from an
 /// empty object and writes only what is assigned — so an option nobody set is ABSENT, and
@@ -194,81 +355,85 @@ type [<AllowNullLiteral>] Options =
     /// Ask for `stream_event` messages — without it the deltas a turn is streamed from
     /// never arrive.
     abstract includePartialMessages : bool with get, set
-    /// Namespace -> `McpServer`, as a plain JS object (`createObj`). Not an F# map: the SDK
-    /// reads it as a record.
-    abstract mcpServers : obj with get, set
+    /// Namespace -> `McpServer`, as the SDK reads it: a record, not an F# map.
+    abstract mcpServers : McpServers with get, set
     /// The BASE set of built-in tools. `[||]` drops every one of them from the model's
     /// context; MCP servers ride a separate channel and survive it.
     abstract tools : string array with get, set
     /// The auto-approve list — NOT a restriction. On its own it leaves the read-only
     /// built-ins reachable.
     abstract allowedTools : string array with get, set
-    /// A JS `AbortController`; aborting it cancels the live query.
-    abstract abortController : obj with get, set
+    /// Aborting it cancels the live query.
+    abstract abortController : Fable.NodeExtras.AbortController with get, set
     /// A system Claude Code install, instead of the SDK's own vendored executable.
     abstract pathToClaudeCodeExecutable : string with get, set
-    /// The spawned CLI's environment, as a plain JS object (`createObj`). It REPLACES the
-    /// subprocess environment rather than merging with `process.env`.
-    abstract env : obj with get, set
-    abstract spawnClaudeCodeProcess : Func<SpawnOptions, SpawnedProcess> with get, set
+    /// The spawned CLI's environment. It REPLACES the subprocess environment rather than
+    /// merging with `process.env`, and it is what a spawner is handed back as the request's
+    /// `env`.
+    abstract env : Environment with get, set
+    abstract spawnClaudeCodeProcess : Spawner with get, set
 
 // --- what a query yields ------------------------------------------------------------------
+//
+// Settable, though nothing in the product writes one: the SDK builds these, and a suite
+// builds them the same way with `jsOptions` — a typed object shaped as `sdk.d.ts` says one
+// arrives, rather than an untyped bag asserted into the interface.
 
 /// One delta on the partial-message stream. `text` and `thinking` are each present only on
 /// the delta kind that carries it — read `Delta.classify` rather than either field, which is
 /// also the difference between seeing a thinking delta and silently dropping it.
 type [<AllowNullLiteral>] Delta =
-    abstract ``type`` : string
-    abstract text : string
-    abstract thinking : string
+    abstract ``type`` : string with get, set
+    abstract text : string with get, set
+    abstract thinking : string with get, set
 
 /// One raw event inside a `stream_event` message.
 type [<AllowNullLiteral>] StreamEvent =
-    abstract ``type`` : string
-    abstract delta : Delta
+    abstract ``type`` : string with get, set
+    abstract delta : Delta with get, set
 
 /// The SDK's message union, as it arrives off the async iteration: discriminated by `type`,
 /// and on a `result` by `subtype` as well. Narrow it with `Message.classify`.
 type [<AllowNullLiteral>] Message =
-    abstract ``type`` : string
+    abstract ``type`` : string with get, set
 
 type [<AllowNullLiteral>] StreamEventMessage =
     inherit Message
-    abstract ``event`` : StreamEvent
+    abstract ``event`` : StreamEvent with get, set
 
 /// The turn's spend. The SDK types these non-null (`NonNullableUsage`), and the names are
 /// the API's own snake_case rather than the SDK's camelCase elsewhere.
 type [<AllowNullLiteral>] Usage =
-    abstract input_tokens : int
-    abstract output_tokens : int
-    abstract cache_read_input_tokens : int
-    abstract cache_creation_input_tokens : int
+    abstract input_tokens : int with get, set
+    abstract output_tokens : int with get, set
+    abstract cache_read_input_tokens : int with get, set
+    abstract cache_creation_input_tokens : int with get, set
 
 /// What ONE model spent, as an entry of `modelUsage` holds it. Camel-cased, unlike `Usage`
 /// above: the per-model breakdown is the SDK's own record rather than the API's usage block,
 /// and the two wear their own spellings.
 type [<AllowNullLiteral>] ModelUsage =
-    abstract inputTokens : int
-    abstract outputTokens : int
-    abstract cacheReadInputTokens : int
-    abstract cacheCreationInputTokens : int
+    abstract inputTokens : int with get, set
+    abstract outputTokens : int with get, set
+    abstract cacheReadInputTokens : int with get, set
+    abstract cacheCreationInputTokens : int with get, set
 
 /// The per-model breakdown: a MAP keyed by model id, not a model and a total. It is keyed
 /// that way because a turn is usually one model and a fallback makes it two, so the provider
 /// will not promise one — read every key (`Object.keys`), never the first.
 type [<AllowNullLiteral>] ModelUsageMap =
     [<EmitIndexer>]
-    abstract Item : string -> ModelUsage with get
+    abstract Item : string -> ModelUsage with get, set
 
 /// The one message that ends a turn. `result` carries the final text on `subtype =
 /// "success"` and is absent on every other subtype, so read `subtype` first. `modelUsage` is
 /// keyed by model id — which is the only place a turn says which models actually ran.
 type [<AllowNullLiteral>] ResultMessage =
     inherit Message
-    abstract subtype : string
-    abstract result : string
-    abstract usage : Usage
-    abstract modelUsage : ModelUsageMap
+    abstract subtype : string with get, set
+    abstract result : string with get, set
+    abstract usage : Usage with get, set
+    abstract modelUsage : ModelUsageMap with get, set
 
 /// What one delta is. `Other` keeps the tag rather than discarding it, so a delta kind that
 /// appears later is readable at the call site instead of being indistinguishable from one
@@ -335,8 +500,13 @@ type [<AllowNullLiteral>] MessageStep =
 type [<AllowNullLiteral>] Query =
     abstract next : unit -> JS.Promise<MessageStep>
 
+/// What `query()` takes: the prompt, as a single message, and the options it runs under.
+type private QueryParameters =
+    abstract prompt : string with get, set
+    abstract options : Options with get, set
+
 [<Import("query", "@anthropic-ai/claude-agent-sdk")>]
-let private queryRaw (parameters: obj) : Query = jsNative
+let private queryRaw (parameters: QueryParameters) : Query = jsNative
 
 /// Start a turn. Nothing runs until the first `next` — the CLI is spawned lazily.
 ///
@@ -344,4 +514,8 @@ let private queryRaw (parameters: obj) : Query = jsNative
 /// THROWING, so the promise `next` returns rejects. That is the adapter's to catch and say
 /// something about, and it is the single sharpest thing to know about this surface.
 let query (prompt: string) (options: Options) : Query =
-    queryRaw (createObj [ "prompt" ==> prompt; "options" ==> options ])
+    queryRaw (
+        jsOptions<QueryParameters> (fun p ->
+            p.prompt <- prompt
+            p.options <- options)
+    )

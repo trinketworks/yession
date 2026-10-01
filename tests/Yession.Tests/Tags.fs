@@ -38,6 +38,7 @@ type Need =
     | Native      // the native `node-datachannel` WebRTC addon (loaded by the real Session Process)
     | Docker      // a reachable Docker daemon
     | LiveAgent   // real model credentials
+    | LiveGitHub  // a GitHub token GitHub accepts, scoped to this repository
     | Keyring     // a usable OS credential manager (Keychain / Credential Manager / Secret Service)
     | Nix         // the nix CLI, to evaluate this repo's derivations against the working tree
     | NixBuild    // consent to BUILD the installable from the working tree and boot it: minutes of
@@ -69,7 +70,7 @@ let private getEnv (name: string) : string =
 // first substitutes, which is tens of minutes buying a proof the gate already has piecewise —
 // it is asked for by name (`check Docker Dogfood`, or a `verify.yml` dispatch naming both) when
 // the container environment story changes.
-let allNeeds = [ Browser; Ports; Native; Docker; LiveAgent; Keyring; Nix; NixBuild; Srt; Pty; Serial; Jumpstarter; Caddy ]
+let allNeeds = [ Browser; Ports; Native; Docker; LiveAgent; LiveGitHub; Keyring; Nix; NixBuild; Srt; Pty; Serial; Jumpstarter; Caddy ]
 
 let parseNeed (s: string) : Need option =
     match s.Trim().ToLowerInvariant () with
@@ -78,6 +79,7 @@ let parseNeed (s: string) : Need option =
     | "native"    -> Some Native
     | "docker"    -> Some Docker
     | "liveagent" -> Some LiveAgent
+    | "livegithub" -> Some LiveGitHub
     | "keyring"   -> Some Keyring
     | "nix"       -> Some Nix
     | "nixbuild"  -> Some NixBuild

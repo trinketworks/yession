@@ -117,6 +117,40 @@ module Harness =
     let run (program: Program<unit, 'model, 'msg, unit>) : Runner<'model, 'msg> =
         runWith waitForTimeoutMs program
 
+    /// Wait for every named condition at once, and on the deadline say WHICH did not hold.
+    ///
+    /// A wait on a conjunction fails as one: its red says the predicate never held, and not
+    /// which half of it — so a case waiting on a message, a reply, an environment and a
+    /// block cost a full gate run per guess when it timed out (`Phase4`'s packaged
+    /// composition, twice in thirty master runs, both times reading exactly that). The
+    /// wait is the same one, on the same deadline; only the failure has more to say.
+    ///
+    /// `showing` is what else to print when it fails: the part of the model a reader needs to
+    /// tell WHY a condition did not hold, which the condition's name cannot carry.
+    let waitForAll
+        (runner: Runner<'model, 'msg>)
+        (conditions: (string * ('model -> bool)) list)
+        (showing: 'model -> string)
+        : Async<unit> =
+        async {
+            let all (model: 'model) = conditions |> List.forall (fun (_, holds) -> holds model)
+            match! runner.WaitFor all |> Async.Catch with
+            | Choice1Of2 () -> return ()
+            | Choice2Of2 timedOut ->
+                let model = runner.Model ()
+                let missing = conditions |> List.filter (fun (_, holds) -> not (holds model)) |> List.map fst
+                return
+                    failwithf
+                        "%s — still not true: %s%s"
+                        timedOut.Message
+                        (match missing with
+                         | [] -> "nothing (every condition holds now; it came true after the deadline)"
+                         | some -> String.concat "; " some)
+                        (match showing model with
+                         | "" -> ""
+                         | shown -> " — " + shown)
+        }
+
 
 
 /// One peer, as the client identifies itself when it joins.
@@ -147,7 +181,10 @@ let connectClientWith (options: Client.ConnectOptions) (signalUrl: string) (toke
         let local = peer id name
         let registry = BodyRegistry doc
         let texts = TextRegistry doc
-        let runner = Harness.run (Client.makeProgram doc (ClientModel.init local))
+        // Made after the program, as the browser makes it, so the program reads it through a
+        // getter: what a message asks of the session goes to whichever connection there is.
+        let wired : Client.Connection option ref = ref None
+        let runner = Harness.run (Client.makeProgram { Client.Ports.Connection = (fun () -> wired.Value); Client.Ports.Launch = None; Client.Ports.Panels = None; Client.Ports.Moves = ignore; Client.Ports.Clipboard = (fun _ -> async.Return false); Client.Ports.Retry = ignore } doc (ClientModel.init local))
         // The composer's publication rule, wired exactly as the browser wires it: the client's
         // draft slot appears when its body has content and goes when the body empties.
         DraftSlot.follow doc registry local.PeerId (user >> runner.Dispatch) |> ignore
@@ -155,6 +192,7 @@ let connectClientWith (options: Client.ConnectOptions) (signalUrl: string) (toke
         // The model is what "how far have we consumed" means (see `ConnectOptions`).
         let options = { options with ReadPosition = Some (fun () -> (runner.Model ()).EventConsumer.LastProcessedOffset) }
         let connection = Client.connect options doc registry texts hello (user >> runner.Dispatch) channel
+        wired.Value <- Some connection
         Async.StartImmediate connection.Run
         do! runner.WaitFor (fun m -> m.Connection = Connected)
         return { Runner = runner; Connection = connection; Registry = registry; Texts = texts; Channel = channel; Doc = doc; Hello = hello }

@@ -145,7 +145,9 @@ module TerminalQueueDrain =
           Ready : (TerminalId * PendingAct) list
           /// Doc keys to remove without running: entries a `TerminalBlockStarted` already
           /// names (a crash between the append and the removal), repaired rather than run
-          /// a second time.
+          /// a second time. Only what is CONSUMED — on the record — and never what a drain
+          /// has merely claimed: an entry on its way to starting is still queued, and a
+          /// waiter reading it gone before its block exists reads a withdrawal.
           Removals : QueueId list
           /// Entries queued on a terminal that is CLOSED. Nothing will ever run them — a
           /// closed terminal has no shell to type into and never reopens — and a queue that
@@ -203,12 +205,14 @@ module TerminalQueueDrain =
         | Choice1Of2 _ -> None
         | Choice2Of2 hold -> Some hold
 
-    /// `consumed` is the log-anchored exactly-once set; `busy` names terminals with a
-    /// block already running; `leased` those a peer is typing into; `isOpen` answers for
-    /// the terminal an entry names. Nothing here reads the clock or the doc — it is given
-    /// a snapshot and returns a decision.
+    /// `consumed` is the log-anchored exactly-once set; `claimed` the entries a drain has
+    /// taken and not yet put on the record — never run again, never repaired away; `busy`
+    /// names terminals with a block already running; `leased` those a peer is typing into;
+    /// `isOpen` answers for the terminal an entry names. Nothing here reads the clock or the
+    /// doc — it is given a snapshot and returns a decision.
     let plan
         (consumed: Set<string>)
+        (claimed: Set<string>)
         (busy: Set<string>)
         (leased: Set<string>)
         (lost: Set<string>)
@@ -217,6 +221,7 @@ module TerminalQueueDrain =
         : TerminalDrainPlan =
 
         let alreadyConsumed (entry: PendingAct) = Set.contains (QueueId.value entry.QueueId) consumed
+        let alreadyTaken (entry: PendingAct) = alreadyConsumed entry || Set.contains (QueueId.value entry.QueueId) claimed
 
         let terminals =
             queue
@@ -228,11 +233,11 @@ module TerminalQueueDrain =
         let ready =
             terminals
             |> List.choose (fun terminal ->
-                match gate alreadyConsumed busy leased lost isOpen queue terminal with
+                match gate alreadyTaken busy leased lost isOpen queue terminal with
                 | Choice1Of2 resolved -> Some resolved
                 | Choice2Of2 _ -> None)
 
-        let unconsumed = queue |> Map.toList |> List.map snd |> List.filter (alreadyConsumed >> not)
+        let untaken = queue |> Map.toList |> List.map snd |> List.filter (alreadyTaken >> not)
 
         { Ready = ready
           Removals =
@@ -242,7 +247,7 @@ module TerminalQueueDrain =
             |> List.filter alreadyConsumed
             |> List.map (fun e -> e.QueueId)
           Orphaned =
-            unconsumed
+            untaken
             |> List.filter (fun e -> not (isOpen e.Terminal))
             |> List.sortBy (fun e -> TerminalId.value e.Terminal, e.Order)
             |> List.map (fun e -> e.Terminal, e) }
@@ -1690,6 +1695,38 @@ module SessionTerminals =
                                 finally
                                     terminal.Starting <- None
                                     started ()
+                                // A shell that EXITS ends its terminal — the rule an attached
+                                // source already follows below, arrived at from the other end.
+                                // A terminal whose pty is gone can run nothing: there is
+                                // nothing to type a command into, and nothing that could mark
+                                // one finished. Left open it was worse than useless, because
+                                // the drain went on offering it work — so a `D` that died with
+                                // the shell left its block running for ever, the terminal never
+                                // left `busy`, and every command queued behind it read `queued`
+                                // until the process restarted. Eight hours of that, six commands
+                                // held, and nothing anywhere saying why.
+                                //
+                                // `closeTerminal` is the whole repair: it ends the block on the
+                                // record, clears `busy`, says the terminal closed and why, and
+                                // re-drains — which refuses what was queued here rather than
+                                // leaving it queued on nothing.
+                                //
+                                // Only the shell `openShell` ADOPTED is watched, which is what
+                                // reading `terminal.Shell` says: a pty that never marked a
+                                // prompt was killed there and the terminal kept its degraded
+                                // path, where each block is its own process and no shell's exit
+                                // is anybody's news.
+                                //
+                                // `isOpen` is the guard rather than a flag of its own: this
+                                // awaits once, and the one thing that resolves `Exited` twice —
+                                // `closeTerminal` killing the pty — has already taken the
+                                // terminal out of the live map by the time we look.
+                                match terminal.Shell with
+                                | Some pty ->
+                                    let! ending = pty.Exited
+                                    if isOpen id then
+                                        do! closeTerminal id (Source.shellEndedReason ending) |> Async.Ignore
+                                | None -> ()
                             })
                     | Attached _ ->
                         dialledHandle |> Option.iter (fun handle -> terminal.Shell <- Some handle)
@@ -2852,6 +2889,18 @@ module TerminalScheduler =
         : TerminalScheduler =
 
         let mutable consumed = initialConsumed
+        // Taken by a drain and not yet on the record. A block's durable start is some way off
+        // from the moment a drain takes its entry — the shell may still be starting, the
+        // classifier and the loan are asked first — and a drain re-entered in between must
+        // neither run the entry again nor take it for a crash's leftover and remove it.
+        let mutable claimed : Set<string> = Set.empty
+        let claim (entry: PendingAct) = claimed <- Set.add (QueueId.value entry.QueueId) claimed
+        let release (entry: PendingAct) = claimed <- Set.remove (QueueId.value entry.QueueId) claimed
+        // On the record: consumed for good, and the doc key can go.
+        let recorded (entry: PendingAct) =
+            consumed <- Set.add (QueueId.value entry.QueueId) consumed
+            release entry
+            SyncedStateSync.removePending doc [ entry.QueueId ]
 
         let rec drain () =
             let synced = SyncedStateSync.ofDoc doc
@@ -2860,6 +2909,7 @@ module TerminalScheduler =
                 let plan =
                     TerminalQueueDrain.plan
                         consumed
+                        claimed
                         (terminals.Busy ())
                         (terminals.Leased ())
                         (terminals.Lost ())
@@ -2874,11 +2924,11 @@ module TerminalScheduler =
                 // twice.
                 for terminal, entry in plan.Orphaned do
                     let command = SyncedStateSync.terminalQueuedText doc entry.QueueId
-                    consumed <- Set.add (QueueId.value entry.QueueId) consumed
+                    claim entry
                     Async.StartImmediate (
                         async {
                             do! terminals.Refuse terminal entry command "the terminal was closed before it ran"
-                            SyncedStateSync.removePending doc [ entry.QueueId ]
+                            recorded entry
                         })
                 for terminal, entry in plan.Ready do
                     // Snapshot the command from THIS replica at the instant it is
@@ -2886,15 +2936,14 @@ module TerminalScheduler =
                     // is what the queue said when it was taken, and later edits to a
                     // fragment nobody can reach change nothing.
                     let command = SyncedStateSync.terminalQueuedText doc entry.QueueId
-                    consumed <- Set.add (QueueId.value entry.QueueId) consumed
+                    claim entry
                     Async.StartImmediate (
                         async {
-                            do!
-                                terminals.RunBlock
-                                    terminal
-                                    entry
-                                    command
-                                    (fun () -> SyncedStateSync.removePending doc [ entry.QueueId ])
+                            do! terminals.RunBlock terminal entry command (fun () -> recorded entry)
+                            // A block that never reached the record — its terminal closed
+                            // between the plan and the run — gives its claim back, so the
+                            // next drain finds the entry as it is: queued on a closed terminal.
+                            release entry
                             // The terminal is free again: whatever queued behind this
                             // command starts now.
                             drain ()
@@ -2909,7 +2958,7 @@ module TerminalScheduler =
             let synced = SyncedStateSync.ofDoc doc
             let holdOf terminal =
                 TerminalQueueDrain.holdOf
-                    consumed
+                    (Set.union consumed claimed)
                     (terminals.Busy ())
                     (terminals.Leased ())
                     (terminals.Lost ())

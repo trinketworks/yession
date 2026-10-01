@@ -236,6 +236,18 @@ let scrollToLatest () : unit =
 let toItemActions (messageId: string) : unit =
     nextFrame (fun () -> focusOn (find (sprintf "[data-item-actions=\"%s\"]" messageId)))
 
+/// Carry out a move the model asked for (`Yession.App.DomMove`) — the one place a move is
+/// turned into the document call that makes it, for the page and the harness alike.
+let move (move: Yession.App.DomMove) : unit =
+    match move with
+    | Yession.App.DomMove.FocusPane -> toPane ()
+    | Yession.App.DomMove.FocusChat tabKey -> toChatItem tabKey
+    | Yession.App.DomMove.FocusItemActions messageId -> toItemActions (Yession.Domain.MessageId.value messageId)
+    | Yession.App.DomMove.RevealBlock (terminalId, blockId) ->
+        revealBlock (Yession.Domain.TerminalId.value terminalId) (Yession.Domain.BlockId.value blockId)
+    | Yession.App.DomMove.RevealMessage messageId -> revealMessage (Yession.Domain.MessageId.value messageId)
+    | Yession.App.DomMove.ScrollToLatest -> scrollToLatest ()
+
 /// The pane's open state, as a class on the shell root — the same mechanism the sidebar uses,
 /// so a Lit re-render never fights the CSS transition. A `set` rather than a toggle, because
 /// the model holds the bit and this only reflects it: the app opens this column itself
@@ -275,7 +287,7 @@ module private Split =
     /// grow to 932px on a 1440 screen and left the conversation 228px — its title truncated to a
     /// single letter and its commands gone. Ask the two columns how wide they actually are.
     let widest () : float =
-        match find "[data-terminal-panel]", find "[data-conversation]" with
+        match find "[data-content-panel]", find "[data-conversation]" with
         | Some pane, Some chat ->
             let spare =
                 pane.getBoundingClientRect().width + chat.getBoundingClientRect().width - minChat
@@ -303,7 +315,7 @@ module private Split =
     let current () : float =
         match System.Double.TryParse (styleProperty root "--term-w" |> trimPx) with
         | true, said when said > 0.0 -> said
-        | _ -> find "[data-terminal-panel]" |> Option.map (fun pane -> pane.getBoundingClientRect().width) |> Option.defaultValue minPane
+        | _ -> find "[data-content-panel]" |> Option.map (fun pane -> pane.getBoundingClientRect().width) |> Option.defaultValue minPane
 
     /// The width to start at: what was remembered, else the design token, else the floor.
     ///
@@ -334,13 +346,16 @@ module private Split =
 /// The handle is a `separator` with a value, so the arrow keys have to move it — a splitter
 /// that only answers a drag is a control a keyboard cannot reach at all.
 let installPaneResize () : unit =
-    // Which handle an event happened on, asked as "does a handle contain this" rather than by
-    // testing the target's type: `contains` answers false for anything that is not a node, so
-    // there is nothing to narrow and no way to be wrong about what a target is.
+    // Which handle an event happened on, asked as "does a handle contain this": a press on
+    // the grip's own children is a press on the handle. A target that is not a node at all is
+    // under no handle.
     let handleUnder (target: EventTarget) : HTMLElement option =
-        let found = document.querySelectorAll "[data-term-resize]"
-        [ for i in 0 .. found.length - 1 -> found.[i] :?> HTMLElement ]
-        |> List.tryFind (fun handle -> handle.contains (unbox target))
+        match EventTargets.asNode target with
+        | None -> None
+        | Some node ->
+            let found = document.querySelectorAll "[data-term-resize]"
+            [ for i in 0 .. found.length - 1 -> found.[i] :?> HTMLElement ]
+            |> List.tryFind (fun handle -> handle.contains node)
 
     Split.apply (Split.seed ())
     window.addEventListener ("resize", fun _ -> Split.apply (Split.current ()))

@@ -281,23 +281,18 @@ let private appRoot () : Browser.Types.HTMLElement = Browser.Dom.document.getEle
 /// The refusal is written to the console rather than swallowed, because the only symptom
 /// it has otherwise is a button that appears to do nothing — the same shape as a broken
 /// binding, and nothing on the page tells the two apart.
-let private writeClipboard (text: string) (settled: bool -> unit) : unit =
-    if not (hasClipboard ()) then
-        JS.console.debug "yession/copy: no clipboard in this context"
-        settled false
-    else
-        Async.StartImmediate (
-            async {
-                match! writeClipboardText text |> Async.AwaitPromise |> Async.Catch with
-                | Choice1Of2 () -> settled true
-                | Choice2Of2 refusal ->
-                    JS.console.debug (sprintf "yession/copy: refused %s" refusal.Message)
-                    settled false
-            })
-
-/// How long a copy says so for. Long enough to be read as an answer to the press, short
-/// enough that the code it stands in front of comes back before anybody needs it again.
-let private copiedShownMs = 1500
+let private writeClipboard (text: string) : Async<bool> =
+    async {
+        if not (hasClipboard ()) then
+            JS.console.debug "yession/copy: no clipboard in this context"
+            return false
+        else
+            match! writeClipboardText text |> Async.AwaitPromise |> Async.Catch with
+            | Choice1Of2 () -> return true
+            | Choice2Of2 refusal ->
+                JS.console.debug (sprintf "yession/copy: refused %s" refusal.Message)
+                return false
+    }
 
 /// A frame later — which is when the render that had to happen, has, and when a class just
 /// written has reached the style flush that acts on it.
@@ -901,12 +896,19 @@ let private parseAuthorizeUrl (body: string) : string option =
     |> Result.toOption
     |> stated
 
-/// What a panel's field holds. A selector that matches nothing — a panel that is not on
-/// screen — reads as the empty string, which is what the caller acts on anyway.
-let private panelInput (selector: string) : string =
-    match Browser.Dom.document.querySelector selector with
-    | null -> ""
-    | field -> (field :?> Browser.Types.HTMLInputElement).value
+/// One Claude panel write, answered as the panel's next step. A sign-in answers with the
+/// authorize URL it opens, and a reply that carries none is refused rather than taken as
+/// accepted: there would be nothing for the human to approve.
+let private claudeWrite (action: ClaudeAction) (request: ClaudeRequest) : Async<ClaudeAnswer> =
+    async {
+        let! reply = postJson (Page.href (Claude action)) (claudeBody request)
+        if not reply.Ok then return Error reply.Body
+        elif action = ClaudeAction.Begin then
+            match parseAuthorizeUrl reply.Body with
+            | None -> return Error "no authorize url in the reply"
+            | Some url -> return Ok (Some url)
+        else return Ok None
+    }
 
 // --- GitHub connection panel round-trips (Plan 14) ---------------------------------------
 // Same fetch shapes as the Claude panel's; the flow differs (device code) so the two
@@ -959,6 +961,35 @@ let private parseDevicePoll (body: string) : {| status: string option; interval:
     Decode.fromString devicePoll body
     |> Result.toOption
     |> Option.defaultValue {| status = None; interval = 0 |}
+
+/// One GitHub panel write, answered as the panel's next step. A begin answers with the device
+/// flow it started, under the scope it was asked for; a reply that begins none is refused.
+let private githubWrite (action: GitHubAction) (request: GitHubRequest) : Async<GitHubAnswer> =
+    async {
+        let! reply = postJson (Page.href (GitHub action)) (githubBody request)
+        if not reply.Ok then return Error reply.Body
+        elif action = GitHubAction.Begin then
+            match parseDeviceBegin reply.Body with
+            | None -> return Error "the reply began no device flow"
+            | Some began ->
+                return Ok (Some (GitHubAwaitingApproval (began.UserCode, began.VerificationUri, request.Scope, began.Interval)))
+        else return Ok None
+    }
+
+/// One device-flow poll. A failed poll is not necessarily a flow that ended: only the
+/// session's own 4xx says this one is over (`GitHubFlow.ended`); anything else is a bad
+/// moment, and the code on screen is still good.
+let private githubPoll (scope: string) : Async<GitHubPollAnswer> =
+    async {
+        let! reply = postJson (Page.href (GitHub GitHubAction.Poll)) (githubBody (GitHubRequest.scoped scope))
+        if not reply.Ok then
+            return if GitHubFlow.ended reply.Status then PollEnded reply.Body else PollFailed
+        else
+            let outcome = parseDevicePoll reply.Body
+            match outcome.status with
+            | Some "connected" -> return PollConnected
+            | _ -> return PollPending outcome.interval
+    }
 
 // --- The launch surface's reads ---------------------------------------------------------------
 // Three GETs, answered on this person's own credential by the session, read in the codec the
@@ -1092,8 +1123,8 @@ let private start () =
         // plain-text roots the terminal composers live in (Plan 13), resolved the same way.
         let registry = BodyRegistry doc
         let texts = TextRegistry doc
-        // Kept current by `setState`: the read positions and the connection panels' flows
-        // are read off it rather than out of a message.
+        // Kept current by `setState`: the read positions are read off it rather than out of
+        // a message.
         let mutable latestModel = initial
         // A caret moved: reported once per frame, to whichever connection there is by then.
         let sendFocus = Render.focusReporter (fun focus -> connectionRef |> Option.iter (fun c -> c.ReportPresence focus))
@@ -1124,114 +1155,17 @@ let private start () =
         // Neither path is reconstructed locally: the title is a named root and a chapter's
         // name rides its chapter's entry, and where each lives is the codec's answer
         // (`SyncedStateSync`), not a second one kept in step by hand.
-        let textOfField (field: FocusField) : obj option =
+        let textOfField (field: FocusField) : Y.Text option =
             match field with
-            | Title -> Some (box (doc.getText "title"))
-            | ChapterName messageId ->
-                SyncedStateSync.chapterNameText doc (MessageId.value messageId) |> Option.map box
+            | Title -> Some (doc.getText "title")
+            | ChapterName messageId -> SyncedStateSync.chapterNameText doc (MessageId.value messageId)
             | DraftBody _ | QueueBody _ | TerminalDraftBody _ | TerminalQueuedBody _ -> None
 
         // The connection panels are TOLD, on the read stream below — nothing here fetches a
         // status. What is left is the one thing a push cannot report: a stream that never
-        // delivers. `armDeadline` is that net, and it is a single tick rather than a poll,
-        // because what it is waiting for is the clock and not an answer.
-        let armDeadline () =
-            Async.StartImmediate (
-                async {
-                    do! Async.Sleep (int Pending.deadlineMillis)
-                    dispatchRef (PendingWaitedMsg (nowMillis ()))
-                })
+        // delivers. The net for that is the deadline the model declares for every wait
+        // (`ClientModel.timers`), which is the clock's to keep and not an answer's.
 
-        /// One shape for every panel action: sending → the command answers → either it is
-        /// refused, or it opened an authorize tab (nothing for the status to show yet), or
-        /// it was ACCEPTED and `expect` names what the status has to show before this panel
-        /// calls it done.
-        let claudeAction
-            (run: unit -> Async<Result<string option, string>>)
-            (scope: string)
-            (expect: ConnectionExpectation option)
-            =
-            dispatchRef (ClaudePendingMsg Pending.Sending)
-            Async.StartImmediate (
-                async {
-                    match! run () with
-                    | Error reason -> dispatchRef (ClaudePendingMsg (Pending.Refused reason))
-                    | Ok (Some authorizeUrl) ->
-                        // Nothing for the panel to show yet: the credential arrives when the
-                        // human finishes in the tab this opens, and the stream says so.
-                        dispatchRef (ClaudePendingMsg Pending.Ready)
-                        dispatchRef (ClaudeFlowMsg (ClaudeAwaitingCode (authorizeUrl, scope)))
-                    | Ok None ->
-                        match expect with
-                        | Some expect ->
-                            dispatchRef (ClaudePendingMsg (Pending.Awaiting (expect, nowMillis ())))
-                            armDeadline ()
-                        | None -> dispatchRef (ClaudePendingMsg Pending.Ready)
-                })
-        let postClaudeAction
-            (route: string)
-            (request: ClaudeRequest)
-            (expectUrl: bool)
-            (expect: ConnectionExpectation option)
-            =
-            claudeAction
-                (fun () ->
-                    async {
-                        let! reply = postJson route (claudeBody request)
-                        if not reply.Ok then return Error reply.Body
-                        elif expectUrl then
-                            match parseAuthorizeUrl reply.Body with
-                            | None -> return Error "no authorize url in the reply"
-                            | Some url -> return Ok (Some url)
-                        else return Ok None
-                    })
-                request.Scope
-                expect
-
-        // The GitHub panel's round-trips (Plan 14). Device flow: begin puts the user
-        // code on screen, then this tab drives the session's poll at GitHub's stated
-        // interval until the grant lands (the pushed panel then flips the flow to idle),
-        // the human cancels, or the flow dies. That poll is a COMMAND — it is what makes
-        // GitHub hand the grant over — and is the one loop here that is not a status probe.
-        let rec pollGitHubWhileAwaiting () =
-            Async.StartImmediate (
-                async {
-                    let interval =
-                        match latestModel.GitHub.Flow with
-                        | GitHubAwaitingApproval (_, _, _, interval) -> max 1 interval
-                        | _ -> 0
-                    do! Async.Sleep (interval * 1000)
-                    match latestModel.GitHub.Flow with
-                    | GitHubAwaitingApproval (userCode, verificationUri, scope, interval) ->
-                        let! reply =
-                            postJson
-                                (Page.href (GitHub GitHubAction.Poll))
-                                (githubBody (GitHubRequest.scoped scope))
-                        if not reply.Ok then
-                            // A poll that failed is not necessarily a flow that ended. Only the
-                            // session's own 4xx says this one is over; a 5xx or a fetch that
-                            // never answered is a bad moment, and the code on screen — which the
-                            // human may already have approved — is still good.
-                            if GitHubFlow.ended reply.Status then
-                                // The flow is over as well as refused, and both have to be
-                                // said: the code on screen is dead, so it goes with the
-                                // reason it died. (When the two were one state, saying the
-                                // error did this by accident.)
-                                dispatchRef (GitHubFlowMsg GitHubIdle)
-                                dispatchRef (GitHubPendingMsg (Pending.Refused reply.Body))
-                            else pollGitHubWhileAwaiting ()
-                        else
-                            let outcome = parseDevicePoll reply.Body
-                            match outcome.status with
-                            // The grant landed. Nothing to ask: the Manager's frame reaches
-                            // this session, and the session tells every open drawer.
-                            | Some "connected" -> ()
-                            | _ ->
-                                if outcome.interval > interval then
-                                    dispatchRef (GitHubFlowMsg (GitHubAwaitingApproval (userCode, verificationUri, scope, outcome.interval)))
-                                pollGitHubWhileAwaiting ()
-                    | _ -> ()
-                })
         // The read surface (Plan 15): subscribe once, fold every frame. A malformed frame
         // is dropped rather than thrown — this is a best-effort push leg, and a stream
         // that dies on one bad line takes the whole surface down with it.
@@ -1254,38 +1188,11 @@ let private start () =
                     | Error _ -> ())
             |> ignore
 
-        let githubAction
-            (run: unit -> Async<Result<GitHubFlowState option, string>>)
-            (expect: ConnectionExpectation option)
-            =
-            dispatchRef (GitHubPendingMsg Pending.Sending)
-            Async.StartImmediate (
-                async {
-                    match! run () with
-                    | Error reason -> dispatchRef (GitHubPendingMsg (Pending.Refused reason))
-                    | Ok (Some flow) ->
-                        dispatchRef (GitHubPendingMsg Pending.Ready)
-                        dispatchRef (GitHubFlowMsg flow)
-                        pollGitHubWhileAwaiting ()
-                    | Ok None ->
-                        match expect with
-                        | Some expect ->
-                            dispatchRef (GitHubPendingMsg (Pending.Awaiting (expect, nowMillis ())))
-                            armDeadline ()
-                        | None -> dispatchRef (GitHubPendingMsg Pending.Ready)
-                })
-
-        // The copied mark is a moment, so it is one deadline: re-armed by each copy, and the
-        // one it replaces is cleared. Two live timers over one slot would let the first
-        // copy's deadline take the second copy's confirmation off the screen.
-        let mutable copiedTimer = 0
-
         // The side effects a template can't derive from the model. Send routes to the one
         // implementation in `Client.connect` (capture markdown, enqueue, seed the queue fragment).
         let actions : ViewActions =
             { SendDraft = fun peer -> connectionRef |> Option.iter (fun c -> c.SendDraft peer)
               DiscardDraft = fun peer -> connectionRef |> Option.iter (fun c -> c.DiscardDraft peer)
-              Interrupt = fun turn -> connectionRef |> Option.iter (fun c -> c.InterruptTurn turn)
               ToggleNav = toggleNav
               // Opening the drawer shows what the stream has already said. There is nothing
               // to re-probe: the panels have a push leg now, exactly as the query surface
@@ -1309,210 +1216,12 @@ let private start () =
                                 let enc i = ProseMirror.relPosFromTypeIndex text i |> ProseMirror.encodeRel
                                 { Field = field; Pos = { Anchor = enc anchor; Head = enc head } }))
                     sendFocus focus
-              ClaudeConnect =
-                fun () ->
-                    let scope = match panelInput "[data-claude-scope]" with "" -> "mine" | s -> s
-                    // Nothing for the status to show: what this returns is an authorize URL,
-                    // and the credential arrives when the human finishes in that tab.
-                    postClaudeAction (Page.href (Claude ClaudeAction.Begin)) (ClaudeRequest.scoped scope) true None
-              ClaudeComplete =
-                fun () ->
-                    // The scope selector is unmounted while awaiting; the flow carries it.
-                    let scope =
-                        match latestModel.Claude.Flow with
-                        | ClaudeAwaitingCode (_, scope) -> scope
-                        | _ -> "mine"
-                    match panelInput "[data-claude-code]" with
-                    | "" -> dispatchRef (ClaudePendingMsg (Pending.Refused "paste the code first"))
-                    | code ->
-                        postClaudeAction
-                            (Page.href (Claude ClaudeAction.Complete))
-                            { Scope = scope; Code = Some code; Token = None }
-                            false
-                            (Some { Scope = scope; Connected = true })
-              ClaudePasteToken =
-                fun () ->
-                    match panelInput "[data-claude-token]" with
-                    | "" -> dispatchRef (ClaudePendingMsg (Pending.Refused "paste a token first"))
-                    | token ->
-                        let scope = match panelInput "[data-claude-scope]" with "" -> "mine" | s -> s
-                        postClaudeAction
-                            (Page.href (Claude ClaudeAction.Token))
-                            { Scope = scope; Code = None; Token = Some token }
-                            false
-                            (Some { Scope = scope; Connected = true })
-              ClaudeDisconnect =
-                fun scope ->
-                    postClaudeAction
-                        (Page.href (Claude ClaudeAction.Disconnect))
-                        (ClaudeRequest.scoped scope)
-                        false
-                        (Some { Scope = scope; Connected = false })
-              GitHubConnect =
-                fun () ->
-                    let scope = match panelInput "[data-github-scope]" with "" -> "mine" | s -> s
-                    // Nothing for the status to show yet: the grant lands when the human
-                    // approves the code this puts on screen.
-                    githubAction
-                        (fun () ->
-                        async {
-                            let! reply =
-                                postJson
-                                    (Page.href (GitHub GitHubAction.Begin))
-                                    (githubBody (GitHubRequest.scoped scope))
-                            if not reply.Ok then return Error reply.Body
-                            else
-                                match parseDeviceBegin reply.Body with
-                                | None -> return Error "the reply began no device flow"
-                                | Some began ->
-                                    return
-                                        Ok (Some (GitHubAwaitingApproval (began.UserCode, began.VerificationUri, scope, began.Interval)))
-                        })
-                        None
-              GitHubPasteToken =
-                fun () ->
-                    match panelInput "[data-github-token]" with
-                    | "" -> dispatchRef (GitHubPendingMsg (Pending.Refused "paste a token first"))
-                    | token ->
-                        let scope = match panelInput "[data-github-scope]" with "" -> "mine" | s -> s
-                        githubAction
-                            (fun () ->
-                            async {
-                                let! reply =
-                                    postJson
-                                        (Page.href (GitHub GitHubAction.Token))
-                                        (githubBody { Scope = scope; Token = Some token })
-                                if not reply.Ok then return Error reply.Body else return Ok None
-                            })
-                            (Some { Scope = scope; Connected = true })
-              Copy =
-                fun key text ->
-                    writeClipboard text (fun written ->
-                        // Only a write that HAPPENED is confirmed. A refused clipboard leaves
-                        // the box showing the value, which is what a person falls back to
-                        // reading — a "copied" over an empty clipboard would send them to the
-                        // other tab with nothing to paste.
-                        if written then
-                            if copiedTimer <> 0 then JS.clearTimeout copiedTimer
-                            dispatchRef (CopiedMsg (Some key))
-                            copiedTimer <-
-                                JS.setTimeout
-                                    (fun () ->
-                                        copiedTimer <- 0
-                                        dispatchRef (CopiedMsg None))
-                                    copiedShownMs)
-              GitHubDisconnect =
-                fun scope ->
-                    githubAction
-                        (fun () ->
-                        async {
-                            let! reply =
-                                postJson
-                                    (Page.href (GitHub GitHubAction.Disconnect))
-                                    (githubBody (GitHubRequest.scoped scope))
-                            if not reply.Ok then return Error reply.Body else return Ok None
-                        })
-                        (Some { Scope = scope; Connected = false })
-              OpenTerminal = fun title -> connectionRef |> Option.iter (fun c -> c.OpenTerminal title)
-              ApproveRepoCapabilities =
-                fun repo granted -> connectionRef |> Option.iter (fun c -> c.ApproveRepoCapabilities repo granted)
-              LaunchSearch =
-                fun query ->
-                    dispatchRef (LaunchMsg (LaunchListingArrived ListingUnknown))
-                    Async.StartImmediate (
-                        async {
-                            let! listing = fetchRepoListing query
-                            dispatchRef (LaunchMsg (LaunchListingArrived listing))
-                        })
-              LaunchMore =
-                fun cursor ->
-                    dispatchRef (LaunchMsg LaunchMoreStarted)
-                    Async.StartImmediate (
-                        async {
-                            match! fetchRepoPage (Page.href GitHubRepos + "?page=" + urlEncode cursor) with
-                            | Ok page -> dispatchRef (LaunchMsg (LaunchMoreArrived page))
-                            | Error (reason, _) -> dispatchRef (LaunchMsg (LaunchMoreFailed reason))
-                        })
-              LaunchBranchesMore =
-                fun repo cursor ->
-                    dispatchRef (LaunchMsg LaunchBranchMoreStarted)
-                    Async.StartImmediate (
-                        async {
-                            let owner, name = RepoRef.owner repo, RepoRef.repo repo
-                            match! fetchBranchPage (Page.href (GitHubBranches (owner, name)) + "?page=" + urlEncode cursor) with
-                            | Ok page -> dispatchRef (LaunchMsg (LaunchBranchMoreArrived (repo, page)))
-                            | Error reason -> dispatchRef (LaunchMsg (LaunchBranchMoreFailed reason))
-                        })
-              LaunchBranches =
-                fun repo ->
-                    Async.StartImmediate (
-                        async {
-                            let! branches = fetchRepoBranches repo
-                            dispatchRef (LaunchMsg (LaunchBranchesArrived (repo, branches)))
-                        })
-              LaunchStart =
-                fun target ->
-                    connectionRef
-                    |> Option.iter (fun c -> dispatchRef (LaunchMsg (LaunchSent (c.AddRepo target.Repo target.Branch, target))))
-              LaunchLink =
-                fun link ->
-                    // A link becomes a ROW, held — never a send: the same listing lookup a
-                    // search makes, asked for the one name, answers the candidate under the
-                    // provider's current name with its real default branch. A pull request is
-                    // asked about first, since which fork its branch lives in only the
-                    // provider knows.
-                    dispatchRef (LaunchMsg (LaunchResolving link))
-                    Async.StartImmediate (
-                        async {
-                            let! resolved =
-                                match link with
-                                | RepoLink.Repo repo -> async { return Ok (repo, None) }
-                                | RepoLink.Branch (repo, branch) -> async { return Ok (repo, Some branch) }
-                                | RepoLink.PullRequest (repo, number) ->
-                                    async {
-                                        match! fetchPullHead repo number with
-                                        | Ok head -> return Ok (head.Repo, Some head.Branch)
-                                        | Error reason -> return Error reason
-                                    }
-                            match resolved with
-                            | Error reason -> dispatchRef (LaunchMsg (LaunchFailed reason))
-                            | Ok (repo, branch) ->
-                                match! fetchRepoListing (RepoRef.value repo) with
-                                | ListingLoaded page when not (List.isEmpty page.Candidates) ->
-                                    let candidate = List.head page.Candidates
-                                    dispatchRef (LaunchMsg (LaunchLinked (candidate, branch)))
-                                    Async.StartImmediate (
-                                        async {
-                                            let! branches = fetchRepoBranches candidate.Repo
-                                            dispatchRef (LaunchMsg (LaunchBranchesArrived (candidate.Repo, branches)))
-                                        })
-                                | ListingLoaded _ ->
-                                    dispatchRef (LaunchMsg (LaunchFailed (sprintf "github does not show %s to this credential" (RepoRef.value repo))))
-                                | ListingUnavailable (reason, _) -> dispatchRef (LaunchMsg (LaunchFailed reason))
-                                | ListingUnknown -> ()
-                        })
-              CloseTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.CloseTerminal id)
-              TakeTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.TakeTerminal id)
-              ReleaseTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.ReleaseTerminal id)
-              RearmTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.RearmTerminal id)
-              ReattachTerminal = fun id -> connectionRef |> Option.iter (fun c -> c.ReattachTerminal id)
               TypeIntoTerminal =
                 fun id data -> connectionRef |> Option.iter (fun c -> c.TypeIntoTerminal id data)
               ResizeTerminal =
                 fun id cols rows -> connectionRef |> Option.iter (fun c -> c.ResizeTerminal id cols rows)
               SendTerminalDraft =
-                fun terminal author -> connectionRef |> Option.iter (fun c -> c.SendTerminalDraft terminal author)
-              RetryNow =
-                // Cut short whatever wait the lifecycle is in. On a refused peer that wait is
-                // indefinite by design, so this is its only way back short of a reload.
-                fun () -> pokeRetry ()
-              FocusPane = PaneShell.toPane
-              FocusChat = PaneShell.toChatItem
-              FocusWatch = PaneShell.toWatchToggle
-              RevealBlock = fun id blockId -> PaneShell.revealBlock (TerminalId.value id) (BlockId.value blockId)
-              RevealMessage = fun id -> PaneShell.revealMessage (MessageId.value id)
-              ScrollToLatest = PaneShell.scrollToLatest
-              FocusItemActions = fun id -> PaneShell.toItemActions (MessageId.value id) }
+                fun terminal author -> connectionRef |> Option.iter (fun c -> c.SendTerminalDraft terminal author) }
 
         let el = appRoot ()
         // Take over the server-rendered shell: from here Lit owns it. lit-html's `render`
@@ -1540,20 +1249,39 @@ let private start () =
                       ReportFocus = sendFocus
                       ResizeTerminal = fun id cols rows -> connectionRef |> Option.iter (fun c -> c.ResizeTerminal id cols rows)
                       Http = httpGet } }
-        // The launch surface's listing is asked for ONCE, the first time the surface is
-        // offered: it has no mount hook of its own, and asking on every render would ask on
-        // every keystroke.
-        let mutable launchListingAsked = false
         let setState (model: ClientModel) (dispatch: Ylmish.Program.Message<ClientMsg> -> unit) =
             dispatchRef <- fun msg -> dispatch (Ylmish.Program.Message.User msg)
             latestModel <- model
             renderer.SetState model
             sendViewing (ClientModel.viewing model)
-            if not launchListingAsked && ClientModel.launchOffered model then
-                launchListingAsked <- true
-                actions.LaunchSearch model.Launch.Query
 
-        Client.makeProgram doc initial
+        let launchReads : Client.LaunchReads =
+            { Client.LaunchReads.Listing = fetchRepoListing
+              Client.LaunchReads.Page = fun cursor -> fetchRepoPage (Page.href GitHubRepos + "?page=" + urlEncode cursor)
+              Client.LaunchReads.Branches = fetchRepoBranches
+              Client.LaunchReads.BranchPage =
+                fun repo cursor ->
+                    let owner, name = RepoRef.owner repo, RepoRef.repo repo
+                    fetchBranchPage (Page.href (GitHubBranches (owner, name)) + "?page=" + urlEncode cursor)
+              Client.LaunchReads.PullHead = fetchPullHead }
+
+        Client.makeProgram
+            { Client.Ports.Connection = (fun () -> connectionRef)
+              Client.Ports.Launch = Some launchReads
+              Client.Ports.Panels =
+                Some
+                    { Client.PanelWrites.Claude = claudeWrite
+                      Client.PanelWrites.GitHub = githubWrite
+                      Client.PanelWrites.GitHubPoll = githubPoll
+                      Client.PanelWrites.Now = nowMillis }
+              Client.Ports.Moves = PaneShell.move
+              Client.Ports.Clipboard = writeClipboard
+              // Cut short whatever wait the lifecycle is in. On a refused peer that wait is
+              // indefinite by design, so this is its only way back short of a reload.
+              Client.Ports.Retry = fun () -> pokeRetry () }
+            doc
+            initial
+        |> Client.withTimers Timer.system
         |> Program.withSetState setState
         |> Program.run
 

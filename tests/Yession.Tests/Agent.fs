@@ -27,12 +27,6 @@ open Yession.Tests.Support
 open Yession.Domain.Prs
 open Yession.Peer
 
-[<ImportAll("node:path")>]
-let private nodePath : obj = Fable.Core.Util.jsNative
-
-[<Emit("$0.resolve($1)")>]
-let private resolvePath (path: obj) (relative: string) : string = Fable.Core.Util.jsNative
-
 let private sessionId = SessionId.create "agent-tests" |> expect
 let private turnId = AgentTurnId.create "turn-1" |> expect
 let private humanMessageId = MessageId.create "msg-human" |> expect
@@ -110,7 +104,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "Running it.")
                             return AgentCompleted ("Running it.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
                 let! events = eventsOf log
                 Expect.equal
                     events
@@ -137,8 +131,8 @@ let private turnTests =
                             return AgentCompleted ("", None)
                         }
                 let words = "Never push to main on this host."
-                do! AgentTurn.run (newLog ()) capturing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] [] None (Some words) asked
-                do! AgentTurn.run (newLog ()) capturing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run (newLog ()) capturing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] [] [] None (Some words) asked
+                do! AgentTurn.run (newLog ()) capturing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
                 match List.rev seen.Value with
                 | [ guided; bare ] ->
                     Expect.equal bare AgentTurn.systemPrompt "no guidance is the core alone"
@@ -181,7 +175,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Thinking "still weighing it up")
                             return AgentCompleted ("", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
                 let! events = eventsOf log
                 let started =
                     events |> List.filter (function AgentMessageStarted _ -> true | _ -> false) |> List.length
@@ -203,7 +197,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "lo!")
                             return AgentCompleted ("Hello!", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
                 let! events = eventsOf log
                 Expect.equal
                     events
@@ -232,7 +226,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "It finished.")
                             return AgentCompleted ("Let me run it again.It finished.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
                 let! events = eventsOf log
                 Expect.equal
                     (events |> List.skip 2)
@@ -257,7 +251,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "Done.")
                             return AgentCompleted ("Done.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
                 let! events = eventsOf log
                 Expect.equal
                     (events |> List.skip 2)
@@ -277,7 +271,7 @@ let private turnTests =
                             onChunk AgentResponseChunk.MessageBoundary
                             return AgentCompleted ("Done.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
                 let! events = eventsOf log
                 Expect.equal
                     (events |> List.skip 2)
@@ -291,7 +285,7 @@ let private turnTests =
             async {
                 let log = newLog ()
                 let failing : RunAgent = fun _ _ _ _ -> async { return AgentFailed ("boom", None) }
-                do! AgentTurn.run log failing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log failing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
                 let! events = eventsOf log
                 Expect.equal
                     (List.last events)
@@ -303,7 +297,7 @@ let private turnTests =
             async {
                 let log = newLog ()
                 let throwing : RunAgent = fun _ _ _ _ -> failwith "runner exploded"
-                do! AgentTurn.run log throwing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log throwing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
                 let! events = eventsOf log
                 match List.last events with
                 | AgentTurnFailed f -> Expect.equal f.Reason "runner exploded" "the thrown reason is captured"
@@ -575,7 +569,9 @@ let private e2eTests =
                 // The client's timeline gains the sent message and then the agent's
                 // completed response — all consumed as events.
                 do! a.Runner.WaitFor (fun m ->
-                        let said = m.Conversation.Items |> List.map (fun i -> (i.Author, ConversationItem.said i, i.Status))
+                        // `timelineOf`, not every item: the session's note that it started is
+                        // an item and is nobody's turn, and this is about whose words these are.
+                        let said = Support.timelineOf m |> List.map (fun i -> (i.Author, ConversationItem.said i, i.Status))
                         said = [ (PeerRef (peer "ada" "Ada").PeerId, "hi agent", Complete)
                                  (ActorRef.Agent, "You said: hi agent", Complete) ]
                         && m.Agent.ActiveTurn = None)
@@ -630,7 +626,7 @@ let private liveTests =
                 let log = newLog ()
                 let mintLiveTurn () = AgentTurnId.create (string (Guid.NewGuid ())) |> expect
                 let mintLiveMessage () = MessageId.create (string (Guid.NewGuid ())) |> expect
-                do! AgentTurn.run log (Agent.run Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log (Agent.run Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
                 let! events = eventsOf log
                 match List.last events with
                 | AgentMessageCompleted completed ->
@@ -651,7 +647,7 @@ let private liveTests =
                 let log = newLog ()
                 let mintLiveTurn () = AgentTurnId.create (string (Guid.NewGuid ())) |> expect
                 let mintLiveMessage () = MessageId.create (string (Guid.NewGuid ())) |> expect
-                do! AgentTurn.run log (Agent.runWith Launch.unlaunched.DataDir HostBackend (Some credential)) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log (Agent.runWith Launch.unlaunched.DataDir HostBackend (Some credential)) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
                 let! events = eventsOf log
                 match List.last events with
                 | AgentMessageCompleted completed ->
@@ -719,7 +715,7 @@ let private liveTests =
                 let dir = "tests/Yession.Tests/out/.data"
                 // Absolute, so the probe would succeed if a built-in file tool were
                 // back — whatever cwd the spawned CLI runs in.
-                let path = resolvePath nodePath (sprintf "%s/tool-surface-probe-%s.txt" dir (string (Guid.NewGuid ())))
+                let path = Node.Api.path.resolve (sprintf "%s/tool-surface-probe-%s.txt" dir (string (Guid.NewGuid ())))
                 TestFiles.ensureDir dir
                 TestFiles.write path nonce
                 let body = sprintf "Read the file at %s and reply with its exact contents." path
@@ -728,7 +724,7 @@ let private liveTests =
                 let log = newLog ()
                 let mintLiveTurn () = AgentTurnId.create (string (Guid.NewGuid ())) |> expect
                 let mintLiveMessage () = MessageId.create (string (Guid.NewGuid ())) |> expect
-                do! AgentTurn.run log (Agent.run Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId [ probeItem ] [] [] None None (AgentTurn.FromMessage probe)
+                do! AgentTurn.run log (Agent.run Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ probeItem ] [] [] None None (AgentTurn.FromMessage probe)
                 let! events = eventsOf log
                 match List.last events with
                 | AgentMessageCompleted completed ->
@@ -784,6 +780,37 @@ let private askedBy (who: Principal) =
     MessageSent { MessageId = humanMessageId; QueueId = None; Author = who; Body = "do a thing" }
 
 let private startedFor (id: AgentTurnId) (cause: TurnCause) = AgentTurnStarted { AgentTurnId = id; Cause = cause }
+
+/// What a turn is told about the session's own time: an agent that does not know a night
+/// passed reads news from before it as if it were a minute old.
+let private sessionTimeTests =
+    let now = DateTimeOffset (2026, 9, 25, 13, 5, 0, TimeSpan.Zero)
+    let context (history: SessionHistory) : AgentContextPack =
+        { SessionId = SessionId.create "time-session" |> expect
+          Conversation = []
+          TurnActor = Principal.Peer ada
+          CurrentMessage = None
+          Woke = Some CommandFinished
+          Terminals = []
+          Repos = []
+          Model = None
+          Now = now
+          History = history
+          SystemPrompt = "" }
+    testList "What a turn is told about time" [
+        testCase "a turn is told the time, and when its session began" <| fun () ->
+            let prompt = Yession.Host.Agent.promptOf (context { StartedAt = Some (now.AddDays -1.0); LastResumed = None })
+            Expect.stringContains prompt "It is now 2026-09-25 13:05 UTC" "now"
+            Expect.stringContains prompt "This session started 2026-09-24 13:05 UTC" "and when it began"
+
+        testCase "a turn after a stop is told how long the session was away" <| fun () ->
+            let prompt =
+                Yession.Host.Agent.promptOf
+                    (context
+                        { StartedAt = None
+                          LastResumed = Some { At = now.AddMinutes -5.0; LastHeardAt = now.AddMinutes -5.0 |> fun t -> t.AddHours -9.0 } })
+            Expect.stringContains prompt "after being stopped for 9h" "the gap it was away for"
+    ]
 
 let private resumeTests =
     let second = AgentTurnId.create "turn-2" |> expect
@@ -966,7 +993,7 @@ let private prSnapshot : PrSnapshot =
       Mergeable = None
       Review = None
       Behind = false
-      Draft = false }
+      Draft = false; Times = PrTimes.none }
 
 let private watchedBy (authority: Authority) =
     PrWatched.create (MessageId.create "w1" |> expect) authority watchedPr prSnapshot
@@ -982,7 +1009,7 @@ let private prTransitioned transition =
           Transition = transition
           State = PrMerged
           Checks = ChecksGreen
-          Watcher = prWatcher }
+          Watcher = prWatcher; OccurredAt = None }
 
 let private prUnwatched =
     SessionEvent.PrUnwatched
@@ -1441,7 +1468,7 @@ let private restartTests =
                 let peerDoc = Y.Doc.Create ()
                 let registry = Yession.Domain.Collab.BodyRegistry peerDoc
                 let bob = PeerId.create "bob" |> expect
-                let runner = Harness.run (Client.makeProgram peerDoc (ClientModel.init (peer "bob" "Bob")))
+                let runner = Harness.run (Client.makeProgram Client.Ports.offline peerDoc (ClientModel.init (peer "bob" "Bob")))
                 Body.author registry runner bob "are you there?"
                 Body.send registry runner bob |> ignore
                 let processDoc = Y.Doc.Create ()
@@ -1489,7 +1516,7 @@ let private restartTests =
 /// nobody asked for is still a turn.
 let private schedulerOverPickedModel (choice: ModelId option) =
     let doc = Y.Doc.Create ()
-    let picker = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+    let picker = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
     picker.Dispatch (user (SetModelMsg choice))
     let log = newLog ()
     appendNow log (blockStarted "b1" true (Principal.Peer ada))
@@ -1566,68 +1593,111 @@ let private failureReasonTests =
 // now, so the whole of it belongs in the cheap tier: no model, no credential, no process.
 // -----------------------------------------------------------------------------
 
-// Opened here rather than at the top of the file: `createObj` and `==>` are what shape a
-// message the way the SDK delivers one, and nothing above this line wants them.
+// Opened here rather than at the top of the file: `jsOptions` is what shapes a message the
+// way the SDK delivers one, and nothing above this line wants it.
 open Fable.Core.JsInterop
 
 module Turn = Yession.Host.Agent.Turn
+
+/// A block's opening carries the block it opens, which the binding does not declare because
+/// the adapter never reads it. Declared here so a case can send one the way `sdk.d.ts` says
+/// it arrives.
+type private ContentBlock =
+    abstract ``type`` : string with get, set
+    abstract text : string with get, set
+    abstract thinking : string with get, set
+
+type private ContentBlockStart =
+    inherit Fable.ClaudeAgentSdk.StreamEvent
+    abstract content_block : ContentBlock with get, set
+
+/// A delta kind the adapter does not read, carrying the field that kind does.
+type private SignatureDelta =
+    inherit Fable.ClaudeAgentSdk.Delta
+    abstract signature : string with get, set
 
 module private Stream =
 
     open Fable.ClaudeAgentSdk
 
-    /// One message off the query, shaped the way `sdk.d.ts` says it arrives.
-    let private message (fields: (string * obj) list) : Message = createObj fields |> unbox
+    let private event (streamed: StreamEvent) : Message =
+        jsOptions<StreamEventMessage> (fun m ->
+            m.``type`` <- "stream_event"
+            m.``event`` <- streamed)
+        :> Message
 
-    let private event (fields: (string * obj) list) : Message =
-        message [ "type" ==> "stream_event"; "event" ==> createObj fields ]
+    let private eventOf (tag: string) : Message =
+        event (jsOptions<StreamEvent> (fun e -> e.``type`` <- tag))
 
-    let messageStart : Message = event [ "type" ==> "message_start" ]
+    let messageStart : Message = eventOf "message_start"
 
     /// A block's opening, carrying the block the API opens it with.
-    let blockStart (block: (string * obj) list) : Message =
-        event [ "type" ==> "content_block_start"; "content_block" ==> createObj block ]
+    let blockStart (tag: string) (fill: ContentBlock -> unit) : Message =
+        event (
+            jsOptions<ContentBlockStart> (fun e ->
+                e.``type`` <- "content_block_start"
+                e.content_block <-
+                    jsOptions<ContentBlock> (fun b ->
+                        b.``type`` <- tag
+                        fill b))
+        )
 
-    let blockStop : Message = event [ "type" ==> "content_block_stop" ]
+    let blockStop : Message = eventOf "content_block_stop"
 
-    /// A delta carrying whatever fields the case is about, so a case can ask what the TAG
-    /// decides rather than what happens to be present.
-    let deltaOf (fields: (string * obj) list) : Message =
-        event [ "type" ==> "content_block_delta"; "delta" ==> createObj fields ]
+    /// A delta, carrying the tag and whichever fields the case sets — so a case can ask what
+    /// the TAG decides rather than what happens to be present.
+    let delta (tag: string) (fill: Delta -> unit) : Delta =
+        jsOptions<Delta> (fun d ->
+            d.``type`` <- tag
+            fill d)
 
-    let text (said: string) : Message = deltaOf [ "type" ==> "text_delta"; "text" ==> said ]
+    let deltaOf (carried: Delta) : Message =
+        event (
+            jsOptions<StreamEvent> (fun e ->
+                e.``type`` <- "content_block_delta"
+                e.delta <- carried)
+        )
 
-    let thought (said: string) : Message = deltaOf [ "type" ==> "thinking_delta"; "thinking" ==> said ]
+    let text (said: string) : Message = deltaOf (delta "text_delta" (fun d -> d.text <- said))
+
+    let thought (said: string) : Message = deltaOf (delta "thinking_delta" (fun d -> d.thinking <- said))
 
     /// The ending the SDK yields, with whatever else the case is about on it.
-    let ending (subtype: string) (fields: (string * obj) list) : Message =
-        message ([ "type" ==> "result"; "subtype" ==> subtype ] @ fields)
+    let ending (subtype: string) (fills: (ResultMessage -> unit) list) : Message =
+        jsOptions<ResultMessage> (fun r ->
+            r.``type`` <- "result"
+            r.subtype <- subtype
+            fills |> List.iter (fun fill -> fill r))
+        :> Message
+
+    /// The ending's own words.
+    let saying (body: string) (result: ResultMessage) : unit = result.result <- body
 
     /// The usage block, under the API's own snake_case names.
-    let usage (input: int) (output: int) (cacheRead: int) (cacheCreation: int) : string * obj =
-        "usage"
-        ==> createObj
-            [ "input_tokens" ==> input
-              "output_tokens" ==> output
-              "cache_read_input_tokens" ==> cacheRead
-              "cache_creation_input_tokens" ==> cacheCreation ]
+    let usage (input: int) (output: int) (cacheRead: int) (cacheCreation: int) (result: ResultMessage) : unit =
+        result.usage <-
+            jsOptions<Usage> (fun u ->
+                u.input_tokens <- input
+                u.output_tokens <- output
+                u.cache_read_input_tokens <- cacheRead
+                u.cache_creation_input_tokens <- cacheCreation)
 
     /// The per-model breakdown, as the SDK sends it: a MAP keyed by model id, camelCase, in
     /// the order given. A turn that ran two models has two keys and there is no third field
     /// saying which of them "the" model was.
-    let ranOn (models: (string * int * int) list) : string * obj =
-        "modelUsage"
-        ==> createObj
-            [ for model, input, output in models ->
-                model
-                ==> createObj
-                    [ "inputTokens" ==> input
-                      "outputTokens" ==> output
-                      "cacheReadInputTokens" ==> 0
-                      "cacheCreationInputTokens" ==> 0 ] ]
+    let ranOn (models: (string * int * int) list) (result: ResultMessage) : unit =
+        result.modelUsage <-
+            jsOptions<ModelUsageMap> (fun byModel ->
+                for model, input, output in models do
+                    byModel.[model] <-
+                        jsOptions<ModelUsage> (fun u ->
+                            u.inputTokens <- input
+                            u.outputTokens <- output
+                            u.cacheReadInputTokens <- 0
+                            u.cacheCreationInputTokens <- 0))
 
     /// The one-model case, which is most turns.
-    let answeredBy (model: string) : string * obj = ranOn [ model, 0, 0 ]
+    let answeredBy (model: string) : ResultMessage -> unit = ranOn [ model, 0, 0 ]
 
     /// Every message in order, then the ending — which is where a block the provider never
     /// closed is flushed, whichever ending it was.
@@ -1698,7 +1768,11 @@ let private deltaTests =
             // Which optional fields a delta happens to carry decides nothing.
             Expect.equal
                 (Stream.forwarded
-                    [ Stream.deltaOf [ "type" ==> "thinking_delta"; "thinking" ==> "hmm"; "text" ==> "hello" ] ])
+                    [ Stream.deltaOf (
+                        Stream.delta "thinking_delta" (fun d ->
+                            d.thinking <- "hmm"
+                            d.text <- "hello")
+                      ) ])
                 [ AgentResponseChunk.Thinking "hmm" ]
                 "the tag decides, and it said thinking"
 
@@ -1706,13 +1780,22 @@ let private deltaTests =
             // Read by field presence, this one was something said AND a thought.
             Expect.equal
                 (Stream.forwarded
-                    [ Stream.deltaOf [ "type" ==> "text_delta"; "text" ==> "hello"; "thinking" ==> "hmm" ] ])
+                    [ Stream.deltaOf (
+                        Stream.delta "text_delta" (fun d ->
+                            d.text <- "hello"
+                            d.thinking <- "hmm")
+                      ) ])
                 [ AgentResponseChunk.Text "hello" ]
                 "the tag decides, and it said text"
 
         testCase "a delta kind this repository does not read forwards nothing" <| fun () ->
             Expect.equal
-                (Stream.forwarded [ Stream.deltaOf [ "type" ==> "signature_delta"; "signature" ==> "abc" ] ])
+                (Stream.forwarded
+                    [ Stream.deltaOf (
+                          jsOptions<SignatureDelta> (fun d ->
+                              d.``type`` <- "signature_delta"
+                              d.signature <- "abc")
+                      ) ])
                 []
                 "an unread delta is not a chunk"
     ]
@@ -1786,7 +1869,7 @@ let private boundaryTests =
             // `content_block_start` carries the block with its text (or its thinking) EMPTY —
             // the content is in the deltas — so there is nothing in it to forward.
             Expect.equal
-                (Stream.forwarded [ Stream.blockStart [ "type" ==> "text"; "text" ==> "" ] ])
+                (Stream.forwarded [ Stream.blockStart "text" (fun b -> b.text <- "") ])
                 []
                 "an opening is not a chunk"
 
@@ -1794,7 +1877,7 @@ let private boundaryTests =
             // And it is not a second place a thought ends: the stop below it already is one.
             Expect.equal
                 (Stream.forwarded
-                    [ Stream.blockStart [ "type" ==> "thinking"; "thinking" ==> "" ]
+                    [ Stream.blockStart "thinking" (fun b -> b.thinking <- "")
                       Stream.thought "I "
                       Stream.thought "shall"
                       Stream.blockStop ])
@@ -1807,7 +1890,7 @@ let private bodyTests =
         testCase "an ending carrying its own words is the body" <| fun () ->
             Expect.equal
                 (Stream.outcome
-                    [ Stream.text "streamed"; Stream.ending "success" [ "result" ==> "the whole answer" ] ])
+                    [ Stream.text "streamed"; Stream.ending "success" [ Stream.saying "the whole answer" ] ])
                 (Ok "the whole answer")
                 "what the ending said"
 
@@ -1935,29 +2018,30 @@ let private spendTests =
 // schema offers is what it accepts and what it refuses.
 // -----------------------------------------------------------------------------
 
-/// One argument's schema out of the raw shape, which is a plain object keyed by name.
-[<Emit("$0[$1]")>]
-let private zodArgument (shape: obj) (key: string) : Fable.Zod.ZodType = Fable.Core.Util.jsNative
+/// One argument's schema out of the converted properties.
+let private zodArgument (schema: string) (key: string) : Fable.Zod.ZodType =
+    match Yession.Host.Agent.zodShape schema |> List.tryFind (fun (name, _) -> name = key) with
+    | Some (_, argument) -> argument
+    | None -> failwithf "the schema has no argument %s" key
 
-/// A genuinely absent argument, which is what `optional` is about. `null` is NOT it: zod
-/// refuses a null against an optional schema.
-[<Emit("undefined")>]
-let private noArgument : obj = Fable.Core.Util.jsNative
+/// A genuinely absent argument, which is what `optional` is about: Fable's `None` is
+/// `undefined`. `null` is NOT it: zod refuses a null against an optional schema.
+let private noArgument : string option = None
 
 let private schemaTests =
-    let accepts (schema: string) (key: string) (value: obj) : bool =
-        ((zodArgument (Yession.Host.Agent.zodShape schema) key).safeParse value).success
+    let accepts (schema: string) (key: string) (value: 'T) : bool =
+        ((zodArgument schema key).safeParse value).success
     let required =
         """{"type":"object","properties":{"cwd":{"type":"string","description":"a directory"}},"required":["cwd"]}"""
     let optional = """{"type":"object","properties":{"cwd":{"type":"string"}},"required":[]}"""
     testList "A tool's arguments, as zod" [
         testCase "a declared string argument accepts a string" <| fun () ->
-            Expect.isTrue (accepts required "cwd" (box "repos/octocat/hello-world")) "a string is a string"
+            Expect.isTrue (accepts required "cwd" "repos/octocat/hello-world") "a string is a string"
 
         testCase "a declared string argument refuses what is not one" <| fun () ->
             // The types the model is told about are the types the SDK enforces before a tool
             // body ever sees the call.
-            Expect.isFalse (accepts required "cwd" (box 7)) "a number is not a string"
+            Expect.isFalse (accepts required "cwd" 7) "a number is not a string"
 
         testCase "an argument outside `required` accepts absence" <| fun () ->
             Expect.isTrue (accepts optional "cwd" noArgument) "an omitted argument is allowed"
@@ -1968,22 +2052,19 @@ let private schemaTests =
         testCase "an array argument carries its element type" <| fun () ->
             let schema =
                 """{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}},"required":["tags"]}"""
-            Expect.isTrue (accepts schema "tags" (box [| "a"; "b" |])) "a list of strings"
-            Expect.isFalse (accepts schema "tags" (box [| box "a"; box 2 |])) "one element off is the array off"
+            Expect.isTrue (accepts schema "tags" [| "a"; "b" |]) "a list of strings"
+            Expect.isFalse (accepts schema "tags" [| U2<string, int>.Case1 "a"; U2.Case2 2 |]) "one element off is the array off"
 
         testCase "a type zod cannot say is accepted rather than refused" <| fun () ->
             // A WIDER schema, never a refusal: a tool whose arguments this cannot describe
             // must still be callable, and the model still reads the description.
             let schema = """{"type":"object","properties":{"where":{"type":"object"}},"required":["where"]}"""
-            Expect.isTrue (accepts schema "where" (box 7)) "anything at all"
+            Expect.isTrue (accepts schema "where" 7) "anything at all"
 
         testCase "a schema that cannot be read at all is no arguments at all" <| fun () ->
             // What the `catch` around `JSON.parse` said: refusing here would take a tool away
             // from the turn over a schema the model never sees.
-            Expect.equal
-                (JS.Constructors.Object.keys (Yession.Host.Agent.zodShape "{not json") |> List.ofSeq)
-                []
-                "an empty shape"
+            Expect.isEmpty (Yession.Host.Agent.zodShape "{not json") "an empty shape"
     ]
 
 // -----------------------------------------------------------------------------
@@ -1993,40 +2074,27 @@ let private schemaTests =
 // reads key/value pairs.
 // -----------------------------------------------------------------------------
 
-/// What `JSON.stringify` writes, which is what the arguments were carried as before they
-/// went through a decoder.
-[<Emit("JSON.stringify($0)")>]
-let private stringified (value: obj) : string = Fable.Core.Util.jsNative
-
 let private argumentTests =
     testList "A tool call's arguments" [
         testCase "an object is carried on in the bytes it arrived as" <| fun () ->
-            let args =
-                createObj
-                    [ "cwd" ==> "repos/octocat/hello-world"
-                      "tags" ==> [| "a"; "b" |]
-                      "depth" ==> 3
-                      "force" ==> false ]
-            Expect.equal
-                (Yession.Host.Agent.toolArguments args)
-                (Ok (stringified args))
-                "key order and all"
+            let args = """{"cwd":"repos/octocat/hello-world","tags":["a","b"],"depth":3,"force":false}"""
+            Expect.equal (Yession.Host.Agent.toolArguments (Some args)) (Ok args) "key order and all"
 
         testCase "a call carrying no arguments is an empty object" <| fun () ->
             // Which is how the SDK delivers one: an empty raw shape registers as
             // `z.object({})`, and `{}` is what parses out of it.
-            Expect.equal (Yession.Host.Agent.toolArguments (createObj [])) (Ok "{}") "an object with nothing in it"
+            Expect.equal (Yession.Host.Agent.toolArguments (Some "{}")) (Ok "{}") "an object with nothing in it"
 
         testCase "what is not an object at all is refused, not read as an empty call" <| fun () ->
             // `{}` would be a valid call to every tool whose arguments are all optional, so
             // inventing one would run the tool on nothing and say so nowhere.
-            let refused (value: obj) =
+            let refused (value: string option) =
                 match Yession.Host.Agent.toolArguments value with
                 | Error _ -> true
                 | Ok _ -> false
-            Expect.isTrue (refused (box "cwd=/")) "a string"
-            Expect.isTrue (refused (box [| 1; 2 |])) "an array"
-            Expect.isTrue (refused noArgument) "nothing at all"
+            Expect.isTrue (refused (Some "\"cwd=/\"")) "a string"
+            Expect.isTrue (refused (Some "[1,2]")) "an array"
+            Expect.isTrue (refused None) "nothing at all"
     ]
 
 let tests =
@@ -2040,6 +2108,7 @@ let tests =
         schemaTests
         argumentTests
         failureReasonTests
+        sessionTimeTests
         resumeTests
         wakeTests
         modelChoiceTests

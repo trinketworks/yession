@@ -29,7 +29,6 @@ module Yession.Tests.DevContainer
 // case fails saying the checkout is missing, which is the machine's fault, not the code's.
 
 open System
-open Fable.Core
 open Fable.Core.JsInterop
 open Fable.NodeExtras
 open Fable.Pyxpecto
@@ -49,11 +48,21 @@ let private runLine (line: string) : unit =
 
 module DK = Fable.Dockerode
 
-[<Emit("$0.getVolume($1).remove()")>]
-let private removeVolume (client: obj) (name: string) : JS.Promise<unit> = jsNative
+/// A named volume carrying the label the cleanup sweep finds a session's objects by.
+let private createLabelledVolume (client: DK.Docker) (name: string) : Async<unit> =
+    client.createVolume (
+        jsOptions<DK.VolumeCreateOptions> (fun o ->
+            o.Name <- name
+            o.Labels <- DK.Labels.ofList [ "yession-session", name ])
+    )
+    |> Interop.awaitPromise
+    |> Async.Ignore
 
-[<Emit("((client, name) => client.createVolume({ Name: name, Labels: { 'yession-session': name } }))($0, $1)")>]
-let private createLabelledVolume (client: obj) (name: string) : JS.Promise<obj> = jsNative
+/// The volume's own `remove`, unforced.
+let private removeVolume (client: DK.Docker) (name: string) : Async<unit> =
+    client.getVolume(name).remove (jsOptions<DK.RemoveOptions> ignore)
+    |> Interop.awaitPromise
+    |> Async.Ignore
 
 let private repoRef = RepoRef.create "trinketworks/yession" |> expect
 
@@ -78,7 +87,7 @@ let private declaredDev (reposDir: string) : EnvironmentSpec =
     // bind source that does not exist is one docker invents, owned by root.
     let artifactsDir = reposDir + "/../artifacts"
     TestFiles.ensureDir artifactsDir
-    let file = RepoConfig.read reposDir repoRef |> expect |> Option.get
+    let file = (RepoConfig.read reposDir repoRef |> expect |> Option.get).File
     let decl = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
     let request = SandboxDecl.toRequest (Some (Sandboxes.checkoutViewsAt None reposDir repoRef)) decl |> expect
     match request.Spec.Runtime with
@@ -225,7 +234,7 @@ let tests =
                 // cannot find — labelled, a run that dies before its own removal still
                 // leaves something the sweep sees.
                 let volume = sprintf "yession-test-%s" (SessionId.value (SessionId.mint ())) |> fun s -> s.ToLowerInvariant ()
-                do! createLabelledVolume (DK.create ()) volume |> Interop.awaitPromise |> Async.Ignore
+                do! createLabelledVolume (DK.create ()) volume
                 let mutable failure = None
                 try
                     do!
@@ -241,7 +250,7 @@ let tests =
                             | other -> failwithf "expected two counts, got %A" other
                         })
                 with e -> failure <- Some e
-                do! removeVolume (DK.create ()) volume |> Interop.awaitPromise
+                do! removeVolume (DK.create ()) volume
                 match failure with
                 | Some e -> return raise e
                 | None -> return ()
@@ -256,6 +265,21 @@ let tests =
 let dogfood =
     Tag.needs "The dev container, self-hosting" [ Tag.Docker; Tag.Dogfood ] (fun () ->
         testList "the dev container runs this repo's own suite" [
+
+            // Every container sandbox in a session binds the SAME checkout. devenv's state —
+            // its task cache is a SQLite database — lived in that checkout's `.devenv`, so
+            // `dev` and `gate` assembling their devshells at once raced for one database
+            // across the host's file share, and a session's `dev` failed to start: "database
+            // is locked". The file now puts it on each container's own disk; this is the
+            // devshell actually honouring that, not the file merely saying it.
+            testCaseAsync "devenv keeps its state on the container's disk, not in the shared checkout" (
+                withDevSpec declaredDev [] (fun dir -> runLine (sprintf "git clone --quiet . %s" dir)) (fun sandbox -> async {
+                    let! run, out, err =
+                        runInSandbox sandbox "sh" [ "-c"; "echo \"dotfile=$DEVENV_DOTFILE\"; test -e .devenv/tasks.db && echo checkout-has-cache || echo checkout-clean" ] Map.empty None
+                    Expect.equal run (SandboxExited 0) (sprintf "the devshell came up; stderr: %s" (err.Substring (max 0 (err.Length - 2000))))
+                    Expect.stringContains out "dotfile=/root/.devenv" "devenv was pointed at the container's own disk"
+                    Expect.stringContains out "checkout-clean" "and wrote no task cache into the checkout every sandbox shares"
+                }))
 
             testCaseAsync "nix develop --command check passes inside the declared container" (
                 // A real clone of HEAD, not a copy of the working tree: `nix develop`

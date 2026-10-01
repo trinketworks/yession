@@ -726,12 +726,15 @@ module Style =
            "#e8469e", "#6e1349" // magenta
         |]
 
-    let private humanCheckers = humanTones |> Array.map (fun (light, dark) -> checker light dark)
+    /// A person's two tones, picked by hashing the id that seeds them. Everything drawn for
+    /// a person — the checker, and the caret and selection they wear in a shared field —
+    /// is read from this one pair, so their mark and their cursor cannot disagree.
+    let humanTone (id: string) : string * string =
+        let hash = id |> Seq.fold (fun acc c -> acc * 31 + int c |> abs) 7
+        humanTones.[hash % humanTones.Length]
 
     /// A stable checker for a human peer id.
-    let humanAvatar (id: string) : string =
-        let hash = id |> Seq.fold (fun acc c -> acc * 31 + int c |> abs) 7
-        humanCheckers.[hash % humanCheckers.Length]
+    let humanAvatar (id: string) : string = humanTone id ||> checker
 
     /// The agent's mark: a dark square holding a small solid blue DIAMOND — the product's
     /// mark seen from above, its first frame, in the same blue the mark is drawn in. The
@@ -1470,18 +1473,30 @@ module Style =
     /// quiet voice as a reply's ref, but the sentence holds references (some of them links),
     /// so the jump is the MARK alone — a link cannot sit inside a button.
     let causeRow = "contents"
-    let causeMark = "col-start-1 h-[1lh] flex items-center justify-center text-ink-faint opacity-60"
+    /// The marks linking acts wear `edge`, the controls' rim: a line, not text, and OPAQUE —
+    /// a chain's pieces meet across two rows, and a translucent line doubles where they touch.
+    let causeMark = "col-start-1 flex justify-center text-edge"
+    /// The corner that opens a chain: a line and a gap tall, so the cause's sentence sits clear
+    /// of the headline under it and the head stops as far above the chevron as a chain's does.
+    let causeCorner = "relative block w-3.5 h-[calc(1lh+0.75rem)]"
+    /// Its turn: from the sentence's middle, in to the centre line.
+    let causeCornerTurn = "absolute top-2.5 left-[6.5px] right-0 h-px bg-current"
+    /// Its stem: down the centre line from the turn to the head.
+    let causeCornerStem = "absolute top-2.5 bottom-1.5 left-[6.5px] w-px bg-current"
     let causeSaid = "flex items-baseline text-small leading-[inherit] text-ink-faint"
     /// The link of a chain, above the act's chevron: shorter than a line, and reaching up
-    /// through the act's top padding to meet the rail the act above draws (`causeRail`).
-    let causeChainMark = "col-start-1 -mt-2 h-5.5 flex flex-col items-center text-ink-faint opacity-60"
-    let causeChainBody = "w-px flex-1 bg-current"
+    /// through the act's top padding to meet the rail the act above draws (`causeRail`). Its
+    /// line is a box, as the rail is, with only the head drawn over its foot. The bottom
+    /// padding holds the head off the chevron by the gap the corner mark keeps (~12px).
+    let causeChainMark = "col-start-1 -mt-2 h-5.5 pb-1.5 relative flex justify-center text-edge"
+    let causeChainBody = "w-px h-full bg-current"
+    let causeChainHead = "absolute bottom-1.5 left-1/2 -translate-x-1/2"
     /// The line from an act's chevron down to the next link of its chain: the gutter's centre,
-    /// the stroke of the marks, through the rows under the headline and on through the gap
-    /// between the two acts.
-    let causeRail = "col-start-1 row-span-2 justify-self-center w-px -mb-2.5 bg-current text-ink-faint opacity-60"
+    /// through the rows under the headline and on through the gap between the two acts.
+    /// Starts the same ~12px under the chevron that the head stops above the next one.
+    let causeRail = "col-start-1 row-span-2 justify-self-center w-px mt-1.5 -mb-2.5 bg-edge"
     let causeJump =
-        cls [ "flex bg-transparent border-0 p-0 cursor-pointer hover:opacity-100 hover:text-ink focus-visible:opacity-100"; focusRing ]
+        cls [ "bg-transparent border-0 p-0 cursor-pointer hover:text-ink focus-visible:text-ink"; focusRing ]
     /// The same quiet line as `replyRef`, but a real control — it jumps to the message it
     /// quotes. Borderless and transparent (it rides above the body, not a box of its own),
     /// brightening under the pointer and wearing the shared focus ring so a keyboard reaches
@@ -1509,6 +1524,39 @@ module Style =
     /// bottoms out at 0.25, so the mark is never gone. Photographed on a phone, twice, before
     /// anybody noticed the picture was of a screen saying nothing.
     let caretWorking = caretBar + " animate-pulse2 motion-reduce:animate-none"
+
+    /// The agent's caret: its own mark, the solid blue diamond its avatar carries (the cube
+    /// seen from above that the intro opens on), standing where its next word lands. The
+    /// bar above is a person's shape — a turn that is yours to type into — and a message the
+    /// agent is writing is not that.
+    ///
+    /// Placed by the font, not by eye. The box is `1ex` square, so the diamond's height is
+    /// the face's x-height, and an empty inline-block rests its bottom edge on the baseline:
+    /// the lower point stands on the line the letters stand on and the upper one at the top
+    /// of an `x`, in whatever face and size the body is set in. It is a clip of that box
+    /// rather than a square turned 45°, because a turn is painted and not laid out — the
+    /// turned corners land wherever the square's centre puts them, which is how a mark ends
+    /// up a pixel off the baseline it was aligned to.
+    ///
+    /// Then overshot, as type is: a point antialiases to a thinner tip than a flat meets, so
+    /// a diamond ending exactly on the baseline and at the x-height reads short of both —
+    /// it did, side by side with `xoxvx` at 1x and 3x. Every point is carried 0.03em past
+    /// its line (the box is 0.06em larger and lowered by half of that), which is about
+    /// twice what Noto's `o` overshoots by and the usual ratio for a point against a curve.
+    let private agentMark =
+        "inline-block w-[calc(1ex_+_0.06em)] h-[calc(1ex_+_0.06em)] align-[-0.03em] bg-blue "
+        + "[clip-path:polygon(50%_0,100%_50%,50%_100%,0_50%)]"
+
+    /// Writing: held still, a small space after the last word. The words arriving are the
+    /// movement; a pulse on top of them said nothing they were not already saying.
+    let agentCaret = agentMark + " ml-[0.35em]"
+
+    /// Thinking — a turn accepted and nothing said yet: a quarter-turn, then a rest. A diamond
+    /// turned a quarter is the same diamond, so at rest it is exactly the writing mark, never
+    /// faint and never gone (the fault `caretWorking` above was brought in for). No margin:
+    /// alone in its body it stands on the content column, where the first word will.
+    /// Without motion it is dimmed instead, so thinking and writing still differ.
+    let agentCaretThinking = agentMark + " animate-think motion-reduce:animate-none motion-reduce:opacity-60"
 
     /// The empty timeline's own mark: the blinking caret, standing where the first message will
     /// land. Dimmed on top of that, because it is an invitation rather than an event — a
@@ -1868,6 +1916,39 @@ module Style =
     /// on the way past. Decorative — the name beside it is what says which chapter this is.
     let chapterDot = "w-1.5 h-1.5 rounded-full bg-ink-faint shrink-0"
 
+    /// A stretch in which nothing was running, drawn as a break in the page rather than as
+    /// something somebody said — because nobody did. Where a chapter hangs its name UNDER a
+    /// full-measure line (the line belongs to what follows), a break puts its words IN the
+    /// line: what it divides is not two sections but two times, and the reader needs to see
+    /// the seam, not a heading.
+    ///
+    /// `readingColumn`, the same measure a chapter rule and a message group wear, so the break
+    /// stops where the words stop; a line running the whole scroller reads as drawn on the page
+    /// rather than as a gap in the conversation. Symmetric margins, unlike `chapterRule`'s: a
+    /// break belongs to neither side, which is the one thing it is saying.
+    let sessionBreak =
+        cls [ "flex items-center gap-3 my-6 max-md:my-4"; readingColumn; "max-md:max-w-none" ]
+
+    /// The line either side. `bg-edge` and a one-pixel box, which is exactly what a causal
+    /// link's rail is (`causeRail`) — the marks that join things in this timeline are all one
+    /// weight, and a break is another of them. Opaque for the same reason: a translucent
+    /// hairline doubles wherever two of them meet.
+    let sessionBreakLine = "flex-1 h-px bg-edge"
+
+    /// Its words, and a real control: pressing them swaps how long ago for when. Borderless and
+    /// transparent — it rides in the line rather than sitting in a box of its own — brightening
+    /// under the pointer, and carrying the shared focus ring so a keyboard reaches it.
+    /// `tabular-nums` so the label does not jitter its neighbours as the numbers change width.
+    ///
+    /// The chapter name's voice, not `statusFaint`'s caps: this is a sibling of `chapterRule`,
+    /// the other thing that divides this column, and the two should read alike. Caps is for a
+    /// status word — seen on the page it made a quiet break shout, and spread the moment
+    /// ("2026-09-26 22:26 UTC") across 148px of letter-spacing to say one date.
+    let sessionBreakLabel =
+        cls [ "font-ui font-light text-small text-ink-faint shrink-0"
+              "bg-transparent border-0 px-1.5 py-0 cursor-pointer tabular-nums"
+              "hover:text-ink focus-visible:text-ink transition-colors"; focusRing ]
+
     /// The name, worn by a text input for the reason the session title is: it is editable
     /// text, and a control that only becomes editable once you have pressed it is a control
     /// nobody presses. The same arrangement as `titleInput` — transparent at rest, the
@@ -1951,18 +2032,36 @@ module Style =
     /// A repo note in the timeline (Plan 14): one quiet act-line, indented past the
     /// avatar gutter so the reading edge lines up with message bodies.
     let actNote = cls [ itemGround; readingColumn; foldRow; "max-md:pl-4" ]
-    /// The pulse for an act in flight, sat in the LEFT gutter rather than trailing the line.
-    /// The box spans exactly the margin the text clears (`pl-[32px]`, `pl-12` on a phone) and
-    /// the first line's own height, so `justify-center`/`items-center` put the dot on the dead
-    /// centre of both — the gutter across, the headline down — however wide the platform's
-    /// gutter is. `top-2` matches `itemGround`'s `py-2`, so it sits on the first line even when
-    /// a detail wraps below. Out of the text flow and unclickable; the reader's cue is the dot,
-    /// the screen-reader's is the `sr-only` word it wraps.
-    let actNoteRunning = cls [ "col-start-1 h-[1lh] flex items-center justify-center text-blue pointer-events-none" ]
-    /// The dot itself: the same size and pulse as elsewhere, but no inline margin or baseline
-    /// nudge — those are for a dot that rides text, and this one is centred by its box.
-    let actNoteRunningDot =
-        "inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse2 motion-reduce:animate-none"
+    /// An act in flight is marked in the LEFT gutter rather than trailing the line, so the
+    /// running ones read as a column down the edge. Out of the text flow and unclickable;
+    /// the reader's cue is the mark, the screen-reader's is the `sr-only` word it wraps.
+    ///
+    /// The gutter is set as a line of the title's own text — its size, its inherited leading
+    /// — so its first line box is the title's first line box, and the mark on it stands on
+    /// the title's baseline by the same rule it stands on a message's (`agentMark`), and is
+    /// centred across the gutter as text is. It was a flex box centring a dot on the line's
+    /// height, which is the middle of the leading and not anywhere the letters are.
+    let actNoteRunning = cls [ "col-start-1 text-small leading-[inherit] text-center pointer-events-none" ]
+    /// The mark for the agent's own act: its diamond, turning — the same mark that turns at
+    /// the end of a message it has not started writing, because an agent working on a tool
+    /// and an agent thinking are the same statement, and where the mark stands says which.
+    /// One mark on the screen at a time: a message's caret goes when the message closes,
+    /// before a tool runs.
+    let actNoteRunningAgent = agentCaretThinking
+
+    /// The mark for an act the agent is not doing — the session bringing a sandbox up at
+    /// boot, a repository's file configuring one: a circle, because the diamond is the
+    /// agent's and a diamond on the session's work says the agent did it. In the chrome's
+    /// dim ink rather than blue, which is the agent's colour as the diamond is its shape.
+    ///
+    /// Placed by the same rule as the diamond (`agentMark`): an `1ex` box resting on the
+    /// baseline, so it spans the title's lowercase. Overshot as a round letter is, 0.015em
+    /// each side — about what Noto's `o` carries — rather than a point's 0.03em. It keeps
+    /// the diamond's rhythm, the same animation: the turn does nothing to a circle, so what
+    /// shows is its dip in scale, one beat and a rest.
+    let actNoteRunningOther =
+        "inline-block w-[calc(1ex_+_0.03em)] h-[calc(1ex_+_0.03em)] align-[-0.015em] rounded-full bg-ink-dim "
+        + "animate-think motion-reduce:animate-none motion-reduce:opacity-60"
     /// Sentence case, deliberately. This wore the caps LABEL voice, and a label voice is for
     /// two or three words: `STARTED SANDBOX WORK (DOCKER), FORWARDING ANTHROPIC_API_KEY FROM
     /// ADA` is a line nobody reads, because uppercase flattens the word shapes a reader scans
@@ -2334,7 +2433,7 @@ module Style =
     // A draft nobody has open here: one line of it, so the composer reads as "what is being
     // written" rather than a stack of boxes. Clicking it opens it (and closes whatever was).
     //
-    // Its leading edge is the AUTHOR'S colour (set inline, from `EditorColour`) — the same
+    // Its leading edge is the AUTHOR'S colour (set inline, from `Entity.presenceColour`) — the same
     // move the terminal's peer-draft row makes, and the reason is the same: the row's whole
     // subject is whose words these are, so the edge should say it rather than repeat a
     // generic hover tint.
@@ -2350,12 +2449,12 @@ module Style =
         "flex-1 min-w-0 " + messageVoice false + " text-small leading-8 text-ink-dim "
         + "overflow-hidden whitespace-nowrap [&_*]:inline [&_*]:truncate [&_*]:m-0"
 
-    /// Who is in this draft right now: one dot per live caret, coloured by peer (`EditorColour`).
+    /// Who is in this draft right now: one dot per live caret, coloured by peer (`Entity.presenceColour`).
     let draftEditors = "shrink-0 flex items-center gap-1 pr-1"
     let draftEditorDot = "inline-block w-1.5 h-1.5 rounded-full"
 
     /// Who has this OPEN right now: one ring per peer, coloured the same way a caret is
-    /// (`EditorColour`) but hollow, because watching and typing are not the same claim. A
+    /// (`Entity.presenceColour`) but hollow, because watching and typing are not the same claim. A
     /// filled dot says somebody's cursor is in here; a ring says somebody is looking.
     let paneViewerDot = "inline-block w-1.5 h-1.5 rounded-full border bg-transparent"
 
@@ -2421,7 +2520,7 @@ module Style =
     /// 20 columns short of the 80 a terminal prints; rather than guess a better number for
     /// everybody, the split is draggable and remembered (`PaneShell.installPaneResize`). The
     /// transition is suppressed while dragging, or the column chases the pointer a frame late.
-    let terminalPanel =
+    let contentPanel =
         "relative w-term md:w-[var(--term-w,var(--spacing-term))] shrink-0 bg-panel h-full overflow-hidden z-40 flex flex-col "
         + Stroke.dividerLeft + " "
         + "md:transition-[width] md:duration-200 md:ease-out md:[.term-resizing_&]:transition-none "
@@ -2554,6 +2653,14 @@ module Style =
     /// stays". Nothing here destroys anything, so nothing here wears the danger tone.
     let paneTabPinMark = "ml-1.5 text-blue"
 
+    /// The mark saying which KIND a tab is, worn by the kinds that are not the strip's usual
+    /// occupant. It leads the label rather than trailing it, where the pin sits: one says what
+    /// this tab IS and belongs before its name, the other says what has been done to it.
+    ///
+    /// Inherits the tab's own colour rather than taking one, so it dims and brightens with the
+    /// tab's selected state instead of making a second claim about which tab is live.
+    let paneTabKindMark = "mr-1.5 inline-flex items-center align-middle"
+
     /// The pane's body — whatever the selected tab shows. It takes the column's remaining
     /// height so the thing inside it scrolls rather than the column.
     let paneBody = "flex-1 min-h-0 flex flex-col"
@@ -2586,12 +2693,12 @@ module Style =
     /// it. Centred like the empty pane, because it IS an empty pane — of this kind.
     let contentDownload = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
 
-    // --- The terminal list (Plan 20, stage 0) --------------------------------------------
+    // --- The content list (Plan 20, stage 0) ---------------------------------------------
 
     /// The list's scroll box. It takes the pane's whole body, because the list IS the body
     /// while it is showing — not a drawer over a terminal, which would leave two surfaces
     /// arguing about which one the reader is in.
-    let terminalListBody = "flex-1 min-h-0 overflow-y-auto flex flex-col"
+    let contentListBody = "flex-1 min-h-0 overflow-y-auto flex flex-col"
 
     /// One row: state, name, verbs. A grid rather than a flex row so the names line up down
     /// the list whatever their state marks are — a ragged left edge is what makes a list of
@@ -2617,8 +2724,23 @@ module Style =
     let terminalListVerbs = "flex items-center gap-1 shrink-0"
 
     /// The list's own empty state: the same idle prompt the empty pane wears, because a
-    /// session with no terminals is one fact however you arrive at it.
-    let terminalListEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
+    /// session with nothing to show is one fact however you arrive at it.
+    let contentListEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
+
+    /// What a section of the list is called. Quiet and small: the rows are the content, and a
+    /// heading that competed with them would make a list of three terminals read as two lists.
+    /// Present only when there is more than one kind to tell apart (`listSections`).
+    let listSectionLabel =
+        cls [ "px-3 pt-3 pb-1 font-ui font-semibold text-label tracking-caps uppercase text-ink-faint select-none" ]
+
+    /// An artifact's row: mark, name, size. Same grid as a terminal's, so the two sections read
+    /// as one list of things rather than two designs — the middle column is what differs, and
+    /// it is a name in both.
+    let artifactListRow = terminalListRow
+
+    /// The size beside an artifact's name — the one fact that decides whether to open it here
+    /// or take it away, so it is on the row rather than behind it.
+    let artifactListSize = "shrink-0 font-ui font-light text-small text-ink-faint tabular-nums"
 
     /// The block history's scroll box, and the stream inside it.
     ///

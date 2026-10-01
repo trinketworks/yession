@@ -55,7 +55,67 @@ type ResourceMount =
       At : string
       Mode : ResourceMountMode }
 
-/// The six primitives, and there is no seventh.
+/// How a forwarded connection reaches a sandbox — the MECHANISM, which is the session's and
+/// not the provider's: `Git` is the git gateway (a sandbox's git sends its requests there,
+/// and each block's are answered with its act's credential), `Api` is the credential proxy (a
+/// sandbox's HTTPS to the provider's API is answered there, with a stand-in swapped for the
+/// credential). Two, because those are the two ways this session has of lending a credential
+/// without handing it over; a provider offers whichever of them it has hosts for.
+///
+/// Closed, so a route an operator misspells is refused where the file is read rather than
+/// quietly forwarding nothing — and named rather than implied, so a sandbox that needs a
+/// repository's git is not also a sandbox whose every API call carries somebody's token.
+[<RequireQualifiedAccess>]
+type ConnectionRoute =
+    | Git
+    | Api
+
+module ConnectionRoute =
+
+    let all : ConnectionRoute list = [ ConnectionRoute.Git; ConnectionRoute.Api ]
+
+    /// The word a file writes and a grant prints.
+    let name (route: ConnectionRoute) : string =
+        match route with
+        | ConnectionRoute.Git -> "git"
+        | ConnectionRoute.Api -> "api"
+
+    let parse (raw: string) : Result<ConnectionRoute, string> =
+        match all |> List.tryFind (fun route -> name route = raw.Trim().ToLowerInvariant ()) with
+        | Some route -> Ok route
+        | None ->
+            Error (
+                sprintf
+                    "'%s' is not a route — a connection is forwarded by %s"
+                    raw
+                    (all |> List.map name |> String.concat " or ")
+            )
+
+/// What one granted variable holds. Text is set as written; the other two are things only
+/// the session can supply, and supplies through the same machinery a repo's declaration uses
+/// (`WorkSandboxes`): a composed value has its `${proxy.…}` provided before the sandbox is
+/// built, and a token is lent to each command for the act it runs as.
+///
+/// Typed rather than left as text that happens to contain `${`, so nothing downstream decides
+/// what a value MEANS by looking inside it: a policy is handed text and only text.
+[<RequireQualifiedAccess>]
+type VariableValue =
+    | Text of string
+    /// `${env.NAME}` / `${proxy.…}` composed with text (`EnvTemplate`).
+    | Composed of EnvTemplate
+    /// `${<connection>.token}` as the whole value.
+    | Token of connection: string
+
+module VariableValue =
+
+    /// As a file writes it.
+    let render (value: VariableValue) : string =
+        match value with
+        | VariableValue.Text text -> EnvTemplate.escape text
+        | VariableValue.Composed template -> EnvTemplate.render template
+        | VariableValue.Token connection -> sprintf "${%s.token}" connection
+
+/// The seven primitives, and there is no eighth.
 type ResourceLeaf =
     | Mount of ResourceMount
     | Socket of path: string
@@ -73,9 +133,23 @@ type ResourceLeaf =
     /// dedup — `{A=1}` and `{A=1,B=2}` are two elements that both grant `A` — and the
     /// conflict rule would need a special case for "same key, two values" instead of falling
     /// out of the one rule every other primitive uses.
-    | Variable of name: string * value: string
+    | Variable of name: string * value: VariableValue
     /// Something to put on PATH.
     | Exec of path: string
+    /// A credential this session forwards into the sandbox, by name (`github`) — the route
+    /// and the per-block loan the session's own source for it provisions, and never its
+    /// value. A NAME here because the value is not the operator's to write either: it is
+    /// whoever's act a block runs as, resolved each time the sandbox spends it.
+    ///
+    /// A leaf like any other so a repo selects it the way it selects everything else, under
+    /// `uses` (refused where the operator offers none) or `wants` (nothing where it offers
+    /// none), and an operator can grant it `always` or declare a sandbox around it.
+    ///
+    /// ONE route of it, for the reason a declared `env` map is one leaf per variable: two
+    /// resources granting `github` by different routes are two grants that add up, where a
+    /// leaf carrying a set of routes would be two different leaves on one target — a
+    /// conflict, for asks that do not disagree.
+    | Connection of name: string * route: ConnectionRoute
 
 /// One resource as the operator declared it: either a thing, or a name for several things.
 ///
@@ -100,6 +174,7 @@ type ResourceTarget =
     | EndpointTarget of host: string
     | VariableTarget of name: string
     | ExecTarget of path: string
+    | ConnectionTarget of name: string * route: ConnectionRoute
 
 module ResourceLeaf =
 
@@ -113,6 +188,7 @@ module ResourceLeaf =
         | Endpoint host -> EndpointTarget host
         | Variable (name, _) -> VariableTarget name
         | Exec path -> ExecTarget path
+        | Connection (name, route) -> ConnectionTarget (name, route)
         // A volume occupies the same axis a mount does — a container path — so a volume
         // and a mount at one target collide like two mounts would.
         | Volume (_, at) -> MountTarget at
@@ -157,9 +233,10 @@ module ResourceLeaf =
             else sprintf "path:%s>%s:%s" mount.From mount.At mode
         | Socket path -> sprintf "sock:%s" path
         | Endpoint host -> sprintf "net:%s" host
-        | Variable (name, value) -> sprintf "env:%s=%s" name (quotedValue value)
+        | Variable (name, value) -> sprintf "env:%s=%s" name (quotedValue (VariableValue.render value))
         | Exec path -> sprintf "exec:%s" path
         | Volume (name, at) -> sprintf "vol:%s>%s" name at
+        | Connection (name, route) -> sprintf "conn:%s/%s" name (ConnectionRoute.name route)
 
     /// Every colliding pair in a set of leaves.
     ///
@@ -384,7 +461,11 @@ module RealisedClosure =
                 LeafRealisation.Withheld
                     "only a container backend has named volumes — grant this where the sandbox is a container, not here")
         | Variable _
-        | Exec _ -> None
+        | Exec _
+        // Whether this backend can be reached by the connection's route is the credential
+        // source's to say when it provisions, in words (`Unforwardable`), not a distinction
+        // of the host's confinement.
+        | Connection _ -> None
 
     /// Put a selection through a host. The third narrowing, after the operator's vocabulary
     /// and the repo's selection — except that it is the one narrowing that can also WIDEN,
@@ -516,6 +597,11 @@ module GrantNotation =
             "an environment variable, its value quoted where it carries anything that could \
              read as the end of the grant"
         | Exec _ -> "exec:PATH", "an executable, on PATH"
+        | Connection _ ->
+            "conn:NAME/ROUTE",
+            "a connection this session forwards by one route — git through the gateway, api \
+             through the credential proxy — spent as whoever each command runs for, and never \
+             its credential"
 
     /// One leaf per kind. What makes `kind` a total match over the vocabulary rather than a
     /// list somebody keeps in step with it.
@@ -524,8 +610,9 @@ module GrantNotation =
           Socket "/run/docker.sock"
           Endpoint "registry.npmjs.org"
           Volume ("yession-nix", "/nix")
-          Variable ("CI", "1")
-          Exec "/usr/bin/git" ]
+          Variable ("CI", VariableValue.Text "1")
+          Exec "/usr/bin/git"
+          Connection ("github", ConnectionRoute.Git) ]
 
     /// Whether a written grant is of this kind, by the token the RENDERER emits for it —
     /// everything up to its first colon, read off `describe` rather than off the shape
@@ -597,7 +684,12 @@ module ResourceProfile =
                 (ResourceLeaf.describe (Mount a))
                 (ResourceLeaf.describe (Mount b))
         | Variable (name, a), Variable (_, b) ->
-            sprintf "%s sets %s to '%s' and to '%s' at once, and a variable has one value" whose name a b
+            sprintf
+                "%s sets %s to '%s' and to '%s' at once, and a variable has one value"
+                whose
+                name
+                (VariableValue.render a)
+                (VariableValue.render b)
         | a, b -> sprintf "%s asks for %s and %s at once, and they cannot both hold" whose (ResourceLeaf.describe a) (ResourceLeaf.describe b)
 
     /// Depth-first walk yielding either every name reachable from `start`, or the path of a
@@ -658,6 +750,12 @@ module ResourceProfile =
     /// selected together. An operator may declare `nix-ro` and `nix-rw` as alternatives, and
     /// a vocabulary that could not hold both would be a vocabulary that cannot express a
     /// choice. That conflict is a REPO's, and it appears in `resolve`.
+    ///
+    /// And a fifth: a resource lending a connection's token (`${github.token}`) that does not
+    /// itself forward that connection by `api`. The token is lent through the credential
+    /// proxy, so a sandbox holding the variable and not the route would find nothing there on
+    /// every command — and whatever selects the resource holds at least its own closure, so
+    /// the resource is where that is decided.
     let load (declarations: (ResourceName * ResourceDecl) list) : Result<ResourceProfile, string> =
         let duplicates =
             declarations
@@ -682,10 +780,32 @@ module ResourceProfile =
                 (fun acc (name, _) ->
                     acc
                     |> Result.bind (fun () ->
-                        match ResourceLeaf.conflicts (ResourceClosure.leaves (closureOf byName name)) with
-                        | [] -> Ok ()
+                        let leaves = ResourceClosure.leaves (closureOf byName name)
+                        match ResourceLeaf.conflicts leaves with
                         | (left, right) :: _ ->
-                            Error (conflictSentence (sprintf "the resource '%s'" (render name)) left right)))
+                            Error (conflictSentence (sprintf "the resource '%s'" (render name)) left right)
+                        | [] ->
+                            let unlent =
+                                leaves
+                                |> Set.toList
+                                |> List.choose (function
+                                    | Variable (variable, VariableValue.Token connection) when
+                                        not (Set.contains (Connection (connection, ConnectionRoute.Api)) leaves)
+                                        ->
+                                        Some (variable, connection)
+                                    | _ -> None)
+                            match unlent with
+                            | [] -> Ok ()
+                            | (variable, connection) :: _ ->
+                                Error (
+                                    sprintf
+                                        "the resource '%s' lends %s '${%s.token}' and does not forward %s by api, which is the route a token is lent through — grant `connection: { %s: [ api ] }` beside it"
+                                        (render name)
+                                        variable
+                                        connection
+                                        connection
+                                        connection
+                                )))
                 (Ok ()))
         |> Result.map (fun () -> ResourceProfile byName)
 
@@ -768,3 +888,27 @@ module ResourceProfile =
                 | Ok required ->
                     let held = Set.union (ResourceClosure.leaves required) (Set.ofList always)
                     Ok (all, Set.difference (Set.ofList all) held)
+
+/// What a grant forwards: the `Connection` leaves in it, split the way the grant is. A
+/// connection something NEEDS (under `uses`, or granted `always`) is forwarded or the
+/// sandbox refuses; one held through `wants` alone is forwarded where it can be and left
+/// out where the backend cannot be reached by its route — a want's promise, applied to the
+/// one kind of leaf whose realisation is the credential source's to decide rather than the
+/// host's confinement.
+[<RequireQualifiedAccess>]
+type ForwardedConnections =
+    { Needed : (string * ConnectionRoute) list
+      Wanted : (string * ConnectionRoute) list }
+
+module ForwardedConnections =
+
+    let none : ForwardedConnections = { Needed = []; Wanted = [] }
+
+    /// Out of `ResourceProfile.grants`' answer.
+    let ofGrant (leaves: ResourceLeaf list, wantedOnly: Set<ResourceLeaf>) : ForwardedConnections =
+        let named (leaf: ResourceLeaf) =
+            match leaf with
+            | Connection (name, route) -> Some (name, route)
+            | _ -> None
+        { Needed = leaves |> List.filter (fun leaf -> not (Set.contains leaf wantedOnly)) |> List.choose named
+          Wanted = wantedOnly |> Set.toList |> List.choose named }

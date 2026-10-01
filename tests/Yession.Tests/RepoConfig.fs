@@ -20,6 +20,9 @@ let private expect = function Ok v -> v | Error e -> failwithf "%A" e
 
 let private repo (raw: string) = RepoRef.create raw |> expect
 
+/// The item a boot recorded, which a boot's fold names as its cause.
+let private boot = MessageId.create "boot" |> expect
+
 /// A repos directory holding one checkout, with `text` as its `yession.yaml` when given.
 let private checkout (r: RepoRef) (text: string option) : string =
     let reposDir = TestFiles.tempDir "yession-config-"
@@ -38,7 +41,6 @@ sandboxes:
       image: node:24
     uses:
       - npm
-    forward: [ github ]
 """
 
 let private duplicateName = """
@@ -101,11 +103,45 @@ let tests =
             match OperatorResources.read file with
             | Ok (Some profile) ->
                 Expect.equal
-                    (Sandboxes.ResourceProfile.declared profile.Resources
+                    (Sandboxes.ResourceProfile.declared profile.Profile.Resources
                      |> Set.toList
                      |> List.map ResourceName.value)
                     [ "thing" ]
                     "it declares what it said it declares"
+            | other -> failwithf "expected a profile, got %A" other
+
+        // One form, whoever writes it: an operator's sandbox reads as a repo's does, and is
+        // analyzed by the same analyzers.
+        testCase "an operator declares sandboxes in the form a repo does, and is read the same way" <| fun () ->
+            let dir = TestFiles.tempDir "yession-config-" |> Fs.canonical |> Option.get
+            let file = dir + "/resources.yaml"
+            TestFiles.write file "version: 1\nresources: {}\nsandboxes:\n  default:\n    uses: [ github ]\n    wants: [ a, a ]\n"
+            match OperatorResources.read file with
+            | Ok (Some read) ->
+                Expect.equal
+                    (read.Profile.Sandboxes
+                     |> Map.toList
+                     |> List.map (fun (name, decl) -> SandboxName.value name, decl.Uses |> List.map ResourceName.value))
+                    [ "default", [ "github" ] ]
+                    "the declaration, as a repo's would decode"
+            | other -> failwithf "expected a profile, got %A" other
+
+        testCase "an operator's sandbox is refused as a repo's would be" <| fun () ->
+            let dir = TestFiles.tempDir "yession-config-" |> Fs.canonical |> Option.get
+            let file = dir + "/resources.yaml"
+            TestFiles.write file "version: 1\nresources: {}\nsandboxes:\n  default:\n    workdirr: .\n"
+            Expect.isError (OperatorResources.read file) "an unknown key, refused by the one decoder"
+
+        testCase "an operator's declarations are noted where they were written" <| fun () ->
+            let dir = TestFiles.tempDir "yession-config-" |> Fs.canonical |> Option.get
+            let file = dir + "/resources.yaml"
+            TestFiles.write file "version: 1\nresources:\n  a: { env: { A: '1' } }\nsandboxes:\n  default:\n    uses: [ a ]\n    wants: [ a ]\n"
+            match OperatorResources.read file with
+            | Ok (Some read) ->
+                Expect.equal
+                    (read.Findings |> List.map Yession.Domain.Sandboxes.LocatedFinding.where)
+                    [ "sandboxes.default.wants[0], line 7" ]
+                    "the want the need already covers, on its line"
             | other -> failwithf "expected a profile, got %A" other
 
         // A path nothing has created yet is left alone. A cache directory a tool makes on
@@ -125,12 +161,11 @@ let tests =
             // The end-to-end claim: YAML on disk reaches the domain intact.
             let r = repo "octo/hello"
             let dir = checkout r (Some devWithNet)
-            let file = RepoConfig.read dir r |> expect |> Option.get
+            let file = (RepoConfig.read dir r |> expect |> Option.get).File
             let dev = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
             Expect.equal (dev.Container |> Option.get).Image (Some { Name = "node"; Tag = Some "24" })
                 "the image survived the round trip"
             Expect.equal (dev.Uses |> List.map ResourceName.value) [ "npm" ] "so did the resources it selects"
-            Expect.equal dev.Forward [ "github" ] "and the credential names"
 
         // Yession's own `yession.yaml`, decoded by the real thing. It is the acceptance test
         // for the schema: if this repo cannot say what a session working on it needs, the
@@ -140,7 +175,7 @@ let tests =
             let dir = TestFiles.tempDir "yession-config-"
             TestFiles.ensureDir (sprintf "%s/%s" dir (RepoRef.relativePath r))
             TestFiles.write (RepoConfig.pathIn dir r) (TestFiles.read "yession.yaml")
-            let file = RepoConfig.read dir r |> expect |> Option.get
+            let file = (RepoConfig.read dir r |> expect |> Option.get).File
             let dev = file.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
             let gate = file.Sandboxes |> Map.find (SandboxName.create "gate" |> expect)
             // A repo's work sandbox is a container; a declaration without one is refused
@@ -159,14 +194,14 @@ let tests =
                 Expect.isTrue
                     (decl.EnvironmentVariables |> Map.containsKey "NIX_CONFIG")
                     (sprintf "%s carries the nix settings its build needs" name)
-            Expect.equal dev.Forward [ "github" ] "dev forwards the credential `git push` needs"
             for name, decl in [ "dev", dev; "gate", gate ] do
-                // A WANT, not a use: the same file has to work on hosts that offer no warm
-                // store, and a `uses:` there would refuse the sandbox outright.
+                // WANTS, not uses: the same file has to work on hosts that offer no warm
+                // store and no GitHub connection, and a `uses:` there would refuse the
+                // sandbox outright. Where the operator offers `github`, `git push` works.
                 Expect.equal
                     (decl.Wants |> List.map ResourceName.value)
-                    [ "nix-container-store" ]
-                    (sprintf "%s wishes for the warm store where an operator offers one" name)
+                    [ "github"; "nix-container-store" ]
+                    (sprintf "%s wishes for the GitHub connection and the warm store where an operator offers them" name)
 
         testCase "a repo with no file asks for nothing, and that is not an error" <| fun () ->
             // The ordinary case. Most repos will never carry one.
@@ -200,7 +235,7 @@ let tests =
             // a second sandbox on the same configuration without repeating it.
             let r = repo "octo/hello"
             let dir = checkout r (Some anchored)
-            let file = RepoConfig.read dir r |> expect |> Option.get
+            let file = (RepoConfig.read dir r |> expect |> Option.get).File
             let gate = file.Sandboxes |> Map.find (SandboxName.create "gate" |> expect)
             Expect.equal (gate.Uses |> List.map ResourceName.value) [ "npm" ] "the alias carried the anchor's value"
 
@@ -220,13 +255,206 @@ let tests =
             for r in [ good; bad ] do TestFiles.ensureDir (sprintf "%s/%s" dir (RepoRef.relativePath r))
             TestFiles.write (RepoConfig.pathIn dir good) "version: 2\nsandboxes:\n  dev: {}\n"
             TestFiles.write (RepoConfig.pathIn dir bad) "version: 2\nsandboxes:\n  dev:\n    nope: 1\n"
-            let declared, refused = RepoConfig.readAll dir [ good; bad ]
+            let read = RepoConfig.readAll dir [ good; bad ]
+            let declared, refused = read.Declared, read.Refused
             Expect.equal (Map.count declared) 1 "the good repo's sandbox survived"
             Expect.isTrue
                 (declared |> Map.containsKey (SandboxRef.inScope good (SandboxName.create "dev" |> expect)))
                 "and it is the good repo's, scoped to it"
             Expect.equal (List.length refused) 1 "the broken one is reported rather than dropped"
             Expect.equal (fst refused.[0]) bad "named, so somebody can fix it"
+
+        // The analyzer answers in key paths; the parse is what knows lines. A note an author
+        // cannot find in their own file is a note they cannot act on.
+        testCase "a resource both needed and wanted is noted where the want was written" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n    wants:\n      - cache\n      - nix\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                Expect.equal
+                    (read.Findings |> List.map Yession.Domain.Sandboxes.LocatedFinding.where)
+                    [ "sandboxes.dev.wants[1], line 7" ]
+                    "the second want, on the line it is on"
+
+        // A note is said, never acted on: the file is honoured as written.
+        testCase "a noted file still declares everything it wrote" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n    wants: [ nix ]\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                let decl = read.File.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
+                Expect.equal (decl.Uses, decl.Wants) ([ ResourceName.create "nix" |> expect ], [ ResourceName.create "nix" |> expect ]) "both lines, as written"
+
+        // What a composed value MEANS: the value beneath, then what the file added.
+        testCase "a variable composed over itself extends what lies beneath it" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      SSL_CERT_DIR: ${env.SSL_CERT_DIR}:/run/ca\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                let decl = read.File.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
+                match decl.EnvironmentVariables |> Map.tryFind "SSL_CERT_DIR" with
+                | Some (Yession.Domain.Sandboxes.Derived template) ->
+                    Expect.equal
+                        (Yession.Domain.Sandboxes.EnvTemplate.resolve (fun name -> if name = "SSL_CERT_DIR" then Some "/etc/ssl/certs" else None) template)
+                        "/etc/ssl/certs:/run/ca"
+                        "the image's directory, then the file's"
+                | other -> failwithf "expected a composed value, got %A" other
+
+        testCase "a reference to nothing beneath composes over empty" <| fun () ->
+            match Yession.Domain.Sandboxes.EnvTemplate.parse "${env.UNSET}:/x" with
+            | Ok template -> Expect.equal (Yession.Domain.Sandboxes.EnvTemplate.resolve (fun _ -> None) template) ":/x" "empty where there is nothing"
+            | Error e -> failwithf "should parse: %s" e
+
+        // A file that writes `${` meaning the characters has a way to say so.
+        testCase "a doubled dollar is a literal reference opener, and stays plain text" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      PROMPT: cost $${dollars}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                let decl = read.File.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
+                Expect.equal (decl.EnvironmentVariables |> Map.tryFind "PROMPT") (Some (Yession.Domain.Sandboxes.PlainValue "cost ${dollars}")) "the characters, as meant"
+
+        // A reference a later build would understand is refused here, not kept as text: a
+        // file that meant a reference and got the literal would run on something unsaid.
+        testCase "a reference this build does not know refuses the file, naming it" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      TOKEN: ${vault.secret}\n"
+            match RepoConfig.fromText text with
+            | Ok _ -> failwith "should refuse"
+            | Error e -> Expect.stringContains e "vault.secret" "names what it did not know"
+
+        // What a sandbox asks the credential proxy for is a reference like `${env.NAME}`, so a
+        // file composes it with what it already has: the image's trust store AND the proxy's.
+        testCase "a proxy reference composes with what lies beneath" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      SSL_CERT_DIR: ${env.SSL_CERT_DIR}:${proxy.ca-dir}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                let decl = read.File.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
+                Expect.equal
+                    (decl.EnvironmentVariables |> Map.tryFind "SSL_CERT_DIR")
+                    (Some (
+                        Yession.Domain.Sandboxes.Derived
+                            [ Yession.Domain.Sandboxes.TemplatePart.Beneath "SSL_CERT_DIR"
+                              Yession.Domain.Sandboxes.TemplatePart.Literal ":"
+                              Yession.Domain.Sandboxes.TemplatePart.Proxy Yession.Domain.Sandboxes.ProxyValue.CaDir ]
+                    ))
+                    "the image's, then the proxy's"
+                Expect.equal (Yession.Domain.Sandboxes.ConfigFile.parseSandbox (Yession.Domain.Sandboxes.SandboxDecl.encode decl)) (Ok decl) "and it crosses the gate as written"
+
+        // A token is lent to each command rather than held by the sandbox, so it is a
+        // variable's whole value — and reads back across the gate as it was written.
+        testCase "a connection's token is lent into the variable that names it" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      GH_TOKEN: ${github.token}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                let decl = read.File.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
+                Expect.equal
+                    (decl.EnvironmentVariables |> Map.tryFind "GH_TOKEN")
+                    (Some (Yession.Domain.Sandboxes.Lent (ConnectionName.create "github" |> expect)))
+                    "lent, not held"
+                Expect.equal (Yession.Domain.Sandboxes.ConfigFile.parseSandbox (Yession.Domain.Sandboxes.SandboxDecl.encode decl)) (Ok decl) "and it crosses the gate as written"
+
+        // Composed into a larger value it would be a value the sandbox holds while the stand-in
+        // inside it rotates — so it is refused, pointing at the open question behind the rule.
+        testCase "a token composed into a larger value refuses the file, pointing at why" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      AUTH: Bearer ${github.token}\n"
+            match RepoConfig.fromText text with
+            | Ok _ -> failwith "should refuse"
+            | Error e ->
+                Expect.stringContains e "whole value" "says what it may be"
+                Expect.stringContains e "docs/GAPS.md" "and where the rule is argued"
+
+        testCase "a proxy field this build does not know refuses the file, naming what it knows" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      ALL_PROXY: ${proxy.socks}\n"
+            match RepoConfig.fromText text with
+            | Ok _ -> failwith "should refuse"
+            | Error e ->
+                Expect.stringContains e "proxy.socks" "names what it did not know"
+                Expect.stringContains e "${proxy.https}" "and what it does"
+
+        // A sandbox is built from values: what the proxy provided is written in, and a
+        // reference it did not provide is refused rather than left for a backend.
+        testCase "a provided proxy value is written into the template, and an unprovided one refused" <| fun () ->
+            let template = Yession.Domain.Sandboxes.EnvTemplate.parse "${env.SSL_CERT_DIR}:${proxy.ca-dir}" |> expect
+            let provided = Map.ofList [ Yession.Domain.Sandboxes.ProxyValue.CaDir, "/run/yession/proxy/authority" ]
+            let written = Yession.Domain.Sandboxes.EnvTemplate.provide provided template |> expect
+            Expect.equal
+                (Yession.Domain.Sandboxes.EnvTemplate.resolve (fun _ -> Some "/etc/ssl/certs") written)
+                "/etc/ssl/certs:/run/yession/proxy/authority"
+                "the image's, then what the proxy provided"
+            match Yession.Domain.Sandboxes.EnvTemplate.provide Map.empty template with
+            | Ok _ -> failwith "an unprovided reference should refuse"
+            | Error e -> Expect.stringContains e "${proxy.ca-dir}" "naming it"
+
+        // What crosses the command gate reads back as the file said it.
+        testCase "a composed value crosses the command gate as it was written" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      PATH: ${env.PATH}:/opt/$${odd}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                let decl = read.File.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
+                Expect.equal (Yession.Domain.Sandboxes.ConfigFile.parseSandbox (Yession.Domain.Sandboxes.SandboxDecl.encode decl)) (Ok decl) "the same declaration after the round trip"
+
+        // A container is told what its declaration composed, and nothing copied from beneath.
+        testCase "a sandbox's environment resolves each template over what lies beneath it" <| fun () ->
+            let policy =
+                { Support.emptyPolicy with
+                    Env = Map.ofList [ "A", "1" ]
+                    Derived =
+                        Map.ofList
+                            [ "PATH", [ Yession.Domain.Sandboxes.TemplatePart.Beneath "PATH"; Yession.Domain.Sandboxes.TemplatePart.Literal ":/x" ] ] }
+            Expect.equal
+                (Sandboxes.environment (Map.ofList [ "PATH", "/img"; "HOME", "/root" ]) policy)
+                (Map.ofList [ "A", "1"; "PATH", "/img:/x" ])
+                "the image's PATH extended; its HOME is the image's to set, not copied"
+
+        // What the credential proxy's references are for, read against each other: a note for
+        // each way a declaration can ask for the proxy and still not get through it.
+        testCase "a proxy URL with nothing trusting the proxy is noted where it was written" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      HTTPS_PROXY: ${proxy.https}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                Expect.equal
+                    (read.Findings |> List.map Yession.Domain.Sandboxes.LocatedFinding.where)
+                    [ "sandboxes.dev.env.HTTPS_PROXY, line 5" ]
+                    "the variable that sends HTTPS there"
+
+        testCase "a token lent with no proxy URL beside it is noted" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      GH_TOKEN: ${github.token}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                Expect.equal
+                    (read.Findings |> List.map Yession.Domain.Sandboxes.LocatedFinding.where)
+                    [ "sandboxes.dev.env.GH_TOKEN, line 5" ]
+                    "the variable lent it"
+
+        testCase "the proxy's authority alone as a whole trust store is noted" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      SSL_CERT_DIR: ${proxy.ca-dir}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                Expect.equal
+                    (read.Findings |> List.map Yession.Domain.Sandboxes.LocatedFinding.where)
+                    [ "sandboxes.dev.env.SSL_CERT_DIR, line 5" ]
+                    "the variable it replaces"
+
+        // The declaration each of those notes asks for, which none of them has anything to say
+        // about.
+        testCase "a sandbox that asks for the proxy the whole way is not noted" <| fun () ->
+            let text =
+                "version: 2\nsandboxes:\n  dev:\n    env:\n      HTTPS_PROXY: ${proxy.https}\n      SSL_CERT_DIR: ${env.SSL_CERT_DIR}:${proxy.ca-dir}\n      GH_TOKEN: ${github.token}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read -> Expect.isEmpty read.Findings "nothing noted"
+
+        testCase "a file with nothing to say about it has no notes" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n    wants: [ cache ]\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read -> Expect.isEmpty read.Findings "nothing noted"
     ]
 
 // --- The fold ----------------------------------------------------------------------------
@@ -319,7 +547,7 @@ let foldTests =
                         (recordingGate seen)
                         (foldLog ())
                         noCapabilities
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal (seen |> Seq.map (fun c -> c.Tool) |> Set.ofSeq) (Set.ofList [ "start_work_sandbox" ]) "one verb, no other"
                 Expect.equal (seen.Count) 3 "every declaration in every file, and nothing else"
             }
@@ -355,7 +583,7 @@ let foldTests =
                 // Started as a child: a sequential fold would deadlock here (the first call
                 // waits on a second the fold has not started), so we do NOT await it to a
                 // finish — we check that both declarations reached the gate.
-                let! _ = Async.StartChild (folded.Fold FoldCause.Booted CredentialFor.Deployment)
+                let! _ = Async.StartChild (folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment)
                 do! Async.Sleep 200
                 Expect.equal arrived 2 "both sandboxes reached the gate before either finished; a sequential fold parks at one"
             }
@@ -369,7 +597,7 @@ let foldTests =
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
                     RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal (Authority.author seen.[0].Authority) (ActorRef.Configured r) "the repo's own file"
                 Expect.equal (Authority.onBehalfOf seen.[0].Authority) None "and a boot fold borrows nobody's authority"
             }
@@ -377,13 +605,13 @@ let foldTests =
         testCaseAsync "a triggered fold runs on the authority of whoever triggered it" <|
             async {
                 let r = repo "octo/hello"
-                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    forward: [ github ]\n")
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ github ]\n")
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
                     RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
                 let ada = Principal.User (UserId.create "ada" |> expect)
                 do! folded.Fold (FoldCause.Connected (CredentialFor.Person ada)) (CredentialFor.Person ada)
-                Expect.equal (Authority.credential seen.[0].Authority) (CredentialFor.Person ada) "whose credential a forward: resolves against"
+                Expect.equal (Authority.credential seen.[0].Authority) (CredentialFor.Person ada) "whose authority the started sandbox is on"
             }
 
         // `start_work_sandbox` decides "already running?" before it starts anything, and a
@@ -409,7 +637,7 @@ let foldTests =
                 let folded =
                     RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) holding (foldLog ()) noCapabilities
                 let ada = Principal.User (UserId.create "ada" |> expect)
-                let! first = Async.StartChild (folded.Fold FoldCause.Booted CredentialFor.Deployment)
+                let! first = Async.StartChild (folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment)
                 do! Async.Sleep 20
                 let! second = Async.StartChild (folded.Fold (FoldCause.Connected (CredentialFor.Person ada)) (CredentialFor.Person ada))
                 do! Async.Sleep 20
@@ -434,7 +662,7 @@ let foldTests =
                         (refusingGate "registry.npmjs.org is not in this session's egress")
                         (foldLog ())
                         noCapabilities
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 match folded.Outcomes () with
                 | [ outcome ] ->
                     Expect.equal outcome.Repo r "the repo whose file asked"
@@ -455,7 +683,7 @@ let foldTests =
                         (recordingGate (ResizeArray<GatedCall> ()))
                         (foldLog ())
                         noCapabilities
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal (folded.Outcomes () |> List.map (fun o -> o.Problem)) [ None ] "nothing to report is nothing to report"
             }
 
@@ -474,7 +702,7 @@ let foldTests =
                         (recordingGate (ResizeArray<GatedCall> ()))
                         (foldLog ())
                         noCapabilities
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 match folded.Outcomes () with
                 | [ outcome ] ->
                     Expect.equal outcome.Sandbox None "there is no sandbox to name — the file did not parse"
@@ -491,7 +719,7 @@ let foldTests =
                 let seen = ResizeArray<GatedCall> ()
                 let folded =
                     RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) (recordingGate seen) (foldLog ()) noCapabilities
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal seen.Count 0 "nothing was asked for"
                 Expect.equal (folded.Outcomes ()) [] "and nothing is wrong"
             }
@@ -512,7 +740,7 @@ let foldTests =
                         (refusingGate "registry.npmjs.org is not in this session's egress")
                         log
                         noCapabilities
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 match page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoConfigRefused n -> Some n | _ -> None) with
                 | [ note ] ->
@@ -537,10 +765,10 @@ let foldTests =
                         (refusingGate "registry.npmjs.org is not in this session's egress")
                         log
                         noCapabilities
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 match page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoConfigRefused n -> Some n | _ -> None) with
-                | [ note ] -> Expect.equal note.CausedBy (Some Cause.Booted) "the session starting"
+                | [ note ] -> Expect.equal note.CausedBy (Some (Cause.Item boot)) "the boot that read the file"
                 | other -> failwithf "expected one note, got %A" other
             }
 
@@ -559,13 +787,36 @@ let foldTests =
                         (refusingGate "the ceiling is closed")
                         log
                         noCapabilities
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 let notes =
                     page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoConfigRefused n -> Some n.Reason | _ -> None)
                 Expect.equal notes [ "the ceiling is closed" ] "three folds, one thing to say"
+            }
+
+        // A note is news once. The fold runs after every repo verb, and a note repeated at
+        // each is a note people learn to stop reading.
+        testCaseAsync "a note about a file is said once, however often the fold runs" <|
+            async {
+                let r = repo "octo/hello"
+                let dir = checkout r (Some "version: 2\nsandboxes:\n  dev:\n    uses: [ nix ]\n    wants: [ nix ]\n")
+                let log = foldLog ()
+                let folded =
+                    RepoSandboxes.create
+                        dir
+                        (cell (Some (reposOver dir [ r ])))
+                        (cell WorkSandboxes.unavailable)
+                        (recordingGate (ResizeArray ()))
+                        log
+                        noCapabilities
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                let! page = log.Read None System.Int32.MaxValue
+                let notes =
+                    page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoConfigWarned n -> Some n.Where | _ -> None)
+                Expect.equal notes [ "sandboxes.dev.wants[0], line 5" ] "two folds, one note"
             }
 
         // The suppression is on the REASON, so a refusal that moved is news. Without this
@@ -584,9 +835,9 @@ let foldTests =
                         }
                 let folded =
                     RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) moving log noCapabilities
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 why <- "no credential to forward"
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 let notes =
                     page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoConfigRefused n -> Some n.Reason | _ -> None)
@@ -608,7 +859,7 @@ let foldTests =
                         (recordingGate (ResizeArray<GatedCall> ()))
                         log
                         noCapabilities
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 Expect.equal
                     (page.Events |> List.filter (fun e -> match e.Event with SessionEvent.RepoConfigRefused _ -> true | _ -> false))
@@ -632,7 +883,7 @@ let foldTests =
                         (recordingGate (ResizeArray<GatedCall> ()))
                         log
                         (granting [ "path:/nix:ro"; "net:cache.nixos.org" ])
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 match page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoCapabilitiesChanged c -> Some c | _ -> None) with
                 | [ note ] ->
@@ -656,10 +907,10 @@ let foldTests =
                         (recordingGate (ResizeArray<GatedCall> ()))
                         log
                         (granting [ "path:/nix:ro" ])
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 match page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoCapabilitiesChanged c -> Some c | _ -> None) with
-                | [ note ] -> Expect.equal note.CausedBy (Some Cause.Booted) "the session starting"
+                | [ note ] -> Expect.equal note.CausedBy (Some (Cause.Item boot)) "the boot that read the file"
                 | other -> failwithf "expected one note, got %A" other
             }
 
@@ -698,9 +949,9 @@ let foldTests =
                         (recordingGate (ResizeArray<GatedCall> ()))
                         log
                         (granting [ "path:/nix:ro" ])
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 let notes =
                     page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoCapabilitiesChanged c -> Some c.Granted | _ -> None)
@@ -722,9 +973,9 @@ let foldTests =
                         (recordingGate (ResizeArray<GatedCall> ()))
                         log
                         (granting granted)
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 granted <- [ "path:/nix:ro"; "!net:anywhere" ]
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let! page = log.Read None System.Int32.MaxValue
                 let notes =
                     page.Events |> List.choose (fun e -> match e.Event with SessionEvent.RepoCapabilitiesChanged c -> Some c.Granted | _ -> None)
@@ -747,7 +998,7 @@ let foldTests =
                     RepoSandboxes.create
                         dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate seen) (foldLog ()) (granting [ "path:/nix:ro" ])
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal seen.Count 1 "the declaration reached the gate"
             }
 
@@ -760,7 +1011,7 @@ let foldTests =
                     RepoSandboxes.create
                         dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate seen) (foldLog ()) (sensitively [ "!net:anywhere" ])
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal seen.Count 0 "nothing was started"
                 match folded.Outcomes () with
                 | [ outcome ] ->
@@ -791,7 +1042,7 @@ let foldTests =
                     RepoSandboxes.create
                         dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable)
                         (recordingGate seen) log (sensitively [ "!net:anywhere" ])
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 let ada = Principal.User (UserId.create "ada" |> expect)
                 let! approved = folded.Approve ada r [ "!net:anywhere" ]
                 Expect.equal approved (Ok ()) "a signed-in person may consent"
@@ -930,7 +1181,7 @@ let foldTests =
             async {
                 let folded =
                     RepoSandboxes.create "/nowhere" (cell None) (cell WorkSandboxes.unavailable) (recordingGate (ResizeArray<GatedCall> ())) (foldLog ()) noCapabilities
-                do! folded.Fold FoldCause.Booted CredentialFor.Deployment
+                do! folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment
                 Expect.equal (folded.Outcomes ()) [] "no repos is not a fault"
             }
 

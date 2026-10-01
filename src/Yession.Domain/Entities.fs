@@ -100,3 +100,39 @@ module Phrase =
             match segment with
             | Segment.Ref entity -> Some entity
             | Segment.Text _ -> None)
+
+/// A stretch of time as a person says it at a glance: the largest unit that fits. One
+/// spelling for every sentence that says how long, so the gap a resumed session names and the
+/// lateness a watched change carries read alike.
+module Elapsed =
+
+    /// Which unit a span is in, and how many of it: the count and the unit's SINGULAR name.
+    /// One ladder, because the two spellings below must never disagree about whether a stretch
+    /// is hours or days — the same break says "7 hours later" on screen and "7h" in a
+    /// sentence, and a reader comparing them is entitled to see the same number.
+    let private largest (span: System.TimeSpan) : int * string =
+        if span.TotalDays >= 1.0 then int span.TotalDays, "day"
+        elif span.TotalHours >= 1.0 then int span.TotalHours, "hour"
+        // Never "0m": a stretch shorter than a minute still happened, and rounding it away
+        // would have a resumed session claim it was never gone.
+        else max 1 (int span.TotalMinutes), "minute"
+
+    /// The terse form, for a sentence with other things to say: "8h", "25m", "3d".
+    let describe (span: System.TimeSpan) : string =
+        let n, unit = largest span
+        sprintf "%d%s" n (unit.Substring (0, 1))
+
+    /// The spelled-out form, for a label that is ONLY the duration: "7 hours", "1 hour",
+    /// "25 minutes", "3 days". A break on the timeline has the room and nothing else to say.
+    let inWords (span: System.TimeSpan) : string =
+        let n, unit = largest span
+        sprintf "%d %s%s" n unit (if n = 1 then "" else "s")
+
+/// One moment, spelled for a reader rather than for a machine. UTC and to the minute, written
+/// out of the parts rather than through a format string, so every runtime this compiles to
+/// produces the same characters — and so the time a person reads off the screen is the same
+/// string the agent was given in its prompt, which is the whole point of having one of these.
+module Moment =
+    let stamp (at: System.DateTimeOffset) : string =
+        let u = at.UtcDateTime
+        sprintf "%04d-%02d-%02d %02d:%02d UTC" u.Year u.Month u.Day u.Hour u.Minute

@@ -33,6 +33,12 @@ open Yession.Domain.Sandboxes
 open Yession.Domain.Terminals
 open Yession.Host
 
+#if FABLE_COMPILER
+open Thoth.Json
+#else
+open Thoth.Json.Net
+#endif
+
 let private expect =
     function
     | Ok v -> v
@@ -155,48 +161,10 @@ let private frame (opcode: int) (payload: byte []) : byte [] =
     Array.append head payload
 
 // --- The socket ------------------------------------------------------------------------------
-
-/// The socket under an accepted upgrade. From the 101 onwards nothing on it is HTTP and every
-/// byte is this file's to frame.
-///
-/// A member per event rather than one `on` taking a name, for `Fable.NodeExtras`' reason: the
-/// event's name and its handler's type are one fact, and a member per event is how the type
-/// gets to say so.
-[<AllowNullLiteral>]
-type private UpgradedSocket =
-    /// Bytes onto the wire. Node takes a `Uint8Array`, which is what Fable compiles a `byte []`
-    /// to, so nothing is converted on the way out.
-    abstract write : bytes: byte [] -> bool
-
-    /// The polite end: what has already been written still goes out.
-    abstract ``end`` : unit -> unit
-
-    /// The rude one: the connection disappears with nothing said. What `/abrupt` is for.
-    abstract destroy : unit -> unit
-
-    /// Node hands each read over as a `Buffer` — a `Uint8Array` subclass, so it arrives as
-    /// bytes with nothing converted here either.
-    [<Emit("$0.on('data', $1)")>]
-    abstract onData : handler: (byte [] -> unit) -> unit
-
-    /// A client that disappeared mid-write raises here, and an unhandled `error` on a stream
-    /// takes the process down. Every route here ends by dropping a connection, so this is the
-    /// ordinary case rather than an edge of it.
-    [<Emit("$0.on('error', $1)")>]
-    abstract onError : handler: (obj -> unit) -> unit
-
-[<Emit("$0.on('upgrade', $1)")>]
-let private onUpgradeRaw
-    (server: Interop.HttpServer)
-    (handler: System.Func<Interop.IncomingMessage, UpgradedSocket, unit>)
-    : unit =
-    jsNative
-
-/// `server.on('upgrade', …)`: the request that asked for it, and the socket under it. The
-/// handler is an uncurried delegate so Node receives the two-argument callback it calls — the
-/// way `Interop.createServer` takes its own.
-let private onUpgrade (server: Interop.HttpServer) (handler: Interop.IncomingMessage -> UpgradedSocket -> unit) : unit =
-    onUpgradeRaw server (System.Func<_, _, _> handler)
+//
+// The socket under an accepted upgrade is `Fable.NodeExtras`' `UpgradedSocket`, and the event
+// that hands one over is its `onUpgrade`: from the 101 onwards nothing on it is HTTP and every
+// byte is this file's to frame.
 
 /// Send one frame.
 let private send (socket: UpgradedSocket) (opcode: int) (payload: byte []) : unit =
@@ -212,27 +180,36 @@ let private sendOutput (socket: UpgradedSocket) (text: string) : unit =
 
 // --- What the client said ---------------------------------------------------------------------
 
-/// A TEXT frame's JSON as the wire admits it: `type` says which control it is, and the other two
-/// are read only by the control that carries them.
-[<AllowNullLiteral>]
+/// A TEXT frame from the client, as this peer reads it. `docs/streams.md` gives the client two
+/// controls; anything else that says which control it is comes from a later spec.
+[<RequireQualifiedAccess>]
 type private ClientControl =
-    abstract ``type`` : string
-    abstract cols : int
-    abstract rows : int
+    /// `{"type":"resize","cols":N,"rows":M}`.
+    | Resize of cols: int * rows: int
+    /// `{"type":"kill"}`: end the stream.
+    | Kill
+    /// A control this peer has no meaning for.
+    | Unknown
 
-/// `JSON.parse`. THROWS on anything that is not JSON — ordinary here rather than exceptional,
-/// because a TEXT frame is whatever the other end chose to send.
-let private parseJson (text: string) : ClientControl = unbox (JS.JSON.parse text)
+/// A control frame: `type` says which control it is, and the size is read only by the control
+/// that carries one. Everything else JSON admits — `null`, a bare string, an object with no
+/// `type` — fails the decode, and the failure is what says "not a control frame".
+let private clientControl : Decoder<ClientControl> =
+    Decode.field "type" Decode.string
+    |> Decode.andThen (function
+        | "resize" ->
+            Decode.map2
+                (fun cols rows -> ClientControl.Resize (cols, rows))
+                (Decode.field "cols" Decode.int)
+                (Decode.field "rows" Decode.int)
+        | "kill" -> Decode.succeed ClientControl.Kill
+        | _ -> Decode.succeed ClientControl.Unknown)
 
 /// What the client's TEXT frame said, or `None` when it said nothing this peer can read: it
-/// would not parse, or it parsed into something that does not say which control it is.
+/// would not parse — ordinary here rather than exceptional, because a TEXT frame is whatever the
+/// other end chose to send — or it parsed into something that is not a control.
 let private controlOf (text: string) : ClientControl option =
-    try
-        match parseJson text with
-        | null -> None
-        | parsed -> if isNull (box parsed.``type``) then None else Some parsed
-    with _ ->
-        None
+    Decode.fromString clientControl text |> Result.toOption
 
 /// What this peer does with one frame the client sent, and whether the stream goes on.
 let private answer (socket: UpgradedSocket) (opcode: int) (payload: byte []) : bool =
@@ -247,19 +224,19 @@ let private answer (socket: UpgradedSocket) (opcode: int) (payload: byte []) : b
         true
     | TextOpcode ->
         match controlOf (System.Text.Encoding.UTF8.GetString payload) with
-        | Some control when control.``type`` = "resize" ->
+        | Some (ClientControl.Resize (cols, rows)) ->
             // Answered on the DATA channel: a client that sees it knows the two channels are
             // distinct rather than one stream it happens to parse twice.
-            sendOutput socket (sprintf "sized %dx%d\n" control.cols control.rows)
+            sendOutput socket (sprintf "sized %dx%d\n" cols rows)
             true
-        | Some control when control.``type`` = "kill" ->
+        | Some ClientControl.Kill ->
             // `kill` ends the STREAM, and says why before it does — the termination frame, then
             // the close. A provider that sent one without the other would leave a terminal
             // nobody can reattach, because nothing has ended yet.
             sendControl socket """{"type":"exited","code":7}"""
             socket.``end`` ()
             false
-        | Some _
+        | Some ClientControl.Unknown
         | None ->
             // A control this peer has no meaning for, or text that is not control at all.
             // Ignored, which is what an implementation does with a frame from a later spec.
@@ -336,8 +313,8 @@ let startProvider () : JS.Promise<Provider> =
         // Anything that is not an upgrade is told so. 426 is the status for "this endpoint is
         // WebSocket", and it is what a plain GET at a provider should read.
         let server =
-            Interop.createServer (fun _ res ->
-                res.writeHead (426, JsInterop.createObj []) |> ignore
+            createServer (fun _ res ->
+                res.writeHead (426, [  ])
                 res.``end`` "")
 
         onUpgrade server (fun req socket ->
@@ -368,7 +345,7 @@ let startProvider () : JS.Promise<Provider> =
             fun () ->
                 listening
                     { new Provider with
-                        member _.port = Interop.serverPort server
+                        member _.port = serverPort server
 
                         member _.stop () =
                             // `close` waits for the connections that are still open, so a test
@@ -396,43 +373,16 @@ let private until (predicate: unit -> bool) : Async<bool> =
         }
     loop 3000
 
-/// The platform's `console.warn` as it stands. `console` is one mutable object for the whole
-/// process, so hearing what was warned means putting something else in `warn`'s place — and
-/// reading the real one first is the only way to put it back.
-[<Emit("console.warn")>]
-let private consoleWarn () : obj = jsNative
-
-[<Emit("console.warn = $0")>]
-let private setConsoleWarn (warn: obj) : unit = jsNative
-
-/// A function called the way `console` calls one: with however many arguments the caller
-/// passed, where an F# function takes exactly one. The parts arrive as an array, so what to
-/// make of them is F#'s decision rather than this line's.
-[<Emit("(...parts) => $0(parts)")>]
-let private variadic (handler: obj [] -> unit) : obj = jsNative
-
-/// Run `body` with a recorder in `console.warn`'s place, and put the real one back however the
-/// body ends. `said` answers with what has been warned so far, one entry per call, spelled the
-/// way `console` would have printed it — arguments joined by spaces.
-///
-/// The body runs INSIDE rather than there being a take and a matching give-back, for
-/// `Support.withEnv`'s reason: the process has one `console`, so a capture that is not given
-/// back swallows every later suite's warnings, and the half a caller forgets is the give-back.
+/// Run `body` hearing what `console.warn` is told, the real one put back however the body ends
+/// (`ConsoleWarnings.overhearing`). `said` answers with what has been warned so far, one entry
+/// per call, spelled the way `console` would have printed it — arguments joined by spaces.
 ///
 /// A diagnostic is the only place this client's warning about a TEXT frame goes, so reading it
 /// back is the only way to ask what it said — and what it must never contain is the ticket's
 /// url, which carries a single-use attach token.
 let private withCapturedWarnings (body: (unit -> string list) -> Async<'a>) : Async<'a> =
-    async {
-        let said = ResizeArray<string> ()
-        let original = consoleWarn ()
-        setConsoleWarn (variadic (fun parts -> said.Add (parts |> Array.map Thrown.describe |> String.concat " ")))
-
-        try
-            return! body (fun () -> List.ofSeq said)
-        finally
-            setConsoleWarn original
-    }
+    let said = ResizeArray<string> ()
+    ConsoleWarnings.overhearing said.Add (async.Delay (fun () -> body (fun () -> List.ofSeq said)))
 
 let private device = { SourceCapabilities.byteStream with CanResize = true }
 
@@ -603,15 +553,21 @@ let portsTests =
 
 module Ws = Yession.Host.AttachWs
 
-/// UTF-8 bytes as a BINARY frame carries them: a standalone `ArrayBuffer`, which is what
-/// `binaryType <- ArrayBuffer` buys and what the socket hands over.
-[<Emit("new TextEncoder().encode($0).buffer")>]
-let private utf8Bytes (text: string) : JS.ArrayBuffer = jsNative
+/// Bytes as a BINARY frame carries them: a standalone `ArrayBuffer` holding exactly these,
+/// which is what `binaryType <- ArrayBuffer` buys and what the socket hands over. Copied into
+/// a fresh `Uint8Array` so the buffer is its own rather than a view's backing store.
+let private framed (bytes: byte []) : JS.ArrayBuffer =
+    let copy = JS.Constructors.Uint8Array.Create bytes.Length
+    bytes |> Array.iteri (fun at value -> copy[at] <- value)
+    copy.buffer
+
+/// UTF-8 bytes as a BINARY frame carries them.
+let private utf8Bytes (text: string) : JS.ArrayBuffer =
+    framed (System.Text.Encoding.UTF8.GetBytes text)
 
 /// One raw byte as a BINARY frame carries it. Two of these are how a multi-byte character
 /// arrives when a chunk boundary cuts it in half, which is what real device output does.
-[<Emit("new Uint8Array([$0]).buffer")>]
-let private oneByte (value: int) : JS.ArrayBuffer = jsNative
+let private oneByte (value: int) : JS.ArrayBuffer = framed [| byte value |]
 
 /// One frame the way a CLIENT sends one, for the provider to read: FIN and opcode 2, the mask
 /// bit and a length of five, a four-byte masking key, and "hello" XOR'd under it. Written out

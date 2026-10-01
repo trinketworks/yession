@@ -30,6 +30,8 @@
     <Compile Include="Emulator.fs" />
     <Compile Include="Fs.fs" />
     <Compile Include="Sandboxes.fs" />
+    <Compile Include="SandboxHost.fs" />
+    <Compile Include="VolumeLeases.fs" />
     <!-- Attaching a terminal to somebody else's byte stream (Plan 16, part D). Beside the
          sandbox adapters because it is the same kind of thing: a way to get a PtyHandle. -->
     <Compile Include="AttachWs.fs" />
@@ -46,11 +48,20 @@
     <!-- Reading `yession.yaml` off a checkout (Plan 27). After Repos.fs, which owns where a
          checkout is, and Fs.fs. The only part of the file's story that cannot run in the
          cheap tier: the decoder itself is pure and lives in the domain. -->
+    <!-- The parse stage both YAML files this repository owns go through: text to JSON for a
+         decoder and to a source index for an analyzer. Before the two readers. -->
+    <Compile Include="YamlSource.fs" />
     <Compile Include="OperatorResources.fs" />
     <Compile Include="RepoConfig.fs" />
     <!-- The session's named WorkSandboxes (Plan 15, stage 2). After Queries (it declares
          one) and Sandboxes (it composes them); before Host, which wires terminals to it. -->
     <Compile Include="WorkSandboxes.fs" />
+    <!-- The credential proxy: the git gateway's idea for any HTTPS client — a stand-in in the
+         sandbox, the credential swapped in here. Provider-neutral; GitHubAccess.fs is the
+         first provider to declare a route on it. After WorkSandboxes, whose provision it
+         builds for a sandbox. -->
+    <Compile Include="CredentialProxy.fs" />
+    <Compile Include="GitHubAccess.fs" />
     <!-- The `shell_profile` query (Plan 25). Beside the other two registrations, and before
          Commands, which invalidates it. -->
     <Compile Include="ShellProfile.fs" />
@@ -58,6 +69,7 @@
          ETag bookkeeping, the watch verbs and the query. Beside the other services
          Commands.fs runs against, and after Queries.fs, whose registration type it answers
          with. -->
+    <Compile Include="Watches.fs" />
     <Compile Include="PrWatches.fs" />
     <!-- What GitHub adds to that: the two REST endpoints, their JSON, and the field path a
          delivery names its repo at. After PrWatch.fs, whose `FetchPr` it satisfies. It
@@ -144,6 +156,7 @@
     <ProjectReference Include="..\src\Fable.Zod\Fable.Zod.fsproj" />
     <ProjectReference Include="..\src\Fable.Dockerode\Fable.Dockerode.fsproj" />
     <ProjectReference Include="..\src\Fable.Jose\Fable.Jose.fsproj" />
+    <ProjectReference Include="..\src\Fable.NodeForge\Fable.NodeForge.fsproj" />
     <ProjectReference Include="..\src\Fable.Yaml\Fable.Yaml.fsproj" />
     <ProjectReference Include="..\src\Fable.NodeDataChannel\Fable.NodeDataChannel.fsproj" />
     <ProjectReference Include="..\src\Fable.NodePty\Fable.NodePty.fsproj" />
@@ -156,6 +169,8 @@
     <ProjectReference Include="..\src\Fable.FetchExtras\Fable.FetchExtras.fsproj" />
     <!-- The markdown parse the SSR timeline renders a message body through. -->
     <ProjectReference Include="..\src\Fable.ProseMirror\Fable.ProseMirror.fsproj" />
+    <!-- The shape of a Lit template once `html` has run, which the SSR renderer takes apart. -->
+    <ProjectReference Include="..\src\Fable.LitExtras\Fable.LitExtras.fsproj" />
     <ProjectReference Include="..\src\Fable.Xterm\Fable.Xterm.fsproj" />
     <ProjectReference Include="..\src\Fable.Keyring\Fable.Keyring.fsproj" />
     <ProjectReference Include="..\src\Fable.OpenIdClient\Fable.OpenIdClient.fsproj" />

@@ -113,18 +113,22 @@ let createFull
                                         (Sandboxes.summaryFor HostBackend spec)
                                         (sprintf "env-%s-%s" (SessionId.value request.SessionId) (SandboxRef.render name)))
                             async {
-                                match! WorkSandboxes.create
+                                return! WorkSandboxes.create
                                         { Backend = fun _ -> SandboxBackend.describe HostBackend
                                           // This composition reads no repo files, so nothing here
                                           // has a description to give.
                                           Describe = fun _ -> None
                                           Checkout = fun _ -> None
                                           Credentials = []
+                                          Selection = fun _ -> Ok SelectionGrant.none
+                                          Proxy = WorkSandboxes.ProxyProvider.none
+                                          // This composition is its own operator: it declares
+                                          // the one sandbox its sessions have, as a resources
+                                          // profile would, since nothing makes one up.
+                                          Standing = [ SandboxRef.name SandboxRef.defaultRef, SandboxRequest.defaults ]
                                           Create = create
                                           Log = log
-                                          Clock = fun () -> DateTimeOffset.UtcNow } with
-                                | Ok sandboxes -> return sandboxes
-                                | Error e -> return failwithf "work sandboxes: %s" e
+                                          Clock = fun () -> DateTimeOffset.UtcNow }
                             })
                 let baseLog = makeLog |> Option.map (fun make -> make request.SessionId)
                 let docStore = makeDocStore |> Option.map (fun make -> make request.SessionId)

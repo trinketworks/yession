@@ -56,9 +56,26 @@ let private isAct (item: ConversationItem) : bool =
     | ItemContent.Stopped _ -> false
 
 /// The ask most of these cases make: nothing in particular about the sandbox, some
-/// credentials forwarded into it. The spec half has its own cases below.
+/// connections forwarded into it — selected under `uses`, as a repo selects them, on a host
+/// where each resource name is the connection of that name (`everyResourceAConnection`). The
+/// spec half has its own cases below.
 let private forwarding (names: string list) : SandboxRequest =
-    { SandboxRequest.defaults with Forward = ConnectionName.normalise names }
+    { Spec = { EnvironmentSpec.defaults with Uses = names |> List.map (ResourceName.create >> expect) } }
+
+/// The host these cases run on: every resource a spec selects is the connection of the same
+/// name by both its routes, needed under `uses` and wanted under `wants` — what an operator
+/// offering `github: { connection: { github: [git, api] } }` comes to, without a profile to
+/// load.
+let private everyResourceAConnection (spec: EnvironmentSpec) : Result<SelectionGrant, string> =
+    let byEveryRoute (names: ResourceName list) =
+        names |> List.collect (fun name -> ConnectionRoute.all |> List.map (fun route -> ResourceName.value name, route))
+    Ok
+        { SelectionGrant.none with
+            Connections = { Needed = byEveryRoute spec.Uses; Wanted = byEveryRoute spec.Wants } }
+
+/// Both routes of github, which is what `everyResourceAConnection` forwards it by.
+let private byEveryRoute (connection: ConnectionName) : Map<ConnectionName, ConnectionRoute list> =
+    Map.ofList [ connection, ConnectionRoute.all ]
 
 /// The one connection these cases forward, as a name.
 let private github : ConnectionName = ConnectionName.create "github" |> expect
@@ -98,9 +115,17 @@ let private fakeEnvironmentFailing (reason: string) : SessionEnvironment.Session
       Shell = fun () -> None
       Realisation = fun () -> [] }
 
+/// A `default` as an operator declares one: nothing in particular about it.
+let private declaredDefault : (SandboxName * SandboxRequest) list =
+    [ SandboxRef.name SandboxRef.defaultRef, SandboxRequest.defaults ]
+
 /// A registry over fake environments, plus the record of what each was BUILT with — which
 /// is where a forwarded credential would have to appear, and the only place it may.
-let private registryWithSpecs (log: EventLog<SessionEvent>) (credentials: WorkSandboxes.CredentialSource list) =
+let private registryDeclaringWithSpecs
+    (log: EventLog<SessionEvent>)
+    (credentials: WorkSandboxes.CredentialSource list)
+    (standing: (SandboxName * SandboxRequest) list)
+    =
     let built = ResizeArray<string * WorkSandboxes.Provision> ()
     let specs = ResizeArray<string * string option> ()
     async {
@@ -110,6 +135,9 @@ let private registryWithSpecs (log: EventLog<SessionEvent>) (credentials: WorkSa
                   Describe = fun _ -> None
                   Checkout = fun _ -> None
                   Credentials = credentials
+                  Selection = everyResourceAConnection
+                  Proxy = WorkSandboxes.ProxyProvider.none
+                  Standing = standing
                   Create =
                     fun name spec provision ->
                         built.Add (SandboxRef.render name, provision)
@@ -117,8 +145,13 @@ let private registryWithSpecs (log: EventLog<SessionEvent>) (credentials: WorkSa
                         Ok (fakeEnvironment ())
                   Log = log
                   Clock = fixedClock }
-        return expect created, built, specs
+        return created, built, specs
     }
+
+/// The same over a session whose operator declared a `default` and nothing else — the
+/// profile every session these cases stand for would have: nothing makes a `default` up.
+let private registryWithSpecs (log: EventLog<SessionEvent>) (credentials: WorkSandboxes.CredentialSource list) =
+    registryDeclaringWithSpecs log credentials declaredDefault
 
 /// A registry whose sandboxes all come up holding something wider than they asked for —
 /// what a host that could not scope a grant hands back.
@@ -130,10 +163,13 @@ let private registryHolding (log: EventLog<SessionEvent>) (realisation: string l
                   Describe = fun _ -> None
                   Checkout = fun _ -> None
                   Credentials = []
+                  Selection = everyResourceAConnection
+                  Proxy = WorkSandboxes.ProxyProvider.none
+                  Standing = declaredDefault
                   Create = fun _ _ _ -> Ok (fakeEnvironmentHolding realisation)
                   Log = log
                   Clock = fixedClock }
-        return expect created
+        return created
     }
 
 /// The same, for the cases that only care about the environment a sandbox was built with.
@@ -153,22 +189,27 @@ let private starter : Authority = Authority.agentFor (Principal.User (UserId.cre
 let private githubSource (route: string) : WorkSandboxes.CredentialSource * ResizeArray<string> =
     let revoked = ResizeArray<string> ()
     { Name = github
+      Routes = ConnectionRoute.all
       Provision =
-        fun _ ->
+        fun _ _ ->
             async {
                 return
                     WorkSandboxes.CredentialForwarding.Forwarded
-                        { Env = Map.ofList [ "GITHUB_ROUTE", route ]; GitConfig = []; Domains = [] }
+                        { WorkSandboxes.Provision.empty with Env = Map.ofList [ "GITHUB_ROUTE", route ] }
             }
       Revoke = fun ref -> revoked.Add (SandboxRef.render ref)
       // Lends by NAME: what a block gets says whose credential it was asked for, which
       // is the whole of what the loan cases compare.
       Lend =
-        fun authority _ _ _ ->
+        fun authority _ _ _ _ lentInto ->
             async {
                 return
                     { BlockEnv.GitConfig = None
-                      BlockEnv.Vars = [ "LENT_TO", Some (CredentialFor.token (Authority.credential authority)) ] }
+                      BlockEnv.Vars =
+                        [ "LENT_TO", Some (CredentialFor.token (Authority.credential authority)) ]
+                        // And, where the declaration lends the token in variables of its own,
+                        // which — so a case can see the registry asked for them.
+                        @ (if List.isEmpty lentInto then [] else [ "LENT_INTO", Some (String.concat "," lentInto) ]) }
             }
       Retire = ignore },
     revoked
@@ -237,7 +278,7 @@ let private ensureTests =
             async {
                 let log = newLog ()
                 let! sandboxes, _ = registry log []
-                let! _ = sandboxes.Ensure starter None (sandbox "test") (forwarding [])
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [])
                 let! events = eventsOf log
                 match lifecycleOf events with
                 | [ ("starting", opened); ("started", resolved) ] ->
@@ -256,11 +297,14 @@ let private ensureTests =
                           Describe = fun _ -> None
                           Checkout = fun _ -> None
                           Credentials = []
+                          Selection = everyResourceAConnection
+                          Proxy = WorkSandboxes.ProxyProvider.none
+                          Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironmentFailing "the docker daemon is not reachable")
                           Log = log
                           Clock = fixedClock }
-                let sandboxes = expect created
-                match! sandboxes.Ensure starter None (sandbox "test") (forwarding []) with
+                let sandboxes = created
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding []) with
                 | Error reason -> Expect.equal reason "the docker daemon is not reachable" "the ask fails with why"
                 | Ok _ -> failwith "a sandbox whose environment cannot come up must not report success"
                 let! events = eventsOf log
@@ -281,11 +325,14 @@ let private ensureTests =
                           Describe = fun _ -> Some "day-to-day work"
                           Checkout = fun _ -> None
                           Credentials = []
+                          Selection = everyResourceAConnection
+                          Proxy = WorkSandboxes.ProxyProvider.none
+                          Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
                           Clock = fixedClock }
-                let sandboxes = expect created
-                let! _ = sandboxes.Ensure starter None (sandbox "test") (forwarding [])
+                let sandboxes = created
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [])
                 let! events = eventsOf log
                 match startedEvents events with
                 | [ started ] -> Expect.equal started.Description (Some "day-to-day work") "the reason travels with the start"
@@ -305,11 +352,14 @@ let private ensureTests =
                           Describe = fun _ -> None
                           Checkout = fun _ -> Some "/repos/owner/name"
                           Credentials = []
+                          Selection = everyResourceAConnection
+                          Proxy = WorkSandboxes.ProxyProvider.none
+                          Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
                           Clock = fixedClock }
-                let sandboxes = expect created
-                let! _ = sandboxes.Ensure starter None (sandbox "test") (forwarding [])
+                let sandboxes = created
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [])
                 let! events = eventsOf log
                 match startedEvents events with
                 | [ started ] -> Expect.equal started.Checkout (Some "/repos/owner/name") "the address travels with the start"
@@ -356,13 +406,16 @@ let private ensureTests =
                           Describe = fun _ -> described.Value
                           Checkout = fun _ -> None
                           Credentials = []
+                          Selection = everyResourceAConnection
+                          Proxy = WorkSandboxes.ProxyProvider.none
+                          Standing = []
                           Create = fun _ _ _ -> Ok (fakeEnvironment ())
                           Log = log
                           Clock = fixedClock }
-                let sandboxes = expect created
-                let! _ = sandboxes.Ensure starter None (sandbox "test") (forwarding [])
+                let sandboxes = created
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [])
                 described.Value <- Some "as somebody later put it"
-                match! sandboxes.Ensure starter None (sandbox "test") (forwarding []) with
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding []) with
                 | Error reason -> failwithf "re-describing is not a configuration change: %s" reason
                 | Ok outcome ->
                     match outcome with
@@ -376,8 +429,8 @@ let private ensureTests =
             async {
                 let log = newLog ()
                 let! sandboxes, built = registry log []
-                let! first = sandboxes.Ensure starter None (sandbox "test") (forwarding [])
-                let! second = sandboxes.Ensure starter None (sandbox "test") (forwarding [])
+                let! first = sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [])
+                let! second = sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [])
                 let one = expect first
                 let two = expect second
                 Expect.equal
@@ -391,25 +444,17 @@ let private ensureTests =
                 | WorkSandboxes.SandboxStarted _, WorkSandboxes.SandboxAlreadyRunning _ -> ()
                 | _ -> failwith "the first ask started it and the second found it running"
                 Expect.equal
-                    (built |> Seq.filter (fun (name, _) -> name = "test") |> Seq.length)
+                    (built |> Seq.filter (fun (name, _) -> name = "octo/hello:test") |> Seq.length)
                     1
                     "it was built once"
                 let! events = eventsOf log
                 Expect.equal (List.length (startedEvents events)) 1 "the second ask recorded nothing"
             }
 
-        // Equivalent-but-differently-spelled forwarding is the SAME ask, which is what
-        // normalisation is for; this pins that the registry uses it.
-        testCaseAsync "an equivalent forwarding list is the same ask" <|
-            async {
-                let log = newLog ()
-                let! sandboxes, _ = registry log [ githubCredential "tok" ]
-                let! _ = sandboxes.Ensure starter None (sandbox "test") (forwarding [ "github" ])
-                let! again = sandboxes.Ensure starter None (sandbox "test") (forwarding [ " GitHub "; "github" ])
-                Expect.isTrue (Result.isOk again) "it is not a configuration change"
-                let! events = eventsOf log
-                Expect.equal (List.length (startedEvents events)) 1 "still recorded once"
-            }
+        // A forwarding list was once free text, normalised here so ` GitHub ` and `github`
+        // compared equal. What a sandbox forwards is its selection now, and a selection is
+        // resource names, which refuse a second spelling where they are decoded — so there
+        // is no equivalent-but-different ask left to reach the registry.
 
         // The refusal, and why it is a refusal: a sandbox has processes in it. Converging
         // by killing somebody's build is not convergence.
@@ -417,15 +462,15 @@ let private ensureTests =
             async {
                 let log = newLog ()
                 let! sandboxes, built = registry log [ githubCredential "tok" ]
-                let! _ = sandboxes.Ensure starter None (sandbox "test") (forwarding [])
-                match! sandboxes.Ensure starter None (sandbox "test") (forwarding [ "github" ]) with
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [])
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [ "github" ]) with
                 | Ok _ -> failwith "expected a refusal"
                 | Error e ->
                     Expect.isTrue (e.Contains "github") "it names what was asked for"
                     Expect.isTrue (e.Contains "nothing") "and what is running"
                     Expect.isTrue (e.Contains "stop_work_sandbox") "and how to actually change it"
                 Expect.equal
-                    (built |> Seq.filter (fun (name, _) -> name = "test") |> Seq.length)
+                    (built |> Seq.filter (fun (name, _) -> name = "octo/hello:test") |> Seq.length)
                     1
                     "nothing was recreated behind the refusal"
             }
@@ -437,15 +482,15 @@ let private ensureTests =
             async {
                 let log = newLog ()
                 let! sandboxes, built = registry log []
-                let! _ = sandboxes.Ensure starter None (sandbox "test") (workingIn "/a")
-                match! sandboxes.Ensure starter None (sandbox "test") (workingIn "/b") with
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") (workingIn "/a")
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:test") (workingIn "/b") with
                 | Ok _ -> failwith "expected a refusal"
                 | Error e ->
                     Expect.isTrue (e.Contains "/a") "it names what is running"
                     Expect.isTrue (e.Contains "/b") "and what was asked for"
                     Expect.isTrue (e.Contains "stop_work_sandbox") "and how to actually change it"
                 Expect.equal
-                    (built |> Seq.filter (fun (name, _) -> name = "test") |> Seq.length)
+                    (built |> Seq.filter (fun (name, _) -> name = "octo/hello:test") |> Seq.length)
                     1
                     "nothing was recreated behind the refusal"
             }
@@ -456,9 +501,9 @@ let private ensureTests =
             async {
                 let log = newLog ()
                 let! sandboxes, _, specs = registryWithSpecs log []
-                let! _ = sandboxes.Ensure starter None (sandbox "test") (workingIn "/somewhere")
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") (workingIn "/somewhere")
                 Expect.equal
-                    (specs |> Seq.filter (fun (name, _) -> name = "test") |> Seq.map snd |> List.ofSeq)
+                    (specs |> Seq.filter (fun (name, _) -> name = "octo/hello:test") |> Seq.map snd |> List.ofSeq)
                     [ Some "/somewhere" ]
                     "the working directory reached the factory"
             }
@@ -468,13 +513,13 @@ let private ensureTests =
             async {
                 let log = newLog ()
                 let! sandboxes, _ = registry log [ githubCredential "tok" ]
-                let! _ = sandboxes.Ensure starter None (sandbox "test") (forwarding [])
-                let! stopped = sandboxes.Stop caller (sandbox "test")
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [])
+                let! stopped = sandboxes.Stop caller (sandbox "octo/hello:test")
                 Expect.isTrue (Result.isOk stopped) "it stops"
-                let! restarted = sandboxes.Ensure starter None (sandbox "test") (forwarding [ "github" ])
+                let! restarted = sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [ "github" ])
                 Expect.equal
-                    (WorkSandboxes.SandboxOutcome.sandbox (expect restarted)).Request.Forward
-                    [ github ]
+                    (WorkSandboxes.SandboxOutcome.sandbox (expect restarted)).Forwarded
+                    (byEveryRoute github)
                     "the new configuration takes"
                 let! events = eventsOf log
                 Expect.equal (List.length (startedEvents events)) 2 "both starts are recorded"
@@ -513,7 +558,7 @@ let private ensureTests =
                 | EnvironmentAvailable -> failwith "expected a refusal"
                 | EnvironmentUnavailable reason ->
                     Expect.isTrue (reason.Contains "ghost") "it names the sandbox"
-                    Expect.isTrue (reason.Contains "start_work_sandbox") "and how to get one"
+                    Expect.isTrue (reason.Contains "operator declares") "and who would declare one"
             }
 
         // What an agent writes after reading "started sandbox octo/hello:dev" is `dev`, and
@@ -579,7 +624,7 @@ let private ensureTests =
             async {
                 let log = newLog ()
                 let! sandboxes = registryHolding log [ "the socket at /run/docker.sock — this host cannot scope that, so the sandbox gets any unix socket on this host" ]
-                let! _ = sandboxes.Ensure starter None (sandbox "test") SandboxRequest.defaults
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") SandboxRequest.defaults
                 let! events = eventsOf log
                 match startedEvents events with
                 | [ started ] ->
@@ -603,13 +648,13 @@ let private credentialTests =
             async {
                 let log = newLog ()
                 let! sandboxes, built = registry log [ githubCredential "ghp_secret" ]
-                let! started = sandboxes.Ensure starter None (sandbox "test") (forwarding [ "github" ])
+                let! started = sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [ "github" ])
                 Expect.equal
-                    (WorkSandboxes.SandboxOutcome.sandbox (expect started)).Request.Forward
-                    [ github ]
+                    (WorkSandboxes.SandboxOutcome.sandbox (expect started)).Forwarded
+                    (byEveryRoute github)
                     "it forwards what was asked"
 
-                let _, provision = built |> Seq.find (fun (name, _) -> name = "test")
+                let _, provision = built |> Seq.find (fun (name, _) -> name = "octo/hello:test")
                 Expect.equal (Map.tryFind "GITHUB_ROUTE" provision.Env) (Some "ghp_secret") "the provision is in the sandbox env"
 
                 let! events = eventsOf log
@@ -625,28 +670,33 @@ let private credentialTests =
                 Expect.isFalse (rendered.Contains "ghp_secret") "no rendering of the log contains the value"
             }
 
-        // The default sandbox forwards everything the session can forward, so its git reaches
+        // A declared default forwards what it selects, so its git reaches
         // the gateway rather than github.com unauthenticated. Provisioned at CONSTRUCTION —
         // a terminal opened without naming a sandbox lands in the default through
         // `EnvironmentFor`, which never runs the provisioning `ensure`, so the route has to
         // be baked into the default's environment before any of that. Three sessions ran
         // `git pull` in the default and got a bare exit 1 because it was not.
-        testCaseAsync "the default sandbox is built with the session's forward, from boot" <|
+        testCaseAsync "a declared default is built with the connections it selects, from boot" <|
             async {
                 let log = newLog ()
-                let! _, built, _ = registryWithSpecs log [ githubCredential "ghp_secret" ]
+                let! _, built, _ =
+                    registryDeclaringWithSpecs
+                        log
+                        [ githubCredential "ghp_secret" ]
+                        [ SandboxRef.name SandboxRef.defaultRef, forwarding [ "github" ] ]
                 let _, provision = built |> Seq.find (fun (name, _) -> name = "default")
                 Expect.equal (Map.tryFind "GITHUB_ROUTE" provision.Env) (Some "ghp_secret") "the default carries the route"
             }
 
-        // The negative that regresses it: forward nothing, and the default is built with
-        // nothing — the provisioning is the session's credentials, not a constant.
-        testCaseAsync "the default sandbox forwards nothing when the session forwards nothing" <|
+        // The negative that regresses it: a default that selects nothing forwards nothing,
+        // however much the session could — what it holds is what it was declared with,
+        // where the sandbox the session once made up held every credential it knew.
+        testCaseAsync "a declared default that selects nothing forwards nothing, though the session could" <|
             async {
                 let log = newLog ()
-                let! _, built, _ = registryWithSpecs log []
+                let! _, built, _ = registryWithSpecs log [ githubCredential "ghp_secret" ]
                 let _, provision = built |> Seq.find (fun (name, _) -> name = "default")
-                Expect.equal provision.Env Map.empty "nothing forwarded, nothing baked"
+                Expect.equal provision.Env Map.empty "nothing selected, nothing baked"
             }
 
         // A repo's file asking at boot asks for nobody, and the agent asking on a turn
@@ -720,11 +770,11 @@ let private credentialTests =
                 let log = newLog ()
                 let source, revoked = githubSource "tok"
                 let! sandboxes, _ = registry log [ source ]
-                let! _ = sandboxes.Ensure starter None (sandbox "test") (forwarding [ "github" ])
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [ "github" ])
                 Expect.equal (List.ofSeq revoked) [] "nothing taken back while it runs"
-                let! stopped = sandboxes.Stop caller (sandbox "test")
+                let! stopped = sandboxes.Stop caller (sandbox "octo/hello:test")
                 expect stopped
-                Expect.equal (List.ofSeq revoked) [ "test" ] "the source was told to take it back, for that sandbox"
+                Expect.equal (List.ofSeq revoked) [ "octo/hello:test" ] "the source was told to take it back, for that sandbox"
             }
 
         testCaseAsync "a sandbox that could not be built keeps nothing forwarded" <|
@@ -737,14 +787,17 @@ let private credentialTests =
                           Describe = fun _ -> None
                           Checkout = fun _ -> None
                           Credentials = [ source ]
+                          Selection = everyResourceAConnection
+                          Proxy = WorkSandboxes.ProxyProvider.none
+                          Standing = []
                           Create = fun name _ _ -> if name = SandboxRef.defaultRef then Ok (fakeEnvironment ()) else Error "no room"
                           Log = log
                           Clock = fixedClock }
-                let sandboxes = expect created
-                match! sandboxes.Ensure starter None (sandbox "test") (forwarding [ "github" ]) with
+                let sandboxes = created
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [ "github" ]) with
                 | Ok _ -> failwith "expected the build to refuse"
                 | Error e -> Expect.equal e "no room" "the build's own reason"
-                Expect.equal (List.ofSeq revoked) [ "test" ] "and the provision did not outlive the attempt"
+                Expect.equal (List.ofSeq revoked) [ "octo/hello:test" ] "and the provision did not outlive the attempt"
             }
 
         // A source may have nowhere to put a credential in THIS sandbox — a backend with no
@@ -754,22 +807,23 @@ let private credentialTests =
                 let log = newLog ()
                 let source : WorkSandboxes.CredentialSource =
                     { Name = github
-                      Provision = fun _ -> async { return WorkSandboxes.CredentialForwarding.Unforwardable "no route from here" }
+                      Routes = ConnectionRoute.all
+                      Provision = fun _ _ -> async { return WorkSandboxes.CredentialForwarding.Unforwardable "no route from here" }
                       Revoke = ignore
-                      Lend = fun _ _ _ _ -> async { return BlockEnv.none }
+                      Lend = fun _ _ _ _ _ _ -> async { return BlockEnv.none }
                       Retire = ignore }
                 let! sandboxes, built = registry log [ source ]
-                match! sandboxes.Ensure starter None (sandbox "test") (forwarding [ "github" ]) with
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [ "github" ]) with
                 | Ok _ -> failwith "expected a refusal"
                 | Error e -> Expect.equal e "no route from here" "the source's own words"
-                Expect.isFalse (built |> Seq.exists (fun (name, _) -> name = "test")) "nothing was built"
+                Expect.isFalse (built |> Seq.exists (fun (name, _) -> name = "octo/hello:test")) "nothing was built"
             }
 
         testCaseAsync "a credential this session does not know is refused, naming the ones it does" <|
             async {
                 let log = newLog ()
                 let! sandboxes, _ = registry log [ githubCredential "tok" ]
-                match! sandboxes.Ensure starter None (sandbox "test") (forwarding [ "gitlab" ]) with
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [ "gitlab" ]) with
                 | Ok _ -> failwith "expected a refusal"
                 | Error e ->
                     Expect.isTrue (e.Contains "gitlab") "it names what was asked for"
@@ -797,16 +851,16 @@ let private queryTests =
                     Expect.equal (row |> List.tryFind (fst >> (=) "state") |> Option.map snd) (Some (CellText "not started")) "and it has not started"
                 | Ok other -> failwithf "expected one row, got %A" other
 
-                let! _ = sandboxes.Ensure starter None (sandbox "test") (forwarding [ "github" ])
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [ "github" ])
                 match! registration.Read () with
                 | Error e -> failwithf "the query failed: %s" e
                 | Ok (RowsOf rows) ->
                     Expect.equal (List.length rows) 2 "both sandboxes are listed"
-                    let test = rows |> List.find (fun row -> row |> List.contains ("name", CellText "test"))
+                    let test = rows |> List.find (fun row -> row |> List.contains ("name", CellText "octo/hello:test"))
                     Expect.equal
                         (test |> List.tryFind (fst >> (=) "forwarding") |> Option.map snd)
-                        (Some (CellText "github"))
-                        "the forwarding is named"
+                        (Some (CellText "github (git, api)"))
+                        "the forwarding is named, with its routes"
                     let rendered = sprintf "%A" rows
                     Expect.isFalse (rendered.Contains "ghp_secret") "and the value is not in the answer"
                 | Ok other -> failwithf "expected rows, got %A" other
@@ -843,11 +897,11 @@ let private queryTests =
                 let log = newLog ()
                 let! sandboxes = registryHolding log [ "the socket at /run/docker.sock — this host cannot scope that, so the sandbox gets any unix socket on this host" ]
                 let registration = WorkSandboxes.query (fun () -> sandboxes)
-                let! _ = sandboxes.Ensure starter None (sandbox "test") SandboxRequest.defaults
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") SandboxRequest.defaults
                 match! registration.Read () with
                 | Error e -> failwithf "the query failed: %s" e
                 | Ok (RowsOf rows) ->
-                    let test = rows |> List.find (fun row -> row |> List.contains ("name", CellText "test"))
+                    let test = rows |> List.find (fun row -> row |> List.contains ("name", CellText "octo/hello:test"))
                     match test |> List.tryFind (fst >> (=) "degraded") |> Option.map snd with
                     | Some (CellText said) ->
                         Expect.isTrue (said.Contains "/run/docker.sock") (sprintf "the grant is named, said: %s" said)
@@ -1289,8 +1343,8 @@ let private lentTests =
             async {
                 let log = newLog ()
                 let! sandboxes, _ = registry log [ githubCredential "route" ]
-                let! _ = sandboxes.Ensure starter None (sandbox "test") (forwarding [ "github" ])
-                let! lent = sandboxes.Loans.Lend (sandbox "test") terminal (Some block) (Authority.agentFor bob)
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [ "github" ])
+                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:test") terminal (Some block) (Authority.agentFor bob)
                 Expect.equal
                     lent.Vars
                     [ "LENT_TO", Some (Principal.token bob) ]
@@ -1301,8 +1355,8 @@ let private lentTests =
             async {
                 let log = newLog ()
                 let! sandboxes, _ = registry log [ githubCredential "route" ]
-                let! _ = sandboxes.Ensure starter None (sandbox "test") SandboxRequest.defaults
-                let! lent = sandboxes.Loans.Lend (sandbox "test") terminal (Some block) (Authority.agentFor bob)
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:test") SandboxRequest.defaults
+                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:test") terminal (Some block) (Authority.agentFor bob)
                 Expect.equal lent BlockEnv.none "a source the sandbox does not forward is not asked"
             }
 
@@ -1314,13 +1368,17 @@ let private lentTests =
                 Expect.equal lent BlockEnv.none "its environment refuses the spawn; the loan has nothing to add"
             }
 
-        // The default forwards github from boot, so a block there is lent its act's
-        // credential with nobody having started anything — which is what makes `git push`
-        // in the default work at all.
-        testCaseAsync "a block in the default sandbox is lent github, unstarted" <|
+        // A default that selects github forwards it from boot, so a block there is lent its
+        // act's credential with nobody having started anything — which is what makes
+        // `git push` in the default work at all.
+        testCaseAsync "a block in a default that selects github is lent it, unstarted" <|
             async {
                 let log = newLog ()
-                let! sandboxes, _ = registry log [ githubCredential "route" ]
+                let! sandboxes, _, _ =
+                    registryDeclaringWithSpecs
+                        log
+                        [ githubCredential "route" ]
+                        [ SandboxRef.name SandboxRef.defaultRef, forwarding [ "github" ] ]
                 let! lent = sandboxes.Loans.Lend SandboxRef.defaultRef terminal (Some block) (Authority.agentFor bob)
                 Expect.equal
                     lent.Vars
@@ -1329,8 +1387,449 @@ let private lentTests =
             }
     ]
 
+// --- the operator's sandboxes -------------------------------------------------------------
+
+/// A registry whose operator declared `standing`, by name and request.
+let private registryStanding
+    (log: EventLog<SessionEvent>)
+    (credentials: WorkSandboxes.CredentialSource list)
+    (standing: (string * SandboxRequest) list)
+    =
+    async {
+        let! created =
+            WorkSandboxes.create
+                { Backend = fun _ -> "fake"
+                  Describe = fun _ -> None
+                  Checkout = fun _ -> None
+                  Credentials = credentials
+                  Selection = everyResourceAConnection
+                  Proxy = WorkSandboxes.ProxyProvider.none
+                  Standing = standing |> List.map (fun (name, request) -> SandboxName.create name |> expect, request)
+                  Create = fun _ _ _ -> Ok (fakeEnvironment ())
+                  Log = log
+                  Clock = fixedClock }
+        return created
+    }
+
+let private unroutable : WorkSandboxes.CredentialSource =
+    { Name = github
+      Routes = ConnectionRoute.all
+      Provision = fun _ _ -> async { return WorkSandboxes.CredentialForwarding.Unforwardable "no route from here" }
+      Revoke = ignore
+      Lend = fun _ _ _ _ _ _ -> async { return BlockEnv.none }
+      Retire = ignore }
+
+let private standingTests =
+    testList "the operator's sandboxes" [
+
+        // What the operator declared is a sandbox the session HAS, as it has `default`:
+        // nobody asked for it, and a terminal naming it finds it.
+        testCaseAsync "an operator's sandbox is there from boot, started by nobody" <|
+            async {
+                let! sandboxes = registryStanding (newLog ()) [] [ "build", forwarding [] ]
+                let build = sandboxes.Listed () |> List.tryFind (fun entry -> entry.Ref = sandbox "build")
+                Expect.equal (build |> Option.map (fun entry -> entry.StartedBy)) (Some None) "listed, and nobody's ask"
+            }
+
+        // `default` is a name an operator gives a sandbox, not one the session makes up: no
+        // declaration, no default — and a terminal that names nothing is told who would
+        // declare one rather than landing somewhere nobody chose.
+        testCaseAsync "a session whose operator declares no default has none, and says who would" <|
+            async {
+                let! sandboxes = registryStanding (newLog ()) [ githubCredential "tok" ] []
+                Expect.isEmpty (sandboxes.Listed ()) "nothing declared, nothing there"
+                match! (sandboxes.EnvironmentFor SandboxRef.defaultRef).Ensure None "a terminal was opened" with
+                | EnvironmentAvailable -> failwith "expected a refusal"
+                | EnvironmentUnavailable reason -> Expect.stringContains reason "operator declares" "who declares the session's own"
+            }
+
+        // The session's own sandboxes are exactly the declared ones: a start cannot add one
+        // under a name nobody declared, whoever asks.
+        testCaseAsync "a session sandbox nobody declared is refused at start" <|
+            async {
+                let! sandboxes = registryStanding (newLog ()) [] [ "default", forwarding [] ]
+                match! sandboxes.Ensure starter None (sandbox "scratch") SandboxRequest.defaults with
+                | Ok _ -> failwith "expected a refusal"
+                | Error reason ->
+                    Expect.stringContains reason "scratch" "it names the sandbox"
+                    Expect.stringContains reason "operator declares" "and who would declare one"
+            }
+
+        // A credential the operator named that cannot reach the sandbox is said by the
+        // sandbox, in words, and costs nobody else theirs.
+        testCaseAsync "an operator's sandbox that cannot forward what it declares refuses in words" <|
+            async {
+                let! sandboxes = registryStanding (newLog ()) [ unroutable ] [ "build", forwarding [ "github" ]; "default", forwarding [] ]
+                match! (sandboxes.EnvironmentFor (sandbox "build")).Ensure None "a terminal was opened" with
+                | EnvironmentAvailable -> failwith "expected a refusal"
+                | EnvironmentUnavailable reason -> Expect.stringContains reason "no route from here" "the source's own words"
+                match! (sandboxes.EnvironmentFor SandboxRef.defaultRef).Ensure None "a terminal was opened" with
+                | EnvironmentAvailable -> ()
+                | EnvironmentUnavailable reason -> failwithf "default should come up regardless: %s" reason
+            }
+
+        // A want is silent where it cannot be had, and a connection's "cannot" is its
+        // source's to say: one this backend cannot be reached by is left out, and the
+        // sandbox comes up without it.
+        testCaseAsync "a wanted connection that cannot reach the sandbox is left out" <|
+            async {
+                let wanting = { Spec = { EnvironmentSpec.defaults with Wants = [ ResourceName.create "github" |> expect ] } }
+                let! sandboxes = registryStanding (newLog ()) [ unroutable ] []
+                let! started = sandboxes.Ensure starter None (sandbox "octo/hello:test") wanting
+                Expect.equal (WorkSandboxes.SandboxOutcome.sandbox (expect started)).Forwarded Map.empty "up, forwarding nothing"
+            }
+
+        // A need is not: the same connection under `uses` refuses the start, in the
+        // source's words.
+        testCaseAsync "a needed connection that cannot reach the sandbox refuses the start" <|
+            async {
+                let! sandboxes = registryStanding (newLog ()) [ unroutable ] []
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:test") (forwarding [ "github" ]) with
+                | Ok _ -> failwith "expected a refusal"
+                | Error reason -> Expect.stringContains reason "no route from here" "the source's own words"
+            }
+
+        // Stopping takes down what runs in it; the sandbox itself is the operator's to keep.
+        testCaseAsync "stopping an operator's sandbox keeps it, as it was declared" <|
+            async {
+                let log = newLog ()
+                let! sandboxes = registryStanding log [] [ "build", forwarding [] ]
+                let! _ = sandboxes.Stop caller (sandbox "build")
+                let build = sandboxes.Listed () |> List.tryFind (fun entry -> entry.Ref = sandbox "build")
+                Expect.equal (build |> Option.map (fun entry -> entry.Request)) (Some (forwarding [])) "still there, reset"
+            }
+    ]
+
+// --- the credential proxy, asked for by name ------------------------------------------------
+
+/// A proxy that provides every value as `provided:<name>` for a sandbox, or refuses one it was
+/// told to — and records who it provided for and who it forgot.
+type private FakeProxy =
+    { Asked : ResizeArray<SandboxRef * ProxyValue list>
+      Released : ResizeArray<SandboxRef>
+      Refuse : string option }
+
+let private fakeProxy (refuse: string option) : FakeProxy * WorkSandboxes.ProxyProvider =
+    let fake = { Asked = ResizeArray (); Released = ResizeArray (); Refuse = refuse }
+    fake,
+    { Provide =
+        fun sandbox asked ->
+            fake.Asked.Add (sandbox, asked)
+            match refuse with
+            | Some reason -> Error reason
+            | None ->
+                Ok (asked |> List.map (fun value -> value, "provided:" + ProxyValue.name value) |> Map.ofList, WorkSandboxes.Provision.empty)
+      Release = fun sandbox -> fake.Released.Add sandbox }
+
+/// A registry over `proxy`, recording the spec each sandbox was BUILT from.
+let private registryProxied (proxy: WorkSandboxes.ProxyProvider) (standing: (string * SandboxRequest) list) =
+    let built = ResizeArray<string * EnvironmentSpec> ()
+    async {
+        let! created =
+            WorkSandboxes.create
+                { Backend = fun _ -> "fake"
+                  Describe = fun _ -> None
+                  Checkout = fun _ -> None
+                  Credentials = []
+                  Selection = everyResourceAConnection
+                  Proxy = proxy
+                  Standing = standing |> List.map (fun (name, request) -> SandboxName.create name |> expect, request)
+                  Create =
+                    fun name spec _ ->
+                        built.Add (SandboxRef.render name, spec)
+                        Ok (fakeEnvironment ())
+                  Log = newLog ()
+                  Clock = fixedClock }
+        return created, built
+    }
+
+/// An ask whose environment names `text` for `variable`, decoded as a file would decode it.
+let private asking (variable: string) (text: string) : SandboxRequest =
+    { Spec =
+        { EnvironmentSpec.defaults with
+            EnvironmentVariables = Map.ofList [ variable, Derived (EnvTemplate.parse text |> expect) ] } }
+
+// --- a token lent into the variables a declaration names ---------------------------------------
+
+/// An ask that forwards `forwarded` and lends each of `lent`'s variables `${github.token}`.
+let private lending (forwarded: string list) (lent: string list) : SandboxRequest =
+    let request = forwarding forwarded
+    { request with
+        Spec =
+            { request.Spec with
+                EnvironmentVariables =
+                    lent |> List.map (fun variable -> variable, Lent github) |> Map.ofList } }
+
+let private lentTokenTests =
+    let terminal = TerminalId.create "term-a" |> expect
+    let block = BlockId.create "b-1" |> expect
+    let bob = Principal.Peer (PeerId.create "bob" |> expect)
+    testList "a token lent by name" [
+
+        testCaseAsync "a command is lent the token in the variables the declaration names" <|
+            async {
+                let! sandboxes, _ = registry (newLog ()) [ githubCredential "route" ]
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") (lending [ "github" ] [ "GH_TOKEN" ])
+                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:dev") terminal (Some block) (Authority.agentFor bob)
+                Expect.isTrue (List.contains ("LENT_INTO", Some "GH_TOKEN") lent.Vars) "the source was asked to lend into it"
+            }
+
+        // Nobody would lend it: every command would find nothing there, and never why.
+        testCaseAsync "a token lent for a connection the sandbox does not forward refuses the start" <|
+            async {
+                let! sandboxes, built = registry (newLog ()) [ githubCredential "route" ]
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:dev") (lending [] [ "GH_TOKEN" ]) with
+                | Ok _ -> failwith "expected a refusal"
+                | Error reason ->
+                    Expect.stringContains reason "GH_TOKEN" "names the variable"
+                    Expect.stringContains reason "uses or wants" "and what to do"
+                    Expect.isFalse (built |> Seq.exists (fun (name, _) -> name = "octo/hello:dev")) "and nothing was built"
+            }
+    ]
+
+let private proxyTests =
+    testList "the credential proxy, asked for by name" [
+
+        testCaseAsync "a sandbox that asks for the proxy is built with what it provided" <|
+            async {
+                let fake, proxy = fakeProxy None
+                let! sandboxes, built = registryProxied proxy []
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") (asking "HTTPS_PROXY" "${proxy.https}")
+                Expect.equal (List.ofSeq fake.Asked) [ sandbox "octo/hello:dev", [ ProxyValue.Https ] ] "asked for what it named"
+                let _, spec = built |> Seq.find (fun (name, _) -> name = "octo/hello:dev")
+                match spec.EnvironmentVariables |> Map.tryFind "HTTPS_PROXY" with
+                | Some (Derived template) -> Expect.equal (EnvTemplate.resolve (fun _ -> None) template) "provided:https" "the value, written in"
+                | other -> failwithf "expected the provided value, got %A" other
+            }
+
+        testCaseAsync "a sandbox that names nothing of the proxy is never provided for" <|
+            async {
+                let fake, proxy = fakeProxy None
+                let! sandboxes, _ = registryProxied proxy []
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") (asking "PATH" "${env.PATH}:/x")
+                Expect.isEmpty fake.Asked "the proxy never heard of it"
+            }
+
+        testCaseAsync "a sandbox the proxy cannot provide for is refused at start, in its words" <|
+            async {
+                let _, proxy = fakeProxy (Some "not from here")
+                let! sandboxes, built = registryProxied proxy []
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:dev") (asking "HTTPS_PROXY" "${proxy.https}") with
+                | Ok _ -> failwith "expected a refusal"
+                | Error reason ->
+                    Expect.stringContains reason "not from here" "the proxy's own words"
+                    Expect.isEmpty built "and nothing was built"
+            }
+
+        testCaseAsync "a sandbox that leaves gives its admission back" <|
+            async {
+                let fake, proxy = fakeProxy None
+                let! sandboxes, _ = registryProxied proxy []
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") (asking "HTTPS_PROXY" "${proxy.https}")
+                let! _ = sandboxes.Stop caller (sandbox "octo/hello:dev")
+                Expect.equal (List.ofSeq fake.Released) [ sandbox "octo/hello:dev" ] "forgotten"
+            }
+
+        // A standing sandbox comes up again on the policy it was built with, which carries the
+        // URL its admission opens — so a stop keeps it.
+        testCaseAsync "a standing sandbox keeps its admission across a stop" <|
+            async {
+                let fake, proxy = fakeProxy None
+                let! sandboxes, _ = registryProxied proxy [ "default", asking "HTTPS_PROXY" "${proxy.https}" ]
+                let! _ = sandboxes.Stop caller SandboxRef.defaultRef
+                Expect.isEmpty fake.Released "still admitted"
+            }
+    ]
+
+// --- what an operator bound in a resource's env --------------------------------------------------
+
+/// A registry over a host whose selection grants exactly `grant`, whatever the spec selects.
+let private registryGranting
+    (grant: SelectionGrant)
+    (credentials: WorkSandboxes.CredentialSource list)
+    (proxy: WorkSandboxes.ProxyProvider)
+    =
+    let built = ResizeArray<string * EnvironmentSpec> ()
+    async {
+        let! created =
+            WorkSandboxes.create
+                { Backend = fun _ -> "fake"
+                  Describe = fun _ -> None
+                  Checkout = fun _ -> None
+                  Credentials = credentials
+                  Selection = fun _ -> Ok grant
+                  Proxy = proxy
+                  Standing = declaredDefault
+                  Create =
+                    fun name spec _ ->
+                        built.Add (SandboxRef.render name, spec)
+                        Ok (fakeEnvironment ())
+                  Log = newLog ()
+                  Clock = fixedClock }
+        return created, built
+    }
+
+let private boundProxy : Map<string, EnvironmentVariableRef> =
+    Map.ofList [ "HTTPS_PROXY", Derived [ TemplatePart.Proxy ProxyValue.Https ] ]
+
+let private boundTests =
+    let terminal = TerminalId.create "term-a" |> expect
+    let block = BlockId.create "b-1" |> expect
+    let bob = Principal.Peer (PeerId.create "bob" |> expect)
+    testList "what an operator bound" [
+
+        // The operator's reference reaches the sandbox by the path a repo's does, so the proxy
+        // provides it the same way, rather than a second mechanism for the same value.
+        testCaseAsync "a bound proxy reference is provided into the sandbox as a declaration's is" <|
+            async {
+                let fake, proxy = fakeProxy None
+                let! sandboxes, built = registryGranting { SelectionGrant.none with Bound = boundProxy } [] proxy
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") SandboxRequest.defaults
+                // The grant is the host's for every selection, the standing `default` included,
+                // so only this sandbox's ask is looked at.
+                Expect.isTrue (List.contains (sandbox "octo/hello:dev", [ ProxyValue.Https ]) (List.ofSeq fake.Asked)) "the proxy was asked"
+                let _, spec = built |> Seq.find (fun (name, _) -> name = "octo/hello:dev")
+                match spec.EnvironmentVariables |> Map.tryFind "HTTPS_PROXY" with
+                | Some (Derived template) -> Expect.equal (EnvTemplate.resolve (fun _ -> None) template) "provided:https" "written in"
+                | other -> failwithf "expected the provided value, got %A" other
+            }
+
+        testCaseAsync "a bound token is lent to each command" <|
+            async {
+                let grant =
+                    { SelectionGrant.none with
+                        Connections = { Needed = [ "github", ConnectionRoute.Api ]; Wanted = [] }
+                        Bound = Map.ofList [ "GH_TOKEN", Lent github ] }
+                let! sandboxes, _ = registryGranting grant [ githubCredential "route" ] WorkSandboxes.ProxyProvider.none
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") SandboxRequest.defaults
+                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:dev") terminal (Some block) (Authority.agentFor bob)
+                Expect.isTrue (List.contains ("LENT_INTO", Some "GH_TOKEN") lent.Vars) "the source was asked to lend into it"
+            }
+
+        // The repo's file is the more specific author of its own sandbox, as it is over a
+        // resource's text.
+        testCaseAsync "a declaration's own line wins over one a resource bound" <|
+            async {
+                let fake, proxy = fakeProxy None
+                let! sandboxes, built = registryGranting { SelectionGrant.none with Bound = boundProxy } [] proxy
+                let mine = { Spec = { EnvironmentSpec.defaults with EnvironmentVariables = Map.ofList [ "HTTPS_PROXY", PlainValue "mine" ] } }
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") mine
+                let _, spec = built |> Seq.find (fun (name, _) -> name = "octo/hello:dev")
+                Expect.equal (spec.EnvironmentVariables |> Map.tryFind "HTTPS_PROXY") (Some (PlainValue "mine")) "the declaration's"
+            }
+
+        testCaseAsync "a bound token something needs refuses a sandbox that does not forward its connection by api" <|
+            async {
+                let! sandboxes, _ =
+                    registryGranting
+                        { SelectionGrant.none with Bound = Map.ofList [ "GH_TOKEN", Lent github ] }
+                        []
+                        WorkSandboxes.ProxyProvider.none
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:dev") SandboxRequest.defaults with
+                | Ok _ -> failwith "expected a refusal"
+                | Error e -> Expect.stringContains e "by api" "it names the route"
+            }
+
+        // A want is silent where it cannot be had, and a bound token is no exception.
+        testCaseAsync "a bound token only a want reached is left out where its connection is not forwarded" <|
+            async {
+                let grant =
+                    { SelectionGrant.none with
+                        Bound = Map.ofList [ "GH_TOKEN", Lent github ]
+                        WantedOnly = Set.singleton "GH_TOKEN" }
+                let! sandboxes, built = registryGranting grant [] WorkSandboxes.ProxyProvider.none
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:dev") SandboxRequest.defaults with
+                | Error e -> failwithf "a want refused the sandbox: %s" e
+                | Ok _ ->
+                    let _, spec = built |> Seq.find (fun (name, _) -> name = "octo/hello:dev")
+                    Expect.isFalse (Map.containsKey "GH_TOKEN" spec.EnvironmentVariables) "left out"
+            }
+    ]
+
+// --- routes: which way a connection is forwarded ----------------------------------------------
+
+/// A source offering `routes`, whose loans say which routes they were asked to lend by.
+let private routedSource (routes: ConnectionRoute list) : WorkSandboxes.CredentialSource =
+    { Name = github
+      Routes = routes
+      Provision = fun _ _ -> async { return WorkSandboxes.CredentialForwarding.Forwarded WorkSandboxes.Provision.empty }
+      Revoke = ignore
+      Lend =
+        fun _ _ _ _ lentBy _ ->
+            async {
+                return
+                    { BlockEnv.GitConfig = None
+                      BlockEnv.Vars = [ "LENT_BY", Some (lentBy |> List.map ConnectionRoute.name |> String.concat ",") ] }
+            }
+      Retire = ignore }
+
+/// A registry whose host forwards `github` by exactly these routes, needed, to anything that
+/// selects it.
+let private registryRouting (routes: ConnectionRoute list) (credentials: WorkSandboxes.CredentialSource list) =
+    WorkSandboxes.create
+        { Backend = fun _ -> "fake"
+          Describe = fun _ -> None
+          Checkout = fun _ -> None
+          Credentials = credentials
+          Selection =
+            fun spec ->
+                Ok
+                    { SelectionGrant.none with
+                        Connections =
+                            { Needed =
+                                spec.Uses
+                                |> List.collect (fun name -> routes |> List.map (fun route -> ResourceName.value name, route))
+                              Wanted = [] } }
+          Proxy = WorkSandboxes.ProxyProvider.none
+          Standing = declaredDefault
+          Create = fun _ _ _ -> Ok (fakeEnvironment ())
+          Log = newLog ()
+          Clock = fixedClock }
+
+let private routeTests =
+    let terminal = TerminalId.create "term-a" |> expect
+    let block = BlockId.create "b-1" |> expect
+    let bob = Principal.Peer (PeerId.create "bob" |> expect)
+    testList "routes" [
+
+        // A route the source does not have is not a route forwarded as nothing: the sandbox
+        // that needs it would come up and find its API calls, or its pushes, unanswered.
+        testCaseAsync "a route the source does not offer refuses a sandbox that needs it" <|
+            async {
+                let! sandboxes = registryRouting [ ConnectionRoute.Api ] [ routedSource [ ConnectionRoute.Git ] ]
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:dev") (forwarding [ "github" ]) with
+                | Ok _ -> failwith "expected a refusal"
+                | Error e -> Expect.stringContains e "not forwarded by api" "it names the route"
+            }
+
+        // The point of naming routes: a sandbox that needs a repository's git is not also a
+        // sandbox whose API client is lent somebody's token.
+        testCaseAsync "a block is lent by the routes its sandbox forwards and no others" <|
+            async {
+                let! sandboxes = registryRouting [ ConnectionRoute.Git ] [ routedSource ConnectionRoute.all ]
+                let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") (forwarding [ "github" ])
+                let! lent = sandboxes.Loans.Lend (sandbox "octo/hello:dev") terminal (Some block) (Authority.agentFor bob)
+                Expect.equal lent.Vars [ "LENT_BY", Some "git" ] "git, and not api"
+            }
+
+        // A token is lent through the credential proxy, which is the `api` route; forwarded by
+        // `git` alone, nothing would ever put a token where the declaration asked for one.
+        testCaseAsync "a token lent in a sandbox that forwards the connection by git alone refuses the start" <|
+            async {
+                let! sandboxes = registryRouting [ ConnectionRoute.Git ] [ routedSource ConnectionRoute.all ]
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:dev") (lending [ "github" ] [ "GH_TOKEN" ]) with
+                | Ok _ -> failwith "expected a refusal"
+                | Error e -> Expect.stringContains e "by api" "it names the route the token needs"
+            }
+    ]
+
 let tests =
     testList "WorkSandboxes" [
+        standingTests
+        proxyTests
+        lentTokenTests
+        boundTests
+        routeTests
         nameTests
         backendTests
         workspaceVolumeTests

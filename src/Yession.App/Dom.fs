@@ -42,10 +42,10 @@ module Dom =
     /// so the look and the aim are one declaration. Worn by the Manager's Create so far.
     let press = "data-press"
 
-    /// The class on the shell ROOT (`<html>`) that says the terminals column is shut. Written
+    /// The class on the shell ROOT (`<html>`) that says the content column is shut. Written
     /// by two hands — the server into the first paint (`Ssr.page`) and the browser after every
     /// render (`PaneShell.setOpen`) — from the one model field, `TerminalsOpen`; the name is
-    /// here so those two cannot drift apart. `Style.terminalPanel` spells it a third time,
+    /// here so those two cannot drift apart. `Style.contentPanel` spells it a third time,
     /// inside Tailwind variants, which have to be literal to be generated at all.
     let termClosedClass = "term-closed"
 
@@ -105,6 +105,9 @@ module Dom =
         /// control that opens a chapter there — valued by the same id, and carrying whether
         /// this item already opens one, so a test can read the state without reading a class.
         let chapterRule = "data-chapter-rule"
+        /// A break where the session was away. Carries WHICH reading its label is showing, so
+        /// a test can press it and see the answer change rather than inferring from the words.
+        let sessionBreak = "data-session-break"
         let chapterName = "data-chapter-name"
         /// The contents: the section listing every chapter, and one entry in it valued by the
         /// message its chapter opens at.
@@ -241,11 +244,14 @@ module Dom =
         // the session has stopped and this deployment can bring it back.
         let sessionGone = "data-session-gone"
         let sessionReopen = "data-session-reopen"
-        // Terminals (Plan 13): the column, its strip of open terminals, the blocks that have
-        // run, and the composer that queues the next command. The composer's hooks mirror the
-        // message composer's, because the interaction is the same one.
-        let terminalPanel = "data-terminal-panel"
-        let terminalToggle = "data-terminal-toggle"
+        // The CONTENT column (Plan 13): the pane itself and the control that shows or hides it.
+        // One surface over several kinds of thing — a terminal, a block, a recording, a file —
+        // so the column is named after what it holds rather than after the first kind it held.
+        let contentPanel = "data-content-panel"
+        let contentToggle = "data-content-toggle"
+        // Terminals: the strip's terminal tabs, the blocks that have run, and the composer that
+        // queues the next command. The composer's hooks mirror the message composer's, because
+        // the interaction is the same one.
         let terminalTab = "data-terminal-tab"
         /// One per peer whose caret is in THAT terminal, on its tab — the strip's share of
         /// the same presence the roster reports.
@@ -347,6 +353,12 @@ module Dom =
         let panePanel = "data-pane-panel"
         /// A block's read-only view: its command line and everything it printed.
         let paneBlock = "data-pane-block"
+        /// The pane's action row: the acts about the thing on screen, in ONE place at the
+        /// bottom of the column whatever kind that thing is — take the keyboard, watch the
+        /// recording, download the file. Its value is the tab's key, so a test can say which
+        /// thing the verbs it finds are about. Absent when the selected tab affords nothing,
+        /// because a bordered strip with nothing in it says there are no controls.
+        let paneActions = "data-pane-actions"
         /// Where a player mounts (Plan 13, stage 3e; Plan 14, stage 4). ONE hook for all
         /// three kinds of recording — a whole terminal, a block's range, a stretch's — with
         /// the tab's key as its value, because they differ in what they play rather than in
@@ -373,6 +385,12 @@ module Dom =
         /// name a file — and with no script the link still works, which is what makes the
         /// interception an improvement rather than the only way in.
         let content = "data-content"
+        /// The picture itself, when the pane can draw the file. Its value is the content path.
+        let contentImage = "data-content-image"
+        /// The way to HAVE the file, wherever it is offered — the action row today. A real `<a>`
+        /// with `download`, so it works without script and names the file the way a person knows
+        /// it rather than by the version leaf it is addressed as.
+        let contentDownload = "data-content-download"
         /// The live screen of a terminal in live mode (Plan 14, stage 6). Its value is the
         /// terminal's id; the holder's copy is the one that takes keystrokes, and every other
         /// peer's is the same screen read-only.
@@ -395,12 +413,14 @@ module Dom =
         /// How far behind live the rewound reader is, growing as the terminal keeps
         /// printing under them.
         let terminalBehind = "data-terminal-behind"
-        /// The terminal LIST (Plan 20, stage 0): every terminal the session has ever had,
-        /// and every verb one of them affords. The toggle carries `list`/`pane` — the face
-        /// it will show, so the browser can hand focus to whichever control replaces the one
-        /// just pressed, exactly as the nav and settings toggles do.
-        let terminalList = "data-terminal-list"
-        let terminalListToggle = "data-terminal-list-toggle"
+        /// The content LIST (Plan 20, stage 0): everything this pane can show — every terminal
+        /// the session has ever had with every verb one of them affords, and every artifact
+        /// shared into it — grouped by kind, because kind is the axis you browse along. The
+        /// toggle carries `list`/`pane` — the face it will show, so the browser can hand focus
+        /// to whichever control replaces the one just pressed, exactly as the nav and settings
+        /// toggles do.
+        let contentList = "data-content-list"
+        let contentListToggle = "data-content-list-toggle"
         /// One row, carrying its terminal's id — and the control that shows that terminal,
         /// so a row is keyboard-operable by construction rather than by a handler on a div.
         let terminalListRow = "data-terminal-list-row"
@@ -417,6 +437,11 @@ module Dom =
         /// play affordance would otherwise be — an audit trail's hole is said, never left to
         /// look like a terminal that printed nothing.
         let terminalListGone = "data-terminal-list-gone"
+        /// An artifact's row in that same list, carrying the content path it opens. The list is
+        /// the ONLY way to reach an artifact whose chip has scrolled out of the conversation,
+        /// which is why the section exists at all — and why the hook is on the row's control
+        /// rather than on a wrapper: it is a button, operable from the keyboard by construction.
+        let artifactListRow = "data-artifact-list-row"
 
     /// Observable text/value tokens the session view emits (labels and status words that
     /// tests assert exactly — never free-text message bodies, which are model data).
@@ -455,10 +480,18 @@ module Dom =
         /// What the field on a rule is, for a reader who cannot see the rule it sits on. The
         /// name itself is the value, so the label says what KIND of thing it is.
         let chapterNameLabel = "Chapter name"
+        /// The break's label says how long the session was away; its accessible name and its
+        /// tooltip say the whole of what pressing it does, because the visible words are a
+        /// duration and a duration does not announce that it is a control.
+        let sessionBreakShowMoment = "Show when the session came back"
+        let sessionBreakShowElapsed = "Show how long the session was away"
+        /// Which reading the label is showing, for the hook above.
+        let breakElapsed = "elapsed"
+        let breakMoment = "moment"
 
         /// What a copy control says once it has copied, IN THE BOX that held the value —
         /// the confirmation lands where the eye already is, rather than beside it. A moment
-        /// and not a state: whoever set it takes it back (`ClientMsg.CopiedMsg`).
+        /// and not a state: the wait the model declares for it takes it back (`ClientModel.timers`).
         let copied = "copied"
 
         /// The word on every notice's disclosure. ONE word across all of them: the move is
@@ -621,6 +654,10 @@ module Dom =
         /// The way to HAVE a file the pane is showing — beside a picture, and instead of one
         /// for a kind this build cannot draw.
         let download = "Download"
+        /// Taking the keyboard of a terminal nobody holds. The STEAL — taking it from somebody
+        /// — is the lease bar's `Take over`, which names who it would be taken from; this one
+        /// takes nothing from anyone, and the two are not the same act.
+        let takeControl = "Take control"
         /// What a second activation of the tab you are on will do. A gesture has no control
         /// of its own to be labelled, so it says so from the tab it acts on.
         let pinHint = "Select again to pin this tab"
@@ -678,6 +715,7 @@ module Dom =
         let causeMissing = "an earlier item"
         /// The cause when the session starting brought a sandbox up.
         let causeBooted = "The session started"
+        let causeResumed = "The session resumed"
         /// The verb after the person whose credential arrived: "Ada connected".
         let causeConnected = "connected"
         /// The accessible name of the ref, said in full for a reader who does not get the
@@ -763,6 +801,30 @@ module Dom =
         /// than the query it links to, so a swap can put focus back on the control that was
         /// pressed even though its href just changed.
         let filter = "data-filter"
+        /// The MCP section — the swap unit for every MCP answer — and its two acts: the form
+        /// that declares a server, and the Withdraw on a row, which carries the server's name
+        /// and its audience (empty for any session). A declaration the Manager refuses is
+        /// reported in the section's error line.
+        let mcp = "data-mcp"
+        let declareMcp = "data-declare-mcp"
+        let mcpError = "data-mcp-error"
+        let mcpWithdraw = "data-mcp-withdraw"
+        let mcpAudience = "data-mcp-audience"
+        /// The opening screen's hooks. Its program is inline and literal
+        /// (`ManagerUi.openingProgram`), so it names these four by VALUE: rename one here and
+        /// rename it there.
+        ///
+        /// The readiness address (`/sessions/{id}/ready`), on the screen it polls for —
+        /// spelled by the server, like every other address its pages carry.
+        let openingReady = "data-opening-ready"
+        /// The opening screen's way in: the session's own address, and where the screen hands
+        /// the browser once the readiness address answers.
+        let openingTarget = "data-opening-target"
+        /// The opening screen's status word: `starting`, then `ready`.
+        let openingWord = "data-word"
+        /// The classes the opening screen's status line takes when it gives up waiting, carried
+        /// on that line so its program is handed them rather than spelling them.
+        let openingFailed = "data-opening-failed"
         // Process status words shown in a row.
         let statusStopped = "stopped"
         let statusRunning = "running"

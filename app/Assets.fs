@@ -24,9 +24,6 @@ open Node.Buffer
 open Yession.App
 open Yession.Host.Interop
 
-[<Import("fileURLToPath", "node:url")>]
-let private fileUrlToPath (url: obj) : string = jsNative
-
 /// The packaged location: `assets/` beside the running bundle, which is the package root once
 /// esbuild has flattened everything into one file.
 let private packagedAssets : Node.Url.URL = urlBesideModule "./assets"
@@ -102,7 +99,7 @@ type AssetSet =
 /// permissions fault. The refusal names the file and what the OS said about it, which is the
 /// only place that diagnosis still exists.
 let load (fallbackDir: string) : AssetSet =
-    let packaged = fileUrlToPath packagedAssets
+    let packaged = FileUrls.toPath packagedAssets
     let files =
         AssetFile.all
         |> List.choose (fun file ->
@@ -143,13 +140,11 @@ let serve (assets: AssetSet) (build: string) (path: string) (res: ServerResponse
     | Some (file, bytes) ->
         res.writeHead (
             200,
-            createObj
-                [ "content-type", box (AssetFile.contentType file)
-                  "cache-control", box CachePolicy.asset ])
-        |> ignore
-        res.``end`` (unbox bytes)
+            [ ResponseHeader.ContentType (AssetFile.contentType file)
+              ResponseHeader.CacheControl CachePolicy.asset ])
+        res.``end`` bytes
     | None ->
-        res.writeHead (404, createObj [ "content-type", box "text/plain" ]) |> ignore
+        res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
         // An EMPTY set is the developer case — nothing was built — and saying so beats a bare
         // 404 on an address that looks perfectly reasonable.
         res.``end`` (if Map.isEmpty assets.Files then "not built (run: build)" else "stale asset address (reload)")

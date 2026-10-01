@@ -436,10 +436,13 @@ module SyncedStateSync =
         }
 
     open Fable.Core
+    // Unqualified from here: written `Yjs.Y.Map.tryOf`, the path resolves `Y.Map` to the
+    // class's static member rather than the module beside it, and finds no `tryOf`.
+    open Yjs
 
     /// The map's keys, drained from the iterator Yjs answers with.
     let private mapKeys (m: Yjs.Y.Map<obj>) : string[] =
-        JS.Constructors.Array.from (unbox<string seq> (m.keys ()))
+        JS.Constructors.Array.from (m.keys ())
 
     /// Yjs materializes root types created by a *remote* update as untyped placeholders
     /// until they are first `get` locally; a structural read of such a doc would miss
@@ -467,11 +470,12 @@ module SyncedStateSync =
     let chapterNameText (doc: Yjs.Y.Doc) (messageId: string) : Yjs.Y.Text option =
         if not (doc.share.has "chapters") then None
         else
+            // Tested by kind at each step rather than cast: a peer wrote this doc, and an entry
+            // that is not a map, or a name that is not text, is no name — as it is to `decode`.
             (doc.getMap "chapters" : Yjs.Y.Map<obj>).get messageId
-            |> Option.filter (isNull >> not)
-            |> Option.bind (fun entry -> (unbox<Yjs.Y.Map<obj>> entry).get "name")
-            |> Option.filter (isNull >> not)
-            |> Option.map unbox<Yjs.Y.Text>
+            |> Option.bind Y.Map.tryOf
+            |> Option.bind (fun entry -> entry.get "name")
+            |> Option.bind Y.Text.tryOf
 
     /// Read the synced state currently in a doc — the decode direction alone, for the Session
     /// Process, which observes the doc without running a Ylmish binding of its own. The same

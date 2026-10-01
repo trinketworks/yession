@@ -22,22 +22,6 @@ open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
 open Yession.SessionProcess
-open Fable.Yaml
-
-let private complaints (doc: Document) : string array =
-    Array.append doc.errors doc.warnings |> Array.map (fun problem -> problem.message)
-
-let private toJson (doc: Document) : string = JS.JSON.stringify (doc.toJS ())
-
-/// The same parser construction `RepoConfig` uses, and every field is load-bearing there for
-/// the same reasons: `core` resolves only what JSON could express, `uniqueKeys` makes a
-/// repeated key an error rather than a silent last-wins fold — which is what makes the
-/// domain's "declared twice" refusal reachable from a real file — and `maxAliasCount` stops
-/// a self-referential anchor turning a small file into an unbounded tree.
-let private parseOptions : ParseOptions =
-    { ParseOptions.schema = "core"
-      uniqueKeys = true
-      maxAliasCount = 100 }
 
 /// Every path a resource names must be the one the KERNEL will check.
 ///
@@ -80,7 +64,8 @@ let private canonicalPaths (file: ProfileFile) : Result<ProfileFile, string> =
         // path, which no host symlink can reach through.
         | Endpoint _
         | Variable _
-        | Volume _ -> None)
+        | Volume _
+        | Connection _ -> None)
     |> function
         | Some reason -> Error reason
         | None -> Ok file
@@ -91,19 +76,27 @@ let private canonicalPaths (file: ProfileFile) : Result<ProfileFile, string> =
 /// with NO profile is ordinary and declares nothing, while a profile that cannot be read is
 /// an operator's mistake and must be said out loud. Folding the second into the first is how
 /// a host silently stops offering everything the day somebody mistypes a key.
-let read (path: string) : Result<ProfileFile option, string> =
+/// The profile as it was read, and what the analyzers had to say about the sandboxes it
+/// declares — the same analyzers a repo's file is read with, since it is the same form.
+[<RequireQualifiedAccess>]
+type ProfileRead =
+    { Profile : ProfileFile
+      Findings : LocatedFinding list }
+
+let read (path: string) : Result<ProfileRead option, string> =
     if not (Fs.exists path) then Ok None
     else
         let saying (reason: string) = sprintf "%s: %s" path reason
         try
-            let doc = parseDocument (Fs.readText path) parseOptions
-            match complaints doc with
-            | [||] ->
-                OperatorProfile.parse (toJson doc)
+            YamlSource.parse (Fs.readText path)
+            |> Result.bind (fun parsed ->
+                OperatorProfile.parse parsed.Json
                 |> Result.bind canonicalPaths
-                |> Result.map Some
-                |> Result.mapError saying
-            | problems -> Error (saying problems.[0])
+                |> Result.map (fun profile ->
+                    { ProfileRead.Profile = profile
+                      ProfileRead.Findings = ConfigAnalysis.run Analyzers.all parsed.Index profile.Sandboxes }))
+            |> Result.map Some
+            |> Result.mapError saying
         with e -> Error (saying e.Message)
 
 let queryName : QueryName =

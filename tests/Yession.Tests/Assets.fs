@@ -14,6 +14,7 @@ module Yession.Tests.Assets
 open FSharp
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Thoth.Json
 open Yession.App
@@ -26,43 +27,44 @@ type private Reply =
       mutable Headers: Map<string, string>
       mutable Body: string }
 
-/// What `end` was handed, as text. The service passes exactly two things — the bytes of a
-/// file, and a sentence for a miss — so the double names both rather than asking `String()`
-/// to stringify whatever turned up.
-///
-/// The Buffer arm is an `unbox` with its reason beside it: `Buffer` is an interface, and Fable
-/// cannot type-test one (the test compiles to `false`), so the case that is not a string is
-/// read as the only other thing `Assets.serve` sends.
-let private asString (value: obj) : string =
-    match value with
-    | :? string as sentence -> sentence
-    | _ -> (unbox<Node.Buffer.Buffer> value).toString ()
-
 /// The headers `writeHead` was given. `Assets.serve` builds them as the plain object Node
 /// takes, so the double reads every pair it carries — once, as it arrives — rather than being
 /// asked for one name at a time and answering a miss with the empty string, which made
 /// "served with no content type" and "served as empty" the same answer.
-let private headersOf (headers: obj) : Map<string, string> =
-    if isNull headers then Map.empty
+let private headersOf (headers: OutgoingHeaders) : Map<string, string> =
+    if isNull (box headers) then Map.empty
     else
         match Decode.fromString (Decode.keyValuePairs Decode.string) (JS.JSON.stringify headers) with
         | Ok pairs -> Map.ofList pairs
         | Error reason -> failwithf "a response was given headers this double cannot read: %s" reason
 
-/// The double itself: three members, each a real F# function, so what a call to it DOES is
-/// F# the compiler reads rather than statements inside a string. `Func` rather than a curried
-/// lambda because Node's members take their arguments at once, which is what `serve` emits.
-let private responseInto (reply: Reply) : Interop.ServerResponse =
-    unbox (
-        createObj
-            [ "writeHead"
-              ==> System.Func<int, obj, obj>(fun status headers ->
-                  reply.Status <- status
-                  reply.Headers <- headersOf headers
-                  null)
-              "write" ==> System.Func<string, bool>(fun _ -> true)
-              "end"
-              ==> System.Func<obj, unit>(fun body -> reply.Body <- if isNull body then "" else asString body) ])
+/// The double itself: the three members `Assets.serve` calls, under the names Node's response
+/// carries them by (`AttachMembers` keeps them on the object as written), each a real F#
+/// method, so what a call to it DOES is F# the compiler reads rather than statements inside a
+/// string.
+///
+/// `end` is handed exactly two things — the bytes of a file, and a sentence for a miss — so
+/// its argument says both, rather than asking `String()` to stringify whatever turned up.
+[<AttachMembers>]
+type private ResponseDouble (reply: Reply) =
+    member _.writeHead (status: int, headers: OutgoingHeaders) : unit =
+        reply.Status <- status
+        reply.Headers <- headersOf headers
+
+    member _.write (_text: string) : bool = true
+
+    member _.``end`` (body: U2<string, Node.Buffer.Buffer>) : unit =
+        reply.Body <-
+            match body with
+            | U2.Case1 sentence -> sentence
+            // `Buffer` is an interface, and Fable cannot type-test one (the test compiles to
+            // `false`), so the case that is not a string is read as the only other one the
+            // union admits — on this line, and typed at once.
+            | _ -> (unbox<Node.Buffer.Buffer> body).toString ()
+
+/// The double, as the response `serve` is handed. F# has no structural typing to say that an
+/// object answering these members IS one, so this line says it — about an object built on it.
+let private responseInto (reply: Reply) : ServerResponse = unbox (ResponseDouble reply)
 
 let private serveInto (assets: Assets.AssetSet) (build: string) (path: string) =
     let reply = { Status = 0; Headers = Map.empty; Body = "" }

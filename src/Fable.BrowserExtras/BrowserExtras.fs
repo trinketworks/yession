@@ -275,7 +275,9 @@ module Urls =
 [<AllowNullLiteral>]
 type MessagePort =
     abstract onmessage : (MessageEvent -> unit) with get, set
-    abstract postMessage : message: obj -> unit
+    /// Post a message to the other end. Typed as the one message this repository posts: a
+    /// tick, whose arrival is the point and whose value nobody reads.
+    abstract postMessage : tick: int -> unit
 
 /// A `MessageChannel`: two ports, and a message posted on one arrives on the other as a
 /// TASK — a turn of the event loop the page may paint in, which is the one thing a
@@ -296,16 +298,21 @@ module MessageChannel =
 /// page's cookies the way any same-origin request does. `Fable.Browser.Dom` stops at the DOM;
 /// `EventSource` belongs to the HTML bindings this repository does not otherwise need.
 ///
-/// Only the slice a reader of a stream uses is declared. `onerror`, `onopen` and `readyState`
-/// describe the state of the connection, which nothing here acts on: the browser's own
-/// reconnection IS the recovery story, so a handler layered over it could only duplicate what
-/// it does or race it.
+/// Only the slice a reader of a stream uses is declared. `onopen` and `readyState` describe the
+/// state of the connection, which nothing here acts on: the browser's own reconnection IS the
+/// recovery story, so a handler layered over it could only duplicate what it does or race it.
+/// `onerror` is the one exception, and it is not about recovery: a reader that opened a stream
+/// for a NEW view is owed its first frame, and an error before that frame is the only moment
+/// it can tell "this view never arrived" from an ordinary drop the browser will mend.
 [<AllowNullLiteral>]
 type EventSource =
     /// Called once per frame whose producer named no event type — which is every frame this
     /// repository's routes send. Settable rather than a `subscribe`, because that is the shape
     /// the API has: one handler, replaced by assigning another.
     abstract onmessage : (MessageEvent -> unit) with get, set
+    /// Called when the connection fails or drops. The browser goes on to reconnect by itself
+    /// (unless the failure was fatal), so this reports; it does not decide anything.
+    abstract onerror : (Event -> unit) with get, set
     /// Stop the connection, and stop the browser reopening it. A stream nobody closes lives as
     /// long as its document does, so whether this is called says something about the caller's
     /// lifetime rather than about the stream.
@@ -356,13 +363,15 @@ module CacheStorage =
         interface
         end
 
+    /// `headers` as name/value pairs, which Fable compiles to two-element arrays — one of the
+    /// shapes `HeadersInit` takes.
     [<Emit("new Response($0, { headers: $1 })")>]
-    let private responseCarrying (body: string) (headers: obj) : KeptResponse = jsNative
+    let private responseCarrying (body: string) (headers: (string * string) array) : KeptResponse = jsNative
 
     /// `body`, as a response to keep, carrying `headers` — which the Cache API round-trips
     /// for nothing, and is where a caller puts what the bytes alone cannot say.
     let keptResponse (body: string) (headers: (string * string) list) : KeptResponse =
-        responseCarrying body (createObj [ for name, value in headers -> name ==> value ])
+        responseCarrying body (Array.ofList headers)
 
     /// One named store.
     ///

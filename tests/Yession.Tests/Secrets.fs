@@ -270,8 +270,17 @@ open Fable.NodeExtras
 open Node.Api
 open Yession.Host
 
-[<Fable.Core.Emit("crypto.subtle.exportKey('raw', $0)")>]
-let private exportRawKey (key: obj) : Fable.Core.JS.Promise<obj> = Fable.Core.Util.jsNative
+/// The one `crypto.subtle` member the product never calls and this suite must: exporting a
+/// key, which is how non-extractability is pinned — by watching it refuse. Declared here, not
+/// in `Fable.NodeExtras.SubtleCrypto`, because nothing in the product may ask it.
+type private KeyExport =
+    abstract exportKey : format: KeyFormat * key: CryptoKey -> Fable.Core.JS.Promise<Fable.Core.JS.ArrayBuffer>
+
+[<Fable.Core.Import("subtle", "node:crypto")>]
+let private subtle : KeyExport = Fable.Core.Util.jsNative
+
+let private exportRawKey (key: CryptoKey) : Fable.Core.JS.Promise<Fable.Core.JS.ArrayBuffer> =
+    subtle.exportKey (KeyFormat.Raw, key)
 
 let private freshPath (label: string) =
     sprintf "tests/Yession.Tests/out/.data/%s-%d.secrets.json" label (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
@@ -589,7 +598,7 @@ let private startControlServer (callers: (string * Control.ControlCaller) list) 
         let table = Map.ofList callers
         let dummyRegister (_: string) (_: SessionId) (_: string) : Yession.Oidc.RegisterClientResponse =
             { ClientId = "unused"; ClientSecret = "unused"; Issuer = "unused" }
-        let handler (req: Interop.IncomingMessage) (res: Interop.ServerResponse) =
+        let handler (req: IncomingMessage) (res: ServerResponse) =
             if not (Control.tryHandle
                         (fun secret -> Map.tryFind secret table)
                         (fun _ _ -> async { return Ok () })
@@ -605,13 +614,13 @@ let private startControlServer (callers: (string * Control.ControlCaller) list) 
                         (fun _ _ -> false)
                         onUnauthorized
                         req res) then
-                res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ]) |> ignore
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain" ])
                 res.``end`` "not found"
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) ->
                 server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        return listening, sprintf "http://127.0.0.1:%d" (Interop.serverPort listening)
+        return listening, sprintf "http://127.0.0.1:%d" (serverPort listening)
     }
 
 let private caller sessionId users : Control.ControlCaller =

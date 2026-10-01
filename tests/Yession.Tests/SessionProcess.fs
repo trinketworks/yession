@@ -17,7 +17,10 @@ let private fixedClock () = DateTimeOffset(2026, 6, 14, 0, 0, 0, TimeSpan.Zero)
 let private newLog () : EventLog<SessionEvent> =
     InMemoryEventLog.create sessionId fixedClock
 
-let private sampleEvent () = SessionCreated { SessionCreated.SessionId = sessionId }
+/// Presence, not a lifecycle fact: these cases page a log and fold offsets, and an event the
+/// conversation projection turns into an item would put its own contents inside assertions
+/// about paging.
+let private sampleEvent () = PeerJoined { PeerId = PeerId.create "ada" |> expect; DisplayName = "swift-heron"; User = None }
 
 /// Page through the whole log from `after`, `limit` events at a time, until the tail.
 let private pagesFrom (log: EventLog<SessionEvent>) (after: EventOffset option) (limit: int) =
@@ -123,7 +126,7 @@ let private processModelTests =
           Offset = EventOffset.create offset |> expect
           Actor = SessionProcess
           Timestamp = fixedClock ()
-          Event = SessionCreated { SessionCreated.SessionId = sessionId } }
+          Event = sampleEvent () }
 
     testList "Process model" [
         testCase "initial model is empty and idle" <| fun () ->

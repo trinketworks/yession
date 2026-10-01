@@ -21,10 +21,39 @@ module Yession.Host.WebhookRelay
 
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Hooks
 
 // --- how a provider signs ------------------------------------------------------------
+
+/// How a provider writes its digest into the header: the two this family uses. Closed, so
+/// the decoder's refusal of anything else is the type rather than a string check every
+/// reader has to trust was made.
+[<RequireQualifiedAccess>]
+type SignatureEncoding =
+    | Hex
+    | Base64
+
+module SignatureEncoding =
+
+    /// The name an operator writes, and the one `decode` reads back.
+    let name (encoding: SignatureEncoding) : string =
+        match encoding with
+        | SignatureEncoding.Hex -> "hex"
+        | SignatureEncoding.Base64 -> "base64"
+
+    let decode (text: string) : SignatureEncoding option =
+        match text with
+        | "hex" -> Some SignatureEncoding.Hex
+        | "base64" -> Some SignatureEncoding.Base64
+        | _ -> None
+
+    /// The same choice, as the digest is asked for.
+    let digest (encoding: SignatureEncoding) : BinaryToTextEncoding =
+        match encoding with
+        | SignatureEncoding.Hex -> BinaryToTextEncoding.Hex
+        | SignatureEncoding.Base64 -> BinaryToTextEncoding.Base64
 
 /// How to check a delivery's signature. Three fields, because that is the whole shape of
 /// the family this covers: an HMAC-SHA256 over the RAW BODY, digested hex or base64, in a
@@ -38,8 +67,8 @@ open Yession.Domain.Hooks
 type SignatureSpec =
     { /// Lowercased — Node lowercases request header names on the way in.
       Header : string
-      /// `hex` or `base64`, as the provider digests.
-      Encoding : string
+      /// As the provider digests.
+      Encoding : SignatureEncoding
       /// What sits before the digest in the header value; `""` when nothing does.
       Prefix : string }
 
@@ -48,7 +77,7 @@ module SignatureSpec =
     /// The default, and it is a convention rather than a provider: `X-Hub-Signature-256`
     /// comes from WebSub, which is why GitHub uses it and why defaulting to it teaches the
     /// Manager nothing about GitHub.
-    let webSub : SignatureSpec = { Header = "x-hub-signature-256"; Encoding = "hex"; Prefix = "sha256=" }
+    let webSub : SignatureSpec = { Header = "x-hub-signature-256"; Encoding = SignatureEncoding.Hex; Prefix = "sha256=" }
 
     /// `header:encoding:prefix`, e.g. `x-shopify-hmac-sha256:base64:`. Split on the first
     /// two colons only, so a prefix may contain anything at all — `sha256=` included, which
@@ -65,9 +94,10 @@ module SignatureSpec =
                 let encoding = parts.[1].Trim().ToLowerInvariant ()
                 let prefix = if parts.Length = 3 then parts.[2] else ""
                 if header = "" then Error "signature spec has no header"
-                elif encoding <> "hex" && encoding <> "base64" then
-                    Error (sprintf "signature encoding %s is not hex or base64" encoding)
-                else Ok { Header = header; Encoding = encoding; Prefix = prefix }
+                else
+                    match SignatureEncoding.decode encoding with
+                    | None -> Error (sprintf "signature encoding %s is not hex or base64" encoding)
+                    | Some known -> Ok { Header = header; Encoding = known; Prefix = prefix }
 
 // --- what an operator declared --------------------------------------------------------
 
@@ -75,8 +105,9 @@ module SignatureSpec =
     /// prefix to put after it, so the empty-prefix form is `header:encoding` — which is one
     /// of the two spellings `decode` accepts for it, and the one worth writing.
     let encode (spec: SignatureSpec) : string =
-        if spec.Prefix = "" then sprintf "%s:%s" spec.Header spec.Encoding
-        else sprintf "%s:%s:%s" spec.Header spec.Encoding spec.Prefix
+        let encoding = SignatureEncoding.name spec.Encoding
+        if spec.Prefix = "" then sprintf "%s:%s" spec.Header encoding
+        else sprintf "%s:%s:%s" spec.Header encoding spec.Prefix
 
 /// One endpoint as configured: a name, which rotation of its secret is current, and how a
 /// delivery to it is signed.
@@ -182,7 +213,7 @@ type HookEndpoint =
 /// key the OS credential manager already holds for the secret store — so it is stable
 /// across restarts, written nowhere, and gone if the KEK is.
 let secretAt (kek: string) (name: string) (rotation: int) : string =
-    Interop.hmacSha256 kek (sprintf "yession-webhook:%s:%d" name rotation) "base64url"
+    Interop.hmacSha256 kek (sprintf "yession-webhook:%s:%d" name rotation) BinaryToTextEncoding.Base64url
 
 /// Resolve the endpoints an operator declared into the endpoints the relay serves.
 ///
@@ -252,7 +283,7 @@ let create
             // comparison is constant-time; trying two of them leaks only that there are two.
             endpoint.Secrets
             |> List.exists (fun secret ->
-                let digest = Interop.hmacSha256 secret body endpoint.Signature.Encoding
+                let digest = Interop.hmacSha256 secret body (SignatureEncoding.digest endpoint.Signature.Encoding)
                 Interop.timingSafeEqualStr presented (endpoint.Signature.Prefix + digest))
 
     let deliver (name: string) (headers: (string * string) list) (body: string) : int =
@@ -291,21 +322,17 @@ let create
 // --- the route ---------------------------------------------------------------------------
 
 /// Every header, as pairs, names lowercased by Node on the way in. A header that repeated
-/// arrives as an array, and is carried joined the way HTTP joins one. Those are the two
-/// shapes Node's typings admit for a value; the third, `undefined`, they admit and never
-/// send, and reads as empty.
-let private headersOf (req: Interop.IncomingMessage) : (string * string) list =
+/// is carried joined the way HTTP joins one.
+let private headersOf (req: IncomingMessage) : (string * string) list =
     req.headerEntries ()
     |> Array.map (fun (name, value) ->
         match value with
-        | :? string as text -> name, text
-        | :? (string[]) as repeated -> name, String.concat ", " repeated
-        | _ -> name, "")
+        | HeaderValue.Single text -> name, text
+        | HeaderValue.Repeated repeated -> name, String.concat ", " repeated)
     |> List.ofArray
 
-let private respond (res: Interop.ServerResponse) (status: int) (text: string) =
-    res.writeHead (status, JsInterop.createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ])
-    |> ignore
+let private respond (res: ServerResponse) (status: int) (text: string) =
+    res.writeHead (status, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
     res.``end`` text
 
 /// Handle a delivery. `false` when the path is not ours, so the composing server falls
@@ -315,7 +342,7 @@ let private respond (res: Interop.ServerResponse) (status: int) (text: string) =
 /// point: the caller is whatever service an operator pointed at this URL, and it
 /// authenticates by signing the body. There is no session to have a cookie, and an unsigned
 /// delivery is refused here rather than let through to be judged later.
-let tryHandle (relay: Relay) (req: Interop.IncomingMessage) (res: Interop.ServerResponse) : bool =
+let tryHandle (relay: Relay) (req: IncomingMessage) (res: ServerResponse) : bool =
     let path = Interop.pathnameOf req.url
     if not (path.StartsWith "/hooks/") then false
     elif req.``method`` <> "POST" then
@@ -328,7 +355,7 @@ let tryHandle (relay: Relay) (req: Interop.IncomingMessage) (res: Interop.Server
             // probe what this deployment is watching.
             match relay.Deliver (path.Substring "/hooks/".Length) (headersOf req) body with
             | 204 ->
-                res.writeHead (204, JsInterop.createObj [ "cache-control", box "no-store" ]) |> ignore
+                res.writeHead (204, [ ResponseHeader.CacheControl "no-store" ])
                 res.``end`` ""
             | 401 -> respond res 401 "bad signature"
             | 400 -> respond res 400 "body is not a json object"

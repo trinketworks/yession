@@ -6,6 +6,7 @@ module Yession.Host.Host
 
 open System
 open Yjs
+open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
@@ -36,11 +37,15 @@ type SessionHost =
       /// browser whose cookie names a Manager-verified user.
       MintPeerTokenAs : PeerAttribution -> string
       Port : int
+      /// The item this process's boot recorded (`SessionStarted` / `SessionResumed`): what
+      /// the boot's own work names as its cause.
+      Boot : MessageId
       Log : EventLog<SessionEvent>
       /// The session's Yjs document. The Session Process owns it; peers hold replicas
       /// synced over `State` frames.
       Doc : Y.Doc
-      /// The session's `default` WorkSandbox (Step 12), the one every session has had.
+      /// The session's `default` WorkSandbox (Step 12): where a terminal that names no sandbox
+      /// opens, and one that refuses with the reason when nobody declared it.
       Environment : SessionEnvironment.SessionEnvironment
       /// Every WorkSandbox the session has, by name (Plan 15, stage 2). The commands that
       /// start and stop them are the agent's; this is where they land.
@@ -151,7 +156,7 @@ let startFull
     // composition root's. `McpConnections.none` is a session that was given none.
     (mcpConnections: McpClient.McpConnections)
     // Extra HTTP routes on the session's server (Plan 08: the connection surface).
-    (extraHttpRoutes: (Interop.IncomingMessage -> Interop.ServerResponse -> bool) option)
+    (extraHttpRoutes: (IncomingMessage -> ServerResponse -> bool) option)
     (sessionId: SessionId)
     (auth: SessionAuth.Auth option)
     // The path this session is served under (`""` at an origin root).
@@ -291,6 +296,10 @@ let startFull
         // Seed the scheduler's log-anchored dedup set from the durable log (the
         // restart case): exactly-once is anchored in the log, not the doc.
         let! replayed = log.Read None Int32.MaxValue
+        // When the previous process was last heard from, read before this one writes a thing:
+        // the gap `SessionResumed` states is from here to boot, and one of this process's own
+        // appends landing first would shrink it to nothing.
+        let lastHeardAt = replayed.Events |> List.tryLast |> Option.map (fun e -> e.Timestamp)
         latestOffset <- replayed.Events |> List.tryLast |> Option.map (fun e -> e.Offset)
         replayed.Events |> List.iter (fun e -> recordAttribution e.Event)
         let initialConsumed =
@@ -310,9 +319,8 @@ let startFull
             |> List.fold (fun proj e -> ShellProfileProjection.applyEvent proj e.Event) ShellProfileProjection.empty
 
         // The session's WorkSandboxes (Plan 15, stage 2): a registry keyed by name, each
-        // entry lazily created on first need. `default` is the one every session has had,
-        // so a Host composed without sandboxes still answers every question — its default
-        // environment records needs as unavailable, exactly as before.
+        // entry lazily created on first need. A Host composed without sandboxes still answers
+        // every question — its default environment records needs as unavailable.
         let! sandboxes =
             match makeSandboxes with
             | Some make -> make log
@@ -770,7 +778,7 @@ let startFull
                             SyncedStateSync.nameTextOf doc subject
                             |> Option.map (fun text ->
                                 // Collapsed: a writer's caret is a bar, never a selection.
-                                let at = Fable.ProseMirror.ProseMirror.relPosFromTypeIndex (box text) index |> Fable.ProseMirror.ProseMirror.encodeRel
+                                let at = Fable.ProseMirror.ProseMirror.relPosFromTypeIndex text index |> Fable.ProseMirror.ProseMirror.encodeRel
                                 { Field = fieldOf subject; Pos = { Anchor = at; Head = at } }))
                     broadcastPresence
                         // The agent writes; it never has a pane open, so it views nothing.
@@ -919,6 +927,17 @@ let startFull
         // the log is describing something that no longer exists. Close them before anything
         // reads the projection — and before the terminal drain, which must not try to run a
         // command in a terminal that is gone.
+        // First, what this boot is — before the reconciles below write what being away cut
+        // off, so the timeline reads in the order it happened. Exactly one of the two, decided
+        // by the one thing that tells them apart: a log with something in it was left by a
+        // previous process, and an empty one is a session beginning.
+        let boot = mintMessageId ()
+        let! _ =
+            log.Append
+                ActorRef.SessionProcess
+                (match lastHeardAt with
+                 | Some at -> SessionResumed { MessageId = boot; LastHeardAt = at }
+                 | None -> SessionStarted { MessageId = boot })
         do! terminals.ReconcileAtBoot ()
         // And the turn that process was running, then what people queued, then what the log
         // still owes — in that order, which is the scheduler's to keep (`Scheduler.Boot`).
@@ -1096,7 +1115,7 @@ let startFull
         let! server, closeConnections = Signalling.start sessionId onConnection (Some eventsEndpoint) (Some transcriptEndpoint) auth extraHttpRoutes peerTokens.Mint mount managerOrigin ephemeralStorage port
         // Port 0 asks the OS for a free port, so any number of instances/sessions
         // coexist; report the port actually bound.
-        let port = Interop.serverPort server
+        let port = serverPort server
 
         let waitForNextSessionEnd () : Async<unit> =
             // Register eagerly at call time so a session that ends before the await still
@@ -1121,6 +1140,7 @@ let startFull
               MintPeerToken = fun () -> peerTokens.Mint UnattributedAccess
               MintPeerTokenAs = peerTokens.Mint
               Port = port
+              Boot = boot
               Log = log
               Doc = doc
               Environment = environment

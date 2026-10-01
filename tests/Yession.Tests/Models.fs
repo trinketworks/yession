@@ -20,6 +20,7 @@ module Yession.Tests.Models
 // paging, headers and a status code, and those are exactly what the cases turn on.
 
 open Fable.Core
+open Fable.NodeExtras
 open Thoth.Json
 open Fable.Pyxpecto
 open Yession.Domain
@@ -44,16 +45,16 @@ let private get (url: string) (cookie: string) : Async<TestHttp.Reply> =
     TestHttp.getNoStore headers url
 
 /// Start a server on a free port and answer with `reply`, which sees the request.
-let private serving (handler: Interop.IncomingMessage -> Interop.ServerResponse -> unit) =
+let private serving (handler: IncomingMessage -> ServerResponse -> unit) =
     async {
-        let server = Interop.createServer handler
+        let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        return sprintf "http://127.0.0.1:%d" (Interop.serverPort listening), server
+        return sprintf "http://127.0.0.1:%d" (serverPort listening), server
     }
 
-let private json (res: Interop.ServerResponse) (status: int) (body: string) =
-    res.writeHead (status, JsInterop.createObj [ "content-type", box "application/json" ]) |> ignore
+let private json (res: ServerResponse) (status: int) (body: string) =
+    res.writeHead (status, [ ResponseHeader.ContentType "application/json" ])
     res.``end`` body
 
 // --- the provider lookup ------------------------------------------------------------------
@@ -61,7 +62,7 @@ let private json (res: Interop.ServerResponse) (status: int) (body: string) =
 /// A provider that answers the models endpoint in two pages, and records how each request
 /// presented itself — which is what the dialect cases read back.
 let private pagedProvider (seen: ResizeArray<string>) =
-    fun (req: Interop.IncomingMessage) (res: Interop.ServerResponse) ->
+    fun (req: IncomingMessage) (res: ServerResponse) ->
         let auth =
             match Interop.headerOf req "x-api-key", Interop.headerOf req "authorization" with
             | Some key, _ -> "x-api-key:" + key

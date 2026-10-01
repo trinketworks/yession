@@ -10,6 +10,7 @@ open Yession.Domain.Collab
 open Yession.Domain.Tools
 open Yession.Domain.Chat
 open Yession.Domain.Content
+open Yession.Domain.Artifacts
 open Yession.Domain.Prs
 
 /// The Browser Client Elmish model and update loop shell. It holds a single typed
@@ -55,10 +56,10 @@ type EventConsumerState =
       /// to "catching up" and back on every send is a flicker, not information. The truth
       /// stays in `IsCatchingUp` (the read loop reads it); this is what the UI reports.
       ///
-      /// Set by a timer the client arms when catch-up begins and disarms when it ends, so
-      /// the threshold is one number in one place (`Browser.catchUpQuietMs`). It can only
-      /// ever be true WHILE catching up — the reducer enforces that, so a timer that fires
-      /// just after the page landed is harmless rather than a stuck indicator.
+      /// Set by the timer the model declares while catch-up runs (`ClientModel.timers`),
+      /// which stops when it ends, so the threshold is one number in one place
+      /// (`ClientModel.catchUpQuietMs`). It can only ever be true WHILE catching up — the
+      /// reducer holds that as an invariant of the state, whoever dispatches.
       CatchUpIsSlow       : bool
       /// Whether reads are getting through at all. `IsCatchingUp` says there is more to
       /// read; this says whether reading is possible — the distinction the old design had
@@ -77,7 +78,19 @@ type EventConsumerState =
       /// cold open with an out-of-order store, moments before the first page fixed it.
       MissingBefore       : EventOffset option }
 
-type AgentViewState = { ActiveTurn : AgentTurnId option }
+/// How far one message the agent is writing has got: the message, and how much of its body
+/// has arrived. Every delta is text, so a body only ever grows while it streams, and two
+/// stamps of one message are equal exactly when nothing arrived between them.
+[<RequireQualifiedAccess>]
+type WritingStamp = { Message : MessageId; Length : int }
+
+type AgentViewState =
+    { ActiveTurn : AgentTurnId option
+      /// The stamp at which the agent's writing was last seen to have sat still for
+      /// `ClientModel.writingQuietMs` (`AgentQuietMsg`). A fact about one exact body: it
+      /// holds while the message's stamp is still this one and means nothing once a word
+      /// lands, so nothing ever has to clear it.
+      Quiet : WritingStamp option }
 
 /// Where the Claude sign-in flow is (Plan 08). `ClaudeAwaitingCode` = the authorize
 /// tab is open; completion may land at the Manager's callback (the panel polls status)
@@ -147,8 +160,35 @@ type ClaudeViewState =
       Status : ClaudePanel option
       Flow : ClaudeFlowState
       /// A command of ours on its way into `Status`, modelled rather than assumed.
-      Pending : Pending<ConnectionExpectation> }
+      Pending : Pending<ConnectionExpectation>
+      /// The panel's fields as typed: which credential a sign-in is for ("mine" |
+      /// "session"), the code pasted back from claude.ai, and a pasted setup token or key.
+      /// Held here rather than read off the document at the press, so the rule refusing an
+      /// empty one sits with the state it reads. This client's own: none of it is synced.
+      Scope : string
+      Code : string
+      Token : string }
 
+/// One write the Claude panel asks the session for: the action, what it says, and what the
+/// status has to show before the panel calls it done (`None` for a sign-in, which answers
+/// with an authorize URL and waits on a human instead).
+[<RequireQualifiedAccess>]
+type ClaudeCall =
+    { Action : ClaudeAction
+      Request : ClaudeRequest
+      Expect : ConnectionExpectation option }
+
+/// The Claude panel's four presses.
+[<RequireQualifiedAccess>]
+type ClaudePress =
+    | Connect
+    | Complete
+    | SaveToken
+    | Disconnect of scope: string
+
+/// What a Claude panel write came back with: refused with the session's reason, an
+/// authorize URL to open, or accepted with nothing to show yet.
+type ClaudeAnswer = Result<string option, string>
 
 /// Where the GitHub sign-in flow is (Plan 14). Device flow: the panel shows a user
 /// code, the human approves it on github.com in their own tab, and the browser polls
@@ -183,13 +223,62 @@ module GitHubPanel =
     let landed (expect: ConnectionExpectation) (panel: GitHubPanel) : bool =
         ConnectionExpectation.landed expect panel.SessionCredential panel.MineCredential
 
+/// Where the device flow's poll is while a code is on screen. The poll is a COMMAND — it is
+/// what makes GitHub hand the grant over — and this tab is the one asking, at the interval
+/// GitHub sets, until the grant lands, the human cancels, or the session says the flow ended.
+type GitHubPolling =
+    /// Waiting out the interval before asking. `round` keys the wait (`ClientModel.timers`),
+    /// so each answer arms a new one and an answer to an old round is recognised as one.
+    | PollWaiting of round: int
+    /// The poll for `round` is out; its answer arms the next wait or ends the flow.
+    | PollAsking of round: int
+    /// The grant landed. Nothing is asked again: the Manager's frame reaches this session,
+    /// the session tells every open drawer, and that status closes the flow.
+    | PollGranted
+
+/// What one poll came back with.
+type GitHubPollAnswer =
+    /// The session said this flow is over — the code expired, the human denied it, nothing is
+    /// pending for that scope (`GitHubFlow.ended`) — with its reason.
+    | PollEnded of reason: string
+    /// A bad moment, not an ending: a 5xx, a proxy, a fetch that never answered. The code on
+    /// screen, which the human may already have approved, is still good.
+    | PollFailed
+    /// Still waiting, at the interval GitHub now asks for (`0` when it revised nothing).
+    | PollPending of interval: int
+    | PollConnected
+
 [<RequireQualifiedAccess>]
 type GitHubViewState =
     { /// As Claude's, for its reason.
       Status : GitHubPanel option
       Flow : GitHubFlowState
       /// A command of ours on its way into `Status`, modelled rather than assumed.
-      Pending : Pending<ConnectionExpectation> }
+      Pending : Pending<ConnectionExpectation>
+      /// The panel's fields as typed, for Claude's reason: which credential a sign-in is for,
+      /// and a pasted token. This client's own; none of it is synced.
+      Scope : string
+      Token : string
+      /// The device flow's poll, while `Flow` has a code on screen.
+      Polling : GitHubPolling }
+
+/// One write the GitHub panel asks the session for, as `ClaudeCall` is for Claude's.
+[<RequireQualifiedAccess>]
+type GitHubCall =
+    { Action : GitHubAction
+      Request : GitHubRequest
+      Expect : ConnectionExpectation option }
+
+/// The GitHub panel's three presses.
+[<RequireQualifiedAccess>]
+type GitHubPress =
+    | Connect
+    | SaveToken
+    | Disconnect of scope: string
+
+/// What a GitHub panel write came back with: refused with the session's reason, a device
+/// flow begun (the code to show), or accepted with nothing to show yet.
+type GitHubAnswer = Result<GitHubFlowState option, string>
 
 /// The generated read surface's state (Plan 15), folded from the `/queries` stream.
 ///
@@ -204,6 +293,12 @@ type QueriesViewState =
       /// The latest value per query name. Absent = not answered yet.
       Values : Map<string, QueryValue> }
 
+/// One copy to the clipboard, as its confirmation shows it: the box it came out of, and which
+/// copy this is. The count is what makes a second copy of the same box a new moment, so its
+/// wait starts again rather than the first copy's deadline taking the second's confirmation
+/// off the screen.
+[<RequireQualifiedAccess>]
+type Copy = { Box : string; Nth : int }
 /// Which draft the composer has open. `Unchosen` is the state a fresh client is in, and the only
 /// one where the DEFAULT applies (join the draft already in flight rather than start a rival) —
 /// once someone picks, the pick stands, so "new message" is not undone by a peer starting to type.
@@ -215,7 +310,7 @@ type ComposerChoice =
 /// Where a remote peer IS: the peer's name (for the cursor label), the `Focus` its caret is in
 /// when it is in one, and what it has open in the pane. Ephemeral presence, delivered over
 /// `Presence` frames — never synced through Yjs, never durable. The peer's colour is derived
-/// from its id (`EditorColour`), not carried.
+/// from who it is (`Entity.presenceColour`), not carried.
 ///
 /// Both halves are optional and an entry exists while EITHER holds, because they are genuinely
 /// independent: someone reading an artifact is typing nowhere, and someone typing in the
@@ -331,6 +426,19 @@ module PaneTab =
         | StretchTab stretch -> Some stretch.TerminalId
         | ContentTab _ -> None
 
+    /// Whether the thing in this tab has ENDED — a terminal that has closed, or one this
+    /// session does not have at all.
+    ///
+    /// A block, a stretch and a file are readings of something that already finished, so
+    /// there is nothing about them left to end: they answer `false` and stay in the strip
+    /// until somebody closes them. This used to be `isLive`, asked as "what may the strip
+    /// keep", which is a question about the strip's policy — and it answered `true` about a
+    /// content tab, which is not a live terminal by any reading.
+    let ended (terminals: Projection) =
+        function
+        | TerminalTab id -> Projection.tryFind id terminals |> Option.forall (fun t -> not t.IsOpen)
+        | BlockTab _ | StretchTab _ | ContentTab _ -> false
+
     /// What having this tab up says to everyone else (`ViewRef`) — the one place a tab becomes
     /// a thing to be present AT. Every terminal-shaped tab reports the terminal, because a
     /// reader who wants to know who else is here is asking about the terminal and not about
@@ -342,18 +450,6 @@ module PaneTab =
         | StretchTab stretch -> ViewingTerminal stretch.TerminalId
         | ContentTab ref -> ViewingFile ref
 
-    /// Whether this tab is a LIVE terminal's, given the terminals as they stand (Plan 20,
-    /// stage 1) — what the strip may keep.
-    ///
-    /// The strip holds the working set, and a recording is not one: a closed terminal leaves
-    /// the strip and stays in the list, which is where every terminal the session has ever
-    /// had now lives. A pin on a recording is a person keeping something to READ, which is
-    /// what a block or stretch tab is, and those stay however their terminal ends.
-    let isLive (terminals: Projection) =
-        function
-        | TerminalTab id ->
-            Projection.tryFind id terminals |> Option.map (fun t -> t.IsOpen) |> Option.defaultValue false
-        | BlockTab _ | StretchTab _ | ContentTab _ -> true
 
 /// Which read of a tab the pane is showing (Plan 25, stage 2): the reader's POSITION — which
 /// tab, and for a terminal where in its history — and their FIDELITY — the text of it, or the
@@ -636,17 +732,47 @@ type ClientModel =
       /// measurement of nothing: the width this reader last had is the truer answer, and the
       /// only one they could have meant.
       TerminalViewports : Map<TerminalId, Size>
-      /// What this client PINNED to the strip, in pin order (Plan 20, stage 1).
+      /// The tabs this client has OPEN, in the order they opened (Plan 20, stage 1).
       ///
       /// The strip used to be a census — every terminal the session ever had, for ever,
       /// because it was the only door to a recording. The list is that door now, so the
-      /// strip can be what a person is actually working with: their pins, and whatever they
-      /// are looking at.
+      /// strip can be what a person is actually working with.
       ///
-      /// A LIST rather than a set, because pin order is what a reader's tabs sit in and a
-      /// set would re-order them on any change. LOCAL to this client, never synced: pinning
-      /// is reading, not collaborating.
-      Pins          : PaneTab list
+      /// A LIST rather than a set, because the order tabs sit in is the order they arrived
+      /// and a set would re-order them on any change. LOCAL to this client, never synced:
+      /// what one person has open is not what another is working on.
+      ///
+      /// What opens one: a terminal you asked for, and a tab you kept. What closes one: your
+      /// own press, or the terminal in it ending — unless you kept it, which is the whole of
+      /// what keeping means here.
+      Tabs          : PaneTab list
+      /// How many terminals this client has ASKED for and not yet been shown.
+      ///
+      /// Pressing "new terminal" is a REQUEST, and the only record of it. `OpenTerminal`
+      /// answers nothing — the new terminal reaches every peer as an event like any other
+      /// (`Client.OpenTerminal`) — so without this the client cannot tell the terminal it
+      /// asked for from one that merely belongs to it, and it must be able to: under a
+      /// verified login the log records which USER opened a terminal and cannot say which
+      /// of their connections did, so "any terminal that is mine" would let the phone in
+      /// somebody's pocket take the pane out of the tab they are working in.
+      ///
+      /// A COUNT rather than a flag, because two presses are owed two terminals and a flag
+      /// would land the second press on the first terminal. Spent on arrival: a press buys
+      /// exactly the terminal that answers it, and the next one to arrive finds nothing
+      /// owed.
+      Opening       : int
+      /// Which of them this client KEPT, by tab key.
+      ///
+      /// A mark on an open tab rather than a list of its own, because "in my strip" and
+      /// "kept" were two memberships free to disagree: the fold wrote pins for terminals a
+      /// person never kept and dropped pins for terminals they had, so neither question
+      /// could be answered off either list. One list of tabs, one mark saying which of them
+      /// somebody decided to hold on to.
+      ///
+      /// Written by ONE message (`TogglePinMsg`) and by nothing else. No event writes it: a
+      /// pin is an act, and a person who typed one command into somebody else's terminal had
+      /// it kept for the rest of the session with nothing on screen saying who decided so.
+      Pinned        : Set<string>
       /// What the pane is SHOWING: which tab, which read of it, or the census (Plan 25,
       /// stage 2). `None` = nothing chosen yet, resolved to a default by `selectedPane`.
       ///
@@ -654,7 +780,7 @@ type ClientModel =
       /// nothing made them: see `PaneMode`. Its tab is also the PREVIEW slot (Plan 20, stage
       /// 1) — a tab that is shown and not pinned is transient, and showing anything else
       /// replaces it. There is no second field for that: a pinned tab and a previewed one
-      /// differ by whether `Pins` names it, which is the only fact there is.
+      /// differ by whether `Tabs` names it, which is the only fact there is.
       Pane          : PaneMode option
       /// Whether the terminals panel is open. View state, never synced: two people in one
       /// session may reasonably want different columns on screen.
@@ -673,15 +799,25 @@ type ClientModel =
       /// things being read, not two popovers fighting over an Escape. Empty is every line
       /// folded to its title, which is how a timeline is read.
       OpenFolds     : Set<FoldKey>
+      /// Which session breaks are showing the moment they happened instead of how long they
+      /// were. View state for `OpenFolds`' reason — which reading of a time one person wants
+      /// is nobody else's business — and a set for the same reason too: two breaks on screen
+      /// are two questions, and answering one must not re-answer the other.
+      ///
+      /// NOT a `FoldKey`. That type is documented as one control — an arrow, a title, and
+      /// something that unfolds beneath — and nothing unfolds here; the label changes what it
+      /// says. Borrowing the key would make a break the fourth kind of fold and the doc
+      /// comment on `FoldKey` a lie.
+      DatedBreaks   : Set<MessageId>
       /// What this client has just put on the clipboard, named by the hook of the box it
       /// came out of (`Dom.Hooks.githubUserCode` and whatever joins it). View state, local
       /// and transient for the same reason the menu above is: copying is one person's act
       /// on one machine, and nobody else is looking at their clipboard.
       ///
       /// ONE slot, so the confirmation cannot be showing on two boxes at once — and `None`
-      /// again a moment later, put back by whoever set it (the browser's `Copy`), because
-      /// what it says is "just now" and nothing else in the model expires on its own.
-      Copied        : string option
+      /// again a moment later, taken back by the wait the model declares for it
+      /// (`ClientModel.timers`), because what it says is "just now".
+      Copied        : Copy option
       /// The Claude connection panel's state (Plan 08), driven by the /claude routes.
       Claude        : ClaudeViewState
       /// The GitHub connection panel's state (Plan 14), driven by the /github routes.
@@ -700,6 +836,28 @@ type ClientModel =
       /// The session's repos, folded from the same events the timeline's repo notes come
       /// from: what the launch surface asks to know whether the session has one.
       Repos         : Repos.ReposProjection }
+
+/// A move only the document can make: focus, and scrolling something into view. The model says
+/// what is on screen; where the cursor is and how far the reader has scrolled are the
+/// document's, so these leave the reducer as effects (`ClientEffect.Move`) and are carried
+/// out after the render that put their target on screen.
+[<RequireQualifiedAccess>]
+type DomMove =
+    /// Into the side pane, after something opened a tab there. A chip that opened a pane and
+    /// left focus behind it is the failure the WCAG floor names.
+    | FocusPane
+    /// Back to the chat item a tab was opened from — the tab's key is the only thing the
+    /// chip and the tab share — once that tab is going.
+    | FocusChat of tabKey: string
+    /// Back to one item's actions control, after the menu it opened has gone. Without it,
+    /// dismissing a menu strands focus on `body`.
+    | FocusItemActions of MessageId
+    /// Scroll a terminal's history to one of its commands and mark it.
+    | RevealBlock of TerminalId * BlockId
+    /// Scroll the conversation to one message and mark it.
+    | RevealMessage of MessageId
+    /// Scroll the conversation to its own tail.
+    | ScrollToLatest
 
 /// Messages that drive the client model. Connection-lifecycle messages are produced by
 /// the connection driver (Connection.fs); the suffix avoids clashing with the
@@ -750,6 +908,9 @@ type ClientMsg =
     /// it is the ONLY thing that lights the "catching up" status — see
     /// `EventConsumerState.CatchUpIsSlow` for why the truth alone is too noisy to show.
     | CatchUpSlowMsg of bool
+    /// The agent's writing sat still at this stamp for `ClientModel.writingQuietMs` — fired
+    /// by the timer `ClientModel.timers` declares for it, never by anything else.
+    | AgentQuietMsg of WritingStamp
     | DisconnectedMsg
     /// Edit the session title (collaborative text, merges like a draft body). A pure CRDT
     /// write; the Session Process reports the settled title to the Manager for the list.
@@ -788,14 +949,37 @@ type ClientMsg =
     /// A Claude connection command moved (sent, accepted and now awaiting the status that
     /// will show it, or refused).
     | ClaudePendingMsg of Pending<ConnectionExpectation>
+    /// The Claude panel's fields, as typed (`ClaudeViewState`).
+    | ClaudeScopeChosen of string
+    | ClaudeCodeTyped of string
+    | ClaudeTokenTyped of string
+    /// A press on the panel. Refused here when a field it needs is empty; otherwise it asks
+    /// the session (`ClientEffect.Claude`) and waits for the answer.
+    | ClaudePressedMsg of ClaudePress
+    /// What a write came back with, for the call that asked, at the moment it arrived —
+    /// which is when an accepted command's wait for the status starts (`Pending.Awaiting`).
+    | ClaudeAnsweredMsg of ClaudeCall * ClaudeAnswer * at: int64
     /// A fresh /github status probe result (Plan 14).
     | GitHubStatusMsg of GitHubPanel
     /// The GitHub sign-in flow moved (the code came up, or the person cancelled).
     | GitHubFlowMsg of GitHubFlowState
     /// A GitHub connection command moved, exactly as Claude's does.
     | GitHubPendingMsg of Pending<ConnectionExpectation>
+    /// The GitHub panel's fields, as typed (`GitHubViewState`).
+    | GitHubScopeChosen of string
+    | GitHubTokenTyped of string
+    /// A press on the panel, as Claude's.
+    | GitHubPressedMsg of GitHubPress
+    /// What a write came back with, as Claude's.
+    | GitHubAnsweredMsg of GitHubCall * GitHubAnswer * at: int64
+    /// The interval before poll `round` has passed (`ClientModel.timers`).
+    | GitHubPollDueMsg of round: int
+    /// What poll `round` came back with.
+    | GitHubPolledMsg of round: int * GitHubPollAnswer
     /// The clock, for every panel waiting on a query at once: one tick, because a deadline
-    /// is about elapsed time and not about which panel is watching it.
+    /// is about elapsed time and not about which panel is watching it. Fired by the deadline
+    /// the model declares for each wait (`ClientModel.timers`), carrying the moment it fell
+    /// due.
     | PendingWaitedMsg of now: int64
     /// The launch surface moved (typed, listed, chose, sent, answered, failed, dismissed).
     | LaunchMsg of LaunchMsg
@@ -865,10 +1049,42 @@ type ClientMsg =
     /// A tab shown and not pinned is the PREVIEW slot (Plan 20, stage 1): showing anything
     /// else replaces it, so a person reading twenty chips ends with one tab, not twenty.
     | ShowInPaneMsg of TabMode
+    /// Show this in the pane and take the reader there: what a chip in the chat does. One
+    /// message for both, so no chip can open a pane and leave focus behind it.
+    | OpenInPaneMsg of TabMode
+    /// Show a terminal's history at one of its commands, scrolled to it, with focus in the
+    /// pane — the block tab's "show in terminal".
+    | ShowInTerminalMsg of TerminalId * BlockId
+    /// A move only the document can make, asked for by a control that changes nothing in the
+    /// model (`DomMove`).
+    | MoveMsg of DomMove
+    /// Put `text` on the clipboard and, if the platform lets it, say so on the box whose hook is
+    /// `box` (`CopiedMsg`). How long it says so is the model's (`ClientModel.timers`).
+    | CopyMsg of box: string * text: string
+    /// Try the session again NOW, rather than when the supervised loop next would. A trigger,
+    /// never a second schedule (Plan 20): it shortens the wait the lifecycle is already in, and
+    /// earns its place on the one client the loop deliberately will not carry — a peer whose
+    /// token was refused, which no amount of waiting fixes.
+    | RetryNowMsg
+    /// Ask the session for a terminal with this title, and remember that this client asked
+    /// (`Opening`).
+    ///
+    /// One message for both halves, so no third `+ new` can be added that opens a terminal
+    /// without recording that somebody here asked for it: asking and remembering that you
+    /// asked are one act, and a caller that could do the first without the second is the dead
+    /// button this exists to end. The terminal comes back as an event that says which USER
+    /// opened it and cannot say which of their tabs did, so the count is the only thing that
+    /// can tell the terminal THIS press asked for from one that merely belongs to the same
+    /// person.
+    | OpenTerminalMsg of title: string
     /// Keep this tab, or stop keeping it (Plan 20, stage 1). Unpinning is not closing:
     /// unpinning a terminal leaves it running and leaves its row in the list, and the one
     /// verb that ends a terminal lives on that row.
     | TogglePinMsg of PaneTab
+    /// Take this tab out of the strip. Not the same verb as ending what is in it: closing a
+    /// terminal's tab leaves the terminal running, and its row in the list — where the one
+    /// verb that ends a terminal lives — is untouched.
+    | CloseTabMsg of PaneTab
     /// Rewind a LIVE terminal (Plan 14, stage 7): watch what it has recorded so far, from a
     /// transcript length pinned NOW while the terminal keeps running.
     ///
@@ -877,8 +1093,8 @@ type ClientMsg =
     /// to look it up first could look it up wrong, or forget, and the rule belongs with the
     /// state it governs.
     | RewindTerminalMsg of TerminalId
-    /// Open or close the terminals column.
-    | ToggleTerminalsMsg
+    /// Open or close the content column.
+    | ToggleContentMsg
     /// Open this item's actions menu, or shut it if it is the one already open. A toggle
     /// rather than an open, because the control that sends it is the same control either
     /// way — pressing the ellipsis a second time has to put the menu away.
@@ -887,6 +1103,11 @@ type ClientMsg =
     /// control, as with the menu — and one message for every fold on the timeline, because
     /// they are one control drawn in three places.
     | ToggleFoldMsg of FoldKey
+    /// Show this break's moment instead of its duration, or go back to the duration if it is
+    /// already showing one. A toggle rather than a one-way reveal, for the reason the menu and
+    /// the folds are: the control that sends it is the same control either way, and a label a
+    /// press cannot put back is a label people stop pressing.
+    | ToggleBreakTimeMsg of MessageId
     /// Shut whatever menu is open. Everything that dismisses one sends this: Escape, a
     /// press outside it, and choosing something from it.
     | CloseItemMenuMsg
@@ -897,8 +1118,8 @@ type ClientMsg =
     /// so this is dispatched only where the write SUCCEEDED. A confirmation the reducer
     /// could set on its own would be a claim about a clipboard nothing here has read.
     | CopiedMsg of string option
-    /// Show the terminal list, or go back to the read it covered (Plan 20, stage 0).
-    | ToggleTerminalListMsg
+    /// Show the content list, or go back to the read it covered (Plan 20, stage 0).
+    | ToggleContentListMsg
     /// Ensure the composer slot for (terminal, author) exists, carrying the queue key it
     /// becomes when sent. The author's own call, exactly as for a message draft.
     | EnsureTerminalDraftMsg of TerminalId * PeerId * QueueId
@@ -911,6 +1132,139 @@ type ClientMsg =
     | DeletePendingMsg of QueueId
     /// Reorder a queued command within its terminal: one fractional-index register write.
     | ReorderPendingMsg of QueueId * order: float
+    /// Take a terminal's stdin — enter live mode, stealing the lease if another peer holds it
+    /// (Plan 13, stage 2e). There is one control because there is one act, and any peer may
+    /// perform it. Asked of the session (`ClientEffect.TakeTerminal`); the lease arrives as a
+    /// `TerminalLeaseTaken` event, so the model changes only when every peer's does.
+    | TakeTerminalMsg of TerminalId
+    /// Hand a terminal this peer holds back to block mode. Refused by the session unless this
+    /// peer is the holder.
+    | ReleaseTerminalMsg of TerminalId
+    /// Type the shell instrumentation in again after a terminal stopped marking (Plan 13,
+    /// stage 2f). Any peer may — it repairs rather than takes.
+    | RearmTerminalMsg of TerminalId
+    /// Ask the provider for a closed terminal's stream again (Plan 19, step 4).
+    | ReattachTerminalMsg of TerminalId
+    /// End a terminal. Not closing its tab: this is the one verb that stops what runs in it.
+    | CloseTerminalMsg of TerminalId
+    /// Ask the session to cancel the running agent turn (Step 17). The outcome arrives as
+    /// events: `AgentTurnInterrupted` on success, or nothing if the turn already finished.
+    | InterruptTurnMsg of AgentTurnId
+    /// Consent to what a repo asks for (Plan 27). Carries the set that is on screen, so the
+    /// session can refuse if the file moved between the screen and the button.
+    | ApproveRepoCapabilitiesMsg of RepoRef * granted: string list
+
+/// What a message asks of the world outside the model, as a value `ClientModel.update` returns
+/// beside the next model.
+///
+/// Data rather than an Elmish `Cmd`, because a `Cmd` is a function: a test can see that one
+/// was returned and never what it would do. A value says which request a message makes, in
+/// the cheap tier, next to the fold that decided it; carrying it out is the composition
+/// root's, which is handed the ports to do it with (`Client.makeProgram`).
+///
+/// Qualified access because the Domain's commands share these names — `CloseTerminal` is the
+/// request as it reaches the session, and this is this client asking for it.
+[<RequireQualifiedAccess>]
+type ClientEffect =
+    | TakeTerminal of TerminalId
+    | ReleaseTerminal of TerminalId
+    | RearmTerminal of TerminalId
+    | ReattachTerminal of TerminalId
+    | CloseTerminal of TerminalId
+    | OpenTerminal of title: string
+    | InterruptTurn of AgentTurnId
+    | ApproveRepoCapabilities of RepoRef * granted: string list
+    | Launch of LaunchEffect
+    | Claude of ClaudeCall
+    | GitHub of GitHubCall
+    /// Ask poll `round` of the device flow begun for this scope.
+    | GitHubPoll of round: int * scope: string
+    | Move of DomMove
+    | Copy of box: string * text: string
+    | RetryNow
+
+/// What each of the Claude panel's presses asks the session for, or why it asks nothing.
+/// One function for both halves of a press — the state it moves to and the effect it
+/// sends — so they cannot come to disagree about whether there was a call at all.
+module ClaudePress =
+
+    let call (press: ClaudePress) (claude: ClaudeViewState) : Result<ClaudeCall, string> =
+        match press with
+        | ClaudePress.Connect ->
+            Ok
+                { Action = ClaudeAction.Begin
+                  Request = ClaudeRequest.scoped claude.Scope
+                  Expect = None }
+        | ClaudePress.Complete ->
+            // The scope selector is unmounted while awaiting; the flow carries it.
+            let scope =
+                match claude.Flow with
+                | ClaudeAwaitingCode (_, scope) -> scope
+                | ClaudeIdle -> "mine"
+            match claude.Code with
+            | "" -> Error "paste the code first"
+            | code ->
+                Ok
+                    { Action = ClaudeAction.Complete
+                      Request = { Scope = scope; Code = Some code; Token = None }
+                      Expect = Some { Scope = scope; Connected = true } }
+        | ClaudePress.SaveToken ->
+            match claude.Token with
+            | "" -> Error "paste a token first"
+            | token ->
+                Ok
+                    { Action = ClaudeAction.Token
+                      Request = { Scope = claude.Scope; Code = None; Token = Some token }
+                      Expect = Some { Scope = claude.Scope; Connected = true } }
+        | ClaudePress.Disconnect scope ->
+            Ok
+                { Action = ClaudeAction.Disconnect
+                  Request = ClaudeRequest.scoped scope
+                  Expect = Some { Scope = scope; Connected = false } }
+
+/// What each of the GitHub panel's presses asks the session for, or why it asks nothing.
+module GitHubPress =
+
+    let call (press: GitHubPress) (github: GitHubViewState) : Result<GitHubCall, string> =
+        match press with
+        // Nothing for the status to show yet: the grant lands when the human approves the
+        // code this puts on screen.
+        | GitHubPress.Connect ->
+            Ok { Action = GitHubAction.Begin; Request = GitHubRequest.scoped github.Scope; Expect = None }
+        | GitHubPress.SaveToken ->
+            match github.Token with
+            | "" -> Error "paste a token first"
+            | token ->
+                Ok
+                    { Action = GitHubAction.Token
+                      Request = { Scope = github.Scope; Token = Some token }
+                      Expect = Some { Scope = github.Scope; Connected = true } }
+        | GitHubPress.Disconnect scope ->
+            Ok
+                { Action = GitHubAction.Disconnect
+                  Request = GitHubRequest.scoped scope
+                  Expect = Some { Scope = scope; Connected = false } }
+
+/// The device flow's poll, beside the state it reads.
+module GitHubPoll =
+
+    /// The scope to poll for, when poll `round` is the one this panel is waiting to ask — and
+    /// nothing for a round already asked, a flow cancelled or granted, or no flow at all.
+    let due (round: int) (github: GitHubViewState) : string option =
+        match github.Flow, github.Polling with
+        | GitHubAwaitingApproval (_, _, scope, _), PollWaiting waiting when waiting = round -> Some scope
+        | _ -> None
+
+    /// The wait before the next poll, while a code is on screen and nothing is out. Keyed by
+    /// the code and the round, so each answer arms a fresh wait and a new flow never inherits
+    /// an old one's.
+    let timer (github: GitHubViewState) : Timer<ClientMsg> list =
+        match github.Flow, github.Polling with
+        | GitHubAwaitingApproval (userCode, _, _, interval), PollWaiting round ->
+            [ { Key = [ "github-poll"; userCode; string round ]
+                After = max 1 interval * 1000
+                Fire = GitHubPollDueMsg round } ]
+        | _ -> []
 
 module ClientModel =
 
@@ -947,7 +1301,7 @@ module ClientModel =
               Feed = FeedLive
               // Nothing has been looked at yet; the replay decides.
               MissingBefore = None }
-          Agent = { ActiveTurn = None }
+          Agent = { ActiveTurn = None; Quiet = None }
           Presence = Map.empty
           Peers = Map.empty
           Attribution = Attribution.empty
@@ -958,20 +1312,29 @@ module ClientModel =
           TerminalKeyframes = Map.empty
           TerminalScreens = Map.empty
           TerminalViewports = Map.empty
-          Pins = []
+          Tabs = []
+          Opening = 0
+          Pinned = Set.empty
           Pane = None
           TerminalsOpen = false
           ItemMenu = None
           OpenFolds = Set.empty
+          DatedBreaks = Set.empty
           Copied = None
           Claude =
             { Status = None
               Flow = ClaudeIdle
-              Pending = Pending.Ready }
+              Pending = Pending.Ready
+              Scope = "mine"
+              Code = ""
+              Token = "" }
           GitHub =
             { Status = None
               Flow = GitHubIdle
-              Pending = Pending.Ready }
+              Pending = Pending.Ready
+              Scope = "mine"
+              Token = ""
+              Polling = PollWaiting 0 }
           Queries = { Declared = []; Values = Map.empty } }
 
     /// Advance the latest-known offset and recompute the catch-up indicator. "Slow" is a
@@ -1074,19 +1437,22 @@ module ClientModel =
 
     /// Whether this client is keeping a tab.
     let isPinned (tab: PaneTab) (model: ClientModel) : bool =
-        model.Pins |> List.exists (fun pinned -> PaneTab.key pinned = PaneTab.key tab)
+        Set.contains (PaneTab.key tab) model.Pinned
 
-    /// The tab strip, in the order it renders (Plan 20, stage 1): the pins that are still
-    /// live, in pin order, then whatever is being previewed.
+    /// The tab strip, in the order it renders (Plan 20, stage 1): the pins, in pin order,
+    /// then whatever is being previewed.
     ///
     /// The preview is at the END and never in the middle, so a person reading one recording
     /// after another watches one tab change rather than their pins shuffling under them.
-    /// A closed terminal is not here at all — its row in the list is where its recording is
-    /// read now, which is what lets the strip stop being a census.
+    ///
+    /// A terminal that CLOSES keeps its tab when it was pinned, and shows its recording
+    /// there. That is the pin doing what it says: the strip stopped being a census because
+    /// the list became the door to every recording, not because a closed terminal is
+    /// unkeepable — and a tab that vanishes at the moment the thing in it finishes is a tab
+    /// taken away from whoever was watching it finish.
     let rec paneTabs (model: ClientModel) : PaneTab list =
-        // No filter here: a pin on a terminal that has closed is dropped where the close is
-        // FOLDED, so the strip is simply the pins. Filtering again at render would be a
-        // second mechanism for one fact, free to disagree with the first.
+        // No filter here, and now nothing to filter: only a person's own act adds a pin, and
+        // only their own act removes one.
         //
         // The preview is the RESOLVED selection rather than the stored choice, because a
         // client that has pinned nothing still shows a terminal — whatever `selectedPane`
@@ -1094,12 +1460,13 @@ module ClientModel =
         // panel it is sitting above.
         let previewed =
             match selectedPane model with
-            | Some chosen when not (isPinned chosen model) -> [ chosen ]
+            | Some chosen when not (model.Tabs |> List.exists (fun open' -> PaneTab.key open' = PaneTab.key chosen)) ->
+                [ chosen ]
             | _ -> []
-        model.Pins @ previewed
+        model.Tabs @ previewed
 
     /// Which tab the pane shows: the stored choice while what it names still exists, else the
-    /// first pinned live terminal, else the first open one. Resolved rather than stored, for
+    /// first pinned OPEN terminal, else the first open one. Resolved rather than stored, for
     /// the same reason `composerTarget` is: a choice that outlives what it pointed at is a
     /// blank pane nobody asked for. The default lands somewhere you can type.
     ///
@@ -1117,8 +1484,15 @@ module ClientModel =
         match model.Pane |> Option.bind PaneMode.subject |> Option.map TabMode.tab with
         | Some chosen when exists chosen -> Some chosen
         | _ ->
-            let pinnedTerminal = model.Pins |> List.tryPick (function TerminalTab _ as tab -> Some tab | _ -> None)
-            match pinnedTerminal with
+            // Open, because this default exists to land somewhere a person can TYPE. A
+            // recording is a fine tab and a poor place to arrive with nothing selected.
+            let openTerminalTab =
+                model.Tabs
+                |> List.tryPick (function
+                    | TerminalTab id as tab when
+                        Projection.tryFind id model.Terminals |> Option.exists (fun t -> t.IsOpen) -> Some tab
+                    | _ -> None)
+            match openTerminalTab with
             | Some tab -> Some tab
             | None ->
                 Projection.openTerminals model.Terminals
@@ -1477,6 +1851,15 @@ module ClientModel =
         let opened, closed = model.Terminals.Terminals |> List.partition (fun t -> t.IsOpen)
         opened @ List.rev closed
 
+    /// Every artifact the session holds, latest version first shared first — what the list
+    /// panel offers beside the terminals, and the only way to reach one whose chip has scrolled
+    /// out of the conversation.
+    ///
+    /// Read straight off the conversation projection (`ConversationProjection.artifacts`), so
+    /// the panel and the timeline cannot disagree about what exists: both are the same fold.
+    let artifactRows (model: ClientModel) : ArtifactShared list =
+        ConversationProjection.artifacts model.Conversation
+
     /// A terminal's queued commands in run order.
     let terminalQueue (terminal: TerminalId) (model: ClientModel) : PendingAct list =
         TerminalQueueOrder.sortedFor terminal model.Synced.Pending
@@ -1594,6 +1977,30 @@ module ClientModel =
         presentEditors model
         |> List.filter (fun (_, _, field) -> terminalOfFocus field model = Some terminal)
         |> List.map (fun (who, name, _) -> who, name)
+
+    /// Which actor THIS client is, by the same rule the Session Process used to stamp what
+    /// this client asked for: `Attribution.actorFor` — the durable user when this peer's join
+    /// was attributed, the peer connection itself when it was not.
+    ///
+    /// Asking the rule rather than building `ActorRef.PeerRef model.Peer.PeerId` and comparing.
+    /// The two agree only under `--auth localhost`, which verifies nobody; under a
+    /// Manager-verified deployment every command this connection sends is written `UserRef`,
+    /// so a client that assumed `PeerRef` matched NOTHING it had done. It cost a strip that
+    /// never held a terminal you opened (`+ new` opened one and showed you nothing, so people
+    /// pressed it again — 24 empty terminals in one session), a lease bar that named its holder
+    /// "somebody else" to the holder, a live screen that refused the holder's keystrokes, and a
+    /// pty that never heard the holder's viewport size. One wrong answer, four surfaces.
+    ///
+    /// This is for a DURABLE actor — one the log carries. Presence is not: an awareness frame
+    /// is keyed by the peer that sent it and never attributed, so the handful of comparisons
+    /// against `model.Presence` are right to build a `PeerRef`, and are deliberately left alone.
+    let me (model: ClientModel) : ActorRef =
+        Attribution.actorFor model.Attribution.PeerUsers model.Peer.PeerId
+
+    /// Whether a durable actor is this client. The question every ownership rule here asks —
+    /// is this terminal mine, is this lease mine — with `me` as its one answer.
+    let isMine (actor: ActorRef) (model: ClientModel) : bool =
+        actor = me model
 
     /// A peer's display name: your own connection's, else the roster's, else the peer's own
     /// live presence, else the raw id (an id is a last resort, not a label — `PEER-129755065`
@@ -1752,11 +2159,99 @@ module ClientModel =
         | Some subject -> sprintf "%s%s — yession" signal subject
         | None -> signal + "yession"
 
-    /// Fold a message into the model.
+    /// How long the agent's writing has to sit still before it reads as thinking again. Long
+    /// enough to ride over the gap between two deltas of one sentence, short enough that a
+    /// pause to reason — or to reach for a tool — shows as one within a breath.
+    let writingQuietMs = 700
+
+    /// How long catch-up must run before it is worth SAYING (`EventConsumerState.CatchUpIsSlow`).
+    /// Long enough that a send — which puts this client one event behind itself for a round
+    /// trip — never lights it; short enough that a real wait is reported rather than sat
+    /// through in silence.
+    let catchUpQuietMs = 500
+
+    /// How long a copy says so for. Long enough to be read as an answer to the press, short
+    /// enough that the code it stands in front of comes back before anybody needs it again.
+    let copiedShownMs = 1500
+
+    /// A message's stamp, while it is one the agent is still writing and has said something in.
+    /// Nothing is a stamp before the first word: an empty body already reads as thinking, and
+    /// has no quiet to wait for.
+    let writingStamp (item: ConversationItem) : WritingStamp option =
+        match item.Status with
+        | Streaming when not (System.String.IsNullOrWhiteSpace (ConversationItem.said item)) ->
+            Some { WritingStamp.Message = item.MessageId; WritingStamp.Length = (ConversationItem.said item).Length }
+        | Streaming | Complete | ConversationItemStatus.Running | ConversationItemStatus.Failed -> None
+
+    /// Whether a message the agent is writing reads as THINKING rather than writing: nothing
+    /// said yet, or what has been said has sat still since the quiet timer last fired at
+    /// exactly this stamp. A word arriving moves the stamp, so it reads as writing again with
+    /// nothing dispatched, and a timer armed before that word fires a stamp that no longer
+    /// matches, so it cannot make the new words read as a pause.
+    let agentThinking (model: ClientModel) (item: ConversationItem) : bool =
+        match writingStamp item with
+        | None -> true
+        | Some stamp -> model.Agent.Quiet = Some stamp
+
+    /// Every wait this model wants running (`Timer`). The program keeps exactly these alive,
+    /// keyed, so a wait is started by appearing here and stopped by leaving.
+    ///
+    /// Catch-up is the normal state for a moment after anything happens — a send puts this
+    /// client behind its own event until the page comes back — so it is reported only once
+    /// it has lasted `catchUpQuietMs`. Without the wait the header flickered "up to date" →
+    /// "catching up" → "up to date" on every message sent. One key for the whole episode:
+    /// the pages that arrive while it runs leave the wait alone rather than pushing it out,
+    /// which would mean a long catch-up was never reported; the episode ending takes it away.
+    ///
+    /// A copy's confirmation is an expiry, keyed by the copy itself: a copy of another box, or
+    /// the same box again, is a new key and a fresh wait, so no earlier deadline can take a
+    /// later confirmation off the screen.
+    ///
+    /// A panel's wait on the query is a deadline, keyed by the wait itself (the panel, and
+    /// when its command was accepted): a wait that ends — the query showed it, or a new
+    /// command replaced it — takes its deadline with it. What it fires is the moment the
+    /// deadline falls due, `since` plus `Pending.deadlineMillis`, which is exactly when a
+    /// timer started with the wait and running that long fires.
+    ///
+    /// The agent's quiet is a debounce: one timer per message it is writing, keyed by the
+    /// stamp, so each delta replaces the wait with a fresh one and only a body that stops
+    /// growing for `writingQuietMs` ever fires. None once it has fired for this stamp — the
+    /// fact is recorded, and a wait for it again would be asking a settled question.
+    let timers (model: ClientModel) : Timer<ClientMsg> list =
+        let catchUp =
+            if model.EventConsumer.IsCatchingUp && not model.EventConsumer.CatchUpIsSlow then
+                [ { Key = [ "catch-up-slow" ]; After = catchUpQuietMs; Fire = CatchUpSlowMsg true } ]
+            else []
+        let quiet =
+            model.Conversation.Items
+            |> List.choose writingStamp
+            |> List.filter (fun stamp -> model.Agent.Quiet <> Some stamp)
+            |> List.map (fun stamp ->
+                { Key = [ "agent-quiet"; MessageId.value stamp.Message; string stamp.Length ]
+                  After = writingQuietMs
+                  Fire = AgentQuietMsg stamp })
+        let copied =
+            match model.Copied with
+            | Some copy ->
+                [ { Key = [ "copied"; copy.Box; string copy.Nth ]; After = copiedShownMs; Fire = CopiedMsg None } ]
+            | None -> []
+        let pending =
+            [ "claude", model.Claude.Pending; "github", model.GitHub.Pending ]
+            |> List.choose (fun (panel, pending) ->
+                match pending with
+                | Pending.Awaiting (_, since) ->
+                    Some
+                        { Key = [ "pending"; panel; string since ]
+                          After = int Pending.deadlineMillis
+                          Fire = PendingWaitedMsg (since + Pending.deadlineMillis) }
+                | Pending.Ready | Pending.Sending | Pending.Refused _ -> None)
+        catchUp @ copied @ pending @ quiet @ GitHubPoll.timer model.GitHub
+
+    /// Fold a message into the model — the state half of `update`, its only caller.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
     /// after every message, rather than being read live from whatever the connection
     /// happens to be doing at render time.
-    let rec update (msg: ClientMsg) (model: ClientModel) : ClientModel =
+    let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
         reconcileLaunch (
         match msg with
         | ConnectingMsg ->
@@ -1813,7 +2308,7 @@ module ClientModel =
                     (fun (launch: LaunchViewState) e ->
                         match e.Event, launch.Stage with
                         | SessionEvent.GatedCommandFailed failed, (Sent _ | Cloning _) when failed.Tool = "add_repo" ->
-                            Launch.update (LaunchFailed failed.Reason) launch
+                            Launch.update (LaunchFailed failed.Reason) launch |> fst
                         | _ -> launch)
                     model.Launch
             let terminals =
@@ -1848,29 +2343,46 @@ module ClientModel =
                     model.EventConsumer.LastProcessedOffset
                     page.Events
                     model.Timeline
-            // The pins move with the terminals (Plan 20, stage 1), in the step that folds
-            // the events rather than at render: a terminal I opened is one I asked for and
-            // is therefore in my hands, and a terminal that has closed has nothing left to
-            // keep. Doing it here means the strip is simply the pins — one rule, one place,
-            // and no filter at render free to disagree with it.
+            // The tabs follow the terminals, which is what a tab is FOR: a terminal I asked
+            // for opens one, and a terminal that ends takes its own away again — unless
+            // somebody kept it, which is the whole of what keeping means. No pin is computed
+            // here and none ever will be: this fold used to write them, so a pin meant both
+            // "recently mine" and "I decided to hold on to this" and neither could be read
+            // off it.
             //
-            // "I opened it" is `PeerRef` against this client's own peer, which is how every
-            // other surface here decides whose something is (the lease bar, the queue's
-            // authorship). A session whose actors are Manager-verified users attributes them
-            // as `UserRef`, and this does not pin those — stated rather than papered over,
-            // because inventing a second identity rule for one convenience is how two
-            // answers to "is this mine" start disagreeing.
-            let pins =
-                let mine = ActorRef.PeerRef model.Peer.PeerId
-                let opened =
-                    freshEvents
-                    |> List.choose (fun e ->
-                        match e.Event with
-                        | SessionEvent.TerminalOpened t when t.OpenedBy = mine -> Some (TerminalTab t.TerminalId)
-                        | _ -> None)
-                (model.Pins @ opened)
-                |> List.filter (fun tab -> PaneTab.isLive terminals tab)
+            // "I asked for it" is `ClientModel.me`'s rule — `Attribution.actorFor`, the same
+            // one the Session Process stamped the open with — asked of the attribution this
+            // page has just been folded into rather than of `model.Attribution`, because the
+            // `PeerJoined` that says who I am can arrive in the SAME page as the terminal I
+            // opened. Reading the older copy here would leave the session's first page
+            // tabless and nothing else, which is the kind of gap that is found once.
+            let opened =
+                let mine = Attribution.actorFor attribution.PeerUsers model.Peer.PeerId
+                freshEvents
+                |> List.choose (fun e ->
+                    match e.Event with
+                    | SessionEvent.TerminalOpened t when t.OpenedBy = mine -> Some (TerminalTab t.TerminalId)
+                    | _ -> None)
+            let tabs =
+                (model.Tabs @ opened)
                 |> List.distinctBy PaneTab.key
+                |> List.filter (fun tab ->
+                    Set.contains (PaneTab.key tab) model.Pinned || not (PaneTab.ended terminals tab))
+            // Being SHOWN the terminal you pressed for, which is the whole of what the press
+            // promised. A tab in the strip is not that: `selectedPane` keeps the stored
+            // choice while what it names still exists, and the terminal you were on still
+            // exists — so the press added a word to the strip and moved nothing, which on a
+            // phone, where the strip scrolls, is a control that does nothing at all.
+            //
+            // Only against a press (`Opening`), and spent by it. The agent opening a terminal
+            // beside your work never takes the pane, and neither does your own other tab —
+            // which the log cannot tell from this one, and which is why the request rather
+            // than the ownership is what this reads.
+            let pane, opening =
+                match model.Opening, List.tryLast opened with
+                | 0, _ | _, None -> model.Pane, model.Opening
+                | asked, Some arrived ->
+                    Some (OnTab (Reading arrived)), max 0 (asked - List.length opened)
             let latestKnown = EventOffset.maxOption model.EventConsumer.LatestKnownOffset highWater
             { model with
                 Conversation = conversation
@@ -1881,7 +2393,9 @@ module ClientModel =
                 Agent = agent
                 Environment = environment
                 Terminals = terminals
-                Pins = pins
+                Tabs = tabs
+                Pane = pane
+                Opening = opening
                 Peers = peers
                 Attribution = attribution
                 EventConsumer =
@@ -1915,12 +2429,13 @@ module ClientModel =
         | EventFeedMsg health ->
             { model with EventConsumer = { model.EventConsumer with Feed = health } }
         | CatchUpSlowMsg slow ->
-            // Gated on still being behind, so a timer that fires just after the page landed
-            // cannot light an indicator with nothing left to report.
+            // Gated on still being behind: slow is a property of a catch-up that is running,
+            // and the state holds that whoever dispatches.
             { model with
                 EventConsumer =
                     { model.EventConsumer with
                         CatchUpIsSlow = slow && model.EventConsumer.IsCatchingUp } }
+        | AgentQuietMsg stamp -> { model with Agent = { model.Agent with Quiet = Some stamp } }
         | DisconnectedMsg ->
             { model with Connection = Reconnecting }
         | EditTitleMsg title ->
@@ -2007,13 +2522,40 @@ module ClientModel =
             let status = ClaudePanel.keeping model.Claude.Status status
             { model with
                 Claude =
-                  { Status = Some status
-                    Flow = flow
-                    Pending = model.Claude.Pending |> Pending.observed ClaudePanel.landed status } }
+                  { model.Claude with
+                      Status = Some status
+                      Flow = flow
+                      Pending = model.Claude.Pending |> Pending.observed ClaudePanel.landed status } }
         | ClaudeFlowMsg flow ->
             { model with Claude = { model.Claude with Flow = flow } }
         | ClaudePendingMsg pending ->
             { model with Claude = { model.Claude with Pending = pending } }
+        | ClaudeScopeChosen scope -> { model with Claude = { model.Claude with Scope = scope } }
+        | ClaudeCodeTyped code -> { model with Claude = { model.Claude with Code = code } }
+        | ClaudeTokenTyped token -> { model with Claude = { model.Claude with Token = token } }
+        | ClaudePressedMsg press ->
+            match ClaudePress.call press model.Claude with
+            // What was typed goes with the call: a code or a token sent is not one to send
+            // again, and a field still holding it after the panel came back would be.
+            | Ok _ -> { model with Claude = { model.Claude with Pending = Pending.Sending; Code = ""; Token = "" } }
+            | Error reason -> { model with Claude = { model.Claude with Pending = Pending.Refused reason } }
+        | ClaudeAnsweredMsg (call, answer, at) ->
+            match answer with
+            | Error reason -> { model with Claude = { model.Claude with Pending = Pending.Refused reason } }
+            // Nothing for the panel to show yet: the credential arrives when the human
+            // finishes in the tab this opens, and the stream says so.
+            | Ok (Some authorizeUrl) ->
+                { model with
+                    Claude =
+                        { model.Claude with
+                            Pending = Pending.Ready
+                            Flow = ClaudeAwaitingCode (authorizeUrl, call.Request.Scope) } }
+            | Ok None ->
+                let pending =
+                    match call.Expect with
+                    | Some expect -> Pending.Awaiting (expect, at)
+                    | None -> Pending.Ready
+                { model with Claude = { model.Claude with Pending = pending } }
         | GitHubStatusMsg status ->
             // The same two rules, for the same two reasons (see Claude's above).
             let connected = status.SessionCredential.IsSome || status.MineCredential.IsSome
@@ -2023,13 +2565,56 @@ module ClientModel =
                 | flow, _ -> flow
             { model with
                 GitHub =
-                  { Status = Some status
-                    Flow = flow
-                    Pending = model.GitHub.Pending |> Pending.observed GitHubPanel.landed status } }
+                  { model.GitHub with
+                      Status = Some status
+                      Flow = flow
+                      Pending = model.GitHub.Pending |> Pending.observed GitHubPanel.landed status } }
         | GitHubFlowMsg flow ->
             { model with GitHub = { model.GitHub with Flow = flow } }
         | GitHubPendingMsg pending ->
             { model with GitHub = { model.GitHub with Pending = pending } }
+        | GitHubScopeChosen scope -> { model with GitHub = { model.GitHub with Scope = scope } }
+        | GitHubTokenTyped token -> { model with GitHub = { model.GitHub with Token = token } }
+        | GitHubPressedMsg press ->
+            match GitHubPress.call press model.GitHub with
+            | Ok _ -> { model with GitHub = { model.GitHub with Pending = Pending.Sending; Token = "" } }
+            | Error reason -> { model with GitHub = { model.GitHub with Pending = Pending.Refused reason } }
+        | GitHubAnsweredMsg (call, answer, at) ->
+            match answer with
+            | Error reason -> { model with GitHub = { model.GitHub with Pending = Pending.Refused reason } }
+            | Ok (Some flow) ->
+                { model with GitHub = { model.GitHub with Pending = Pending.Ready; Flow = flow; Polling = PollWaiting 0 } }
+            | Ok None ->
+                let pending =
+                    match call.Expect with
+                    | Some expect -> Pending.Awaiting (expect, at)
+                    | None -> Pending.Ready
+                { model with GitHub = { model.GitHub with Pending = pending } }
+        | GitHubPollDueMsg round ->
+            match GitHubPoll.due round model.GitHub with
+            | Some _ -> { model with GitHub = { model.GitHub with Polling = PollAsking round } }
+            | None -> model
+        | GitHubPolledMsg (round, answer) ->
+            match model.GitHub.Flow, model.GitHub.Polling with
+            | GitHubAwaitingApproval (userCode, verificationUri, scope, interval), PollAsking asked when asked = round ->
+                let next = PollWaiting (round + 1)
+                match answer with
+                // The flow is over as well as refused, and both have to be said: the code on
+                // screen is dead, so it goes with the reason it died.
+                | PollEnded reason ->
+                    { model with GitHub = { model.GitHub with Flow = GitHubIdle; Pending = Pending.Refused reason; Polling = next } }
+                | PollFailed -> { model with GitHub = { model.GitHub with Polling = next } }
+                // GitHub's `slow_down` only ever widens the interval.
+                | PollPending revised when revised > interval ->
+                    { model with
+                        GitHub =
+                            { model.GitHub with
+                                Flow = GitHubAwaitingApproval (userCode, verificationUri, scope, revised)
+                                Polling = next } }
+                | PollPending _ -> { model with GitHub = { model.GitHub with Polling = next } }
+                | PollConnected -> { model with GitHub = { model.GitHub with Polling = PollGranted } }
+            // An answer to a flow that was cancelled, or to a round already answered.
+            | _ -> model
         | PendingWaitedMsg now ->
             { model with
                 Claude = { model.Claude with Pending = Pending.waited now model.Claude.Pending }
@@ -2050,12 +2635,12 @@ module ClientModel =
             // a page and the same lines arriving one at a time cannot come to differ.
             let folded =
                 records
-                |> List.fold (fun m (seq, record) -> update (TerminalRecordMsg (terminal, seq, record)) m) model
+                |> List.fold (fun m (seq, record) -> fold (TerminalRecordMsg (terminal, seq, record)) m) model
             let withHeader =
                 match header with
-                | Some h -> update (TerminalHeaderMsg (terminal, h)) folded
+                | Some h -> fold (TerminalHeaderMsg (terminal, h)) folded
                 | None -> folded
-            update (TerminalReadThroughMsg (terminal, readThrough)) withHeader
+            fold (TerminalReadThroughMsg (terminal, readThrough)) withHeader
         | TerminalAvailableMsg (terminal, length) ->
             let feed = terminalFeed terminal model
             { model with
@@ -2084,11 +2669,17 @@ module ClientModel =
             if Size.isValid size then
                 { model with TerminalViewports = Map.add terminal size model.TerminalViewports }
             else model
+        | OpenTerminalMsg _ -> { model with Opening = model.Opening + 1 }
         | ShowInPaneMsg mode ->
             // The WHOLE next face, stated by every way in. Nothing here clears a subset and
             // hopes the rest was already right: the list cannot survive a choice that
             // replaces it, and a pin or a start hint cannot outlive the mode that carried it.
             { model with Pane = Some (OnTab mode); TerminalsOpen = true }
+        | OpenInPaneMsg mode -> fold (ShowInPaneMsg mode) model
+        | ShowInTerminalMsg (terminal, block) -> fold (ShowInPaneMsg (ReadingAt (terminal, block))) model
+        | MoveMsg _
+        | CopyMsg _
+        | RetryNowMsg -> model
         | RewindTerminalMsg terminal ->
             // The length is pinned NOW rather than followed. A recording that grew under a
             // reader would move the scrub bar out from under them, which is the one thing
@@ -2111,13 +2702,43 @@ module ClientModel =
             { model with Pane = Some (OnTab (WatchingBehind (terminal, length))); TerminalsOpen = true }
         | TogglePinMsg tab ->
             let key = PaneTab.key tab
-            // Unpinning leaves what is SHOWN alone: it stays on screen, now as the preview.
-            // Pressing unpin should say "stop keeping this", never "take it away from me
-            // while I am looking at it".
             if isPinned tab model then
-                { model with Pins = model.Pins |> List.filter (fun pinned -> PaneTab.key pinned <> key) }
-            else { model with Pins = model.Pins @ [ tab ] }
-        | ToggleTerminalsMsg ->
+                // Unpinning leaves the tab OPEN and where it was: it stays on screen, now
+                // closable. Pressing unpin should say "stop keeping this", never "take it
+                // away from me while I am looking at it".
+                { model with Pinned = Set.remove key model.Pinned }
+            else
+                // Keeping something that was only previewed OPENS it, because a mark on a tab
+                // that is not in the strip is a mark on nothing. Appended rather than moved
+                // to the front: a strip that re-orders under a reader is the thing pin order
+                // was a list for in the first place.
+                let tabs =
+                    if model.Tabs |> List.exists (fun open' -> PaneTab.key open' = key) then model.Tabs
+                    else model.Tabs @ [ tab ]
+                { model with Tabs = tabs; Pinned = Set.add key model.Pinned }
+        | CloseTabMsg tab ->
+            // Closing is total — the tab goes, and a tab that was kept is no longer kept,
+            // because somebody asking for it gone has said so more recently than they said to
+            // keep it. WHICH tabs offer a close is the view's question, and its answer is
+            // "the ones nobody kept": a stray tap in a strip that scrolls sideways must not
+            // take away something a person is holding on to, while Delete on a focused tab is
+            // deliberate enough to.
+            //
+            // The pane lets go of it too, and only when it was the tab that was showing.
+            // Otherwise `selectedPane` would resolve the closed tab right back as the preview
+            // — closing the thing you are looking at would leave it exactly where it was.
+            let key = PaneTab.key tab
+            let letGo (mode: TabMode) = PaneTab.key (TabMode.tab mode) = key
+            let pane =
+                match model.Pane with
+                | Some (OnTab mode) when letGo mode -> None
+                | Some (OnList (Some mode)) when letGo mode -> Some (OnList None)
+                | other -> other
+            { model with
+                Tabs = model.Tabs |> List.filter (fun open' -> PaneTab.key open' <> key)
+                Pinned = Set.remove key model.Pinned
+                Pane = pane }
+        | ToggleContentMsg ->
             { model with TerminalsOpen = not model.TerminalsOpen }
         | ToggleItemMenuMsg messageId ->
             // Opening one is writing the field, so opening a second shuts the first without
@@ -2130,8 +2751,19 @@ module ClientModel =
                 if Set.contains key model.OpenFolds then Set.remove key model.OpenFolds
                 else Set.add key model.OpenFolds
             { model with OpenFolds = next }
-        | CopiedMsg copied -> { model with Copied = copied }
-        | ToggleTerminalListMsg ->
+        | ToggleBreakTimeMsg messageId ->
+            let next =
+                if Set.contains messageId model.DatedBreaks then Set.remove messageId model.DatedBreaks
+                else Set.add messageId model.DatedBreaks
+            { model with DatedBreaks = next }
+        | CopiedMsg (Some box) ->
+            let nth =
+                match model.Copied with
+                | Some copy -> copy.Nth + 1
+                | None -> 1
+            { model with Copied = Some { Copy.Box = box; Copy.Nth = nth } }
+        | CopiedMsg None -> { model with Copied = None }
+        | ToggleContentListMsg ->
             // Going to the list KEEPS the read it covers, so coming back resumes it — a
             // rewind included, which is the one thing the boolean did right. The column comes
             // with it: reaching the list from a shut column is exactly the case where a
@@ -2143,15 +2775,14 @@ module ClientModel =
                 | None -> Some (OnList None)
             { model with Pane = next; TerminalsOpen = true }
         | EnsureTerminalDraftMsg (terminal, author, queueId) ->
-            // Typing in a terminal pins it, for the person typing (Plan 20, stage 1). The
-            // rule that makes the agent's terminals safe to leave unpinned: watching one and
-            // joining one are a keystroke apart, and the moment you take a seat at it, it is
-            // in your strip. Applied before the idempotence check below, because a slot that
-            // already exists is somebody coming BACK to a terminal — which is the same claim.
-            let model =
-                if author = model.Peer.PeerId && not (isPinned (TerminalTab terminal) model) then
-                    { model with Pins = model.Pins @ [ TerminalTab terminal ] }
-                else model
+            // Typing does NOT pin. It used to — "watching one and joining one are a keystroke
+            // apart" — and the reasoning was sound about terminals while the strip was also
+            // the working set. It is not sound about a pin: a person who typed one command
+            // into somebody else's terminal had it kept for the rest of the session, and
+            // nothing they did said so. Keeping is one gesture, on the tab, and this is not
+            // it. A terminal being typed in is on screen already, which is the whole of what
+            // it needs.
+            //
             // Idempotent, and the queue key of an existing slot is never re-minted: every
             // co-editor's send depends on it staying the one the slot was published with.
             if Map.containsKey (terminal, author) model.Synced.TerminalDrafts then model
@@ -2216,9 +2847,9 @@ module ClientModel =
                     { model.Synced with
                         Pending = Map.add queueId { entry with Order = order } model.Synced.Pending }
             | None -> model
-        | LaunchMsg msg -> { model with Launch = Launch.update msg model.Launch }
+        | LaunchMsg msg -> { model with Launch = Launch.update msg model.Launch |> fst }
         | CommandAnsweredMsg (request, result) ->
-            { model with Launch = Launch.update (LaunchAnswered (request, result)) model.Launch }
+            { model with Launch = Launch.update (LaunchAnswered (request, result)) model.Launch |> fst }
         | SetModelMsg choice -> model |> withSynced { model.Synced with Model = choice }
         // An id this client's window does not hold is a page boundary, not a bug — and
         // there is nothing to toggle, because what the verdict would default to is on the item.
@@ -2243,4 +2874,47 @@ module ClientModel =
                 |> withSynced
                     { model.Synced with Chapters = Chapters.rename item said model.Synced.Chapters }
             | None -> model
-)
+        // Requests of the session and nothing else: what they change arrives as events, which
+        // every peer folds alike, so a local guess here would be a state only this peer had.
+        | TakeTerminalMsg _
+        | ReleaseTerminalMsg _
+        | RearmTerminalMsg _
+        | ReattachTerminalMsg _
+        | CloseTerminalMsg _
+        | InterruptTurnMsg _
+        | ApproveRepoCapabilitiesMsg _ -> model
+        )
+
+    /// A message's consequences: the next model, and what it asks of the world outside it.
+    let update (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =
+        let next = fold msg model
+        // The launch surface's listing is asked for by whichever message first offers it:
+        // anchoring happens once in a client's life on a session, so this asks once, and
+        // the surface has no mount of its own to ask from.
+        let offering =
+            if not model.Launch.Anchored && next.Launch.Anchored then
+                [ ClientEffect.Launch (LaunchEffect.Search next.Launch.Query) ]
+            else []
+        let effects =
+            match msg with
+            | TakeTerminalMsg terminal -> [ ClientEffect.TakeTerminal terminal ]
+            | ReleaseTerminalMsg terminal -> [ ClientEffect.ReleaseTerminal terminal ]
+            | RearmTerminalMsg terminal -> [ ClientEffect.RearmTerminal terminal ]
+            | ReattachTerminalMsg terminal -> [ ClientEffect.ReattachTerminal terminal ]
+            | CloseTerminalMsg terminal -> [ ClientEffect.CloseTerminal terminal ]
+            | OpenTerminalMsg title -> [ ClientEffect.OpenTerminal title ]
+            | InterruptTurnMsg turn -> [ ClientEffect.InterruptTurn turn ]
+            | ApproveRepoCapabilitiesMsg (repo, granted) -> [ ClientEffect.ApproveRepoCapabilities (repo, granted) ]
+            | LaunchMsg launchMsg -> Launch.update launchMsg model.Launch |> snd |> List.map ClientEffect.Launch
+            | ClaudePressedMsg press -> ClaudePress.call press model.Claude |> Result.toList |> List.map ClientEffect.Claude
+            | GitHubPressedMsg press -> GitHubPress.call press model.GitHub |> Result.toList |> List.map ClientEffect.GitHub
+            | OpenInPaneMsg _ -> [ ClientEffect.Move DomMove.FocusPane ]
+            | ShowInTerminalMsg (terminal, block) ->
+                [ ClientEffect.Move (DomMove.RevealBlock (terminal, block)); ClientEffect.Move DomMove.FocusPane ]
+            | MoveMsg move -> [ ClientEffect.Move move ]
+            | CopyMsg (box, text) -> [ ClientEffect.Copy (box, text) ]
+            | RetryNowMsg -> [ ClientEffect.RetryNow ]
+            | GitHubPollDueMsg round ->
+                GitHubPoll.due round model.GitHub |> Option.map (fun scope -> ClientEffect.GitHubPoll (round, scope)) |> Option.toList
+            | _ -> []
+        next, effects @ offering

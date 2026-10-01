@@ -9,6 +9,7 @@ open Yession.Domain.Content
 open Yession.Domain.Terminals
 open Yession.Domain.Tools
 open Yession.Domain.Prs
+open Yession.Domain.Watching
 
 /// Something a party DID on the timeline, as the FACTS of it — the event's own record, and
 /// not a sentence made from one.
@@ -38,6 +39,7 @@ type Act =
     | RepoCapabilitiesChanged of RepoCapabilitiesChanged
     | RepoCapabilitiesApproved of RepoCapabilitiesApproved
     | RepoConfigRefused of RepoConfigRefused
+    | RepoConfigWarned of RepoConfigWarned
     | SandboxStarting of WorkSandboxStarting
     | SandboxStarted of WorkSandboxStarted
     | SandboxStartFailed of WorkSandboxStartFailed
@@ -54,19 +56,33 @@ type Act =
     | PrWatched of PrWatched
     | PrUnwatched of PrUnwatched
     | PrTransitioned of PrTransitioned
+    /// Any act that reports a watched thing changing (`WatchChanged`), noticed well after it
+    /// happened at the source. A wrapper rather than a field on every act, because lateness
+    /// is not any one act's fact: it is how far the session's own record trails the world,
+    /// and every kind of watch has it the same way. Everything below reads through it to
+    /// the act inside, and only the headline adds the words.
+    | Noticed of late: System.TimeSpan * Act
+    /// The session came back after a stretch with nothing running. With when it came back,
+    /// which is half of the gap it states and lives on the envelope rather than the record.
+    | SessionResumed of SessionResumed * at: System.DateTimeOffset
+    /// The session began: the first process over an empty log. With when, for the same
+    /// reason its pair carries it — the envelope holds the moment, the record does not.
+    | SessionStarted of SessionStarted * at: System.DateTimeOffset
 
 module Act =
 
     /// What was done, without who it was done for — the headline's first half. Dispatch
     /// only — the words are beside each event.
-    let deed (act: Act) : Phrase =
+    let rec deed (act: Act) : Phrase =
         match act with
+        | Act.Noticed (_, inner) -> deed inner
         | Act.RepoAdded r -> RepoAdded.phrase r
         | Act.RepoRemoved r -> RepoRemoved.phrase r
         | Act.RepoBranchSwitched r -> RepoBranchSwitched.phrase r
         | Act.RepoCapabilitiesChanged c -> RepoCapabilitiesChanged.phrase c
         | Act.RepoCapabilitiesApproved a -> RepoCapabilitiesApproved.phrase a
         | Act.RepoConfigRefused r -> RepoConfigRefused.phrase r
+        | Act.RepoConfigWarned w -> RepoConfigWarned.phrase w
         | Act.SandboxStarting s -> WorkSandboxStarting.phrase s
         | Act.SandboxStarted s -> WorkSandboxStarted.phrase s
         | Act.SandboxStartFailed s -> WorkSandboxStartFailed.phrase s
@@ -83,17 +99,20 @@ module Act =
         | Act.PrWatched p -> PrWatched.phrase p
         | Act.PrUnwatched p -> PrUnwatched.phrase p
         | Act.PrTransitioned p -> PrTransitioned.phrase p
+        | Act.SessionResumed (r, at) -> SessionResumed.phrase at r
+        | Act.SessionStarted _ -> SessionStarted.phrase
 
     /// Who the act was done for, when that is not its author: " for Ada" after the deed —
     /// the person behind the agent or a repo's file, or whose credential a push spent. Empty
     /// when the author acted for themselves. Its own clause, so a narrow screen can put it
     /// on a line of its own.
-    let forWhom (act: Act) : Phrase =
+    let rec forWhom (act: Act) : Phrase =
         let person (principal: Principal option) =
             match principal with
             | Some p -> [ Segment.Text " for "; Segment.Ref (EntityRef.Actor (Principal.toActor p)) ]
             | None -> []
         match act with
+        | Act.Noticed (_, inner) -> forWhom inner
         | Act.SandboxStarting s -> person s.OnBehalfOf
         | Act.SandboxStarted s -> person s.OnBehalfOf
         | Act.SandboxStartFailed s -> person s.OnBehalfOf
@@ -105,6 +124,7 @@ module Act =
         | Act.RepoCapabilitiesChanged _
         | Act.RepoCapabilitiesApproved _
         | Act.RepoConfigRefused _
+        | Act.RepoConfigWarned _
         | Act.SandboxStopped _
         | Act.SandboxSetupQueued _
         | Act.FileChanged _
@@ -115,12 +135,15 @@ module Act =
         | Act.McpServerUnavailable _
         | Act.PrWatched _
         | Act.PrUnwatched _
-        | Act.PrTransitioned _ -> []
+        | Act.PrTransitioned _
+        | Act.SessionResumed _
+        | Act.SessionStarted _ -> []
 
     /// The person `forWhom` names, when it names one — for a reader that has to know WHO,
     /// not how to say it.
-    let onBehalfOf (act: Act) : Principal option =
+    let rec onBehalfOf (act: Act) : Principal option =
         match act with
+        | Act.Noticed (_, inner) -> onBehalfOf inner
         | Act.SandboxStarting s -> s.OnBehalfOf
         | Act.SandboxStarted s -> s.OnBehalfOf
         | Act.SandboxStartFailed s -> s.OnBehalfOf
@@ -129,16 +152,24 @@ module Act =
         | _ -> None
 
     /// The headline: the one sentence a reader lands on — the deed, then who it was for.
-    let phrase (act: Act) : Phrase = deed act @ forWhom act
+    ///
+    /// A change noticed late says so at the end of it, so the sentence a reader lands on —
+    /// the screen's and the agent's alike — carries when it happened as well as that it did.
+    let phrase (act: Act) : Phrase =
+        match act with
+        | Act.Noticed (late, inner) -> deed inner @ forWhom inner @ Lateness.phrase late
+        | _ -> deed act @ forWhom act
 
     /// What the headline holds back, one phrase per fact. Empty is an act that is already
     /// one clause — most are: "removed repo octo/hello" has no second half to withhold, and
     /// inventing one would pad every short line into looking like a long one.
-    let particulars (act: Act) : Phrase list =
+    let rec particulars (act: Act) : Phrase list =
         match act with
+        | Act.Noticed (_, inner) -> particulars inner
         | Act.RepoAdded r -> RepoAdded.particulars r
         | Act.RepoCapabilitiesChanged c -> RepoCapabilitiesChanged.particulars c
         | Act.RepoConfigRefused r -> RepoConfigRefused.particulars r
+        | Act.RepoConfigWarned w -> RepoConfigWarned.particulars w
         | Act.SandboxStarting s -> WorkSandboxStarting.particulars s
         | Act.SandboxStarted s -> WorkSandboxStarted.particulars s
         | Act.SandboxStartFailed s -> WorkSandboxStartFailed.particulars s
@@ -159,7 +190,9 @@ module Act =
         | Act.McpServerAvailable _
         | Act.McpServerUnavailable _
         | Act.PrUnwatched _
-        | Act.PrTransitioned _ -> []
+        | Act.PrTransitioned _
+        | Act.SessionResumed _
+        | Act.SessionStarted _ -> []
 
     /// The whole account as ONE sentence: headline, then the particulars after an em-dash,
     /// semicolon-joined. This is the composition every reader that is not a screen gets
@@ -181,14 +214,16 @@ module Act =
     /// says what it holds by kind (`WorkRun.summary`), and the kind is the act's to name:
     /// a file edited and a file written are two counts, because a reader asks about them
     /// separately, while every sandbox start is one.
-    let counted (act: Act) : string * string * string =
+    let rec counted (act: Act) : string * string * string =
         match act with
+        | Act.Noticed (_, inner) -> counted inner
         | Act.RepoAdded _ -> "added", "repo", "repos"
         | Act.RepoRemoved _ -> "removed", "repo", "repos"
         | Act.RepoBranchSwitched _ -> "switched", "branch", "branches"
         | Act.RepoCapabilitiesChanged _ -> "changed", "repo's capabilities", "repos' capabilities"
         | Act.RepoCapabilitiesApproved _ -> "approved", "repo's capabilities", "repos' capabilities"
         | Act.RepoConfigRefused _ -> "refused", "repo config", "repo configs"
+        | Act.RepoConfigWarned _ -> "noted", "repo config", "repo configs"
         | Act.SandboxStarting _
         | Act.SandboxStarted _ -> "started", "sandbox", "sandboxes"
         | Act.SandboxStartFailed _ -> "failed to start", "sandbox", "sandboxes"
@@ -209,6 +244,8 @@ module Act =
         | Act.PrWatched _ -> "watched", "pull request", "pull requests"
         | Act.PrUnwatched _ -> "unwatched", "pull request", "pull requests"
         | Act.PrTransitioned _ -> "noted", "pull request", "pull requests"
+        | Act.SessionResumed _ -> "resumed", "session", "sessions"
+        | Act.SessionStarted _ -> "started", "session", "sessions"
 
     /// Whether this act opens a chapter BY NATURE — one nobody had to ask for.
     ///
@@ -216,8 +253,9 @@ module Act =
     /// prose is: the act knows. What is notable is deliberately a short list — a transcript
     /// where everything opens a chapter has none — and `Chapters` is where a person's own
     /// verdict overrides it in either direction.
-    let notable (act: Act) : bool =
+    let rec notable (act: Act) : bool =
         match act with
+        | Act.Noticed (_, inner) -> notable inner
         // Where the waiting began, and the news that follows it — unlike the unwatch, which
         // is where the story stops being told rather than a place worth coming back to.
         | Act.PrWatched _
@@ -231,6 +269,7 @@ module Act =
         | Act.RepoCapabilitiesChanged _
         | Act.RepoCapabilitiesApproved _
         | Act.RepoConfigRefused _
+        | Act.RepoConfigWarned _
         | Act.SandboxStarting _
         | Act.SandboxStarted _
         | Act.SandboxStartFailed _
@@ -243,4 +282,6 @@ module Act =
         | Act.CredentialSpent _
         | Act.McpServerAvailable _
         | Act.McpServerUnavailable _
-        | Act.PrUnwatched _ -> false
+        | Act.PrUnwatched _
+        | Act.SessionResumed _
+        | Act.SessionStarted _ -> false

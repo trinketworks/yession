@@ -12,6 +12,7 @@ module Yession.Tests.DockerIntegration
 open System
 open Fable.Core
 open Fable.Core.JsInterop
+open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Sandboxes
@@ -161,6 +162,23 @@ let tests =
                     Expect.stringContains reason "found none" "and that nothing was there"
             })
 
+            // A devshell entrypoint that fails — `nix develop` losing a fetch it raced another
+            // sandbox for — used to be reported as "found none", which reads as a missing shell
+            // in an environment that was never assembled.
+            testCaseAsync "an entrypoint that fails refuses the start as itself, with its code and what it said" (async {
+                let spec =
+                    alpineSpec
+                    |> withContainer (fun c -> { c with Entrypoint = Some [ "sh"; "-c"; "echo 'error: the devshell broke' >&2; exit 3" ] })
+                match! start envSecrets spec with
+                | Ok (_, sandbox) ->
+                    do! sandbox.Dispose ()
+                    failwith "an entrypoint that exits 3 cannot have had a shell looked for behind it"
+                | Error reason ->
+                    Expect.stringContains reason "exited 3" "it names the entrypoint's failure and its code"
+                    Expect.stringContains reason "error: the devshell broke" "and carries what it said"
+                    Expect.isFalse (reason.Contains "found none") "rather than claiming a shell was looked for"
+            })
+
             // Through the Session Process as production composes it (`hostOver`), over a
             // docker sandbox with an entrypoint: the terminal's shell is the one found
             // behind it, a block runs inside it, `cd` carries to the next block — and the
@@ -231,6 +249,19 @@ let tests =
                 // Per-command env from the request too.
                 let! _, cmdEnv, _ = runInSandbox sandbox "printenv" [ "PER_CMD" ] (Map.ofList [ "PER_CMD", "cmd-env" ]) None
                 Expect.isTrue (cmdEnv.Contains "cmd-env") "request env var is set for the exec"
+                do! sandbox.Dispose ()
+            })
+
+            // What lies beneath a composed variable in a container is the IMAGE's own `ENV` —
+            // alpine sets PATH — and only a real image can say what that is.
+            testCaseAsync "a composed variable extends what the image itself sets" (async {
+                let spec =
+                    { alpineSpec with
+                        EnvironmentVariables =
+                            Map.ofList [ "PATH", Derived [ TemplatePart.Beneath "PATH"; TemplatePart.Literal ":/opt/extra" ] ] }
+                let! _, sandbox = startOrFail spec
+                let! _, path, _ = runInSandbox sandbox "printenv" [ "PATH" ] Map.empty None
+                Expect.equal (path.Trim ()) "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/extra" "alpine's own PATH, then the declaration's"
                 do! sandbox.Dispose ()
             })
 
@@ -390,11 +421,11 @@ let tests =
                 // github.com, played by a listener that answers anything with one line —
                 // seeing that line inside the container is the whole proof.
                 let upstream =
-                    Interop.createServer (fun _ res ->
-                        res.writeHead (200, createObj [ "content-type", box "text/plain" ]) |> ignore
+                    createServer (fun _ res ->
+                        res.writeHead (200, [ ResponseHeader.ContentType "text/plain" ])
                         res.``end`` "answered by the upstream")
                 do! Async.FromContinuations (fun (cont, _, _) -> upstream.listen (0, "127.0.0.1", fun () -> cont ()) |> ignore)
-                let! gateway = GitGateway.start (sprintf "http://127.0.0.1:%d" (Interop.serverPort upstream)) ignore
+                let! gateway = GitGateway.start (sprintf "http://127.0.0.1:%d" (serverPort upstream)) ignore
                 try
                     let cap = gateway.Grant SandboxRef.defaultRef
                     let secret =

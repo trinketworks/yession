@@ -189,6 +189,10 @@ jobs:
           # meant every release up to v5.0.0-beta.0 shipped green with the live agent suite
           # skipped. The `node` tier asks for LiveAgent, so an empty credential fails it.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The token the live GitHub suites read this repository with: the one every run is
+          # issued, so nothing has to be configured and a fork's dispatch has one too. The
+          # suites only read; the `node` tier asks for LiveGitHub, so a missing one fails it.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Read as data rather than interpolated into the script: a dispatch input is a string
           # somebody typed, and the one place it must not land is inside the shell this composes.
           # The tier's capabilities take the same route, because on a dispatch they ARE that

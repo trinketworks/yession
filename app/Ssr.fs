@@ -13,18 +13,7 @@ open System.Text.RegularExpressions
 open Yession.Domain
 open Yession.App
 open Lit
-
-// --- lit-html TemplateResult shape (read-only) ------------------------------------------
-
-/// A lit-html `TemplateResult` as it is shaped at runtime: the static parts, the hole values
-/// between them, and the brand lit-html puts on one (`1` for `html`, `2` for `svg`). The brand
-/// is what tells a template from any other object in a hole, and it is an option because on
-/// anything that is not a template it is absent.
-[<AllowNullLiteral>]
-type private LitTemplate =
-    abstract strings : string[]
-    abstract values : obj[]
-    abstract ``_$litType$`` : int option
+open Fable.LitExtras
 
 /// The binding syntax lit-html reads off the end of a static part — `@x=`, `.x=`, `?x=`, with
 /// or without the opening quote of the value. These carry a listener/property a string cannot.
@@ -49,34 +38,21 @@ let escapeAttr (s: string) =
 
 /// One hole's value, as text. The cases are the renderable types the template-hole rule
 /// admits (`TemplateHoles.fs`) — text, a template, a sequence of them, a number, a bool — and
-/// then what a string cannot carry: a listener, lit's `nothing`/`noChange` sentinels, any
-/// other object, all of which render as nothing. Every JavaScript kind is named by the F# type
-/// test that compiles to it, where this used to ask `typeof` in a macro and hand a number to
-/// `String()`. The order is the guard: `null` before anything a property is read off, text
-/// before the sequence arm — a string IS an `IEnumerable`, and that the probe the arm compiles
-/// to happens to answer no to one is a property of the library, not a rule. The position is
-/// the rule.
-let rec private renderValue (inAttr: bool) (v: obj) : string =
-    match v with
-    | null -> ""
-    | :? string as s -> if inAttr then escapeAttr s else escapeText s
-    | :? float as n -> string n
-    | :? bool as b -> if b then "true" else "false"
-    | candidate when (unbox<LitTemplate> candidate).``_$litType$``.IsSome ->
-        renderTemplate (unbox<LitTemplate> candidate)
-    // A JS array, a Fable list, a lazy `seq` — everything lit-html renders as a run of child
-    // parts. The test is the NON-GENERIC `IEnumerable` deliberately: Fable refuses a test
-    // against `seq<_>` or `IEnumerable<_>` outright ("Cannot type test (evals to false)", a
-    // compile error rather than a silent false), while this one compiles to the library's own
-    // iterability probe — which, unlike a `Symbol.iterator` macro, does not answer yes to a
-    // string.
-    | :? System.Collections.IEnumerable as items ->
-        items |> Seq.cast<obj> |> Seq.map (renderValue false) |> String.concat ""
-    | _ -> ""
+/// then what a string cannot carry, which renders as nothing. What KIND of value a hole holds
+/// is `Fable.LitExtras`' question, answered once per hole; this only says what each kind
+/// renders as.
+let rec private renderValue (inAttr: bool) (value: Value) : string =
+    match Hole.classify value with
+    | Hole.Text s -> if inAttr then escapeAttr s else escapeText s
+    | Hole.Number n -> string n
+    | Hole.Flag b -> if b then "true" else "false"
+    | Hole.Template parts -> renderParts parts
+    | Hole.Sequence items -> items |> Seq.map (renderValue false) |> String.concat ""
+    | Hole.Inert -> ""
 
-and private renderTemplate (template: LitTemplate) : string =
-    let strings = template.strings
-    let values = template.values
+and private renderParts (parts: Parts) : string =
+    let strings = parts.Statics
+    let values = parts.Values
     let sb = System.Text.StringBuilder ()
     for i in 0 .. values.Length - 1 do
         let s = strings.[i]
@@ -90,7 +66,7 @@ and private renderTemplate (template: LitTemplate) : string =
     sb.ToString ()
 
 /// Render a Fable.Lit template to an HTML string.
-let render (template: TemplateResult) : string = renderTemplate (unbox<LitTemplate> template)
+let render (template: TemplateResult) : string = renderParts (Parts.ofTemplate template)
 
 /// Render the client shell for `model` to a string (the view's `ViewActions` are no-ops —
 /// the handlers never fire during rendering).

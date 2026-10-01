@@ -33,13 +33,10 @@ open Thoth.Json.Net
 /// not this repository's business and has moved before. git's own stderr is left where it
 /// goes: on a box with no repository it says so once, and `repoRoot` says nothing below.
 ///
-/// `Fable.Node` types the answer as a string or a `Buffer`, because which one depends on the
-/// `encoding` option; with `utf8` named it is the string, and the one `unbox` says so here
-/// rather than in a match Fable cannot compile (a `Buffer` is an interface, so a type test
-/// on it evaluates to false).
+/// Text back through `Fable.NodeExtras`' `execSync`, which always asks Node for `utf8` and so
+/// is typed as the string that answers.
 let private gitToplevel () : string =
-    let options = jsOptions<Node.ChildProcess.ExecOptions> (fun o -> o.encoding <- Some "utf8")
-    unbox<string> (Node.Api.childProcess.execSync ("git rev-parse --show-toplevel", box options))
+    Fable.NodeExtras.SyncChildProcesses.execSync "git rev-parse --show-toplevel" Fable.NodeExtras.SyncOptions.none
 
 /// Nothing for a working directory git will not answer about — this file's subject is a
 /// committed document, and a box that cannot find one has not read it rather than read an
@@ -102,7 +99,7 @@ let private sandboxes : Decoder<(string * Declared) list> =
 /// A file this cannot read is a failure with the reason in it, not an empty list: an empty
 /// list is what a file that obeys the rule looks like, and the two must not read the same.
 let private commandsIn (text: string) : (string * string) list =
-    match Decode.fromString sandboxes (JS.JSON.stringify (Fable.Yaml.parse text)) with
+    match Decode.fromString sandboxes (Fable.Yaml.Plain.json (Fable.Yaml.parse text)) with
     | Error reason -> failwithf "yession.yaml is not a document this file can read: %s" reason
     | Ok declared ->
         [ for name, sandbox in declared do

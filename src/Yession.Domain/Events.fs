@@ -23,10 +23,11 @@ type EventEnvelope<'event> =
       Timestamp : DateTimeOffset
       Event     : 'event }
 
-/// The single, append-only session event type. New cases are added per delivery step;
-/// foundations define only `SessionCreated`.
+/// The single, append-only session event type. New cases are added per delivery step.
 type SessionEvent =
-    | SessionCreated of SessionCreated
+    /// This log's first process found nothing in it: the session is beginning. Its pair is
+    /// `SessionResumed`, and exactly one of the two is written at every boot.
+    | SessionStarted of SessionStarted
     // Control/presence facts appended by the Session Process on connect/disconnect (Step 03).
     | PeerJoined of PeerJoined
     | PeerLeft of PeerLeft
@@ -118,6 +119,9 @@ type SessionEvent =
     // starts; until this, only the starts were announced — so a file with a typo in it read
     // on the timeline exactly like a file nobody had written.
     | RepoConfigRefused of RepoConfigRefused
+    // A declaration that WAS honoured, and that an analyzer has something to say about
+    // (`ConfigAnalysis`): legal, and almost certainly not what its author meant.
+    | RepoConfigWarned of RepoConfigWarned
     // What a repo's file asks for, said when it CHANGES. A capability set is authored by
     // whoever can push to the checkout, so a `uses:` line added in a pull request takes
     // effect the next time anybody touches a repo — and did so silently.
@@ -161,6 +165,9 @@ type SessionEvent =
     // before needs to know why. So the question part C asked applies: not "did the agent
     // do it" but "does a future turn need to be told?".
     | McpServerAvailable of McpServerNoted
+    // The session process started over a log a previous one wrote: the session was away, and
+    // for how long. Written first thing at boot by the process itself.
+    | SessionResumed of SessionResumed
     | McpServerUnavailable of McpServerNoted
     // Watched pull requests: durable facts about PRs this session keeps an eye on. The
     // watch is an attributed act like a repo add; a transition is the session observing
@@ -171,8 +178,6 @@ type SessionEvent =
     | PrUnwatched of PrUnwatched
     | PrTransitioned of PrTransitioned
 
-and [<RequireQualifiedAccess>] SessionCreated =
-    { SessionId : SessionId }
 
 
 

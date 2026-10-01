@@ -164,13 +164,14 @@ let private launchTests =
 
 // A promise that is already rejected when the workflow gets to it — the shape every
 // backend produces routinely (a docker 404 for a container that is not there).
-[<Fable.Core.Emit("Promise.reject(new Error($0))")>]
-let private rejectedPromise (message: string) : JS.Promise<unit> = Fable.Core.Util.jsNative
+let private rejectedPromise (message: string) : JS.Promise<unit> =
+    JS.Constructors.Promise.reject (box (errorWith message))
 
 // The same, rejecting with nothing at all — legal JavaScript, and what a rejection whose
-// reason never reaches `raise` as a value looks like.
-[<Fable.Core.Emit("Promise.reject()")>]
-let private rejectedWithNothing () : JS.Promise<unit> = Fable.Core.Util.jsNative
+// reason never reaches `raise` as a value looks like. F#'s unit is JavaScript's
+// `undefined`, which is the reason `Promise.reject()` carries.
+let private rejectedWithNothing () : JS.Promise<unit> =
+    JS.Constructors.Promise.reject (box ())
 
 /// Count Node's unhandled-rejection reports, until the returned stop is called. Registering
 /// a listener is also what stops Node from killing the process over one, so the count is
@@ -180,7 +181,7 @@ let private watchUnhandledRejections () : (unit -> int) * (unit -> unit) =
     let mutable reported = 0
     // One closure, registered and removed by reference: `removeListener` only removes the
     // very function `on` was given.
-    let listener = fun (_: obj) -> reported <- reported + 1
+    let listener = fun () -> reported <- reported + 1
     Node.Api.``process``.on ("unhandledRejection", listener) |> ignore
     (fun () -> reported), (fun () -> Node.Api.``process``.removeListener ("unhandledRejection", listener) |> ignore)
 
@@ -661,7 +662,7 @@ let private sandboxPolicyTests =
                 Sandboxes.policyFor
                     SrtBackend (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
                     [ Mount { From = "/opt/tools"; At = "/opt/tools"; Mode = ResourceMountMode.Read }
-                      Variable ("LANG", "C.UTF-8") ]
+                      Variable ("LANG", VariableValue.Text "C.UTF-8") ]
                     Set.empty
                     EnvironmentSpec.defaults
                 |> expect
@@ -956,7 +957,36 @@ let private sandboxPolicyTests =
             Expect.equal
                 (Sandboxes.SrtSandbox.startFailure (fun path -> path <> "/usr/bin/rg") namedToolsConfig)
                 Sandboxes.HostCannotConfine
-                "that answer does not change while the process lives, so it is the one kept"
+                "that answer does not change while the process lives, so it is not asked again"
+
+        // A sandbox's srt manager runs in a process of its own and is told its config over a
+        // pipe. What it is told is the whole of its network policy, so a field the wire drops
+        // is a grant the sandbox silently lost — or, for a field whose absence means "allow",
+        // one it silently gained.
+        testCase "a config reaches its srt host as it was sent" <| fun () ->
+            let config =
+                { namedToolsConfig with
+                    AllowedDomains = [ "api.github.com" ]
+                    AllowUnixSockets = [ "/run/nix.sock" ]
+                    MitmProxy = Some { Interception.Socket = "/tmp/p.sock"; Interception.Hosts = [ "api.github.com" ] } }
+            let sent = Sandboxes.SrtSandbox.HostWire.Start config
+            Expect.equal
+                (Sandboxes.SrtSandbox.HostWire.parseRequest (Sandboxes.SrtSandbox.HostWire.request sent))
+                (Some sent)
+                "every field survives the pipe"
+
+        testCase "a confined command line reaches the session as the host sent it" <| fun () ->
+            let sent = Sandboxes.SrtSandbox.HostWire.Confined (7, [ "/usr/bin/bwrap"; "--"; "sh"; "-c"; "echo 'two words'" ])
+            Expect.equal
+                (Sandboxes.SrtSandbox.HostWire.parseReply (Sandboxes.SrtSandbox.HostWire.reply sent))
+                (Some sent)
+                "the argv, and which wrap it answers"
+
+        testCase "a line the host printed for a person is not a reply" <| fun () ->
+            Expect.equal
+                (Sandboxes.SrtSandbox.HostWire.parseReply "[SandboxDebug] starting proxy")
+                None
+                "it is passed on as a log line rather than read as an answer"
 
         testCase "the srt start policy waits out what settled nothing and believes what did not" <| fun () ->
             // The pace and the decision as VALUES: three attempts a quarter-second apart for
@@ -1241,7 +1271,7 @@ let private sandboxPolicyTests =
                     [ Mount { From = "/nix"; At = "/nix"; Mode = ResourceMountMode.Read }
                       Socket "/nix/var/nix/daemon-socket"
                       Endpoint "cache.nixos.org"
-                      Variable ("SSL_CERT_FILE", "/nix/ca.crt") ]
+                      Variable ("SSL_CERT_FILE", VariableValue.Text "/nix/ca.crt") ]
                     Set.empty
                     EnvironmentSpec.defaults
                 |> expect
@@ -1976,6 +2006,51 @@ let private testWaitTests =
             }
     ]
 
+// The OTHER other half: a run that stops early. A case that stops being scheduled is not
+// work, so Node's loop empties and the process leaves with code 0 having printed no verdict —
+// the run reads as a pass. Pyxpecto exits on every verdict it reaches, so an ending it did not
+// choose is already the fault; `RunEnd` is what says so, and what names the case.
+let private runEndTests =
+    testList "The test harness's ending (a run that stopped early)" [
+        testCaseAsync "an ordinary ending is not complained about" <|
+            async { Expect.isNone (RunEnd.ending false []) "nothing in flight, nothing to say" }
+
+        testCaseAsync "a case still running when the process leaves fails the run, and is named" <|
+            async {
+                match RunEnd.ending false [ "Yession - Domain - waits for ever" ] with
+                | Some complaint ->
+                    Expect.isTrue (complaint.Contains "Yession - Domain - waits for ever")
+                        "the case nobody would otherwise know to look at"
+                | None -> failwith "expected a case that never settled to fail the run"
+            }
+
+        testCaseAsync "a loop that emptied with nothing in flight is still a run that did not happen" <|
+            async {
+                Expect.isSome (RunEnd.ending true [])
+                    "a finished run exits on its own verdict, so a drained loop reached none"
+            }
+
+        testCaseAsync "a case is named while it runs, and let go when it finishes" <|
+            async {
+                let mutable seen = []
+                let probe =
+                    Fable.Pyxpecto.Model.AsyncTest (
+                        "waits",
+                        async { seen <- RunEnd.stillRunning () },
+                        Fable.Pyxpecto.Model.FocusState.Normal)
+                let wrapped =
+                    RunEnd.guarded (
+                        Fable.Pyxpecto.Model.TestList ("probe", [ probe ], Fable.Pyxpecto.Model.FocusState.Normal))
+                match wrapped with
+                | Fable.Pyxpecto.Model.TestList (_, [ Fable.Pyxpecto.Model.AsyncTest (_, body, _) ], _) ->
+                    do! body
+                    Expect.isTrue (seen |> List.contains "probe - waits") "in flight while it ran"
+                    Expect.isFalse (RunEnd.stillRunning () |> List.contains "probe - waits")
+                        "and gone once it finished"
+                | other -> failwithf "expected the tree back in the same shape, got %A" other
+            }
+    ]
+
 let private commandFoldTests =
     testList "Command execution (local)" [
         testCaseAsync "a host-sandbox command never inherits the session's credentials (leak regression)" <|
@@ -2247,9 +2322,14 @@ let private persistenceTests =
                 let managed2 = (m2.Registered ()) |> List.head
                 let! after = managed2.Host.Log.Read None Int32.MaxValue
                 Expect.equal
-                    (after.Events |> List.map (fun e -> e.Offset, e.Event))
+                    (after.Events |> List.truncate (List.length before.Events) |> List.map (fun e -> e.Offset, e.Event))
                     (before.Events |> List.map (fun e -> e.Offset, e.Event))
                     "the reopened log replays the identical history"
+                // ...and the second life's first word is that it resumed: it adds to the
+                // history, and never rewrites it.
+                match after.Events |> List.skip (List.length before.Events) |> List.map (fun e -> e.Event) with
+                | SessionResumed _ :: _ -> ()
+                | other -> failwithf "expected the second life to open by saying it resumed, got %A" other
 
                 // A reconnecting client catches up on the persisted conversation, and
                 // new appends continue the offset sequence.
@@ -2272,10 +2352,15 @@ let private persistenceTests =
 // are asked here rather than in the tier that can really spawn something.
 // -----------------------------------------------------------------------------
 
-/// A spawn request as the SDK builds one. Only the field under test is set; the rest
-/// are absent, which is what the SDK leaves them when it has nothing to say.
-let private spawnRequest (fields: (string * obj) list) : Fable.ClaudeAgentSdk.SpawnOptions =
-    unbox<Fable.ClaudeAgentSdk.SpawnOptions> (Fable.Core.JsInterop.createObj fields)
+/// A spawn request naming a directory, as the SDK builds one. The directory is the field
+/// under test; the rest say nothing a spawner would act on.
+let private spawnRequest (cwd: string option) : Fable.ClaudeAgentSdk.SpawnOptions =
+    { new Fable.ClaudeAgentSdk.SpawnOptions with
+        member _.command = "true"
+        member _.args = [||]
+        member _.cwd = cwd
+        member _.env = Fable.ClaudeAgentSdk.Environment.ofMap Map.empty
+        member _.signal = None }
 
 let private agentSpawnerTests =
     testList "The agent CLI's spawner seam (pure)" [
@@ -2285,13 +2370,13 @@ let private agentSpawnerTests =
             // field out, and `spawn` given `cwd: ''` fails with ENOENT rather than
             // inheriting — so the CLI would not start at all.
             Expect.equal
-                (Sandboxes.AgentSandbox.startDirectory (spawnRequest [ "cwd", box "" ]))
+                (Sandboxes.AgentSandbox.startDirectory (spawnRequest (Some "")))
                 None
                 "an empty directory is no directory"
 
         testCase "the directory a request named is where the child starts" <| fun () ->
             Expect.equal
-                (Sandboxes.AgentSandbox.startDirectory (spawnRequest [ "cwd", box "/work/checkout" ]))
+                (Sandboxes.AgentSandbox.startDirectory (spawnRequest (Some "/work/checkout")))
                 (Some "/work/checkout")
                 "the directory the SDK asked for"
 
@@ -2305,12 +2390,27 @@ let private agentSpawnerTests =
             Expect.isTrue standin.Killed "the kill was asked for, whether or not anything died"
 
         testCase "a stand-in has no exit code until the child reports one" <| fun () ->
-            // `null`, not `undefined`: the SDK tests the field against `null`, so the answer
-            // for "still running" has to be the one Node gives.
             let standin = Sandboxes.AgentSandbox.Standin ()
-            Expect.isTrue (isNull standin.ExitCode) "nothing has exited"
-            standin.Exited (box 0)
-            Expect.equal (unbox<int> standin.ExitCode) 0 "the code the child ended with"
+            Expect.isNone standin.ExitCode "nothing has exited"
+            standin.Exited (Some 0)
+            Expect.equal standin.ExitCode (Some 0) "the code the child ended with"
+
+        testCase "a process standing in for a child answers a code it does not have as null" <| fun () ->
+            // `null`, not `undefined`: the SDK tests the field with `=== null`, so the answer
+            // for "still running" has to be the one Node gives — and `None` alone is
+            // `undefined`, which the SDK reads as a process that has exited and whose stdin it
+            // then refuses to write. `typeof` is what tells the two apart.
+            let proxy =
+                Fable.ClaudeAgentSdk.SpawnedProcess.standingIn
+                    (Node.Api.stream.PassThrough.Create<string> ())
+                    (Node.Api.stream.PassThrough.Create<string> ())
+                    (Node.Api.stream.PassThrough.Create<string> ())
+                    (fun () -> false)
+                    (fun () -> None)
+                    (fun _ -> true)
+                    (createRelay ())
+
+            Expect.equal (Fable.Core.JsInterop.jsTypeof (box proxy.exitCode)) "object" "Node's null, not undefined"
 
         testCase "a kill asked for before the child arrives reaches it when it does" <| fun () ->
             // srt's wrap is asynchronous and the SDK's seam is not, so there is a window in
@@ -2348,10 +2448,22 @@ let private nodePath () : string = Node.Api.``process``.execPath
 
 /// The FIRING end of an abort, which the product never holds: the signals it sees come from
 /// the agent SDK. Here because a spawner that listens to one needs something to listen to.
-/// Call a spawner the way the SDK does: one request in, one process out.
-let private askSpawner (spawner: obj) (fields: (string * obj) list) : Fable.ClaudeAgentSdk.SpawnedProcess =
-    (unbox<Func<Fable.ClaudeAgentSdk.SpawnOptions, Fable.ClaudeAgentSdk.SpawnedProcess>> spawner)
-        .Invoke (unbox<Fable.ClaudeAgentSdk.SpawnOptions> (Fable.Core.JsInterop.createObj fields))
+/// Call a spawner the way the SDK does: one request in, one process out. No directory, so
+/// the child starts where this process is.
+let private askSpawner
+    (spawner: Fable.ClaudeAgentSdk.Spawner)
+    (command: string)
+    (arguments: string array)
+    (env: Map<string, string>)
+    (signal: AbortSignal option)
+    : Fable.ClaudeAgentSdk.SpawnedProcess =
+    spawner.Invoke
+        { new Fable.ClaudeAgentSdk.SpawnOptions with
+            member _.command = command
+            member _.args = arguments
+            member _.cwd = None
+            member _.env = Fable.ClaudeAgentSdk.Environment.ofMap env
+            member _.signal = signal }
 
 /// A wrap that confines nothing: the argv it was handed, back. The srt spawner takes its wrap
 /// as a PARAMETER, so a case about the SEAM needs a wrap rather than a sandbox — which is why
@@ -2363,23 +2475,27 @@ let private passthroughWrap
     : Async<string list> =
     async { return command :: arguments }
 
+/// The signal a spawned process ended by, as its `exit` event reports it: `None` until it
+/// has exited, then `Some` of whatever signal took it (`None` inside for a process that
+/// ended with a code). Listening from the moment it is called, so call it straight after
+/// the spawn — an exit is announced once.
+let private endingSignal (spawned: Fable.ClaudeAgentSdk.SpawnedProcess) : unit -> string option option =
+    let ended = ref None
+    Fable.ClaudeAgentSdk.SpawnedProcess.onExit spawned (fun _ signal -> ended.Value <- Some signal)
+    fun () -> ended.Value
+
 /// What a spawner answers for `killed` once the SDK's forwarded abort has fired — waited out
 /// to the child's exit, so the answer is read after the teardown it is about and no sleeper
 /// outlives the case.
-let private killedAfterAbort (spawner: obj) : Async<bool> =
+let private killedAfterAbort (spawner: Fable.ClaudeAgentSdk.Spawner) : Async<bool> =
     async {
         let controller = abortController ()
 
         let spawned =
-            askSpawner
-                spawner
-                [ "command", box (nodePath ())
-                  "args", box [| "-e"; "setTimeout(() => {}, 60000)" |]
-                  "env", Fable.Core.JsInterop.createObj []
-                  "signal", controller.signal ]
+            askSpawner spawner (nodePath ()) [| "-e"; "setTimeout(() => {}, 60000)" |] Map.empty (Some controller.signal)
 
         let exited = ref false
-        spawned.on ("exit", box (Func<obj, obj, unit> (fun _ _ -> exited.Value <- true)))
+        Fable.ClaudeAgentSdk.SpawnedProcess.onExit spawned (fun _ _ -> exited.Value <- true)
 
         controller.abort ()
         do! Support.waitUntilWithin 5000 "the child exits" (fun () -> exited.Value)
@@ -2393,12 +2509,14 @@ let private agentSpawnerPortsTests =
             let spawned =
                 askSpawner
                     (Sandboxes.AgentSandbox.hostClaudeSpawner ())
-                    [ "command", box (nodePath ())
-                      "args", box [| "-e"; "process.exit(process.env.YESSION_MARK === 'set' ? 4 : 5)" |]
-                      "env", Fable.Core.JsInterop.createObj [ "YESSION_MARK", box "set" ] ]
+                    (nodePath ())
+                    [| "-e"; "process.exit(process.env.YESSION_MARK === 'set' ? 4 : 5)" |]
+                    (Map.ofList [ "YESSION_MARK", "set" ])
+                    None
 
-            do! Support.waitUntilWithin 5000 "the child exits" (fun () -> not (isNull spawned.exitCode))
-            Expect.equal (unbox<int> spawned.exitCode) 4 "the CLI ran with exactly the env the request carried"
+            let exitCode () = Fable.ClaudeAgentSdk.ExitCode.toOption spawned.exitCode
+            do! Support.waitUntilWithin 5000 "the child exits" (fun () -> (exitCode ()).IsSome)
+            Expect.equal (exitCode ()) (Some 4) "the CLI ran with exactly the env the request carried"
         }
 
         // The SDK's forwarded abort is how a turn is stopped, and what it has to stop is the
@@ -2410,21 +2528,17 @@ let private agentSpawnerPortsTests =
             let spawned =
                 askSpawner
                     (Sandboxes.AgentSandbox.hostClaudeSpawner ())
-                    [ "command", box (nodePath ())
-                      "args", box [| "-e"; "setTimeout(() => {}, 60000)" |]
-                      "env", Fable.Core.JsInterop.createObj []
-                      "signal", controller.signal ]
+                    (nodePath ())
+                    [| "-e"; "setTimeout(() => {}, 60000)" |]
+                    Map.empty
+                    (Some controller.signal)
 
-            let child = unbox<Node.ChildProcess.ChildProcess> spawned
+            let ending = endingSignal spawned
             controller.abort ()
 
-            do! Support.waitUntilWithin 5000 "the child is signalled" (fun () ->
-                    (Fable.NodeExtras.ChildProcesses.signalCode child).IsSome)
+            do! Support.waitUntilWithin 5000 "the child exits" (fun () -> (ending ()).IsSome)
 
-            Expect.equal
-                (Fable.NodeExtras.ChildProcesses.signalCode child)
-                (Some "SIGKILL")
-                "the forwarded abort took it down"
+            Expect.equal (ending ()) (Some (Some "SIGKILL")) "the forwarded abort took it down"
         }
 
         // The other branch, and the one listening cannot reach: a signal that fired before
@@ -2436,20 +2550,16 @@ let private agentSpawnerPortsTests =
             let spawned =
                 askSpawner
                     (Sandboxes.AgentSandbox.hostClaudeSpawner ())
-                    [ "command", box (nodePath ())
-                      "args", box [| "-e"; "setTimeout(() => {}, 60000)" |]
-                      "env", Fable.Core.JsInterop.createObj []
-                      "signal", controller.signal ]
+                    (nodePath ())
+                    [| "-e"; "setTimeout(() => {}, 60000)" |]
+                    Map.empty
+                    (Some controller.signal)
 
-            let child = unbox<Node.ChildProcess.ChildProcess> spawned
+            let ending = endingSignal spawned
 
-            do! Support.waitUntilWithin 5000 "the child is signalled" (fun () ->
-                    (Fable.NodeExtras.ChildProcesses.signalCode child).IsSome)
+            do! Support.waitUntilWithin 5000 "the child exits" (fun () -> (ending ()).IsSome)
 
-            Expect.equal
-                (Fable.NodeExtras.ChildProcesses.signalCode child)
-                (Some "SIGKILL")
-                "an already-fired signal is still a kill"
+            Expect.equal (ending ()) (Some (Some "SIGKILL")) "an already-fired signal is still a kill"
         }
 
         // `killed` is the one fact the SDK reads to know whether it has already asked a
@@ -2477,6 +2587,7 @@ let tests =
         environmentRecordingTests
         testEnvTests
         testWaitTests
+        runEndTests
         commandFoldTests
         acceptanceTests
         agentSpawnerTests

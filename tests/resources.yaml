@@ -1,0 +1,11 @@
+# The resources profile every session runs under when this repository runs one itself: the
+# suites (`check`) and a local `start` / `dev`. A session's own sandboxes are the ones its
+# operator declares, and there is no other `default` — so this declares the one a terminal
+# that names nothing lands in, and offers the GitHub connection it wants.
+version: 1
+resources:
+  github:
+    connection: { github: [ git, api ] }
+sandboxes:
+  default:
+    wants: [ github ]

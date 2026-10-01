@@ -50,23 +50,23 @@ let private discard (path: string) : unit =
 /// to hold the file in memory.
 let private digestOf (path: string) : ContentDigest option =
     try
-        let hash = crypto.createHash "sha256"
+        let hash = Digests.hash "sha256"
         let fd = fs.openSync (U2.Case1 path, U2.Case1 "r")
         try
             let chunk = 1 <<< 20
-            let buffer = JS.Constructors.Uint8Array.Create chunk
+            let buffer = buffer.Buffer.alloc chunk
             // The read position is carried rather than left to the descriptor's own cursor:
             // the binding wants one, and an explicit offset is what makes this loop's
             // termination readable — it ends when a read at the end returns nothing.
             let mutable pos = 0.
             let mutable go = true
             while go do
-                let read = fs.readSync (fd, unbox buffer, 0., float chunk, pos)
+                let read = fs.readSync (fd, buffer, 0., float chunk, pos)
                 if read <= 0. then go <- false
                 else
                     pos <- pos + read
                     hash.update (buffer.slice (0, int read)) |> ignore
-            ContentDigest.create (unbox<string> (hash.digest "hex")) |> Result.toOption
+            ContentDigest.create (hash.digest BinaryToTextEncoding.Hex) |> Result.toOption
         finally
             fs.closeSync fd
     with _ -> None
@@ -108,7 +108,7 @@ let nextVersion (artifactsDir: string) (name: string) (actor: ActorRef) : Result
     | Some latest -> ArtifactRef.next stamp latest
 
 /// The name a share takes when the caller did not say one: the file's own, as the last segment
-/// of the path it came from. So `share_artifact` of `$TMPDIR/chart.png` is `chart.png`, and the
+/// of the path it came from. So `share_artifact` of `out/chart.png` is `chart.png`, and the
 /// extension — which is what the media type is read from — survives by default rather than by
 /// the agent remembering to repeat it.
 let nameOfPath (path: string) : string =
@@ -209,16 +209,15 @@ let private headersFor (ref: ArtifactRef) (bytes: int64) =
         match ContentKind.ofMediaType (ArtifactRef.mediaType ref) with
         | ContentKind.Image media -> media, sprintf "inline; filename=\"%s\"" name
         | ContentKind.Download -> "application/octet-stream", sprintf "attachment; filename=\"%s\"" name
-    createObj
-        [ "content-type", box contentType
-          "content-length", box (string bytes)
-          "content-disposition", box disposition
-          "cache-control", box CachePolicy.contentVersion
-          "x-content-type-options", box "nosniff"
-          "content-security-policy", box "default-src 'none'; sandbox" ]
+    [ ResponseHeader.ContentType contentType
+      ResponseHeader.ContentLength bytes
+      ResponseHeader.ContentDisposition disposition
+      ResponseHeader.CacheControl CachePolicy.contentVersion
+      ResponseHeader.ContentTypeOptions "nosniff"
+      ResponseHeader.ContentSecurityPolicy "default-src 'none'; sandbox" ]
 
 let private notFound (res: ServerResponse) =
-    res.writeHead (404, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+    res.writeHead (404, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
     res.``end`` "not found"
 
 /// One version's bytes, piped rather than read: this is allowed to be 100 MB, and a slow
@@ -228,7 +227,7 @@ let private serveVersion (artifactsDir: string) (ref: ArtifactRef) (res: ServerR
     match (if containedIn artifactsDir path then sizeOf path else None) with
     | None -> notFound res
     | Some bytes ->
-        res.writeHead (200, headersFor ref bytes) |> ignore
+        res.writeHead (200, headersFor ref bytes)
         let file = openFileStream path
         // The head has gone out, so there is no status left to say this with: a read that
         // fails now can only end the response early, which is what a truncated body is. The
@@ -253,7 +252,7 @@ let routes (auth: SessionAuth.Auth) (artifactsDir: string) (mount: string) : Inc
         match SessionRoute.parseUnder mount req.``method`` (req.url.Split('?').[0]) with
         | Some (SessionRoute.Content ref) ->
             if (auth.IdentityOf req).IsNone then
-                res.writeHead (401, createObj [ "content-type", box "text/plain"; "cache-control", box "no-store" ]) |> ignore
+                res.writeHead (401, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
                 res.``end`` "unauthorized"
             else
                 match ContentRef.segments ref with
@@ -271,7 +270,10 @@ let routes (auth: SessionAuth.Auth) (artifactsDir: string) (mount: string) : Inc
                     match ArtifactRef.latest (versions artifactsDir name) with
                     | Some latest ->
                         let target = RelativeUrl.under mount (SessionRoute.relative (SessionRoute.Content (ArtifactRef.content latest)))
-                        res.writeHead (307, createObj [ "location", box target; "cache-control", box CachePolicy.contentLatest ]) |> ignore
+                        res.writeHead (
+                            307,
+                            [ ResponseHeader.Location target
+                              ResponseHeader.CacheControl CachePolicy.contentLatest ])
                         res.``end`` ""
                     | None -> notFound res
                 // The content root has one directory in it so far. A `repos/…` path is a real
@@ -293,6 +295,42 @@ type SessionArtifacts =
       Versions : string -> ArtifactRef list
       /// Every name, with its latest version.
       Names : unit -> (string * ArtifactRef) list }
+
+/// What `weigh` asks the sandbox. Every answer it can give is one this side named: left to
+/// report for itself the shell says `sh: 1: cannot open /x: No such file`, which is true, and
+/// written for whoever wrote the shell rather than for the agent that must now decide what to
+/// do instead. These exit codes are that decision, taken here where it can be tested.
+let weighScript =
+    "if [ ! -e \"$1\" ]; then exit 3
+     elif [ -d \"$1\" ]; then exit 4
+     elif [ ! -r \"$1\" ]; then exit 5
+     else wc -c < \"$1\"
+     fi"
+
+/// How big the file is, or why the agent cannot have it — every refusal names the path, the
+/// sandbox it was looked for in, and what to do instead, because the agent reads this and acts.
+let weighed (sandbox: SandboxRef) (path: string) (code: int, out: string, err: string) : Result<int64, string> =
+    match code with
+    | 0 ->
+        match System.Int64.TryParse ((out: string).Trim ()) with
+        | true, bytes -> Ok bytes
+        | false, _ -> Error (sprintf "could not tell how big %s is" path)
+    | 3 ->
+        Error (
+            sprintf
+                "there is no %s in sandbox '%s' — share a path that exists there, and name the sandbox if the file is in another one"
+                path
+                (SandboxRef.render sandbox))
+    | 4 ->
+        Error (
+            sprintf
+                "%s is a directory, and an artifact is one file — share the file inside it, or archive it and share that"
+                path)
+    | 5 -> Error (sprintf "%s is not readable in sandbox '%s'" path (SandboxRef.render sandbox))
+    | _ ->
+        match (err: string).Trim () with
+        | "" -> Error (sprintf "%s is not a file sandbox '%s' can read" path (SandboxRef.render sandbox))
+        | said -> Error (sprintf "could not tell how big %s is: %s" path said)
 
 let unavailable : SessionArtifacts =
     { SessionArtifacts.Share = fun _ _ _ _ -> async { return Error "this session has nowhere to keep artifacts" }
@@ -355,30 +393,26 @@ let create
     /// arrives after 100 MB has been written is a refusal that already cost what it was for.
     let weigh (sandbox: SandboxRef) (path: string) : Async<Result<int64, string>> =
         async {
-            match! run sandbox "an artifact was shared" "wc -c < \"$1\"" [ path ] with
+            match! run sandbox "an artifact was shared" weighScript [ path ] with
             | Error reason -> return Error reason
-            | Ok (0, out, _) ->
-                match System.Int64.TryParse (out.Trim ()) with
-                | true, bytes -> return Ok bytes
-                | false, _ -> return Error (sprintf "could not tell how big %s is" path)
-            | Ok (_, _, err) ->
-                let said = err.Trim ()
-                return
-                    Error (
-                        if said = "" then sprintf "%s is not a file this sandbox can read" path
-                        else said)
+            | Ok answer -> return weighed sandbox path answer
         }
 
     /// The bytes, copied by the SANDBOX into the store — which it can do because the store is
     /// mounted there, and this process could not do because under docker the source is inside a
     /// container it cannot read. Landed under a `.part` leaf, so what appears at the version's
     /// own address appears whole (the rename is this side's, below).
-    let copyIn (sandbox: SandboxRef) (source: string) (ref: ArtifactRef) : Async<Result<unit, string>> =
+    ///
+    /// It answers with the path it told the sandbox to write to, so the caller that then looks
+    /// for the bytes can say where they were sent when they are not there. Nobody else builds
+    /// that string: a refusal naming a second spelling of it would be a refusal about a path
+    /// nothing wrote.
+    let copyIn (sandbox: SandboxRef) (source: string) (ref: ArtifactRef) : Async<Result<string, string>> =
         async {
             let target = sprintf "%s/%s/%s.part" (artifactsPathIn sandbox) (ArtifactRef.name ref) (ArtifactRef.leaf ref)
             match! run sandbox "an artifact was shared" "mkdir -p -- \"$(dirname -- \"$2\")\" && cp -- \"$1\" \"$2\"" [ source; target ] with
             | Error reason -> return Error reason
-            | Ok (0, _, _) -> return Ok ()
+            | Ok (0, _, _) -> return Ok target
             | Ok (_, _, err) ->
                 let said = err.Trim ()
                 return Error (if said = "" then sprintf "copying %s into the artifacts store failed" source else said)
@@ -403,7 +437,7 @@ let create
                 | Ok _ ->
                     match! copyIn sandbox source ref with
                     | Error reason -> return Error reason
-                    | Ok () ->
+                    | Ok target ->
                         let landed = pathOf artifactsDir ref
                         let part = landed + ".part"
                         // What ARRIVED, measured on this side. The check above refused a file that
@@ -412,7 +446,21 @@ let create
                         // something else — and it is the one that guards the bytes a browser will
                         // be served.
                         match sizeOf part with
-                        | None -> return Error (sprintf "nothing arrived for %s" name)
+                        // Both paths, said out loud. This is the one refusal whose cause is
+                        // entirely outside what either side can see on its own — the copy
+                        // succeeded and the bytes are not here — so the reader's only question
+                        // is which store the sandbox was writing into, and the two strings
+                        // answer it: a host-shaped path in a message about a container is the
+                        // whole diagnosis, and it cost a day's archaeology the once it shipped.
+                        | None ->
+                            return
+                                Error (
+                                    sprintf
+                                        "nothing arrived for %s: sandbox '%s' reported copying it to %s, and there is nothing at %s on this side"
+                                        name
+                                        (SandboxRef.render sandbox)
+                                        target
+                                        part)
                         | Some landedBytes when landedBytes > cap ->
                             discard part
                             return

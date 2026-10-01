@@ -78,7 +78,7 @@ let tests =
                 let checkConnected, connected = waiterFor (fun m -> m.Connection = Connected)
                 let checkReconnecting, reconnecting = waiterFor (fun m -> m.Connection = Reconnecting)
                 let dispatch msg =
-                    model <- ClientModel.update msg model
+                    model <- Support.step msg model
                     checkConnected model
                     checkReconnecting model
 
@@ -90,7 +90,12 @@ let tests =
                 do! connected
                 Expect.equal model.Connection Connected "model reaches Connected"
                 Expect.equal model.Peer.DisplayName "Grace" "assigned display name reflected"
-                Expect.equal model.EventConsumer.LatestKnownOffset (Some EventOffset.zero) "latest-known offset = joined offset 0"
+                // The session's own start is offset 0, written before any peer can be accepted,
+                // so the offset a joiner is told — and catches up to — is the one past it.
+                Expect.equal
+                    model.EventConsumer.LatestKnownOffset
+                    (EventOffset.create 1L |> Result.toOption)
+                    "latest-known offset = the log's end when this peer joined"
                 Expect.equal model.EventConsumer.LastProcessedOffset None "nothing consumed yet"
                 Expect.isTrue model.EventConsumer.IsCatchingUp "catch-up active while behind the known offset"
 
@@ -98,7 +103,7 @@ let tests =
                 // catch-up has lasted long enough to be worth reporting, which is the only
                 // state that shows them (a catch-up too brief to wait on is silent, so that
                 // sending a message does not flicker the status).
-                let html = Support.render (ClientModel.update (CatchUpSlowMsg true) model)
+                let html = Support.render (Support.step (CatchUpSlowMsg true) model)
                 Expect.isTrue (html.Contains Dom.Hooks.lastProcessedOffset) "last-processed offset display rendered"
                 Expect.isTrue (html.Contains Dom.Hooks.latestKnownOffset) "latest-known offset display rendered"
                 Expect.isTrue (html.Contains Dom.Hooks.catchUp) "catch-up indicator rendered"
