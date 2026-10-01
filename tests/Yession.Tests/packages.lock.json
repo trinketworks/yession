@@ -342,6 +342,7 @@
       "yession.peer": {
         "type": "Project",
         "dependencies": {
+          "Fable.NodeExtras": "[1.0.0, )",
           "Yession.Host": "[1.0.0, )"
         }
       },

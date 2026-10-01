@@ -34,9 +34,6 @@ let private user msg = Ylmish.Program.Message.User msg
 /// event-driven `WaitFor` that resolves the first time the model satisfies a predicate.
 module Harness =
 
-    [<Fable.Core.Emit("queueMicrotask($0)")>]
-    let private defer (f: unit -> unit) : unit = Fable.Core.Util.jsNative
-
     /// How long a single `WaitFor` may wait before it is a FAILURE rather than a wait.
     ///
     /// A condition that never arrives used to hang for ever, and the run's own budget
@@ -74,7 +71,7 @@ module Harness =
             // a continuation that dispatches synchronously from here would only enqueue
             // (ring buffer) — its Model() reads would then see stale state. Deferring
             // lets the loop drain first, so awaited WaitFor + Dispatch compose safely.
-            fire |> List.iter (fun (_, resume) -> defer resume)
+            fire |> List.iter (fun (_, resume) -> Fable.NodeExtras.Microtasks.queue resume)
         Program.withSetState setState program |> Program.run
         { Model = fun () -> model
           Dispatch = fun msg -> dispatch msg

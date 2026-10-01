@@ -19,6 +19,8 @@
     <!-- For `WebRtc.connect`, which is the client half and lives in `app/` because the Host
          was the first thing to need a data channel. -->
     <ProjectReference Include="../../app/Yession.Host.fsproj" />
+    <!-- For `Microtasks.queue`, which the harness resumes a waiter on. -->
+    <ProjectReference Include="../Fable.NodeExtras/Fable.NodeExtras.fsproj" />
   </ItemGroup>
 
 </Project>
