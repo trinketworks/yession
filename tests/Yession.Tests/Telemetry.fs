@@ -229,7 +229,10 @@ let private emitterTests =
         testCaseAsync "a dead OTLP endpoint never throws on Emit; Shutdown flushes cleanly" <|
             async {
                 let sessionId = SessionId.create "sess-z" |> expect
-                let dead = Telemetry.createOtlp sessionId "http://127.0.0.1:1/v1/logs"
+                // A deadline shorter than the SDK's first backoff, so the refused connect is
+                // given up on rather than retried for seven seconds: what is under test is that
+                // the failure stays inside the emitter, not how long the SDK keeps trying.
+                let dead = Telemetry.createOtlp sessionId "http://127.0.0.1:1/v1/logs" (System.TimeSpan.FromMilliseconds 100.0)
                 dead.Emit (AgentTurnId.create "t2" |> expect)
                     { InputTokens = 2; OutputTokens = 2; CacheReadTokens = 0; CacheCreationTokens = 0; Models = [] }
                 do! dead.Shutdown () |> Interop.awaitPromise
@@ -252,7 +255,7 @@ let private forwardingTests =
             async {
                 let! stub = OtlpStub.start ()
                 let sessionId = SessionId.create "rt-sess" |> expect
-                let emitter = Telemetry.createOtlp sessionId stub.Url
+                let emitter = Telemetry.createOtlp sessionId stub.Url (System.TimeSpan.FromSeconds 10.0)
                 emitter.Emit (AgentTurnId.create "rt-turn" |> expect)
                     { InputTokens = 42; OutputTokens = 9; CacheReadTokens = 4; CacheCreationTokens = 6
                       Models = [ ranAll "claude-opus-4-8" 42 9 4 6 ] }

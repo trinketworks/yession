@@ -108,6 +108,7 @@ type private OtlpHeaders = interface end
 type private OtlpExporterConfig =
     abstract url : string with get, set
     abstract headers : OtlpHeaders with get, set
+    abstract timeoutMillis : float with get, set
 
 type private LoggerProviderClass =
     [<EmitConstructor>]
@@ -218,11 +219,15 @@ let simpleProcessor (exporter: LogRecordExporter) : LogRecordProcessor =
     simpleProcessorClass.Create (jsOptions<ProcessorConfig> (fun c -> c.exporter <- exporter))
 
 /// OTLP/HTTP logs exporter (JSON) posting to `url`, with the given headers (name → value).
-let otlpLogExporter (url: string) (headers: Map<string, string>) : LogRecordExporter =
+///
+/// `deadline` bounds one export, retries included: the SDK retries a refused connect with a
+/// backoff starting at a second, and stops once the next attempt would land past it.
+let otlpLogExporter (url: string) (headers: Map<string, string>) (deadline: System.TimeSpan) : LogRecordExporter =
     otlpExporterClass.Create (
         jsOptions<OtlpExporterConfig> (fun c ->
             c.url <- url
-            c.headers <- flat [ for KeyValue (name, value) in headers -> name, box value ]))
+            c.headers <- flat [ for KeyValue (name, value) in headers -> name, box value ]
+            c.timeoutMillis <- deadline.TotalMilliseconds))
 
 /// OTLP/HTTP logs exporter (JSON) self-configured from the environment — no explicit url:
 /// the SDK reads `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`/`OTEL_EXPORTER_OTLP_ENDPOINT` (+ `_HEADERS`).
