@@ -662,7 +662,7 @@ let private sandboxPolicyTests =
                 Sandboxes.policyFor
                     SrtBackend (Sandboxes.limitsFor SrtBackend Node.Base.Platform.Darwin) Map.empty Map.empty (Some "/ws") None (Some "/ws/home")
                     [ Mount { From = "/opt/tools"; At = "/opt/tools"; Mode = ResourceMountMode.Read }
-                      Variable ("LANG", "C.UTF-8") ]
+                      Variable ("LANG", VariableValue.Text "C.UTF-8") ]
                     Set.empty
                     EnvironmentSpec.defaults
                 |> expect
@@ -1271,7 +1271,7 @@ let private sandboxPolicyTests =
                     [ Mount { From = "/nix"; At = "/nix"; Mode = ResourceMountMode.Read }
                       Socket "/nix/var/nix/daemon-socket"
                       Endpoint "cache.nixos.org"
-                      Variable ("SSL_CERT_FILE", "/nix/ca.crt") ]
+                      Variable ("SSL_CERT_FILE", VariableValue.Text "/nix/ca.crt") ]
                     Set.empty
                     EnvironmentSpec.defaults
                 |> expect

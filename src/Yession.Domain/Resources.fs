@@ -91,6 +91,30 @@ module ConnectionRoute =
                     (all |> List.map name |> String.concat " or ")
             )
 
+/// What one granted variable holds. Text is set as written; the other two are things only
+/// the session can supply, and supplies through the same machinery a repo's declaration uses
+/// (`WorkSandboxes`): a composed value has its `${proxy.…}` provided before the sandbox is
+/// built, and a token is lent to each command for the act it runs as.
+///
+/// Typed rather than left as text that happens to contain `${`, so nothing downstream decides
+/// what a value MEANS by looking inside it: a policy is handed text and only text.
+[<RequireQualifiedAccess>]
+type VariableValue =
+    | Text of string
+    /// `${env.NAME}` / `${proxy.…}` composed with text (`EnvTemplate`).
+    | Composed of EnvTemplate
+    /// `${<connection>.token}` as the whole value.
+    | Token of connection: string
+
+module VariableValue =
+
+    /// As a file writes it.
+    let render (value: VariableValue) : string =
+        match value with
+        | VariableValue.Text text -> EnvTemplate.escape text
+        | VariableValue.Composed template -> EnvTemplate.render template
+        | VariableValue.Token connection -> sprintf "${%s.token}" connection
+
 /// The seven primitives, and there is no eighth.
 type ResourceLeaf =
     | Mount of ResourceMount
@@ -109,7 +133,7 @@ type ResourceLeaf =
     /// dedup — `{A=1}` and `{A=1,B=2}` are two elements that both grant `A` — and the
     /// conflict rule would need a special case for "same key, two values" instead of falling
     /// out of the one rule every other primitive uses.
-    | Variable of name: string * value: string
+    | Variable of name: string * value: VariableValue
     /// Something to put on PATH.
     | Exec of path: string
     /// A credential this session forwards into the sandbox, by name (`github`) — the route
@@ -209,7 +233,7 @@ module ResourceLeaf =
             else sprintf "path:%s>%s:%s" mount.From mount.At mode
         | Socket path -> sprintf "sock:%s" path
         | Endpoint host -> sprintf "net:%s" host
-        | Variable (name, value) -> sprintf "env:%s=%s" name (quotedValue value)
+        | Variable (name, value) -> sprintf "env:%s=%s" name (quotedValue (VariableValue.render value))
         | Exec path -> sprintf "exec:%s" path
         | Volume (name, at) -> sprintf "vol:%s>%s" name at
         | Connection (name, route) -> sprintf "conn:%s/%s" name (ConnectionRoute.name route)
@@ -586,7 +610,7 @@ module GrantNotation =
           Socket "/run/docker.sock"
           Endpoint "registry.npmjs.org"
           Volume ("yession-nix", "/nix")
-          Variable ("CI", "1")
+          Variable ("CI", VariableValue.Text "1")
           Exec "/usr/bin/git"
           Connection ("github", ConnectionRoute.Git) ]
 
@@ -660,7 +684,12 @@ module ResourceProfile =
                 (ResourceLeaf.describe (Mount a))
                 (ResourceLeaf.describe (Mount b))
         | Variable (name, a), Variable (_, b) ->
-            sprintf "%s sets %s to '%s' and to '%s' at once, and a variable has one value" whose name a b
+            sprintf
+                "%s sets %s to '%s' and to '%s' at once, and a variable has one value"
+                whose
+                name
+                (VariableValue.render a)
+                (VariableValue.render b)
         | a, b -> sprintf "%s asks for %s and %s at once, and they cannot both hold" whose (ResourceLeaf.describe a) (ResourceLeaf.describe b)
 
     /// Depth-first walk yielding either every name reachable from `start`, or the path of a
@@ -721,6 +750,12 @@ module ResourceProfile =
     /// selected together. An operator may declare `nix-ro` and `nix-rw` as alternatives, and
     /// a vocabulary that could not hold both would be a vocabulary that cannot express a
     /// choice. That conflict is a REPO's, and it appears in `resolve`.
+    ///
+    /// And a fifth: a resource lending a connection's token (`${github.token}`) that does not
+    /// itself forward that connection by `api`. The token is lent through the credential
+    /// proxy, so a sandbox holding the variable and not the route would find nothing there on
+    /// every command — and whatever selects the resource holds at least its own closure, so
+    /// the resource is where that is decided.
     let load (declarations: (ResourceName * ResourceDecl) list) : Result<ResourceProfile, string> =
         let duplicates =
             declarations
@@ -745,10 +780,32 @@ module ResourceProfile =
                 (fun acc (name, _) ->
                     acc
                     |> Result.bind (fun () ->
-                        match ResourceLeaf.conflicts (ResourceClosure.leaves (closureOf byName name)) with
-                        | [] -> Ok ()
+                        let leaves = ResourceClosure.leaves (closureOf byName name)
+                        match ResourceLeaf.conflicts leaves with
                         | (left, right) :: _ ->
-                            Error (conflictSentence (sprintf "the resource '%s'" (render name)) left right)))
+                            Error (conflictSentence (sprintf "the resource '%s'" (render name)) left right)
+                        | [] ->
+                            let unlent =
+                                leaves
+                                |> Set.toList
+                                |> List.choose (function
+                                    | Variable (variable, VariableValue.Token connection) when
+                                        not (Set.contains (Connection (connection, ConnectionRoute.Api)) leaves)
+                                        ->
+                                        Some (variable, connection)
+                                    | _ -> None)
+                            match unlent with
+                            | [] -> Ok ()
+                            | (variable, connection) :: _ ->
+                                Error (
+                                    sprintf
+                                        "the resource '%s' lends %s '${%s.token}' and does not forward %s by api, which is the route a token is lent through — grant `connection: { %s: [ api ] }` beside it"
+                                        (render name)
+                                        variable
+                                        connection
+                                        connection
+                                        connection
+                                )))
                 (Ok ()))
         |> Result.map (fun () -> ResourceProfile byName)
 

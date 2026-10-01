@@ -201,6 +201,24 @@ module OperatorProfile =
                 get.Optional.Field "maintain" maintain |> ignore
                 Volume (get.Required.Field "name" Decode.string, get.Required.Field "at" Decode.string)))
 
+    /// A variable's value: text, or — where it carries `${` — what only the session can
+    /// supply: `${proxy.https|ca-file|ca-dir}` and `${env.NAME}` composed with text, or a
+    /// connection's token as the whole value. The same grammar a repo's declaration reads
+    /// (`EnvTemplate`), so a reference means one thing wherever it is written. `$${` is a
+    /// literal `${`.
+    let private variableValue : Decoder<VariableValue> =
+        Decode.string
+        |> Decode.andThen (fun text ->
+            match EnvTemplate.lent text with
+            | Some connection -> Decode.succeed (VariableValue.Token connection)
+            | None when not (EnvTemplate.composes text) -> Decode.succeed (VariableValue.Text text)
+            | None ->
+                match EnvTemplate.parse text with
+                | Error e -> Decode.fail e
+                | Ok [] -> Decode.succeed (VariableValue.Text "")
+                | Ok [ TemplatePart.Literal literal ] -> Decode.succeed (VariableValue.Text literal)
+                | Ok template -> Decode.succeed (VariableValue.Composed template))
+
     /// `connection:` is a map of each connection to the routes it is forwarded by —
     /// `{ github: [git, api] }` — one leaf per route. The bare name it used to be meant every
     /// route the source happened to have, which is a grant nobody wrote down; it is refused
@@ -247,7 +265,7 @@ module OperatorProfile =
                 // One `Variable` leaf per entry, which is what makes a variable dedup and
                 // conflict like every other primitive instead of needing a rule of its own.
                 let variables =
-                    get.Optional.Field "env" (Decode.keyValuePairs Decode.string)
+                    get.Optional.Field "env" (Decode.keyValuePairs variableValue)
                     |> Option.defaultValue []
                 let sensitivity =
                     if get.Optional.Field "sensitive" Decode.bool |> Option.defaultValue false then
