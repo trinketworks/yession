@@ -198,6 +198,8 @@ let private representativeModel : ClientModel =
       TerminalScreens = Map.empty
       TerminalViewports = Map.empty
       Tabs = []
+      // Nothing pressed for and still owed: this client is looking, not mid-request.
+      Opening = 0
       Pinned = Set.empty
       Pane = None
       TerminalsOpen = true
@@ -215,11 +217,17 @@ let private representativeModel : ClientModel =
                   AgentAvailable = false
                   Models = ModelsLoaded offeredModels }
           Flow = ClaudeIdle
-          Pending = Pending.Ready }
+          Pending = Pending.Ready
+          Scope = "mine"
+          Code = ""
+          Token = "" }
       GitHub =
         { Status = Some { SessionCredential = None; MineCredential = None; Owner = OwnedByUser }
           Flow = GitHubIdle
-          Pending = Pending.Ready }
+          Pending = Pending.Ready
+          Scope = "mine"
+          Token = ""
+          Polling = PollWaiting 0 }
       // The generated read surface (Plan 15), with all three shapes declared at once, so
       // the acceptance render exercises the ONE renderer every future query goes through
       // rather than the one shape today's queries happen to use.
@@ -1219,12 +1227,11 @@ let private uiChecklistTests =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Items = [ edited ] } }
             let html = Support.render model
-            let noteStart = html.IndexOf "data-act-note"
-            let openedAt = html.LastIndexOf ("<article", noteStart)
-            let article = html.Substring (openedAt, html.IndexOf ("</article>", openedAt) - openedAt)
-            Expect.isTrue (article.Contains "edited src/A.fs") "the headline names the file"
-            Expect.isTrue (article.Contains "data-act-fact=\"diff\"") "and the change is its own element"
-            let diff = article.Substring (article.IndexOf "data-act-fact=\"diff\"")
+            Expect.isTrue (html.Contains "edited src/A.fs") "the headline names the file"
+            // Behind the disclosure, which is where a diff belongs: the line says what
+            // happened, the fold says what changed.
+            let diff = Support.behindFold (FoldKey.Act (MessageId.create "msg-edit" |> expect)) model
+            Expect.isTrue (diff.Contains "data-act-fact=\"diff\"") "and the change is its own element"
             Expect.isTrue (diff.Contains "+let x = 2") "carrying the line that came in"
             Expect.isTrue (diff.Contains "-let x = 1") "and the one that went out"
 
@@ -1300,12 +1307,10 @@ let private uiChecklistTests =
             let model =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Items = [ note ] } }
-            let html = Support.render model
-            let start = html.IndexOf "data-act-said"
-            Expect.isTrue (start >= 0) "every act offers what the agent was told"
-            // The element's words with the markup taken out: what a reader READS.
-            let element = html.Substring (start, html.IndexOf ("</div>", start) - start)
-            let text = System.Text.RegularExpressions.Regex.Replace(element.Substring (element.IndexOf ">" + 1), "<[^>]*>", "").Trim ()
+            let behind = Support.behindFold (FoldKey.Act (MessageId.create "msg-said-note" |> expect)) model
+            Expect.isTrue (behind.Contains "data-act-said") "every act offers what the agent was told"
+            let element = behind.Substring (behind.IndexOf "data-act-said")
+            let text = Support.readable (element.Substring (element.IndexOf ">" + 1))
             Expect.equal text (ConversationItem.said note) "the disclosure reads exactly as the prompt did"
             Expect.isTrue (text.Contains "on branch main") "particulars included, not the headline alone"
             // And it is TEXT. The quote used to draw each reference in it the way the screen
@@ -1341,9 +1346,54 @@ let private uiChecklistTests =
             let shut = Support.render folded
             Expect.isTrue ((control shut).Contains "aria-expanded=\"false\"") "folded by default, and the control says so"
             Expect.isTrue (shut.Contains (Dom.attr "data-fold-open" "no")) "and the particulars agree"
-            let open' = Support.render (ClientModel.update (ToggleFoldMsg (FoldKey.Act note.MessageId)) folded)
+            let open' = Support.render (Support.step (ToggleFoldMsg (FoldKey.Act note.MessageId)) folded)
             Expect.isTrue ((control open').Contains "aria-expanded=\"true\"") "one press unfolds it, and the control says so"
             Expect.isTrue (open'.Contains (Dom.attr "data-fold-open" "yes")) "and the particulars agree"
+
+        // A shut disclosure builds NOTHING behind it, and that is a promise about the whole
+        // page rather than a detail of one act.
+        //
+        // Every act, every tool call and every run of them is a fold, and a session's
+        // timeline holds thousands: measured on a real one of 20,650 events, 2,125 folds, all
+        // shut, NOT ONE ever opened — and 41,269 of the document's 54,016 elements, 76% of
+        // it, were inside them. All built, styled, laid out and diffed by Lit on every
+        // render, then clipped away by `grid-rows-[0fr]`. Dropping them took the open's
+        // main-thread work from 4.9s to 1.6s on a phone-speed CPU, and the document from
+        // 54,016 elements to 13,645.
+        //
+        // Nothing a reader could reach is lost: a folded body is `invisible`, so find-in-page
+        // and a screen reader already skipped it. What is lost is the cost.
+        //
+        // Asked of the CONTENT rather than of a tag count. The first draft of this counted
+        // tags per act against a budget, which needed a number nobody could derive — the
+        // first guess was wrong by a factor of three — and which a restyle of the visible
+        // half would move. What is behind a fold either reached the document or it did not,
+        // and that question has no magic number in it.
+        testCase "a fold nobody has opened builds nothing behind it" <| fun () ->
+            let note : ConversationItem =
+                { MessageId = MessageId.create "msg-shut" |> expect
+                  Author = PeerRef ada
+                  Content = ItemContent.Act (repoAdded "octo/hello" "main")
+                  Status = Complete
+                  Offset = EventOffset.create 1L |> expect
+                  Woke = None; CausedBy = None }
+            let model =
+                { representativeModel with
+                    Conversation = { representativeModel.Conversation with Items = [ note ] } }
+            let shut = Support.render model
+            // The wrapper stays, always: `aria-controls` names it, the control's state rides
+            // it, and a fold that vanished when shut would be a control pointing at nothing.
+            Expect.isTrue (shut.Contains (Dom.attr "data-fold-body" "act-msg-shut")) "the disclosure is there"
+            Expect.isTrue (shut.Contains (Dom.attr "data-fold-open" "no")) "and it says it is shut"
+            // What is BEHIND it is not.
+            Expect.isFalse
+                (shut.Contains "data-act-said")
+                "a fold nobody opened has not built what is behind it — see `foldBodyIn` in \
+                 `src/Yession.App/View.fs`; a timeline is thousands of these and three \
+                 quarters of the document was inside them"
+            // And the other way, so this cannot pass by drawing nothing at all.
+            let opened = Support.behindFold (FoldKey.Act note.MessageId) model
+            Expect.isTrue (opened.Contains "data-act-said") "and opening it says what the agent was told"
 
         // An act still in flight is not one to unfold — its account is about to change under
         // the reader, and the gutter is where its pulse sits — so it offers no fold until it
@@ -1408,10 +1458,10 @@ let private uiChecklistTests =
             let model =
                 { representativeModel with
                     Conversation = { representativeModel.Conversation with Items = [ start ] } }
-            let html = Support.render model
-            let fact = html.IndexOf (Dom.attr "data-act-fact" "forwarded")
+            let behind = Support.behindFold (FoldKey.Act (MessageId.create "msg-start" |> expect)) model
+            let fact = behind.IndexOf (Dom.attr "data-act-fact" "forwarded")
             Expect.isTrue (fact >= 0) "the forwarding is on the start"
-            let row = html.Substring (fact, html.IndexOf ("</div>", fact) - fact)
+            let row = behind.Substring fact
             Expect.isTrue
                 (row.Contains (Dom.attr "data-entity" (EntityRef.said (EntityRef.Connection github))))
                 "and what it forwards is the connection, as a reference"
@@ -1491,14 +1541,14 @@ let private uiChecklistTests =
         testCase "a sandbox start's disclosure still says what the agent was told" <| fun () ->
             let by = ActorRef.Configured (RepoRef.create "octo/hello" |> expect)
             let item = sandboxStartBy by
-            let html =
-                Support.render
+            let behind =
+                Support.behindFold
+                    (FoldKey.Act (MessageId.create "msg-dev" |> expect))
                     { representativeModel with
                         Conversation = { representativeModel.Conversation with Items = [ item ] } }
-            let start = html.IndexOf "data-act-said"
-            Expect.isTrue (start >= 0) "the sentence is offered"
-            let element = html.Substring (start, html.IndexOf ("</div>", start) - start)
-            let text = System.Text.RegularExpressions.Regex.Replace(element.Substring (element.IndexOf ">" + 1), "<[^>]*>", "").Trim ()
+            Expect.isTrue (behind.Contains "data-act-said") "the sentence is offered"
+            let element = behind.Substring (behind.IndexOf "data-act-said")
+            let text = Support.readable (element.Substring (element.IndexOf ">" + 1))
             Expect.equal text (ConversationItem.said item) "whole, scope and backend included"
 
         // A pull request a sentence points at leads to the pull request, like a repository
@@ -2023,7 +2073,7 @@ let private paneActionsTests =
         testCase "a file's way to have it is in the row, not inside the picture" <| fun () ->
             let html =
                 representativeModel
-                |> ClientModel.update (ShowInPaneMsg (Reading (ContentTab picture)))
+                |> Support.step (ShowInPaneMsg (Reading (ContentTab picture)))
                 |> Support.render
             let row = rowFor "content:artifacts/chart.png/0000-e7f1a6" html
             Expect.isTrue
@@ -2043,7 +2093,7 @@ let private paneActionsTests =
         testCase "a content tab in the strip says which kind it is" <| fun () ->
             let html =
                 representativeModel
-                |> ClientModel.update (ShowInPaneMsg (Reading (ContentTab picture)))
+                |> Support.step (ShowInPaneMsg (Reading (ContentTab picture)))
                 |> Support.render
             let tab =
                 let at = html.IndexOf (Dom.attr Dom.Hooks.paneTab "content:artifacts/chart.png/0000-e7f1a6")
@@ -2092,7 +2142,7 @@ let private paneActionsTests =
                   EndedAt = DateTimeOffset (2026, 8, 8, 0, 2, 0, TimeSpan.Zero) }
             let html =
                 representativeModel
-                |> ClientModel.update (ShowInPaneMsg (Reading (StretchTab stretch)))
+                |> Support.step (ShowInPaneMsg (Reading (StretchTab stretch)))
                 |> Support.render
             Expect.isFalse (html.Contains Dom.Hooks.paneActions) "no row"
     ]
@@ -2504,7 +2554,7 @@ let private syncStatusTests =
         // The flag describes a catch-up that is RUNNING, so it cannot outlive one: a timer
         // that fires just as the page lands must not leave a status nothing can clear.
         testCase "'slow' cannot be claimed once there is nothing left to catch up on" <| fun () ->
-            let model = ClientModel.update (CatchUpSlowMsg true) settled
+            let model = Support.step (CatchUpSlowMsg true) settled
             Expect.isFalse model.EventConsumer.CatchUpIsSlow "a late timer is refused, not stored"
             Expect.isFalse ((Support.render model).Contains Dom.Hooks.catchUp) "and nothing is shown"
     ]

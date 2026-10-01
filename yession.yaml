@@ -84,6 +84,12 @@ sandboxes:
         extra-trusted-public-keys = yession.cachix.org-1:Dj6jHWpEaqcGyrEEC3/qy/D3UQN8sZW1RXUOCRJ41oI=
         build-users-group =
         sandbox = false
+      # devenv's own state — its task cache is a SQLite database — on this container's
+      # disk rather than in the checkout every sandbox in the session shares. With it in
+      # the checkout, `dev` and `gate` entering their devshells at once raced for one
+      # database across the host's file share and one sandbox failed to start, "database
+      # is locked". devenv.nix reads this; see `devenv.dotfile` there.
+      CONTAINER_DEVENV_DOTFILE: /root/.devenv
 
   # `verify` is minutes long. A second sandbox on the same configuration means the gate
   # runs beside interactive work instead of holding the shell.
@@ -104,3 +110,4 @@ sandboxes:
         extra-trusted-public-keys = yession.cachix.org-1:Dj6jHWpEaqcGyrEEC3/qy/D3UQN8sZW1RXUOCRJ41oI=
         build-users-group =
         sandbox = false
+      CONTAINER_DEVENV_DOTFILE: /root/.devenv   # as in `dev`: one per container

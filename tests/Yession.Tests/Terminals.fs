@@ -98,15 +98,15 @@ let private allOpen (_: TerminalId) = true
 /// No lane cap in play. These cases are about the drain's other holds; the cap has its own.
 let private noLaneCap (_: TerminalId) = false
 let private planWith consumed busy isOpen entries =
-    TerminalQueueDrain.plan consumed busy Set.empty Set.empty isOpen (queueOf entries)
+    TerminalQueueDrain.plan consumed Set.empty busy Set.empty Set.empty isOpen (queueOf entries)
 
 /// The same plan with a lease in play (Plan 13, stage 2e).
 let private planLeased consumed busy leased isOpen entries =
-    TerminalQueueDrain.plan consumed busy leased Set.empty isOpen (queueOf entries)
+    TerminalQueueDrain.plan consumed Set.empty busy leased Set.empty isOpen (queueOf entries)
 
 /// ...and with the shell's marks gone (Plan 13, stage 2f).
 let private planLost consumed lost isOpen entries =
-    TerminalQueueDrain.plan consumed Set.empty Set.empty lost isOpen (queueOf entries)
+    TerminalQueueDrain.plan consumed Set.empty Set.empty Set.empty lost isOpen (queueOf entries)
 
 let private drainTests =
     testList "Terminal drain plan" [
@@ -154,6 +154,34 @@ let private drainTests =
                 "the closed terminal's unconsumed entries, in queue order"
             Expect.equal (plan.Ready |> List.map (fun (_, e) -> QueueId.value e.QueueId)) [ "q-b1" ] "the open one runs as before"
             Expect.equal (plan.Removals |> List.map QueueId.value) [ "q-a0" ] "and the consumed one is repaired, not refused"
+
+        // A drain takes an entry some while before its block is on the record — the shell may
+        // still be starting — and a drain re-entered in that window used to take the entry for
+        // a crash's leftover and remove it: its block then started a moment later, but the
+        // waiter had already read it gone, and answered that the command was withdrawn.
+        testCase "an entry a drain has taken is not removed before its block is on the record" <| fun () ->
+            let plan =
+                TerminalQueueDrain.plan
+                    Set.empty
+                    (Set.singleton "q-a1")
+                    (Set.singleton (TerminalId.value terminalA))
+                    Set.empty
+                    Set.empty
+                    allOpen
+                    (queueOf [ entry "a1" terminalA byAda 1.0 ])
+            Expect.isEmpty plan.Removals "it is still queued, as far as anybody waiting on it can tell"
+
+        testCase "an entry a drain has taken is not started a second time" <| fun () ->
+            let plan =
+                TerminalQueueDrain.plan
+                    Set.empty
+                    (Set.singleton "q-a1")
+                    Set.empty
+                    Set.empty
+                    Set.empty
+                    allOpen
+                    (queueOf [ entry "a1" terminalA byAda 1.0 ])
+            Expect.isEmpty plan.Ready "the taken one is not run again"
 
         testCase "an entry already named by a started block is repaired away, never re-run" <| fun () ->
             // The crash window: the block event was appended and the doc removal was not.
@@ -2559,7 +2587,7 @@ let private composing (model: ClientModel) : ClientModel =
 
 /// Send that slot and read back the entry it queued.
 let private sent (model: ClientModel) : PendingAct =
-    let after = ClientModel.update (SendTerminalDraftMsg (terminalA, ada)) model
+    let after = Support.step (SendTerminalDraftMsg (terminalA, ada)) model
     match after.Synced.Pending |> Map.toList |> List.map snd with
     | [ entry ] -> entry
     | other -> failwithf "expected one queued command, got %d" (List.length other)
@@ -2653,7 +2681,7 @@ let private viewportTests =
             // in the transcript for ever, so the width belongs to whoever asked for it.
             let model =
                 client ()
-                |> ClientModel.update (TerminalViewportMsg (terminalA, { Cols = 132; Rows = 43 }))
+                |> Support.step (TerminalViewportMsg (terminalA, { Cols = 132; Rows = 43 }))
                 |> composing
             Expect.equal (sent model).Size (Some { Cols = 132; Rows = 43 }) "the author's own viewport"
 
@@ -2669,8 +2697,8 @@ let private viewportTests =
             // unreadable for ever.
             let model =
                 client ()
-                |> ClientModel.update (TerminalViewportMsg (terminalA, { Cols = 132; Rows = 43 }))
-                |> ClientModel.update (TerminalViewportMsg (terminalA, { Cols = 0; Rows = 0 }))
+                |> Support.step (TerminalViewportMsg (terminalA, { Cols = 132; Rows = 43 }))
+                |> Support.step (TerminalViewportMsg (terminalA, { Cols = 0; Rows = 0 }))
                 |> composing
             Expect.equal (sent model).Size (Some { Cols = 132; Rows = 43 }) "the last real measurement stands"
 
@@ -2678,9 +2706,26 @@ let private viewportTests =
             // Two terminals are two panes, and the reader may have looked at only one of them.
             let model =
                 client ()
-                |> ClientModel.update (TerminalViewportMsg (terminalB, { Cols = 132; Rows = 43 }))
+                |> Support.step (TerminalViewportMsg (terminalB, { Cols = 132; Rows = 43 }))
                 |> composing
             Expect.isNone (sent model).Size "terminal B's pane says nothing about terminal A's"
+    ]
+
+let private leaseRequestTests =
+    let client () = ClientModel.init { PeerId = ada; DisplayName = "ada" }
+
+    testList "Asking the session about a terminal's lease" [
+        testCase "taking a terminal asks the session for its lease" <| fun () ->
+            let _, effects = ClientModel.update (TakeTerminalMsg terminalA) (client ())
+            Expect.equal effects [ ClientEffect.TakeTerminal terminalA ] "one request, for that terminal"
+
+        testCase "a take is not a lease until the session says so" <| fun () ->
+            // The lease arrives as `TerminalLeaseTaken`, which every peer folds alike. A client
+            // that marked itself live on the press would be the one peer believing it held a
+            // keyboard somebody else may already have taken.
+            let before = client ()
+            let after, _ = ClientModel.update (TakeTerminalMsg terminalA) before
+            Expect.equal after.Terminals before.Terminals "no terminal changed on this side"
     ]
 
 let private syncTests =
@@ -4767,6 +4812,7 @@ let tests =
         syncTests
         commandLineCaretTests
         viewportTests
+        leaseRequestTests
         transcriptCursorTests
         terminalTitleTests
     ]

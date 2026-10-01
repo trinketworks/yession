@@ -54,10 +54,10 @@ let private leafShapesFor (i: int) (mode: ResourceMountMode) : ResourceLeaf list
         [ Mount { From = sprintf "/from/%d" i; At = sprintf "/at/%d" i; Mode = mode }
           Socket (sprintf "/run/%d.sock" i)
           Endpoint (sprintf "h%d.example.com" i)
-          Variable (sprintf "V%d" i, sprintf "value-%d" i)
+          Variable (sprintf "V%d" i, VariableValue.Text (sprintf "value-%d" i))
           Volume (sprintf "vol%d" i, sprintf "/vol/%d" i)
           Exec (sprintf "/bin/tool%d" i)
-          Connection (sprintf "conn%d" i) ]
+          Connection (sprintf "conn%d" i, ConnectionRoute.Git) ]
     for shape in shapes do
         match shape with
         | Mount _ | Socket _ | Endpoint _ | Variable _ | Volume _ | Exec _ | Connection _ -> ()
@@ -364,8 +364,8 @@ let tests =
                 let b = ResourceName.create "cc-gcc" |> expect
                 let both = ResourceName.create "cc-both" |> expect
                 let clashing =
-                    [ a, ResourceDecl.Leaf ([ Variable ("CC", "clang") ], Sensitivity.Ordinary)
-                      b, ResourceDecl.Leaf ([ Variable ("CC", "gcc") ], Sensitivity.Ordinary)
+                    [ a, ResourceDecl.Leaf ([ Variable ("CC", VariableValue.Text "clang") ], Sensitivity.Ordinary)
+                      b, ResourceDecl.Leaf ([ Variable ("CC", VariableValue.Text "gcc") ], Sensitivity.Ordinary)
                       both, ResourceDecl.Composition [ a; b ] ]
                 match ResourceProfile.load (declarations @ clashing) with
                 | Ok _ -> failwith "expected a refusal"
@@ -749,7 +749,7 @@ let tests =
                    Socket "/run/docker.sock"
                    Endpoint "registry.npmjs.org"
                    Volume ("yession-nix", "/nix")
-                   Variable ("CI", "1")
+                   Variable ("CI", VariableValue.Text "1")
                    Exec "/usr/bin/git" ]
                  |> List.map ResourceLeaf.describe)
                 [ "path:/nix:ro"
@@ -768,10 +768,10 @@ let tests =
         // to read past them, which is how the one that means something gets missed.
         testCase "a value that could be mistaken for the end of a grant is quoted" <| fun () ->
             Expect.equal
-                ([ Variable ("A", "1")
-                   Variable ("B", "a b")
-                   Variable ("C", "x;y")
-                   Variable ("D", "say \"hi\"") ]
+                ([ Variable ("A", VariableValue.Text "1")
+                   Variable ("B", VariableValue.Text "a b")
+                   Variable ("C", VariableValue.Text "x;y")
+                   Variable ("D", VariableValue.Text "say \"hi\"") ]
                  |> List.map ResourceLeaf.describe)
                 [ "env:A=1"; "env:B=\"a b\""; "env:C=\"x;y\""; "env:D=\"say \\\"hi\\\"\"" ]
                 "quoted exactly where it is ambiguous"
@@ -787,7 +787,7 @@ let tests =
                   Socket "/run/docker.sock"
                   Endpoint "registry.npmjs.org"
                   Volume ("yession-nix", "/nix")
-                  Variable ("CI", "1")
+                  Variable ("CI", VariableValue.Text "1")
                   Exec "/usr/bin/git" ] do
                 let written = ResourceLeaf.describe leaf
                 let kind = written.Substring (0, written.IndexOf ':' + 1)

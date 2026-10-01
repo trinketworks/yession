@@ -120,7 +120,7 @@ let createFull
                                           Describe = fun _ -> None
                                           Checkout = fun _ -> None
                                           Credentials = []
-                                          Connections = fun _ -> Ok ForwardedConnections.none
+                                          Selection = fun _ -> Ok SelectionGrant.none
                                           Proxy = WorkSandboxes.ProxyProvider.none
                                           // This composition is its own operator: it declares
                                           // the one sandbox its sessions have, as a resources

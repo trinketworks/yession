@@ -65,9 +65,9 @@ let private page (names: string list) (next: string option) : RepoPage =
 
 let private clientAt (latest: int64) (events: EventEnvelope<SessionEvent> list) : ClientModel =
     ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
-    |> ClientModel.update (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (offset latest) })
-    |> ClientModel.update HistoryReadMsg
-    |> ClientModel.update
+    |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (offset latest) })
+    |> Support.step HistoryReadMsg
+    |> Support.step
         (EventsPageMsg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true })
 
 /// A fresh session: created, one peer in — nothing on the timeline.
@@ -75,7 +75,7 @@ let private fresh =
     [ at 0L (SessionStarted { MessageId = MessageId.create "msg-started" |> expect })
       at 1L (PeerJoined { PeerId = ada; DisplayName = "swift-heron"; User = None }) ]
 
-let private launch (msg: LaunchMsg) (model: ClientModel) = ClientModel.update (LaunchMsg msg) model
+let private launch (msg: LaunchMsg) (model: ClientModel) = Support.step (LaunchMsg msg) model
 
 let private offeredTests =
     testList "when it is offered" [
@@ -87,7 +87,7 @@ let private offeredTests =
         testCase "a client that has not connected is not, whatever it has read" <| fun () ->
             let unconnected =
                 ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
-                |> ClientModel.update HistoryReadMsg
+                |> Support.step HistoryReadMsg
             Expect.isFalse (ClientModel.launchOffered unconnected) "the command it produces needs a session to send it to"
 
         testCase "a client still reading is not: the log may hold the repo it is about to see" <| fun () ->
@@ -178,14 +178,14 @@ let private choosingTests =
         testCase "the cursor is asked for once, not once per look" <| fun () ->
             let more = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/hello" ] (Some "cursor-2"))))
             Expect.equal (Launch.wanting more.Launch) (Some "cursor-2") "the foot asks with what the page carried"
-            let asking = more |> launch LaunchMoreStarted
+            let asking = more |> launch LaunchMoreAsked
             Expect.equal (Launch.wanting asking.Launch) None "and not again while that page is in flight"
 
         testCase "a page lands after the rows already read, and brings its own cursor" <| fun () ->
             let arrived =
                 clientAt 1L fresh
                 |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/one"; "octo/two" ] (Some "cursor-2"))))
-                |> launch LaunchMoreStarted
+                |> launch LaunchMoreAsked
                 |> launch (LaunchMoreArrived (page [ "octo/two"; "octo/three" ] (Some "cursor-3")))
             Expect.equal
                 (Launch.candidates arrived.Launch |> List.map (fun c -> RepoRef.value c.Repo))
@@ -197,7 +197,7 @@ let private choosingTests =
             let searched =
                 clientAt 1L fresh
                 |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/one" ] (Some "cursor-2"))))
-                |> launch LaunchMoreStarted
+                |> launch LaunchMoreAsked
                 // The reader typed, and the search answered, while the page was in flight.
                 |> launch (LaunchListingArrived (ListingLoaded (page [ "found/by-name" ] None)))
                 |> launch (LaunchMoreArrived (page [ "octo/two" ] None))
@@ -210,7 +210,7 @@ let private choosingTests =
             let failed =
                 clientAt 1L fresh
                 |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/one" ] (Some "cursor-2"))))
-                |> launch LaunchMoreStarted
+                |> launch LaunchMoreAsked
                 |> launch (LaunchMoreFailed "github is rate limiting this credential")
             Expect.equal (Launch.candidates failed.Launch |> List.map (fun c -> RepoRef.value c.Repo)) [ "octo/one" ] "the rows read stay read"
             Expect.stringContains (render failed) "data-repo-picker-again" "with a way to ask again"
@@ -275,15 +275,27 @@ let private choosingTests =
             Expect.equal (Launch.linkOf "hello") None "so is a word"
 
         testCase "a resolved link is a held row, at the head of the list if it was not in it" <| fun () ->
-            let resolving = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/other" ] None))) |> launch (LaunchResolving (RepoLink.PullRequest (hello, 42)))
+            let resolving =
+                clientAt 1L fresh
+                |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/other" ] None)))
+                |> launch (LaunchQueryTyped "https://github.com/octo/hello/pull/42")
+                |> launch LaunchSubmitted
             Expect.stringContains (render resolving) "data-repo-picker=\"resolving\"" "the card says it is asking"
-            let linked = resolving |> launch (LaunchLinked (candidate "octo/hello", Some "fix/thing"))
+            let linked = resolving |> launch (LaunchResolved (hello, Some "fix/thing", ListingLoaded (page [ "octo/hello" ] None)))
             Expect.equal linked.Launch.Stage Choosing "choosing again, with the row held"
             Expect.equal (Launch.target linked.Launch) (Some { LaunchTarget.Repo = hello; LaunchTarget.Branch = Some "fix/thing" }) "on the branch the link named"
             Expect.equal (Launch.candidates linked.Launch |> List.map (fun c -> c.Repo)) [ hello; RepoRef.create "octo/other" |> expect ] "at the head"
             let failed = resolving |> launch (LaunchFailed "github does not show that repository to this credential")
             Expect.equal failed.Launch.Stage Choosing "a link that could not be resolved opens choosing again"
             Expect.stringContains (render failed) "data-repo-picker-problem" "with the reason on the card"
+
+        testCase "a link the listing does not show is refused by name, not held" <| fun () ->
+            let refused =
+                clientAt 1L fresh
+                |> launch (LaunchQueryTyped "https://github.com/octo/hello")
+                |> launch LaunchSubmitted
+                |> launch (LaunchResolved (hello, None, ListingLoaded (page [] None)))
+            Expect.equal refused.Launch.Problem (Some "github does not show octo/hello to this credential") "the reason names the repo"
     ]
 
 let private answerTests =
@@ -298,13 +310,13 @@ let private answerTests =
             |> launch (LaunchSent (request, target))
 
         testCase "a rejection at the door is shown, and choosing is open again" <| fun () ->
-            let rejected = ClientModel.update (CommandAnsweredMsg (request, CommandRejected "this session already has octo/other")) waiting
+            let rejected = Support.step (CommandAnsweredMsg (request, CommandRejected "this session already has octo/other")) waiting
             Expect.equal rejected.Launch.Stage Choosing "back to choosing"
             Expect.equal rejected.Launch.Problem (Some "this session already has octo/other") "with the reason"
             Expect.stringContains (render rejected) "data-repo-picker-problem" "on the surface"
 
         testCase "another command's answer is not this surface's" <| fun () ->
-            let other = ClientModel.update (CommandAnsweredMsg (RequestId.fresh (), CommandRejected "no")) waiting
+            let other = Support.step (CommandAnsweredMsg (RequestId.fresh (), CommandRejected "no")) waiting
             Expect.equal other.Launch.Stage (Sent (request, target)) "still waiting on its own"
             Expect.equal other.Launch.Problem None "and nothing to say"
 
@@ -317,16 +329,16 @@ let private answerTests =
             Expect.isFalse ((render waiting).Contains "data-repo-picker") "and nothing of it is drawn"
 
         testCase "admitted, the card stays aside while the clone runs, on the row that was tapped" <| fun () ->
-            let admitted = ClientModel.update (CommandAnsweredMsg (request, CommandAccepted)) waiting
+            let admitted = Support.step (CommandAnsweredMsg (request, CommandAccepted)) waiting
             Expect.equal admitted.Launch.Stage (Cloning target) "cloning"
             Expect.isTrue (Launch.committed admitted.Launch) "still committed"
             Expect.isFalse (ClientModel.launchOffered admitted) "so the card stays aside — the timeline is showing the add"
             Expect.isTrue (Launch.busy admitted.Launch) "and no row is for holding meanwhile"
 
         testCase "a clone that failed reaches the screen that asked, while it is waiting" <| fun () ->
-            let admitted = ClientModel.update (CommandAnsweredMsg (request, CommandAccepted)) waiting
+            let admitted = Support.step (CommandAnsweredMsg (request, CommandAccepted)) waiting
             let failed =
-                ClientModel.update
+                Support.step
                     (EventsPageMsg
                         { Events =
                             [ at 2L
@@ -350,4 +362,56 @@ let private answerTests =
             Expect.stringContains html "failed add_repo octo/hello" "beside the timeline's own account of it"
     ]
 
-let tests = testList "Launch surface" [ offeredTests; choosingTests; answerTests ]
+/// What one message asks of the session, on a client in the given state.
+let private asks (msg: ClientMsg) (model: ClientModel) : ClientEffect list = ClientModel.update msg model |> snd
+
+let private askTests =
+    let listed = clientAt 1L fresh |> launch (LaunchListingArrived (ListingLoaded (page [ "octo/hello" ] None)))
+
+    testList "what it asks the session for" [
+
+        testCase "the message that first offers it asks for the listing" <| fun () ->
+            let read =
+                ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
+                |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (offset 1L) })
+                |> Support.step HistoryReadMsg
+            let arriving = EventsPageMsg { Events = fresh; LastOffset = Some (offset 1L); IsEnd = true }
+            Expect.equal (asks arriving read) [ ClientEffect.Launch (LaunchEffect.Search "") ] "my repos, asked for once it is on screen"
+
+        testCase "a surface already offered does not ask again" <| fun () ->
+            Expect.equal (asks (LaunchMsg (LaunchQueryTyped "oc")) (clientAt 1L fresh)) [] "typing is not asking"
+
+        testCase "holding a row asks for its branches" <| fun () ->
+            Expect.equal
+                (asks (LaunchMsg (LaunchSelected (candidate "octo/hello"))) listed)
+                [ ClientEffect.Launch (LaunchEffect.Branches hello) ]
+                "so the pane is full by the time it is opened"
+
+        testCase "a row's branches are asked for once, whatever is held and let go" <| fun () ->
+            let again =
+                listed
+                |> launch (LaunchSelected (candidate "octo/hello"))
+                |> launch (LaunchBranchesArrived (hello, BranchesLoaded (branches [ "main" ] None)))
+                |> launch (LaunchSelected (candidate "octo/hello"))
+            Expect.equal (asks (LaunchMsg (LaunchSelected (candidate "octo/hello"))) again) [] "already answered"
+
+        testCase "Enter on a link asks about the link" <| fun () ->
+            let typed = listed |> launch (LaunchQueryTyped "https://github.com/octo/hello")
+            Expect.equal (asks (LaunchMsg LaunchSubmitted) typed) [ ClientEffect.Launch (LaunchEffect.Resolve (RepoLink.Repo hello)) ] "resolved, not searched"
+
+        testCase "Enter on anything else searches for what was typed" <| fun () ->
+            let typed = listed |> launch (LaunchQueryTyped "octo/hel")
+            Expect.equal (asks (LaunchMsg LaunchSubmitted) typed) [ ClientEffect.Launch (LaunchEffect.Search "octo/hel") ] "a half-typed name is a search"
+
+        testCase "START sends the row held, on its branch" <| fun () ->
+            let held = listed |> launch (LaunchSelected (candidate "octo/hello"))
+            Expect.equal
+                (asks (LaunchMsg LaunchStartPressed) held)
+                [ ClientEffect.Launch (LaunchEffect.Start { LaunchTarget.Repo = hello; LaunchTarget.Branch = None }) ]
+                "the command for what is on screen"
+
+        testCase "START with nothing held sends nothing" <| fun () ->
+            Expect.equal (asks (LaunchMsg LaunchStartPressed) listed) [] "no command over nothing"
+    ]
+
+let tests = testList "Launch surface" [ offeredTests; choosingTests; answerTests; askTests ]

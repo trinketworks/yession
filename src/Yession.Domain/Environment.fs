@@ -73,6 +73,46 @@ type EnvironmentVariableRef =
     /// all but in each command's. docs/GAPS.md asks whether the rotation earns its keep.
     | Lent of connection: ConnectionName
 
+/// What a selection grants a sandbox beyond its policy: the connections it forwards, and the
+/// variables an operator bound to something only the session can supply (a resource's
+/// `${proxy.…}` or `${<connection>.token}`), as the same references a repo's declaration
+/// would carry — so the session supplies them through one path whoever wrote them.
+[<RequireQualifiedAccess>]
+type SelectionGrant =
+    { Connections : ForwardedConnections
+      Bound : Map<string, EnvironmentVariableRef>
+      /// The bound variables reached through `wants:` alone. A want is silent where it cannot
+      /// be had, so one of these whose connection is not forwarded is left out rather than
+      /// refusing the sandbox; one something NEEDS refuses it.
+      WantedOnly : Set<string> }
+
+module SelectionGrant =
+
+    let none : SelectionGrant =
+        { SelectionGrant.Connections = ForwardedConnections.none
+          SelectionGrant.Bound = Map.empty
+          SelectionGrant.WantedOnly = Set.empty }
+
+    /// Out of `ResourceProfile.grants`' answer.
+    let ofGrant (leaves: ResourceLeaf list, wantedOnly: Set<ResourceLeaf>) : SelectionGrant =
+        let bound (leaf: ResourceLeaf) =
+            match leaf with
+            | Variable (variable, VariableValue.Composed template) -> Some (variable, Derived template)
+            | Variable (variable, VariableValue.Token connection) ->
+                // `load` already refused a name no connection could carry, through the
+                // connection leaf this one needs beside it.
+                ConnectionName.create connection |> Result.toOption |> Option.map (fun name -> variable, Lent name)
+            | Variable (_, VariableValue.Text _)
+            | Mount _
+            | Socket _
+            | Endpoint _
+            | Exec _
+            | Volume _
+            | Connection _ -> None
+        { SelectionGrant.Connections = ForwardedConnections.ofGrant (leaves, wantedOnly)
+          SelectionGrant.Bound = leaves |> List.choose bound |> Map.ofList
+          SelectionGrant.WantedOnly = wantedOnly |> Set.toList |> List.choose bound |> List.map fst |> Set.ofList }
+
 /// What a CONTAINER is. Every field here is one only a container has — an image to run, a
 /// filesystem to build, volumes to mount, a process to be.
 type ContainerSpec =

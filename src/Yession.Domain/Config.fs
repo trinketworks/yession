@@ -544,7 +544,7 @@ module ConfigFile =
         |> Decode.andThen (function
             | Some _ ->
                 Decode.fail
-                    "`forward:` is gone — a connection is a resource now: the operator offers it (`github: { connection: github }`) and a sandbox selects it under `uses` or `wants`"
+                    "`forward:` is gone — a connection is a resource now: the operator offers it (`github: { connection: { github: [git, api] } }`) and a sandbox selects it under `uses` or `wants`"
             | None -> Decode.succeed ())
 
     /// `dialect:` — one of the shells a terminal can instrument, by name.

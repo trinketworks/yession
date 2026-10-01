@@ -49,13 +49,6 @@ let private syncBoth (a: Y.Doc) (b: Y.Doc) =
     Y.applyUpdate (b, Y.encodeStateAsUpdate a)
     Y.applyUpdate (a, Y.encodeStateAsUpdate b)
 
-/// A caret `index` characters into `text`: yjs's `createRelativePositionFromTypeIndex`, typed
-/// for the one kind of type this suite takes a caret in. `Fable.Yjs` declares it over
-/// `AbstractType<obj option>`, which no `Y.Text` is to the compiler, so the typed signature is
-/// written here rather than reached with a cast.
-[<Fable.Core.Import("createRelativePositionFromTypeIndex", "yjs")>]
-let private caretIn (text: Y.Text) (index: float) : Utils.RelativePosition.RelativePosition = Fable.Core.Util.jsNative
-
 /// An entry in one of the codec's keyed roots, written the way a peer's update would arrive:
 /// straight onto the doc, under no origin anything here owns. The cases that use it write what
 /// no build of ours writes — that is the point — so writing it by hand is the only way to ask
@@ -77,7 +70,7 @@ let private codecTests =
         testCase "decode∘encode preserves the synced session state" <| fun () ->
             let doc = Y.Doc.Create ()
             let registry = BodyRegistry doc
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             // A draft slot whose rich body is a top-level fragment root (not a model field, and
             // not in the decoded tree). So equality below is over the slot's identity; the body
             // is asserted separately, through the registry.
@@ -93,7 +86,7 @@ let private codecTests =
         // hand the choice back to its provider.
         testCase "the model choice crosses the sync boundary" <| fun () ->
             let doc = Y.Doc.Create ()
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             let chosen = ModelId.create "a-model" |> expect
             p.Dispatch (user (SetModelMsg (Some chosen)))
             let decoded = SyncedStateSync.ofDoc doc
@@ -101,7 +94,7 @@ let private codecTests =
 
         testCase "unpicking a model hands the choice back to the provider" <| fun () ->
             let doc = Y.Doc.Create ()
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             p.Dispatch (user (SetModelMsg (Some (ModelId.create "a-model" |> expect))))
             p.Dispatch (user (SetModelMsg None))
             let decoded = SyncedStateSync.ofDoc doc
@@ -128,7 +121,7 @@ let private codecTests =
                         Woke = None; CausedBy = None } ]
                   ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
             let initial = { ClientModel.init (peer "ada" "Ada") with Conversation = conversation }
-            let p = Harness.run (Client.makeProgram doc initial)
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc initial)
             Body.author registry p ada "draft body"
 
             let drafts : Y.Map<obj> = doc.getMap "drafts"
@@ -140,7 +133,7 @@ let private codecTests =
         testCase "enqueueing round-trips through the codec (draft moves into the queue)" <| fun () ->
             let doc = Y.Doc.Create ()
             let registry = BodyRegistry doc
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             let queueId = QueueId.create "q-1" |> expect
             Body.authorAs queueId registry p ada "queued words"
             Expect.equal
@@ -162,8 +155,8 @@ let private codecTests =
             docB.clientID <- 2.0
             let regA = BodyRegistry docA
             let regB = BodyRegistry docB
-            let pA = Harness.run (Client.makeProgram docA (ClientModel.init (peer "ada" "Ada")))
-            let pB = Harness.run (Client.makeProgram docB (ClientModel.init (peer "grace" "Grace")))
+            let pA = Harness.run (Client.makeProgram Client.Ports.offline docA (ClientModel.init (peer "ada" "Ada")))
+            let pB = Harness.run (Client.makeProgram Client.Ports.offline docB (ClientModel.init (peer "grace" "Grace")))
             let q1 = QueueId.create "q-1" |> expect
             let q2 = QueueId.create "q-2" |> expect
             let queueIds (p: Body.Runner) =
@@ -201,7 +194,7 @@ let private codecTests =
         // program observes the doc through, and only a second replica exercises it.
         testCase "the width a command claims crosses the sync boundary" <| fun () ->
             let doc = Y.Doc.Create ()
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             let terminal = TerminalId.create "term-a" |> expect
             let queueId = QueueId.create "q-term" |> expect
             p.Dispatch (user (TerminalViewportMsg (terminal, { Cols = 132; Rows = 43 })))
@@ -219,8 +212,8 @@ let private codecTests =
             let docB = Y.Doc.Create ()
             docA.clientID <- 1.0
             docB.clientID <- 2.0
-            let pA = Harness.run (Client.makeProgram docA (ClientModel.init (peer "ada" "Ada")))
-            let pB = Harness.run (Client.makeProgram docB (ClientModel.init (peer "grace" "Grace")))
+            let pA = Harness.run (Client.makeProgram Client.Ports.offline docA (ClientModel.init (peer "ada" "Ada")))
+            let pB = Harness.run (Client.makeProgram Client.Ports.offline docB (ClientModel.init (peer "grace" "Grace")))
             let terminal = TerminalId.create "term-a" |> expect
             let queueId = QueueId.create "q-term" |> expect
             pA.Dispatch (user (TerminalViewportMsg (terminal, { Cols = 132; Rows = 43 })))
@@ -238,7 +231,7 @@ let private codecTests =
             // A size is text in the doc, so the empty one has to decode to NO claim: as a
             // `{ Cols = 0; Rows = 0 }` it would be a resize to a terminal with no columns.
             let doc = Y.Doc.Create ()
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             let terminal = TerminalId.create "term-a" |> expect
             let queueId = QueueId.create "q-term" |> expect
             p.Dispatch (user (EnsureTerminalDraftMsg (terminal, ada, queueId)))
@@ -256,7 +249,7 @@ let private codecTests =
         testCase "a replica with no binding reads what a peer wrote, without having touched it" <| fun () ->
             let docA = Y.Doc.Create ()
             let docB = Y.Doc.Create ()
-            let p = Harness.run (Client.makeProgram docA (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline docA (ClientModel.init (peer "ada" "Ada")))
             let terminal = TerminalId.create "term-a" |> expect
             let queueId = QueueId.create "q-term" |> expect
             p.Dispatch (user (EnsureTerminalDraftMsg (terminal, ada, queueId)))
@@ -337,8 +330,8 @@ let private codecTests =
             let messageId = MessageId.create "msg-1" |> expect
             let model =
                 ClientModel.init (peer "ada" "Ada")
-                |> ClientModel.update (ToggleItemMenuMsg messageId)
-                |> ClientModel.update (ToggleItemMenuMsg messageId)
+                |> Support.step (ToggleItemMenuMsg messageId)
+                |> Support.step (ToggleItemMenuMsg messageId)
             Expect.isNone model.ItemMenu "shut, not reopened"
 
         // A menu left standing over an act it has already performed is a menu asking to be
@@ -348,9 +341,9 @@ let private codecTests =
             let messageId = MessageId.create "msg-1" |> expect
             let model =
                 ClientModel.init (peer "ada" "Ada")
-                |> ClientModel.update (EventsPageMsg (said messageId "ship it"))
-                |> ClientModel.update (ToggleItemMenuMsg messageId)
-                |> ClientModel.update (ToggleChapterMsg messageId)
+                |> Support.step (EventsPageMsg (said messageId "ship it"))
+                |> Support.step (ToggleItemMenuMsg messageId)
+                |> Support.step (ToggleChapterMsg messageId)
             Expect.isNone model.ItemMenu "the menu is gone"
             Expect.equal
                 (model.Synced.Chapters |> Map.tryFind messageId |> Option.map (fun mark -> mark.Opens))
@@ -361,7 +354,7 @@ let private codecTests =
         // person could not see would be a chapter break pencilled into a shared book.
         testCase "a chapter crosses the sync boundary" <| fun () ->
             let doc = Y.Doc.Create ()
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             let messageId = MessageId.create "msg-1" |> expect
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
             p.Dispatch (user (ToggleChapterMsg messageId))
@@ -376,7 +369,7 @@ let private codecTests =
         // decided", and the act's own default would open it straight back.
         testCase "closing one crosses as a no, never as an absence" <| fun () ->
             let doc = Y.Doc.Create ()
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             let messageId = MessageId.create "msg-1" |> expect
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
             p.Dispatch (user (ToggleChapterMsg messageId))
@@ -393,7 +386,7 @@ let private codecTests =
         // chapter interleaves with you rather than replacing what you wrote.
         testCase "a chapter's name crosses the sync boundary" <| fun () ->
             let doc = Y.Doc.Create ()
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             let messageId = MessageId.create "msg-1" |> expect
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
             p.Dispatch (user (ToggleChapterMsg messageId))
@@ -410,7 +403,7 @@ let private codecTests =
         // about where it put it, never by a path rebuilt at the browser.
         testCase "a chapter's name is findable as the live text it is" <| fun () ->
             let doc = Y.Doc.Create ()
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             let messageId = MessageId.create "msg-1" |> expect
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
             p.Dispatch (user (ToggleChapterMsg messageId))
@@ -424,7 +417,7 @@ let private codecTests =
         // caret standing somewhere nobody put it.
         testCase "a chapter this doc does not have is no text at all" <| fun () ->
             let doc = Y.Doc.Create ()
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             let messageId = MessageId.create "msg-1" |> expect
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
             p.Dispatch (user (ToggleChapterMsg messageId))
@@ -452,7 +445,7 @@ let private codecTests =
         // red.
         testCase "a caret in a chapter's name survives the name being written" <| fun () ->
             let doc = Y.Doc.Create ()
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             let messageId = MessageId.create "msg-1" |> expect
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
             p.Dispatch (user (ToggleChapterMsg messageId))
@@ -460,7 +453,7 @@ let private codecTests =
                 SyncedStateSync.chapterNameText doc (MessageId.value messageId)
                 |> Option.defaultWith (fun () -> failwith "the chapter's name should be in the doc")
             // A caret after "ship" in the seeded name, taken before anybody types.
-            let caret = caretIn text 4.0
+            let caret = Fable.ProseMirror.ProseMirror.relPosFromTypeIndex text 4
             let seeded = (p.Model ()).Synced.Chapters |> Map.find messageId
             p.Dispatch (user (EditChapterNameMsg (messageId, Text.edit "ship it now" seeded.Name)))
             Expect.equal
@@ -474,7 +467,7 @@ let private codecTests =
         // could see would not be a name the session holds.
         testCase "a chapter nobody named takes the words that were written for it" <| fun () ->
             let doc = Y.Doc.Create ()
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             let messageId = MessageId.create "msg-1" |> expect
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
             p.Dispatch (user (ToggleChapterMsg messageId))
@@ -501,7 +494,7 @@ let private codecTests =
 
         testCase "a title typed while the model was thinking is the one that stays" <| fun () ->
             let doc = Y.Doc.Create ()
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             p.Dispatch (user (EditTitleMsg (Text.insert 0 "Mine" (p.Model ()).Synced.Title)))
             Expect.equal
                 (SyncedStateSync.nameSubject doc NamingSubject.Title "" "The refresh-token bug")
@@ -533,7 +526,7 @@ let private codecTests =
         // applied over their words.
         testCase "a name written while the model was thinking is the one that stays" <| fun () ->
             let doc = Y.Doc.Create ()
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             let messageId = MessageId.create "msg-1" |> expect
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
             p.Dispatch (user (ToggleChapterMsg messageId))
@@ -555,7 +548,7 @@ let private codecTests =
         // be a name every peer wrote and none could read back.
         testCase "a named chapter round-trips through the codec" <| fun () ->
             let doc = Y.Doc.Create ()
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             let messageId = MessageId.create "msg-1" |> expect
             p.Dispatch (user (EventsPageMsg (said messageId "ship it")))
             p.Dispatch (user (ToggleChapterMsg messageId))
@@ -565,7 +558,7 @@ let private codecTests =
         testCase "the collaborative title round-trips through the codec" <| fun () ->
             let doc = Y.Doc.Create ()
             let registry = BodyRegistry doc
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             p.Dispatch (user (EditTitleMsg (Text.insert 0 "Launch plan" (p.Model ()).Synced.Title)))
 
             let decoded = SyncedStateSync.ofDoc doc
@@ -594,7 +587,7 @@ let private draftSlotTests =
             async {
                 let doc = Y.Doc.Create ()
                 let registry = BodyRegistry doc
-                let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+                let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
                 DraftSlot.follow doc registry ada (user >> p.Dispatch) |> ignore
 
                 // Mounting a composer is not drafting: the editor writes an empty paragraph into
@@ -615,7 +608,7 @@ let private draftSlotTests =
         testCase "an empty-bodied slot is dropped from a doc at boot; a typed draft survives" <| fun () ->
             let doc = Y.Doc.Create ()
             let registry = BodyRegistry doc
-            let p = Harness.run (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             let grace = PeerId.create "grace" |> expect
             // The pre-rule shape, as a persisted doc carries it: ada published a slot and never
             // typed; grace has a real draft.
@@ -724,8 +717,8 @@ let private queueUnitTests =
                 { Events = [ envelope ]; LastOffset = Some envelope.Offset; IsEnd = true }
             let model =
                 ClientModel.init (peer "ada" "Ada")
-                |> ClientModel.update (EventsPageMsg page)
-                |> ClientModel.update (EventsPageMsg page)
+                |> Support.step (EventsPageMsg page)
+                |> Support.step (EventsPageMsg page)
             Expect.equal
                 (model.Conversation.Items |> List.map (fun i -> (ConversationItem.said i)))
                 [ "once only" ]
@@ -1000,7 +993,7 @@ let private composerTests =
 
         testCase "starting a new message opts out of joining, and survives peers typing" <| fun () ->
             let joined = mine |> withDrafts [ grace; ivy ]
-            let started = ClientModel.update StartDraftMsg joined
+            let started = Support.step StartDraftMsg joined
             Expect.equal (ClientModel.composerTarget started) ada "new message opens your own composer"
             Expect.equal (ClientModel.collapsedDrafts started) [ grace; ivy ] "both peers' drafts collapse to summaries"
             // The choice is not undone by a third peer starting to type — the point of holding it.
@@ -1009,14 +1002,14 @@ let private composerTests =
 
         testCase "expanding a peer's draft collapses yours; expanding your own comes back" <| fun () ->
             let model = mine |> withDrafts [ ada; grace ]
-            let expanded = ClientModel.update (ExpandDraftMsg grace) model
+            let expanded = Support.step (ExpandDraftMsg grace) model
             Expect.equal (ClientModel.composerTarget expanded) grace "theirs is open"
             Expect.equal (ClientModel.collapsedDrafts expanded) [ ada ] "and yours is the summary now"
-            let back = ClientModel.update (ExpandDraftMsg ada) expanded
+            let back = Support.step (ExpandDraftMsg ada) expanded
             Expect.equal (ClientModel.composerTarget back) ada "expanding your own is the way back"
 
         testCase "a draft that is sent or discarded stops being the composer" <| fun () ->
-            let joined = ClientModel.update (ExpandDraftMsg grace) (mine |> withDrafts [ grace ])
+            let joined = Support.step (ExpandDraftMsg grace) (mine |> withDrafts [ grace ])
             let gone = { joined with Synced = { joined.Synced with Drafts = Map.empty } }
             Expect.equal (ClientModel.composerTarget gone) ada "a vanished draft falls back to your own composer"
 
@@ -1031,7 +1024,7 @@ let private composerTests =
                         Event = PeerJoined { PeerId = grace; DisplayName = "brave-owl"; User = None } } ]
                   LastOffset = Some EventOffset.zero
                   IsEnd = true }
-            let model = ClientModel.update (EventsPageMsg page) mine
+            let model = Support.step (EventsPageMsg page) mine
             Expect.equal (ClientModel.nameOf grace model) "brave-owl" "a joined peer is named, not numbered"
             Expect.equal (ClientModel.nameOf ivy model) (PeerId.value ivy) "an unknown peer falls back to its id"
 
@@ -1040,8 +1033,8 @@ let private composerTests =
             let model =
                 mine
                 |> withDrafts [ grace ]
-                |> ClientModel.update (RemotePresenceMsg { Who = PeerRef ivy; DisplayName = "keen-fox"; Focus = Some (focus grace); Viewing = None })
-                |> ClientModel.update (RemotePresenceMsg { Who = PeerRef grace; DisplayName = "brave-owl"; Focus = Some (focus ada); Viewing = None })
+                |> Support.step (RemotePresenceMsg { Who = PeerRef ivy; DisplayName = "keen-fox"; Focus = Some (focus grace); Viewing = None })
+                |> Support.step (RemotePresenceMsg { Who = PeerRef grace; DisplayName = "brave-owl"; Focus = Some (focus ada); Viewing = None })
             Expect.equal (ClientModel.editorsOf grace model) [ PeerRef ivy, "keen-fox" ] "only carets in THAT draft count"
             Expect.equal (ClientModel.editorsOf ada model) [ PeerRef grace, "brave-owl" ] "a peer in your draft shows in yours"
 
@@ -1051,7 +1044,7 @@ let private composerTests =
             let model =
                 { mine with
                     Synced = { mine.Synced with Drafts = Map.ofList [ grace, { Author = grace; QueueId = queueId } ] } }
-                |> ClientModel.update (SendDraftMsg grace)
+                |> Support.step (SendDraftMsg grace)
             Expect.isFalse (Map.containsKey grace model.Synced.Drafts) "the draft left the composer"
             match Map.toList model.Synced.Queue with
             | [ (key, entry) ] ->
@@ -1066,10 +1059,10 @@ let private composerTests =
             let slot = Map.ofList [ grace, { Author = grace; QueueId = queueId } ]
             let onAda =
                 { mine with Synced = { mine.Synced with Drafts = slot } }
-                |> ClientModel.update (SendDraftMsg grace)
+                |> Support.step (SendDraftMsg grace)
             let onIvy =
                 { ClientModel.init (peer "ivy" "Ivy") with Synced = { mine.Synced with Drafts = slot } }
-                |> ClientModel.update (SendDraftMsg grace)
+                |> Support.step (SendDraftMsg grace)
             Expect.equal
                 (onAda.Synced.Queue |> Map.toList |> List.map fst)
                 (onIvy.Synced.Queue |> Map.toList |> List.map fst)
@@ -1086,31 +1079,31 @@ let private titlePresenceTests =
                 { SessionId = SessionId.create "demo-session" |> expect
                   AssignedDisplayName = "swift-heron"
                   LatestOffset = None }
-            let next = ClientModel.update (ConnectedMsg accepted) base'
+            let next = Support.step (ConnectedMsg accepted) base'
             Expect.equal next.Session (Some (SessionId.create "demo-session" |> expect)) "the session id is learned from PeerAccepted"
 
         testCase "RemotePresenceMsg adds, updates, and clears a peer's cursor" <| fun () ->
             let focusAt (a: string) : Focus = { Field = Title; Pos = { Anchor = a; Head = a } }
             let typing (f: Focus option) : PresencePayload = { Who = PeerRef bob; DisplayName = "brave-owl"; Focus = f; Viewing = None }
-            let added = ClientModel.update (RemotePresenceMsg (typing (Some (focusAt "aa")))) base'
+            let added = Support.step (RemotePresenceMsg (typing (Some (focusAt "aa")))) base'
             Expect.equal (Map.tryFind (PeerRef bob) added.Presence) (Some { DisplayName = "brave-owl"; Focus = Some (focusAt "aa"); Viewing = None }) "the peer's caret is recorded"
-            let moved = ClientModel.update (RemotePresenceMsg (typing (Some (focusAt "bb")))) added
+            let moved = Support.step (RemotePresenceMsg (typing (Some (focusAt "bb")))) added
             Expect.equal (Map.tryFind (PeerRef bob) moved.Presence |> Option.bind (fun c -> c.Focus) |> Option.map (fun f -> f.Pos.Anchor)) (Some "bb") "the caret moves"
-            let cleared = ClientModel.update (RemotePresenceMsg { Who = PeerRef bob; DisplayName = ""; Focus = None; Viewing = None }) moved
+            let cleared = Support.step (RemotePresenceMsg { Who = PeerRef bob; DisplayName = ""; Focus = None; Viewing = None }) moved
             Expect.isFalse (Map.containsKey (PeerRef bob) cleared.Presence) "a peer with neither caret nor view is forgotten"
 
         // The reason `Focus` became an option: a reader has no caret anywhere, and the old
         // "no caret means gone" rule would drop them the moment they stopped typing.
         testCase "RemotePresenceMsg keeps a peer who is only viewing" <| fun () ->
             let ref' = ContentRef.create "artifacts/chart.png/0000-7f2a91" |> expect
-            let viewing = ClientModel.update (RemotePresenceMsg { Who = PeerRef bob; DisplayName = "brave-owl"; Focus = None; Viewing = Some (ViewingFile ref') }) base'
+            let viewing = Support.step (RemotePresenceMsg { Who = PeerRef bob; DisplayName = "brave-owl"; Focus = None; Viewing = Some (ViewingFile ref') }) base'
             Expect.equal (Map.tryFind (PeerRef bob) viewing.Presence |> Option.bind (fun c -> c.Viewing)) (Some (ViewingFile ref')) "a peer with no caret is present while they hold something open"
-            let closed = ClientModel.update (RemotePresenceMsg { Who = PeerRef bob; DisplayName = "brave-owl"; Focus = None; Viewing = None }) viewing
+            let closed = Support.step (RemotePresenceMsg { Who = PeerRef bob; DisplayName = "brave-owl"; Focus = None; Viewing = None }) viewing
             Expect.isFalse (Map.containsKey (PeerRef bob) closed.Presence) "closing the pane with no caret forgets them"
 
         testCase "RemotePresenceMsg ignores the local peer's own cursor" <| fun () ->
             let focus : Focus = { Field = Title; Pos = { Anchor = "aa"; Head = "aa" } }
-            let next = ClientModel.update (RemotePresenceMsg { Who = PeerRef base'.Peer.PeerId; DisplayName = "Ada"; Focus = Some focus; Viewing = None }) base'
+            let next = Support.step (RemotePresenceMsg { Who = PeerRef base'.Peer.PeerId; DisplayName = "Ada"; Focus = Some focus; Viewing = None }) base'
             Expect.isFalse (Map.containsKey (PeerRef base'.Peer.PeerId) next.Presence) "you never render your own remote caret"
     ]
 
@@ -1124,7 +1117,7 @@ let private harnessTests =
         testCaseAsync "a condition that never arrives fails the ONE test, with why" <|
             async {
                 let doc = Y.Doc.Create ()
-                let p = Harness.runWith 50 (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+                let p = Harness.runWith 50 (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
                 let! outcome = Async.Catch (p.WaitFor (fun _ -> false))
                 match outcome with
                 | Choice1Of2 () -> failwith "a never-satisfied predicate must not resolve"
@@ -1138,7 +1131,7 @@ let private harnessTests =
         testCaseAsync "a wait on several conditions says which never held" <|
             async {
                 let doc = Y.Doc.Create ()
-                let p = Harness.runWith 50 (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+                let p = Harness.runWith 50 (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
                 let! outcome =
                     Harness.waitForAll
                         p
@@ -1158,14 +1151,14 @@ let private harnessTests =
         testCaseAsync "a condition that is already true resolves without waiting" <|
             async {
                 let doc = Y.Doc.Create ()
-                let p = Harness.runWith 50 (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+                let p = Harness.runWith 50 (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
                 do! p.WaitFor (fun m -> m.Peer.DisplayName = "Ada")
             }
 
         testCaseAsync "a condition that arrives resolves, and the deadline never fires after it" <|
             async {
                 let doc = Y.Doc.Create ()
-                let p = Harness.runWith 50 (Client.makeProgram doc (ClientModel.init (peer "ada" "Ada")))
+                let p = Harness.runWith 50 (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
                 let waited = p.WaitFor (fun m -> m.Composer = Own)
                 p.Dispatch (user StartDraftMsg)
                 do! waited

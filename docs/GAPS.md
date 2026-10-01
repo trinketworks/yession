@@ -274,32 +274,20 @@ first's.
       (srt bakes it into the wrapped argv: bwrap `--setenv` on Linux, an `env VAR=…` prefix
       on macOS), and there is no TLS interception to fail — srt runs a plain authenticated
       CONNECT proxy by default, no MITM CA — so a missing CA bundle was never it.
-    - **Why it stays `host`, and is not a small fix.** Two things would each have to change.
-      srt's `SandboxManager` is process-wide (next bullet), so the agent CLI and the
-      WorkSandbox in one Session Process share one egress policy — dropping the agent's
-      network isolation to let its direct connection through would drop the WorkSandbox's
-      too, unless the agent runs in its own process. And only the Bun binary is shipped (the
+    - **Why it stays `host`, and is not a small fix.** srt's `SandboxManager` is
+      process-wide, which used to mean the agent CLI and the WorkSandbox shared one egress
+      policy; each srt sandbox now runs its manager in a process of its own
+      (`SrtSandbox.HostWire`), so the agent's network policy could be loosened without
+      loosening anybody else's. What remains is the binary: only the Bun one is shipped (the
       SDK's per-platform optional deps; no Node-runnable CLI), so "run it on Node, where
       undici's global dispatcher governs `fetch` and the proxy is honoured" means adding a
-      large dependency and packaging it under Nix. Until one of those is done the agent CLI
+      large dependency and packaging it under Nix. Until that is done the agent CLI
       is confined by its env allowlist and scratch HOME only — the same standing as `host`
       everywhere else — and `host` is the honest default.
   - The SDK's spawn seam is SYNCHRONOUS and srt's wrap is not, so the srt tier hands the
     SDK a stand-in process whose streams are live immediately and joins the real child to
     them when the wrap resolves. It is plumbing, not policy, and the `Srt` suite drives it
     end to end (stdin in, stdout out, exit code) rather than trusting it.
-- **srt's egress allowlist is per PROCESS, not per sandbox.** `SandboxManager` is a
-  singleton with one filtering proxy pair, so a session whose AgentSandbox and WorkSandbox
-  are both srt confines their FILES exactly (the profile rides each spawn) but can only
-  UNION their allowlists — the work sandbox can reach the agent's API hosts, without any
-  credential for them. Splitting it needs either a manager instance per sandbox (srt does
-  not offer one) or a Session Process per sandbox. Its interception (`network.mitmProxy`)
-  is per process for the same reason: once any sandbox of a session forwards `github`,
-  EVERY srt spawn in it — the agent CLI's included — has its HTTPS to `api.github.com`
-  answered by the credential proxy, and only a sandbox provisioned for it has been told to
-  trust that proxy's authority. One that was not fails TLS to that host rather than
-  reaching it unauthenticated. `default` forwards `github` whenever the session can, so
-  in practice this is a sandbox whose selection reaches no `github` connection.
 - **The strict confinement profile needs a nested user namespace, which an unprivileged
   container refuses.** srt's seccomp helper creates one inside bubblewrap's to drop
   capabilities and mount a fresh `/proc`; Docker's default (and this repo's dev container)
@@ -523,6 +511,36 @@ first's.
   innerHTML-replacement approach). The only remaining manual DOM work is pinning the chat
   scroll and pixel-positioning collaborators' cursor markers (a native `<input>` exposes no
   per-character geometry).
+- **Sending a draft still bypasses the Elmish loop, and moving it in needs Ylmish to change.**
+  Every other control now dispatches a message and `ClientModel.update` answers the requests it
+  makes as `ClientEffect` values, carried out by `Client.Ports` after the model they came with.
+  What is left is the drafts: the composer's Send and Clear (`ViewActions.SendDraft`,
+  `DiscardDraft`), the terminal composer's Send (`SendTerminalDraft`), and the editors'
+  keyboard send (`Links.SendDraft`, `SendTerminalDraft` in `Render.fs`). Each calls a verb on
+  `Client.Connection` that opens a `doc.transact`, copies or empties a body root the app owns
+  beside the synced model (a draft's `Y.XmlFragment`, a terminal slot's `Y.Text`), and
+  dispatches `SendDraftMsg` / `SendTerminalDraftMsg` / `DiscardDraftMsg` from INSIDE that
+  transaction. That one transaction is the invariant: the Session Process drains on a queue
+  entry's arrival, so an entry that lands without its body runs as an empty message, and a
+  send split across updates lets a `withYlmish` `Set` from the drain's removal clobber the
+  sender's own state (`Client.connect` says both at the verbs). It holds today only because a
+  dispatch from a click handler is processed synchronously, and `withYlmish` wraps each update
+  in `Y.transact`, which nests inside the one already open. Made an effect, it breaks: a
+  dispatch from inside an Elmish command is queued until the command returns, so the model's
+  write lands in a second transaction after the body's. The fix belongs in Ylmish, not around
+  it: an update needs a way to declare doc writes that run inside the transaction `withYlmish`
+  already opens for it, before the model's own write, so "seed the queued body, clear the
+  draft, add the entry" is one message, one update, one transaction, and the cheap tier can
+  assert the writes as values. To design: whether the writes are opaque `Y.Doc -> unit`
+  functions or a typed vocabulary over the roots an app declares (copy a fragment, clear a
+  text); which origin they carry, given the binding filters its own echoes by origin and
+  these roots sit outside the binding; and whether this is a new `Program` combinator or a
+  change to `Options`. The second half of the same step needs no Ylmish change but waits for
+  the first, because it lives in the same closure: `Client.connect` keeps its own mutable
+  state beside the model (the read cursor `lastProcessed`, `latestKnown`, `readInFlight`;
+  presence's `reportedFocus`, `reportedViewing`, `presenceAllowed`), and `dispatchAndConsume`
+  reads messages after dispatching them to decide reads the reducer should be asking for as
+  effects.
 - **One WIP draft per client, co-editable by any peer** (Plan 03): drafts are keyed by author
   (`Map<PeerId, DraftState>`), so each client owns at most one — structurally, not by a runtime
   cap. Any peer may co-edit any slot, and any co-editor may send it: the entry is attributed to
@@ -680,10 +698,11 @@ first's.
     hardening (hooks/fsmonitor/ext off, no global config, protocol pinned) still
     applies; the filesystem and egress boundaries do not.
   - **Every srt sandbox may write a checkout's `.git/config`.** srt denies that write by
-    default; a `git clone` makes it, so the flag is on. It cannot be scoped to the git
-    sandbox: srt reads it from the session config that whichever sandbox came up first
-    initialized the process-wide manager with, and ignores the per-spawn one. So the
-    WorkSandbox and the
+    default; a `git clone` makes it, so the flag is on — for every sandbox. srt reads it
+    from the config the manager was initialized with and ignores the per-spawn one, which
+    forced the answer to be one while a session shared a manager; each srt sandbox now
+    initializes its own, so scoping it to the git sandbox is a change nobody has made yet
+    rather than one srt refuses. Until then the WorkSandbox and the
     agent can write a `.git/config` too — planting a `core.fsmonitor`, an alias, or a
     pager that runs when git next runs in that checkout. Inside the session that is the
     shared-trust boundary already stated above, and the verbs themselves are immune (the

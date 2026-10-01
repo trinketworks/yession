@@ -99,7 +99,7 @@ let private sandboxes : Decoder<(string * Declared) list> =
 /// A file this cannot read is a failure with the reason in it, not an empty list: an empty
 /// list is what a file that obeys the rule looks like, and the two must not read the same.
 let private commandsIn (text: string) : (string * string) list =
-    match Decode.fromString sandboxes (JS.JSON.stringify (Fable.Yaml.parse text)) with
+    match Decode.fromString sandboxes (Fable.Yaml.Plain.json (Fable.Yaml.parse text)) with
     | Error reason -> failwithf "yession.yaml is not a document this file can read: %s" reason
     | Ok declared ->
         [ for name, sandbox in declared do

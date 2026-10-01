@@ -507,7 +507,7 @@ let
       nix-container-store:
         volume: { name: yession-nix, at: /nix }
       github:
-        connection: github
+        connection: { github: [ git, api ] }   # the gateway, and the credential proxy
       ca:
         mount: { from: /private/etc/ssl/cert.pem, mode: read }
         env:

@@ -216,7 +216,7 @@ let tests =
         // What a stream reports is an `Error` by convention only, and the sentence built from
         // it is read by a person — so the two answers are pinned apart. The ordinary one:
         testCase "a stream error describes as the message it carries" <| fun () ->
-            let refused : StreamError = !!{| message = "connect ECONNREFUSED 127.0.0.1:1" |}
+            let refused = StreamError.ofThrown (Thrown.errorWith "connect ECONNREFUSED 127.0.0.1:1")
             Expect.equal
                 (StreamError.describe refused)
                 "connect ECONNREFUSED 127.0.0.1:1"
@@ -232,6 +232,11 @@ let tests =
         // for two of these were `[object Object]` and the bare word `Error`.
         testCase "an object thrown describes as its JSON rather than as [object Object]" <| fun () ->
             Expect.equal (Thrown.describe (box {| code = 7 |})) """{"code":7}""" "the value, not the kind of thing it is"
+
+        // Fable's `exn` is not an `Error`, so it is not caught by the case above — and it used
+        // to fall through to the JSON, saying `{"message":"…"}` where a sentence wanted words.
+        testCase "an F# exception describes as its message" <| fun () ->
+            Expect.equal (Thrown.describe (box (exn "the lease was taken"))) "the lease was taken" "its message, not its JSON"
 
         testCase "an error carrying no message describes as its name" <| fun () ->
             Expect.equal (Thrown.describe (box (Thrown.errorWith ""))) "Error" "the one word an empty error has"

@@ -343,6 +343,21 @@ let dogfood =
     Tag.needs "The dev container, self-hosting" [ Tag.Docker; Tag.Dogfood ] (fun () ->
         testList "the dev container runs this repo's own suite" [
 
+            // Every container sandbox in a session binds the SAME checkout. devenv's state —
+            // its task cache is a SQLite database — lived in that checkout's `.devenv`, so
+            // `dev` and `gate` assembling their devshells at once raced for one database
+            // across the host's file share, and a session's `dev` failed to start: "database
+            // is locked". The file now puts it on each container's own disk; this is the
+            // devshell actually honouring that, not the file merely saying it.
+            testCaseAsync "devenv keeps its state on the container's disk, not in the shared checkout" (
+                withDevSpec declaredDev [] (fun dir -> runLine (sprintf "git clone --quiet . %s" dir)) (fun sandbox -> async {
+                    let! run, out, err =
+                        runInSandbox sandbox "sh" [ "-c"; "echo \"dotfile=$DEVENV_DOTFILE\"; test -e .devenv/tasks.db && echo checkout-has-cache || echo checkout-clean" ] Map.empty None
+                    Expect.equal run (SandboxExited 0) (sprintf "the devshell came up; stderr: %s" (err.Substring (max 0 (err.Length - 2000))))
+                    Expect.stringContains out "dotfile=/root/.devenv" "devenv was pointed at the container's own disk"
+                    Expect.stringContains out "checkout-clean" "and wrote no task cache into the checkout every sandbox shares"
+                }))
+
             testCaseAsync "nix develop --command check passes inside the declared container" (
                 // A real clone of HEAD, not a copy of the working tree: `nix develop`
                 // evaluates the flake from git, and a checkout is what the session would

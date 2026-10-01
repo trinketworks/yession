@@ -4296,7 +4296,7 @@ let private catalogueTests =
             let model =
                 ClientModel.init peer
                 |> fun model -> { model with Claude = { model.Claude with Status = Some known } }
-                |> ClientModel.update (ClaudeStatusMsg (claudeStatus None (Some connected)))
+                |> Support.step (ClaudeStatusMsg (claudeStatus None (Some connected)))
             Expect.equal
                 (model.Claude.Status |> Option.map (fun panel -> panel.Models))
                 (Some (ModelsLoaded offered))
@@ -4316,14 +4316,14 @@ let private panelFoldTests =
             let model =
                 ClientModel.init peer
                 |> awaiting
-                |> ClientModel.update (ClaudeStatusMsg (claudeStatus None None))
+                |> Support.step (ClaudeStatusMsg (claudeStatus None None))
             Expect.equal model.Claude.Pending awaitingMine "the wait survives a probe that says nothing yet"
 
         testCase "the probe that shows the connected account ends the wait" <| fun () ->
             let model =
                 ClientModel.init peer
                 |> awaiting
-                |> ClientModel.update (ClaudeStatusMsg (claudeStatus None (Some connected)))
+                |> Support.step (ClaudeStatusMsg (claudeStatus None (Some connected)))
             Expect.equal model.Claude.Pending Pending.Ready "the status shows it, so the panel is done"
 
         testCase "one tick answers for every panel waiting at once" <| fun () ->
@@ -4331,9 +4331,100 @@ let private panelFoldTests =
                 ClientModel.init peer
                 |> awaiting
                 |> fun model -> { model with GitHub = { model.GitHub with Pending = awaitingMine } }
-                |> ClientModel.update (PendingWaitedMsg (1_000L + Pending.deadlineMillis))
+                |> Support.step (PendingWaitedMsg (1_000L + Pending.deadlineMillis))
             Expect.equal model.Claude.Pending (Pending.Refused Pending.unseen) "claude gave up"
             Expect.equal model.GitHub.Pending (Pending.Refused Pending.unseen) "and so did github"
+    ]
+
+/// What the Claude panel's presses ask the session for, decided by the reducer from the
+/// fields it holds — the fields used to be read off the document at the press, where no
+/// test could reach the rule refusing an empty one.
+let private claudePressTests =
+    let peer : PeerState = { PeerId = PeerId.create "press-peer" |> expect; DisplayName = "Ada" }
+    let press (p: ClaudePress) (model: ClientModel) = ClientModel.update (ClaudePressedMsg p) model
+    testList "the claude panel's presses" [
+        testCase "completing with no code pasted is refused on the panel, and asks nothing" <| fun () ->
+            let model, effects = ClientModel.init peer |> press ClaudePress.Complete
+            Expect.equal (model.Claude.Pending, effects) (Pending.Refused "paste the code first", []) "refused here"
+
+        testCase "a token saved goes to the scope chosen, expecting that scope to connect" <| fun () ->
+            let typed =
+                ClientModel.init peer
+                |> Support.step (ClaudeScopeChosen "session")
+                |> Support.step (ClaudeTokenTyped "sk-ant-oat01-x")
+            let _, effects = press ClaudePress.SaveToken typed
+            Expect.equal
+                effects
+                [ ClientEffect.Claude
+                    { Action = ClaudeAction.Token
+                      Request = { Scope = "session"; Code = None; Token = Some "sk-ant-oat01-x" }
+                      Expect = Some { Scope = "session"; Connected = true } } ]
+                "one write, for the credential slot that was chosen"
+
+        testCase "a token sent does not stay in the field" <| fun () ->
+            let model, _ = ClientModel.init peer |> Support.step (ClaudeTokenTyped "sk-ant-oat01-x") |> press ClaudePress.SaveToken
+            Expect.equal model.Claude.Token "" "a secret already sent is not one to offer sending again"
+
+        testCase "a sign-in answered with an authorize url waits on the human in that tab" <| fun () ->
+            let model, effects = ClientModel.init peer |> press ClaudePress.Connect
+            let call =
+                match effects with
+                | [ ClientEffect.Claude call ] -> call
+                | other -> failwithf "expected one claude write, got %A" other
+            let answered = model |> Support.step (ClaudeAnsweredMsg (call, Ok (Some "https://claude.ai/authorize"), 5_000L))
+            Expect.equal answered.Claude.Flow (ClaudeAwaitingCode ("https://claude.ai/authorize", "mine")) "the flow carries the scope it began with"
+
+        testCase "an accepted write waits for the status from the moment it answered" <| fun () ->
+            let call : ClaudeCall =
+                { Action = ClaudeAction.Disconnect; Request = ClaudeRequest.scoped "mine"; Expect = Some disconnectMine }
+            let model = ClientModel.init peer |> Support.step (ClaudeAnsweredMsg (call, Ok None, 5_000L))
+            Expect.equal model.Claude.Pending (Pending.Awaiting (disconnectMine, 5_000L)) "the deadline runs from the answer"
+    ]
+
+/// The GitHub device flow's poll, as the model's own timer. It used to be a loop of sleeps in
+/// the browser reading back whatever model it last saw; the rules it carried — ask at GitHub's
+/// interval, keep the code through a bad moment, give it up only when the session says so,
+/// stop once the grant lands — are the reducer's now, and reachable without a browser.
+let private githubPollTests =
+    let peer : PeerState = { PeerId = PeerId.create "poll-peer" |> expect; DisplayName = "Ada" }
+    let begun : GitHubCall = { Action = GitHubAction.Begin; Request = GitHubRequest.scoped "mine"; Expect = None }
+    let flow interval = GitHubAwaitingApproval ("ABCD-1234", "https://github.com/login/device", "mine", interval)
+    let showing =
+        ClientModel.init peer |> Support.step (GitHubAnsweredMsg (begun, Ok (Some (flow 5)), 1_000L))
+    let polls (model: ClientModel) =
+        ClientModel.timers model |> List.filter (fun timer -> List.head timer.Key = "github-poll")
+    let asked = showing |> Support.step (GitHubPollDueMsg 0)
+    testList "the github device flow's poll" [
+        testCase "a code on screen waits GitHub's interval before asking" <| fun () ->
+            Expect.equal
+                (polls showing |> List.map (fun timer -> timer.After, timer.Fire))
+                [ 5_000, GitHubPollDueMsg 0 ]
+                "one wait, as long as GitHub asked"
+
+        testCase "the poll that falls due asks the session, for the scope the flow began with" <| fun () ->
+            Expect.equal (ClientModel.update (GitHubPollDueMsg 0) showing |> snd) [ ClientEffect.GitHubPoll (0, "mine") ] "one poll"
+
+        testCase "a round already asked is not asked again" <| fun () ->
+            Expect.equal (ClientModel.update (GitHubPollDueMsg 0) asked |> snd) [] "the first answer is still out"
+
+        testCase "a bad moment keeps the code on screen and waits again" <| fun () ->
+            let after = asked |> Support.step (GitHubPolledMsg (0, PollFailed))
+            Expect.equal (after.GitHub.Flow, polls after |> List.map (fun timer -> timer.Fire)) (flow 5, [ GitHubPollDueMsg 1 ]) "the code the human may have approved stays"
+
+        testCase "a flow the session ended takes the code away, with its reason" <| fun () ->
+            let after = asked |> Support.step (GitHubPolledMsg (0, PollEnded "the code expired"))
+            Expect.equal (after.GitHub.Flow, after.GitHub.Pending) (GitHubIdle, Pending.Refused "the code expired") "over, and said why"
+
+        testCase "slow_down widens the wait" <| fun () ->
+            let after = asked |> Support.step (GitHubPolledMsg (0, PollPending 10))
+            Expect.equal (polls after |> List.map (fun timer -> timer.After)) [ 10_000 ] "asked less often"
+
+        testCase "the grant landing stops the asking" <| fun () ->
+            let after = asked |> Support.step (GitHubPolledMsg (0, PollConnected))
+            Expect.isEmpty (polls after) "the status closes the flow; nothing more to ask"
+
+        testCase "cancelling stops the asking" <| fun () ->
+            Expect.isEmpty (polls (showing |> Support.step (GitHubFlowMsg GitHubIdle))) "no code, no poll"
     ]
 
 /// What a listing asks for, and what it says — pure, so no capability.
@@ -4543,6 +4634,8 @@ let tests =
         watchEngineTests
         panelTests
         panelFoldTests
+        claudePressTests
+        githubPollTests
         panelWireTests
         catalogueTests
         codecTests

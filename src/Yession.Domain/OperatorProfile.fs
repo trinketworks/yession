@@ -201,6 +201,52 @@ module OperatorProfile =
                 get.Optional.Field "maintain" maintain |> ignore
                 Volume (get.Required.Field "name" Decode.string, get.Required.Field "at" Decode.string)))
 
+    /// A variable's value: text, or — where it carries `${` — what only the session can
+    /// supply: `${proxy.https|ca-file|ca-dir}` and `${env.NAME}` composed with text, or a
+    /// connection's token as the whole value. The same grammar a repo's declaration reads
+    /// (`EnvTemplate`), so a reference means one thing wherever it is written. `$${` is a
+    /// literal `${`.
+    let private variableValue : Decoder<VariableValue> =
+        Decode.string
+        |> Decode.andThen (fun text ->
+            match EnvTemplate.lent text with
+            | Some connection -> Decode.succeed (VariableValue.Token connection)
+            | None when not (EnvTemplate.composes text) -> Decode.succeed (VariableValue.Text text)
+            | None ->
+                match EnvTemplate.parse text with
+                | Error e -> Decode.fail e
+                | Ok [] -> Decode.succeed (VariableValue.Text "")
+                | Ok [ TemplatePart.Literal literal ] -> Decode.succeed (VariableValue.Text literal)
+                | Ok template -> Decode.succeed (VariableValue.Composed template))
+
+    /// `connection:` is a map of each connection to the routes it is forwarded by —
+    /// `{ github: [git, api] }` — one leaf per route. The bare name it used to be meant every
+    /// route the source happened to have, which is a grant nobody wrote down; it is refused
+    /// with the form that says what was meant.
+    let private connections : Decoder<ResourceLeaf list> =
+        let leaves (connection: string, raw: string list) : Result<ResourceLeaf list, string> =
+            match raw |> List.map ConnectionRoute.parse |> List.tryPick (function Error e -> Some e | Ok _ -> None) with
+            | Some e -> Error (sprintf "%s: %s" connection e)
+            | None ->
+                match raw |> List.choose (ConnectionRoute.parse >> Result.toOption) |> List.distinct with
+                | [] -> Error (sprintf "%s names no route, so it forwards nothing — name git, api or both" connection)
+                | routes -> Ok (routes |> List.map (fun route -> Connection (connection, route)))
+        Decode.oneOf [
+            Decode.keyValuePairs stringList |> Decode.map Choice1Of2
+            stringList |> Decode.map Choice2Of2
+        ]
+        |> Decode.andThen (fun written ->
+            match written with
+            | Choice1Of2 pairs ->
+                match pairs |> List.map leaves |> List.tryPick (function Error e -> Some e | Ok _ -> None) with
+                | Some e -> Decode.fail e
+                | None -> pairs |> List.collect (leaves >> Result.defaultValue []) |> Decode.succeed
+            | Choice2Of2 names ->
+                Decode.fail (
+                    sprintf
+                        "a connection names the routes it is forwarded by — write `connection: { %s }` with the routes this resource grants"
+                        (names |> List.map (sprintf "%s: [git, api]") |> String.concat ", ")))
+
     /// A leaf declares primitives directly, and may declare several: the things that make one
     /// resource work are usually more than one — a cache is a mount and an endpoint and the
     /// variable pointing a tool at it — and none of the three means anything alone.
@@ -212,14 +258,14 @@ module OperatorProfile =
                 let sockets = get.Optional.Field "socket" stringList |> Option.defaultValue []
                 let endpoints = get.Optional.Field "endpoint" stringList |> Option.defaultValue []
                 let execs = get.Optional.Field "exec" stringList |> Option.defaultValue []
-                let connections = get.Optional.Field "connection" stringList |> Option.defaultValue []
+                let connections = get.Optional.Field "connection" connections |> Option.defaultValue []
                 let volumes =
                     get.Optional.Field "volume" (Decode.oneOf [ Decode.list volume; volume |> Decode.map List.singleton ])
                     |> Option.defaultValue []
                 // One `Variable` leaf per entry, which is what makes a variable dedup and
                 // conflict like every other primitive instead of needing a rule of its own.
                 let variables =
-                    get.Optional.Field "env" (Decode.keyValuePairs Decode.string)
+                    get.Optional.Field "env" (Decode.keyValuePairs variableValue)
                     |> Option.defaultValue []
                 let sensitivity =
                     if get.Optional.Field "sensitive" Decode.bool |> Option.defaultValue false then
@@ -232,7 +278,7 @@ module OperatorProfile =
                     @ (variables |> List.map Variable)
                     @ (execs |> List.map Exec)
                     @ volumes
-                    @ (connections |> List.map Connection)
+                    @ connections
                 leaves, sensitivity))
         |> Decode.andThen (fun (leaves, sensitivity) ->
             // A resource that grants nothing is a name that reads as configuration and is

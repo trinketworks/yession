@@ -104,6 +104,19 @@ in
   # against devenv's own source and `devenv update` cannot silence it.
   devenv.warnOnNewVersion = false;
 
+  # Where devenv keeps its own state — the task cache (`tasks.db`, a SQLite database in WAL
+  # mode), the profile link, `state/` — when the environment asks for it elsewhere. By default
+  # it is `.devenv` in the checkout, and every container sandbox in a session bind-mounts the
+  # SAME checkout: `dev` and `gate` assembling their devshells at once opened one database
+  # from two containers across the host's file share, where SQLite's shared-memory locking does
+  # not hold, and one of them died with "Failed to initialize task cache: database is locked"
+  # — a sandbox that would not start. yession.yaml names a directory on each container's own
+  # disk. Read here because devenv offers no variable for it; unset — a laptop, CI — leaves
+  # the default alone.
+  devenv.dotfile =
+    let elsewhere = builtins.getEnv "CONTAINER_DEVENV_DOTFILE";
+    in lib.mkIf (elsewhere != "") elsewhere;
+
   # Point node_modules at the Nix-built tree (addon baked in). Idempotent; replaces a stale
   # symlink or a leftover npm-installed dir. `restore` then skips `npm install` (dir present).
   enterShell = ''

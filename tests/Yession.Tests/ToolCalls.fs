@@ -238,7 +238,7 @@ let private registryReporting (outcome: WorkSandboxes.RunningSandbox -> WorkSand
                                 { Ref = name
                                   Backend = "srt"
                                   Request = { SandboxRequest.defaults with Spec = spec }
-                                  Forwarded = []
+                                  Forwarded = Map.empty
                                   StartedBy = None
                                   StartedAt = None
                                   Environment = SessionEnvironment.unavailable })
@@ -271,7 +271,7 @@ let private declaringDev (record: SandboxRequest -> unit) : Commands.CommandServ
                                             { Ref = name
                                               Backend = "docker"
                                               Request = request
-                                              Forwarded = []
+                                              Forwarded = Map.empty
                                               StartedBy = None
                                               StartedAt = None
                                               Environment = SessionEnvironment.unavailable })

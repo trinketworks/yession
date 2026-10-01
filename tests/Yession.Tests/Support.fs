@@ -225,6 +225,58 @@ let saidOn (model: ClientModel) : string list =
 
 let render (model: ClientModel) : string = Ssr.renderModel model
 
+/// The model after one message, for a case that asserts on state. What the message asked of
+/// the world outside the model is `ClientModel.update`'s other half, and a case about that
+/// reads it there.
+let step (msg: ClientMsg) (model: ClientModel) : ClientModel = ClientModel.update msg model |> fst
+
+/// Open one fold, and answer only what is behind it.
+///
+/// A shut fold builds NOTHING (`View.foldBodyIn`): the wrapper is always there, so every
+/// hook and `aria-controls` resolves, but its contents exist only while it is open. That is
+/// what keeps a session of two thousand shut disclosures from building forty thousand
+/// elements nobody asked to see.
+///
+/// So a case about what a disclosure HOLDS opens it, and a case about what a LINE says reads
+/// the line. Said once, here, because it was said five times in five slightly different
+/// hand-rolled `IndexOf` walks — and each of those broke on the day the body stopped being
+/// rendered, in a way that read as "the content is gone" rather than "you have to open it".
+///
+/// The answer is scoped to the fold, which the hand-rolled versions were not: a bare
+/// `.Contains` over the whole page is satisfied by any other surface that happens to say the
+/// same words, and one of them was — the act's own headline, one line above the disclosure
+/// quoting it.
+let behindFold (key: FoldKey) (model: ClientModel) : string =
+    let html = render (step (ToggleFoldMsg key) model)
+    let hook = sprintf "data-fold-body=\"%s\"" (FoldKey.value key)
+    match html.IndexOf hook with
+    | -1 ->
+        failwithf
+            "no fold is drawn for %s — `behindFold` opens a disclosure that exists, and this \
+             model has none by that key"
+            (FoldKey.value key)
+    | at ->
+        // The element's own subtree, balanced rather than cut at the first `</div>`: a fold's
+        // body holds divs, so the naive cut returns the first line of it and an assertion
+        // about the rest passes or fails by accident.
+        let opensAt = html.LastIndexOf ('<', at)
+        let bodyFrom = html.IndexOf ('>', at) + 1
+        let mutable depth = 1
+        let mutable i = bodyFrom
+        let mutable endsAt = -1
+        while endsAt < 0 && i < html.Length do
+            if i + 4 <= html.Length && html.Substring (i, 4) = "<div" then depth <- depth + 1
+            elif i + 6 <= html.Length && html.Substring (i, 6) = "</div>" then
+                depth <- depth - 1
+                if depth = 0 then endsAt <- i
+            i <- i + 1
+        ignore opensAt
+        if endsAt < 0 then html.Substring bodyFrom else html.Substring (bodyFrom, endsAt - bodyFrom)
+
+/// The words a reader READS in some markup, with the tags taken out.
+let readable (markup: string) : string =
+    System.Text.RegularExpressions.Regex.Replace(markup, "<[^>]*>", " ").Replace("  ", " ").Trim ()
+
 /// One template, rendered the same way — for a piece of the view that can be asked about
 /// on its own (an entity, a phrase) without standing up the whole page around it.
 let renderTemplate (template: Lit.TemplateResult) : string = Ssr.render template
@@ -543,7 +595,9 @@ let connectInMemoryClientVia
         let local = peer id name
         let registry = BodyRegistry doc
         let texts = TextRegistry doc
-        let runner = Harness.run (Client.makeProgram doc (ClientModel.init local))
+        // Read through a getter, for the reason `connectClientWith` gives.
+        let wired : Client.Connection option ref = ref None
+        let runner = Harness.run (Client.makeProgram { Client.Ports.Connection = (fun () -> wired.Value); Client.Ports.Launch = None; Client.Ports.Panels = None; Client.Ports.Moves = ignore; Client.Ports.Clipboard = (fun _ -> async.Return false); Client.Ports.Retry = ignore } doc (ClientModel.init local))
         // As the browser wires it (see `connectClientWith`).
         DraftSlot.follow doc registry local.PeerId (user >> runner.Dispatch) |> ignore
         let hello = { PeerId = local.PeerId; DisplayName = name; Token = host.MintPeerToken () }
@@ -552,6 +606,7 @@ let connectInMemoryClientVia
             { makeOptions dispatch with
                 ReadPosition = Some (fun () -> (runner.Model ()).EventConsumer.LastProcessedOffset) }
         let connection = Client.connect options doc registry texts hello dispatch clientEnd
+        wired.Value <- Some connection
         Async.StartImmediate connection.Run
         do! runner.WaitFor (fun m -> m.Connection = Connected)
         return { Runner = runner; Connection = connection; Registry = registry; Texts = texts; Channel = clientEnd; Doc = doc; Hello = hello }
