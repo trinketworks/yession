@@ -114,6 +114,22 @@ module Client =
           /// changes nothing.
           FetchTranscript : TerminalId -> unit }
 
+    /// The launch surface's reads (`LaunchEffect`): GETs answered by the session on this
+    /// person's own credential. Each is total — a failure is an answer the surface shows, not
+    /// an exception — and the cursors are the session's, carried back unread.
+    [<RequireQualifiedAccess>]
+    type LaunchReads =
+        { /// The listing for what was typed; empty is "my repos".
+          Listing : string -> Async<LaunchListing>
+          /// The page a listing cursor names. A failure says whether signing in would help.
+          Page : string -> Async<Result<Repos.RepoPage, string * bool>>
+          /// One repo's branches.
+          Branches : RepoRef -> Async<LaunchBranches>
+          /// The page a branch cursor names.
+          BranchPage : RepoRef -> string -> Async<Result<Repos.BranchPage, string>>
+          /// Where a pull request's head lives, so a link to one can be launched.
+          PullHead : RepoRef -> int -> Async<Result<Repos.PullHead, string>> }
+
     /// What the program's effects are carried out against (`ClientEffect`).
     ///
     /// A getter rather than a connection because the program exists first: a client is local
@@ -122,28 +138,76 @@ module Client =
     /// control that needs the session did before it was a message.
     [<RequireQualifiedAccess>]
     type Ports =
-        { Connection : unit -> Connection option }
+        { Connection : unit -> Connection option
+          /// `None` where there is no page to read from: a headless peer, a test.
+          Launch : LaunchReads option }
 
     module Ports =
 
         /// A client with no session to ask: every request goes nowhere.
-        let offline : Ports = { Ports.Connection = fun () -> None }
+        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None }
 
-        /// Carry out one effect. The whole map from what a message asked for to the verb that
-        /// does it, so that no caller holding a connection decides it a second time.
-        let perform (ports: Ports) (effect: ClientEffect) : unit =
-            match ports.Connection () with
-            | None -> ()
-            | Some connection ->
+        /// A launch read, answered as the message that carries its result.
+        let private launchRead (reads: LaunchReads) (dispatch: ClientMsg -> unit) (effect: LaunchEffect) : Async<unit> =
+            let answer msg = dispatch (LaunchMsg msg)
+            async {
                 match effect with
-                | ClientEffect.TakeTerminal terminal -> connection.TakeTerminal terminal
-                | ClientEffect.ReleaseTerminal terminal -> connection.ReleaseTerminal terminal
-                | ClientEffect.RearmTerminal terminal -> connection.RearmTerminal terminal
-                | ClientEffect.ReattachTerminal terminal -> connection.ReattachTerminal terminal
-                | ClientEffect.CloseTerminal terminal -> connection.CloseTerminal terminal
-                | ClientEffect.OpenTerminal title -> connection.OpenTerminal title
-                | ClientEffect.InterruptTurn turn -> connection.InterruptTurn turn
-                | ClientEffect.ApproveRepoCapabilities (repo, granted) -> connection.ApproveRepoCapabilities repo granted
+                | LaunchEffect.Search query ->
+                    let! listing = reads.Listing query
+                    answer (LaunchListingArrived listing)
+                | LaunchEffect.More cursor ->
+                    match! reads.Page cursor with
+                    | Ok page -> answer (LaunchMoreArrived page)
+                    | Error (reason, _) -> answer (LaunchMoreFailed reason)
+                | LaunchEffect.Branches repo ->
+                    let! branches = reads.Branches repo
+                    answer (LaunchBranchesArrived (repo, branches))
+                | LaunchEffect.BranchesMore (repo, cursor) ->
+                    match! reads.BranchPage repo cursor with
+                    | Ok page -> answer (LaunchBranchMoreArrived (repo, page))
+                    | Error reason -> answer (LaunchBranchMoreFailed reason)
+                | LaunchEffect.Resolve link ->
+                    // A pull request is asked about first, since which fork its branch lives
+                    // in only the provider knows; then the one name is looked up in the same
+                    // listing a search reads, which answers the row under the provider's
+                    // current name with its real default branch.
+                    let! resolved =
+                        match link with
+                        | Repos.RepoLink.Repo repo -> async.Return (Ok (repo, None))
+                        | Repos.RepoLink.Branch (repo, branch) -> async.Return (Ok (repo, Some branch))
+                        | Repos.RepoLink.PullRequest (repo, number) ->
+                            async {
+                                match! reads.PullHead repo number with
+                                | Ok head -> return Ok (head.Repo, Some head.Branch)
+                                | Error reason -> return Error reason
+                            }
+                    match resolved with
+                    | Error reason -> answer (LaunchFailed reason)
+                    | Ok (repo, branch) ->
+                        let! listing = reads.Listing (RepoRef.value repo)
+                        answer (LaunchResolved (repo, branch, listing))
+                // The command goes over the connection, not a read; `perform` sends it.
+                | LaunchEffect.Start _ -> ()
+            }
+
+        /// Carry out one effect, answering through `dispatch` where it has an answer. The whole
+        /// map from what a message asked for to the verb that does it, so that no caller holding
+        /// a connection decides it a second time.
+        let perform (ports: Ports) (dispatch: ClientMsg -> unit) (effect: ClientEffect) : unit =
+            let connected (send: Connection -> unit) = ports.Connection () |> Option.iter send
+            match effect with
+            | ClientEffect.TakeTerminal terminal -> connected (fun c -> c.TakeTerminal terminal)
+            | ClientEffect.ReleaseTerminal terminal -> connected (fun c -> c.ReleaseTerminal terminal)
+            | ClientEffect.RearmTerminal terminal -> connected (fun c -> c.RearmTerminal terminal)
+            | ClientEffect.ReattachTerminal terminal -> connected (fun c -> c.ReattachTerminal terminal)
+            | ClientEffect.CloseTerminal terminal -> connected (fun c -> c.CloseTerminal terminal)
+            | ClientEffect.OpenTerminal title -> connected (fun c -> c.OpenTerminal title)
+            | ClientEffect.InterruptTurn turn -> connected (fun c -> c.InterruptTurn turn)
+            | ClientEffect.ApproveRepoCapabilities (repo, granted) -> connected (fun c -> c.ApproveRepoCapabilities repo granted)
+            | ClientEffect.Launch (LaunchEffect.Start target) ->
+                connected (fun c -> dispatch (LaunchMsg (LaunchSent (c.AddRepo target.Repo target.Branch, target))))
+            | ClientEffect.Launch read ->
+                ports.Launch |> Option.iter (fun reads -> Async.StartImmediate (launchRead reads dispatch read))
 
     /// The client Elmish program for a given Yjs doc: the pure `ClientModel.update`
     /// under `Program.withYlmish`, so local draft edits flow out as CRDT deltas and
@@ -154,7 +218,7 @@ module Client =
     /// (`ClientEffect`) is carried out against `ports`, after the model it came with.
     let makeProgram (ports: Ports) (doc: Y.Doc) (initial: ClientModel) =
         let commandOf (effects: ClientEffect list) : Cmd<ClientMsg> =
-            effects |> List.map (fun effect -> Cmd.ofEffect (fun _ -> Ports.perform ports effect)) |> Cmd.batch
+            effects |> List.map (fun effect -> Cmd.ofEffect (fun dispatch -> Ports.perform ports dispatch effect)) |> Cmd.batch
         Program.mkProgram
             (fun () -> initial, Cmd.none)
             (fun msg model ->

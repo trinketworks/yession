@@ -1038,6 +1038,7 @@ type ClientEffect =
     | OpenTerminal of title: string
     | InterruptTurn of AgentTurnId
     | ApproveRepoCapabilities of RepoRef * granted: string list
+    | Launch of LaunchEffect
 
 module ClientModel =
 
@@ -2075,7 +2076,7 @@ module ClientModel =
                     (fun (launch: LaunchViewState) e ->
                         match e.Event, launch.Stage with
                         | SessionEvent.GatedCommandFailed failed, (Sent _ | Cloning _) when failed.Tool = "add_repo" ->
-                            Launch.update (LaunchFailed failed.Reason) launch
+                            Launch.update (LaunchFailed failed.Reason) launch |> fst
                         | _ -> launch)
                     model.Launch
             let terminals =
@@ -2539,9 +2540,9 @@ module ClientModel =
                     { model.Synced with
                         Pending = Map.add queueId { entry with Order = order } model.Synced.Pending }
             | None -> model
-        | LaunchMsg msg -> { model with Launch = Launch.update msg model.Launch }
+        | LaunchMsg msg -> { model with Launch = Launch.update msg model.Launch |> fst }
         | CommandAnsweredMsg (request, result) ->
-            { model with Launch = Launch.update (LaunchAnswered (request, result)) model.Launch }
+            { model with Launch = Launch.update (LaunchAnswered (request, result)) model.Launch |> fst }
         | SetModelMsg choice -> model |> withSynced { model.Synced with Model = choice }
         // An id this client's window does not hold is a page boundary, not a bug — and
         // there is nothing to toggle, because what the verdict would default to is on the item.
@@ -2579,6 +2580,14 @@ module ClientModel =
 
     /// A message's consequences: the next model, and what it asks of the world outside it.
     let update (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =
+        let next = fold msg model
+        // The launch surface's listing is asked for by whichever message first offers it:
+        // anchoring happens once in a client's life on a session, so this asks once, and
+        // the surface has no mount of its own to ask from.
+        let offering =
+            if not model.Launch.Anchored && next.Launch.Anchored then
+                [ ClientEffect.Launch (LaunchEffect.Search next.Launch.Query) ]
+            else []
         let effects =
             match msg with
             | TakeTerminalMsg terminal -> [ ClientEffect.TakeTerminal terminal ]
@@ -2589,5 +2598,6 @@ module ClientModel =
             | OpenTerminalMsg title -> [ ClientEffect.OpenTerminal title ]
             | InterruptTurnMsg turn -> [ ClientEffect.InterruptTurn turn ]
             | ApproveRepoCapabilitiesMsg (repo, granted) -> [ ClientEffect.ApproveRepoCapabilities (repo, granted) ]
+            | LaunchMsg launchMsg -> Launch.update launchMsg model.Launch |> snd |> List.map ClientEffect.Launch
             | _ -> []
-        fold msg model, effects
+        next, effects @ offering

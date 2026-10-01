@@ -116,13 +116,21 @@ type LaunchViewState =
 type LaunchMsg =
     | LaunchQueryTyped of string
     | LaunchListingArrived of LaunchListing
-    /// A row was tapped: held if it was not, let go if it was.
+    /// Enter on the field: a link copied from the forge is resolved to a row, anything else
+    /// is a search (`linkOf`). Nothing while an attempt is under way.
+    | LaunchSubmitted
+    /// A row was tapped: held if it was not, let go if it was. Holding a row whose branches
+    /// have not been asked for asks, so the pane is full by the time it is opened.
     | LaunchSelected of RepoCandidate
-    /// A pasted link resolved to a row: put at the head of the list if it is not in it,
-    /// and held, with the branch the link named.
-    | LaunchLinked of RepoCandidate * branch: string option
-    /// The foot of the list came into view and a page was asked for.
-    | LaunchMoreStarted
+    /// What a pasted link resolved to: the repo and the branch it named, and the listing's
+    /// answer for that one name — which carries the row under the provider's current name,
+    /// with its real default branch.
+    | LaunchResolved of RepoRef * branch: string option * LaunchListing
+    /// The foot of the list came into view: a page is asked for if the listing wants one
+    /// (`wanting`). Sent as often as the foot is seen; the rule is what keeps it to one.
+    | LaunchMoreAsked
+    /// Ask again for the page that failed — the foot's ask, with the failure set aside.
+    | LaunchMoreRetried
     /// The next page landed: its rows go after the ones already read, and its own `Next`
     /// replaces the cursor that fetched it.
     | LaunchMoreArrived of RepoPage
@@ -136,11 +144,14 @@ type LaunchMsg =
     | LaunchBranchPaneOpened of RepoRef
     | LaunchBranchPaneClosed
     | LaunchBranchQueryTyped of string
-    | LaunchBranchMoreStarted
+    /// `LaunchMoreAsked` and `LaunchMoreRetried`, for the branch pane's listing.
+    | LaunchBranchMoreAsked
+    | LaunchBranchMoreRetried
     | LaunchBranchMoreArrived of RepoRef * BranchPage
     | LaunchBranchMoreFailed of reason: string
-    /// A pasted link is being asked about before it can be held.
-    | LaunchResolving of RepoLink
+    /// START: send the held row as the `AddRepo` command (`target`). Nothing, when nothing
+    /// is held.
+    | LaunchStartPressed
     /// The command left, under this request id, for this target.
     | LaunchSent of RequestId * LaunchTarget
     /// The session answered a command; only the one `Sent` names is this surface's.
@@ -149,6 +160,27 @@ type LaunchMsg =
     /// clone did (`GatedCommandFailed` for `add_repo`). Choosing is open again.
     | LaunchFailed of reason: string
     | LaunchDismissed
+
+/// What the launch surface asks of the session, as values the reducer returns beside the
+/// state (`Launch.update`), so the rule deciding WHEN to ask sits with the state it reads —
+/// "once per row", "not while a page is in flight" — rather than in the handler of whichever
+/// control happened to be pressed. Carried out by `Client.Ports`, which answers each with
+/// the `LaunchMsg` it names.
+[<RequireQualifiedAccess>]
+type LaunchEffect =
+    /// The listing for what was typed (empty is "my repos") -> `LaunchListingArrived`.
+    | Search of query: string
+    /// The page a cursor names -> `LaunchMoreArrived` or `LaunchMoreFailed`.
+    | More of cursor: string
+    /// One repo's branches -> `LaunchBranchesArrived`.
+    | Branches of RepoRef
+    /// The branch page a cursor names -> `LaunchBranchMoreArrived` or `LaunchBranchMoreFailed`.
+    | BranchesMore of RepoRef * cursor: string
+    /// A pasted link: a pull request's head asked of the provider, then the one name looked
+    /// up in the listing -> `LaunchResolved`, or `LaunchFailed` when the head cannot be read.
+    | Resolve of RepoLink
+    /// The `AddRepo` command -> `LaunchSent`, under the request id it left with.
+    | Start of LaunchTarget
 
 module Launch =
 
@@ -325,31 +357,81 @@ module Launch =
         let hosted = text.Contains "github.com/" || text.StartsWith "git@github.com:"
         if hosted then RepoLink.parse text else None
 
-    let update (msg: LaunchMsg) (launch: LaunchViewState) : LaunchViewState =
+    /// The branches for `repo`, unless they have been asked for already — once per row,
+    /// whatever is held and let go.
+    let private branchesFor (repo: RepoRef) (launch: LaunchViewState) : LaunchEffect list =
+        if launch.Branches |> Map.containsKey repo then [] else [ LaunchEffect.Branches repo ]
+
+    /// A message's consequences for the surface: its next state, and what it asks of the
+    /// session.
+    let update (msg: LaunchMsg) (launch: LaunchViewState) : LaunchViewState * LaunchEffect list =
         match msg with
-        | LaunchQueryTyped text -> { launch with Query = text }
+        | LaunchSubmitted when busy launch -> launch, []
+        | LaunchSubmitted ->
+            match linkOf launch.Query with
+            | Some link -> { launch with Stage = Resolving link; Problem = None }, [ LaunchEffect.Resolve link ]
+            // A new search is the start of a new list: whatever the foot was doing for the old
+            // one is over.
+            | None -> { launch with Listing = ListingUnknown; More = MoreIdle }, [ LaunchEffect.Search launch.Query ]
+        | LaunchSelected candidate ->
+            if launch.Selected = Some candidate.Repo then { launch with Selected = None }, []
+            else { launch with Selected = Some candidate.Repo; Problem = None }, branchesFor candidate.Repo launch
+        // A link becomes a ROW, held — never a send.
+        | LaunchResolved (repo, branch, listing) ->
+            match listing with
+            | ListingLoaded page when not (List.isEmpty page.Candidates) ->
+                let candidate = List.head page.Candidates
+                let listed = candidates launch
+                let rows =
+                    if listed |> List.exists (fun c -> c.Repo = candidate.Repo) then listed
+                    else candidate :: listed
+                { launch with
+                    Listing = ListingLoaded { RepoPage.Candidates = rows; RepoPage.Next = nextOf launch }
+                    Selected = Some candidate.Repo
+                    Named =
+                        match branch with
+                        | Some branch -> launch.Named |> Map.add candidate.Repo branch
+                        | None -> launch.Named |> Map.remove candidate.Repo
+                    Stage = Choosing
+                    Problem = None },
+                [ LaunchEffect.Branches candidate.Repo ]
+            | ListingLoaded _ ->
+                { launch with
+                    Stage = Choosing
+                    Problem = Some (sprintf "github does not show %s to this credential" (RepoRef.value repo)) },
+                []
+            | ListingUnavailable (reason, _) -> { launch with Stage = Choosing; Problem = Some reason }, []
+            | ListingUnknown -> launch, []
+        | LaunchMoreAsked ->
+            match wanting launch with
+            | Some cursor -> { launch with More = MoreFetching }, [ LaunchEffect.More cursor ]
+            | None -> launch, []
+        | LaunchMoreRetried ->
+            match wanting { launch with More = MoreIdle } with
+            | Some cursor -> { launch with More = MoreFetching }, [ LaunchEffect.More cursor ]
+            | None -> launch, []
+        | LaunchBranchMoreAsked ->
+            match wantingBranches launch with
+            | Some (repo, cursor) -> { launch with BranchMore = MoreFetching }, [ LaunchEffect.BranchesMore (repo, cursor) ]
+            | None -> launch, []
+        | LaunchBranchMoreRetried ->
+            match wantingBranches { launch with BranchMore = MoreIdle } with
+            | Some (repo, cursor) -> { launch with BranchMore = MoreFetching }, [ LaunchEffect.BranchesMore (repo, cursor) ]
+            | None -> launch, []
+        // The pane's own query does not survive it: a branch typed on one repo's pane is not a
+        // filter over another's, and a pane reopened is a question asked again. The branches
+        // are asked for here as well as on holding, because a row can be held by a pasted link
+        // rather than a press.
+        | LaunchBranchPaneOpened repo ->
+            { launch with Pane = ChoosingBranch repo; BranchQuery = ""; BranchMore = MoreIdle }, branchesFor repo launch
+        // One launch at a time: what is under way is what the button is showing.
+        | LaunchStartPressed when busy launch -> launch, []
+        | LaunchStartPressed -> launch, (target launch |> Option.map LaunchEffect.Start |> Option.toList)
+        | LaunchQueryTyped text -> { launch with Query = text }, []
         // A listing ARRIVING is the start of a new list, so whatever the foot was doing for
         // the old one is over: a page in flight for a search two keystrokes ago must not
         // append itself to what is on screen now.
-        | LaunchListingArrived listing -> { launch with Listing = listing; More = MoreIdle }
-        | LaunchSelected candidate ->
-            if launch.Selected = Some candidate.Repo then { launch with Selected = None }
-            else { launch with Selected = Some candidate.Repo; Problem = None }
-        | LaunchLinked (candidate, branch) ->
-            let listed = candidates launch
-            let listing =
-                if listed |> List.exists (fun c -> c.Repo = candidate.Repo) then listed
-                else candidate :: listed
-            { launch with
-                Listing = ListingLoaded { RepoPage.Candidates = listing; RepoPage.Next = nextOf launch }
-                Selected = Some candidate.Repo
-                Named =
-                    match branch with
-                    | Some branch -> launch.Named |> Map.add candidate.Repo branch
-                    | None -> launch.Named |> Map.remove candidate.Repo
-                Stage = Choosing
-                Problem = None }
-        | LaunchMoreStarted -> { launch with More = MoreFetching }
+        | LaunchListingArrived listing -> { launch with Listing = listing; More = MoreIdle }, []
         | LaunchMoreArrived page ->
             match launch.Listing with
             // Only onto the list the page was asked for. A page that lands after the list
@@ -359,17 +441,14 @@ module Launch =
                 let added = page.Candidates |> List.filter (fun c -> not (known.Contains c.Repo))
                 { launch with
                     Listing = ListingLoaded { RepoPage.Candidates = seen.Candidates @ added; RepoPage.Next = page.Next }
-                    More = MoreIdle }
-            | _ -> launch
-        | LaunchMoreFailed reason -> { launch with More = MoreFailed reason }
+                    More = MoreIdle },
+                []
+            | _ -> launch, []
+        | LaunchMoreFailed reason -> { launch with More = MoreFailed reason }, []
         | LaunchBranchesArrived (repo, branches) ->
-            { launch with Branches = launch.Branches |> Map.add repo branches; BranchMore = MoreIdle }
-        // The pane's own query does not survive it. A branch typed on one repo's pane is not
-        // a filter over another's, and a pane reopened is a question asked again.
-        | LaunchBranchPaneOpened repo -> { launch with Pane = ChoosingBranch repo; BranchQuery = ""; BranchMore = MoreIdle }
-        | LaunchBranchPaneClosed -> { launch with Pane = ChoosingRepo; BranchQuery = "" }
-        | LaunchBranchQueryTyped text -> { launch with BranchQuery = text }
-        | LaunchBranchMoreStarted -> { launch with BranchMore = MoreFetching }
+            { launch with Branches = launch.Branches |> Map.add repo branches; BranchMore = MoreIdle }, []
+        | LaunchBranchPaneClosed -> { launch with Pane = ChoosingRepo; BranchQuery = "" }, []
+        | LaunchBranchQueryTyped text -> { launch with BranchQuery = text }, []
         | LaunchBranchMoreArrived (repo, page) ->
             match launch.Branches |> Map.tryFind repo with
             // Only onto the listing it is a page of, and only while it was asked for — the
@@ -381,18 +460,18 @@ module Launch =
                     Branches =
                         launch.Branches
                         |> Map.add repo (BranchesLoaded { BranchPage.Names = seen.Names @ added; BranchPage.Next = page.Next })
-                    BranchMore = MoreIdle }
-            | _ -> launch
-        | LaunchBranchMoreFailed reason -> { launch with BranchMore = MoreFailed reason }
-        | LaunchBranchNamed (repo, branch) -> { launch with Named = launch.Named |> Map.add repo branch }
-        | LaunchResolving link -> { launch with Stage = Resolving link; Problem = None }
-        | LaunchSent (request, target) -> { launch with Stage = Sent (request, target); Problem = None; Pane = ChoosingRepo }
+                    BranchMore = MoreIdle },
+                []
+            | _ -> launch, []
+        | LaunchBranchMoreFailed reason -> { launch with BranchMore = MoreFailed reason }, []
+        | LaunchBranchNamed (repo, branch) -> { launch with Named = launch.Named |> Map.add repo branch }, []
+        | LaunchSent (request, target) -> { launch with Stage = Sent (request, target); Problem = None; Pane = ChoosingRepo }, []
         | LaunchAnswered (request, result) ->
             match launch.Stage with
             | Sent (sent, target) when sent = request ->
                 match result with
-                | CommandAccepted -> { launch with Stage = Cloning target }
-                | CommandRejected reason -> { launch with Stage = Choosing; Problem = Some reason }
-            | _ -> launch
-        | LaunchFailed reason -> { launch with Stage = Choosing; Problem = Some reason }
-        | LaunchDismissed -> { launch with Dismissed = true }
+                | CommandAccepted -> { launch with Stage = Cloning target }, []
+                | CommandRejected reason -> { launch with Stage = Choosing; Problem = Some reason }, []
+            | _ -> launch, []
+        | LaunchFailed reason -> { launch with Stage = Choosing; Problem = Some reason }, []
+        | LaunchDismissed -> { launch with Dismissed = true }, []
