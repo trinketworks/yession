@@ -52,8 +52,19 @@ export NIX_SSL_CERT_FILE=/root/.ccr/ca-bundle.crt
 [ -e "$HOME/.nix-profile/etc/profile.d/nix.sh" ] && . "$HOME/.nix-profile/etc/profile.d/nix.sh"
 RC
   done
+  #
+  # Each wrapper is written beside its destination and then RENAMED over it, never written
+  # through it. An image can ship /usr/local/bin/nix as a symlink into a Nix profile, and
+  # `cat >` follows a symlink: it overwrote the nix binary in the store with this wrapper,
+  # whose exec then named itself, so every nix call recursed until the kernel refused
+  # ("Argument list too long") and the store copy could only be fetched back by hand.
   for tool in nix devenv; do
-    cat > "/usr/local/bin/$tool" <<WRAP
+    target="$(readlink -f "$HOME/.nix-profile/bin/$tool" 2>/dev/null || true)"
+    if [ -n "$target" ] && grep -qs 'Wrapper written by .claude/setup.sh' "$target"; then
+      echo "setup: $target is this script's wrapper, not $tool — an earlier run wrote through a symlink into the store; restore it (nix-store --repair-path, or re-fetch it) before re-running" >&2
+      exit 1
+    fi
+    cat > "/usr/local/bin/.$tool.setup" <<WRAP
 #!/usr/bin/env bash
 # Wrapper written by .claude/setup.sh: the env nix needs in this container.
 export USER="\${USER:-\$(id -un)}"
@@ -79,7 +90,8 @@ unset no_proxy NO_PROXY
 export PATH="\$HOME/.nix-profile/bin:\$PATH"
 exec "\$HOME/.nix-profile/bin/$tool" "\$@"
 WRAP
-    chmod +x "/usr/local/bin/$tool"
+    chmod +x "/usr/local/bin/.$tool.setup"
+    mv -f "/usr/local/bin/.$tool.setup" "/usr/local/bin/$tool"
   done
 fi
 
