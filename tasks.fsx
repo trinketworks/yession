@@ -950,6 +950,19 @@ let example (name: string) =
         failwithf "no example called '%s' (have: %s)" name available
     if File.Exists (Path.Combine (dir, "pyproject.toml")) then pythonExample dir name else
 
+    // The fourth shape: shell scripts an operator installs where the product will run them
+    // (examples/nix-store). Nothing to build, so the verb does what a build would have
+    // caught — a script `sh` cannot parse. What they DO is proved by the suite
+    // (`DevContainer.fs`), which needs docker and a nix image, which is why not here.
+    let scripts =
+        Directory.GetFiles dir
+        |> Array.filter (fun path -> (File.ReadLines path |> Seq.tryHead) = Some "#!/bin/sh")
+    if scripts.Length > 0 then
+        for script in scripts do
+            run "sh" [ "-n"; script ] |> ignore
+        printfn "examples/%s: %d scripts parse; nothing to build — see its README" name scripts.Length
+    else
+
     // The third shape: plain Node, no dependencies, nothing to bundle. There is no build to
     // run, so the verb does what a build would have caught — a file node cannot parse — and
     // says so. What the example DOES is proved by the suite (`ProxyMap.fs`), which needs a

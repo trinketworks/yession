@@ -1,0 +1,68 @@
+#!/bin/sh
+# sweep EVERY KEEP
+#
+# Collects a Nix store shared by Yession sandboxes, keeping what any of them still
+# uses. EVERY is the pin interval in seconds (the profile's `maintain.every`); KEEP
+# is how long, in seconds, an ended sandbox's lease still counts — which is how the
+# next session gets its shell warm. Run it in a container of its own, holding the
+# volume at /nix, with the indirect roots hidden from it:
+#
+#   docker run --rm -v yession-nix:/nix --tmpfs /nix/var/nix/gcroots/auto \
+#     nixos/nix /nix/var/yession/sweep 600 604800
+#
+# The mask is not optional. Every indirect root points into some sandbox's own
+# checkout, which does not exist in here, and nix deletes a root whose target it
+# cannot find — so an unmasked sweep would unroot every other sandbox's shell.
+# Those roots are what the leases carry instead.
+set -eu
+
+every=$1
+keep=$2
+leases=/nix/.yession/leases
+roots=/nix/var/nix/gcroots/yession-sweep
+lock=/nix/.yession/sweeping
+
+masked=no
+while read -r _ mountpoint _; do
+    [ "$mountpoint" = /nix/var/nix/gcroots/auto ] && masked=yes
+done < /proc/mounts
+if [ "$masked" != yes ]; then
+    echo "sweep: /nix/var/nix/gcroots/auto is not masked; run with --tmpfs /nix/var/nix/gcroots/auto" >&2
+    exit 2
+fi
+if [ "$keep" -le "$every" ]; then
+    echo "sweep: KEEP ($keep) must be longer than EVERY ($every), or a live sandbox's lease could lapse between two pins" >&2
+    exit 2
+fi
+
+mkdir -p /nix/.yession
+if ! mkdir "$lock" 2>/dev/null; then
+    echo "sweep: another sweep holds $lock (remove it if none is running)" >&2
+    exit 1
+fi
+trap 'rm -rf "$roots" "$lock"' EXIT
+
+# Every live sandbox pins at least once in EVERY, so after waiting that long its
+# lease says what it uses now rather than up to EVERY ago.
+sleep "$every"
+
+rm -rf "$roots"
+mkdir -p "$roots"
+now=$(date +%s)
+for lease in "$leases"/*; do
+    [ -f "$lease/paths" ] || continue
+    name=${lease##*/}
+    renewed=$(stat -c %Y "$lease/paths")
+    if [ $((now - renewed)) -ge "$keep" ]; then
+        echo "sweep: $name last pinned $(( (now - renewed) / 3600 ))h ago; dropping its lease"
+        rm -rf "$lease"
+        continue
+    fi
+    i=0
+    while IFS= read -r path; do
+        [ -e "$path" ] && ln -s "$path" "$roots/$name-$i"
+        i=$((i + 1))
+    done < "$lease/paths"
+done
+
+nix-store --gc
