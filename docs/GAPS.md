@@ -511,6 +511,36 @@ first's.
   innerHTML-replacement approach). The only remaining manual DOM work is pinning the chat
   scroll and pixel-positioning collaborators' cursor markers (a native `<input>` exposes no
   per-character geometry).
+- **Sending a draft still bypasses the Elmish loop, and moving it in needs Ylmish to change.**
+  Every other control now dispatches a message and `ClientModel.update` answers the requests it
+  makes as `ClientEffect` values, carried out by `Client.Ports` after the model they came with.
+  What is left is the drafts: the composer's Send and Clear (`ViewActions.SendDraft`,
+  `DiscardDraft`), the terminal composer's Send (`SendTerminalDraft`), and the editors'
+  keyboard send (`Links.SendDraft`, `SendTerminalDraft` in `Render.fs`). Each calls a verb on
+  `Client.Connection` that opens a `doc.transact`, copies or empties a body root the app owns
+  beside the synced model (a draft's `Y.XmlFragment`, a terminal slot's `Y.Text`), and
+  dispatches `SendDraftMsg` / `SendTerminalDraftMsg` / `DiscardDraftMsg` from INSIDE that
+  transaction. That one transaction is the invariant: the Session Process drains on a queue
+  entry's arrival, so an entry that lands without its body runs as an empty message, and a
+  send split across updates lets a `withYlmish` `Set` from the drain's removal clobber the
+  sender's own state (`Client.connect` says both at the verbs). It holds today only because a
+  dispatch from a click handler is processed synchronously, and `withYlmish` wraps each update
+  in `Y.transact`, which nests inside the one already open. Made an effect, it breaks: a
+  dispatch from inside an Elmish command is queued until the command returns, so the model's
+  write lands in a second transaction after the body's. The fix belongs in Ylmish, not around
+  it: an update needs a way to declare doc writes that run inside the transaction `withYlmish`
+  already opens for it, before the model's own write, so "seed the queued body, clear the
+  draft, add the entry" is one message, one update, one transaction, and the cheap tier can
+  assert the writes as values. To design: whether the writes are opaque `Y.Doc -> unit`
+  functions or a typed vocabulary over the roots an app declares (copy a fragment, clear a
+  text); which origin they carry, given the binding filters its own echoes by origin and
+  these roots sit outside the binding; and whether this is a new `Program` combinator or a
+  change to `Options`. The second half of the same step needs no Ylmish change but waits for
+  the first, because it lives in the same closure: `Client.connect` keeps its own mutable
+  state beside the model (the read cursor `lastProcessed`, `latestKnown`, `readInFlight`;
+  presence's `reportedFocus`, `reportedViewing`, `presenceAllowed`), and `dispatchAndConsume`
+  reads messages after dispatching them to decide reads the reducer should be asking for as
+  effects.
 - **One WIP draft per client, co-editable by any peer** (Plan 03): drafts are keyed by author
   (`Map<PeerId, DraftState>`), so each client owns at most one — structurally, not by a runtime
   cap. Any peer may co-edit any slot, and any co-editor may send it: the entry is attributed to
