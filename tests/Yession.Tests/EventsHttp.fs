@@ -15,6 +15,7 @@ open Fable.Pyxpecto
 open Ylmish
 open Yession.Domain
 open Yession.App
+open Yession.SessionProcess
 open Yession.Host
 open Yession.Tests.Support
 open Yession.Peer
@@ -371,8 +372,80 @@ let private storeTests =
             }
     ]
 
+// What one page costs does not grow with the log behind it.
+//
+// A reader catching up asks for every page in turn, so `Read` is called once per page — and
+// both stores used to answer by walking the WHOLE log from the cursor and then discarding
+// all but the first `limit`. That is quadratic in the length of the log, per reader, per
+// cold open: a real 20,650-event session cost 208 reads averaging ten thousand copied
+// envelopes apiece, about two million of them, and roughly 1.9s of a cold open on a laptop.
+// `EventPaging.page` takes the slice instead, which it can because an envelope's offset is
+// its index.
+//
+// Pinned as a RATIO, for the reason the render budget is a count rather than a duration: an
+// absolute millisecond figure on a shared runner is the flaky test this repository warns
+// about, while "a page off a long log costs about what it costs off a short one" is the same
+// claim on every box. The bound is deliberately loose — a hundred times the log may cost ten
+// times the page and still pass — because what it exists to catch is the walk, which makes
+// it cost a hundred times.
+let private pagingTests =
+    testList "Paging" [
+        testCaseAsync "one page costs about the same whatever the log behind it holds" <|
+            async {
+                let logOf (n: int) =
+                    let log =
+                        InMemoryEventLog.create
+                            (SessionId.create "paging" |> expect)
+                            (fun () -> DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero))
+                    async {
+                        for i in 1 .. n do
+                            let! _ =
+                                log.Append
+                                    ActorRef.System
+                                    (SessionEvent.PeerJoined
+                                        { PeerId = PeerId.create (sprintf "p-%d" i) |> expect
+                                          DisplayName = "x"
+                                          User = None })
+                            ()
+                        return log
+                    }
+                let short' = 200
+                let long' = 20_000
+                let! shortLog = logOf short'
+                let! longLog = logOf long'
+                // The FIRST page of each, which is where the walk and the slice differ most:
+                // one copies the whole log to hand back a hundred, the other copies a hundred.
+                let timeReads (log: Yession.SessionProcess.EventLog<SessionEvent>) =
+                    async {
+                        // Warm first, so neither side pays a one-off the other does not.
+                        let! _ = log.Read None 100
+                        let started = DateTimeOffset.UtcNow
+                        for _ in 1 .. 50 do
+                            let! page = log.Read None 100
+                            Expect.equal (List.length page.Events) 100 "a full page each time"
+                        return (DateTimeOffset.UtcNow - started).TotalMilliseconds
+                    }
+                let! shortMs = timeReads shortLog
+                let! longMs = timeReads longLog
+                // A floor on the denominator: 50 reads of a 200-event log can land on 0ms,
+                // and a ratio over zero is not a measurement.
+                let ratio = longMs / (max shortMs 1.0)
+                printfn
+                    "  50 pages off %d events: %.0fms; off %d events: %.0fms — %.1fx"
+                    short' shortMs long' longMs ratio
+                Expect.isTrue
+                    (ratio < 10.0)
+                    (sprintf
+                        "a page off a log %dx longer cost %.1fx as much (%.0fms against %.0fms) — \
+                         reading a page is walking the log again; see `EventPaging.page` in \
+                         `src/Yession.SessionProcess/EventLog.fs`"
+                        (long' / short') ratio longMs shortMs)
+            }
+    ]
+
 let tests =
     testList "EventsHttp" [
         endpointTests
         storeTests
+        pagingTests
     ]
