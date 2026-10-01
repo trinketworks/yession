@@ -130,6 +130,15 @@ module Client =
           /// Where a pull request's head lives, so a link to one can be launched.
           PullHead : RepoRef -> int -> Async<Result<Repos.PullHead, string>> }
 
+    /// The connection panels' writes: POSTs to the session's own routes, answered as the
+    /// panel's next step — refused, an authorize URL to open, or accepted. `Now` is the clock
+    /// an accepted command's wait is measured from (`Pending.Awaiting`), read where the answer
+    /// lands rather than in the reducer, which has none.
+    [<RequireQualifiedAccess>]
+    type PanelWrites =
+        { Claude : ClaudeAction -> ClaudeRequest -> Async<ClaudeAnswer>
+          Now : unit -> int64 }
+
     /// What the program's effects are carried out against (`ClientEffect`).
     ///
     /// A getter rather than a connection because the program exists first: a client is local
@@ -140,12 +149,14 @@ module Client =
     type Ports =
         { Connection : unit -> Connection option
           /// `None` where there is no page to read from: a headless peer, a test.
-          Launch : LaunchReads option }
+          Launch : LaunchReads option
+          /// `None` where there is no page to post to, as for `Launch`.
+          Panels : PanelWrites option }
 
     module Ports =
 
         /// A client with no session to ask: every request goes nowhere.
-        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None }
+        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None; Ports.Panels = None }
 
         /// A launch read, answered as the message that carries its result.
         let private launchRead (reads: LaunchReads) (dispatch: ClientMsg -> unit) (effect: LaunchEffect) : Async<unit> =
@@ -208,6 +219,14 @@ module Client =
                 connected (fun c -> dispatch (LaunchMsg (LaunchSent (c.AddRepo target.Repo target.Branch, target))))
             | ClientEffect.Launch read ->
                 ports.Launch |> Option.iter (fun reads -> Async.StartImmediate (launchRead reads dispatch read))
+            | ClientEffect.Claude call ->
+                ports.Panels
+                |> Option.iter (fun panels ->
+                    Async.StartImmediate (
+                        async {
+                            let! answer = panels.Claude call.Action call.Request
+                            dispatch (ClaudeAnsweredMsg (call, answer, panels.Now ()))
+                        }))
 
     /// The client Elmish program for a given Yjs doc: the pure `ClientModel.update`
     /// under `Program.withYlmish`, so local draft edits flow out as CRDT deltas and

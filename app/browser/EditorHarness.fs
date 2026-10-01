@@ -1397,7 +1397,8 @@ do
             // without a press. What the cursor says is the session's business; that it is
             // carried back unread is what the harness stands in for.
             | ClientEffect.Launch (LaunchEffect.More cursor) -> moreRef cursor
-            | ClientEffect.Launch _ -> ())
+            | ClientEffect.Launch _
+            | ClientEffect.Claude _ -> ())
         // Read back off the MODEL rather than out of the message: a measurement the reducer
         // refused is not a width anything would claim, and a hook that reported it anyway
         // would say the opposite of what happened.
