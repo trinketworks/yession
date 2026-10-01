@@ -22,19 +22,33 @@ open Yjs
 /// written against.
 module ProseMirror =
 
-    type Node = obj
+    type Node = Headless.Node
     type Plugin = obj
-    type Schema = obj
+    type Schema = Headless.Schema
     type NodeType = obj
-    type MarkType = obj
+
+    /// A mark's type in the schema (`strong`, `em`, `code`, `link`, …).
+    type [<AllowNullLiteral>] MarkType =
+        abstract name : string
+
+    /// A mark's attributes: a link's `href`, and nothing on any other mark.
+    [<AllowNullLiteral>]
+    type MarkAttrs =
+        abstract href : string option
+
+    /// A mark applied to a text run, as a parsed node carries it.
+    type [<AllowNullLiteral>] Mark =
+        abstract ``type`` : MarkType
+        abstract attrs : MarkAttrs
+
     type Command = obj
     type InputRule = obj
 
     /// A ProseMirror transaction. Members are chainable (each returns the mutated `this`).
     type [<AllowNullLiteral>] Transaction =
         abstract delete : int * int -> Transaction
-        abstract addMark : int * int * obj -> Transaction
-        abstract removeStoredMark : obj -> Transaction
+        abstract addMark : int * int * Mark -> Transaction
+        abstract removeStoredMark : MarkType -> Transaction
         abstract replaceSelectionWith : Node * bool -> Transaction
 
     type [<AllowNullLiteral>] EditorState =
@@ -70,14 +84,9 @@ module ProseMirror =
 
     // --- prosemirror-markdown: the schema + parser/serializer (markdown round-trip) --------
 
-    type [<AllowNullLiteral>] MarkdownParser =
-        abstract parse : string -> Node
+    type MarkdownParser = Headless.MarkdownParser
 
-    [<Import("schema", "prosemirror-markdown")>]
-    let schema : Schema = jsNative
-
-    [<Import("defaultMarkdownParser", "prosemirror-markdown")>]
-    let private defaultMdParser : MarkdownParser = jsNative
+    let schema : Schema = Headless.schema
 
     /// markdown-it refuses a link by SCHEME before anything sees it: `javascript:`,
     /// `vbscript:`, `data:` and `file:` never become links at all — they stay literal text.
@@ -96,7 +105,7 @@ module ProseMirror =
     [<Emit("(function (p) { const inner = p.tokenizer.validateLink.bind(p.tokenizer); p.tokenizer.validateLink = url => inner(url) || /^file:\\/\\/\\//i.test(url.trim()); return p })($0)")>]
     let private admittingContentLinks (parser: MarkdownParser) : MarkdownParser = jsNative
 
-    let mdParser : MarkdownParser = admittingContentLinks defaultMdParser
+    let mdParser : MarkdownParser = admittingContentLinks Headless.defaultMarkdownParser
 
     /// `schema.nodes[name]` / `schema.marks[name]`: the type under that name, and nothing when
     /// the schema declares none — which the option says, where a JS truthiness test used to be
@@ -106,7 +115,7 @@ module ProseMirror =
     [<Emit("$0.marks[$1]")>]
     let markType (s: Schema) (name: string) : MarkType option = jsNative
     [<Emit("$0.create()")>]
-    let markCreate (m: MarkType) : obj = jsNative
+    let markCreate (m: MarkType) : Mark = jsNative
     /// A fresh JS RegExp from a pattern string (input-rule triggers).
     [<Emit("new RegExp($0)")>]
     let regex (pattern: string) : obj = jsNative
@@ -132,7 +141,7 @@ module ProseMirror =
     let nodeTextContent (node: Node) : string = jsNative
     /// A text node's marks (`em`/`strong`/`code`/`link`), innermost-last.
     [<Emit("$0.marks")>]
-    let nodeMarks (node: Node) : obj[] = jsNative
+    let nodeMarks (node: Node) : Mark[] = jsNative
     /// The attributes the markdown schema puts on a node — a heading's `level`, an ordered
     /// list's `order`, a table cell's `align` — each an option because a node of another type
     /// carries neither.
@@ -142,19 +151,12 @@ module ProseMirror =
         abstract order : int option
         abstract align : string option
 
-    /// A mark's attributes: a link's `href`, and nothing on any other mark.
-    [<AllowNullLiteral>]
-    type MarkAttrs =
-        abstract href : string option
-
     /// A node's attributes as they stand, undefaulted. The two readers below answer what a
     /// RENDERER wants — a level, a start number, each with the schema's fallback already
     /// folded in — and that is the wrong question for a predicate, which has to be able to
     /// tell an absent attribute from a present one that happens to equal the default.
     [<Emit("$0.attrs")>]
     let nodeAttrs (node: Node) : NodeAttrs = jsNative
-    [<Emit("$0.attrs")>]
-    let private markAttrs (mark: obj) : MarkAttrs = jsNative
 
     /// A heading's level (1–6), defaulting to 1. This used to be `level || 1`, and the one
     /// case that operator folds in is kept on purpose: a heading whose level is 0 is not a
@@ -184,11 +186,6 @@ module ProseMirror =
         let orderedList (order: int) : NodeAttrs = unbox (createObj [ "order" ==> order ])
         let tableCell (align: string option) : NodeAttrs =
             unbox (createObj [ "align" ==> (align |> Option.map box |> Option.defaultValue null) ])
-
-    [<Emit("$0.type.name")>]
-    let markTypeName (mark: obj) : string = jsNative
-    /// A link mark's target, and nothing for a mark that is not a link.
-    let markHref (mark: obj) : string option = (markAttrs mark).href
 
     // --- GFM tables (read-only): the timeline's OWN schema + parser, never the editor's -----
     // `mdParser`/`schema` above are what the composer edits with, and their commonmark
