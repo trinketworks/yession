@@ -5,8 +5,9 @@ module Yession.Host.Version
 //
 // The version is a COMPILE-TIME constant: `tasks.fsx stage` passes esbuild
 // `--define:YESSION_BUILD_VERSION="<version>"` when it bundles `manager.js` and `session.js`, so
-// the identifier below is substituted for a literal. Nothing is read from disk at run time — the
-// bundles deliberately never depend on a package.json being next to them.
+// the identifier `Fable.NodeExtras.Bundle.buildVersion` reads is substituted for a literal.
+// Nothing is read from disk at run time — the bundles deliberately never depend on a
+// package.json being next to them.
 //
 // Every build states what it actually is; there are no placeholder versions:
 //   1.0.0-beta.95   a release (GitVersion, see GitVersion.yml)
@@ -14,13 +15,11 @@ module Yession.Host.Version
 //   test            the test tiers (`check` stages with this)
 //   dev             an unbundled run of the Fable output (`tasks.fsx start` / `dev`)
 
-open Fable.Core
+open Fable.NodeExtras
 
 /// This build's version. `dev` is the honest answer for an unbundled run of the Fable output:
-/// it is the ONLY path with no esbuild define. `typeof` guards the identifier so such a run
-/// cannot ReferenceError — esbuild substitutes inside the `typeof` too, which is harmless.
-[<Emit("typeof YESSION_BUILD_VERSION !== 'undefined' ? YESSION_BUILD_VERSION : 'dev'")>]
-let current : string = jsNative
+/// it is the ONLY path with no esbuild define.
+let current : string = Bundle.buildVersion |> Option.defaultValue "dev"
 
 /// The major component, for skew detection. `None` for anything that is not a release version
 /// (`dev`, `test`, malformed input) — a build that cannot state a release version is never

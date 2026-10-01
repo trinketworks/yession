@@ -381,6 +381,22 @@ module ProcessEnv =
     [<Emit("Object.keys(process.env)")>]
     let names () : string array = jsNative
 
+// --- What the bundler substituted -----------------------------------------------------------
+
+/// Globals that exist only because `tasks.fsx stage` asked esbuild to define them when it
+/// bundled the bins. Not Node's, strictly — but a bundle of this host is the only place they
+/// are ever read, and a program that reaches for one is reaching for its platform.
+[<RequireQualifiedAccess>]
+module Bundle =
+
+    /// `YESSION_BUILD_VERSION`, which esbuild replaces with a string literal (`--define`), or
+    /// nothing when this code was not bundled at all. `typeof` guards the bare identifier, so an
+    /// unbundled run cannot ReferenceError — esbuild substitutes inside the `typeof` too, which
+    /// is harmless. What an absent version is CALLED is the reader's decision, not this
+    /// binding's (`Yession.Host.Version`).
+    [<Emit("typeof YESSION_BUILD_VERSION !== 'undefined' ? YESSION_BUILD_VERSION : undefined")>]
+    let buildVersion : string option = jsNative
+
 // --- This process ---------------------------------------------------------------------------
 
 /// What `Fable.Node`'s `process` leaves out. Everything it types — `execPath`, `platform`,
