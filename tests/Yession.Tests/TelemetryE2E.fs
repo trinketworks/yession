@@ -43,7 +43,7 @@ let tests =
                             OutputTokens = 45
                             CacheReadTokens = 6
                             CacheCreationTokens = 7 } ] }
-                let emitter = Telemetry.createOtlp sessionId stub.Url
+                let emitter = Telemetry.createOtlp sessionId stub.Url (System.TimeSpan.FromSeconds 10.0)
 
                 // A turn-complete signal taken off the emit sink itself: it fires exactly when
                 // a completed turn reports usage, so no polling and no sleeps.

@@ -208,7 +208,8 @@ let managerFromEnv () : Emitter =
     build "yession-manager" None None (processorsFromEnv ())
 
 /// A session emitter forwarding OTLP to an explicit `url` (tests / programmatic use — the
-/// stand-in for a real collector). Bypasses env exporter selection.
-let createOtlp (sessionId: SessionId) (url: string) : Emitter =
+/// stand-in for a real collector). Bypasses env exporter selection. `deadline` bounds each
+/// export, retries included (`OpenTelemetry.otlpLogExporter`).
+let createOtlp (sessionId: SessionId) (url: string) (deadline: System.TimeSpan) : Emitter =
     build "yession-session" (Some (SessionId.value sessionId)) (Some sessionId)
-        [ OpenTelemetry.batchProcessor (OpenTelemetry.otlpLogExporter url Map.empty) ]
+        [ OpenTelemetry.batchProcessor (OpenTelemetry.otlpLogExporter url Map.empty deadline) ]
