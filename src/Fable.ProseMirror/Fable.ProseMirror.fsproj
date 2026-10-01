@@ -8,8 +8,12 @@
     its own and not a slice of `Fable.BrowserExtras`: the same distinction `Fable.Dockerode`
     and `Fable.Jose` draw, and what `package.json` keeps it in step with.
 
-    Only the members the editor calls are declared. The bar for adding one is that the editor
-    calls it — a binding written ahead of its use is a binding nothing checks.
+    `Headless` is the DOM-free part — the markdown schema, parser and serializer, and the
+    fragment conversions — which `Yession.Domain` reaches too, so the Session Process can
+    serialize a body without loading the editor's module (that file says why it matters).
+
+    Only the members something calls are declared. The bar for adding one is that the editor
+    or the domain calls it — a binding written ahead of its use is a binding nothing checks.
 
     Fable-only: `dotnet build` type-checks it and stops there.
   -->
@@ -18,6 +22,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Headless.fs" />
     <Compile Include="ProseMirror.fs" />
   </ItemGroup>
 

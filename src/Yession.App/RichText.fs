@@ -34,13 +34,13 @@ module RichText =
     // `chip` is how a reference into this session is drawn — the timeline's entity chip, passed
     // in rather than built here, so a file an agent links to and a file a fold names look the
     // same without this module knowing what a chip is.
-    let private wrapMark (chip: ContentRef -> TemplateResult) (mark: obj) (inner: TemplateResult) : TemplateResult =
-        match markTypeName mark with
+    let private wrapMark (chip: ContentRef -> TemplateResult) (mark: Mark) (inner: TemplateResult) : TemplateResult =
+        match mark.``type``.name with
         | "strong" -> html $"""<strong class="{Style.proseStrong}">{inner}</strong>"""
         | "em" -> html $"""<em>{inner}</em>"""
         | "code" -> html $"""<code class="{Style.proseCode}">{inner}</code>"""
         | "link" ->
-            match markHref mark |> Option.map (fun href -> href, contentLink href) with
+            match mark.attrs.href |> Option.map (fun href -> href, contentLink href) with
             // A reference to something here draws as the chip, and its own name is what the
             // chip says: the link text an agent wrote around it ("this chart") is the sentence's
             // words, not the file's, and the chip has to be recognisable as the same thing the

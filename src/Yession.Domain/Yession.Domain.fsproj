@@ -169,4 +169,9 @@
     <PackageReference Include="Ylmish" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The DOM-free ProseMirror bindings `Markdown` converts a rich-text body through. -->
+    <ProjectReference Include="..\Fable.ProseMirror\Fable.ProseMirror.fsproj" />
+  </ItemGroup>
+
 </Project>

@@ -66,8 +66,8 @@
       },
       "Fable.Browser.Blob": {
         "type": "Transitive",
-        "resolved": "1.2.0",
-        "contentHash": "bM4zbtIeycTFFCH7o4WuN28W70dTxNTMZiMvR70XUTYrBnbz7GpS5XxzUy5caDB4l7s2l7wiuVDhh52t7NXxDg==",
+        "resolved": "1.3.0",
+        "contentHash": "UDVl31aW99qa2NygpxlBRQ7KWUWhF6MuWTZIRB96sSZZxrs46lKYGuL+V8QMd4mKjgeU+02GgUH0tN84NeBATg==",
         "dependencies": {
           "FSharp.Core": "4.7.2",
           "Fable.Core": "3.0.0"
@@ -102,24 +102,39 @@
         "resolved": "13.0.1",
         "contentHash": "ppPFpBcvxdsfUonNcvITKqLl3bqxWbDCZIzDWHzjpdAHRFfZe0Dw9HmA0+za13IdyrgJwpkDTDA9fHaxOrt20A=="
       },
+      "fable.browserextras": {
+        "type": "Project",
+        "dependencies": {
+          "Fable.Browser.Dom": "[2.16.0, )",
+          "Fable.Core": "[5.2.0, )"
+        }
+      },
+      "fable.prosemirror": {
+        "type": "Project",
+        "dependencies": {
+          "Fable.BrowserExtras": "[1.0.0, )",
+          "Fable.Core": "[5.2.0, )",
+          "Fable.Yjs": "[1.0.0-beta0233, )"
+        }
+      },
       "Fable.Browser.Dom": {
         "type": "CentralTransitive",
         "requested": "[2.16.0, )",
-        "resolved": "2.10.1",
-        "contentHash": "G1Ul9D3suwBPUxEw0hwclZzDxDk/hLkwAZytgAoxHmv4uGth9Zpi9Fz4gm6C8v6W87qvhcM8lrCpg1awPeATyg==",
+        "resolved": "2.16.0",
+        "contentHash": "Lvt2LwCd31QCSqHPi48KpQlx2gkaQrAotCeocuQajD+uRJHH43mTBbQ0nLrN7h7Ic/i8LfsS5spZ92K7bktHwA==",
         "dependencies": {
           "FSharp.Core": "4.7.2",
-          "Fable.Browser.Blob": "1.2.0",
+          "Fable.Browser.Blob": "1.3.0",
           "Fable.Browser.Event": "1.5.0",
-          "Fable.Browser.WebStorage": "1.1.0",
+          "Fable.Browser.WebStorage": "1.2.0",
           "Fable.Core": "3.2.8"
         }
       },
       "Fable.Browser.WebStorage": {
         "type": "CentralTransitive",
         "requested": "[1.2.0, )",
-        "resolved": "1.1.0",
-        "contentHash": "tGktTk6QHIOeX7JtG5ISem1p9Rc1iYkgcbpIEzHS2YuvpOa9YomUKABU0Lraz4GMjAGxhhNvAXLRry2w89HdVQ==",
+        "resolved": "1.2.0",
+        "contentHash": "T41JtXnYNzJRXDRndy3FiNNPRp5nnWA6JIMY063wMk+2GOv9MhdPTdTURTtMdBUcX907Gm/hRULVARyedsWM8g==",
         "dependencies": {
           "FSharp.Core": "4.7.2",
           "Fable.Browser.Event": "1.5.0",
