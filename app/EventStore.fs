@@ -94,25 +94,12 @@ let openLog (path: string) (sessionId: SessionId) (clock: unit -> System.DateTim
             return { Offset = offset }
         }
 
+    // By position, not by filtering the whole log: the offset `append` assigns above is the
+    // index, and the replay at open adds the file's lines in their own order, so it is the
+    // index here too. `EventPaging.page` is where that rule and its cost live, shared with
+    // the in-memory store, which kept an identical copy of the walk this replaces.
     let read (after: EventOffset option) (limit: int) : Async<EventPage<SessionEvent>> =
-        async {
-            let afterValue = after |> Option.map EventOffset.value
-            let selected =
-                events
-                |> Seq.filter (fun e ->
-                    match afterValue with
-                    | Some n -> EventOffset.value e.Offset > n
-                    | None -> true)
-                |> Seq.toArray
-            let pageEvents = selected |> Array.truncate (max 0 limit)
-            let lastOffset =
-                if pageEvents.Length = 0 then None
-                else Some (Array.last pageEvents).Offset
-            return
-                { Events = List.ofArray pageEvents
-                  LastOffset = lastOffset
-                  IsEnd = pageEvents.Length = selected.Length }
-        }
+        async { return EventPaging.page events after limit }
 
     { Append = append
       Read = read }

@@ -19,6 +19,39 @@ type EventLog<'event> =
     { Append : AppendEvent<'event>
       Read   : ReadEvents<'event> }
 
+/// One page of a log kept in a list where an envelope's OFFSET IS ITS INDEX.
+///
+/// Both stores guarantee that the same way and say so where they do it: `append` assigns
+/// `events.Count` as the offset, and nothing is ever removed, so the nth envelope is the one
+/// at offset n. That is what makes a page a SLICE — taken by position, costing what the page
+/// holds — and it lives here rather than in either store because it is one rule and there are
+/// two of them (`InMemoryEventLog` below, `Yession.Host.EventStore` over a JSONL file), which
+/// replayed it in two copies.
+///
+/// Both copies walked the WHOLE log and then threw away all but the first `limit`:
+/// `Seq.filter (offset > after) |> Seq.toArray |> Array.truncate limit`. Correct, and
+/// quadratic in exactly the case the surface exists for — a client catching up asks for every
+/// page in turn, so a 20,000-event log cost 208 reads averaging 10,000 copied envelopes
+/// apiece, about two million, per reader, per cold open. On the laptop that is ~1.9s of a
+/// cold open spent walking a list the reader is already most of the way down.
+///
+/// A page off the end is empty rather than an error: a cursor at the head is a caller who is
+/// current, which is the ordinary steady state and not a mistake.
+module EventPaging =
+
+    let page (events: ResizeArray<EventEnvelope<'event>>) (after: EventOffset option) (limit: int) : EventPage<'event> =
+        let from =
+            match after with
+            | Some offset -> int (EventOffset.value offset) + 1
+            | None -> 0
+        let from = max 0 from
+        let count = max 0 (min limit (events.Count - from))
+        let pageEvents = List.init count (fun i -> events.[from + i])
+        { Events = pageEvents
+          LastOffset = if count = 0 then None else Some events.[from + count - 1].Offset
+          // The page is the tail when it holds everything still available after `after`.
+          IsEnd = from + count >= events.Count }
+
 /// An in-memory event log. Phase 1 storage; the `EventLog` interface it returns does not
 /// expose the in-memory representation, so storage is replaceable without changing callers.
 ///
@@ -75,29 +108,10 @@ module InMemoryEventLog =
 
         let read (after: EventOffset option) (limit: int) : Async<EventPage<'event>> =
             async {
-                return
-                    withLock gate (fun () ->
-                        // Snapshot under the gate so the page is deterministic against the
-                        // log state observed at read time.
-                        let afterValue = after |> Option.map EventOffset.value
-                        let selected =
-                            events
-                            |> Seq.filter (fun e ->
-                                match afterValue with
-                                | Some n -> EventOffset.value e.Offset > n
-                                | None -> true)
-                            |> Seq.toArray
-
-                        let pageEvents = selected |> Array.truncate (max 0 limit)
-                        let lastOffset =
-                            if pageEvents.Length = 0 then None
-                            else Some (Array.last pageEvents).Offset
-
-                        { Events = List.ofArray pageEvents
-                          LastOffset = lastOffset
-                          // The page is the tail when it contains everything still
-                          // available after `after`.
-                          IsEnd = pageEvents.Length = selected.Length })
+                // Under the gate so the page is deterministic against the log state observed
+                // at read time — and taken by position, which is `EventPaging.page`'s whole
+                // subject: the offset assigned two functions up IS the index.
+                return withLock gate (fun () -> EventPaging.page events after limit)
             }
 
         { Append = append
