@@ -4336,6 +4336,51 @@ let private panelFoldTests =
             Expect.equal model.GitHub.Pending (Pending.Refused Pending.unseen) "and so did github"
     ]
 
+/// What the Claude panel's presses ask the session for, decided by the reducer from the
+/// fields it holds — the fields used to be read off the document at the press, where no
+/// test could reach the rule refusing an empty one.
+let private claudePressTests =
+    let peer : PeerState = { PeerId = PeerId.create "press-peer" |> expect; DisplayName = "Ada" }
+    let press (p: ClaudePress) (model: ClientModel) = ClientModel.update (ClaudePressedMsg p) model
+    testList "the claude panel's presses" [
+        testCase "completing with no code pasted is refused on the panel, and asks nothing" <| fun () ->
+            let model, effects = ClientModel.init peer |> press ClaudePress.Complete
+            Expect.equal (model.Claude.Pending, effects) (Pending.Refused "paste the code first", []) "refused here"
+
+        testCase "a token saved goes to the scope chosen, expecting that scope to connect" <| fun () ->
+            let typed =
+                ClientModel.init peer
+                |> Support.step (ClaudeScopeChosen "session")
+                |> Support.step (ClaudeTokenTyped "sk-ant-oat01-x")
+            let _, effects = press ClaudePress.SaveToken typed
+            Expect.equal
+                effects
+                [ ClientEffect.Claude
+                    { Action = ClaudeAction.Token
+                      Request = { Scope = "session"; Code = None; Token = Some "sk-ant-oat01-x" }
+                      Expect = Some { Scope = "session"; Connected = true } } ]
+                "one write, for the credential slot that was chosen"
+
+        testCase "a token sent does not stay in the field" <| fun () ->
+            let model, _ = ClientModel.init peer |> Support.step (ClaudeTokenTyped "sk-ant-oat01-x") |> press ClaudePress.SaveToken
+            Expect.equal model.Claude.Token "" "a secret already sent is not one to offer sending again"
+
+        testCase "a sign-in answered with an authorize url waits on the human in that tab" <| fun () ->
+            let model, effects = ClientModel.init peer |> press ClaudePress.Connect
+            let call =
+                match effects with
+                | [ ClientEffect.Claude call ] -> call
+                | other -> failwithf "expected one claude write, got %A" other
+            let answered = model |> Support.step (ClaudeAnsweredMsg (call, Ok (Some "https://claude.ai/authorize"), 5_000L))
+            Expect.equal answered.Claude.Flow (ClaudeAwaitingCode ("https://claude.ai/authorize", "mine")) "the flow carries the scope it began with"
+
+        testCase "an accepted write waits for the status from the moment it answered" <| fun () ->
+            let call : ClaudeCall =
+                { Action = ClaudeAction.Disconnect; Request = ClaudeRequest.scoped "mine"; Expect = Some disconnectMine }
+            let model = ClientModel.init peer |> Support.step (ClaudeAnsweredMsg (call, Ok None, 5_000L))
+            Expect.equal model.Claude.Pending (Pending.Awaiting (disconnectMine, 5_000L)) "the deadline runs from the answer"
+    ]
+
 /// What a listing asks for, and what it says — pure, so no capability.
 let private prListingTests =
     let octo = RepoRef.create "octo/hello" |> expect
@@ -4543,6 +4588,7 @@ let tests =
         watchEngineTests
         panelTests
         panelFoldTests
+        claudePressTests
         panelWireTests
         catalogueTests
         codecTests

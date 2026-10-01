@@ -160,8 +160,35 @@ type ClaudeViewState =
       Status : ClaudePanel option
       Flow : ClaudeFlowState
       /// A command of ours on its way into `Status`, modelled rather than assumed.
-      Pending : Pending<ConnectionExpectation> }
+      Pending : Pending<ConnectionExpectation>
+      /// The panel's fields as typed: which credential a sign-in is for ("mine" |
+      /// "session"), the code pasted back from claude.ai, and a pasted setup token or key.
+      /// Held here rather than read off the document at the press, so the rule refusing an
+      /// empty one sits with the state it reads. This client's own: none of it is synced.
+      Scope : string
+      Code : string
+      Token : string }
 
+/// One write the Claude panel asks the session for: the action, what it says, and what the
+/// status has to show before the panel calls it done (`None` for a sign-in, which answers
+/// with an authorize URL and waits on a human instead).
+[<RequireQualifiedAccess>]
+type ClaudeCall =
+    { Action : ClaudeAction
+      Request : ClaudeRequest
+      Expect : ConnectionExpectation option }
+
+/// The Claude panel's four presses.
+[<RequireQualifiedAccess>]
+type ClaudePress =
+    | Connect
+    | Complete
+    | SaveToken
+    | Disconnect of scope: string
+
+/// What a Claude panel write came back with: refused with the session's reason, an
+/// authorize URL to open, or accepted with nothing to show yet.
+type ClaudeAnswer = Result<string option, string>
 
 /// Where the GitHub sign-in flow is (Plan 14). Device flow: the panel shows a user
 /// code, the human approves it on github.com in their own tab, and the browser polls
@@ -851,6 +878,16 @@ type ClientMsg =
     /// A Claude connection command moved (sent, accepted and now awaiting the status that
     /// will show it, or refused).
     | ClaudePendingMsg of Pending<ConnectionExpectation>
+    /// The Claude panel's fields, as typed (`ClaudeViewState`).
+    | ClaudeScopeChosen of string
+    | ClaudeCodeTyped of string
+    | ClaudeTokenTyped of string
+    /// A press on the panel. Refused here when a field it needs is empty; otherwise it asks
+    /// the session (`ClientEffect.Claude`) and waits for the answer.
+    | ClaudePressedMsg of ClaudePress
+    /// What a write came back with, for the call that asked, at the moment it arrived —
+    /// which is when an accepted command's wait for the status starts (`Pending.Awaiting`).
+    | ClaudeAnsweredMsg of ClaudeCall * ClaudeAnswer * at: int64
     /// A fresh /github status probe result (Plan 14).
     | GitHubStatusMsg of GitHubPanel
     /// The GitHub sign-in flow moved (the code came up, or the person cancelled).
@@ -1039,6 +1076,46 @@ type ClientEffect =
     | InterruptTurn of AgentTurnId
     | ApproveRepoCapabilities of RepoRef * granted: string list
     | Launch of LaunchEffect
+    | Claude of ClaudeCall
+
+/// What each of the Claude panel's presses asks the session for, or why it asks nothing.
+/// One function for both halves of a press — the state it moves to and the effect it
+/// sends — so they cannot come to disagree about whether there was a call at all.
+module ClaudePress =
+
+    let call (press: ClaudePress) (claude: ClaudeViewState) : Result<ClaudeCall, string> =
+        match press with
+        | ClaudePress.Connect ->
+            Ok
+                { Action = ClaudeAction.Begin
+                  Request = ClaudeRequest.scoped claude.Scope
+                  Expect = None }
+        | ClaudePress.Complete ->
+            // The scope selector is unmounted while awaiting; the flow carries it.
+            let scope =
+                match claude.Flow with
+                | ClaudeAwaitingCode (_, scope) -> scope
+                | ClaudeIdle -> "mine"
+            match claude.Code with
+            | "" -> Error "paste the code first"
+            | code ->
+                Ok
+                    { Action = ClaudeAction.Complete
+                      Request = { Scope = scope; Code = Some code; Token = None }
+                      Expect = Some { Scope = scope; Connected = true } }
+        | ClaudePress.SaveToken ->
+            match claude.Token with
+            | "" -> Error "paste a token first"
+            | token ->
+                Ok
+                    { Action = ClaudeAction.Token
+                      Request = { Scope = claude.Scope; Code = None; Token = Some token }
+                      Expect = Some { Scope = claude.Scope; Connected = true } }
+        | ClaudePress.Disconnect scope ->
+            Ok
+                { Action = ClaudeAction.Disconnect
+                  Request = ClaudeRequest.scoped scope
+                  Expect = Some { Scope = scope; Connected = false } }
 
 module ClientModel =
 
@@ -1098,7 +1175,10 @@ module ClientModel =
           Claude =
             { Status = None
               Flow = ClaudeIdle
-              Pending = Pending.Ready }
+              Pending = Pending.Ready
+              Scope = "mine"
+              Code = ""
+              Token = "" }
           GitHub =
             { Status = None
               Flow = GitHubIdle
@@ -2290,13 +2370,40 @@ module ClientModel =
             let status = ClaudePanel.keeping model.Claude.Status status
             { model with
                 Claude =
-                  { Status = Some status
-                    Flow = flow
-                    Pending = model.Claude.Pending |> Pending.observed ClaudePanel.landed status } }
+                  { model.Claude with
+                      Status = Some status
+                      Flow = flow
+                      Pending = model.Claude.Pending |> Pending.observed ClaudePanel.landed status } }
         | ClaudeFlowMsg flow ->
             { model with Claude = { model.Claude with Flow = flow } }
         | ClaudePendingMsg pending ->
             { model with Claude = { model.Claude with Pending = pending } }
+        | ClaudeScopeChosen scope -> { model with Claude = { model.Claude with Scope = scope } }
+        | ClaudeCodeTyped code -> { model with Claude = { model.Claude with Code = code } }
+        | ClaudeTokenTyped token -> { model with Claude = { model.Claude with Token = token } }
+        | ClaudePressedMsg press ->
+            match ClaudePress.call press model.Claude with
+            // What was typed goes with the call: a code or a token sent is not one to send
+            // again, and a field still holding it after the panel came back would be.
+            | Ok _ -> { model with Claude = { model.Claude with Pending = Pending.Sending; Code = ""; Token = "" } }
+            | Error reason -> { model with Claude = { model.Claude with Pending = Pending.Refused reason } }
+        | ClaudeAnsweredMsg (call, answer, at) ->
+            match answer with
+            | Error reason -> { model with Claude = { model.Claude with Pending = Pending.Refused reason } }
+            // Nothing for the panel to show yet: the credential arrives when the human
+            // finishes in the tab this opens, and the stream says so.
+            | Ok (Some authorizeUrl) ->
+                { model with
+                    Claude =
+                        { model.Claude with
+                            Pending = Pending.Ready
+                            Flow = ClaudeAwaitingCode (authorizeUrl, call.Request.Scope) } }
+            | Ok None ->
+                let pending =
+                    match call.Expect with
+                    | Some expect -> Pending.Awaiting (expect, at)
+                    | None -> Pending.Ready
+                { model with Claude = { model.Claude with Pending = pending } }
         | GitHubStatusMsg status ->
             // The same two rules, for the same two reasons (see Claude's above).
             let connected = status.SessionCredential.IsSome || status.MineCredential.IsSome
@@ -2599,5 +2706,6 @@ module ClientModel =
             | InterruptTurnMsg turn -> [ ClientEffect.InterruptTurn turn ]
             | ApproveRepoCapabilitiesMsg (repo, granted) -> [ ClientEffect.ApproveRepoCapabilities (repo, granted) ]
             | LaunchMsg launchMsg -> Launch.update launchMsg model.Launch |> snd |> List.map ClientEffect.Launch
+            | ClaudePressedMsg press -> ClaudePress.call press model.Claude |> Result.toList |> List.map ClientEffect.Claude
             | _ -> []
         next, effects @ offering

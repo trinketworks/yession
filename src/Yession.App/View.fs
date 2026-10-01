@@ -66,19 +66,10 @@ type ViewActions =
       /// is on screen whenever a credential needs one — including while the settings face is
       /// already open — so a toggle there would shut the panel it is pointing at.
       RevealSettings : unit -> unit
-      /// Claude connection panel (Plan 08). Imperative because they read panel inputs and
-      /// drive the /claude round-trips; the reducer only folds the resulting messages.
-      /// Begin the sign-in flow for the scope in the panel's selector.
-      ClaudeConnect : unit -> unit
-      /// Complete a flow with the pasted `code#state` from the panel's code input.
-      ClaudeComplete : unit -> unit
-      /// Store the pasted setup-token/API key from the panel's token input.
-      ClaudePasteToken : unit -> unit
-      /// Disconnect the credential stored for a scope choice ("session" | "mine").
-      ClaudeDisconnect : string -> unit
-      /// GitHub connection panel (Plan 14). Same imperative shape as the Claude set;
-      /// the flow differs (device code, no paste-back) so there is no Complete — the
-      /// browser polls while awaiting approval.
+      /// GitHub connection panel (Plan 14). Imperative because they read panel inputs and
+      /// drive the /github round-trips; the reducer only folds the resulting messages. The
+      /// flow is a device code with no paste-back, so there is no Complete — the browser
+      /// polls while awaiting approval.
       /// Begin the device-flow sign-in for the scope in the panel's selector.
       GitHubConnect : unit -> unit
       /// Store the pasted personal-access/user token from the panel's token input.
@@ -163,10 +154,6 @@ module ViewActions =
           ReportFieldSelection = fun _ _ -> ()
           ToggleSettings = ignore
           RevealSettings = ignore
-          ClaudeConnect = ignore
-          ClaudeComplete = ignore
-          ClaudePasteToken = ignore
-          ClaudeDisconnect = ignore
           GitHubConnect = ignore
           GitHubPasteToken = ignore
           GitHubDisconnect = ignore
@@ -708,12 +695,12 @@ module View =
     /// The Claude connection panel (Plan 08), living in the settings drawer: status per
     /// sign-in scope, the OAuth flow (approve on claude.ai → paste the shown code), and
     /// the paste-a-token fallback.
-    let private claudeSection (actions: ViewActions) (dispatch: ClientMsg -> unit) (claude: ClaudeViewState) : TemplateResult =
+    let private claudeSection (dispatch: ClientMsg -> unit) (claude: ClaudeViewState) : TemplateResult =
         let connectedRow (label: string) (scopeChoice: string) (credential: CredentialRow option) =
             match credential with
             | Some credential ->
                 html $"""
-                    <div class="{Style.sideRow}" data-claude-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.btnIconBareDanger}" aria-label="Disconnect" data-claude-disconnect="{scopeChoice}" @click={Ev(fun _ -> actions.ClaudeDisconnect scopeChoice)}>{Icon.close}</button></div>
+                    <div class="{Style.sideRow}" data-claude-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.btnIconBareDanger}" aria-label="Disconnect" data-claude-disconnect="{scopeChoice}" @click={Ev(fun _ -> dispatch (ClaudePressedMsg (ClaudePress.Disconnect scopeChoice)))}>{Icon.close}</button></div>
                     {credentialReason Dom.Hooks.claudeSignInRequired scopeChoice credential}"""
             | None -> html $""""""
         let controls =
@@ -728,22 +715,27 @@ module View =
                     <a class="{Style.btnPrimary}" href="{url}" target="_blank" rel="noreferrer" data-claude-authorize>Approve on claude.ai</a>
                     <label class="{Style.label}" for="claude-code">code from claude.ai</label>
                     <input id="claude-code" type="text" class="{Style.field}" data-claude-code placeholder="code#state"
-                           autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+                           autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
+                           .value={claude.Code}
+                           @input={EvVal(fun v -> dispatch (ClaudeCodeTyped v))} />
                     <div class="flex gap-2">
-                      <button type="button" class="{Style.btnPrimary}" data-claude-complete @click={Ev(fun _ -> actions.ClaudeComplete ())}>Complete</button>
+                      <button type="button" class="{Style.btnPrimary}" data-claude-complete @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Complete))}>Complete</button>
                       <button type="button" class="{Style.btn}" data-claude-cancel @click={Ev(fun _ -> dispatch (ClaudeFlowMsg ClaudeIdle))}>Cancel</button>
                     </div>"""
             | ClaudeIdle ->
                 html $"""
                     <label class="{Style.label}" for="claude-scope">sign in for</label>
-                    <select id="claude-scope" class="{Style.field}" data-claude-scope aria-label="Sign-in scope">
-                      <option value="mine">{sharedScopeLabel (claude.Status |> Option.map (fun panel -> panel.Owner))}</option>
-                      <option value="session">This session only</option>
+                    <select id="claude-scope" class="{Style.field}" data-claude-scope aria-label="Sign-in scope"
+                            @change={EvVal(fun v -> dispatch (ClaudeScopeChosen v))}>
+                      <option value="mine" ?selected={claude.Scope = "mine"}>{sharedScopeLabel (claude.Status |> Option.map (fun panel -> panel.Owner))}</option>
+                      <option value="session" ?selected={claude.Scope = "session"}>This session only</option>
                     </select>
-                    <button type="button" class="{Style.btnPrimary}" data-claude-connect @click={Ev(fun _ -> actions.ClaudeConnect ())}>Connect Claude</button>
+                    <button type="button" class="{Style.btnPrimary}" data-claude-connect @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Connect))}>Connect Claude</button>
                     <label class="{Style.label} pt-2" for="claude-token">setup token / api key</label>
-                    <input id="claude-token" type="password" class="{Style.field}" data-claude-token placeholder="sk-ant-…" />
-                    <button type="button" class="{Style.btn}" data-claude-save-token @click={Ev(fun _ -> actions.ClaudePasteToken ())}>Save token</button>"""
+                    <input id="claude-token" type="password" class="{Style.field}" data-claude-token placeholder="sk-ant-…"
+                           .value={claude.Token}
+                           @input={EvVal(fun v -> dispatch (ClaudeTokenTyped v))} />
+                    <button type="button" class="{Style.btn}" data-claude-save-token @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.SaveToken))}>Save token</button>"""
         let error =
             match Pending.refusal claude.Pending with
             | Some reason -> html $"""<span class="{Style.statusErr}" data-claude-error>{reason}</span>"""
@@ -1011,7 +1003,7 @@ module View =
                 <span class="{Style.settingsTitle}">settings</span>
                 <button type="button" class="{Style.navChevronBack}" aria-label="Collapse sidebar" data-nav-toggle="hide" @click={Ev(fun _ -> actions.ToggleNav ())}>{Icon.left}</button>
               </div>
-              {claudeSection actions dispatch model.Claude}
+              {claudeSection dispatch model.Claude}
               {modelSection dispatch model}
               {githubSection actions dispatch model.Copied model.GitHub}
               {queriesSection model.Queries}

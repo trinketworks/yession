@@ -897,6 +897,20 @@ let private parseAuthorizeUrl (body: string) : string option =
     |> Result.toOption
     |> stated
 
+/// One Claude panel write, answered as the panel's next step. A sign-in answers with the
+/// authorize URL it opens, and a reply that carries none is refused rather than taken as
+/// accepted: there would be nothing for the human to approve.
+let private claudeWrite (action: ClaudeAction) (request: ClaudeRequest) : Async<ClaudeAnswer> =
+    async {
+        let! reply = postJson (Page.href (Claude action)) (claudeBody request)
+        if not reply.Ok then return Error reply.Body
+        elif action = ClaudeAction.Begin then
+            match parseAuthorizeUrl reply.Body with
+            | None -> return Error "no authorize url in the reply"
+            | Some url -> return Ok (Some url)
+        else return Ok None
+    }
+
 /// What a panel's field holds. A selector that matches nothing — a panel that is not on
 /// screen — reads as the empty string, which is what the caller acts on anyway.
 let private panelInput (selector: string) : string =
@@ -1131,51 +1145,6 @@ let private start () =
         // delivers. The net for that is the deadline the model declares for every wait
         // (`ClientModel.timers`), which is the clock's to keep and not an answer's.
 
-        /// One shape for every panel action: sending → the command answers → either it is
-        /// refused, or it opened an authorize tab (nothing for the status to show yet), or
-        /// it was ACCEPTED and `expect` names what the status has to show before this panel
-        /// calls it done.
-        let claudeAction
-            (run: unit -> Async<Result<string option, string>>)
-            (scope: string)
-            (expect: ConnectionExpectation option)
-            =
-            dispatchRef (ClaudePendingMsg Pending.Sending)
-            Async.StartImmediate (
-                async {
-                    match! run () with
-                    | Error reason -> dispatchRef (ClaudePendingMsg (Pending.Refused reason))
-                    | Ok (Some authorizeUrl) ->
-                        // Nothing for the panel to show yet: the credential arrives when the
-                        // human finishes in the tab this opens, and the stream says so.
-                        dispatchRef (ClaudePendingMsg Pending.Ready)
-                        dispatchRef (ClaudeFlowMsg (ClaudeAwaitingCode (authorizeUrl, scope)))
-                    | Ok None ->
-                        match expect with
-                        | Some expect ->
-                            dispatchRef (ClaudePendingMsg (Pending.Awaiting (expect, nowMillis ())))
-                        | None -> dispatchRef (ClaudePendingMsg Pending.Ready)
-                })
-        let postClaudeAction
-            (route: string)
-            (request: ClaudeRequest)
-            (expectUrl: bool)
-            (expect: ConnectionExpectation option)
-            =
-            claudeAction
-                (fun () ->
-                    async {
-                        let! reply = postJson route (claudeBody request)
-                        if not reply.Ok then return Error reply.Body
-                        elif expectUrl then
-                            match parseAuthorizeUrl reply.Body with
-                            | None -> return Error "no authorize url in the reply"
-                            | Some url -> return Ok (Some url)
-                        else return Ok None
-                    })
-                request.Scope
-                expect
-
         // The GitHub panel's round-trips (Plan 14). Device flow: begin puts the user
         // code on screen, then this tab drives the session's poll at GitHub's stated
         // interval until the grant lands (the pushed panel then flips the flow to idle),
@@ -1290,45 +1259,6 @@ let private start () =
                                 let enc i = ProseMirror.relPosFromTypeIndex text i |> ProseMirror.encodeRel
                                 { Field = field; Pos = { Anchor = enc anchor; Head = enc head } }))
                     sendFocus focus
-              ClaudeConnect =
-                fun () ->
-                    let scope = match panelInput "[data-claude-scope]" with "" -> "mine" | s -> s
-                    // Nothing for the status to show: what this returns is an authorize URL,
-                    // and the credential arrives when the human finishes in that tab.
-                    postClaudeAction (Page.href (Claude ClaudeAction.Begin)) (ClaudeRequest.scoped scope) true None
-              ClaudeComplete =
-                fun () ->
-                    // The scope selector is unmounted while awaiting; the flow carries it.
-                    let scope =
-                        match latestModel.Claude.Flow with
-                        | ClaudeAwaitingCode (_, scope) -> scope
-                        | _ -> "mine"
-                    match panelInput "[data-claude-code]" with
-                    | "" -> dispatchRef (ClaudePendingMsg (Pending.Refused "paste the code first"))
-                    | code ->
-                        postClaudeAction
-                            (Page.href (Claude ClaudeAction.Complete))
-                            { Scope = scope; Code = Some code; Token = None }
-                            false
-                            (Some { Scope = scope; Connected = true })
-              ClaudePasteToken =
-                fun () ->
-                    match panelInput "[data-claude-token]" with
-                    | "" -> dispatchRef (ClaudePendingMsg (Pending.Refused "paste a token first"))
-                    | token ->
-                        let scope = match panelInput "[data-claude-scope]" with "" -> "mine" | s -> s
-                        postClaudeAction
-                            (Page.href (Claude ClaudeAction.Token))
-                            { Scope = scope; Code = None; Token = Some token }
-                            false
-                            (Some { Scope = scope; Connected = true })
-              ClaudeDisconnect =
-                fun scope ->
-                    postClaudeAction
-                        (Page.href (Claude ClaudeAction.Disconnect))
-                        (ClaudeRequest.scoped scope)
-                        false
-                        (Some { Scope = scope; Connected = false })
               GitHubConnect =
                 fun () ->
                     let scope = match panelInput "[data-github-scope]" with "" -> "mine" | s -> s
@@ -1448,7 +1378,9 @@ let private start () =
               Client.LaunchReads.PullHead = fetchPullHead }
 
         Client.makeProgram
-            { Client.Ports.Connection = (fun () -> connectionRef); Client.Ports.Launch = Some launchReads }
+            { Client.Ports.Connection = (fun () -> connectionRef)
+              Client.Ports.Launch = Some launchReads
+              Client.Ports.Panels = Some { Client.PanelWrites.Claude = claudeWrite; Client.PanelWrites.Now = nowMillis } }
             doc
             initial
         |> Client.withTimers Timer.system

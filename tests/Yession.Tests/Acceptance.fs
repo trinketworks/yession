@@ -217,7 +217,10 @@ let private representativeModel : ClientModel =
                   AgentAvailable = false
                   Models = ModelsLoaded offeredModels }
           Flow = ClaudeIdle
-          Pending = Pending.Ready }
+          Pending = Pending.Ready
+          Scope = "mine"
+          Code = ""
+          Token = "" }
       GitHub =
         { Status = Some { SessionCredential = None; MineCredential = None; Owner = OwnedByUser }
           Flow = GitHubIdle
