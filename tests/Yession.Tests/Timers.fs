@@ -87,6 +87,13 @@ let private program () =
     let runner = Harness.run (Client.makeProgram Client.Ports.offline (Y.Doc.Create ()) (ClientModel.init (peer "ada" "Ada")) |> Client.withTimers clock.Clock)
     clock, (fun msg -> runner.Dispatch (user msg)), runner.Model
 
+/// The real client program over a clipboard that answers `written` — the platform's half of a
+/// copy, which only it can know.
+let private copying (written: bool) =
+    let ports = { Client.Ports.offline with Client.Ports.Clipboard = fun _ -> async.Return written }
+    let runner = Harness.run (Client.makeProgram ports (Y.Doc.Create ()) (ClientModel.init (peer "ada" "Ada")))
+    (fun msg -> runner.Dispatch (user msg)), runner.Model
+
 /// The program with a message open and nothing said in it yet.
 let private running () =
     let clock, send, model = program ()
@@ -193,6 +200,18 @@ let tests =
             send (CopiedMsg (Some "data-box"))
             clock.Advance most
             Expect.isSome (model ()).Copied "the second copy is shown for as long as the first was"
+
+        testCase "a copy the clipboard took is confirmed on the box it came from" <| fun () ->
+            let send, model = copying true
+            send (CopyMsg ("data-box", "ABCD-1234"))
+            Expect.equal ((model ()).Copied |> Option.map (fun copy -> copy.Box)) (Some "data-box") "said where the reader is looking"
+
+        testCase "a copy the clipboard refused is never confirmed" <| fun () ->
+            // A "copied" over an empty clipboard would send the reader to the other tab with
+            // nothing to paste; the box goes on showing the value instead.
+            let send, model = copying false
+            send (CopyMsg ("data-box", "ABCD-1234"))
+            Expect.isNone (model ()).Copied "nothing to confirm"
 
         testCase "a panel's wait on the query is refused once its deadline passes" <| fun () ->
             let clock, send, model = program ()

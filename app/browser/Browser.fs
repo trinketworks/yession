@@ -281,19 +281,18 @@ let private appRoot () : Browser.Types.HTMLElement = Browser.Dom.document.getEle
 /// The refusal is written to the console rather than swallowed, because the only symptom
 /// it has otherwise is a button that appears to do nothing — the same shape as a broken
 /// binding, and nothing on the page tells the two apart.
-let private writeClipboard (text: string) (settled: bool -> unit) : unit =
-    if not (hasClipboard ()) then
-        JS.console.debug "yession/copy: no clipboard in this context"
-        settled false
-    else
-        Async.StartImmediate (
-            async {
-                match! writeClipboardText text |> Async.AwaitPromise |> Async.Catch with
-                | Choice1Of2 () -> settled true
-                | Choice2Of2 refusal ->
-                    JS.console.debug (sprintf "yession/copy: refused %s" refusal.Message)
-                    settled false
-            })
+let private writeClipboard (text: string) : Async<bool> =
+    async {
+        if not (hasClipboard ()) then
+            JS.console.debug "yession/copy: no clipboard in this context"
+            return false
+        else
+            match! writeClipboardText text |> Async.AwaitPromise |> Async.Catch with
+            | Choice1Of2 () -> return true
+            | Choice2Of2 refusal ->
+                JS.console.debug (sprintf "yession/copy: refused %s" refusal.Message)
+                return false
+    }
 
 /// A frame later — which is when the render that had to happen, has, and when a class just
 /// written has reached the style flush that acts on it.
@@ -1217,25 +1216,12 @@ let private start () =
                                 let enc i = ProseMirror.relPosFromTypeIndex text i |> ProseMirror.encodeRel
                                 { Field = field; Pos = { Anchor = enc anchor; Head = enc head } }))
                     sendFocus focus
-              Copy =
-                fun key text ->
-                    writeClipboard text (fun written ->
-                        // Only a write that HAPPENED is confirmed. A refused clipboard leaves
-                        // the box showing the value, which is what a person falls back to
-                        // reading — a "copied" over an empty clipboard would send them to the
-                        // other tab with nothing to paste.
-                        // How long it says so is the model's (`ClientModel.timers`).
-                        if written then dispatchRef (CopiedMsg (Some key)))
               TypeIntoTerminal =
                 fun id data -> connectionRef |> Option.iter (fun c -> c.TypeIntoTerminal id data)
               ResizeTerminal =
                 fun id cols rows -> connectionRef |> Option.iter (fun c -> c.ResizeTerminal id cols rows)
               SendTerminalDraft =
-                fun terminal author -> connectionRef |> Option.iter (fun c -> c.SendTerminalDraft terminal author)
-              RetryNow =
-                // Cut short whatever wait the lifecycle is in. On a refused peer that wait is
-                // indefinite by design, so this is its only way back short of a reload.
-                fun () -> pokeRetry () }
+                fun terminal author -> connectionRef |> Option.iter (fun c -> c.SendTerminalDraft terminal author) }
 
         let el = appRoot ()
         // Take over the server-rendered shell: from here Lit owns it. lit-html's `render`
@@ -1288,7 +1274,11 @@ let private start () =
                       Client.PanelWrites.GitHub = githubWrite
                       Client.PanelWrites.GitHubPoll = githubPoll
                       Client.PanelWrites.Now = nowMillis }
-              Client.Ports.Moves = PaneShell.move }
+              Client.Ports.Moves = PaneShell.move
+              Client.Ports.Clipboard = writeClipboard
+              // Cut short whatever wait the lifecycle is in. On a refused peer that wait is
+              // indefinite by design, so this is its only way back short of a reload.
+              Client.Ports.Retry = fun () -> pokeRetry () }
             doc
             initial
         |> Client.withTimers Timer.system

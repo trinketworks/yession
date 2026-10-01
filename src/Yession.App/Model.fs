@@ -1058,6 +1058,14 @@ type ClientMsg =
     /// A move only the document can make, asked for by a control that changes nothing in the
     /// model (`DomMove`).
     | MoveMsg of DomMove
+    /// Put `text` on the clipboard and, if the platform lets it, say so on the box whose hook is
+    /// `box` (`CopiedMsg`). How long it says so is the model's (`ClientModel.timers`).
+    | CopyMsg of box: string * text: string
+    /// Try the session again NOW, rather than when the supervised loop next would. A trigger,
+    /// never a second schedule (Plan 20): it shortens the wait the lifecycle is already in, and
+    /// earns its place on the one client the loop deliberately will not carry — a peer whose
+    /// token was refused, which no amount of waiting fixes.
+    | RetryNowMsg
     /// Ask the session for a terminal with this title, and remember that this client asked
     /// (`Opening`).
     ///
@@ -1172,6 +1180,8 @@ type ClientEffect =
     /// Ask poll `round` of the device flow begun for this scope.
     | GitHubPoll of round: int * scope: string
     | Move of DomMove
+    | Copy of box: string * text: string
+    | RetryNow
 
 /// What each of the Claude panel's presses asks the session for, or why it asks nothing.
 /// One function for both halves of a press — the state it moves to and the effect it
@@ -2667,7 +2677,9 @@ module ClientModel =
             { model with Pane = Some (OnTab mode); TerminalsOpen = true }
         | OpenInPaneMsg mode -> fold (ShowInPaneMsg mode) model
         | ShowInTerminalMsg (terminal, block) -> fold (ShowInPaneMsg (ReadingAt (terminal, block))) model
-        | MoveMsg _ -> model
+        | MoveMsg _
+        | CopyMsg _
+        | RetryNowMsg -> model
         | RewindTerminalMsg terminal ->
             // The length is pinned NOW rather than followed. A recording that grew under a
             // reader would move the scrub bar out from under them, which is the one thing
@@ -2900,6 +2912,8 @@ module ClientModel =
             | ShowInTerminalMsg (terminal, block) ->
                 [ ClientEffect.Move (DomMove.RevealBlock (terminal, block)); ClientEffect.Move DomMove.FocusPane ]
             | MoveMsg move -> [ ClientEffect.Move move ]
+            | CopyMsg (box, text) -> [ ClientEffect.Copy (box, text) ]
+            | RetryNowMsg -> [ ClientEffect.RetryNow ]
             | GitHubPollDueMsg round ->
                 GitHubPoll.due round model.GitHub |> Option.map (fun scope -> ClientEffect.GitHubPoll (round, scope)) |> Option.toList
             | _ -> []
