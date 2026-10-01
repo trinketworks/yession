@@ -236,6 +236,18 @@ let scrollToLatest () : unit =
 let toItemActions (messageId: string) : unit =
     nextFrame (fun () -> focusOn (find (sprintf "[data-item-actions=\"%s\"]" messageId)))
 
+/// Carry out a move the model asked for (`Yession.App.DomMove`) — the one place a move is
+/// turned into the document call that makes it, for the page and the harness alike.
+let move (move: Yession.App.DomMove) : unit =
+    match move with
+    | Yession.App.DomMove.FocusPane -> toPane ()
+    | Yession.App.DomMove.FocusChat tabKey -> toChatItem tabKey
+    | Yession.App.DomMove.FocusItemActions messageId -> toItemActions (Yession.Domain.MessageId.value messageId)
+    | Yession.App.DomMove.RevealBlock (terminalId, blockId) ->
+        revealBlock (Yession.Domain.TerminalId.value terminalId) (Yession.Domain.BlockId.value blockId)
+    | Yession.App.DomMove.RevealMessage messageId -> revealMessage (Yession.Domain.MessageId.value messageId)
+    | Yession.App.DomMove.ScrollToLatest -> scrollToLatest ()
+
 /// The pane's open state, as a class on the shell root — the same mechanism the sidebar uses,
 /// so a Lit re-render never fights the CSS transition. A `set` rather than a toggle, because
 /// the model holds the bit and this only reflects it: the app opens this column itself

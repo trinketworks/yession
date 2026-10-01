@@ -837,6 +837,28 @@ type ClientModel =
       /// from: what the launch surface asks to know whether the session has one.
       Repos         : Repos.ReposProjection }
 
+/// A move only the document can make: focus, and scrolling something into view. The model says
+/// what is on screen; where the cursor is and how far the reader has scrolled are the
+/// document's, so these leave the reducer as effects (`ClientEffect.Move`) and are carried
+/// out after the render that put their target on screen.
+[<RequireQualifiedAccess>]
+type DomMove =
+    /// Into the side pane, after something opened a tab there. A chip that opened a pane and
+    /// left focus behind it is the failure the WCAG floor names.
+    | FocusPane
+    /// Back to the chat item a tab was opened from — the tab's key is the only thing the
+    /// chip and the tab share — once that tab is going.
+    | FocusChat of tabKey: string
+    /// Back to one item's actions control, after the menu it opened has gone. Without it,
+    /// dismissing a menu strands focus on `body`.
+    | FocusItemActions of MessageId
+    /// Scroll a terminal's history to one of its commands and mark it.
+    | RevealBlock of TerminalId * BlockId
+    /// Scroll the conversation to one message and mark it.
+    | RevealMessage of MessageId
+    /// Scroll the conversation to its own tail.
+    | ScrollToLatest
+
 /// Messages that drive the client model. Connection-lifecycle messages are produced by
 /// the connection driver (Connection.fs); the suffix avoids clashing with the
 /// `ConnectionState` cases and the transport frame DU cases. Draft and queue messages
@@ -1027,6 +1049,15 @@ type ClientMsg =
     /// A tab shown and not pinned is the PREVIEW slot (Plan 20, stage 1): showing anything
     /// else replaces it, so a person reading twenty chips ends with one tab, not twenty.
     | ShowInPaneMsg of TabMode
+    /// Show this in the pane and take the reader there: what a chip in the chat does. One
+    /// message for both, so no chip can open a pane and leave focus behind it.
+    | OpenInPaneMsg of TabMode
+    /// Show a terminal's history at one of its commands, scrolled to it, with focus in the
+    /// pane — the block tab's "show in terminal".
+    | ShowInTerminalMsg of TerminalId * BlockId
+    /// A move only the document can make, asked for by a control that changes nothing in the
+    /// model (`DomMove`).
+    | MoveMsg of DomMove
     /// Ask the session for a terminal with this title, and remember that this client asked
     /// (`Opening`).
     ///
@@ -1140,6 +1171,7 @@ type ClientEffect =
     | GitHub of GitHubCall
     /// Ask poll `round` of the device flow begun for this scope.
     | GitHubPoll of round: int * scope: string
+    | Move of DomMove
 
 /// What each of the Claude panel's presses asks the session for, or why it asks nothing.
 /// One function for both halves of a press — the state it moves to and the effect it
@@ -2633,6 +2665,9 @@ module ClientModel =
             // hopes the rest was already right: the list cannot survive a choice that
             // replaces it, and a pin or a start hint cannot outlive the mode that carried it.
             { model with Pane = Some (OnTab mode); TerminalsOpen = true }
+        | OpenInPaneMsg mode -> fold (ShowInPaneMsg mode) model
+        | ShowInTerminalMsg (terminal, block) -> fold (ShowInPaneMsg (ReadingAt (terminal, block))) model
+        | MoveMsg _ -> model
         | RewindTerminalMsg terminal ->
             // The length is pinned NOW rather than followed. A recording that grew under a
             // reader would move the scrub bar out from under them, which is the one thing
@@ -2861,6 +2896,10 @@ module ClientModel =
             | LaunchMsg launchMsg -> Launch.update launchMsg model.Launch |> snd |> List.map ClientEffect.Launch
             | ClaudePressedMsg press -> ClaudePress.call press model.Claude |> Result.toList |> List.map ClientEffect.Claude
             | GitHubPressedMsg press -> GitHubPress.call press model.GitHub |> Result.toList |> List.map ClientEffect.GitHub
+            | OpenInPaneMsg _ -> [ ClientEffect.Move DomMove.FocusPane ]
+            | ShowInTerminalMsg (terminal, block) ->
+                [ ClientEffect.Move (DomMove.RevealBlock (terminal, block)); ClientEffect.Move DomMove.FocusPane ]
+            | MoveMsg move -> [ ClientEffect.Move move ]
             | GitHubPollDueMsg round ->
                 GitHubPoll.due round model.GitHub |> Option.map (fun scope -> ClientEffect.GitHubPoll (round, scope)) |> Option.toList
             | _ -> []

@@ -154,12 +154,14 @@ module Client =
           /// `None` where there is no page to read from: a headless peer, a test.
           Launch : LaunchReads option
           /// `None` where there is no page to post to, as for `Launch`.
-          Panels : PanelWrites option }
+          Panels : PanelWrites option
+          /// The document's own moves (`DomMove`); `ignore` where there is no document.
+          Moves : DomMove -> unit }
 
     module Ports =
 
         /// A client with no session to ask: every request goes nowhere.
-        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None; Ports.Panels = None }
+        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None; Ports.Panels = None; Ports.Moves = ignore }
 
         /// A launch read, answered as the message that carries its result.
         let private launchRead (reads: LaunchReads) (dispatch: ClientMsg -> unit) (effect: LaunchEffect) : Async<unit> =
@@ -238,6 +240,7 @@ module Client =
                             let! answer = panels.GitHub call.Action call.Request
                             dispatch (GitHubAnsweredMsg (call, answer, panels.Now ()))
                         }))
+            | ClientEffect.Move move -> ports.Moves move
             | ClientEffect.GitHubPoll (round, scope) ->
                 ports.Panels
                 |> Option.iter (fun panels ->
