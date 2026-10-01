@@ -803,15 +803,27 @@ first's.
     lends nothing and a push typed there is refused in words. Only `github` is
     forwardable so far, and the gateway admits only git's three smart-HTTP requests to a
     repository path, so a cap is not a token for the rest of github.com.
-  - **The GitHub API is forwarded into srt sandboxes only.** Under srt, a forwarded `github`
-    also routes `api.github.com` and `uploads.github.com` through the credential proxy
-    (`CredentialProxy.fs`, srt's `mitmProxy`), and each block is lent a stand-in in
-    `GH_TOKEN` and `GITHUB_TOKEN` beside its git loan, spent as the same act. A docker or
-    host sandbox is given neither: its egress does not run through a proxy this session can
-    tell, and the proxy listens only on a socket srt reaches. The stand-in is in the block's
-    environment exactly as the git loan is, with the same transcript caveat above, and the
-    proxy — unlike the gateway — admits every request to a declared host: a stand-in is the
-    lender's whole API token for as long as it is live.
+  - **The GitHub API reaches a sandbox only as far as somebody bound it.** A connection
+    forwarded by `api` routes `api.github.com` and `uploads.github.com` to the credential
+    proxy — under srt by srt's own `mitmProxy`, under docker or the host only by a
+    `${proxy.https}` the sandbox was given — and nothing else: which bundle a client trusts
+    (`${proxy.ca-file}`) and which variables carry a stand-in (`${github.token}`) are bound by
+    the operator in a resource's `env` or by a repo's declaration, never set on a sandbox's
+    behalf. A sandbox that binds neither reaches the API through the proxy unauthenticated.
+    The stand-in is in the block's environment exactly as the git loan is, with the same
+    transcript caveat above, and the proxy — unlike the gateway — admits every request to a
+    declared host: a stand-in is the lender's whole API token for as long as it is live.
+  - **The AgentSandbox is granted nothing.** The agent CLI runs with no built-in tools; every
+    command it issues runs in a work sandbox, under that sandbox's grants. Its own process
+    holds no connection and no proxy, and nothing in the profile can give it one. Should the
+    CLI ever run tools of its own, it needs a selection of its own first.
+  - **A grant is the operator's file as it reads today, and nobody consents to it.** What a
+    sandbox is given is the closure of its selection under the current profile
+    (`ResourceProfile.grants`): a person joining a session is not shown it, and a profile or a
+    repo's file that changes widens what every later sandbox holds without anybody being
+    asked. The closure is already the one value that says what was granted, so showing it at
+    join or at connect, and recording it per person so a later configuration cannot widen a
+    grant silently, both build on it rather than on a second account of the same thing.
   - **An external MCP server's read-only tools are not queries yet.** `readOnlyHint` is
     declared, not inferred, precisely so a third-party server's queries could be listed into
     the registry without a yession-specific convention — but only the in-process

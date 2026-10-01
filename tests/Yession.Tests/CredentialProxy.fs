@@ -27,12 +27,14 @@ let private admitted = SandboxRef.parse "octo/hello:dev" |> expect
 
 let private route : CredentialRoute =
     { Provider = "example"
-      Hosts = [ "api.example.test"; "uploads.example.test" ]
-      Variables = [ "EXAMPLE_TOKEN"; "EXAMPLE_API_TOKEN" ] }
+      Hosts = [ "api.example.test"; "uploads.example.test" ] }
+
+/// The variables a declaration lends `route`'s token in, for the cases that lend one.
+let private lentInto = [ "EXAMPLE_TOKEN"; "EXAMPLE_API_TOKEN" ]
 
 /// A second provider, for the one invariant that needs two.
 let private other : CredentialRoute =
-    { Provider = "other"; Hosts = [ "api.other.test" ]; Variables = [ "OTHER_TOKEN" ] }
+    { Provider = "other"; Hosts = [ "api.other.test" ] }
 
 let private headers (pairs: (string * string) list) : (string * HeaderValue)[] =
     pairs |> List.map (fun (name, value) -> name, HeaderValue.Single value) |> List.toArray
@@ -113,8 +115,7 @@ let private carryTests =
         testCase "a refusal is said in the field a provider's client prints" <| fun () ->
             Expect.equal (refusalBody "run it again") """{"message":"run it again"}""" "JSON, with a message"
 
-        testCase "GitHub's stand-in reaches gh, and gh's requests reach the swap" <| fun () ->
-            Expect.isTrue (List.contains "GH_TOKEN" GitHubAccess.route.Variables) "the variable gh reads a token from"
+        testCase "gh's requests reach the swap" <| fun () ->
             Expect.equal (routeFor [ GitHubAccess.route ] "api.github.com") (Some GitHubAccess.route) "the host gh calls"
     ]
 
@@ -533,26 +534,25 @@ let private portsTests =
             do!
                 withProxy upstream (fun proxy ->
                     async {
-                        let lent = CredentialProxy.lend proxy route route.Variables terminal (lenderOf { Token = Some "ghu_real"; Refusals = 0 })
+                        let lent = CredentialProxy.lend proxy route lentInto terminal (lenderOf { Token = Some "ghu_real"; Refusals = 0 })
                         match lent.Vars |> List.choose snd |> List.distinct with
                         | [ standIn ] ->
                             let! _ = request proxy "api.example.test" (Some ("token " + standIn))
                             Expect.equal (List.ofSeq upstream.Authorizations) [ Some "token ghu_real" ] "the lender's credential"
-                        | other -> failwithf "expected one stand-in in %A, got %A" route.Variables other
+                        | other -> failwithf "expected one stand-in in %A, got %A" lentInto other
                     })
         }
 
-        // A sandbox is told to trust a file; what makes that trust the proxy's is that the
-        // file is the bundle the proxy wrote, and that the sandbox may read it.
-        testCaseAsync "a sandbox provisioned for a route trusts, and may read, the bundle the proxy wrote" <| async {
+        // Which bundle a client trusts is bound by whoever wants it (`${proxy.ca-file}`): srt's
+        // route to the proxy sets nothing a client reads, so nothing it did not ask for changes
+        // what it trusts.
+        testCaseAsync "a sandbox routed to the proxy is told nothing it did not ask for" <| async {
             let! upstream = startUpstream ()
             do!
                 withProxy upstream (fun proxy ->
                     async {
                         let provision = CredentialProxy.provision proxy route
-                        Expect.equal (Map.tryFind "SSL_CERT_FILE" provision.Env) (Some proxy.TrustFile) "told where"
-                        Expect.equal provision.Reads [ proxy.TrustFile ] "and let read it"
-                        Expect.equal (Fs.readText proxy.TrustFile) proxy.TrustBundle "and it is the proxy's bundle"
+                        Expect.isEmpty provision.Env "no variable set on its behalf"
                     })
         }
     ]
@@ -581,9 +581,10 @@ let private confinedTests =
                             let made = TestFiles.tempDir "yession-credproxy-srt-"
                             Fs.canonical made |> Option.defaultValue made
                         let provision = CredentialProxy.provision proxy route
-                        let lent = CredentialProxy.lend proxy route route.Variables terminal (lenderOf { Token = Some "ghu_real"; Refusals = 0 })
+                        let lent = CredentialProxy.lend proxy route lentInto terminal (lenderOf { Token = Some "ghu_real"; Refusals = 0 })
                         let policy : SandboxPolicy =
-                            { ReadPaths = workspace :: provision.Reads
+                            // The bundle, as `${proxy.ca-file}` provides it: told, and readable.
+                            { ReadPaths = workspace :: proxy.TrustFile :: provision.Reads
                               WritePaths = [ workspace ]
                               AllowedDomains = Some provision.Domains
                               Sockets = []
@@ -592,6 +593,7 @@ let private confinedTests =
                               Realisation = []
                               Env =
                                 Sandboxes.mergeEnv (Sandboxes.hostBaseline (Sandboxes.ambientEnv ())) provision.Env
+                                |> Map.add "SSL_CERT_FILE" proxy.TrustFile
                                 |> Map.add "HOME" workspace
                               WorkingDirectory = Some workspace
                               Filesystem = Confined

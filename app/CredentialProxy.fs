@@ -66,10 +66,11 @@ type CredentialRoute =
       Provider : string
       /// The hosts a stand-in for this route is swapped on — and, across every route, the
       /// only hosts this proxy carries.
-      Hosts : string list
-      /// The variables a block exports its stand-in as: the ones the provider's own tools
-      /// read a token from.
-      Variables : string list }
+      ///
+      /// No variables: which ones a block is lent a stand-in in is said where it is wanted —
+      /// `${<connection>.token}`, in a resource the operator wrote or a repo's declaration —
+      /// and never by the provider on everybody's behalf.
+      Hosts : string list }
 
 /// Whose credential answers a stand-in, resolved PER REQUEST — never captured, so a refresh
 /// reaches a sandbox already running.
@@ -587,20 +588,14 @@ let reachable (backend: SandboxBackend) : bool =
     | HostBackend
     | DockerBackend -> false
 
-/// The variables that point a TLS client at a trust bundle, one per family of client that
-/// reads its own: Go and OpenSSL, curl, Node, Python's requests. Each REPLACES the client's
-/// store (Node's adds to it), which is why the bundle carries every root and not just this
-/// proxy's authority.
-let trustVariables : string list = [ "SSL_CERT_FILE"; "CURL_CA_BUNDLE"; "NODE_EXTRA_CA_CERTS"; "REQUESTS_CA_BUNDLE" ]
-
-/// What a sandbox needs for `route`'s hosts to reach this proxy: those hosts' HTTPS routed
-/// here, leave to reach them, the bundle it is told to trust, and leave to read it. Nothing
-/// of anybody's credential — that is per block (`lend`).
+/// What `api` is under srt: `route`'s hosts' HTTPS handed to this proxy, and leave to reach
+/// them. Nothing a client reads — which bundle to trust and where a token goes are bound by
+/// whoever wants them (`${proxy.ca-file}`, `${<connection>.token}`), and a sandbox that binds
+/// neither reaches the provider through the proxy as an unauthenticated client would, which is
+/// what it asked for. Nothing of anybody's credential either — that is per block (`lend`).
 let provision (proxy: Proxy) (route: CredentialRoute) : WorkSandboxes.Provision =
     { WorkSandboxes.Provision.empty with
-        Env = trustVariables |> List.map (fun name -> name, proxy.TrustFile) |> Map.ofList
         Domains = route.Hosts
-        Reads = [ proxy.TrustFile ]
         Intercept = Some { Interception.Socket = proxy.Socket; Interception.Hosts = route.Hosts } }
 
 /// What one block is lent on `route`: a fresh stand-in, in each of `variables` — the same

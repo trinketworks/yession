@@ -1332,18 +1332,14 @@ Async.StartImmediate (
                                 }
                             // By `api`: the API's stand-in, lent to the same act as the push,
                             // so a block's `gh` and its `git push` spend one person's
-                            // credential. In the variables the declaration lends it in, and —
-                            // while srt is routed to the proxy unasked — the route's own there.
+                            // credential — in the variables something bound it in, and no others.
                             let api =
                                 if not (List.contains ConnectionRoute.Api routes) then BlockEnv.none
                                 else
-                                    let variables =
-                                        lentInto
-                                        @ (if CredentialProxy.reachable (sandboxBackend sandbox) then GitHubAccess.route.Variables else [])
                                     CredentialProxy.lend
                                         credentialProxy
                                         GitHubAccess.route
-                                        variables
+                                        lentInto
                                         terminal
                                         { CredentialProxy.Lender.Owner = owner
                                           CredentialProxy.Lender.Resolve = fun () -> resolveGitHubToken owner

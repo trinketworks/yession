@@ -16,6 +16,4 @@ open Yession.Host.CredentialProxy
 /// host whose TLS the proxy terminates.
 let route : CredentialRoute =
     { Provider = "github"
-      Hosts = [ "api.github.com"; "uploads.github.com" ]
-      // `gh` reads the first; most everything else in the GitHub ecosystem, the second.
-      Variables = [ "GH_TOKEN"; "GITHUB_TOKEN" ] }
+      Hosts = [ "api.github.com"; "uploads.github.com" ] }

@@ -414,7 +414,14 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
         // What a spec asks the credential proxy for, provided INTO the spec — so the sandbox
         // is built from values, and a backend never sees a reference nobody answered. The
         // request keeps the references as asked: it is what a second ask is compared to.
-        let provideProxy (name: SandboxRef) (spec: EnvironmentSpec) : Result<EnvironmentSpec * Provision, string> =
+        // Closed by default: the proxy answers only what a connection's `api` route sends it,
+        // so a sandbox that forwards nothing by `api` has no business being admitted to it — and
+        // under docker, admission is a door that tunnels anywhere.
+        let provideProxy
+            (name: SandboxRef)
+            (forwarded: Map<ConnectionName, ConnectionRoute list>)
+            (spec: EnvironmentSpec)
+            : Result<EnvironmentSpec * Provision, string> =
             let asked =
                 spec.EnvironmentVariables
                 |> Map.toList
@@ -425,8 +432,15 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                     | SecretRef _
                     | Lent _ -> [])
                 |> List.distinct
+            let byApi = forwarded |> Map.exists (fun _ routes -> List.contains ConnectionRoute.Api routes)
             match asked with
             | [] -> Ok (spec, Provision.empty)
+            | asked when not byApi ->
+                Error (
+                    sprintf
+                        "this sandbox names %s, and forwards no connection by api — the credential proxy answers only what a connection's api route sends it; select a resource granting one"
+                        (asked |> List.map (fun value -> sprintf "'${proxy.%s}'" (ProxyValue.name value)) |> String.concat ", ")
+                )
             | asked ->
                 match config.Proxy.Provide name asked with
                 | Error e -> Error e
@@ -520,7 +534,7 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                                         (String.concat "; " said)
                                 )
                         | [] ->
-                            match provideProxy name spec with
+                            match provideProxy name forwarded spec with
                             | Error e ->
                                 revoke name forwarded
                                 return Error e

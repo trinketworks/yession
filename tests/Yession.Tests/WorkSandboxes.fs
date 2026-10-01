@@ -1530,7 +1530,7 @@ let private registryProxied (proxy: WorkSandboxes.ProxyProvider) (standing: (str
                 { Backend = fun _ -> "fake"
                   Describe = fun _ -> None
                   Checkout = fun _ -> None
-                  Credentials = []
+                  Credentials = [ githubCredential "route" ]
                   Selection = everyResourceAConnection
                   Proxy = proxy
                   Standing = standing |> List.map (fun (name, request) -> SandboxName.create name |> expect, request)
@@ -1543,10 +1543,12 @@ let private registryProxied (proxy: WorkSandboxes.ProxyProvider) (standing: (str
         return created, built
     }
 
-/// An ask whose environment names `text` for `variable`, decoded as a file would decode it.
+/// An ask whose environment names `text` for `variable`, decoded as a file would decode it —
+/// selecting `github`, since the proxy answers only a sandbox forwarding a connection by api.
 let private asking (variable: string) (text: string) : SandboxRequest =
     { Spec =
         { EnvironmentSpec.defaults with
+            Uses = [ ResourceName.create "github" |> expect ]
             EnvironmentVariables = Map.ofList [ variable, Derived (EnvTemplate.parse text |> expect) ] } }
 
 // --- a token lent into the variables a declaration names ---------------------------------------
@@ -1600,6 +1602,20 @@ let private proxyTests =
                 match spec.EnvironmentVariables |> Map.tryFind "HTTPS_PROXY" with
                 | Some (Derived template) -> Expect.equal (EnvTemplate.resolve (fun _ -> None) template) "provided:https" "the value, written in"
                 | other -> failwithf "expected the provided value, got %A" other
+            }
+
+        // The proxy answers what a connection's api route sends it, and under docker its door
+        // tunnels anywhere: a sandbox forwarding nothing by api is not admitted to it.
+        testCaseAsync "a sandbox that forwards no connection by api is refused the proxy" <|
+            async {
+                let fake, proxy = fakeProxy None
+                let! sandboxes, _ = registryProxied proxy []
+                let unforwarded = { Spec = { (asking "HTTPS_PROXY" "${proxy.https}").Spec with Uses = [] } }
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:dev") unforwarded with
+                | Ok _ -> failwith "expected a refusal"
+                | Error e ->
+                    Expect.stringContains e "forwards no connection by api" "it says why"
+                    Expect.isEmpty fake.Asked "and the proxy never heard of it"
             }
 
         testCaseAsync "a sandbox that names nothing of the proxy is never provided for" <|
@@ -1669,6 +1685,10 @@ let private registryGranting
         return created, built
     }
 
+/// `github` forwarded by api, which is what the proxy answers.
+let private byApi : SelectionGrant =
+    { SelectionGrant.none with Connections = { Needed = [ "github", ConnectionRoute.Api ]; Wanted = [] } }
+
 let private boundProxy : Map<string, EnvironmentVariableRef> =
     Map.ofList [ "HTTPS_PROXY", Derived [ TemplatePart.Proxy ProxyValue.Https ] ]
 
@@ -1683,7 +1703,7 @@ let private boundTests =
         testCaseAsync "a bound proxy reference is provided into the sandbox as a declaration's is" <|
             async {
                 let fake, proxy = fakeProxy None
-                let! sandboxes, built = registryGranting { SelectionGrant.none with Bound = boundProxy } [] proxy
+                let! sandboxes, built = registryGranting { byApi with Bound = boundProxy } [ githubCredential "route" ] proxy
                 let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") SandboxRequest.defaults
                 // The grant is the host's for every selection, the standing `default` included,
                 // so only this sandbox's ask is looked at.
@@ -1711,7 +1731,7 @@ let private boundTests =
         testCaseAsync "a declaration's own line wins over one a resource bound" <|
             async {
                 let fake, proxy = fakeProxy None
-                let! sandboxes, built = registryGranting { SelectionGrant.none with Bound = boundProxy } [] proxy
+                let! sandboxes, built = registryGranting { byApi with Bound = boundProxy } [ githubCredential "route" ] proxy
                 let mine = { Spec = { EnvironmentSpec.defaults with EnvironmentVariables = Map.ofList [ "HTTPS_PROXY", PlainValue "mine" ] } }
                 let! _ = sandboxes.Ensure starter None (sandbox "octo/hello:dev") mine
                 let _, spec = built |> Seq.find (fun (name, _) -> name = "octo/hello:dev")
