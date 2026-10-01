@@ -1470,6 +1470,23 @@ module DockerSandbox =
             | Ok handle ->
                 match! handle.Exited with
                 | SandboxRunFailed reason -> return Error (sprintf "could not look for a shell behind the entrypoint: %s" reason)
+                // The look itself ends `; true`, so it exits 0 whatever it found: any other
+                // code is the ENTRYPOINT failing before the look ran — `nix develop` losing a
+                // fetch, say. Reported as that, with its code, rather than as "found none",
+                // which sent a reader hunting for a missing shell in a devshell that was never
+                // assembled.
+                | SandboxExited code when code <> 0 ->
+                    let what =
+                        match container.Entrypoint with
+                        | Some prefix -> sprintf "the entrypoint (%s)" (String.concat " " prefix)
+                        | None -> "the look for a shell"
+                    return
+                        Error
+                            (sprintf
+                                "%s exited %d before a shell could be looked for behind it. It said: %s"
+                                what
+                                code
+                                (let text = said.ToString().Trim () in if text = "" then "nothing" else text))
                 | SandboxExited _ ->
                     let found =
                         said.ToString().Split '\n'
