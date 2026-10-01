@@ -2306,10 +2306,12 @@ let private sseGiveUpTests =
                 let! url = aDeadUrl ()
                 let asked = ResizeArray<Sse.Refusal> ()
                 let refuseSilence : Sse.Retry = fun refusal -> asked.Add refusal; false
-                let subscription = Sse.subscribeWhile url [] refuseSilence ignore
-                // Past two retry windows, so anything still reading ONE is a subscription that
-                // gave up rather than one that has not come round again yet.
-                do! Async.Sleep 2500
+                let clock = virtualClock (DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero))
+                let subscription = Sse.subscribeWhile clock.Clock url [] refuseSilence ignore
+                do! waitUntil "the caller to be asked about the dead connect" (fun () -> asked.Count > 0)
+                // The verdict is acted on in the tick that asked for it, so a subscription that
+                // had not believed it would already be parked on the clock, waiting to re-dial.
+                Expect.equal (clock.Pending ()) 0 "no reconnect was armed"
                 Expect.equal
                     (List.ofSeq asked)
                     [ Sse.Refusal.Unanswered ]
@@ -2322,11 +2324,12 @@ let private sseGiveUpTests =
                 let! url = aDeadUrl ()
                 let asked = ResizeArray<Sse.Refusal> ()
                 let acceptSilence : Sse.Retry = fun refusal -> asked.Add refusal; true
-                let subscription = Sse.subscribeWhile url [] acceptSilence ignore
-                do! Async.Sleep 2500
-                Expect.isTrue
-                    (asked.Count > 1)
-                    "a peer that is not up YET is what every leg in this product waits for"
+                let clock = virtualClock (DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero))
+                let subscription = Sse.subscribeWhile clock.Clock url [] acceptSilence ignore
+                do! clock.Armed ()
+                clock.Advance (TimeSpan.FromMinutes 1.0)
+                // A peer that is not up YET is what every leg in this product waits for.
+                do! waitUntil "the caller to be asked again after the retry window" (fun () -> asked.Count > 1)
                 subscription.Stop ()
             }
 
@@ -2338,7 +2341,11 @@ let private sseGiveUpTests =
             async {
                 // A stream that is open and stays open: the only way this connection can end is
                 // the teardown, so anything reaching `retry` came from the unsubscribe.
-                let handler (_req: IncomingMessage) (res: ServerResponse) =
+                let mutable connected = false
+                let mutable socketClosed = false
+                let handler (req: IncomingMessage) (res: ServerResponse) =
+                    onRequestSocketClosed req (fun () -> socketClosed <- true)
+                    connected <- true
                     res.writeHead (200, [ ResponseHeader.ContentType "text/event-stream" ])
                     res.write ": subscribed\n\n" |> ignore
 
@@ -2350,12 +2357,13 @@ let private sseGiveUpTests =
 
                 let asked = ResizeArray<Sse.Refusal> ()
                 let recording : Sse.Retry = fun refusal -> asked.Add refusal; true
-                let subscription = Sse.subscribeWhile url [] recording ignore
-                do! Async.Sleep 250
+                let clock = virtualClock (DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero))
+                let subscription = Sse.subscribeWhile clock.Clock url [] recording ignore
+                do! waitUntil "the stream to be open" (fun () -> connected)
                 subscription.Stop ()
-                // Past a retry window, so a subscription that had asked and been told yes would
-                // have re-dialled and asked again by now.
-                do! Async.Sleep 1500
+                // The abort settles the client's read before the server can see the socket go,
+                // so by then the teardown has already landed wherever it was going to.
+                do! waitUntil "the server to see the connection let go" (fun () -> socketClosed)
                 Expect.equal (List.ofSeq asked) [] "the caller was asked about no refusal, because there was none"
                 listening.close ignore
             }
@@ -2390,7 +2398,7 @@ let private sseGiveUpTests =
                     function
                     | Sse.Refusal.Answered status -> status <> 404
                     | Sse.Refusal.Unanswered -> true
-                let subscription = Sse.subscribeWhile url [] permanentOn404 ignore
+                let subscription = Sse.subscribeWhile Clock.system url [] permanentOn404 ignore
                 do!
                     waitUntilWithin
                         2000

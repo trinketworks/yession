@@ -136,6 +136,7 @@ let private retryAfterMs = 1000
 // on a refusal the caller called permanent. Best-effort by design: a transport error is a dropped
 // connection the caller is asked about, never thrown.
 let private openStream
+    (clock: Clock)
     (url: string)
     (headers: (string * string) list)
     (onEvent: Sink<string>)
@@ -244,7 +245,7 @@ let private openStream
                 if cancelled then
                     return ()
                 else
-                    do! Async.Sleep retryAfterMs
+                    do! clock.After (System.TimeSpan.FromMilliseconds (float retryAfterMs))
                     if cancelled then return () else return! run ()
         }
 
@@ -260,10 +261,19 @@ let private openStream
 /// or a connect nothing answered — is permanent. The stopped subscription is inert rather than
 /// errored: a server that does not offer a stream is not a fault, it is a server whose news has
 /// to arrive another way.
-let subscribeWhile (url: string) (headers: (string * string) list) (retry: Retry) (onFrame: Sink<string>) : Subscription =
-    Subscription.ofStop (openStream url headers (fun event -> dataOf event |> Option.iter onFrame) retry)
+///
+/// The wait between attempts is the clock's, so a case that wants a retry window to have passed
+/// turns the clock rather than sleeping a real second per window.
+let subscribeWhile
+    (clock: Clock)
+    (url: string)
+    (headers: (string * string) list)
+    (retry: Retry)
+    (onFrame: Sink<string>)
+    : Subscription =
+    Subscription.ofStop (openStream clock url headers (fun event -> dataOf event |> Option.iter onFrame) retry)
 
 /// Subscribe to an SSE stream, receiving one call per event carrying data (comment-only
 /// keep-alives are dropped). `headers` ride every connect and reconnect.
 let subscribe (url: string) (headers: (string * string) list) (onFrame: Sink<string>) : Subscription =
-    subscribeWhile url headers Retry.always onFrame
+    subscribeWhile Clock.system url headers Retry.always onFrame
