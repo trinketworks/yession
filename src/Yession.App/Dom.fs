@@ -349,6 +349,14 @@ module Dom =
         /// close control it replaced: the strip cannot destroy. Killing a terminal is
         /// `terminalClose`, on its row in the list.
         let paneTabPinned = "data-pane-tab-pinned"
+        /// The control that takes a tab off the strip, carrying that tab's key. Offered on
+        /// the SELECTED tab and only while nobody has kept it — the pin is what says "not
+        /// this one", and Delete on a focused tab is the path that can close a kept one.
+        ///
+        /// It closes a TAB. Ending a terminal is `terminalClose`, on its row in the list, and
+        /// the two must not be mistaken for each other: a `close` in this strip once did the
+        /// destructive one, which is why it was taken out of it.
+        let paneTabClose = "data-pane-tab-close"
         /// The pane's body, carrying the key of whatever it is showing.
         let panePanel = "data-pane-panel"
         /// A block's read-only view: its command line and everything it printed.
@@ -662,6 +670,10 @@ module Dom =
         /// of its own to be labelled, so it says so from the tab it acts on.
         let pinHint = "Select again to pin this tab"
         let unpinHint = "Select again to unpin this tab"
+        /// The close control's accessible name. It says TAB, because the word on its own is
+        /// the one this product uses for ending a terminal, and it names which tab so that a
+        /// reader who arrives on the control knows what it is about.
+        let closeTab (what: string) = sprintf "Close tab %s" what
         /// A queued command that will run as soon as the terminal is free.
         let queuedReady = "ready"
         /// A queued command held because a peer is typing in its terminal (Plan 13, stage

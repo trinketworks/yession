@@ -3701,6 +3701,45 @@ let editorTests =
                 return ()
             }
 
+        // A tab is a `div role="tab"` now, because it HOLDS the close control — a control
+        // outside the tab would be a child of the tablist that is not a tab, and a `button`
+        // cannot contain one. What a real button gave for free was Enter and Space, so the
+        // tab says them itself, and nothing but a browser can report whether they arrived.
+        //
+        // Driven against the strip the harness already renders rather than a tab opened from
+        // the chat: every step this case does not take is a step that cannot time out under
+        // a loaded runner, and what is under test is the tab, not the way it got there.
+        editorCase "a tab is kept from the keyboard, and the close control follows" <| fun page ->
+            async {
+                // The column the strip lives in starts shut at this window size.
+                do! awaitU (page.Locator("#shell [data-content-toggle='show']").First.ClickAsync ())
+
+                // An open tab nobody kept offers a close.
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab-close^='terminal:']")
+
+                // Enter keeps it, exactly as a second click would — and a kept tab offers no
+                // close, which is what keeping BUYS: a stray tap in a strip that scrolls
+                // sideways must not take away something somebody is holding on to.
+                do! awaitU (page.Locator("#shell [data-pane-tab][aria-selected='true']").First.PressAsync "Enter")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """document.querySelector("#shell [data-pane-tab][aria-selected='true']")
+                               ?.getAttribute('data-pane-tab-pinned') === 'true'""")
+                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-pane-tab-close]")""")
+
+                // Space releases it, and the control comes back.
+                do! awaitU (page.Locator("#shell [data-pane-tab][aria-selected='true']").First.PressAsync "Space")
+                let! closer = await (page.WaitForSelectorAsync "#shell [data-pane-tab-close]")
+
+                // And it takes that tab off the strip.
+                let! key = await (closer.GetAttributeAsync "data-pane-tab-close")
+                do! awaitU (closer.ClickAsync ())
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        (sprintf """!document.querySelector("#shell [data-pane-tab='%s']")""" key))
+                return ()
+            }
+
         // The terminal list (Plan 20, stage 0). WHICH verbs a row offers is a fold the cheap
         // tier already pins; what only a browser can answer is the DOM swap — the list
         // replaces the strip and the pane's body at once, so choosing a row removes the
