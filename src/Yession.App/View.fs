@@ -3640,7 +3640,15 @@ module View =
                 html $"""
                     <span class="{Style.paneViewerDot}" style="border-color:{Entity.presenceColour model who}"
                           title="{name} is watching" data-pane-viewer="{ActorRef.token who}"></span>""")
-        let terminalTabButton (activate: unit -> unit) (pinMark: TemplateResult) (pinnedAttr: string) (hint: string) (view: TerminalView) =
+        let terminalTabButton
+            (activate: unit -> unit)
+            (activateKey: Browser.Types.Event -> unit)
+            (closeControl: TemplateResult)
+            (pinMark: TemplateResult)
+            (pinnedAttr: string)
+            (hint: string)
+            (view: TerminalView)
+            =
             let on = isOn (TerminalTab view.TerminalId)
             let key = PaneTab.key (TerminalTab view.TerminalId)
             let id = TerminalId.value view.TerminalId
@@ -3658,20 +3666,22 @@ module View =
                          <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model who}"
                                title="{name}" data-terminal-tab-peer="{ActorRef.token who}"></span>"""))
                 @ viewerDots (editors |> List.map fst) (TerminalTab view.TerminalId)
-            // Two literal spellings of one button, because lit-html cannot inject an
-            // attribute NAME through a hole — and the open/closed hooks must stay apart:
-            // there is nothing to run in a closed terminal, only something to read.
+            // Two literal spellings of one tab, because lit-html cannot inject an attribute
+            // NAME through a hole — and the open/closed hooks must stay apart: there is
+            // nothing to run in a closed terminal, only something to read.
             if view.IsOpen then
                 html $"""
-                    <button type="button" role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-tab="{id}"
-                            aria-selected="{selectedAttr}" tabindex="{tabIndex}" title="{hint}"
-                            data-pane-tab-pinned="{pinnedAttr}"
-                            @click={Ev(fun _ -> activate ())}>{TerminalTitle.value view.Title}{pinMark}<span class="{Style.terminalTabPeers}">{peers}</span></button>"""
+                    <div role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-tab="{id}"
+                         aria-selected="{selectedAttr}" tabindex="{tabIndex}" title="{hint}"
+                         data-pane-tab-pinned="{pinnedAttr}"
+                         @keydown={Ev(activateKey)}
+                         @click={Ev(fun _ -> activate ())}><span class="{Style.paneTabLabel}">{TerminalTitle.value view.Title}</span>{pinMark}<span class="{Style.terminalTabPeers}">{peers}</span>{closeControl}</div>"""
             else
                 html $"""
-                    <button type="button" role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-closed-tab="{id}"
-                            aria-selected="{selectedAttr}" tabindex="{tabIndex}"
-                            @click={Ev(fun _ -> activate ())}>{TerminalTitle.value view.Title}<span class="{Style.small}"> · closed</span><span class="{Style.terminalTabPeers}">{peers}</span></button>"""
+                    <div role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-closed-tab="{id}"
+                         aria-selected="{selectedAttr}" tabindex="{tabIndex}"
+                         @keydown={Ev(activateKey)}
+                         @click={Ev(fun _ -> activate ())}><span class="{Style.paneTabLabel}">{TerminalTitle.value view.Title}</span><span class="{Style.small}"> · closed</span>{pinMark}<span class="{Style.terminalTabPeers}">{peers}</span>{closeControl}</div>"""
         // What a tab is CALLED — read by the tab itself and by the properties bar, which names
         // the selected one. One function, so the strip and the bar can never disagree about
         // what you are looking at.
@@ -3691,7 +3701,15 @@ module View =
             // strip is narrow, and `artifacts/chart.png/0003-7f2a91` truncates to the part
             // that says least.
             | ContentTab ref -> ContentName.ofRef ref
-        let readonlyTabButton (activate: unit -> unit) (pinMark: TemplateResult) (pinnedAttr: string) (hint: string) (tab: PaneTab) =
+        let readonlyTabButton
+            (activate: unit -> unit)
+            (activateKey: Browser.Types.Event -> unit)
+            (closeControl: TemplateResult)
+            (pinMark: TemplateResult)
+            (pinnedAttr: string)
+            (hint: string)
+            (tab: PaneTab)
+            =
             let on = isOn tab
             let label = tabLabel tab
             // The strip holds both kinds at once, so a content tab says which it is — wearing
@@ -3706,11 +3724,12 @@ module View =
                     html $"""<span class="{Style.paneTabKindMark}" aria-hidden="true">{glyph}</span>"""
                 | TerminalTab _ | BlockTab _ | StretchTab _ -> Lit.nothing
             html $"""
-                <button type="button" role="tab" class="{if on then Style.terminalTabActive else Style.terminalTab}"
-                        data-pane-tab="{PaneTab.key tab}" title="{hint}"
-                        data-pane-tab-pinned="{pinnedAttr}"
-                        aria-selected="{if on then "true" else "false"}" tabindex="{if on then "0" else "-1"}"
-                        @click={Ev(fun _ -> activate ())}>{kindMark}{label}{pinMark}<span class="{Style.terminalTabPeers}">{viewerDots [] tab}</span></button>"""
+                <div role="tab" class="{if on then Style.terminalTabActive else Style.terminalTab}"
+                     data-pane-tab="{PaneTab.key tab}" title="{hint}"
+                     data-pane-tab-pinned="{pinnedAttr}"
+                     aria-selected="{if on then "true" else "false"}" tabindex="{if on then "0" else "-1"}"
+                     @keydown={Ev(activateKey)}
+                     @click={Ev(fun _ -> activate ())}>{kindMark}<span class="{Style.paneTabLabel}">{label}</span>{pinMark}<span class="{Style.terminalTabPeers}">{viewerDots [] tab}</span>{closeControl}</div>"""
         /// Activating the tab you are ALREADY on is how a tab gets kept, or released.
         ///
         /// The pin used to be a second button beside every keepable tab. On a touch screen
@@ -3732,6 +3751,47 @@ module View =
             let select () = dispatch (ShowInPaneMsg (Reading tab))
             let activate () =
                 if isOn tab then dispatch (TogglePinMsg tab) else select ()
+            // A tab is a `div role="tab"` rather than a `button`, because it CONTAINS a
+            // button: a control outside the tab would be a child of the tablist that is not
+            // a tab, which is the one thing that role does not allow. What a real button
+            // gave for free was Enter and Space, so the tab says them itself — the strip's
+            // own keydown handler already carries the arrow walk and Delete, and these
+            // belong to the tab because `activate` is the tab's.
+            let activateKey (e: Browser.Types.Event) =
+                let pressed = e :?> Browser.Types.KeyboardEvent
+                if pressed.key = "Enter" || pressed.key = " " then
+                    // Space on a focused element scrolls the page, and a strip that jumped
+                    // every time somebody kept a tab would be answering a different question.
+                    pressed.preventDefault ()
+                    activate ()
+            // Taking a tab off the strip, on the SELECTED tab and only while nobody kept it.
+            //
+            // On the selected one because the strip is a row of names a person scans, and a
+            // control on every tab is the column of marks that distinguishes nothing — the
+            // same reason the pin is a mark rather than a button, and the same place the pin
+            // hint already speaks from. Closing another tab is selecting it first, which is
+            // the tap that was going to happen anyway.
+            //
+            // Not on a kept tab, because that is what keeping BUYS: a strip scrolls sideways
+            // under a thumb, and a stray tap must not take away something somebody is
+            // holding on to. Delete on a focused tab is deliberate enough to, and does.
+            let closeControl =
+                if not (isOn tab) || pinned then Lit.nothing
+                elif not (model.Tabs |> List.exists (fun open' -> PaneTab.key open' = PaneTab.key tab)) then
+                    // A preview is whatever is being looked at; "close" said of it would mean
+                    // closing the pane, which is not a thing this strip does.
+                    Lit.nothing
+                else
+                    let named = Dom.Text.closeTab (tabLabel tab)
+                    html $"""
+                        <button type="button" class="{Style.paneTabClose}" tabindex="-1"
+                                data-pane-tab-close="{PaneTab.key tab}" aria-label="{named}" title="{named}"
+                                @click={Ev(fun (e: Browser.Types.Event) ->
+                                               // Or the tab under it would take the click as
+                                               // a second activation and keep what was just
+                                               // asked to go.
+                                               e.stopPropagation ()
+                                               dispatch (CloseTabMsg tab))}>{Icon.close}</button>"""
             // The mark says the tab is kept, and only when it is. `role="img"` with a name,
             // because a colour and a glyph are not a fact anything that cannot see them can
             // read — and the state is not on the button itself: a `tab` cannot also be a
@@ -3749,9 +3809,10 @@ module View =
             match tab with
             | TerminalTab id ->
                 match Projection.tryFind id model.Terminals with
-                | Some view -> terminalTabButton activate pinMark pinnedAttr hint view
+                | Some view -> terminalTabButton activate activateKey closeControl pinMark pinnedAttr hint view
                 | None -> Lit.nothing
-            | BlockTab _ | StretchTab _ | ContentTab _ -> readonlyTabButton activate pinMark pinnedAttr hint tab
+            | BlockTab _ | StretchTab _ | ContentTab _ ->
+                readonlyTabButton activate activateKey closeControl pinMark pinnedAttr hint tab
         let terminalBody (view: TerminalView) =
             let feed = ClientModel.terminalFeed view.TerminalId model
             let affords = ClientModel.affordances view model

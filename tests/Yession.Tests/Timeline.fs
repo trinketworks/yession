@@ -1553,6 +1553,29 @@ let private pinTests =
                 "both still open, and closing one is not a person changing their mind"
             Expect.isTrue (List.contains "terminal:term-a" (stripKeys model)) "the closed one is still a tab"
 
+        testCase "an open tab offers a close, and a kept one does not" <| fun () ->
+            // What keeping BUYS, on screen: the strip scrolls sideways under a thumb, so a
+            // stray tap must not take away something somebody is holding on to. The keyboard
+            // still can (Delete on a focused tab), because that is not a stray anything.
+            let model = clientOf [ at 1L 0.0 (opened terminalA "build") ]
+            let offered (m: ClientModel) =
+                (Support.render m).Contains (Dom.attr Dom.Hooks.paneTabClose "terminal:term-a")
+            Expect.isTrue (offered model) "the tab I have open, and am looking at, can be closed"
+            Expect.isFalse
+                (offered (Support.step (TogglePinMsg (TerminalTab terminalA)) model))
+                "and once kept, not by a tap"
+
+        testCase "a previewed tab offers no close, because there is nothing to close" <| fun () ->
+            // The preview is whatever is being looked at rather than something in the strip,
+            // so "close" said of it would mean closing the pane — which is not a thing this
+            // strip does. Looking at something else is what takes a preview away.
+            let model =
+                clientOf oneBlock
+                |> Support.step (ShowInPaneMsg (Reading (BlockTab (terminalA, block "1"))))
+            Expect.isFalse
+                ((Support.render model).Contains (Dom.attr Dom.Hooks.paneTabClose "block:term-a:b-1"))
+                "nothing to take off a strip it is not on"
+
         testCase "a terminal that ends takes its tab with it, when nobody kept it" <| fun () ->
             // The other half of the tab rule, and why the strip does not need tidying: what
             // is in a tab having finished is the ordinary reason a tab is done with. The list

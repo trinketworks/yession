@@ -2622,9 +2622,28 @@ module Style =
     /// transparent and the hairline shows straight through. Drawn at the tab's own height
     /// instead, it was a second rule 23px above the first — two horizontal lines saying one
     /// thing, which is the ornament this pass exists to remove.
+    /// The tab is a flex ROW rather than a truncating box, because it holds a control: the
+    /// close button sits inside the tab (a tab is what the pointer aims at, and a control
+    /// outside it would be a child of the tablist that is not a tab), and a `truncate` on the
+    /// tab itself would clip the button rather than the name. The bound and the ellipsis moved
+    /// onto the label, which is the thing that is allowed to be too long.
     let private tabBase =
-        cls [ caps; "bg-transparent cursor-pointer px-2.5 pt-1.5 pb-2 -mb-px max-w-40 truncate transition-colors"
+        cls [ caps; "bg-transparent cursor-pointer px-2.5 pt-1.5 pb-2 -mb-px inline-flex items-center transition-colors"
               Stroke.underline; focusRing ]
+    /// A tab's NAME: as much of it as fits, and an ellipsis for the rest.
+    let paneTabLabel = "max-w-40 truncate"
+    /// Taking a tab off the strip — on the selected tab only, which is where a gesture with
+    /// no control of its own already says what a second activation would do.
+    ///
+    /// Deliberately NOT the danger face (`btnIconBareDanger`, `hover:text-err`): that
+    /// vocabulary belongs to the control that ENDS a terminal, which lives on its row in the
+    /// list, and a strip that borrowed it would be making the two acts look alike one pixel
+    /// apart — which is the exact mistake that took `close` out of this strip in the first
+    /// place. This one only stops showing something.
+    /// `btnIconBare` itself, which is this vocabulary's borderless icon verb riding a row it
+    /// acts on — 24px, which the rule at that declaration keeps as WCAG 2.5.8's floor and is
+    /// not a thing a strip gets to shave.
+    let paneTabClose = cls [ btnIconBare; "ml-1.5" ]
     let terminalTab = cls [ tabBase; Stroke.clear; "text-ink-faint hover:text-ink" ]
     let terminalTabActive = cls [ tabBase; Stroke.blue; "text-ink" ]
     /// Adds a terminal. The one action in the strip that is not a selection — so it wears the
