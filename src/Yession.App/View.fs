@@ -151,27 +151,7 @@ type ViewActions =
       /// shut, and only the document knows where the cursor went. Without it, dismissing a
       /// menu strands focus on `body` — the failure the WCAG floor names, and the one a
       /// keyboard reader hits on the very first Escape.
-      FocusItemActions : MessageId -> unit
-      /// The launch surface's five effects. Ask the session for the repos this person can
-      /// choose from — theirs when the text is empty, a search otherwise; the answer comes
-      /// back as `LaunchListingArrived`.
-      LaunchSearch : string -> unit
-      /// Ask for the page a cursor names (`LaunchMoreArrived`). The cursor is the session's
-      /// own and is carried back unread — see `Repos.RepoPage`.
-      LaunchMore : string -> unit
-      /// Ask for one repo's branches (`LaunchBranchesArrived`), and for the page a branch
-      /// cursor names (`LaunchBranchMoreArrived`). The repo rides the second because a page
-      /// that landed after the pane moved on belongs to a question nobody is asking.
-      LaunchBranches : RepoRef -> unit
-      LaunchBranchesMore : RepoRef -> string -> unit
-      /// Send the choice: the `AddRepo` command, on the branch when one other than the
-      /// default was picked. The request leaves as `LaunchSent`; its admission comes back as
-      /// `CommandAnsweredMsg`, and its outcome as events.
-      LaunchStart : LaunchTarget -> unit
-      /// Launch what a pasted link asks for. A repo or a branch is sent as it stands; a pull
-      /// request is first asked about (`LaunchResolving`), since its head is the provider's
-      /// to say.
-      LaunchLink : Repos.RepoLink -> unit }
+      FocusItemActions : MessageId -> unit }
 
 module ViewActions =
     /// A no-op action set for rendering the view to a string (SSR + tests). The handlers
@@ -191,12 +171,6 @@ module ViewActions =
           GitHubPasteToken = ignore
           GitHubDisconnect = ignore
           Copy = fun _ _ -> ()
-          LaunchSearch = ignore
-          LaunchMore = ignore
-          LaunchBranches = ignore
-          LaunchBranchesMore = fun _ _ -> ()
-          LaunchStart = ignore
-          LaunchLink = ignore
           RetryNow = ignore
           SendTerminalDraft = fun _ _ -> ()
           TypeIntoTerminal = fun _ _ -> ()
@@ -1657,21 +1631,11 @@ module View =
             let key : string = (e :?> Browser.Types.KeyboardEvent).key
             if key = "Enter" && not busy then
                 e.preventDefault ()
-                match Launch.linkOf launch.Query with
-                | Some link -> actions.LaunchLink link
-                | None -> actions.LaunchSearch launch.Query
-        let hold (candidate: Repos.RepoCandidate) =
-            dispatch (LaunchMsg (LaunchSelected candidate))
-            // Branches are asked for on holding, so the pane is full by the time it is
-            // opened — and once per row, whatever is held and let go.
-            if launch.Selected <> Some candidate.Repo && not (launch.Branches |> Map.containsKey candidate.Repo) then
-                actions.LaunchBranches candidate.Repo
-        // Going to the branch pane, from the link on a held row. The listing is asked for
-        // here as well as on holding, because a row can be held by a pasted link rather than
-        // a press and that path never went through `hold`.
-        let openBranches (repo: RepoRef) =
-            if not (launch.Branches |> Map.containsKey repo) then actions.LaunchBranches repo
-            dispatch (LaunchMsg (LaunchBranchPaneOpened repo))
+                dispatch (LaunchMsg LaunchSubmitted)
+        // Holding a row asks for its branches, and so does opening its pane: `Launch.update`
+        // keeps that to once per row.
+        let hold (candidate: Repos.RepoCandidate) = dispatch (LaunchMsg (LaunchSelected candidate))
+        let openBranches (repo: RepoRef) = dispatch (LaunchMsg (LaunchBranchPaneOpened repo))
         // The held row's branch, at the row's trailing edge: the name it will launch on, and
         // a way into the pane that changes it. A LINK rather than the field this used to be —
         // a field inside a row is a second thing to operate in a surface whose whole grammar
@@ -1757,7 +1721,7 @@ module View =
                               <div class="{Style.askFootLine}">
                                 <span class="{Style.statusErr}" role="status">{reason}</span>
                                 <button type="button" class="{Style.askLink}" data-repo-picker-again
-                                        @click={Ev(fun _ -> Launch.wanting { launch with More = MoreIdle } |> Option.iter actions.LaunchMore)}>{Dom.Text.repoPickerAgain}</button>
+                                        @click={Ev(fun _ -> dispatch (LaunchMsg LaunchMoreRetried))}>{Dom.Text.repoPickerAgain}</button>
                               </div>
                             </div>"""
                     | Some _, (MoreIdle | MoreFetching) ->
@@ -1785,7 +1749,7 @@ module View =
             html $"""
                 <button type="button" class="{Style.askStart}" data-repo-picker-start
                         ?disabled={target.IsNone || busy} aria-busy="{if busy then "true" else "false"}"
-                        @click={Ev(fun _ -> target |> Option.iter actions.LaunchStart)}>
+                        @click={Ev(fun _ -> dispatch (LaunchMsg LaunchStartPressed))}>
                   <span class="{Style.whenReady}">{Dom.Text.repoPickerStart}</span><span class="{Style.whenBusy}">{Dom.Text.repoPickerCloning}</span>
                 </button>"""
         let actionsRow =
@@ -1890,9 +1854,7 @@ module View =
                                       <div class="{Style.askFootLine}">
                                         <span class="{Style.statusErr}" role="status">{reason}</span>
                                         <button type="button" class="{Style.askLink}" data-repo-branch-again
-                                                @click={Ev(fun _ ->
-                                                               Launch.wantingBranches { launch with BranchMore = MoreIdle }
-                                                               |> Option.iter (fun (repo, cursor) -> actions.LaunchBranchesMore repo cursor))}>{Dom.Text.repoPickerAgain}</button>
+                                                @click={Ev(fun _ -> dispatch (LaunchMsg LaunchBranchMoreRetried))}>{Dom.Text.repoPickerAgain}</button>
                                       </div>
                                     </div>"""
                             | Some _, (MoreIdle | MoreFetching), _ ->

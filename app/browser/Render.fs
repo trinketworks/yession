@@ -836,9 +836,9 @@ let create (deps: Deps) : Renderer =
     // the same node across renders while the foot is drawn, so that is once when the listing
     // gains a page to come and once when it runs out.
     //
-    // What the watch asks is `latest`, not a cursor from the render that made it: one observer
-    // outlives many renders, and `Launch.wanting` is where "should I ask" lives (a page to
-    // come, nothing in flight, no attempt under way).
+    // What the watch sends is a sighting, not a cursor from the render that made it: one
+    // observer outlives many renders, and `Launch.wanting`, read by the reducer, is where
+    // "should I ask" lives (a page to come, nothing in flight, no attempt under way).
     // Two feet, one per pane, watched the same way and independently — the branch pane's list
     // pages exactly as the repo pane's does, and both are in the document at once because the
     // track slides rather than swapping.
@@ -863,12 +863,10 @@ let create (deps: Deps) : Renderer =
                             foot
                             wanted)
     let syncListingFoot () =
-        watchFoot Dom.Hooks.repoPickerBody Dom.Hooks.repoPickerFoot (fun () ->
-            latest |> Option.bind (fun model -> Launch.wanting model.Launch) |> Option.iter deps.Actions.LaunchMore)
-        watchFoot Dom.Hooks.repoBranchBody Dom.Hooks.repoBranchFoot (fun () ->
-            latest
-            |> Option.bind (fun model -> Launch.wantingBranches model.Launch)
-            |> Option.iter (fun (repo, cursor) -> deps.Actions.LaunchBranchesMore repo cursor))
+        // Every sighting is sent: whether it asks for a page is the reducer's rule
+        // (`Launch.wanting`), and the watcher fires many times for one scroll.
+        watchFoot Dom.Hooks.repoPickerBody Dom.Hooks.repoPickerFoot (fun () -> dispatch (LaunchMsg LaunchMoreAsked))
+        watchFoot Dom.Hooks.repoBranchBody Dom.Hooks.repoBranchFoot (fun () -> dispatch (LaunchMsg LaunchBranchMoreAsked))
 
     let mutable renderedAt = -infinity
     let mutable held = 0

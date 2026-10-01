@@ -1387,81 +1387,6 @@ let private start () =
                             if not reply.Ok then return Error reply.Body else return Ok None
                         })
                         (Some { Scope = scope; Connected = false })
-              LaunchSearch =
-                fun query ->
-                    dispatchRef (LaunchMsg (LaunchListingArrived ListingUnknown))
-                    Async.StartImmediate (
-                        async {
-                            let! listing = fetchRepoListing query
-                            dispatchRef (LaunchMsg (LaunchListingArrived listing))
-                        })
-              LaunchMore =
-                fun cursor ->
-                    dispatchRef (LaunchMsg LaunchMoreStarted)
-                    Async.StartImmediate (
-                        async {
-                            match! fetchRepoPage (Page.href GitHubRepos + "?page=" + urlEncode cursor) with
-                            | Ok page -> dispatchRef (LaunchMsg (LaunchMoreArrived page))
-                            | Error (reason, _) -> dispatchRef (LaunchMsg (LaunchMoreFailed reason))
-                        })
-              LaunchBranchesMore =
-                fun repo cursor ->
-                    dispatchRef (LaunchMsg LaunchBranchMoreStarted)
-                    Async.StartImmediate (
-                        async {
-                            let owner, name = RepoRef.owner repo, RepoRef.repo repo
-                            match! fetchBranchPage (Page.href (GitHubBranches (owner, name)) + "?page=" + urlEncode cursor) with
-                            | Ok page -> dispatchRef (LaunchMsg (LaunchBranchMoreArrived (repo, page)))
-                            | Error reason -> dispatchRef (LaunchMsg (LaunchBranchMoreFailed reason))
-                        })
-              LaunchBranches =
-                fun repo ->
-                    Async.StartImmediate (
-                        async {
-                            let! branches = fetchRepoBranches repo
-                            dispatchRef (LaunchMsg (LaunchBranchesArrived (repo, branches)))
-                        })
-              LaunchStart =
-                fun target ->
-                    connectionRef
-                    |> Option.iter (fun c -> dispatchRef (LaunchMsg (LaunchSent (c.AddRepo target.Repo target.Branch, target))))
-              LaunchLink =
-                fun link ->
-                    // A link becomes a ROW, held — never a send: the same listing lookup a
-                    // search makes, asked for the one name, answers the candidate under the
-                    // provider's current name with its real default branch. A pull request is
-                    // asked about first, since which fork its branch lives in only the
-                    // provider knows.
-                    dispatchRef (LaunchMsg (LaunchResolving link))
-                    Async.StartImmediate (
-                        async {
-                            let! resolved =
-                                match link with
-                                | RepoLink.Repo repo -> async { return Ok (repo, None) }
-                                | RepoLink.Branch (repo, branch) -> async { return Ok (repo, Some branch) }
-                                | RepoLink.PullRequest (repo, number) ->
-                                    async {
-                                        match! fetchPullHead repo number with
-                                        | Ok head -> return Ok (head.Repo, Some head.Branch)
-                                        | Error reason -> return Error reason
-                                    }
-                            match resolved with
-                            | Error reason -> dispatchRef (LaunchMsg (LaunchFailed reason))
-                            | Ok (repo, branch) ->
-                                match! fetchRepoListing (RepoRef.value repo) with
-                                | ListingLoaded page when not (List.isEmpty page.Candidates) ->
-                                    let candidate = List.head page.Candidates
-                                    dispatchRef (LaunchMsg (LaunchLinked (candidate, branch)))
-                                    Async.StartImmediate (
-                                        async {
-                                            let! branches = fetchRepoBranches candidate.Repo
-                                            dispatchRef (LaunchMsg (LaunchBranchesArrived (candidate.Repo, branches)))
-                                        })
-                                | ListingLoaded _ ->
-                                    dispatchRef (LaunchMsg (LaunchFailed (sprintf "github does not show %s to this credential" (RepoRef.value repo))))
-                                | ListingUnavailable (reason, _) -> dispatchRef (LaunchMsg (LaunchFailed reason))
-                                | ListingUnknown -> ()
-                        })
               TypeIntoTerminal =
                 fun id data -> connectionRef |> Option.iter (fun c -> c.TypeIntoTerminal id data)
               ResizeTerminal =
@@ -1506,20 +1431,26 @@ let private start () =
                       ReportFocus = sendFocus
                       ResizeTerminal = fun id cols rows -> connectionRef |> Option.iter (fun c -> c.ResizeTerminal id cols rows)
                       Http = httpGet } }
-        // The launch surface's listing is asked for ONCE, the first time the surface is
-        // offered: it has no mount hook of its own, and asking on every render would ask on
-        // every keystroke.
-        let mutable launchListingAsked = false
         let setState (model: ClientModel) (dispatch: Ylmish.Program.Message<ClientMsg> -> unit) =
             dispatchRef <- fun msg -> dispatch (Ylmish.Program.Message.User msg)
             latestModel <- model
             renderer.SetState model
             sendViewing (ClientModel.viewing model)
-            if not launchListingAsked && ClientModel.launchOffered model then
-                launchListingAsked <- true
-                actions.LaunchSearch model.Launch.Query
 
-        Client.makeProgram { Client.Ports.Connection = fun () -> connectionRef } doc initial
+        let launchReads : Client.LaunchReads =
+            { Client.LaunchReads.Listing = fetchRepoListing
+              Client.LaunchReads.Page = fun cursor -> fetchRepoPage (Page.href GitHubRepos + "?page=" + urlEncode cursor)
+              Client.LaunchReads.Branches = fetchRepoBranches
+              Client.LaunchReads.BranchPage =
+                fun repo cursor ->
+                    let owner, name = RepoRef.owner repo, RepoRef.repo repo
+                    fetchBranchPage (Page.href (GitHubBranches (owner, name)) + "?page=" + urlEncode cursor)
+              Client.LaunchReads.PullHead = fetchPullHead }
+
+        Client.makeProgram
+            { Client.Ports.Connection = (fun () -> connectionRef); Client.Ports.Launch = Some launchReads }
+            doc
+            initial
         |> Client.withTimers Timer.system
         |> Program.withSetState setState
         |> Program.run

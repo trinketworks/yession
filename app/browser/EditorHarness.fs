@@ -1337,12 +1337,6 @@ do
             RevealMessage = fun id -> PaneShell.revealMessage (MessageId.value id)
             ScrollToLatest = PaneShell.scrollToLatest
             FocusItemActions = fun id -> PaneShell.toItemActions (MessageId.value id)
-            // The listing's next page, answered here because this harness has no session to
-            // ask: a page arrives with two more rows and no cursor after it, which is what
-            // the browser tier needs in order to watch REACHING the foot bring rows in
-            // without a press. What the cursor says is the session's business; that it is
-            // carried back unread is what the harness stands in for.
-            LaunchMore = fun cursor -> moreRef cursor
             TypeIntoTerminal = recordTyped }
     // The forward reference is the same shape `Browser.fs` uses: the render needs dispatch
     // (a rewound cast that plays off its end jumps back to live) and dispatch's render needs
@@ -1396,7 +1390,14 @@ do
             | ClientEffect.CloseTerminal _
             | ClientEffect.OpenTerminal _
             | ClientEffect.InterruptTurn _
-            | ClientEffect.ApproveRepoCapabilities _ -> ())
+            | ClientEffect.ApproveRepoCapabilities _ -> ()
+            // The listing's next page, answered here because this harness has no session to
+            // ask: a page arrives with two more rows and no cursor after it, which is what
+            // the browser tier needs in order to watch REACHING the foot bring rows in
+            // without a press. What the cursor says is the session's business; that it is
+            // carried back unread is what the harness stands in for.
+            | ClientEffect.Launch (LaunchEffect.More cursor) -> moreRef cursor
+            | ClientEffect.Launch _ -> ())
         // Read back off the MODEL rather than out of the message: a measurement the reducer
         // refused is not a width anything would claim, and a hook that reported it anyway
         // would say the opposite of what happened.
@@ -1460,7 +1461,6 @@ do
         | Error _ -> ())
     moreRef <-
         fun _ ->
-            dispatch (LaunchMsg LaunchMoreStarted)
             dispatch (
                 LaunchMsg (
                     LaunchMoreArrived
