@@ -23,6 +23,9 @@ module EventTargets =
     [<Emit("$0 instanceof HTMLElement")>]
     let private isHTMLElement (target: EventTarget) : bool = jsNative
 
+    [<Emit("$0 instanceof HTMLInputElement")>]
+    let private isHTMLInputElement (target: EventTarget) : bool = jsNative
+
     /// The target as a node, or `None` for one that is not (the window, a request).
     let asNode (target: EventTarget) : Node option =
         if isNode target then Some (target :?> Node) else None
@@ -31,3 +34,9 @@ module EventTargets =
     /// text node, an SVG element.
     let asHTMLElement (target: EventTarget) : HTMLElement option =
         if isHTMLElement target then Some (target :?> HTMLElement) else None
+
+    /// The target as an `<input>`, or `None` for anything else — a button, a textarea, the
+    /// document. Whether the input carries a caret is the input's own question (`selectionStart`
+    /// is `null` for a checkbox or a number field), asked of what this returns.
+    let asHTMLInputElement (target: EventTarget) : HTMLInputElement option =
+        if isHTMLInputElement target then Some (target :?> HTMLInputElement) else None
