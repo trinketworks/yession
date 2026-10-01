@@ -13,11 +13,20 @@ open Yession.Domain
 type AppendEvent<'event> = ActorRef -> 'event -> Async<AppendResult>
 type ReadEvents<'event> = EventOffset option -> int -> Async<EventPage<'event>>
 
+/// The last offset the log holds, or `None` for a log with nothing in it.
+///
+/// A length is what the read surface could never ask for, so everything about "how much is
+/// left" was answered by reading it. That is fine for one page and wrong for a plan: naming
+/// the next sixty-four addresses by reading six thousand envelopes to find their edges is
+/// paying for the answer in the currency the plan exists to save.
+type HeadOffset = unit -> Async<EventOffset option>
+
 /// The append-only event log, with its storage implementation hidden. Callers depend on
 /// these functions, never on the representation.
 type EventLog<'event> =
     { Append : AppendEvent<'event>
-      Read   : ReadEvents<'event> }
+      Read   : ReadEvents<'event>
+      Head   : HeadOffset }
 
 /// One page of a log kept in a list where an envelope's OFFSET IS ITS INDEX.
 ///
@@ -114,5 +123,13 @@ module InMemoryEventLog =
                 return withLock gate (fun () -> EventPaging.page events after limit)
             }
 
+        let head () : Async<EventOffset option> =
+            async {
+                return
+                    withLock gate (fun () ->
+                        if events.Count = 0 then None else Some events.[events.Count - 1].Offset)
+            }
+
         { Append = append
-          Read = read }
+          Read = read
+          Head = head }
