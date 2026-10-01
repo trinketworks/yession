@@ -322,6 +322,21 @@ let private tests' =
                 Expect.isFalse (text.Contains "WAITING") "nobody was waiting on anything"
             }
 
+        // Arguments the dispatch cannot read are not an empty call. They used to decode to
+        // `[]`, so `{` and `[]` were refused with one sentence — a count of zero — and a call
+        // whose arguments were garbled said nothing about what was wrong with it.
+        testCaseAsync "arguments that will not decode are refused apart from an empty call" <|
+            async {
+                let table =
+                    Commands.dispatch (servicesOver (reposAnswering (fun _ -> async { return Error "never reached" })))
+                let run (args: string) = table.[ "add_repo" ] { Args = args; Authority = Authority.agentFor ada }
+                let! garbled = run "{"
+                let! empty = run "[]"
+                match garbled, empty with
+                | Error unreadable, Error nothing -> Expect.notEqual unreadable nothing "garbage and an empty call are told apart"
+                | _ -> failwithf "both are refusals, got %A and %A" garbled empty
+            }
+
         // A sandbox the add brings up points back to the add, so the fold after it is told
         // which item the add recorded, and for which repo.
         testCaseAsync "add_repo refolds with the item it recorded" <|

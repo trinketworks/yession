@@ -27,7 +27,6 @@ open System.Net
 open System.Net.Http
 open System.Net.Sockets
 open System.Diagnostics
-open System.Text.Json
 open System.Threading
 open System.Threading.Tasks
 open Microsoft.Playwright
@@ -4721,9 +4720,15 @@ let private startFrontDoor (managerPort: int) (lag: int) : Serving =
                     let! line = reader.ReadLineAsync () |> Async.AwaitTask
                     if isNull line then live <- false
                     elif line.StartsWith "data:" then
-                        use frame = JsonDocument.Parse (line.Substring 5)
-                        for entry in frame.RootElement.GetProperty("sessions").EnumerateArray () do
-                            ports.[entry.GetProperty("id").GetString ()] <- entry.GetProperty("port").GetInt32 ()
+                        // Read with the registry's own codec, and a frame it refuses is said
+                        // rather than swallowed: walked by hand, a frame missing a field threw
+                        // into the reconnect below, so the door re-read the same snapshot every
+                        // 100ms and the case timed out naming the wait, never the frame.
+                        match Yession.Manager.ControlWire.fromString Yession.Manager.ControlWire.sessionRegistryFrame (line.Substring 5) with
+                        | Ok frame ->
+                            for entry in frame.Sessions do
+                                ports.[Yession.Domain.SessionId.value entry.Id] <- entry.Port
+                        | Error reason -> printfn "front door: a registry frame it could not read: %s" reason
             with _ -> ()
             do! Async.Sleep 100
             return! watching ()
