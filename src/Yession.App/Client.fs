@@ -141,6 +141,9 @@ module Client =
                 | ClientEffect.RearmTerminal terminal -> connection.RearmTerminal terminal
                 | ClientEffect.ReattachTerminal terminal -> connection.ReattachTerminal terminal
                 | ClientEffect.CloseTerminal terminal -> connection.CloseTerminal terminal
+                | ClientEffect.OpenTerminal title -> connection.OpenTerminal title
+                | ClientEffect.InterruptTurn turn -> connection.InterruptTurn turn
+                | ClientEffect.ApproveRepoCapabilities (repo, granted) -> connection.ApproveRepoCapabilities repo granted
 
     /// The client Elmish program for a given Yjs doc: the pure `ClientModel.update`
     /// under `Program.withYlmish`, so local draft edits flow out as CRDT deltas and

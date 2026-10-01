@@ -1641,12 +1641,18 @@ let private pinTests =
             let model =
                 clientOf [ at 1L 0.0 (opened terminalA "build") ]
                 |> Support.step (ShowInPaneMsg (Reading (TerminalTab terminalA)))
-                |> Support.step OpeningTerminalMsg
+                |> Support.step (OpenTerminalMsg "terminal")
                 |> withPage [ at 2L 1.0 (opened terminalB "the one I asked for") ]
             Expect.equal
                 (ClientModel.selectedPane model)
                 (Some (TerminalTab terminalB))
                 "the pane went to the terminal the press asked for"
+
+        testCase "the press is what asks the session for the terminal" <| fun () ->
+            // The other half of the one act: remembering that I asked (above) and asking are
+            // one message, so a button cannot do either without the other.
+            let _, effects = ClientModel.update (OpenTerminalMsg "build") (clientOf [])
+            Expect.equal effects [ ClientEffect.OpenTerminal "build" ] "one request, under the title pressed for"
 
         testCase "a terminal I did not ask for leaves my pane where it is" <| fun () ->
             // The reason this is a REQUEST and not "any terminal that is mine": under a
@@ -1667,7 +1673,7 @@ let private pinTests =
             let model =
                 clientOf [ at 1L 0.0 (opened terminalA "build") ]
                 |> Support.step (ShowInPaneMsg (Reading (TerminalTab terminalA)))
-                |> Support.step OpeningTerminalMsg
+                |> Support.step (OpenTerminalMsg "terminal")
                 |> withPage [ at 2L 1.0 (openedBy ActorRef.Agent terminalB "running the tests") ]
             Expect.equal
                 (ClientModel.selectedPane model)
@@ -1681,7 +1687,7 @@ let private pinTests =
             let model =
                 clientOf [ at 1L 0.0 (opened terminalA "build") ]
                 |> Support.step (ShowInPaneMsg (Reading (TerminalTab terminalA)))
-                |> Support.step OpeningTerminalMsg
+                |> Support.step (OpenTerminalMsg "terminal")
                 |> withPage [ at 2L 1.0 (opened terminalB "the one I asked for") ]
                 |> withPage [ at 3L 2.0 (opened terminalC "one I did not") ]
             Expect.equal
