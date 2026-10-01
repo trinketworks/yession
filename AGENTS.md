@@ -545,7 +545,25 @@ requires, and is judged against that. The browser client references none and is 
 it is not Node, where an unhandled rejection is a dead process rather than a console warning,
 and `Yession.Host.Interop` is Node-only, so the exemption is the same fact as the absence. That
 silence is half of what the rule says, and no project that declares a seam can demonstrate it,
-which is why this is the only rule with two fixtures.
+which is why this rule has two fixtures.
+
+`EmitHome.fs` is about where an emit is DECLARED rather than what is in it: an `[<Emit>]` — or
+any of its family, `EmitMethod`, `EmitConstructor`, `EmitIndexer`, `EmitProperty` — lives in a
+binding project and nowhere else. The residue outside `src/Fable.*` was driven to zero by a
+long sweep, one binding at a time: a hundred-odd lines of JavaScript in `PaneShell.fs`, a
+65-line program in `AttachWs.fs`, twelve tool definitions inside one macro in the Domain. Then
+nothing kept it there. `Type safety` above says not to write one, and the two emit rules read
+every macro they find, but neither asks where a macro is written — a new emit in `app/` that
+names its arguments and declares nothing in its body is clean to both. The population is
+derived, not listed: a binding project is one with nothing Yession in its reach, neither its
+own name nor any reference, because a binding is a thing that knows nothing of the product it
+serves. That exempts `src/Fable.*`, the serial example (which owns its copies and references
+nothing of the product, both by the examples rule) and the analyzer fixtures, with no list for
+any of them to be missing from — and still judges `Yession.Domain`, which references nothing
+at all but IS the product. `[<Import>]` is not an emit: it names a module and an export and
+carries no JavaScript. Three fixtures, because the verdict is per project and has three
+answers: a project reaching Yession by reference, a Yession project reaching nothing, and a
+binding, silent over the same emits the first is reported for.
 
 `Population.fs` is what the scoping rules read: every declaration one project could name, of
 the code this repository builds — its own contents entire, plus what it references, bounded to

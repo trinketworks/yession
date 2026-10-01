@@ -2112,11 +2112,18 @@ let private fixtures =
       "YES007", "EnvWriteFixture", [ "Access.fs"; "Owner.fs"; "Elsewhere.fs" ]
       "YES008", "EnvReaderFixture", [ "Access.fs"; "Boot.fs"; "Elsewhere.fs" ]
       "YES009", "EmptyDefaultFixture", [ "Defaults.fs" ]
-      // Two projects for one rule, which no other rule needs. YES010 judges a project that can
-      // NAME an awaiting seam, so the silence of a project with none is half of what it says
-      // and cannot be shown from inside a project that declares one.
+      // Two projects for one rule. YES010 judges a project that can NAME an awaiting seam, so
+      // the silence of a project with none is half of what it says and cannot be shown from
+      // inside a project that declares one.
       "YES010", "AwaitSeamFixture", [ "Seam.fs"; "Elsewhere.fs" ]
-      "YES010", "AwaitNoSeamFixture", [ "Unguarded.fs" ] ]
+      "YES010", "AwaitNoSeamFixture", [ "Unguarded.fs" ]
+      // Three for YES011, which judges a project by what is in its REACH: one reaching a Yession
+      // project by reference, one that is a Yession project and references nothing (the
+      // Domain's shape), and one with nothing Yession in reach, which must stay silent over the
+      // same emits the first is reported for.
+      "YES011", "EmitInProductFixture", [ "Product.fs" ]
+      "YES011", "Yession.EmitInDomainFixture", [ "Domain.fs" ]
+      "YES011", "EmitInBindingFixture", [ "Binding.fs" ] ]
 
 let private fixtureProject name =
     Path.Combine ("analyzers", "fixtures", name, name + ".fsproj")

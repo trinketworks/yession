@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    One of three projects for YES011, and the one that carries the rule's main case: a project
+    that is not itself named Yession but references a Yession project is product code, and
+    every emit it declares is reported. Not in Yession.slnx, for the reason no fixture is.
+
+    The reference is to Yession.EmitInDomainFixture rather than to a real product project
+    because only its name matters to the rule, and a real one would put the product's whole
+    compile in front of a fixture that asks one question.
+
+    Its pair is EmitInBindingFixture, which declares the same emits with nothing Yession in
+    reach and must be reported clean.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Product.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Yession.EmitInDomainFixture\Yession.EmitInDomainFixture.fsproj" />
+  </ItemGroup>
+
+</Project>
