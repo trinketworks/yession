@@ -21,7 +21,6 @@ module Yession.Browser.Render
 // happens.
 
 open Fable.Core
-open Fable.Core.JsInterop
 open Fable.BrowserExtras
 open Lit
 open Yjs
@@ -409,9 +408,14 @@ let private setInputValue (el: Browser.Types.HTMLInputElement) (value: string) :
         el.value <- value
         el.setSelectionRange (first, last)
 
-/// Attach a listener once. The flag lives on the element, so a Lit re-render that reuses the
-/// same element does not stack a second handler on it — and one that creates a fresh element
-/// gets its own.
+/// The inputs `bindTerminalInput` has already attached its listeners to. Keyed by the ELEMENT,
+/// weakly, for the same reason `keepSurfacesPinned`'s map is: Lit replaces elements, and one a
+/// render dropped must be collectable rather than held here for the life of the page.
+let private boundTerminalInputs = JS.Constructors.WeakSet.Create<Browser.Types.HTMLInputElement> ()
+
+/// Attach a listener once. Membership in `boundTerminalInputs` is per element, so a Lit
+/// re-render that reuses the same element does not stack a second handler on it — and one
+/// that creates a fresh element gets its own.
 ///
 /// Because it is once, the handlers passed here must decide from the ELEMENT what they are
 /// acting on: an input Lit hands to a second terminal is this same element with a new
@@ -428,11 +432,8 @@ let private bindTerminalInput
     (onBlur: unit -> unit)
     (onEnter: unit -> unit)
     : unit =
-    // The flag is this repository's own property on the element rather than anything the DOM
-    // declares, so no binding types it and none should: `Fable.BrowserExtras` is for the parts
-    // of the BROWSER's API that `Fable.Browser.Dom` has not typed.
-    if not (el?__yessionBound) then
-        el?__yessionBound <- true
+    if not (boundTerminalInputs.has el) then
+        boundTerminalInputs.add el |> ignore
         el.addEventListener ("input", fun _ -> onInput ())
         el.addEventListener ("keyup", fun _ -> onSelect ())
         el.addEventListener ("click", fun _ -> onSelect ())
@@ -842,7 +843,7 @@ let create (deps: Deps) : Renderer =
     // Two feet, one per pane, watched the same way and independently — the branch pane's list
     // pages exactly as the repo pane's does, and both are in the document at once because the
     // track slides rather than swapping.
-    let mutable feetSeen : Map<string, obj> = Map.empty
+    let mutable feetSeen : Map<string, Browser.Types.Element> = Map.empty
     let mutable feetWatched : Map<string, IntersectionObserver> = Map.empty
     // Each foot is watched inside ITS OWN pane's scroller: the panes scroll independently, so
     // a watch rooted in the other one would be asking whether the foot is visible in a box it
@@ -852,7 +853,7 @@ let create (deps: Deps) : Renderer =
         if not (obj.ReferenceEquals (box foot, feetSeen |> Map.tryFind hook |> Option.defaultValue null)) then
             feetWatched |> Map.tryFind hook |> Option.iter (fun watch -> watch.disconnect ())
             feetWatched <- feetWatched |> Map.remove hook
-            feetSeen <- feetSeen |> Map.add hook (box foot)
+            feetSeen <- feetSeen |> Map.add hook foot
             if not (isNull (box foot)) then
                 feetWatched <-
                     feetWatched

@@ -1066,24 +1066,17 @@ module View =
                   {action}
                 </section>"""
 
-    /// Whether the event's target carries a caret at all. The one question no binding can
-    /// answer: `selectionStart` is a property of the text inputs and nothing else, and a
-    /// `@focus` on a button — or an event with no target — has to be told apart from an input
-    /// whose caret happens to sit at 0. `typeof` is what JavaScript has to say it with.
-    [<Fable.Core.Emit("typeof $0?.target?.selectionStart === 'number'")>]
-    let private hasCaret (e: Browser.Types.Event) : bool = Fable.Core.Util.jsNative
-
-    /// The `(selectionStart, selectionEnd)` of the event's target input, or `None`. Read live
-    /// from the DOM; only ever invoked in the browser (SSR drops event bindings), so the `.NET`
-    /// type-check sees a signature it never runs.
-    let private selectionOf (e: obj) : (int * int) option =
-        let event = e :?> Browser.Types.Event
-
-        if not (hasCaret event) then
-            None
-        else
-            let field = event.target :?> Browser.Types.HTMLInputElement
+    /// The `(selectionStart, selectionEnd)` of the event's target input, or `None` when the
+    /// target carries no caret at all: a `@focus` on a button, an event with no target, or an
+    /// `<input>` whose type has no text selection (`selectionStart` answers `null` there) — each
+    /// told apart from an input whose caret happens to sit at 0. Read live from the DOM; only
+    /// ever invoked in the browser (SSR drops event bindings), so the `.NET` type-check sees a
+    /// signature it never runs.
+    let private selectionOf (e: Browser.Types.Event) : (int * int) option =
+        match EventTargets.asHTMLInputElement e.target with
+        | Some field when not (isNull (box field.selectionStart)) ->
             Some (int field.selectionStart, int field.selectionEnd)
+        | _ -> None
 
     /// Enter, in a one-line field that has nothing to submit: let go of it.
     ///
@@ -1892,7 +1885,7 @@ module View =
             // the control too, which is where focus is put back.
             html $"""
                 <div class="contents" @keydown={Ev(fun (e: Browser.Types.Event) ->
-                                                       let key = (unbox<Browser.Types.KeyboardEvent> e).key
+                                                       let key = (e :?> Browser.Types.KeyboardEvent).key
                                                        if key = "Escape" && opened then
                                                            dispatch CloseItemMenuMsg
                                                            dispatch (MoveMsg (DomMove.FocusItemActions item.MessageId)))}>
