@@ -231,7 +231,7 @@ module ProseMirror =
 
     /// A FRESH tokenizer, never `mdParser`'s own: enabling `table` on the shared one would
     /// hand the composer's paste path a `table_open` token its schema has no node for.
-    [<Emit("new $0('commonmark', { html: false }).enable('table')")>]
+    [<Emit("new ($0)('commonmark', { html: false }).enable('table')")>]
     let private newTableTokenizerRaw (cls: obj) : obj = jsNative
 
     let private newTableTokenizer (cls: obj) : obj = admittingContentLinksOnTokenizer (newTableTokenizerRaw cls)
@@ -262,7 +262,7 @@ module ProseMirror =
     [<Import("MarkdownParser", "prosemirror-markdown")>]
     let private markdownParserClass : obj = jsNative
 
-    [<Emit("new $0($1, $2, $3)")>]
+    [<Emit("new ($0)($1, $2, $3)")>]
     let private newMarkdownParser (cls: obj) (schema: Schema) (tokenizer: obj) (tokens: obj) : MarkdownParser = jsNative
 
     /// `thead`/`tbody` are pure grouping GFM adds around the header/body rows — the schema
