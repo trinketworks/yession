@@ -1865,7 +1865,8 @@ let editorTests =
                         const note = document.querySelector('#shell [data-act-status="running"]')
                         const mark = note.querySelector('[data-act-running]')
                         const gutter = mark.parentElement.getBoundingClientRect()
-                        const title = note.querySelector('.col-start-2')
+                        // The title, not the cause's sentence above it (which sits in the same column).
+                        const title = [...note.querySelectorAll('.col-start-2')].find(e => !e.closest('[data-cause-ref]'))
                         const walk = document.createTreeWalker(title, NodeFilter.SHOW_TEXT)
                         let first = null
                         while (!first && walk.nextNode()) if (walk.currentNode.textContent.trim()) first = walk.currentNode
