@@ -6,6 +6,19 @@ version: 1
 resources:
   github:
     connection: { github: [ git, api ] }
+  # What `gh` and every other HTTPS client in `default` need to reach the API as whoever runs
+  # the command: the proxy's trust bundle, and a token lent per command. `default` runs under
+  # srt, whose own proxy already routes the API's hosts to the credential proxy, so no
+  # `HTTPS_PROXY` — a container that wanted this would bind that too, in its own declaration.
+  github-cli:
+    connection: { github: [ api ] }
+    env:
+      SSL_CERT_FILE: ${proxy.ca-file}
+      CURL_CA_BUNDLE: ${proxy.ca-file}
+      NODE_EXTRA_CA_CERTS: ${proxy.ca-file}
+      REQUESTS_CA_BUNDLE: ${proxy.ca-file}
+      GH_TOKEN: ${github.token}
+      GITHUB_TOKEN: ${github.token}
 sandboxes:
   default:
-    wants: [ github ]
+    wants: [ github, github-cli ]

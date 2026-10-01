@@ -508,17 +508,30 @@ let
         volume: { name: yession-nix, at: /nix }
       github:
         connection: { github: [ git, api ] }   # the gateway, and the credential proxy
+      # `gh` and other HTTPS clients in `default` (srt): the proxy's trust, and a token
+      # lent per command. srt routes the API's hosts to the proxy itself, so no
+      # HTTPS_PROXY; a container sandbox binds that in its own yession.yaml.
+      github-cli:
+        connection: { github: [ api ] }
+        env:
+          SSL_CERT_FILE: ''${proxy.ca-file}
+          CURL_CA_BUNDLE: ''${proxy.ca-file}
+          NODE_EXTRA_CA_CERTS: ''${proxy.ca-file}
+          REQUESTS_CA_BUNDLE: ''${proxy.ca-file}
+          GH_TOKEN: ''${github.token}
+          GITHUB_TOKEN: ''${github.token}
+      # SSL_CERT_FILE is github-cli's: the proxy's bundle holds these roots and its own
+      # authority, and a variable has one value in a sandbox selecting both.
       ca:
         mount: { from: /private/etc/ssl/cert.pem, mode: read }
         env:
-          SSL_CERT_FILE: /private/etc/ssl/cert.pem
           NIX_SSL_CERT_FILE: /private/etc/ssl/cert.pem
     # The session's own sandboxes. Nothing makes a `default` up: this is where a
     # terminal that names no sandbox opens.
     sandboxes:
       default:
         uses: [ ca ]
-        wants: [ github ]
+        wants: [ github, github-cli ]
     # Appended after the product's system prompt, as the operator's words. Host
     # conventions only — the prompt already covers the tools.
     agent:
