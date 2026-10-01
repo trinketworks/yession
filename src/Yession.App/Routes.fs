@@ -216,6 +216,15 @@ type SessionRoute =
     /// redirect and keeps what came back under it, so it never has to know that a range
     /// has a size, a boundary, or an alignment.
     | Events of first: int64 * last: int64
+    /// The addresses of the `Events` ranges between a cursor and the head — what a client
+    /// catching up fetches AT ONCE, rather than one round trip per hundred events. Carries no
+    /// events and is never cached, like the cursor it is the plural of, and for the same
+    /// reason: where the events a caller has not seen ARE is a thing that moves.
+    ///
+    /// The client still names none of these. It is handed a list and keeps what comes back
+    /// under each address it was given, which is the whole of what `EventsAfter` promises,
+    /// said about several addresses instead of one.
+    | EventsAhead of after: EventOffset option
     /// A terminal transcript's cursor (Plan 22): "what has this terminal printed after line
     /// `after`?", `None` meaning from the beginning. The event log's `EventsAfter` for the
     /// history leg of the terminal feed, and the only transcript address a client builds.
@@ -332,6 +341,8 @@ module SessionRoute =
           | EventsAfter None -> "events"
           | EventsAfter (Some after) -> sprintf "events/after/%d" (EventOffset.value after)
           | Events (first, last) -> sprintf "events/%d-%d" first last
+          | EventsAhead None -> "events/ahead"
+          | EventsAhead (Some after) -> sprintf "events/ahead/%d" (EventOffset.value after)
           | TerminalTranscriptAfter (terminal, None) -> sprintf "terminals/%s" terminal
           | TerminalTranscriptAfter (terminal, Some after) -> sprintf "terminals/%s/after/%d" terminal after
           | TerminalTranscriptRange (terminal, first, last) -> sprintf "terminals/%s/%d-%d" terminal first last
@@ -380,6 +391,18 @@ module SessionRoute =
                 // restated here.
                 match EventOffset.create parsed with
                 | Ok o -> Some (EventsAfter (Some o))
+                | Error _ -> None
+            | _ -> None
+        // BEFORE the range below, and that order is load-bearing: `[ "events"; "ahead" ]`
+        // matches the range pattern structurally, and a nested match that answers `None` is
+        // the whole route answering `None` rather than falling through to the next rule. So
+        // `ahead` would 404 if it came after.
+        | "GET", [ "events"; "ahead" ] -> Some (EventsAhead None)
+        | "GET", [ "events"; "ahead"; offset ] ->
+            match System.Int64.TryParse offset with
+            | true, parsed ->
+                match EventOffset.create parsed with
+                | Ok o -> Some (EventsAhead (Some o))
                 | Error _ -> None
             | _ -> None
         | "GET", [ "events"; range ] ->

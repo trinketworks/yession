@@ -1086,6 +1086,12 @@ let startFull
                             return Some (EventOffset.value first.Offset, EventOffset.value last)
                         | _ -> return None
                     }
+              // Arithmetic over the cursor and the head, which is what `EventChunk.ranges`
+              // is — and what it could not be until a page was a slice and the log could
+              // say where it ends. Naming sixty-four addresses by READING six thousand
+              // envelopes to find their edges would be paying for the answer in the
+              // currency this exists to save.
+              RangesAhead = fun after -> async { let! head = log.Head () in return EventChunk.ranges after head }
               ReadRange =
                 fun first last ->
                     async {

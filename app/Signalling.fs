@@ -53,7 +53,11 @@ type EventsEndpoint =
       /// The JSONL-encoded envelope lines at offsets `[first, last]`, or `None` when the
       /// log has not reached `last` — a range that does not exist yet is not a short
       /// answer, it is a 404.
-      ReadRange : int64 -> int64 -> Async<string list option> }
+      ReadRange : int64 -> int64 -> Async<string list option>
+      /// The bounds of the next several answers, so a caller a long way behind can ask for
+      /// them at once instead of a round trip apiece. Empty when the caller is current —
+      /// the plural of `BoundsAfter`'s `None`, and answered the same way, with `204`.
+      RangesAhead : EventOffset option -> Async<(int64 * int64) list> }
 
 /// The same surface for a terminal's transcript (Plan 13, cursored in Plan 22) — separate
 /// because the resource is a terminal's, not the session's, so every read takes the id it
@@ -183,12 +187,19 @@ let start
     ///
     /// One function for both feeds, because both cursors mean the same thing and a second
     /// copy of this would be a second chance to get the mount or the token wrong.
-    let redirectTo (url: string) (route: SessionRoute) (res: ServerResponse) =
+    /// Where a route is, as this caller must ask for it: under this session's mount, with
+    /// the caller's token carried over. ONE rule, because two surfaces hand out addresses —
+    /// the cursor's redirect below and the plan above — and a second copy of it is a second
+    /// chance to drop the mount or the token, which the cookie-less path arrives
+    /// unauthorized without.
+    let addressOf (url: string) (route: SessionRoute) : string =
         let path = RelativeUrl.under mount (SessionRoute.relative route)
-        let target =
-            match queryParamOf url "token" with
-            | Some token -> sprintf "%s?token=%s" path (encodeUriComponent token)
-            | None -> path
+        match queryParamOf url "token" with
+        | Some token -> sprintf "%s?token=%s" path (encodeUriComponent token)
+        | None -> path
+
+    let redirectTo (url: string) (route: SessionRoute) (res: ServerResponse) =
+        let target = addressOf url route
         res.writeHead (307, [ ResponseHeader.Location target; ResponseHeader.CacheControl "no-store" ])
         res.``end`` ""
 
@@ -223,6 +234,25 @@ let start
                     match! endpoint.ReadRange first last with
                     | Some lines -> writeLines lines res
                     | None -> notFound res
+                })
+
+    /// What is ahead of a cursor, as addresses. One line each, in log order, in the same
+    /// relative form every other address here is written in — so a client fetches what it is
+    /// given and keeps each answer under the address it was given, exactly as it does with
+    /// the one a cursor redirects to.
+    ///
+    /// `no-store`, like the cursor: which addresses are ahead of you is a fact about now.
+    /// What they POINT at is immutable, which is the whole point, and is the range's business
+    /// rather than this one's.
+    let serveAhead (endpoint: EventsEndpoint) (req: IncomingMessage) (url: string) (after: EventOffset option) (res: ServerResponse) =
+        if not (authorized req url endpoint.ValidateToken) then unauthorized res
+        else
+            Async.StartImmediate (
+                async {
+                    match! endpoint.RangesAhead after with
+                    | [] -> noContent res
+                    | ranges ->
+                        writeLines (ranges |> List.map (fun (first, last) -> addressOf url (Events (first, last)))) res
                 })
 
     /// A terminal's cursor, and its range — the event pair one feed over.
@@ -381,6 +411,10 @@ let start
         | Some (Events (first, last)) ->
             match events with
             | Some endpoint -> serveRange endpoint req req.url first last res
+            | None -> notFound res
+        | Some (EventsAhead after) ->
+            match events with
+            | Some endpoint -> serveAhead endpoint req req.url after res
             | None -> notFound res
         | Some (TerminalTranscriptAfter (terminal, after)) ->
             match transcripts with

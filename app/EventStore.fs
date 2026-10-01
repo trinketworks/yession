@@ -101,5 +101,9 @@ let openLog (path: string) (sessionId: SessionId) (clock: unit -> System.DateTim
     let read (after: EventOffset option) (limit: int) : Async<EventPage<SessionEvent>> =
         async { return EventPaging.page events after limit }
 
+    let head () : Async<EventOffset option> =
+        async { return if events.Count = 0 then None else Some events.[events.Count - 1].Offset }
+
     { Append = append
-      Read = read }
+      Read = read
+      Head = head }

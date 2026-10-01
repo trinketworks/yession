@@ -388,6 +388,109 @@ let private storeTests =
 // claim on every box. The bound is deliberately loose — a hundred times the log may cost ten
 // times the page and still pass — because what it exists to catch is the walk, which makes
 // it cost a hundred times.
+// What is ahead of a cursor, as addresses — the plural of the cursor, and the thing that
+// lets a catching-up client stop paying a round trip per hundred events.
+//
+// The arithmetic is pinned apart from the HTTP, because they fail for different reasons: the
+// bounds are a rule about where ranges fall, and the endpoint is about authorization, framing
+// and the empty case.
+let private aheadTests =
+    testList "What is ahead" [
+        testCase "the addresses are the ones the cursor would have chosen, one at a time" <| fun () ->
+            // The two surfaces must tile identically or a client that used both would keep
+            // two copies of the same events under two sets of addresses. A cursor at 137
+            // answers 138-237 — the tiling starts where the READER is, not on a boundary —
+            // and so does this.
+            let offset (n: int64) = EventOffset.create n |> expect
+            Expect.equal
+                (EventChunk.ranges (Some (offset 137L)) (Some (offset 500L)) |> List.head)
+                (138L, 237L)
+                "the first address begins one past the cursor, as the cursor's own does"
+            Expect.equal
+                (EventChunk.ranges None (Some (offset 500L)) |> List.head)
+                (0L, int64 EventChunk.size - 1L)
+                "and from the beginning, at the beginning"
+
+        testCase "the last address stops at the head, and is short when it has to be" <| fun () ->
+            let offset (n: int64) = EventOffset.create n |> expect
+            let ranges = EventChunk.ranges None (Some (offset 142L))
+            Expect.equal ranges [ (0L, 99L); (100L, 142L) ] "two addresses, the second as far as the log goes"
+            // Not a tile waiting to be filled: the address names what it names, and the
+            // events it names will never be different ones. What arrives later is somebody
+            // else's address, handed out from their own cursor.
+            let grown = EventChunk.ranges (Some (offset 142L)) (Some (offset 150L))
+            Expect.equal grown [ (143L, 150L) ] "and what came after is addressed from the cursor that missed it"
+
+        testCase "a caller at the head is told nothing is ahead" <| fun () ->
+            let offset (n: int64) = EventOffset.create n |> expect
+            Expect.equal (EventChunk.ranges (Some (offset 99L)) (Some (offset 99L))) [] "current means no addresses"
+            Expect.equal (EventChunk.ranges None None) [] "and an empty log has none to give"
+
+        testCase "one answer names no more than it promised" <| fun () ->
+            let offset (n: int64) = EventOffset.create n |> expect
+            // A log of any length is a handful of these rather than one reply naming ten
+            // thousand addresses; a client that wants more asks again from where it got to.
+            let far = int64 EventChunk.size * int64 EventChunk.ahead * 4L
+            let ranges = EventChunk.ranges None (Some (offset far))
+            Expect.equal (List.length ranges) EventChunk.ahead "capped at one answer's worth"
+            let resumed = EventChunk.ranges (Some (offset (snd (List.last ranges)))) (Some (offset far))
+            Expect.equal (fst (List.head resumed)) (snd (List.last ranges) + 1L) "and the next answer continues from it"
+
+        testCaseAsync "the plan hands out addresses that serve, and says nothing when there are none" <|
+            async {
+                let! h = Host.start (SessionId.create "events-ahead" |> expect) 0
+                let mintedToken = h.MintPeerToken ()
+                let at (route: SessionRoute) (token: string) =
+                    sprintf "%s?token=%s" (SessionRoute.at (sprintf "http://127.0.0.1:%d" h.Port) route) token
+
+                // A caller who is already current: nothing is ahead, and `204` says so for
+                // the reason the cursor answers `204` — an empty answer is a resource
+                // somebody would keep, and "nothing yet" is exactly what stops being true.
+                // Asked from the HEAD rather than of an empty log: a Host has recorded its
+                // own start by the time it is up, so an empty log is not a state this
+                // surface can be asked about from out here.
+                let! atHead = h.Log.Head ()
+                let! current = TestHttp.getUnredirected [] (at (EventsAhead atHead) mintedToken)
+                Expect.equal current.Status 204 "a caller with nothing to catch up on is told so"
+                let before = atHead |> Option.map EventOffset.value |> Option.defaultValue -1L
+
+                for i in 1 .. 2 * EventChunk.size + 5 do
+                    let! _ =
+                        h.Log.Append
+                            ActorRef.SessionProcess
+                            (PeerJoined
+                                { PeerId = PeerId.create (sprintf "ahead-%d" i) |> expect
+                                  DisplayName = "filler"
+                                  User = None })
+                    ()
+
+                let! refused = TestHttp.getUnredirected [] (at (EventsAhead None) "not-a-token")
+                Expect.equal refused.Status 401 "and it is gated like every other read here"
+
+                // From where that caller stood, so what is ahead is exactly what this case
+                // appended and the count is its own arithmetic rather than the Host's.
+                let from = EventOffset.create before |> Result.toOption
+                let! plan = TestHttp.get (at (EventsAhead from) mintedToken)
+                Expect.equal plan.Status 200 "the plan serves"
+                Expect.equal (TestHttp.requiredHeader "cache-control" plan) "no-store" "which addresses are ahead of you moves"
+                let addresses = plan.Body.Split '\n' |> Array.filter (fun l -> l.Trim().Length > 0)
+                Expect.equal addresses.Length 3 "three answers' worth: two full and the tail"
+
+                // The addresses are FETCHABLE as given — that is the whole promise. A client
+                // is handed these and asks for them; it does not build one, so a missing
+                // mount or a dropped token here is a client that cannot read its own history.
+                let origin = sprintf "http://127.0.0.1:%d" h.Port
+                let! first = TestHttp.get (origin + addresses.[0])
+                Expect.equal first.Status 200 "the first address answers"
+                let lines (body: string) = body.Split '\n' |> Array.filter (fun l -> l.Trim().Length > 0)
+                Expect.equal (lines first.Body).Length EventChunk.size "with one answer's worth of events"
+                let! last = TestHttp.get (origin + addresses.[addresses.Length - 1])
+                Expect.equal last.Status 200 "and so does the short one at the end"
+                Expect.equal (lines last.Body).Length 5 "carrying the tail"
+                Expect.stringContains addresses.[0] "token=" "each carries the token a redirect would otherwise drop"
+            }
+    ]
+
 let private pagingTests =
     testList "Paging" [
         testCaseAsync "one page costs about the same whatever the log behind it holds" <|
@@ -447,5 +550,6 @@ let tests =
     testList "EventsHttp" [
         endpointTests
         storeTests
+        aheadTests
         pagingTests
     ]

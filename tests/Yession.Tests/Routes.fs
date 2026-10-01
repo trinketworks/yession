@@ -39,6 +39,13 @@ let private every =
       EventsAfter (Some (offset 4711L))
       Events (0L, 99L)
       Events (100L, 136L)
+      // The plural of the cursor: the addresses of what is ahead, in both its forms. It
+      // shares a shape with a range (`events/<something>`), which is why the router matches
+      // it first and why it is in this list — the round trip is what proves the two stay
+      // apart.
+      EventsAhead None
+      EventsAhead (Some (offset 0L))
+      EventsAhead (Some (offset 4711L))
       // A terminal's transcript cursor and ranges (Plan 22), and the keyframes beside them
       // (Plan 14): deeper paths than anything else here, and the set the router has to keep
       // apart — `terminals/<id>`, `terminals/<id>/after/<n>`, `terminals/<id>/<a>-<b>` and
@@ -116,6 +123,20 @@ let private routeTests =
             let inShell, _ = DocumentBase.declare ""
             Expect.equal (RelativeUrl.inDocument inShell (SessionRoute.relative Shell)) "" "so `<base href>` alone addresses it"
             Expect.equal (SessionRoute.parse "GET" "/") (Some Shell) "served at the mount root"
+
+        // `events/ahead` and `events/0-99` are the same SHAPE — two segments under `events`
+        // — and the router answers them from one match, top down. A nested match that
+        // answers `None` is the whole route answering `None`, never a fall-through to the
+        // next rule, so a range pattern placed first would 404 the plan rather than let it
+        // through. The round trip above cannot see that: it only ever asks about routes that
+        // exist. This asks about the collision.
+        testCase "the plan is not read as a range, and a range is not read as the plan" <| fun () ->
+            Expect.equal (SessionRoute.parse "GET" "/events/ahead") (Some (EventsAhead None)) "the plan wins its own path"
+            Expect.equal (SessionRoute.parse "GET" "/events/0-99") (Some (Events (0L, 99L))) "and a range keeps its"
+            // Neither is a range: one has no bounds at all, the other is a word where a
+            // number goes. Both are 404s rather than a route with a surprising meaning.
+            Expect.equal (SessionRoute.parse "GET" "/events/ahead-99") None "a range cannot be spelled with a word"
+            Expect.equal (SessionRoute.parse "GET" "/events/ahead/nope") None "and a plan's cursor is a number or nothing"
 
         testCase "a route reached with the wrong method is no route at all" <| fun () ->
             // None, not a 405: an unknown path and a method mismatch answer identically, as
