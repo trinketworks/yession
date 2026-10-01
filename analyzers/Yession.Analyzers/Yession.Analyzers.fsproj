@@ -38,6 +38,7 @@
     <Compile Include="EnvReaders.fs" />
     <Compile Include="EmptyDefault.fs" />
     <Compile Include="AwaitSeam.fs" />
+    <Compile Include="EmitHome.fs" />
   </ItemGroup>
 
   <ItemGroup>

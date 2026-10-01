@@ -46,6 +46,21 @@ let macroOn (mfv: FSharpMemberOrFunctionOrValue) =
         else
             None)
 
+/// The range of any attribute of the Emit family on this binding — the raw `[<Emit>]` and the
+/// named variants (EmitMethod, EmitConstructor, EmitIndexer, EmitProperty) alike.
+///
+/// `macroOn` reads only the raw form because its rules are about the macro's TEXT. A rule about
+/// where interop is DECLARED wants all of them: a named variant has no string to get wrong, but
+/// it is still a promise about an API this repository does not own, made in whatever file it is
+/// written in. Matched on the family's prefix rather than a list of five, so a variant Fable adds
+/// tomorrow is an emit to this rule the day it appears instead of a hole nobody listed.
+let emitOn (mfv: FSharpMemberOrFunctionOrValue) =
+    mfv.Attributes
+    |> Seq.tryPick (fun a ->
+        match a.AttributeType.TryFullName with
+        | Some name when name.StartsWith "Fable.Core.Emit" && name.EndsWith "Attribute" -> Some a.Range
+        | _ -> None)
+
 /// Every binding in a file that could be carrying one.
 let rec members (ds: FSharpImplementationFileDeclaration list) =
     seq {

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    One of three projects for YES011, which judges a project by what is in its REACH, so no
+    single project can show both of its halves. Not in Yession.slnx, for the reason no fixture
+    is: what is below is there to be judged.
+
+    This is the Domain's shape: a Yession project that references nothing. Referencing no
+    Yession project is not what makes a binding project — knowing nothing of the product is,
+    and a project that IS the product knows it. Its emit is marked.
+
+    It is also what EmitInProductFixture references, which is how that one reaches Yession.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Domain.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+  </ItemGroup>
+
+</Project>

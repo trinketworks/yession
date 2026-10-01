@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The other half of YES011: a binding project — nothing Yession in its reach, neither its own
+    name nor any reference — may declare any emit it likes. Every binding below is the same as
+    one EmitInProductFixture is reported for, and nothing here is marked. A finding would mean
+    the rule had started rejecting the src/Fable.* projects, the serial example and the other
+    fixtures, which are where emits belong.
+
+    Not in Yession.slnx, for the reason no fixture is.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Binding.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+  </ItemGroup>
+
+</Project>
