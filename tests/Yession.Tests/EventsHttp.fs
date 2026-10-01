@@ -491,6 +491,150 @@ let private aheadTests =
             }
     ]
 
+// The feed that asks what is ahead and fetches it together.
+//
+// What it must keep is in three parts, and they break for different reasons: the ASKING (it
+// does not wait for one answer before asking for the next — the whole point), the ORDER (log
+// order, one page at a time, so nothing downstream sees a different shape than the cursor
+// gave it), and the REFUSALS (a reader who moved, a bad answer, a caller who is current).
+let private feedTests =
+    let answers = System.Collections.Generic.Dictionary<string, string> ()
+    let planFor (addresses: string list) = String.concat "\n" addresses
+
+    /// A `HttpGet` that records the order calls were STARTED in and only settles the ones a
+    /// test releases. Started-but-unsettled is what proves concurrency: a serial feed cannot
+    /// have two in flight, so if it does, it asked before it was answered.
+    let gateable () =
+        let started = ResizeArray<string> ()
+        let gates = System.Collections.Generic.Dictionary<string, unit -> unit> ()
+        let get : Client.HttpGet =
+            fun url ->
+                started.Add url
+                async {
+                    // A plan settles at once; a range waits to be released.
+                    if url.Contains "ahead" then
+                        return Ok { Url = url; Body = answers.[url] }
+                    else
+                        let! () =
+                            Async.FromContinuations (fun (ok, _, _) ->
+                                gates.[url] <- fun () -> ok ())
+                        return Ok { Url = url; Body = answers.[url] }
+                }
+        get, started, gates
+
+    testList "Fetching what is ahead" [
+        testCaseAsync "it asks for every address before it waits for any of them" <|
+            async {
+                answers.Clear ()
+                let ranges = [ for first in 0L .. 3L .. 9L -> answerOf first 3 ]
+                for (address, body) in ranges do answers.["/" + address] <- body
+                answers.["/events/ahead"] <- planFor [ for (a, _) in ranges -> "/" + a ]
+                let get, started, gates = gateable ()
+                let feed = Client.EventFetch.aheadOf Client.HistoryCache.none get (fun r -> RelativeUrl.under "" (SessionRoute.relative r)) None
+                // Started, not awaited — `StartChild` rather than a promise, which the
+                // await-seam rule rightly refuses here.
+                let! page = Async.StartChild (feed None)
+                // Nothing has been released, so nothing has answered — and yet every
+                // address has been asked for. A feed that waited would have asked once.
+                do! Async.Sleep 20
+                let asked = started |> Seq.filter (fun u -> not (u.Contains "ahead")) |> List.ofSeq
+                Expect.equal (List.length asked) (List.length ranges) "every address is in flight at once"
+                for (_, release) in List.ofSeq (Seq.map (fun (KeyValue (k, v)) -> k, v) gates) do release ()
+                let! first = page
+                match first with
+                | Ok p -> Expect.equal (List.length p.Events) 3 "and the first answer comes back as its own page"
+                | Error e -> failwithf "the feed faulted: %A" e
+            }
+
+        testCaseAsync "the pages come back in log order, one at a time" <|
+            async {
+                answers.Clear ()
+                let ranges = [ for first in 0L .. 3L .. 9L -> answerOf first 3 ]
+                for (address, body) in ranges do answers.["/" + address] <- body
+                answers.["/events/ahead"] <- planFor [ for (a, _) in ranges -> "/" + a ]
+                let get : Client.HttpGet = fun url -> async { return Ok { Url = url; Body = answers.[url] } }
+                let feed = Client.EventFetch.aheadOf Client.HistoryCache.none get (fun r -> RelativeUrl.under "" (SessionRoute.relative r)) None
+                // Driven the way the read loop drives it: ask, fold, ask again from the last
+                // offset it gave back. Each answer is ONE range — the renderer sees the
+                // shape the cursor always gave it, not a plan's worth in one task.
+                let mutable after = None
+                let mutable seen = []
+                let mutable go = true
+                while go do
+                    match! feed after with
+                    | Ok page when List.isEmpty page.Events -> go <- false
+                    | Ok page ->
+                        Expect.equal (List.length page.Events) 3 "one range per page, never a plan's worth at once"
+                        seen <- seen @ (page.Events |> List.map (fun e -> EventOffset.value e.Offset))
+                        after <- page.LastOffset
+                        if page.IsEnd then go <- false
+                    | Error e -> failwithf "the feed faulted: %A" e
+                Expect.equal seen [ 0L .. 11L ] "every event once, in log order"
+            }
+
+        testCaseAsync "a reader who moved is answered from where they are, not from the queue" <|
+            async {
+                answers.Clear ()
+                let ranges = [ for first in 0L .. 3L .. 9L -> answerOf first 3 ]
+                for (address, body) in ranges do answers.["/" + address] <- body
+                answers.["/events/ahead"] <- planFor [ for (a, _) in ranges -> "/" + a ]
+                // A second plan, for a cursor that is not where the queue was filled for.
+                let later = answerOf 50L 2
+                answers.["/" + fst later] <- snd later
+                answers.["/events/ahead/49"] <- planFor [ "/" + fst later ]
+                let get : Client.HttpGet = fun url -> async { return Ok { Url = url; Body = answers.[url] } }
+                let feed = Client.EventFetch.aheadOf Client.HistoryCache.none get (fun r -> RelativeUrl.under "" (SessionRoute.relative r)) None
+                let! _ = feed None
+                // The queue now holds 3.. onward. Asking from somewhere else entirely — a
+                // gap repaired, a position restored — must not be served somebody else's
+                // place in the log.
+                let! moved = feed (EventOffset.create 49L |> Result.toOption)
+                match moved with
+                | Ok page ->
+                    Expect.equal
+                        (page.Events |> List.map (fun e -> EventOffset.value e.Offset))
+                        [ 50L; 51L ]
+                        "it asked again from the cursor it was given"
+                | Error e -> failwithf "the feed faulted: %A" e
+            }
+
+        testCaseAsync "a caller with nothing ahead is told so, and told it is the end" <|
+            async {
+                answers.Clear ()
+                answers.["/events/ahead"] <- ""
+                let get : Client.HttpGet = fun url -> async { return Ok { Url = url; Body = answers.[url] } }
+                let feed = Client.EventFetch.aheadOf Client.HistoryCache.none get (fun r -> RelativeUrl.under "" (SessionRoute.relative r)) None
+                match! feed None with
+                | Ok page ->
+                    Expect.isTrue (List.isEmpty page.Events) "no events"
+                    Expect.isTrue page.IsEnd "and the loop is told to stop asking"
+                | Error e -> failwithf "the feed faulted: %A" e
+            }
+
+        testCaseAsync "one bad answer fails the whole refill rather than leaving a hole" <|
+            async {
+                answers.Clear ()
+                let ranges = [ for first in 0L .. 3L .. 9L -> answerOf first 3 ]
+                for (address, body) in ranges do answers.["/" + address] <- body
+                answers.["/events/ahead"] <- planFor [ for (a, _) in ranges -> "/" + a ]
+                let bad = "/" + fst ranges.[2]
+                let get : Client.HttpGet =
+                    fun url ->
+                        async {
+                            if url = bad then return Error (Client.HttpStatus 503)
+                            else return Ok { Url = url; Body = answers.[url] }
+                        }
+                let feed = Client.EventFetch.aheadOf Client.HistoryCache.none get (fun r -> RelativeUrl.under "" (SessionRoute.relative r)) None
+                // Not a short queue with a gap in the middle: a page missing from the middle
+                // is one the fold would walk straight past, and whether to try again belongs
+                // to the policy around this feed.
+                match! feed None with
+                | Error (Client.FeedRefused status) -> Expect.equal status 503 "the refusal is carried, with its status"
+                | Error other -> failwithf "the wrong fault: %A" other
+                | Ok page -> failwithf "answered with %d events over a refused address" (List.length page.Events)
+            }
+    ]
+
 let private pagingTests =
     testList "Paging" [
         testCaseAsync "one page costs about the same whatever the log behind it holds" <|
@@ -551,5 +695,6 @@ let tests =
         endpointTests
         storeTests
         aheadTests
+        feedTests
         pagingTests
     ]

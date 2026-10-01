@@ -1366,8 +1366,11 @@ let private start () =
             // which is the one thing a settled outcome cannot carry.
             let feed =
                 // `storing` sits UNDER the policy, so only a settled answer is kept — a
-                // retried fetch stores once, and a failed one stores nothing.
-                Client.EventFetch.overHttp (Client.EventFetch.storing historyCache httpGet) Page.href None
+                // retried fetch stores once, and a failed one stores nothing. It is applied
+                // INSIDE `aheadOf` rather than here, because which of the two addresses that
+                // feed asks for is keepable is the feed's own knowledge: a plan is a question
+                // about now, a range is the answer for ever.
+                Client.EventFetch.aheadOf historyCache httpGet Page.href None
                 |> Resilience.Policy.guard
                     (Client.EventFetch.policy Resilience.Policy.sleep jsRandom (fun attempt ->
                         Client.EventFetch.retrying attempt
