@@ -61,6 +61,40 @@ let private entryIn (doc: Y.Doc) (root: string) (key: string) (fields: (string *
 let private queueKeys (state: SyncedSessionState) : string list =
     state.Queue |> Map.toList |> List.map (fst >> QueueId.value)
 
+/// Hand the synced state a whole new value. The client's own messages only ever build the
+/// entries a PERSON writes — a terminal act that is foreground and asks for no stdin — so the
+/// codec's encode direction for every other shape of entry is reachable only by putting one
+/// into the model directly, which is what this does.
+type private Replaced = Replaced of SyncedSessionState
+
+/// The synced-state codec bound to a doc with nothing of the client around it: the same
+/// `create`/`update`/`encode`/`decode` the client program binds, under the same
+/// `withYlmish`, over a model that is the synced state alone.
+let private codecProgram (doc: Y.Doc) =
+    Elmish.Program.mkSimple
+        (fun () -> SyncedSessionState.empty)
+        (fun (Replaced next) _ -> next)
+        (fun _ _ -> ())
+    |> Ylmish.Program.withYlmish
+        { Doc = doc
+          Create = SyncedStateSync.create
+          Update = SyncedStateSync.update
+          Encode = SyncedStateSync.encode
+          Decode = SyncedStateSync.decode
+          OnError = Ylmish.Program.OnError.log }
+    |> Harness.run
+
+/// A command the agent queued to run in the background, asking for stdin, on Ada's behalf —
+/// the entry that carries every field a pending act has.
+let private agentsBackgroundAct (queueId: QueueId) (terminal: TerminalId) : PendingAct =
+    { QueueId = queueId
+      Terminal = terminal
+      Order = 1.0
+      Authority = Authority.agentFor (Principal.Peer ada)
+      Background = true
+      Stdin = true
+      Size = None }
+
 // -----------------------------------------------------------------------------
 // Model tests — the codec through the public surface (program encode + doc decode).
 // -----------------------------------------------------------------------------
@@ -321,6 +355,78 @@ let private codecTests =
             (doc.getMap "terminalDrafts" : Y.Map<obj>).set (key, box "not an entry") |> ignore
 
             Expect.isNone (SyncedStateSync.terminalDraftQueueId doc terminal ada) "a scalar names no queue key"
+
+        // How a command runs — in the background or not, with the terminal's stdin or not —
+        // is part of the act, and the client codec writes pending acts too. An entry it
+        // encodes must decode to the act it was handed, or whatever it writes is a different
+        // command: a background one the agent would now wait on, a stdin ask no longer asked.
+        testCase "a pending act crosses the client codec with how it was asked to run" <| fun () ->
+            let doc = Y.Doc.Create ()
+            let p = codecProgram doc
+            let act = agentsBackgroundAct (QueueId.create "q-bg" |> expect) (TerminalId.create "term-a" |> expect)
+            p.Dispatch (user (Replaced { SyncedSessionState.empty with Pending = Map.ofList [ act.QueueId, act ] }))
+
+            let decoded = SyncedStateSync.ofDoc doc
+            Expect.equal (decoded.Pending |> Map.tryFind act.QueueId) (Some act) "the doc holds the act it was handed"
+
+        // The path a client actually takes: the agent's writer puts the entry in the doc, and a
+        // person moves it in the queue. Ylmish re-flushes a keyed item whole when any field of
+        // it changes, so the reorder is the client codec writing the agent's entry.
+        testCase "reordering the agent's command keeps how it was asked to run" <| fun () ->
+            let doc = Y.Doc.Create ()
+            let terminal = TerminalId.create "term-a" |> expect
+            let queueId = QueueId.create "q-bg" |> expect
+            SyncedStateSync.enqueueTerminalCommand doc queueId terminal (Authority.agentFor (Principal.Peer ada)) 1.0 "make watch" true true
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+            p.Dispatch (user (ReorderPendingMsg (queueId, 5.0)))
+
+            let decoded = SyncedStateSync.ofDoc doc
+            Expect.equal
+                (decoded.Pending |> Map.tryFind queueId |> Option.map (fun act -> act.Order, act.Background, act.Stdin))
+                (Some (5.0, true, true))
+                "moved, and still a background command that asked for stdin"
+
+        // Two writers put pending acts in the doc — the agent's, straight onto a `Y.Map`, and
+        // the client codec — and the Session Process reads both through one decoder. If they
+        // disagree about any field, an act means something different depending on who last
+        // wrote it.
+        testCase "the agent's writer and the client codec write the same act" <| fun () ->
+            let terminal = TerminalId.create "term-a" |> expect
+            let act = agentsBackgroundAct (QueueId.create "q-bg" |> expect) terminal
+            let direct = Y.Doc.Create ()
+            SyncedStateSync.enqueueTerminalCommand direct act.QueueId terminal act.Authority act.Order "make watch" act.Background act.Stdin
+            let encoded = Y.Doc.Create ()
+            (codecProgram encoded).Dispatch (user (Replaced { SyncedSessionState.empty with Pending = Map.ofList [ act.QueueId, act ] }))
+
+            Expect.equal
+                (SyncedStateSync.ofDoc encoded).Pending
+                (SyncedStateSync.ofDoc direct).Pending
+                "one act, whichever wrote it"
+
+        // Builds before absent meant absent wrote a blank for an act with no owner and for one
+        // that claimed no width. Persisted docs still hold those entries, and they must read as
+        // what they meant rather than be dropped or read as a value.
+        testCase "an owner an older build wrote as a blank reads as no owner" <| fun () ->
+            let doc = Y.Doc.Create ()
+            let byAda = Authority.ofAuthor (Principal.Peer ada)
+            let author = ActorRef.token (Authority.author byAda)
+            entryIn doc "pending" "q-old" [ "subject", box "terminal:term-a"; "onBehalfOf", box ""; "author", box author; "order", box 1.0 ]
+
+            let decoded = SyncedStateSync.ofDoc doc
+            Expect.equal
+                (decoded.Pending |> Map.tryFind (QueueId.create "q-old" |> expect) |> Option.map (fun act -> act.Authority))
+                (Some byAda)
+                "runs as its own author, on nobody's behalf"
+
+        testCase "a width an older build wrote as a blank reads as no claim" <| fun () ->
+            let doc = Y.Doc.Create ()
+            let author = ActorRef.token (Authority.author (Authority.ofAuthor (Principal.Peer ada)))
+            entryIn doc "pending" "q-old" [ "subject", box "terminal:term-a"; "author", box author; "order", box 1.0; "size", box "" ]
+
+            let decoded = SyncedStateSync.ofDoc doc
+            match decoded.Pending |> Map.tryFind (QueueId.create "q-old" |> expect) with
+            | Some act -> Expect.isNone act.Size "a blank is no width"
+            | None -> failwith "the command was dropped over a blank width"
 
         // A second menu cannot be open, and that is the FIELD's promise rather than a
         // behaviour: `ItemMenu` is one slot, so opening one is writing it. There is no case

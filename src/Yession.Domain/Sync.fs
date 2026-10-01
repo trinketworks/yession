@@ -125,29 +125,58 @@ module SyncedStateSync =
               "author", Encode.string (AVal.constant (PeerId.value d.Author))
               "queueId", Encode.string (AVal.constant (QueueId.value d.QueueId)) ]
 
-    /// A queued act. `author` is an actor TOKEN, not a peer id, because the agent proposes
-    /// acts too and "who asked for this" is part of the record. Its text is a sibling
-    /// `Y.Text` root (`BodyKey.terminalQueued`), so nothing of the command crosses here.
+    /// What one field of a pending entry holds in the doc: text, or the order's number.
+    [<RequireQualifiedAccess>]
+    type private PendingValue =
+        | Word of string
+        | Number of float
+
+    /// A queued act as the doc holds it: every key, and what it holds for this act — `None`
+    /// where the act has nothing to say, which is an ABSENT key, never a blank standing in
+    /// for one.
     ///
-    /// The `subject` key keeps the `terminal:<id>` wire form the entry has always had —
-    /// the F# shape simplified to a `TerminalId` (Plan 23), the doc format did not, so a
-    /// persisted doc and a pre-upgrade browser tab both keep reading.
+    /// ONE list because there are two writers: the client codec (`encodePendingAct`) and the
+    /// Session Process's own enqueue (`enqueueTerminalCommand`), both read back by the one
+    /// `decodePendingAct`. They used to spell the entry separately and had drifted — the codec
+    /// wrote no `background` or `stdin`, so an act it wrote came back foreground and asking
+    /// nothing, and it wrote `""` for "no owner" and "no width" where the other wrote nothing.
+    /// A field the decoder reads is added here or it is written by neither.
+    ///
+    /// `author` is an actor TOKEN, not a peer id, because the agent proposes acts too and "who
+    /// asked for this" is part of the record. The command's text is a sibling `Y.Text` root
+    /// (`BodyKey.terminalQueued`), so nothing of the command crosses here.
+    ///
+    /// The `subject` key keeps the `terminal:<id>` wire form the entry has always had — the F#
+    /// shape simplified to a `TerminalId` (Plan 23), the doc format did not, so a persisted doc
+    /// and a pre-upgrade browser tab both keep reading.
+    let private pendingEntry (q: PendingAct) : (string * PendingValue option) list =
+        [ "subject", Some (PendingValue.Word ("terminal:" + TerminalId.value q.Terminal))
+          "onBehalfOf", Authority.onBehalfOf q.Authority |> Option.map (Principal.token >> PendingValue.Word)
+          "author", Some (PendingValue.Word (ActorRef.token (Authority.author q.Authority)))
+          "order", Some (PendingValue.Number q.Order)
+          // Words rather than booleans, like every other field here: the doc carries text,
+          // and the domain type is where it becomes a value. Only the yes is written — a
+          // foreground act that asks for nothing is what an entry with neither key reads as.
+          "background", (if q.Background then Some (PendingValue.Word "true") else None)
+          "stdin", (if q.Stdin then Some (PendingValue.Word "true") else None)
+          // `"120x40"`, the same spelling the transcript's `r` record uses (`Size.format`),
+          // so one format serves the doc and the recording and neither can drift from the
+          // other.
+          "size", q.Size |> Option.map (Size.format >> PendingValue.Word) ]
+
+    /// A queued act, through the codec: `pendingEntry`, with an absent field as
+    /// `Encode.option` over `None`. That is an absent KEY rather than an empty value, and it
+    /// stays one when Ylmish re-flushes the item whole on a change to any field of it (a
+    /// reorder): the re-flush deletes a key whose option is `None`, so it also clears a blank
+    /// an older build left there.
     let private encodePendingAct (q: PendingAct) : Encoded =
         Encode.object
-            [ "subject", Encode.string (AVal.constant ("terminal:" + TerminalId.value q.Terminal))
-              "onBehalfOf",
-              Encode.string
-                  (AVal.constant
-                      (Authority.onBehalfOf q.Authority |> Option.map Principal.token |> Option.defaultValue ""))
-              "author", Encode.string (AVal.constant (ActorRef.token (Authority.author q.Authority)))
-              "order", Encode.float (AVal.constant q.Order)
-              // `"120x40"`, the same spelling the transcript's `r` record uses
-              // (`Size.format`), so one format serves the doc and the recording and
-              // neither can drift from the other. A string like `background` beside it: the
-              // doc carries text, and the domain type is where it becomes a value.
-              "size",
-              Encode.string
-                  (AVal.constant (q.Size |> Option.map Size.format |> Option.defaultValue "")) ]
+            [ for key, value in pendingEntry q ->
+                  key,
+                  match value with
+                  | Some (PendingValue.Word word) -> Encode.string (AVal.constant word)
+                  | Some (PendingValue.Number number) -> Encode.float (AVal.constant number)
+                  | None -> Encode.option Encode.string (AVal.constant None) ]
 
     /// One chapter: the verdict about whether it opens here, and what it is called.
     ///
@@ -283,14 +312,19 @@ module SyncedStateSync =
             // The one field read through `slot` rather than failing its entry: a width nobody
             // can read is NO claim (`pendingToDomain`), not a reason to drop the command.
             let! size = slot "size" Decode.string
+            // A blank owner or width reads as ABSENT. Builds before `pendingEntry` wrote `""`
+            // for both where an act had none, and persisted docs still hold those entries;
+            // said here, at the one reader, rather than left to the token and size parsers
+            // happening to refuse an empty string.
+            let present = Option.filter (fun (raw: string) -> raw <> "")
             return
                 { Subject = subject
-                  OnBehalfOf = onBehalfOf
+                  OnBehalfOf = present onBehalfOf
                   Author = author
                   Order = defaultArg order 0.0
                   Background = background
                   Stdin = stdin
-                  Size = size }
+                  Size = present size }
         }
 
     /// The doc-side chapter, before the message id is checked: the verdict as written, and
@@ -681,19 +715,29 @@ module SyncedStateSync =
         // entry for the same reason `background` is.
         (stdin: bool)
         : unit =
+        let act : PendingAct =
+            { QueueId = id
+              Terminal = terminal
+              Order = order
+              Authority = authority
+              Background = background
+              Stdin = stdin
+              // The Process has no screen to measure, so it claims no width: the terminal
+              // keeps the one it has.
+              Size = None }
         doc.transact (
             (fun _ ->
                 (doc.getText (BodyKey.terminalQueued id)).insert (0, command)
                 let queue : Yjs.Y.Map<obj> = doc.getMap "pending"
                 let entry : Yjs.Y.Map<obj> = Yjs.Y.Map.Create ()
                 queue.set (QueueId.value id, box entry) |> ignore
-                entry.set ("subject", box ("terminal:" + TerminalId.value terminal)) |> ignore
-                entry.set ("author", box (ActorRef.token (Authority.author authority))) |> ignore
-                entry.set ("order", box order) |> ignore
-                if background then entry.set ("background", box "true") |> ignore
-                if stdin then entry.set ("stdin", box "true") |> ignore
-                Authority.onBehalfOf authority
-                |> Option.iter (fun principal -> entry.set ("onBehalfOf", box (Principal.token principal)) |> ignore)),
+                // The same fields the client codec writes (`pendingEntry`), and an absent one
+                // is a key never set — as the codec leaves it.
+                for key, value in pendingEntry act do
+                    match value with
+                    | Some (PendingValue.Word word) -> entry.set (key, box word) |> ignore
+                    | Some (PendingValue.Number number) -> entry.set (key, box number) |> ignore
+                    | None -> ()),
             processOrigin)
 
     /// Remove consumed pending entries in one transaction under the process origin — the
