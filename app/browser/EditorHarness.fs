@@ -1393,7 +1393,9 @@ do
             | ClientEffect.Claude _
             | ClientEffect.GitHub _
             | ClientEffect.GitHubPoll _ -> ()
-            | ClientEffect.Move move -> PaneShell.move move)
+            | ClientEffect.Move move -> PaneShell.move move
+            | ClientEffect.Copy _
+            | ClientEffect.RetryNow -> ())
         // Read back off the MODEL rather than out of the message: a measurement the reducer
         // refused is not a width anything would claim, and a hook that reported it anyway
         // would say the opposite of what happened.

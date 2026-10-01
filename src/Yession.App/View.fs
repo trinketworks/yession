@@ -66,24 +66,6 @@ type ViewActions =
       /// is on screen whenever a credential needs one — including while the settings face is
       /// already open — so a toggle there would shut the panel it is pointing at.
       RevealSettings : unit -> unit
-      /// Put a value on the system clipboard, and say so on the box it came from — the hook
-      /// of that box is the key (`ClientModel.Copied`), the second argument is the text.
-      ///
-      /// Imperative, and both halves for the same reason: the clipboard is a permission the
-      /// browser may refuse, so only the browser knows whether there is anything to confirm,
-      /// and the confirmation is a MOMENT, which needs a timer the reducer cannot hold.
-      Copy : string -> string -> unit
-      // The Repos panel's three actions (Plan 14) were RETIRED by Plan 15: adding,
-      // removing and switching a repo are commands, and commands belong to the agent, so
-      // a human asks and reads the act-line in the timeline. What is left of that panel is
-      // the `repos` QUERY, which needs no action at all.
-      /// Try the session again NOW, rather than when the supervised loop next would.
-      ///
-      /// A trigger, never a second schedule (Plan 20): it shortens the wait the lifecycle is
-      /// already in. It earns its place on the one client the loop deliberately will not
-      /// carry — a peer whose token was refused, which no amount of waiting fixes and which
-      /// therefore parks until somebody asks.
-      RetryNow : unit -> unit
       /// Send a terminal composer slot: enqueue its command. Imperative for exactly the
       /// reason `SendDraft` is — the command text is a shared type the reducer cannot move.
       SendTerminalDraft : TerminalId -> PeerId -> unit
@@ -107,8 +89,6 @@ module ViewActions =
           ReportFieldSelection = fun _ _ -> ()
           ToggleSettings = ignore
           RevealSettings = ignore
-          Copy = fun _ _ -> ()
-          RetryNow = ignore
           SendTerminalDraft = fun _ _ -> ()
           TypeIntoTerminal = fun _ _ -> ()
           ResizeTerminal = fun _ _ _ -> () }
@@ -219,7 +199,7 @@ module View =
                        data-session-reopen="{target}">{Dom.Text.reopenSession}</a>""")
         | _ -> None
 
-    let private reconnectOffer (actions: ViewActions) (model: ClientModel) : TemplateResult option =
+    let private reconnectOffer (model: ClientModel) : TemplateResult option =
         match model.Connection, reopenAction model Style.noAgentAction with
         | Disconnected (Some reason), Some action ->
             // What reopening actually costs. Under a `{id}` template the session returns to
@@ -328,7 +308,7 @@ module View =
                           aria-valuemin="0" aria-valuemax="{string known}" aria-valuenow="{string folded}"
                           data-catch-up-bar style="{width}"></div>"""
 
-    let private connectionSection (actions: ViewActions) (model: ClientModel) : TemplateResult =
+    let private connectionSection (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let consumer = model.EventConsumer
         let showsCatchUp = showsCatchUp model
         let catchUp =
@@ -343,12 +323,12 @@ module View =
             | Disconnected _ ->
                 html $"""
                   <button type="button" class="{Style.btn}" data-retry-now
-                          @click={Ev(fun _ -> actions.RetryNow ())}>{Dom.Text.retryNow}</button>"""
+                          @click={Ev(fun _ -> dispatch RetryNowMsg)}>{Dom.Text.retryNow}</button>"""
             | _ -> Lit.nothing
         // The offer REPLACES the report rather than sitting over it: a status reading "not
         // connected", its reason, and a button to fix it would be saying one thing three
         // times. The offer carries the same promise and the same disclosure.
-        let offer = reconnectOffer actions model
+        let offer = reconnectOffer model
         let report = connectionReport model
         // Whichever of the two this column has to show, it is ONE mount of one report, so it
         // wears one hook and one visibility rule. Anything narrower and the rule stops being
@@ -792,7 +772,7 @@ module View =
                       <span class="{Style.fieldWithAction}" data-github-user-code aria-live="polite">{if justCopied then Dom.Text.copied else userCode}</span>
                       <button type="button" class="{Style.fieldAction}" data-github-copy-code
                               aria-label="{if justCopied then "Device code copied" else "Copy the device code"}"
-                              @click={Ev(fun _ -> actions.Copy Dom.Hooks.githubUserCode userCode)}>{if justCopied then Icon.check else Icon.copy}</button>
+                              @click={Ev(fun _ -> dispatch (CopyMsg (Dom.Hooks.githubUserCode, userCode)))}>{if justCopied then Icon.check else Icon.copy}</button>
                     </div>
                     <div class="flex gap-2">
                       <a class="{Style.btnPrimary}" href="{verificationUri}" target="_blank" rel="noreferrer" data-github-authorize>Approve on github.com</a>
@@ -999,7 +979,7 @@ module View =
                 <span class="{Style.lockup}"><span class="{Style.lockupMark}" aria-hidden="true">{Brand.mark}</span><span class="{Style.wordmark}">yession</span></span>
                 <button type="button" class="{Style.navChevronBack}" aria-label="Collapse sidebar" data-nav-toggle="hide" @click={Ev(fun _ -> actions.ToggleNav ())}>{Icon.left}</button>
               </div>
-              {connectionSection actions model}
+              {connectionSection dispatch model}
               {peopleSection actions dispatch model}
               {chaptersSection dispatch model}
               {environmentSection model.Environment}

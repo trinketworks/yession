@@ -156,12 +156,17 @@ module Client =
           /// `None` where there is no page to post to, as for `Launch`.
           Panels : PanelWrites option
           /// The document's own moves (`DomMove`); `ignore` where there is no document.
-          Moves : DomMove -> unit }
+          Moves : DomMove -> unit
+          /// Put text on the system clipboard, answering whether the platform let it — a
+          /// permission it may refuse, and the only place that knows whether it did.
+          Clipboard : string -> Async<bool>
+          /// Cut short whatever wait the connection's lifecycle is in (`ClientEffect.RetryNow`).
+          Retry : unit -> unit }
 
     module Ports =
 
         /// A client with no session to ask: every request goes nowhere.
-        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None; Ports.Panels = None; Ports.Moves = ignore }
+        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None; Ports.Panels = None; Ports.Moves = ignore; Ports.Clipboard = (fun _ -> async.Return false); Ports.Retry = ignore }
 
         /// A launch read, answered as the message that carries its result.
         let private launchRead (reads: LaunchReads) (dispatch: ClientMsg -> unit) (effect: LaunchEffect) : Async<unit> =
@@ -241,6 +246,17 @@ module Client =
                             dispatch (GitHubAnsweredMsg (call, answer, panels.Now ()))
                         }))
             | ClientEffect.Move move -> ports.Moves move
+            | ClientEffect.Copy (box, text) ->
+                Async.StartImmediate (
+                    async {
+                        // Only a write that HAPPENED is confirmed. A refused clipboard leaves the
+                        // box showing the value, which is what a person falls back to reading —
+                        // a "copied" over an empty clipboard would send them to the other tab
+                        // with nothing to paste.
+                        let! written = ports.Clipboard text
+                        if written then dispatch (CopiedMsg (Some box))
+                    })
+            | ClientEffect.RetryNow -> ports.Retry ()
             | ClientEffect.GitHubPoll (round, scope) ->
                 ports.Panels
                 |> Option.iter (fun panels ->
