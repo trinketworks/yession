@@ -137,6 +137,9 @@ module Client =
     [<RequireQualifiedAccess>]
     type PanelWrites =
         { Claude : ClaudeAction -> ClaudeRequest -> Async<ClaudeAnswer>
+          GitHub : GitHubAction -> GitHubRequest -> Async<GitHubAnswer>
+          /// One device-flow poll for a scope: the write that makes GitHub hand the grant over.
+          GitHubPoll : string -> Async<GitHubPollAnswer>
           Now : unit -> int64 }
 
     /// What the program's effects are carried out against (`ClientEffect`).
@@ -226,6 +229,22 @@ module Client =
                         async {
                             let! answer = panels.Claude call.Action call.Request
                             dispatch (ClaudeAnsweredMsg (call, answer, panels.Now ()))
+                        }))
+            | ClientEffect.GitHub call ->
+                ports.Panels
+                |> Option.iter (fun panels ->
+                    Async.StartImmediate (
+                        async {
+                            let! answer = panels.GitHub call.Action call.Request
+                            dispatch (GitHubAnsweredMsg (call, answer, panels.Now ()))
+                        }))
+            | ClientEffect.GitHubPoll (round, scope) ->
+                ports.Panels
+                |> Option.iter (fun panels ->
+                    Async.StartImmediate (
+                        async {
+                            let! answer = panels.GitHubPoll scope
+                            dispatch (GitHubPolledMsg (round, answer))
                         }))
 
     /// The client Elmish program for a given Yjs doc: the pure `ClientModel.update`

@@ -66,16 +66,6 @@ type ViewActions =
       /// is on screen whenever a credential needs one — including while the settings face is
       /// already open — so a toggle there would shut the panel it is pointing at.
       RevealSettings : unit -> unit
-      /// GitHub connection panel (Plan 14). Imperative because they read panel inputs and
-      /// drive the /github round-trips; the reducer only folds the resulting messages. The
-      /// flow is a device code with no paste-back, so there is no Complete — the browser
-      /// polls while awaiting approval.
-      /// Begin the device-flow sign-in for the scope in the panel's selector.
-      GitHubConnect : unit -> unit
-      /// Store the pasted personal-access/user token from the panel's token input.
-      GitHubPasteToken : unit -> unit
-      /// Disconnect the credential stored for a scope choice ("session" | "mine").
-      GitHubDisconnect : string -> unit
       /// Put a value on the system clipboard, and say so on the box it came from — the hook
       /// of that box is the key (`ClientModel.Copied`), the second argument is the text.
       ///
@@ -154,9 +144,6 @@ module ViewActions =
           ReportFieldSelection = fun _ _ -> ()
           ToggleSettings = ignore
           RevealSettings = ignore
-          GitHubConnect = ignore
-          GitHubPasteToken = ignore
-          GitHubDisconnect = ignore
           Copy = fun _ _ -> ()
           RetryNow = ignore
           SendTerminalDraft = fun _ _ -> ()
@@ -824,7 +811,7 @@ module View =
             match credential with
             | Some credential ->
                 html $"""
-                    <div class="{Style.sideRow}" data-github-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.btnIconBareDanger}" aria-label="Disconnect GitHub" data-github-disconnect="{scopeChoice}" @click={Ev(fun _ -> actions.GitHubDisconnect scopeChoice)}>{Icon.close}</button></div>
+                    <div class="{Style.sideRow}" data-github-connected="{scopeChoice}">{credentialStatus label credential}<button type="button" class="{Style.btnIconBareDanger}" aria-label="Disconnect GitHub" data-github-disconnect="{scopeChoice}" @click={Ev(fun _ -> dispatch (GitHubPressedMsg (GitHubPress.Disconnect scopeChoice)))}>{Icon.close}</button></div>
                     {credentialReason Dom.Hooks.githubSignInRequired scopeChoice credential}"""
             | None -> html $""""""
         let controls =
@@ -858,14 +845,17 @@ module View =
             | GitHubIdle ->
                 html $"""
                     <label class="{Style.label}" for="github-scope">sign in for</label>
-                    <select id="github-scope" class="{Style.field}" data-github-scope aria-label="GitHub sign-in scope">
-                      <option value="mine">{sharedScopeLabel (github.Status |> Option.map (fun panel -> panel.Owner))}</option>
-                      <option value="session">This session only</option>
+                    <select id="github-scope" class="{Style.field}" data-github-scope aria-label="GitHub sign-in scope"
+                            @change={EvVal(fun v -> dispatch (GitHubScopeChosen v))}>
+                      <option value="mine" ?selected={github.Scope = "mine"}>{sharedScopeLabel (github.Status |> Option.map (fun panel -> panel.Owner))}</option>
+                      <option value="session" ?selected={github.Scope = "session"}>This session only</option>
                     </select>
-                    <button type="button" class="{Style.btnPrimary}" data-github-connect @click={Ev(fun _ -> actions.GitHubConnect ())}>Connect GitHub</button>
+                    <button type="button" class="{Style.btnPrimary}" data-github-connect @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.Connect))}>Connect GitHub</button>
                     <label class="{Style.label} pt-2" for="github-token">personal access token</label>
-                    <input id="github-token" type="password" class="{Style.field}" data-github-token placeholder="github_pat_…" />
-                    <button type="button" class="{Style.btn}" data-github-save-token @click={Ev(fun _ -> actions.GitHubPasteToken ())}>Save token</button>"""
+                    <input id="github-token" type="password" class="{Style.field}" data-github-token placeholder="github_pat_…"
+                           .value={github.Token}
+                           @input={EvVal(fun v -> dispatch (GitHubTokenTyped v))} />
+                    <button type="button" class="{Style.btn}" data-github-save-token @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.SaveToken))}>Save token</button>"""
         let error =
             match Pending.refusal github.Pending with
             | Some reason -> html $"""<span class="{Style.statusErr}" data-github-error>{reason}</span>"""
