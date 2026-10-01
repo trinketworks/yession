@@ -777,10 +777,11 @@ type ClientModel =
       /// stage 2). `None` = nothing chosen yet, resolved to a default by `selectedPane`.
       ///
       /// One field rather than the four this replaces, because the four had to agree and
-      /// nothing made them: see `PaneMode`. Its tab is also the PREVIEW slot (Plan 20, stage
-      /// 1) — a tab that is shown and not pinned is transient, and showing anything else
-      /// replaces it. There is no second field for that: a pinned tab and a previewed one
-      /// differ by whether `Tabs` names it, which is the only fact there is.
+      /// nothing made them: see `PaneMode`. What it names is always a tab in `Tabs` — showing
+      /// something opens it — so this says which of them is on top and never what the strip
+      /// holds. It did once: a tab shown and not kept was a PREVIEW, outside the strip's list
+      /// and replaced by the next thing looked at, which is how a terminal reached from the
+      /// chat came to sit among the tabs offering no way to close it.
       Pane          : PaneMode option
       /// Whether the terminals panel is open. View state, never synced: two people in one
       /// session may reasonably want different columns on screen.
@@ -1046,8 +1047,10 @@ type ClientMsg =
     /// subset of four fields, which is what let a chip open a tab the list was still covering
     /// and let the list's rewind cancel itself.
     ///
-    /// A tab shown and not pinned is the PREVIEW slot (Plan 20, stage 1): showing anything
-    /// else replaces it, so a person reading twenty chips ends with one tab, not twenty.
+    /// Showing something OPENS it (Plan 20, stage 1): it is in the strip afterwards, and
+    /// closes from there like anything else somebody opened. Reading twenty chips therefore
+    /// leaves twenty tabs — each with a close on it, which is the part that was missing when
+    /// one transient slot was the answer to that instead.
     | ShowInPaneMsg of TabMode
     /// Show this in the pane and take the reader there: what a chip in the chat does. One
     /// message for both, so no chip can open a pane and leave focus behind it.
@@ -1435,35 +1438,39 @@ module ClientModel =
         |> List.filter (fun (_, presence) -> presence.Focus |> Option.exists (fun f -> f.Field = DraftBody peer))
         |> List.map (fun (editor, presence) -> editor, presence.DisplayName)
 
+    /// The strip with this tab in it, appended if it is not already there.
+    ///
+    /// Appended rather than moved to the front: a strip that re-orders under a reader is the
+    /// thing the order was a list for in the first place. ONE adder, because every way a tab
+    /// gets into the strip — showing it, keeping it — has to agree about what "already there"
+    /// means, and `PaneTab.key` is that answer.
+    let opened (tab: PaneTab) (tabs: PaneTab list) : PaneTab list =
+        if tabs |> List.exists (fun open' -> PaneTab.key open' = PaneTab.key tab) then tabs
+        else tabs @ [ tab ]
+
     /// Whether this client is keeping a tab.
     let isPinned (tab: PaneTab) (model: ClientModel) : bool =
         Set.contains (PaneTab.key tab) model.Pinned
 
-    /// The tab strip, in the order it renders (Plan 20, stage 1): the pins, in pin order,
-    /// then whatever is being previewed.
+    /// The tab strip, in the order it renders (Plan 20, stage 1): what this client has open,
+    /// in the order it opened.
     ///
-    /// The preview is at the END and never in the middle, so a person reading one recording
-    /// after another watches one tab change rather than their pins shuffling under them.
-    ///
-    /// A terminal that CLOSES keeps its tab when it was pinned, and shows its recording
-    /// there. That is the pin doing what it says: the strip stopped being a census because
-    /// the list became the door to every recording, not because a closed terminal is
-    /// unkeepable — and a tab that vanishes at the moment the thing in it finishes is a tab
-    /// taken away from whoever was watching it finish.
+    /// A terminal that CLOSES keeps its tab when it was kept, and shows its recording there.
+    /// That is the pin doing what it says: the strip stopped being a census because the list
+    /// became the door to every recording, not because a closed terminal is unkeepable — and
+    /// a tab that vanishes at the moment the thing in it finishes is a tab taken away from
+    /// whoever was watching it finish.
     let rec paneTabs (model: ClientModel) : PaneTab list =
-        // No filter here, and now nothing to filter: only a person's own act adds a pin, and
-        // only their own act removes one.
-        //
-        // The preview is the RESOLVED selection rather than the stored choice, because a
-        // client that has pinned nothing still shows a terminal — whatever `selectedPane`
-        // fell back to — and a strip that omitted it would be a tablist with no tab for the
-        // panel it is sitting above.
-        let previewed =
+        // The resolved SELECTION, when a client that has opened nothing is still being shown
+        // a terminal — a strip that omitted it would be a tablist with no tab for the panel
+        // it is sitting above. Every other way into the pane opens a tab, so this is the one
+        // case left, and it ends the moment anybody touches anything.
+        let fallback =
             match selectedPane model with
             | Some chosen when not (model.Tabs |> List.exists (fun open' -> PaneTab.key open' = PaneTab.key chosen)) ->
                 [ chosen ]
             | _ -> []
-        model.Tabs @ previewed
+        model.Tabs @ fallback
 
     /// Which tab the pane shows: the stored choice while what it names still exists, else the
     /// first pinned OPEN terminal, else the first open one. Resolved rather than stored, for
@@ -2674,7 +2681,17 @@ module ClientModel =
             // The WHOLE next face, stated by every way in. Nothing here clears a subset and
             // hopes the rest was already right: the list cannot survive a choice that
             // replaces it, and a pin or a start hint cannot outlive the mode that carried it.
-            { model with Pane = Some (OnTab mode); TerminalsOpen = true }
+            //
+            // And showing something OPENS it. There used to be a preview slot — whatever was
+            // being looked at, held outside `Tabs` so that reading one chip after another left
+            // one tab rather than twenty — and the distinction had no expression on screen: a
+            // terminal reached from the chat sat in the strip looking like every other tab and
+            // offered no close, because the model knew it was a preview and nobody else could.
+            // Opening is opening; a strip of things you opened is a strip you can close.
+            { model with
+                Tabs = opened (TabMode.tab mode) model.Tabs
+                Pane = Some (OnTab mode)
+                TerminalsOpen = true }
         | OpenInPaneMsg mode -> fold (ShowInPaneMsg mode) model
         | ShowInTerminalMsg (terminal, block) -> fold (ShowInPaneMsg (ReadingAt (terminal, block))) model
         | MoveMsg _
@@ -2708,14 +2725,10 @@ module ClientModel =
                 // away from me while I am looking at it".
                 { model with Pinned = Set.remove key model.Pinned }
             else
-                // Keeping something that was only previewed OPENS it, because a mark on a tab
-                // that is not in the strip is a mark on nothing. Appended rather than moved
-                // to the front: a strip that re-orders under a reader is the thing pin order
-                // was a list for in the first place.
-                let tabs =
-                    if model.Tabs |> List.exists (fun open' -> PaneTab.key open' = key) then model.Tabs
-                    else model.Tabs @ [ tab ]
-                { model with Tabs = tabs; Pinned = Set.add key model.Pinned }
+                // Keeping something OPENS it, for the days when something reaches the strip
+                // without having been shown: a mark on a tab that is not in the strip is a
+                // mark on nothing.
+                { model with Tabs = opened tab model.Tabs; Pinned = Set.add key model.Pinned }
         | CloseTabMsg tab ->
             // Closing is total — the tab goes, and a tab that was kept is no longer kept,
             // because somebody asking for it gone has said so more recently than they said to
@@ -2725,7 +2738,7 @@ module ClientModel =
             // deliberate enough to.
             //
             // The pane lets go of it too, and only when it was the tab that was showing.
-            // Otherwise `selectedPane` would resolve the closed tab right back as the preview
+            // Otherwise `selectedPane` would resolve the closed tab right back into the strip
             // — closing the thing you are looking at would leave it exactly where it was.
             let key = PaneTab.key tab
             let letGo (mode: TabMode) = PaneTab.key (TabMode.tab mode) = key
@@ -2734,10 +2747,16 @@ module ClientModel =
                 | Some (OnTab mode) when letGo mode -> None
                 | Some (OnList (Some mode)) when letGo mode -> Some (OnList None)
                 | other -> other
+            let tabs = model.Tabs |> List.filter (fun open' -> PaneTab.key open' <> key)
             { model with
-                Tabs = model.Tabs |> List.filter (fun open' -> PaneTab.key open' <> key)
+                Tabs = tabs
                 Pinned = Set.remove key model.Pinned
-                Pane = pane }
+                Pane = pane
+                // Closing the LAST tab shuts the column. A pane with nothing open in it has
+                // nothing to show, and the one thing it must not do is re-propose whatever the
+                // session happens to be running — which is the tab the person just asked to be
+                // rid of, back under their hand as if nothing had happened.
+                TerminalsOpen = model.TerminalsOpen && not (List.isEmpty tabs) }
         | ToggleContentMsg ->
             { model with TerminalsOpen = not model.TerminalsOpen }
         | ToggleItemMenuMsg messageId ->

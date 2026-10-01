@@ -340,8 +340,7 @@ module Dom =
         /// tablist and a test asserting keyboard order should not have to know which is which.
         /// Its value is `PaneTab.key`.
         let paneTab = "data-pane-tab"
-        /// Whether a tab is KEPT — `"true"` or `"false"`, and absent on a tab that cannot be
-        /// pinned at all (a closed terminal's preview). State rather than a control: the pin
+        /// Whether a tab is KEPT — `"true"` or `"false"`. State rather than a control: the pin
         /// stopped being a second button beside every tab and became a mark on the one that
         /// has it, toggled by activating the tab you are already on.
         ///
