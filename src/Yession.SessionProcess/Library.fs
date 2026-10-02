@@ -60,6 +60,8 @@ module Bootstrap =
         | SessionEvent.ShellProfileSet _ -> "shell-profile-set"
         | SessionEvent.FileChanged _ -> "file-changed"
         | SessionEvent.ArtifactShared _ -> "artifact-shared"
+        | SessionEvent.TabOpened _ -> "tab-opened"
+        | SessionEvent.TabClosed _ -> "tab-closed"
         | SessionEvent.CommandRefused _ -> "command-refused"
         | SessionEvent.GatedCommandFailed _ -> "gated-command-failed"
         | SessionEvent.ToolUseStarted _ -> "tool-use-started"

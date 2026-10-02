@@ -1707,6 +1707,45 @@ module Codec =
                 | Ok r -> Decode.succeed r
                 | Error e -> Decode.fail e) }
 
+    /// What the pane can show, on the wire. Up here rather than beside the presence frame it
+    /// was written for, because the events that record a tab being opened carry one too and
+    /// the event codec is declared first — one spelling, so a tab read off the log and a peer
+    /// read off a presence frame can never be two different things.
+    let private viewRef : Codec<ViewRef> =
+        { Encode =
+            (fun v ->
+                match v with
+                | ViewingFile ref -> Encode.object [ "kind", Encode.string "file"; "path", Encode.string (ContentRef.value ref) ]
+                | ViewingTerminal t -> Encode.object [ "kind", Encode.string "terminal"; "terminalId", terminalId.Encode t ])
+          Decode =
+            Decode.field "kind" Decode.string
+            |> Decode.andThen (function
+                | "file" ->
+                    // The path is re-CHECKED on the way in rather than trusted: this arrives
+                    // from a peer's presence frame or off the log, and a `ContentRef` is what
+                    // the pane turns into a URL.
+                    Decode.field "path" Decode.string
+                    |> Decode.andThen (fun path ->
+                        match ContentRef.create path with
+                        | Ok ref -> Decode.succeed (ViewingFile ref)
+                        | Error reason -> Decode.fail reason)
+                | "terminal" -> Decode.field "terminalId" terminalId.Decode |> Decode.map ViewingTerminal
+                | other -> Decode.fail (sprintf "Unknown view ref: %s" other)) }
+
+    let private tabOpened : Codec<TabOpened> =
+        { Encode =
+            fun (t: TabOpened) -> Encode.object [ "ref", viewRef.Encode t.Ref; "focus", Encode.bool t.Focus ]
+          Decode =
+            Decode.object (fun get ->
+                { TabOpened.Ref = get.Required.Field "ref" viewRef.Decode
+                  // Absent reads as `false`: an opening that did not say it takes the screen
+                  // did not take it, which is the answer that leaves a reader where they are.
+                  TabOpened.Focus = get.Optional.Field "focus" Decode.bool |> Option.defaultValue false }) }
+
+    let private tabClosed : Codec<TabClosed> =
+        { Encode = fun (t: TabClosed) -> Encode.object [ "ref", viewRef.Encode t.Ref ]
+          Decode = Decode.object (fun get -> { TabClosed.Ref = get.Required.Field "ref" viewRef.Decode }) }
+
     let private artifactShared : Codec<ArtifactShared> =
         { Encode =
             fun (a: ArtifactShared) ->
@@ -1933,6 +1972,10 @@ module Codec =
                     Encode.object [ "type", Encode.string "fileChanged"; "payload", fileChanged.Encode p ]
                 | SessionEvent.ArtifactShared p ->
                     Encode.object [ "type", Encode.string "artifactShared"; "payload", artifactShared.Encode p ]
+                | SessionEvent.TabOpened p ->
+                    Encode.object [ "type", Encode.string "tabOpened"; "payload", tabOpened.Encode p ]
+                | SessionEvent.TabClosed p ->
+                    Encode.object [ "type", Encode.string "tabClosed"; "payload", tabClosed.Encode p ]
                 | SessionEvent.CommandRefused p ->
                     Encode.object [ "type", Encode.string "commandRefused"; "payload", commandRefused.Encode p ]
                 | SessionEvent.GatedCommandFailed p ->
@@ -2012,6 +2055,8 @@ module Codec =
                 | "workSandboxStopped" -> Decode.field "payload" workSandboxStopped.Decode |> Decode.map WorkSandboxStopped
                 | "shellProfileSet" -> Decode.field "payload" shellProfileSet.Decode |> Decode.map ShellProfileSet
                 | "fileChanged" -> Decode.field "payload" fileChanged.Decode |> Decode.map SessionEvent.FileChanged
+                | "tabOpened" -> Decode.field "payload" tabOpened.Decode |> Decode.map SessionEvent.TabOpened
+                | "tabClosed" -> Decode.field "payload" tabClosed.Decode |> Decode.map SessionEvent.TabClosed
                 | "artifactShared" ->
                     Decode.field "payload" artifactShared.Decode |> Decode.map SessionEvent.ArtifactShared
                 | "commandRefused" -> Decode.field "payload" commandRefused.Decode |> Decode.map SessionEvent.CommandRefused
@@ -2446,26 +2491,6 @@ module Codec =
             Decode.object (fun get ->
                 { Field = get.Required.Field "field" focusField.Decode
                   Pos = get.Required.Field "pos" cursorPos.Decode }) }
-
-    let private viewRef : Codec<ViewRef> =
-        { Encode =
-            (fun v ->
-                match v with
-                | ViewingFile ref -> Encode.object [ "kind", Encode.string "file"; "path", Encode.string (ContentRef.value ref) ]
-                | ViewingTerminal t -> Encode.object [ "kind", Encode.string "terminal"; "terminalId", terminalId.Encode t ])
-          Decode =
-            Decode.field "kind" Decode.string
-            |> Decode.andThen (function
-                | "file" ->
-                    // The path is re-CHECKED on the way in rather than trusted: a presence frame
-                    // comes from a peer, and a `ContentRef` is what the pane turns into a URL.
-                    Decode.field "path" Decode.string
-                    |> Decode.andThen (fun path ->
-                        match ContentRef.create path with
-                        | Ok ref -> Decode.succeed (ViewingFile ref)
-                        | Error reason -> Decode.fail reason)
-                | "terminal" -> Decode.field "terminalId" terminalId.Decode |> Decode.map ViewingTerminal
-                | other -> Decode.fail (sprintf "Unknown view ref: %s" other)) }
 
     let private presencePayload : Codec<PresencePayload> =
         { Encode =

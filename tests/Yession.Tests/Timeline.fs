@@ -1587,6 +1587,69 @@ let private pinTests =
                 ((Support.render reached).Contains (Dom.attr Dom.Hooks.paneTabClose "terminal:term-a"))
                 "so it offers a close, like every other tab nobody kept"
 
+        // What the agent can do to a strip (`open_tab` / `close_tab` / `focus_tab`), which
+        // reaches every client as events on the log rather than as synced state: a tab opened
+        // before somebody arrived is in their strip when they do, for the same reason a
+        // message sent before they arrived is in their chat.
+        testCase "a tab the agent opened is in my strip, and does not take my screen" <| fun () ->
+            let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> thenFolded [ at 2L 1.0 (SessionEvent.TabOpened { TabOpened.Ref = ViewingFile chart; TabOpened.Focus = false }) ]
+            Expect.isTrue
+                (model.Tabs |> List.exists (fun tab -> PaneTab.key tab = "content:artifacts/chart.png/0000-ab12cd"))
+                "in reach"
+            Expect.equal
+                (ClientModel.selectedPane model |> Option.map PaneTab.key)
+                (Some "terminal:term-a")
+                "and I am still reading what I was reading"
+
+        testCase "a tab the agent was asked to SHOW takes the screen" <| fun () ->
+            // The one verb that moves a reader, and the whole reason it is a separate thing
+            // to ask for: `focus_tab` is somebody saying "show me", not an agent deciding.
+            let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> thenFolded [ at 2L 1.0 (SessionEvent.TabOpened { TabOpened.Ref = ViewingFile chart; TabOpened.Focus = true }) ]
+            Expect.equal
+                (ClientModel.selectedPane model |> Option.map PaneTab.key)
+                (Some "content:artifacts/chart.png/0000-ab12cd")
+                "the thing I asked to be shown"
+
+        testCase "a focus that is already history does not move a reader who just arrived" <| fun () ->
+            // The log keeps a focus for ever; a reader opening the session an hour later must
+            // not be landed on what somebody was being shown then, ahead of everything since.
+            let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
+            let model =
+                clientOf
+                    [ at 1L 0.0 (SessionEvent.TabOpened { TabOpened.Ref = ViewingFile chart; TabOpened.Focus = true })
+                      at 2L 1.0 (opened terminalA "build") ]
+            Expect.notEqual
+                (ClientModel.selectedPane model |> Option.map PaneTab.key)
+                (Some "content:artifacts/chart.png/0000-ab12cd")
+                "arriving history is not a command"
+
+        testCase "a tab the agent closed goes, unless I kept it" <| fun () ->
+            // A pin lives in this browser and the session that ran the tool cannot see one,
+            // so the rule is honoured HERE rather than refused there — which is also why the
+            // tool says what it does rather than reporting what happened.
+            let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
+            let shown =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> thenFolded [ at 2L 1.0 (SessionEvent.TabOpened { TabOpened.Ref = ViewingFile chart; TabOpened.Focus = false }) ]
+            let closedAway =
+                shown |> thenFolded [ at 3L 2.0 (SessionEvent.TabClosed { TabClosed.Ref = ViewingFile chart }) ]
+            Expect.isFalse
+                (closedAway.Tabs |> List.exists (fun tab -> PaneTab.key tab = "content:artifacts/chart.png/0000-ab12cd"))
+                "taken back"
+            let kept =
+                shown
+                |> Support.step (TogglePinMsg (ContentTab chart))
+                |> thenFolded [ at 3L 2.0 (SessionEvent.TabClosed { TabClosed.Ref = ViewingFile chart }) ]
+            Expect.isTrue
+                (kept.Tabs |> List.exists (fun tab -> PaneTab.key tab = "content:artifacts/chart.png/0000-ab12cd"))
+                "and a tab I kept is mine, not the agent's to take"
+
         testCase "a terminal that ends takes its tab with it, when nobody kept it" <| fun () ->
             // The other half of the tab rule, and why the strip does not need tidying: what
             // is in a tab having finished is the ordinary reason a tab is done with. The list

@@ -141,6 +141,12 @@ type SessionEvent =
     // distinguishes them (`ArtifactShared`) and the bytes are immutable once written — so there
     // is no later event about this version to reconcile with this one.
     | ArtifactShared of ArtifactShared
+    // What the agent put in front of the people here, and took back (Plan 20). The log rather
+    // than the sync doc, because this is a thing that HAPPENED and the log is what every
+    // client already folds: a tab opened before somebody arrived is in their strip when they
+    // do, for the same reason a message sent before they arrived is in their chat.
+    | TabOpened of TabOpened
+    | TabClosed of TabClosed
     // The approval gate's refusal (Plan 15, stage 3). Only the refusal: an approval is
     // recorded on the event of the command it released.
     | CommandRefused of CommandRefused
