@@ -21,6 +21,7 @@ open Yession.Domain.Collab
 open Yession.Domain.Tools
 open Fable.ProseMirror
 open Yession.App
+open Yession.App.Codecs
 open Lit
 
 #if FABLE_COMPILER
@@ -120,10 +121,10 @@ let private openDataChannel (signalUrl: string) (timeoutMs: int) : JS.Promise<Ha
                         // can arrive here — the two gathering events cannot fire before the
                         // description is local.
                         settle (Refused "no local description to offer")
+                    | Some local when local.``type`` <> Browser.Types.RTCSdpType.Offer ->
+                        settle (Refused "the local description is not an offer")
                     | Some local ->
-                        let offer =
-                            JS.JSON.stringify (
-                                Browser.WebRTC.RTCSessionDescriptionInit.Create (local.``type``, local.sdp))
+                        let offer = Codec.toString Sdp.message { Kind = SdpKind.Offer; Sdp = local.sdp }
                         let! reply =
                             Fetch.fetchUnsafe
                                 signalUrl
@@ -131,8 +132,14 @@ let private openDataChannel (signalUrl: string) (timeoutMs: int) : JS.Promise<Ha
                                   Fetch.requestHeaders [ Fetch.Types.HttpRequestHeaders.ContentType "application/json" ]
                                   Fetch.Types.RequestProperties.Body (U3.Case3 offer) ]
                         if reply.Ok then
-                            let! answer = reply.json<Browser.Types.RTCSessionDescriptionInit> ()
-                            do! peer.setRemoteDescription answer
+                            let! body = reply.text ()
+                            match Sdp.parse body with
+                            | Some { Kind = SdpKind.Answer; Sdp = sdp } ->
+                                do!
+                                    peer.setRemoteDescription (
+                                        Browser.WebRTC.RTCSessionDescriptionInit.Create (Browser.Types.RTCSdpType.Answer, sdp))
+                            | Some { Kind = SdpKind.Offer } -> settle (Refused "the session answered with an offer")
+                            | None -> settle (Refused "the session answered with no session description")
                         else
                             settle (Refused (sprintf "signalling refused: %d" reply.Status))
                 }

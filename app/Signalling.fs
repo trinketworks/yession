@@ -21,6 +21,7 @@ open Yession.Host.Interop
 open Yession.Host.WebRtc
 open Fable.NodeDataChannel
 open Yession.App
+open Yession.App.Codecs
 open Thoth.Json
 open Thoth.Json.Net
 
@@ -343,8 +344,9 @@ let start
         match routeOf req with
         | Some Signal ->
             readBody req (fun body ->
-                match parseSdp body with
+                match Sdp.parse body with
                 | None -> badRequest "no session description" res
+                | Some { Kind = SdpKind.Answer } -> badRequest "an answer is not an offer" res
                 | Some offer ->
                     let pc = createPeerConnection "yession-process"
                     connections.Add pc
