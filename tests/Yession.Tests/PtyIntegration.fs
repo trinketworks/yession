@@ -1265,12 +1265,16 @@ let tests =
                     // Report the size on SIGWINCH, then again at exit. A shell that never
                     // learns its size is the one that redraws wrongly, so this is the
                     // behaviour that matters rather than the call returning unit.
-                    let script = "trap 'stty size' WINCH; sleep 2 & wait; stty size"
+                    // `armed` once the trap is in place, so the resize goes in after it rather
+                    // than after a guess at how long a shell takes to start; the trap reports
+                    // and ends the program, so nothing here waits out a timer either.
+                    let script = "trap 'stty size; exit 0' WINCH; echo armed; while :; do sleep 1 & wait; done"
                     let exec = { Executable = "/bin/sh"; Arguments = [ "-c"; script ]; Env = Map.empty; WorkingDirectory = None; Via = Entrypoint }
                     match! spawnPty exec 80 24 (fun d -> output.Append d |> ignore) with
                     | Error e -> failwith e
                     | Ok pty ->
-                        do! Async.Sleep 300
+                        let! armed = until 5000 (fun () -> (string output).Contains "armed")
+                        Expect.isTrue armed (sprintf "the program armed its trap, got: %s" (string output))
                         pty.Resize 120 40
                         let! _ = pty.Exited
                         do! sandbox.Dispose ()
@@ -1300,14 +1304,15 @@ let tests =
                     let output = System.Text.StringBuilder ()
                     let exec =
                         { Executable = "/bin/sh"
-                          Arguments = [ "-c"; "read line; echo \"got:$line\"" ]
+                          Arguments = [ "-c"; "echo ready; read line; echo \"got:$line\"" ]
                           Env = Map.empty
                           WorkingDirectory = None
                           Via = Entrypoint }
                     match! spawnPty exec 80 24 (fun d -> output.Append d |> ignore) with
                     | Error e -> failwith e
                     | Ok pty ->
-                        do! Async.Sleep 200
+                        let! ready = until 5000 (fun () -> (string output).Contains "ready")
+                        Expect.isTrue ready (sprintf "the program started, got: %s" (string output))
                         pty.Write "hello\r"
                         let! _ = pty.Exited
                         do! sandbox.Dispose ()
@@ -1360,11 +1365,21 @@ let tests =
                               clean <- clean + Marks.printedOf scanned) with
                     | Error e -> failwith e
                     | Ok pty ->
-                        do! Async.Sleep 500
+                        // Each line goes in once the shell has said it is ready for one — its
+                        // first prompt, then each command's done mark — rather than after a
+                        // guess at how long a shell takes, which is what these marks are for.
+                        let completed () = marks |> Seq.filter (function MarkCommandDone _ -> true | _ -> false) |> Seq.length
+                        let! prompted = until 5000 (fun () -> marks |> Seq.exists ((=) MarkPromptStart))
+                        Expect.isTrue prompted "the shell drew its first prompt"
+                        // Counted from here: the prompt hook marks a done before each prompt,
+                        // the first one included, so a done can already be in hand.
+                        let before = completed ()
                         pty.Write "echo hello\r"
-                        do! Async.Sleep 600
+                        let! first = until 5000 (fun () -> completed () >= before + 1)
+                        Expect.isTrue first "the first command was marked done"
                         pty.Write "false\r"
-                        do! Async.Sleep 600
+                        let! second = until 5000 (fun () -> completed () >= before + 2)
+                        Expect.isTrue second "the second command was marked done"
                         pty.Kill ()
                         let! _ = pty.Exited
                         do! sandbox.Dispose ()
@@ -1523,11 +1538,14 @@ let tests =
                 | Ok sandbox ->
                     let spawnPty = Option.get sandbox.SpawnPty
                     let exec =
-                        { Executable = "/bin/sh"; Arguments = [ "-c"; "sleep 30" ]; Env = Map.empty; WorkingDirectory = None; Via = Entrypoint }
-                    match! spawnPty exec 80 24 ignore with
+                        { Executable = "/bin/sh"; Arguments = [ "-c"; "echo ready; sleep 30" ]; Env = Map.empty; WorkingDirectory = None; Via = Entrypoint }
+                    let output = System.Text.StringBuilder ()
+                    match! spawnPty exec 80 24 (fun d -> output.Append d |> ignore) with
                     | Error e -> failwith e
                     | Ok pty ->
-                        do! Async.Sleep 200
+                        // Killed once it is running, which it says, rather than after a guess.
+                        let! ready = until 5000 (fun () -> (string output).Contains "ready")
+                        Expect.isTrue ready (sprintf "the program started, got: %s" (string output))
                         pty.Kill ()
                         // The assertion is that this RESOLVES. A handle whose Exited never
                         // settles would hang the drain that awaits it, for ever.
