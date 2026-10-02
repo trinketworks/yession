@@ -1763,9 +1763,13 @@ let private reapingTests =
                 // Declaring one it does not answer on fails the launch, not the assertion.
                 let! managerPort = freePort ()
                 let origin = sprintf "http://127.0.0.1:%d" managerPort
+                // The idle window passes when the case turns this, not three real seconds and
+                // a sweep later.
+                let clock = virtualClock (DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero))
                 let! pm =
                     ProcessManager.createWithUi
                         { ProcessManager.Options.defaults dataDir nodePath [ "app/SessionMain.js" ] with
+                            Clock = clock.Clock
                             Strategy = Some Strategy.localhost
                             // Path-mounted: a session's address is derived from its ID, so it
                             // is the same string before and after a reap however the OS
@@ -1787,8 +1791,14 @@ let private reapingTests =
                 let! launched = pm.Launch sessionId
                 Expect.isTrue (Result.isOk launched) "the session launches"
 
-                // Nobody connects, so it is idle from the moment it boots. It reports that,
-                // and the Manager stops it once the window elapses.
+                // Nobody connects, so it is idle from the moment it boots, and says so from
+                // inside that boot. The clock turns only once the Manager has heard it: the
+                // report is not awaited before the readiness line, so it can land after
+                // `Launch` returns, and a sweep ahead of it would reap for the wrong reason
+                // because the case raced, not because the Manager did.
+                do! waitUntil "the session's first activity report" (fun () ->
+                        lock events (fun () -> events |> Seq.exists (fun (name, _) -> name = "session reporting activity")))
+                clock.Advance (TimeSpan.FromMinutes 1.0)
                 do! waitUntil "the idle session to be reaped" (fun () ->
                         match (pm.TryFind sessionId).Value.Status with
                         | ProcessManager.NotRunning -> true

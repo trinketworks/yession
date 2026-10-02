@@ -172,6 +172,10 @@ type Options =
       /// holds — and, on a deployment that tracks a fast-moving build, for sessions that
       /// come back on the new one without the Manager having to restart.
       IdleTimeout : TimeSpan option
+      /// Time, for what this Manager keeps on it: when a session was created, archived and
+      /// last in use, and the reaper's sweep. `Clock.system` in the product; a case that
+      /// wants an idle window to have passed turns its own instead of waiting it out.
+      Clock : Clock
       /// The hook endpoints this deployment serves, as declared (`--webhook`, once per
       /// endpoint). Empty = none, and the relay is inert: an endpoint is an inbound door,
       /// so it exists only where an operator asked for one by name.
@@ -225,6 +229,7 @@ module Options =
           Strategy = None
           Secrets = None
           IdleTimeout = None
+          Clock = Clock.system
           Webhooks = [] }
 
 module ManagerPort =
@@ -311,8 +316,6 @@ module SecretsBacking =
                  secrets KEK has nowhere to live. Make one available (unlock the keychain, \
                  start a Secret Service daemon), or pass --secrets ephemeral to accept a \
                  store that dies with this Manager."
-
-let private clock () = DateTimeOffset.UtcNow
 
 /// How often to look for sessions to reap, derived from the window rather than configured
 /// separately: a quarter of it, so the worst-case overshoot is a quarter of a window and
@@ -508,6 +511,7 @@ let createWithUi
     (ui: (ProcessManager -> (IncomingMessage -> Async<AuthenticationOutcome>) -> IncomingMessage -> ServerResponse -> bool) option)
     : Async<ProcessManager> =
   async {
+    let clock () = options.Clock.Now ()
     let statePath = sprintf "%s/manager.json" options.DataDir
     let mutable state = ManagerStore.load statePath
 
@@ -542,8 +546,8 @@ let createWithUi
     // exit, and cleared again if the stop fails — a reason must never outlive its attempt
     // and mislabel the next ordinary stop.
     let mutable reaping : Map<string, ReapReason> = Map.empty
-    // The reaper's sweep timer, so `StopAll` can clear it. See where it is set.
-    let mutable reapSweep : int option = None
+    // The reaper's sweep, so `StopAll` can stop it. See where it is set.
+    let mutable reapSweep : (unit -> unit) option = None
 
     // The control endpoint (Step 24): the per-launch secret names WHICH session is
     // calling — supervision reports, secrets custody, connections. A secret dies with
@@ -719,6 +723,11 @@ let createWithUi
                                 LastBusyAt = (if busy then clock () else launch.LastBusyAt)
                                 EverReported = true }
                             activity
+                    // Said once per launch: from here a reap of this session is `idle`, not
+                    // `never-reported`, and nothing else would say the reason has changed.
+                    if not launch.EverReported then
+                        options.OnEvent "session reporting activity"
+                            [ "yession.session.id", Telemetry.AttributeValue.String key ]
                 // A report from a launch the Manager is not tracking (its exit raced this
                 // request) is not an error worth failing: the launch it described is gone,
                 // and there is nothing left to reap.
@@ -1282,12 +1291,13 @@ let createWithUi
                                 reaping <- Map.remove key reaping
                                 eprintfn "[reaper] could not stop idle session %s: %s" key e
                         }))
-        // Kept, not discarded, so `StopAll` can clear it. A sweep that keeps firing after
-        // shutdown is a Manager still deciding to stop sessions it no longer supervises —
-        // and the interval is a live event-loop handle besides. Neither shows up in the
-        // product, where the Manager runs until the machine stops it; both are wrong for an
-        // in-process one, whose `StopAll` is documented to leave nothing behind.
-        reapSweep <- Some (Fable.Core.JS.setInterval sweep (sweepIntervalMsFor timeout))
+        // Kept, not discarded, so `StopAll` can stop it. A sweep that keeps firing after
+        // shutdown is a Manager still deciding to stop sessions it no longer supervises,
+        // which never shows up in the product, where the Manager runs until the machine
+        // stops it, and is wrong for an in-process one. On the clock rather than a timer of
+        // its own, so the window a case wants to have passed is one it turns; stopped, the
+        // wait in flight runs out and nothing sweeps after it (`Clock.every`).
+        reapSweep <- Some (Clock.every options.Clock (TimeSpan.FromMilliseconds (float (sweepIntervalMsFor timeout))) sweep)
 
     let pm =
         { CreateSession = createSession
@@ -1322,7 +1332,7 @@ let createWithUi
                 async {
                     // Before stopping anything: a sweep that fires mid-shutdown would try to
                     // reap sessions this loop is already stopping.
-                    reapSweep |> Option.iter Fable.Core.JS.clearInterval
+                    reapSweep |> Option.iter (fun stop -> stop ())
                     reapSweep <- None
                     for record in state.Sessions do
                         if Map.containsKey (SessionId.value record.SessionId) children then
