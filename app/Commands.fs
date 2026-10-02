@@ -92,7 +92,16 @@ type CommandServices =
       /// ensure-shaped bought.
       ///
       /// The fold cause says what the verb did, so a sandbox it brings up can point back to it.
-      Refold : FoldCause -> CredentialFor -> Async<unit> }
+      Refold : FoldCause -> CredentialFor -> Async<unit>
+      /// Record that a tab was put in front of the people here, or taken back — the other
+      /// thing a command here puts on the log directly, and for the same reason `NoteSetup`
+      /// does: there is no service under it. A tab is a thing on somebody's screen, and the
+      /// log is how it reaches one.
+      ///
+      /// `focus` rides the opening rather than being a verb of its own, because it is one
+      /// fact about one act: whether this takes the reader's screen or waits to be chosen.
+      NoteTabOpened : ViewRef -> bool -> ActorRef -> Async<unit>
+      NoteTabClosed : ViewRef -> ActorRef -> Async<unit> }
 
 let private encodeArgs (values: string list) : string = Codec.toString Codec.gatedArgs values
 
@@ -1132,9 +1141,31 @@ let private artifactCapabilitiesFor (turnActor: Principal) (capabilities: AgentC
                       Summary = summary
                       Authority = Authority.agentFor turnActor } } }
 
+/// What a turn may do to the side pane. Not gated, and that is the decision rather than an
+/// omission: opening a tab reaches nobody's filesystem, costs nothing, and undoes with one
+/// tap — a gate in front of "look at this" would ask a person to approve being shown things,
+/// which is the opposite of the point. What it cannot reach is anything somebody KEPT.
+let private tabCapabilitiesFor (services: CommandServices) (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
+    let actor = Principal.toActor turnActor
+    { capabilities with
+        Tabs =
+          { TabCapabilities.Open =
+              fun view focus ->
+                  async {
+                      do! services.NoteTabOpened view focus actor
+                      return Ok ()
+                  }
+            TabCapabilities.Close =
+              fun view ->
+                  async {
+                      do! services.NoteTabClosed view actor
+                      return Ok ()
+                  } } }
+
 let bindFor (services: CommandServices) (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
     capabilities
     |> repoCapabilitiesFor services turnActor
     |> sandboxCapabilitiesFor services turnActor
     |> fileCapabilitiesFor turnActor
     |> artifactCapabilitiesFor turnActor
+    |> tabCapabilitiesFor services turnActor

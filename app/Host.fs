@@ -708,6 +708,8 @@ let startFull
               // A denial here and a gated call once `bindFor` knows whose turn it is, like the
               // file changes: sharing puts bytes everyone can see, so it passes the gate.
               Artifacts = AgentCapabilities.none.Artifacts
+              // Bound where the log is (`Commands.bindFor`), like the artifacts beside it.
+              Tabs = AgentCapabilities.none.Tabs
               Tools =
                 { Record = toolUseLogFor turnId
                   // Snapshotted HERE, which is what makes a turn's tool list stable: a set

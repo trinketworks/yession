@@ -184,7 +184,9 @@ let private servicesOver (service: Repos.ReposService) : Commands.CommandService
       Prs = fun () -> None
       Invalidate = ignore
       NoteSetup = fun _ _ _ _ -> async { return () }
-      Refold = fun _ _ -> async { return () } }
+      Refold = fun _ _ -> async { return () }
+      NoteTabOpened = fun _ _ _ -> async { return () }
+      NoteTabClosed = fun _ _ -> async { return () } }
 
 /// The same, with a shell profile already set for the default sandbox — a session where
 /// somebody has already said where terminals start.
@@ -1153,4 +1155,65 @@ let private artifactTests =
                 } ]
         ]
 
-let tests = testList "Tool calls" [ tests'; fileTests; artifactTests; launchTests ]
+/// What a turn may do to the side pane (Plan 20): the three verbs, through the registry the
+/// SDK adapter builds and the per-turn bindings a turn is given, as a model would reach them.
+let private paneTests =
+    /// A session that records what reached the log about the side pane, which is the whole of
+    /// what these tools do: there is no service under them.
+    let servicesShowing (opened: ResizeArray<ViewRef * bool>) (closed: ResizeArray<ViewRef>) =
+        { servicesOver (reposAnswering (fun _ -> async { return Error "not part of this test" })) with
+            NoteTabOpened = fun view focus _ -> async { opened.Add (view, focus) }
+            NoteTabClosed = fun view _ -> async { closed.Add view } }
+
+    testList
+        "the side pane"
+        [ testCaseAsync "open_tab puts a file in reach without taking anybody's screen" <|
+            async {
+                let opened, closed = ResizeArray (), ResizeArray ()
+                let session = openToolSession (servicesShowing opened closed)
+                let! answer = session.Call "open_tab" """{"address":"file:///artifacts/chart.png"}"""
+                let view, focus = Seq.exactlyOne opened
+                Expect.equal view (ViewingFile (Content.ContentRef.create "artifacts/chart.png" |> expect)) "the file asked for"
+                Expect.isFalse focus "opening is not showing"
+                Expect.stringContains (answered answer) "file:///artifacts/chart.png" "the address it opened"
+            }
+
+          testCaseAsync "focus_tab is the same act, asked to take the screen" <|
+            async {
+                // One fact rather than two verbs, which is why they share a body: a focus is
+                // an opening somebody asked for, and a tab cannot be shown without being open.
+                let opened, closed = ResizeArray (), ResizeArray ()
+                let session = openToolSession (servicesShowing opened closed)
+                let! _ = session.Call "focus_tab" """{"address":"terminal:term-a"}"""
+                let view, focus = Seq.exactlyOne opened
+                Expect.equal view (ViewingTerminal (TerminalId.create "term-a" |> expect)) "the terminal asked for"
+                Expect.isTrue focus "and it takes the screen, which is what asking for it buys"
+            }
+
+          testCaseAsync "close_tab says what it asked for, not what each person ended up with" <|
+            async {
+                // A pin lives in one browser and this side cannot see one, so a sentence
+                // claiming the tab is gone from every screen would be sometimes false.
+                let opened, closed = ResizeArray (), ResizeArray ()
+                let session = openToolSession (servicesShowing opened closed)
+                let! answer = session.Call "close_tab" """{"address":"file:///artifacts/chart.png"}"""
+                Expect.equal
+                    (Seq.exactlyOne closed)
+                    (ViewingFile (Content.ContentRef.create "artifacts/chart.png" |> expect))
+                    "the tab asked about"
+                Expect.stringContains (answered answer) "closed" "and it says it asked"
+            }
+
+          testCaseAsync "an address this session cannot read is refused in its own words" <|
+            async {
+                // The agent writes this by hand, so the refusal has to name both spellings
+                // rather than report a decode failure.
+                let opened, closed = ResizeArray (), ResizeArray ()
+                let session = openToolSession (servicesShowing opened closed)
+                let! answer = session.Call "open_tab" """{"address":"../../etc/passwd"}"""
+                Expect.isEmpty opened "nothing was opened"
+                Expect.isTrue ((answered answer).Length > 0) "and it said why"
+            }
+        ]
+
+let tests = testList "Tool calls" [ tests'; fileTests; artifactTests; paneTests; launchTests ]

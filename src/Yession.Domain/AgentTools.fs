@@ -557,6 +557,33 @@ module AgentTools =
                 | Error reason -> return sprintf "could not look: %s" reason
             })
 
+    /// Opening, and the asking-to-be-shown that rides it. The answer says what was ASKED
+    /// rather than what each person ended up looking at: a pin lives in one browser and this
+    /// side cannot see one, so a sentence claiming the tab is now on everybody's screen would
+    /// be a sentence that is sometimes false.
+    let private openTab (capabilities: AgentCapabilities) (address: string) (focus: bool) : Async<string> =
+        async {
+            match ViewRef.read address with
+            | Error reason -> return reason
+            | Ok view ->
+                match! capabilities.Tabs.Open view focus with
+                | Error reason -> return sprintf "could not open %s: %s" (ViewRef.said view) reason
+                | Ok () ->
+                    return
+                        if focus then sprintf "showing %s" (ViewRef.said view)
+                        else sprintf "opened %s" (ViewRef.said view)
+        }
+
+    let private closeTab (capabilities: AgentCapabilities) (address: string) : Async<string> =
+        async {
+            match ViewRef.read address with
+            | Error reason -> return reason
+            | Ok view ->
+                match! capabilities.Tabs.Close view with
+                | Error reason -> return sprintf "could not close %s: %s" (ViewRef.said view) reason
+                | Ok () -> return sprintf "closed %s" (ViewRef.said view)
+        }
+
     let private setSecret (capabilities: AgentCapabilities) (name: string) (value: string) : Async<string> =
         async {
             match SecretName.create name with
@@ -930,6 +957,39 @@ module AgentTools =
                       match ToolArgs.artifactShare args with
                       | Error e -> return Error e
                       | Ok (path, name, sandbox) -> return! ok (shareArtifact capabilities path name sandbox)
+                  })
+
+          tool
+              "open_tab"
+              "Put something in front of the people here: it opens as a tab in their side pane, ready to look at. Takes an address — a file as \"file:///artifacts/<name>\" (what share_artifact answers with; name a version to pin one), or a terminal as \"terminal:<id>\". Use it when you have made something they asked for, or when the next useful thing is for them to look at this rather than read your description of it. It does NOT take anyone's screen: everybody stays on what they were reading, and the tab waits to be chosen — to show somebody something because they asked to see it, use focus_tab. Opening the same address twice is the same one tab. Say in your message what you opened; the tab is how they find it again, not how they learn it exists."
+              [ ToolField.required "address" "string" "what to open, e.g. \"file:///artifacts/chart.png\" or \"terminal:01HQ...\"" ]
+              (fun args ->
+                  async {
+                      match ToolArgs.string "address" args with
+                      | Error e -> return Error e
+                      | Ok address -> return! ok (openTab capabilities address false)
+                  })
+
+          tool
+              "focus_tab"
+              "Show the people here something: opens the address if it is not already open, and makes it the tab their pane is showing — so it REPLACES whatever they were reading. Do this when they have asked to be shown something (\"show me the chart\", \"put it up\"), and not otherwise. If you merely think they will want it next, open_tab puts it in reach without taking their screen, and that is almost always the right one. What somebody has pinned is not disturbed either way: this changes which tab is on top, never which tabs they have kept. Addresses as open_tab takes them."
+              [ ToolField.required "address" "string" "what to show, as open_tab names it" ]
+              (fun args ->
+                  async {
+                      match ToolArgs.string "address" args with
+                      | Error e -> return Error e
+                      | Ok address -> return! ok (openTab capabilities address true)
+                  })
+
+          tool
+              "close_tab"
+              "Take back an open_tab: the tab goes from the side pane. Use it when what you opened has stopped being useful, rather than leaving it there. Asking is all this does — if somebody here has pinned that tab, it stays on their screen, because pinning is how a person says a tab is theirs. Closing something that is not open is not an error. Addresses as open_tab takes them."
+              [ ToolField.required "address" "string" "what to close, as open_tab names it" ]
+              (fun args ->
+                  async {
+                      match ToolArgs.string "address" args with
+                      | Error e -> return Error e
+                      | Ok address -> return! ok (closeTab capabilities address)
                   })
 
           tool
