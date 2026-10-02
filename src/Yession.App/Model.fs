@@ -426,6 +426,17 @@ module PaneTab =
         | StretchTab stretch -> Some stretch.TerminalId
         | ContentTab _ -> None
 
+    /// The tab a `ViewRef` names — what an act recorded in the log becomes in a strip.
+    ///
+    /// Not an inverse of `view` and cannot be: `view` answers `ViewingTerminal` for a block
+    /// and a stretch as well as for the terminal itself, because what a reader is AT is the
+    /// terminal. So a terminal named from outside opens the terminal's own tab, which is the
+    /// only one of the three that something outside this browser could have meant.
+    let ofView (view: ViewRef) : PaneTab =
+        match view with
+        | ViewingFile ref -> ContentTab ref
+        | ViewingTerminal id -> TerminalTab id
+
     /// Whether the thing in this tab has ENDED — a terminal that has closed, or one this
     /// session does not have at all.
     ///
@@ -2369,12 +2380,33 @@ module ClientModel =
                 |> List.choose (fun e ->
                     match e.Event with
                     | SessionEvent.TerminalOpened t when t.OpenedBy = mine -> Some (TerminalTab t.TerminalId)
+                    // A tab somebody put in front of the people here (`open_tab`). Not only
+                    // the ones I asked for: that rule is about terminals a session starts on
+                    // its own business, and this is an act whose entire point is that it is
+                    // for whoever is reading.
+                    | SessionEvent.TabOpened t -> Some (PaneTab.ofView t.Ref)
                     | _ -> None)
+            // Taken back (`close_tab`), in the same pass and after the opening, so a thing
+            // opened and closed in one page ends closed rather than depending on which list
+            // was built first.
+            //
+            // A tab this reader KEPT is left alone, and that is the whole of what a pin is
+            // worth against somebody else's act. It is decided here rather than refused at
+            // the tool, because a pin lives in one browser and the session that ran the tool
+            // cannot see one — so the honest place to honour it is the only place that knows.
+            let closed =
+                freshEvents
+                |> List.choose (fun e ->
+                    match e.Event with
+                    | SessionEvent.TabClosed t -> Some (PaneTab.key (PaneTab.ofView t.Ref))
+                    | _ -> None)
+                |> Set.ofList
             let tabs =
                 (model.Tabs @ opened)
                 |> List.distinctBy PaneTab.key
                 |> List.filter (fun tab ->
-                    Set.contains (PaneTab.key tab) model.Pinned || not (PaneTab.ended terminals tab))
+                    Set.contains (PaneTab.key tab) model.Pinned
+                    || (not (Set.contains (PaneTab.key tab) closed) && not (PaneTab.ended terminals tab)))
             // Being SHOWN the terminal you pressed for, which is the whole of what the press
             // promised. A tab in the strip is not that: `selectedPane` keeps the stored
             // choice while what it names still exists, and the terminal you were on still
@@ -2390,6 +2422,32 @@ module ClientModel =
                 | 0, _ | _, None -> model.Pane, model.Opening
                 | asked, Some arrived ->
                     Some (OnTab (Reading arrived)), max 0 (asked - List.length opened)
+            // The other thing that may move the pane: somebody having been ASKED to show this
+            // (`focus_tab`). The last one in the page wins, for the same reason the press
+            // above takes the last terminal to arrive — two of them in one page is one answer
+            // arriving late, not two answers.
+            //
+            // Never on this client's FIRST page. A focus is a thing somebody asked for at a
+            // moment, and the log keeps it for ever: replayed on a reload it would land a
+            // reader on whatever the agent was showing an hour ago, ahead of whatever they
+            // opened since. Arriving history is not a command.
+            //
+            // Read off `LastProcessedOffset` rather than `IsCatchingUp`, which looks like the
+            // right question and is not: catch-up is true for a few dozen milliseconds every
+            // time ANYBODY sends anything (its own declaration says so), so a focus landing in
+            // that window would be dropped for a reason having nothing to do with it. Having
+            // folded nothing yet is the one fact that distinguishes a page of history from a
+            // page of news.
+            let pane =
+                if model.EventConsumer.LastProcessedOffset.IsNone then pane
+                else
+                    freshEvents
+                    |> List.rev
+                    |> List.tryPick (fun e ->
+                        match e.Event with
+                        | SessionEvent.TabOpened t when t.Focus -> Some (Some (OnTab (Reading (PaneTab.ofView t.Ref))))
+                        | _ -> None)
+                    |> Option.defaultValue pane
             let latestKnown = EventOffset.maxOption model.EventConsumer.LatestKnownOffset highWater
             { model with
                 Conversation = conversation

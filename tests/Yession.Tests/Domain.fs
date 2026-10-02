@@ -477,7 +477,17 @@ let private frameSerializationTests =
                       Transition = PrTransition.ChecksFailed
                       State = PrOpen
                       Checks = ChecksRed
-                      Watcher = Principal.Peer peerId; OccurredAt = Some (DateTimeOffset (2026, 9, 25, 8, 0, 0, TimeSpan.Zero)) } ]
+                      Watcher = Principal.Peer peerId; OccurredAt = Some (DateTimeOffset (2026, 9, 25, 8, 0, 0, TimeSpan.Zero)) }
+                  // Both kinds of thing a tab can hold, and both answers to whether an
+                  // opening takes the screen — the one field that decides whether a reader
+                  // is moved, which is the field a wire is most expensive to be wrong about.
+                  SessionEvent.TabOpened
+                    { TabOpened.Ref = ViewingFile (Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect)
+                      TabOpened.Focus = false }
+                  SessionEvent.TabOpened
+                    { TabOpened.Ref = ViewingTerminal (TerminalId.create "term-a" |> expect); TabOpened.Focus = true }
+                  SessionEvent.TabClosed
+                    { TabClosed.Ref = ViewingFile (Content.ContentRef.create "artifacts/chart.png" |> expect) } ]
             for event in everyCase do
                 let env = { sampleEnvelope with Event = event }
                 let roundTripped =
@@ -3624,6 +3634,46 @@ let private contentTests =
             Expect.isError (ContentDigest.create (String.replicate 64 "z")) "not hex"
     ]
 
+let private viewRefTests =
+    testList "What the pane can be asked to show" [
+
+        // The address an agent writes by hand, so every answer it can give is one this side
+        // named — and what it answers with is what `share_artifact` already handed it back,
+        // rather than a second spelling it has to be taught.
+        testCase "a file is said as the address it was shared at" <| fun () ->
+            let ref = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
+            Expect.equal
+                (ViewRef.said (ViewingFile ref))
+                "file:///artifacts/chart.png/0000-ab12cd"
+                "the url a share answers with and a message body links to"
+
+        testCase "a terminal is said with a prefix, because an id is otherwise just letters" <| fun () ->
+            let id = TerminalId.create "term-a" |> expect
+            Expect.equal (ViewRef.said (ViewingTerminal id)) "terminal:term-a" "named as what it is"
+
+        testCase "every spelling of a file this session answers with reads back" <| fun () ->
+            // The three a reader meets: what a tool answered, what a path looks like in a
+            // log line, and what somebody typed. `ContentRef.create` already takes all three,
+            // and reading them here is what keeps an agent from being refused for quoting
+            // the session's own words back at it.
+            for spelling in [ "file:///artifacts/chart.png"; "/artifacts/chart.png"; "  artifacts/chart.png  " ] do
+                match ViewRef.read spelling with
+                | Ok (ViewingFile ref) -> Expect.equal (Content.ContentRef.value ref) "artifacts/chart.png" spelling
+                | other -> failwithf "expected a file for '%s', got %A" spelling other
+
+        testCase "what is said reads back as what it was" <| fun () ->
+            let ref = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
+            let id = TerminalId.create "term-a" |> expect
+            for view in [ ViewingFile ref; ViewingTerminal id ] do
+                Expect.equal (ViewRef.read (ViewRef.said view)) (Ok view) "round-trip"
+
+        testCase "naming nothing says what to name instead" <| fun () ->
+            match ViewRef.read "   " with
+            | Error said ->
+                Expect.stringContains said "file:///artifacts/" "the spelling for a file"
+                Expect.stringContains said "terminal:" "and the one for a terminal"
+            | Ok other -> failwithf "expected a refusal, got %A" other ]
+
 let private artifactTests =
     let stamp = ArtifactStamp.create "7f2a91" |> expect
     let chart (seq: int) = ArtifactRef.create "chart.png" seq stamp |> expect
@@ -3780,6 +3830,7 @@ let tests =
         shellProfileTests
         fileChangedTests
         contentTests
+        viewRefTests
         artifactTests
         frameSerializationTests
     ]

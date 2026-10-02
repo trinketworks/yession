@@ -861,6 +861,13 @@ module ConversationProjection =
         // I show them" reads the same record a person does — and the address in the sentence is
         // what an agent quotes back to serve or supersede it.
         | SessionEvent.ArtifactShared a -> proj |> noted a.MessageId a.Actor (Act.ArtifactShared a) envelope
+        // A tab opened or closed is not something SAID. It is a thing that happened to one
+        // column of one screen, and the chat is the record of the conversation — an item
+        // reading "opened artifacts/chart.png" under the message that shared it would be the
+        // same fact twice, once as what the agent did and once as what the agent said about
+        // what it did.
+        | SessionEvent.TabOpened _
+        | SessionEvent.TabClosed _ -> proj
         // A refusal reads in the timeline beside the acts that happened, attributed to the
         // person who said no rather than to the agent that asked (Plan 15, stage 3). Same
         // reason `BlockRejected` renders in the terminal: an act that simply vanishes is
