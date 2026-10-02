@@ -53,8 +53,13 @@ in
   #
   # zsh is the one dialect the terminal instruments that no host is guaranteed to have at a
   # path: the `Pty` cases open it from PATH to run the zsh rc for real beside bash and sh.
+  #
+  # gh is for the work sandboxes (yession.yaml), where the operator's `github` connection
+  # lends it a stand-in token and the credential proxy. It belongs in the CONTAINER: on
+  # macOS gh verifies TLS through the Security framework and ignores SSL_CERT_FILE, so
+  # under srt it can trust neither the proxy's authority nor anything else.
   packages =
-    [ pkgs.git pkgs.actionlint pkgs.uv pkgs.python312 pkgs.caddy pkgs.zsh ]
+    [ pkgs.git pkgs.gh pkgs.actionlint pkgs.uv pkgs.python312 pkgs.caddy pkgs.zsh ]
     ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux
          [ pkgs.dbus pkgs.gnome-keyring pkgs.bubblewrap pkgs.socat pkgs.ripgrep pkgs.eudev ];
 

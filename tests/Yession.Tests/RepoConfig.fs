@@ -202,6 +202,12 @@ let tests =
                     (decl.Wants |> List.map ResourceName.value)
                     [ "github"; "nix-container-store" ]
                     (sprintf "%s wishes for the GitHub connection and the warm store where an operator offers them" name)
+            // `gh` finds its repo from the checkout's remotes, and behind the git gateway's
+            // `insteadOf` it finds none it recognises — so `dev`, where gh runs, names it.
+            Expect.equal
+                (dev.EnvironmentVariables |> Map.tryFind "GH_REPO")
+                (Some (Yession.Domain.Sandboxes.PlainValue "trinketworks/yession"))
+                "dev points gh at this repo, which its rewritten remote no longer says"
 
         testCase "a repo with no file asks for nothing, and that is not an error" <| fun () ->
             // The ordinary case. Most repos will never carry one.

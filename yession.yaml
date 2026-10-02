@@ -28,7 +28,9 @@ sandboxes:
     # thing that cannot tell them apart: shown both and asked to run tests, an agent picked
     # `gate`, which is the one that holds a terminal for minutes.
     description: day-to-day work — the toolchain, and where `check`, `build` and `lint`
-      run; name it as `sandbox` on the command — a shell profile only sets where a shell
+      run; also where `gh` runs, for anything GitHub the first-party tools do not cover
+      (Actions runs and their logs, workflows, releases, issues), already pointed at this
+      repo; name it as `sandbox` on the command — a shell profile only sets where a shell
       here starts
     workdir: .
     container:
@@ -90,6 +92,13 @@ sandboxes:
       # database across the host's file share and one sandbox failed to start, "database
       # is locked". devenv.nix reads this; see `devenv.dotfile` there.
       CONTAINER_DEVENV_DOTFILE: /root/.devenv
+      # The repo `gh` acts on. gh finds one from the checkout's remotes, and here it finds
+      # none: the session reaches github.com through its git gateway by an `insteadOf`,
+      # which `git remote -v` — what gh reads — prints rewritten, as a localhost URL gh
+      # does not recognise as GitHub. Naming the repo is what makes `gh run list` and
+      # the rest work without `-R`. Where no operator offers the API, gh is simply
+      # unauthenticated; nothing here refuses.
+      GH_REPO: trinketworks/yession
 
   # `verify` is minutes long. A second sandbox on the same configuration means the gate
   # runs beside interactive work instead of holding the shell.
