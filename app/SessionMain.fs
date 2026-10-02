@@ -722,7 +722,29 @@ let private commandServices : Commands.CommandServices =
       // fold itself because the cell is filled after this record is built — and because a
       // command's business is to say WHEN the configuration may have changed, never to know
       // what reading it involves.
-      Refold = fun cause actor -> foldFor (fun _ -> cause) [ actor ] }
+      Refold = fun cause actor -> foldFor (fun _ -> cause) [ actor ]
+      // The pane's two acts, straight onto the log — which is the whole mechanism: every
+      // client folds it already, so a tab opened before somebody arrived is in their strip
+      // when they get there. A session with no log open yet can show nobody anything, and
+      // says so by doing nothing, exactly as `NoteSetup` above does.
+      NoteTabOpened =
+        fun view focus actor ->
+            async {
+                match openedLog with
+                | None -> return ()
+                | Some log ->
+                    let! _ = log.Append actor (SessionEvent.TabOpened { TabOpened.Ref = view; TabOpened.Focus = focus })
+                    return ()
+            }
+      NoteTabClosed =
+        fun view actor ->
+            async {
+                match openedLog with
+                | None -> return ()
+                | Some log ->
+                    let! _ = log.Append actor (SessionEvent.TabClosed { TabClosed.Ref = view })
+                    return ()
+            } }
 
 /// The credential a party's calls on the provider run on (Plan 08): the session's own
 /// explicit credential first, then the actor's — fresh from the Manager, which lazily

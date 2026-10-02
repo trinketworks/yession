@@ -828,6 +828,25 @@ type ShareArtifact = SandboxRef -> string -> string option -> Async<Result<Comma
 type ArtifactCapabilities =
     { Share : ShareArtifact }
 
+/// Put something in front of the people here: it appears in the side pane, in reach. `focus`
+/// is the one thing that moves a reader — it makes this the tab their pane is showing — and
+/// is what a person asking to be shown something buys.
+///
+/// What it cannot do is anything about what somebody KEPT: which tabs are pinned, and the
+/// order they sit in, live in each person's own browser and are theirs. That is a property of
+/// the design and not of this signature, but it is why this signature has nothing else in it.
+type OpenTab = ViewRef -> bool -> Async<Result<unit, string>>
+
+/// Take back an `OpenTab`. Asking is all this does: a reader who pinned that tab keeps it,
+/// decided in their own client, because a pin is not a thing this side can see.
+type CloseTab = ViewRef -> Async<Result<unit, string>>
+
+/// what a turn may do to what the people here are looking at.
+[<RequireQualifiedAccess>]
+type TabCapabilities =
+    { Open : OpenTab
+      Close : CloseTab }
+
 /// the session's read-only queries, and how to answer one.
 type QueryCapabilities =
       /// The session's read-only queries (Plan 15), declared once and surfaced to the
@@ -873,6 +892,7 @@ type AgentCapabilities =
       Sandboxes : SandboxCapabilities
       Files : FileCapabilities
       Artifacts : ArtifactCapabilities
+      Tabs : TabCapabilities
       Queries : QueryCapabilities
       Tools : ToolCapabilities
       RunGated : RunGatedCommand }
@@ -922,6 +942,9 @@ module AgentCapabilities =
               FileCapabilities.Find = fun _ _ _ -> async { return Error "no file capability" } }
           Artifacts =
             { ArtifactCapabilities.Share = fun _ _ _ -> async { return Error "no artifact capability" } }
+          Tabs =
+            { TabCapabilities.Open = fun _ _ -> async { return Error "no pane capability" }
+              TabCapabilities.Close = fun _ -> async { return Error "no pane capability" } }
           Queries =
             { Declared = []
               Read = fun _ -> async { return Error "no query capability" } }
