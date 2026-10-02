@@ -2545,6 +2545,21 @@ let private richTableTests =
             Expect.isTrue ((cellOf "$9.00").Contains "text-right") "the right-aligned column, body cell"
             Expect.isFalse ((cellOf "Name").Contains "text-right") "the left column carries no alignment override"
 
+        testCase "a cell carries the row-edge rule that drops its own padding at the wrapper's edge" <| fun () ->
+            // `first:pl-0`/`last:pr-0` are CSS variants (`:first-child`/`:last-child`): every
+            // cell's class attribute carries them literally, and the browser decides which
+            // cell they fire on from its actual position in the row — a server-rendered
+            // string has no row to check that against. What this can assert is that the
+            // rule reaches every cell, header and body alike, so the CSS is there to fire.
+            let rendered = Support.renderTemplate (RichText.render markerChip tableMarkdown)
+            let cellOf (needle: string) =
+                let at = rendered.IndexOf (">" + needle + "<")
+                let opens = (rendered.Substring (0, at)).LastIndexOf "<t"
+                rendered.Substring (opens, at - opens)
+            for needle in [ "Name"; "Qty"; "Price"; "Widget" ] do
+                Expect.isTrue ((cellOf needle).Contains "first:pl-0") $"{needle}'s cell carries the leftmost rule"
+                Expect.isTrue ((cellOf needle).Contains "last:pr-0") $"{needle}'s cell carries the rightmost rule"
+
         testCase "a cell still formats the words inside it" <| fun () ->
             let rendered =
                 Support.renderTemplate (RichText.render markerChip "| A |\n| --- |\n| **bold** and `code` |")
