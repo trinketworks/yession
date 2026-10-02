@@ -349,6 +349,14 @@ module Style =
     /// and small: it is a signpost, not a second status.
     let recordLinkMark = "text-code text-ink-faint ml-1 align-[1px]"
 
+    /// The hit area for a listed record's whole cell — name line and state line both, not
+    /// just the name's own glyphs. `block` so the link's box is the cell's full width rather
+    /// than the text it wraps; colour and hover stay on the name text itself (`recordLink` /
+    /// `recordLinkQuiet`, worn by a span inside), so hovering the state line below does not
+    /// blue it — only the name was ever styled to look like a link, this just widens what you
+    /// can press to get it.
+    let recordRowLink = cls [ "block no-underline"; focusRing ]
+
     /// A filter over a listed registry — which archive states the management page is showing.
     /// Real links, because the filter IS the page's location, so these are chips only in how
     /// they look; everything about how they behave comes free from `<a>`.
