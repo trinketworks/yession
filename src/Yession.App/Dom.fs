@@ -142,7 +142,6 @@ module Dom =
         let draftAuthor = "data-draft-author"
         let draftInput = "data-draft-input"
         let sendDraft = "data-send-draft"
-        let discardDraft = "data-discard-draft"
         /// A collapsed draft's summary row, and the button that opens it.
         let draftSummary = "data-draft-summary"
         let expandDraft = "data-draft-expand"

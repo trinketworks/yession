@@ -1411,7 +1411,7 @@ do
     dispatchRef <- dispatch
     // The publication rule the real client runs (`Browser.fs`), because without it this page
     // renders a composer that can never reach the states a composer actually has: a slot is
-    // what says a draft EXISTS, and Send's weight, Clear's existence and the verbs' row are
+    // what says a draft EXISTS, and Send's weight and the verbs' row are
     // all read from it. A harness that never publishes one shows the empty composer forever
     // and calls the typed one green — which is how a Send nobody could press stayed
     // invisible to this tier.

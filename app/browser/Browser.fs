@@ -1198,7 +1198,6 @@ let private start () =
         // implementation in `Client.connect` (capture markdown, enqueue, seed the queue fragment).
         let actions : ViewActions =
             { SendDraft = fun peer -> connectionRef |> Option.iter (fun c -> c.SendDraft peer)
-              DiscardDraft = fun peer -> connectionRef |> Option.iter (fun c -> c.DiscardDraft peer)
               ToggleNav = toggleNav
               // Opening the drawer shows what the stream has already said. There is nothing
               // to re-probe: the panels have a push leg now, exactly as the query surface

@@ -198,10 +198,9 @@ module Style =
     let private caps = "font-semibold text-label tracking-caps uppercase"
 
     /// The same voice one step up, for a verb that has ROOM: 13px rather than 11. Worn by
-    /// the composer's Send and Clear and by the interrupt above them — the three that stand
-    /// on a band of their own with nothing competing for the width. At the label size a word
-    /// button there read as a caption of the glyph it replaced rather than as the thing you
-    /// press.
+    /// the composer's Send and by the interrupt above it — the two that stand on a band of
+    /// their own with nothing competing for the width. At the label size a word button there
+    /// read as a caption of the glyph it replaced rather than as the thing you press.
     let private capsLg = "font-semibold text-small tracking-caps uppercase"
 
     /// The voice a body is written in: Source Serif 4 for a person, and the system's own Noto
@@ -488,9 +487,8 @@ module Style =
     /// Send's own hit area, grown past its 40px box the way `btnIconBareTouch` grows a bare
     /// icon's: an empty `::before` reaching past the glyph on three sides, a press on the
     /// pseudo-element landing on the element. Only three sides, not four — Send is the
-    /// TRAILING control in this row (Clear sits to its left across one `gap-1`), so growing
-    /// left would widen onto Clear's own box rather than onto nothing, and a press meant for
-    /// Clear ending on Send is a worse bug than the one this fixes.
+    /// TRAILING control in this row, and `draftEditors` sits to its left across one `gap-1`;
+    /// growing left would widen onto that presence display rather than onto nothing.
     let private btnComposerSendTouch =
         "relative before:absolute before:content-[''] before:-top-1.5 before:-bottom-1.5 before:-right-1.5"
     let btnComposerSend = cls [ btnComposerWord; btnComposerSendTouch; "text-blue hover:text-blue-bright" ]
@@ -498,10 +496,6 @@ module Style =
     /// thing with nothing to do — never `disabled`, in either spelling: an empty composer is
     /// not a blocked one.
     let btnComposerSendWaiting = cls [ btnComposerWord; btnComposerSendTouch; "text-ink-faint hover:text-ink" ]
-    /// What the `✕` became. The glyph was a verdict on the draft — *discard* — drawn in the
-    /// one mark a tab strip uses for *gone*; the word says what the press does to the line in
-    /// front of you, which is the same act described from where the person is standing.
-    let btnComposerClear = cls [ btnComposerWord; "text-ink-faint hover:text-err" ]
     /// Chrome, not an action: the small sidebar collapse/reveal chevrons. They lean the way
     /// they travel on hover and lead further on press — the only motion chrome earns, and the
     /// reason the two directions are separate values rather than one class plus a guess.
@@ -2401,8 +2395,7 @@ module Style =
     let draftBody = "flex-1 min-w-0 flex flex-col"
 
     /// Send sits at the TRAILING edge — where the eye ends the line it just wrote, and where
-    /// every send button a person has ever used lives — with discard as its quiet neighbour
-    /// and whoever is typing beside them.
+    /// every send button a person has ever used lives — with whoever is typing beside it.
     ///
     /// The keyboard hint that used to sit on this row is gone from the layout. It was true and
     /// it taught something, but it spent a permanent strip saying what one press teaches; it
@@ -2422,8 +2415,8 @@ module Style =
     /// (`max-md:w-full max-md:justify-end`, its buttons pushed to the trailing edge the
     /// way they sit on desktop) and it sits BELOW the text (`draftBox`'s `max-md:flex-col`
     /// puts it there in document order). A row that was always there spent a band of every
-    /// phone screen on two controls a thumb reaches once per message, so it comes and goes
-    /// — and WHAT it comes and goes with is the whole of this bug's story.
+    /// phone screen on a control a thumb reaches once per message, so it comes and goes —
+    /// and WHAT it comes and goes with is the whole of this bug's story.
     ///
     /// It used to be `group-focus-within`, and that could not work. `focus-within` is false
     /// the instant focus leaves the composer, and pressing a button is how focus leaves: on
@@ -2434,11 +2427,11 @@ module Style =
     /// Send did nothing, the composer collapsed, and that was the whole of what a person saw.
     ///
     /// So the row follows the DRAFT, not the focus: it stands exactly while there is
-    /// something for it to do (`draftCommitReady`), which is the rule Clear already followed
-    /// on its own and the rule Send's two faces are already computed from. Nothing about a
-    /// press can retract it, because a press cannot empty the draft before the press lands.
-    /// An empty composer still gives the room back, which is what the coming-and-going was
-    /// for; it simply no longer offers two controls with nothing to act on.
+    /// something for it to do (`draftCommitReady`), which is the rule Send's two faces are
+    /// already computed from. Nothing about a press can retract it, because a press cannot
+    /// empty the draft before the press lands. An empty composer still gives the room back,
+    /// which is what the coming-and-going was for; it simply no longer offers a control with
+    /// nothing to act on.
     ///
     /// GONE means `max-h-0` beside the fade, not the fade alone. `opacity-0` hides a row and
     /// keeps every pixel of its height, so the band under an empty composer carried a 44px
@@ -2892,9 +2885,9 @@ module Style =
     /// `composerBand`, above, kept as one token rather than a matching string, so the tone
     /// and the rule can never quietly drift from the message composer's. The bottom
     /// clearance is its own, though (`max-md:pb-4`, plain thumb room): Run stays on the
-    /// command line rather than dropping below it the way Send and Clear do, so this band
-    /// never needs their room — which is also the clearance the message composer falls back
-    /// to when its own row is not showing (`composer`, above).
+    /// command line rather than dropping below it the way Send does, so this band never
+    /// needs its room — which is also the clearance the message composer falls back to when
+    /// its own row is not showing (`composer`, above).
     let terminalComposer = composerBand + " max-md:pb-4"
 
     /// A row in the band that is not the command line — the lease bar, the "not marking"

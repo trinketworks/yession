@@ -1095,8 +1095,6 @@ let private uiChecklistTests =
                   "the way out of collaborating", Dom.Hooks.newDraft ]
             for label, needle in required do
                 Expect.isTrue (html.Contains needle) (sprintf "%s (%s)" label needle)
-            // Destruction stays the author's: you cannot discard a draft you merely joined.
-            Expect.isFalse (html.Contains Dom.Hooks.discardDraft) "no discard on someone else's draft"
             // And there is exactly ONE editable body host: the composer, not the summaries.
             Expect.equal
                 (html.Split "data-rich-readonly=\"false\"" |> Array.length |> (fun n -> n - 1))
@@ -2974,17 +2972,11 @@ let private semanticsTests =
             Expect.isFalse (element.Contains ">carol@example.com<") "never the subject as a name"
             Expect.isTrue (html.StartsWith "pushed on behalf of ") "the words around it are words"
 
-        // A destructive control offered over nothing is a live-looking button that does not do
-        // anything, and the way a working one and a dead one come to look identical. Whether
-        // it is a discard `x` at all, and what the send button WEARS while it waits, are
-        // design; that the offer follows the content is the invariant.
-        testCase "discard is offered only when there is something to discard" <| fun () ->
+        // Send is never withdrawn for want of content: an empty draft is not a blocked one,
+        // so the control that sends it stays whole whether there is anything to send or not.
+        // `Resilience.fs` pins the same thing against a dead feed.
+        testCase "send is offered whether or not there is a draft to send" <| fun () ->
             let empty = Support.render { representativeModel with Synced = { representativeModel.Synced with Drafts = Map.empty } }
-            let full = Support.render representativeModel
-            Expect.isFalse (empty.Contains Dom.Hooks.discardDraft) "nothing to discard, so nothing offers to"
-            Expect.isTrue (full.Contains Dom.Hooks.discardDraft) "and it is there once there is"
-            // The local-first promise, from the composer's side: an empty draft is not a
-            // blocked one. `Resilience.fs` pins the same thing against a dead feed.
             Expect.isTrue
                 (empty.Contains (Dom.attr Dom.Hooks.sendDraft (PeerId.value ada)))
                 "send keeps its place either way — it is never taken away"

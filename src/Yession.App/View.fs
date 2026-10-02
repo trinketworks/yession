@@ -36,12 +36,6 @@ type ViewActions =
       /// new queue entry, and enqueue. Imperative because the fragment content-copy (shared
       /// types can't be re-parented) can't live in the pure reducer.
       SendDraft : PeerId -> unit
-      /// Discard the local peer's draft: EMPTY its body, which retracts the slot through the
-      /// same publication rule typing published it with (`DraftSlot`). Imperative for the same
-      /// reason `SendDraft` is — the body is a fragment the reducer cannot touch. Retracting
-      /// the slot alone (what the button used to do) left the text sitting in the composer and
-      /// the next keystroke published it straight back, so the button looked broken.
-      DiscardDraft : PeerId -> unit
       /// Collapse or reveal the sidebar column (a presentation bit on the shell root, not
       /// model; the browser also remembers a desktop collapse and moves focus to whichever
       /// control replaces the one that was pressed).
@@ -84,7 +78,6 @@ module ViewActions =
     /// are never invoked while rendering — they fire on user events in the live browser.
     let ssr : ViewActions =
         { SendDraft = ignore
-          DiscardDraft = ignore
           ToggleNav = ignore
           ReportFieldSelection = fun _ _ -> ()
           ToggleSettings = ignore
@@ -1311,26 +1304,13 @@ module View =
                 | None -> ""
             html $"""<span class="{Style.srOnly}" role="status" data-agent-stream>{said}</span>"""
         // The open draft: an editable rich editor bound to that body fragment (mounted
-        // imperatively by the browser), Send for anyone, Discard for its author.
+        // imperatively by the browser), Send for anyone.
         let open' =
             // Whether there is anything here to act ON. The draft slot is that fact
             // (`ClientModel.draftHasContent` — `DraftSlot` publishes one exactly while the body
             // has content), so the controls and the send path read the same truth rather than
             // two measurements that can disagree.
             let hasContent = ClientModel.draftHasContent target model
-            // Clear exists only once there is something to clear. An empty composer used to
-            // offer a destructive control over nothing — and offering a verdict on nothing is
-            // how a working button and a dead one come to look identical.
-            //
-            // The WORD is the accessible name now, so there is no `aria-label` beside it: a
-            // control that says what it does needs no second copy of the sentence, and two
-            // that disagree is the fault the label was there to prevent.
-            let clear =
-                if target = myPeer && hasContent then
-                    html $"""
-                        <button type="button" class="{Style.btnComposerClear}"
-                                data-discard-draft @click={Ev(fun _ -> actions.DiscardDraft myPeer)}>clear</button>"""
-                else Lit.nothing
             // Send STAYS — same place in the layout, same place in focus order, so nothing
             // moves under the hand and no Tab stop appears mid-sentence — and waits at a
             // dimmed weight until there is something to send, coming to full strength with the
@@ -1364,7 +1344,6 @@ module View =
                   </div>
                   <div class="{commitClass}">
                     <span class="{Style.draftEditors}">{editors target}</span>
-                    {clear}
                     <button type="button" class="{sendClass}" aria-keyshortcuts="Control+Enter"
                             title="{Dom.Text.composerKeys}"
                             data-send-draft="{PeerId.value target}" @click={Ev(fun _ -> actions.SendDraft target)}>send</button>
