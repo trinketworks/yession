@@ -477,11 +477,19 @@ module Style =
     let private btnComposerWord =
         cls [ "h-10 px-3 shrink-0 inline-flex items-center bg-transparent border-0 cursor-pointer font-ui"
               capsLg; "transition-colors"; focusRing ]
-    let btnComposerSend = cls [ btnComposerWord; "text-blue hover:text-blue-bright" ]
+    /// Send's own hit area, grown past its 40px box the way `btnIconBareTouch` grows a bare
+    /// icon's: an empty `::before` reaching past the glyph on three sides, a press on the
+    /// pseudo-element landing on the element. Only three sides, not four — Send is the
+    /// TRAILING control in this row (Clear sits to its left across one `gap-1`), so growing
+    /// left would widen onto Clear's own box rather than onto nothing, and a press meant for
+    /// Clear ending on Send is a worse bug than the one this fixes.
+    let private btnComposerSendTouch =
+        "relative before:absolute before:content-[''] before:-top-1.5 before:-bottom-1.5 before:-right-1.5"
+    let btnComposerSend = cls [ btnComposerWord; btnComposerSendTouch; "text-blue hover:text-blue-bright" ]
     /// Waiting for something to send. The same control in the same place, at the weight of a
     /// thing with nothing to do — never `disabled`, in either spelling: an empty composer is
     /// not a blocked one.
-    let btnComposerSendWaiting = cls [ btnComposerWord; "text-ink-faint hover:text-ink" ]
+    let btnComposerSendWaiting = cls [ btnComposerWord; btnComposerSendTouch; "text-ink-faint hover:text-ink" ]
     /// What the `✕` became. The glyph was a verdict on the draft — *discard* — drawn in the
     /// one mark a tab strip uses for *gone*; the word says what the press does to the line in
     /// front of you, which is the same act described from where the person is standing.
