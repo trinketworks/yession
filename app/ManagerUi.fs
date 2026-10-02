@@ -64,7 +64,7 @@ module private Col =
 ///
 /// UNCOLOURED, but for a fault. `running` and `stopped` were green and faint caps; that spent
 /// the palette on the commonest fact in the list, and the name above already carries it — a
-/// running session's name is full ink, any other's is a step back (`nameView`). `exited (n)`
+/// running session's name is full ink, any other's is a step back (`nameText`). `exited (n)`
 /// keeps the err tone because it is the one state that is not an operator's doing. The word
 /// is always there beside the colour, so nothing rests on colour alone.
 ///
@@ -101,43 +101,31 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
         let reason = code |> Option.map string |> Option.defaultValue "signal"
         html $"""<div class="{Style.smallErr} truncate"><span data-status="{Dom.Manager.statusExited}">exited ({reason})</span></div>"""
 
-/// The name cell. Opening a session is THE act on it, and it is carried by the name — content
-/// is the interface — rather than by a second bordered rectangle in the right rail: with five
-/// sessions listed, a per-row Open plus a per-row lifecycle verb is ten buttons competing with
-/// the page's one real CTA (Create).
-///
-/// The address is the session's STABLE open route in every state it can be opened from, not
-/// the port it happens to answer on. `/open` launches a stopped session and lands the browser
-/// on it, which is why there is no Launch button: launching without going was a verb nobody
-/// had a use for, and it left a stopped session's name as text and its way in as two acts
-/// (press Launch, then find the link that appeared). A session that exited on its own is
-/// opened the same way — `/open` is what relaunches it. A port, by contrast, is a launch-scoped
-/// fact: bookmark it and a relaunch under idle reaping breaks the bookmark, which is the fault
-/// `/open` exists to close, so this page never spells one.
-///
-/// An ARCHIVED session has no way in — `/open` refuses it — so its name is plain text: a link
-/// whose only outcome is a refusal is worse than no link.
+/// The name text, styled by state but carrying no link of its own — the cell around it
+/// (`rowTemplate`) is the one hit area, covering this and `stateLine` both. A session that
+/// has no way in (archived) renders the same step-back ink it always has; the distinction
+/// that used to live in "is this an `<a>`" now lives in whether `rowTemplate` wraps the cell
+/// at all.
 ///
 /// The name carries the STATE, by weight of ink: full ink while the session runs, a step back
 /// (`bodyDim`) when it is stopped, exited or archived. That is what lets the state line below
 /// it be plain text — a scan down the column finds what is live without a colour saying so —
 /// and it is a token rather than an opacity so the mark and the focus ring keep theirs.
-let private nameView (view: ProcessManager.SessionView) : TemplateResult =
+let private nameText (view: ProcessManager.SessionView) : TemplateResult =
     match view.Record.ArchivedAt, view.Status with
     | Some _, _ -> html $"""<span class="{Style.bodyDim}">{view.Record.DisplayName}</span>"""
     | None, status ->
-        let openUrl = ManagerRoute.path (ManagerRoute.OpenSession view.Record.SessionId)
         let face =
             match status with
             | ProcessManager.Running _ -> Style.recordLink
             | ProcessManager.NotRunning
             | ProcessManager.Exited _ -> Style.recordLinkQuiet
         html
-            $"""<a class="{face}" href="{openUrl}" target="_blank" data-open>{view.Record.DisplayName}<span class="{Style.recordLinkMark}" aria-hidden="true">↗</span></a>"""
+            $"""<span class="{face}">{view.Record.DisplayName}<span class="{Style.recordLinkMark}" aria-hidden="true">↗</span></span>"""
 
 /// The row's controls: Stop, while the session runs, and — where the session is not already
-/// archived — the quiet way to retire it. There is no Launch: opening IS launching, and the name
-/// carries it (`nameView`).
+/// archived — the quiet way to retire it. There is no Launch: opening IS launching, and the
+/// row's hit area carries it (`rowTemplate`).
 ///
 /// Both are BORDERLESS. `Style`'s rule for a verb riding a listed row is exactly this case —
 /// the row already carries the structure, so the verb borrows it, faint at rest and ink (or
@@ -208,14 +196,26 @@ let private createdView (at: System.DateTimeOffset) : TemplateResult =
 /// rather than repeating it verbatim — two columns carrying one value is a row that reads as
 /// two facts. A named session shows both, because then they are two. The cell stays, empty:
 /// the table is fixed-layout, and a row that dropped a cell would move every one after it.
+///
+/// The cell's hit area is the WHOLE cell, name line and state line both, not just the name's
+/// own glyphs — one `<a>` (`Style.recordRowLink`) wraps both when there is somewhere to go,
+/// same open route the name always linked to. An archived row has no way in (`/open` refuses
+/// it, and a link whose only outcome is a refusal is worse than no link), so its cell stays
+/// unwrapped, exactly as it was.
 let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
     let id = SessionId.value view.Record.SessionId
     let idCell = if SessionRecord.isNamed view.Record then id else ""
+    let cell = html $"""<div class="truncate">{nameText view}</div>{stateLine view}"""
+    let nameCell =
+        match view.Record.ArchivedAt with
+        | Some _ -> cell
+        | None ->
+            let openUrl = ManagerRoute.path (ManagerRoute.OpenSession view.Record.SessionId)
+            html $"""<a class="{Style.recordRowLink}" href="{openUrl}" target="_blank" data-open>{cell}</a>"""
     html $"""
         <tr class="border-b border-hair hover:bg-surface transition-colors" data-session="{id}">
           <td class="py-3 pr-4 align-middle" title="{view.Record.DisplayName}">
-            <div class="truncate">{nameView view}</div>
-            {stateLine view}
+            {nameCell}
           </td>
           <td class="py-3 pr-4 align-middle font-terminal text-code text-ink-faint truncate max-md:hidden">{idCell}</td>
           <td class="py-3 pr-4 align-middle font-terminal text-code text-ink-faint tabular-nums truncate max-md:hidden">{createdView view.Record.CreatedAt}</td>
