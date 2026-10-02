@@ -1173,8 +1173,12 @@ let private lifecycleTests =
                 ada.Silence ()
                 do! ada.Say "into the void"
 
-                // Nothing above the link can tell yet — so let the supervisor look.
-                for _ in 1 .. Link.LinkPolicy.quietTicksBeforeDeath do
+                // Nothing above the link can tell yet — so let the supervisor look. One tick
+                // more than the threshold: the link heard the honest traffic above, and the
+                // first tick after the silence only forgets it. Ticking the threshold alone left
+                // the client's link alive, and the case passed only because the Host's own
+                // supervisor — on real time — noticed some three seconds later.
+                for _ in 1 .. Link.LinkPolicy.quietTicksBeforeDeath + 1 do
                     ada.Tick ()
 
                 do! ada.Runner.WaitFor (fun m ->
