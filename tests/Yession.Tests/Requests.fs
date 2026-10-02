@@ -232,8 +232,8 @@ let private signallingTests =
         // decoder — so what is pinned here is what they will read: the two field names,
         // in the order they have always been written, with nothing else beside them.
         testCase "is offered as its type and its sdp, and nothing else" <| fun () ->
-            let answer : WebRtc.SdpMessage = { Type = "answer"; Sdp = sampleSdp }
-            let json = Codec.toString WebRtc.sdpMessage answer
+            let answer : Yession.Browser.Contracts.SdpMessage = { Type = "answer"; Sdp = sampleSdp }
+            let json = Codec.toString Yession.Browser.Contracts.sdpMessage answer
             Expect.equal
                 json
                 """{"type":"answer","sdp":"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"}"""
@@ -243,9 +243,9 @@ let private signallingTests =
         // reads. The two used to be written apart — an anonymous record on the way out, a
         // decoder on the way in — and nothing compared them.
         testCase "reads back as the description that was offered" <| fun () ->
-            let message : WebRtc.SdpMessage = { Type = "offer"; Sdp = sampleSdp }
+            let message : Yession.Browser.Contracts.SdpMessage = { Type = "offer"; Sdp = sampleSdp }
             Expect.equal
-                (WebRtc.parseSdp (Codec.toString WebRtc.sdpMessage message))
+                (Yession.Browser.Contracts.parseSdp (Codec.toString Yession.Browser.Contracts.sdpMessage message))
                 (Some message)
                 "the same description"
     ]

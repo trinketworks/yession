@@ -19,6 +19,7 @@ open Yession.Domain.Link
 open Yession.SessionProcess
 open Yession.Host.Interop
 open Yession.Host.WebRtc
+open Yession.Browser.Contracts
 open Fable.NodeDataChannel
 open Yession.App
 open Thoth.Json

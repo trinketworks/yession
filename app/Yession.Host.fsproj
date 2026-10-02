@@ -27,7 +27,6 @@
     <Compile Include="EventStore.fs" />
     <Compile Include="DocStore.fs" />
     <Compile Include="TranscriptStore.fs" />
-    <Compile Include="Emulator.fs" />
     <Compile Include="Fs.fs" />
     <Compile Include="Sandboxes.fs" />
     <Compile Include="SandboxHost.fs" />
@@ -180,6 +179,7 @@
     <ProjectReference Include="..\src\Yession.Oidc\Yession.Oidc.fsproj" />
     <ProjectReference Include="..\src\Yession.SessionProcess\Yession.SessionProcess.fsproj" />
     <ProjectReference Include="..\src\Yession.App\Yession.App.fsproj" />
+    <ProjectReference Include="browser\Yession.Browser.fsproj" />
   </ItemGroup>
 
 </Project>

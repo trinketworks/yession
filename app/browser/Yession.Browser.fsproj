@@ -14,6 +14,7 @@
          composes a live screen with the same `@xterm/headless` the Process does, so the two
          screens cannot disagree — the property `TerminalSnapshot` already rests on, and one
          a second browser-only renderer would quietly break. Pure JS, no Node API. -->
+    <Compile Include="Contracts.fs" />
     <Compile Include="..\Emulator.fs" Link="Emulator.fs" />
     <Compile Include="Replay.fs" />
     <!-- Presentation the model drives but a Lit render cannot do — focus moves, and the
