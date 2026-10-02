@@ -514,14 +514,14 @@ first's.
 - **Sending a draft still bypasses the Elmish loop, and moving it in needs Ylmish to change.**
   Every other control now dispatches a message and `ClientModel.update` answers the requests it
   makes as `ClientEffect` values, carried out by `Client.Ports` after the model they came with.
-  What is left is the drafts: the composer's Send and Clear (`ViewActions.SendDraft`,
-  `DiscardDraft`), the terminal composer's Send (`SendTerminalDraft`), and the editors'
-  keyboard send (`Links.SendDraft`, `SendTerminalDraft` in `Render.fs`). Each calls a verb on
-  `Client.Connection` that opens a `doc.transact`, copies or empties a body root the app owns
-  beside the synced model (a draft's `Y.XmlFragment`, a terminal slot's `Y.Text`), and
-  dispatches `SendDraftMsg` / `SendTerminalDraftMsg` / `DiscardDraftMsg` from INSIDE that
-  transaction. That one transaction is the invariant: the Session Process drains on a queue
-  entry's arrival, so an entry that lands without its body runs as an empty message, and a
+  What is left is the drafts: the composer's Send (`ViewActions.SendDraft`), the terminal
+  composer's Send (`SendTerminalDraft`), and the editors' keyboard send (`Links.SendDraft`,
+  `SendTerminalDraft` in `Render.fs`). Each calls a verb on `Client.Connection` that opens a
+  `doc.transact`, copies a body root the app owns beside the synced model (a draft's
+  `Y.XmlFragment`, a terminal slot's `Y.Text`) into the queued entry, and dispatches
+  `SendDraftMsg` / `SendTerminalDraftMsg` from INSIDE that transaction. That one transaction
+  is the invariant: the Session Process drains on a queue entry's arrival, so an entry that
+  lands without its body runs as an empty message, and a
   send split across updates lets a `withYlmish` `Set` from the drain's removal clobber the
   sender's own state (`Client.connect` says both at the verbs). It holds today only because a
   dispatch from a click handler is processed synchronously, and `withYlmish` wraps each update
