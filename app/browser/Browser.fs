@@ -442,14 +442,20 @@ type private ProbeOutcome =
 
 let private fetchMe (url: string) (deadlineMs: float) : Async<ProbeOutcome> =
     async {
+        // The deadline is the page's own timer rather than `AbortSignal.timeout`, whose timer
+        // the platform keeps: a page timer is on the page's clock, so the case that pins a
+        // probe nobody answers turns that clock past the deadline instead of sitting it out.
+        let controller = Fetch.newAbortController ()
+        let deadline = JS.setTimeout (fun () -> controller.abort ()) (int deadlineMs)
         let init =
             [ Fetch.Types.RequestProperties.Cache Fetch.Types.RequestCache.Nostore
-              Fetch.Types.RequestProperties.Signal(Fable.FetchExtras.timeoutSignal deadlineMs) ]
+              Fetch.Types.RequestProperties.Signal controller.signal ]
         // `fetchUnsafe`, not `fetch`: the plain binding throws on a non-2xx status, which
         // would fold the "refused" and "not there" axes back into one exception to
         // re-inspect. This wants the raw response so it can tell 401/403 (refused) apart
         // from everything else (not there) below.
         let! attempt = Fetch.fetchUnsafe url init |> Async.AwaitPromise |> Async.Catch
+        JS.clearTimeout deadline
         match attempt with
         | Choice2Of2 exn -> return ProbeUnreachable (string exn.Message)
         | Choice1Of2 response when response.Ok ->

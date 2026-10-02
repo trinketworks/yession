@@ -320,6 +320,11 @@ let private waitFor (what: string) (page: IPage) (predicate: string) : Async<uni
             let tail = if lastError = "" then "" else sprintf " (last error: %s)" lastError
             failwithf "waiting for %s — timed out after %gms%s\n  predicate: %s"
                 what waitTimeoutMs tail predicate
+        // A wait that settles is otherwise silent about how long it took, and a case's time
+        // is the sum of its waits: said here, a slow case's log names which wait it spent it
+        // on, where its duration alone names nothing.
+        elif sw.Elapsed.TotalSeconds >= 1.0 then
+            printfn "browser: waited %.1fs for %s" sw.Elapsed.TotalSeconds what
     }
 
 // Browser-evaluated predicate strings: JS by necessity — they run inside Chromium via CDP.
@@ -4542,7 +4547,12 @@ let mountedTests =
         testCaseAsync "a probe that never answers is answered for it, and the way back is offered" <|
             async {
                 let mutable stalling = false
-                let mounted = startMounted (fun url -> stalling && url.EndsWith "/me")
+                let stalled = TaskCompletionSource<unit> (TaskCreationOptions.RunContinuationsAsynchronously)
+                let mounted =
+                    startMounted (fun url ->
+                        let stalls = stalling && url.EndsWith "/me"
+                        if stalls then stalled.TrySetResult () |> ignore
+                        stalls)
                 let mutable browserToClose : IBrowser option = None
                 let mutable playwrightToDispose : IPlaywright option = None
                 try
@@ -4565,7 +4575,15 @@ let mountedTests =
                     let! _ = await (page.GotoAsync publicUrl)
                     let! _ = await (page.WaitForFunctionAsync connected)
                     stalling <- true
+                    // The page's time from here is the case's to turn, so the probe's deadline
+                    // passes when the case says rather than ten real seconds later. Flowing,
+                    // not paused: everything else on the page keeps its ordinary pace.
+                    do! awaitU (page.Clock.InstallAsync ())
                     let! _ = await (page.ReloadAsync ())
+                    // The probe is out, and held: its deadline is armed before it is sent.
+                    let! asked = Async.AwaitTask (Task.WhenAny (stalled.Task, Task.Delay 20000))
+                    Expect.isTrue (obj.ReferenceEquals (asked, stalled.Task)) "the reloaded page asked who it is, and the question was held"
+                    do! awaitU (page.Clock.FastForwardAsync (int64 Yession.App.Client.Probe.deadline.TotalMilliseconds))
                     do! waitFor "the offer to reopen, once the probe has been given up on" page
                             """document.querySelector('[data-session-reopen]') !== null"""
                     }
@@ -4856,7 +4874,9 @@ let frontDoorTests =
                     playwrightToDispose <- Some pw
                     let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
                     browserToClose <- Some br
-                    let! context = await (br.NewContextAsync ())
+                    // Declining motion skips the opening screen's 2.8s dwell, which is the
+                    // opening page's own cases' subject and not this one's.
+                    let! context = await (br.NewContextAsync (BrowserNewContextOptions (ReducedMotion = ReducedMotion.Reduce)))
                     let! page = await (context.NewPageAsync ())
                     page.SetDefaultTimeout 30000.0f
                     let evidence = watching page
@@ -5008,6 +5028,8 @@ let frontedTests =
                     let! context =
                         await (br.NewContextAsync (
                             BrowserNewContextOptions (
+                                // Past the opening screen's dwell, which is not this case's.
+                                ReducedMotion = ReducedMotion.Reduce,
                                 ExtraHTTPHeaders =
                                     dict [ "Tailscale-User-Login", FRONTED_LOGIN
                                            "Tailscale-User-Name", FRONTED_NAME
@@ -5250,7 +5272,9 @@ let private withHeldCreate
             playwrightToDispose <- Some pw
             let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
             browserToClose <- Some br
-            let! page = await (br.NewPageAsync ())
+            // Declining motion skips the opening screen's 2.8s dwell on the way to the
+            // session, which is the opening page's own cases' subject and not these.
+            let! page = await (br.NewPageAsync (BrowserNewPageOptions (ReducedMotion = ReducedMotion.Reduce)))
             page.SetDefaultTimeout 30000.0f
             let evidence = watching page
             do! reporting name page evidence <| async {
@@ -5386,18 +5410,38 @@ let private marksShown =
 let openingTests =
     testList "The opening page (browser)" [
         testCaseAsync "it goes once the session answers, and not before the intro has landed" <|
-            withOpening "the dwell" (readyAnswers 200) (fun manager page opening -> async {
-                // Wherever the page goes, it must not need the session to be up for the
-                // measurement: the destination is answered here, so what is timed is the page.
+            withOpening "the dwell" (fun page -> async {
+                do! readyAnswers 200 page
+                // The page's time is the case's to turn: its dwell is measured on
+                // `performance.now` and waited out on `setTimeout`, both of which this clock
+                // owns, and it stands still until the case moves it. Paused before the page
+                // exists, so no timer of the page's can fire on the way.
+                let start = DateTime (2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                do! awaitU (page.Clock.InstallAsync (ClockInstallOptions (TimeDate = start)))
+                do! awaitU (page.Clock.PauseAtAsync (start.AddSeconds 1.0))
+            }) (fun manager page opening -> async {
+                // Wherever the page goes, it must not need the session to be up: the
+                // destination is answered here, so what is under test is the page.
                 do! awaitU (page.RouteAsync ("**/login*", fun route ->
                         route.FulfillAsync (RouteFulfillOptions (Status = 200, ContentType = "text/html", Body = "<title>session</title>")) |> ignore))
-                let clock = Stopwatch.StartNew ()
                 let! _ = await (page.GotoAsync opening)
+                let stillHere = sprintf "location.port === '%d'" manager.Port
+                // The readiness has answered, so the hand-over is scheduled — and not yet due.
+                do! waitFor "the page to have heard the session answer" page
+                        (sprintf "document.querySelector('[%s]')?.textContent === 'ready'" Yession.App.Dom.Manager.openingWord)
+                // The intro is 2.4s and the dwell 2.8s from the page's first script: a beat
+                // short of it, the page is still showing.
+                do! awaitU (page.Clock.RunForAsync 2700L)
+                // A context torn down under the question is the page having navigated away,
+                // which is the answer rather than an error.
+                let! held =
+                    async {
+                        try return! await (page.EvaluateAsync<bool> (sprintf "() => %s" stillHere))
+                        with _ -> return false
+                    }
+                Expect.isTrue held "the page held until the intro had landed"
+                do! awaitU (page.Clock.RunForAsync 200L)
                 do! waitFor "the browser to have left for the session" page (sprintf "location.port !== '%d'" manager.Port)
-                // The page's own dwell is 2.8s from its first script; measured from before the
-                // navigation began, so the reading can only be longer. A page that left on the
-                // first poll would read well under a second.
-                Expect.isTrue (clock.ElapsedMilliseconds >= 2500L) (sprintf "left after %dms, before the intro had landed" clock.ElapsedMilliseconds)
             })
 
         testCaseAsync "a reader who declined motion is shown the still mark, and only it" <|
