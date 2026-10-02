@@ -22,7 +22,7 @@ open Fable.NodeDataChannel
 open Yession.App.Codecs
 
 /// The transport never inspects the state-sync payload, so its codec is just a string.
-let private frameCodec : Codec<SessionFrame<string>> = Codec.sessionFrame Codec.string
+let private frameCodec : Codec<SessionFrame<string>> = Frames.session Codec.string
 
 /// Bridge a push-based data channel into the pull-based `FrameChannel.Receive`.
 /// A single consumer (the peer-session pump) is assumed.
