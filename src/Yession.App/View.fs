@@ -2865,8 +2865,7 @@ module View =
               <details>
                 <summary class="{Style.terminalBlockSummary}">
                   {author}
-                  <span class="{Style.terminalPrompt}">$</span>
-                  <code class="{Style.terminalCommandText}">{block.Command}</code>
+                  <span class="{Style.terminalCommandText}">ran <code>{block.Command}</code></span>
                   {notable}
                   <span class="{Style.terminalBlockMark}" aria-hidden="true">…</span>
                 </summary>
