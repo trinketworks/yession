@@ -2197,8 +2197,11 @@ module Style =
     let proseTable = "w-full border-collapse text-left align-top"
     /// One border rule for header and body cells alike: `border-collapse` merges a header
     /// cell's bottom edge with the hairline under the row below it, so the header never carries
-    /// a second, heavier rule of its own.
-    let proseTableCell = "px-2 py-1 border-b " + Stroke.hair
+    /// a second, heavier rule of its own. `first:pl-0 last:pr-0` drop the horizontal padding at
+    /// the row's own edges — `px-2` is for the gutter BETWEEN columns, and the outermost columns
+    /// have no column on that side, only the wrapper's edge, so prose there should sit flush
+    /// with the prose above and below it rather than indented in from it.
+    let proseTableCell = "px-2 py-1 border-b first:pl-0 last:pr-0 " + Stroke.hair
     let proseTableHeaderCell = cls [ "font-semibold text-ink"; proseTableCell ]
     let proseTableAlignLeft = "text-left"
     let proseTableAlignCenter = "text-center"
