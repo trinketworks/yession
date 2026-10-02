@@ -20,6 +20,7 @@ module Yession.Tests.Requests
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Host
+open Yession.App.Codecs
 open Yession.Host.PrWatches
 
 /// One header's value, or `None` when a request does not carry it. Every assertion below
@@ -232,8 +233,8 @@ let private signallingTests =
         // decoder — so what is pinned here is what they will read: the two field names,
         // in the order they have always been written, with nothing else beside them.
         testCase "is offered as its type and its sdp, and nothing else" <| fun () ->
-            let answer : WebRtc.SdpMessage = { Type = "answer"; Sdp = sampleSdp }
-            let json = Codec.toString WebRtc.sdpMessage answer
+            let answer : SdpMessage = { Kind = SdpKind.Answer; Sdp = sampleSdp }
+            let json = Codec.toString Sdp.message answer
             Expect.equal
                 json
                 """{"type":"answer","sdp":"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"}"""
@@ -243,11 +244,20 @@ let private signallingTests =
         // reads. The two used to be written apart — an anonymous record on the way out, a
         // decoder on the way in — and nothing compared them.
         testCase "reads back as the description that was offered" <| fun () ->
-            let message : WebRtc.SdpMessage = { Type = "offer"; Sdp = sampleSdp }
+            let message : SdpMessage = { Kind = SdpKind.Offer; Sdp = sampleSdp }
             Expect.equal
-                (WebRtc.parseSdp (Codec.toString WebRtc.sdpMessage message))
+                (Sdp.parse (Codec.toString Sdp.message message))
                 (Some message)
                 "the same description"
+
+        // A kind neither end of this exchange can act on is not a description at all. The
+        // browser's own type has two more (`pranswer`, `rollback`), and before the App owned
+        // this shape the Session decoded any word here and handed it to libdatachannel.
+        testCase "a description that is neither an offer nor an answer is refused" <| fun () ->
+            Expect.equal
+                (Sdp.parse """{"type":"pranswer","sdp":"v=0\r\n"}""")
+                None
+                "not an offer or an answer"
     ]
 
 let tests =

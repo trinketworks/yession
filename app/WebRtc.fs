@@ -19,45 +19,7 @@ open Thoth.Json
 open Thoth.Json.Net
 #endif
 open Fable.NodeDataChannel
-
-/// One side's session description, as the wire carries it: `{ type, sdp }`.
-type SdpMessage = { Type : string; Sdp : string }
-
-/// Both halves of the signalling wire, in one value.
-///
-/// The decode half was already here; the encode half was `JSON.stringify {| ``type`` = ty;
-/// sdp = sdp |}`, an anonymous record whose backtick-escaped label was the only place the
-/// wire's field name was written on the way OUT. Nothing checked the two against each
-/// other — rename the field on one side and this side still compiles, still stringifies,
-/// and answers an offer with a body the other side reads as no session description at
-/// all. A codec cannot drift that way: one declaration, read in both directions.
-///
-/// Both fields are required, because neither has a meaning this side can supply. A message
-/// is DECODED rather than asserted: it arrives over somebody else's POST, and the two
-/// readers that used to unbox it handed a missing `sdp` to libdatachannel as `undefined` —
-/// a native call with no answer for it, inside a handler with nowhere to report one.
-///
-/// It stays HERE rather than moving to the domain's `Link` namespace, which holds the
-/// protocol shapes the Session Process and the Browser Client share. This one is not
-/// shared: the browser's end of the same exchange is a `RTCSessionDescriptionInit`, the
-/// browser's own type, which it hands to `setRemoteDescription` rather than to a decoder.
-/// Both readers of this shape — `answerOffer` below and `Signalling.fs` — are in this
-/// project, so the rule sits with the state it governs.
-let sdpMessage : Codec<SdpMessage> =
-    { Encode =
-        fun (message: SdpMessage) ->
-            Encode.object
-                [ "type", Encode.string message.Type
-                  "sdp", Encode.string message.Sdp ]
-      Decode =
-        Decode.object (fun get ->
-            { Type = get.Required.Field "type" Decode.string
-              Sdp = get.Required.Field "sdp" Decode.string }) }
-
-/// What a signalling body says, or nothing — a body that is not JSON, and one that is JSON
-/// carrying no session description, are the same nothing to both callers.
-let parseSdp (json: string) : SdpMessage option =
-    Codec.fromString sdpMessage json |> Result.toOption
+open Yession.App.Codecs
 
 /// The transport never inspects the state-sync payload, so its codec is just a string.
 let private frameCodec : Codec<SessionFrame<string>> = Codec.sessionFrame Codec.string
@@ -155,13 +117,13 @@ let private onceOpen (dc: DataChannel) : Async<unit> =
 /// gathering callback eagerly (at call time), so it must be created *before* the action
 /// that starts negotiation (creating the data channel, or setting the remote offer).
 /// Non-trickle: the gathered `localDescription()` already embeds all candidates.
-let private gatherDescription (pc: PeerConnection) : Async<string> =
+let private gatherDescription (kind: SdpKind) (pc: PeerConnection) : Async<string> =
     let mutable result : string option = None
     let mutable waiter : (string -> unit) option = None
     pc.onGatheringStateChange (fun state ->
         if state = "complete" && Option.isNone result then
             let ld = pc.localDescription ()
-            let json = Codec.toString sdpMessage { Type = ld.``type``; Sdp = ld.sdp }
+            let json = Codec.toString Sdp.message { Kind = kind; Sdp = ld.sdp }
             result <- Some json
             match waiter with
             | Some w -> waiter <- None; w json
@@ -178,8 +140,8 @@ let private gatherDescription (pc: PeerConnection) : Async<string> =
 /// negotiation generates the answer automatically when the remote description is set.
 let answerOffer (pc: PeerConnection) (offerSdp: string) : Async<string> =
     async {
-        let answerReady = gatherDescription pc
-        pc.setRemoteDescription (offerSdp, "offer")
+        let answerReady = gatherDescription SdpKind.Answer pc
+        pc.setRemoteDescription (offerSdp, SdpKind.wire SdpKind.Offer)
         return! answerReady
     }
 
@@ -189,16 +151,17 @@ let answerOffer (pc: PeerConnection) (offerSdp: string) : Async<string> =
 let connect (signalUrl: string) : Async<FrameChannel<string>> =
     async {
         let pc = createPeerConnection "yession-client"
-        let offerReady = gatherDescription pc
+        let offerReady = gatherDescription SdpKind.Offer pc
         let dc = pc.createDataChannel "session"
         let opened = onceOpen dc
         let! offer = offerReady
         let! answerText = postText signalUrl offer |> Interop.awaitPromise
         let answer =
-            match parseSdp answerText with
-            | Some answer -> answer
+            match Sdp.parse answerText with
+            | Some { Kind = SdpKind.Answer; Sdp = sdp } -> sdp
+            | Some { Kind = SdpKind.Offer } -> failwith "the signalling url answered the offer with an offer"
             | None -> failwith "the signalling url answered the offer with no session description"
-        pc.setRemoteDescription (answer.Sdp, answer.Type)
+        pc.setRemoteDescription (answer, SdpKind.wire SdpKind.Answer)
         do! opened
         // The client owns this side's PeerConnection: closing the channel also closes
         // the connection and WAITS for libdatachannel to report it closed, so a caller
