@@ -203,6 +203,7 @@ let private representativeModel : ClientModel =
       TerminalsOpen = true
       ItemMenu = None
       PaneMenu = false
+      Refused = None
       OpenFolds = Set.empty
       DatedBreaks = Set.empty
       Copied = None

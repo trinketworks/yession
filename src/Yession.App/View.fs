@@ -1029,6 +1029,30 @@ module View =
                 </section>"""
 
 
+    /// What the session last REFUSED, in the sign-in prompt's slot and its hairline: a notice
+    /// over the timeline, never a modal and never a blocker.
+    ///
+    /// It exists because a refused command used to be silent. Every command answers, and
+    /// until now only the launch surface read the answer — so a press the session would not
+    /// honour did nothing and said nothing, which is a dead control wearing a live one's
+    /// clothes. The reason is the session's own sentence, written to be read.
+    ///
+    /// Dismissible, because a refusal is NEWS rather than a state: nothing recovers it and
+    /// nothing re-raises it, so once it has been read there is nothing left for it to do. The
+    /// next command that succeeds clears it too (`CommandAnsweredMsg`).
+    let private refusalNotice (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+        match model.Refused with
+        | None -> Lit.nothing
+        | Some reason ->
+            html $"""
+                <section class="{Style.signInPrompt}" data-command-refused role="status">
+                  <span class="{Style.statusErr}"><span class="{Style.statusDot}"></span>{Dom.Text.refused}</span>
+                  <span class="{Style.signInPromptReason}">{reason}</span>
+                  <button type="button" class="{Style.btnIcon}" data-command-refused-dismiss
+                          aria-label="{Dom.Text.dismissRefusal}"
+                          @click={Ev(fun _ -> dispatch DismissRefusalMsg)}>{Icon.close}</button>
+                </section>"""
+
     /// The connection report where the nav column is NOT on screen: a phone, or a desktop
     /// with the column collapsed. Same visibility rule the header's "no agent" stand-in
     /// already uses, and for the same reason — news that reaches you only if a column happens
@@ -4150,6 +4174,7 @@ module View =
               {degradedBar actions model}
               {header actions dispatch model}
               {signInPrompt actions model}
+              {refusalNotice dispatch model}
               {chat actions dispatch model}
               {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
               {queue dispatch model}

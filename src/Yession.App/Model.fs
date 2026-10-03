@@ -814,6 +814,19 @@ type ClientModel =
       /// was asked. Model state rather than the DOM's own, for `ItemMenu`'s reason — a menu
       /// rendered only while open cannot be asked whether it is open.
       PaneMenu      : bool
+      /// The last thing the session REFUSED, in its own words.
+      ///
+      /// A command answers `CommandAccepted` or `CommandRejected`, and until now only the
+      /// launch surface read that answer — every other refusal was dropped where it arrived.
+      /// So pressing a button the session would not honour did nothing, said nothing, and
+      /// left no trace: a dead control, which is the one thing a control must never be. It
+      /// cost an afternoon to find that terminals could not open on one machine, because the
+      /// refusal that said why was discarded by the client that asked for it.
+      ///
+      /// The REASON rather than the command it answered: a rejection carries a sentence
+      /// written to be read ("there is no sandbox named 'octo/hello:dev' in this session —
+      /// there is …"), and the surface that shows it has nothing to add.
+      Refused       : string option
       /// Which folds are UNFOLDED — an act's particulars, a turn's tool calls, one call's
       /// input and output. View state like the menu above — what one person opened to read
       /// is nobody else's — but a set rather than one slot: two folds open at once are two
@@ -1139,6 +1152,9 @@ type ClientMsg =
     /// Shut whatever menu is open. Everything that dismisses one sends this: Escape, a
     /// press outside it, and choosing something from it.
     | CloseItemMenuMsg
+    /// Put away the notice saying what the session last refused. A refusal is news, not a
+    /// state: once it has been read there is nothing left for it to do.
+    | DismissRefusalMsg
     /// Open or shut the strip's menu of things to open (Plan 20, stage 1). Opening is a
     /// toggle rather than a pair, so the control that opened it is the control that shuts it
     /// and focus never has to go looking for a replacement.
@@ -1352,6 +1368,7 @@ module ClientModel =
           TerminalsOpen = false
           ItemMenu = None
           PaneMenu = false
+          Refused = None
           OpenFolds = Set.empty
           DatedBreaks = Set.empty
           Copied = None
@@ -2970,7 +2987,21 @@ module ClientModel =
             | None -> model
         | LaunchMsg msg -> { model with Launch = Launch.update msg model.Launch |> fst }
         | CommandAnsweredMsg (request, result) ->
-            { model with Launch = Launch.update (LaunchAnswered (request, result)) model.Launch |> fst }
+            // The launch surface still reads every answer, because it tracks the request it
+            // sent and has its own place to show the outcome. What is new is that a REFUSAL
+            // is kept whoever asked: a command the session would not honour used to arrive
+            // here and go no further.
+            let refused =
+                match result with
+                | CommandRejected reason -> Some reason
+                // An acceptance clears whatever the last refusal was. The reader has just
+                // been told something worked, and a notice about something that did not,
+                // left standing beside it, is a screen arguing with itself.
+                | CommandAccepted -> None
+            { model with
+                Launch = Launch.update (LaunchAnswered (request, result)) model.Launch |> fst
+                Refused = refused }
+        | DismissRefusalMsg -> { model with Refused = None }
         | SetModelMsg choice -> model |> withSynced { model.Synced with Model = choice }
         // An id this client's window does not hold is a page boundary, not a bug — and
         // there is nothing to toggle, because what the verdict would default to is on the item.
