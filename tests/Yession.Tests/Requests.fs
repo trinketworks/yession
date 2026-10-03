@@ -172,21 +172,22 @@ let private githubStatusTests =
                 "the credential works and may not do this"
 
         testCase "a 403 with the allowance spent is a rate limit" <| fun () ->
-            Expect.equal (GitHubPrs.failureAt 403 "" "0" "") (PrRateLimited None) "the primary budget is gone"
+            Expect.equal (GitHubPrs.failureAt 403 "" "0" "") (PrRateLimited (None, "403, 0 left")) "the primary budget is gone, and it says so"
 
         // A secondary limit leaves the primary budget untouched, so the remaining count says
-        // nothing; GitHub names it in the message instead.
-        testCase "a secondary rate limit's 403 is a rate limit" <| fun () ->
+        // nothing; GitHub names it in the message instead. Which of the two it was is the
+        // first question about a watch that went unreadable, so the refusal keeps it.
+        testCase "a secondary rate limit's 403 is a rate limit, and says it was the secondary one" <| fun () ->
             Expect.equal
                 (GitHubPrs.failureAt 403 "" "4000" """{"message":"You have exceeded a secondary rate limit."}""")
-                (PrRateLimited None)
+                (PrRateLimited (None, "403, a secondary limit, 4000 left"))
                 "it says so in the message"
 
         testCase "a 429 is a rate limit" <| fun () ->
-            Expect.equal (GitHubPrs.failureAt 429 "" "" "") (PrRateLimited None) "too many, whatever else"
+            Expect.equal (GitHubPrs.failureAt 429 "" "" "") (PrRateLimited (None, "429")) "too many, whatever else"
 
         testCase "a rate limit carries the window it ends at, when GitHub named one" <| fun () ->
-            Expect.equal (GitHubPrs.failureAt 429 "1770000000" "" "") (PrRateLimited (Some 1770000000L)) "the reset epoch"
+            Expect.equal (GitHubPrs.failureAt 429 "1770000000" "" "") (PrRateLimited (Some 1770000000L, "429")) "the reset epoch"
 
         // Read as an `Int32` this parsed as nothing, so the hold fell back to a fixed window
         // and the number GitHub actually named was discarded — on every reply, from January
@@ -195,7 +196,7 @@ let private githubStatusTests =
         testCase "a reset window past 2038 is read, not dropped" <| fun () ->
             Expect.equal
                 (GitHubPrs.failureAt 429 "2147483648" "" "")
-                (PrRateLimited (Some 2147483648L))
+                (PrRateLimited (Some 2147483648L, "429"))
                 "the second after Int32.MaxValue"
 
         testCase "any other status is reported as what GitHub answered" <| fun () ->

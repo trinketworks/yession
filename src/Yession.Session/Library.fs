@@ -72,3 +72,4 @@ module Bootstrap =
         | SessionEvent.PrWatched _ -> "pr-watched"
         | SessionEvent.PrUnwatched _ -> "pr-unwatched"
         | SessionEvent.PrTransitioned _ -> "pr-transitioned"
+        | SessionEvent.PrWatchReadability _ -> "pr-watch-readability"

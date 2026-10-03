@@ -134,7 +134,8 @@ let failureAt (status: int) (remaining: string) (body: string) : LookupFailure =
     | PrWatches.PrUnauthorized -> Refused
     | PrWatches.PrNotFound -> NotFound
     | PrWatches.PrForbidden -> Forbidden
-    | PrWatches.PrRateLimited _ -> RateLimited
+    | PrWatches.PrRateLimited _
+    | PrWatches.PrHeld _ -> RateLimited
     | PrWatches.PrUnreadable said -> Unreadable said
     | PrWatches.PrUnreachable said -> Unreachable said
 

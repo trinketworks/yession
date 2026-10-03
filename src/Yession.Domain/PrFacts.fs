@@ -493,6 +493,18 @@ type PrTransitioned =
       /// Part of the `WatchChanged` contract every watched change keeps.
       OccurredAt : DateTimeOffset option }
 
+/// A watched pull request stopped being readable, and why — or can be read again. Recorded
+/// on the CHANGE, so an outage is two events however many looks it spans, and what the
+/// `pull_requests` status column said survives the process that said it: a summary reading
+/// `unreachable` used to be the only trace, with nothing anywhere to say why or since when.
+type PrWatchReadability =
+    { MessageId : MessageId
+      Pr : PrRef
+      Watcher : Principal
+      /// Why no look can read it — the provider's own numbers in it, where it gave any — or
+      /// `None`: it can be read again.
+      Unreadable : string option }
+
 // --- What each pull-request act SAYS (see RepoFacts.fs for why prose lives beside the event) ---
 
 module PrUnwatched =

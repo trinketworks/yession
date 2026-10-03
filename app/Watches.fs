@@ -55,14 +55,14 @@ type Kind<'Key, 'Snapshot, 'Known, 'Cursor, 'Change> =
       DueIn : 'Snapshot option -> int64
       /// The cursor a watch starts with, before any look.
       NoCursor : 'Cursor
-      /// How this watch is NAMED in a line a person reads — `owner/repo#12` for a pull
-      /// request. The engine says nothing about what a watch is ON; this is the one thing
-      /// it has to borrow from the kind to be able to say anything at all.
-      Describe : 'Key -> string
       /// Make what moved durable: whose watch, which key, the reading, and the changes. The
       /// engine calls this and only then advances what it knows, so what it knows never
       /// runs ahead of what the log says.
-      Record : Principal -> 'Key -> 'Snapshot -> 'Change list -> Async<unit> }
+      Record : Principal -> 'Key -> 'Snapshot -> 'Change list -> Async<unit>
+      /// Make a change in whether it can be read durable: whose watch, which key, and why
+      /// not — or `None`, it can again. Called on the CHANGE, so an outage is two records
+      /// however many looks it spans.
+      Readability : Principal -> 'Key -> string option -> Async<unit> }
 
 /// One watch as the durable projection has it.
 type Watch<'Key, 'Known> =
@@ -186,8 +186,7 @@ let create
                     // watch nothing is happening to are not the same fact, and only one of
                     // them wants a person.
                     let moved = entry.Health.IsSome
-                    if moved then
-                        printfn "[watch] %s can be read again" (kind.Describe entry.Key)
+                    if moved then do! kind.Readability entry.Watcher entry.Key None
                     entry.Health <- None
                     schedule entry.Snapshot
                     return moved
@@ -197,8 +196,7 @@ let create
                         do! kind.Record entry.Watcher entry.Key snapshot changes
                         entry.Known <- changes |> List.fold kind.Advance entry.Known
                     let moved = entry.Snapshot <> Some snapshot || entry.Health <> None
-                    if entry.Health.IsSome then
-                        printfn "[watch] %s can be read again" (kind.Describe entry.Key)
+                    if entry.Health.IsSome then do! kind.Readability entry.Watcher entry.Key None
                     entry.Snapshot <- Some snapshot
                     entry.Cursor <- cursor
                     entry.Health <- None
@@ -208,20 +206,13 @@ let create
                     if refusal.CredentialRejected then do! onUnauthorized (CredentialFor.Person entry.Watcher)
                     entry.HoldUntilEpoch <- refusal.HoldUntilEpoch
                     let moved = entry.Health <> Some refusal.Health
-                    // Said when it CHANGES, and in pairs: a watch looks every minute, so a
-                    // line per failed look is a line a minute for as long as nobody is
-                    // reading. The health string lives only in this process and in the
-                    // query's status cell, so a session that has restarted takes the reason
-                    // with it — and until then a summary can say `#905 unreachable` with
-                    // nothing anywhere to say why or since when. An unpaired line is the
-                    // whole diagnosis: the failure that started it, and no recovery under it.
-                    //
-                    // Stdout rather than stderr, because the Manager forwards a session's
-                    // stdout line by line under a `[session <pid>]` prefix and INHERITS its
-                    // stderr (`Spawn.fs`) — so a stderr line from one of five sessions lands
-                    // in the log naming none of them, and a watch line has to say whose.
-                    if moved then
-                        printfn "[watch] %s cannot be read: %s" (kind.Describe entry.Key) refusal.Health
+                    // Recorded when it CHANGES, and in pairs: a watch looks every minute, so
+                    // a record per failed look is one a minute for as long as nobody is
+                    // reading. Durable rather than a line on stdout, because the reason lived
+                    // only in this process and the query's status cell — a session that had
+                    // restarted took it along, and a summary went on saying `unreachable`
+                    // with nothing anywhere to say why, or since when.
+                    if moved then do! kind.Readability entry.Watcher entry.Key (Some refusal.Health)
                     entry.Health <- Some refusal.Health
                     schedule None
                     return moved

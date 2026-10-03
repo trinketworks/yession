@@ -571,6 +571,17 @@ let private frameSerializationTests =
                       State = PrOpen
                       Checks = ChecksRed
                       Watcher = Principal.Peer peerId; OccurredAt = Some (DateTimeOffset (2026, 9, 25, 8, 0, 0, TimeSpan.Zero)) }
+                  // Both halves of an outage: why it could not be read, and that it can again.
+                  SessionEvent.PrWatchReadability
+                    { MessageId = messageId
+                      Pr = { Repo = RepoRef.create "octo/hello" |> expect; Number = 12 }
+                      Watcher = Principal.Peer peerId
+                      Unreadable = Some "rate limited by github (403, a secondary limit, 4950 left) — waiting for the window to reset" }
+                  SessionEvent.PrWatchReadability
+                    { MessageId = messageId
+                      Pr = { Repo = RepoRef.create "octo/hello" |> expect; Number = 12 }
+                      Watcher = Principal.Peer peerId
+                      Unreadable = None }
                   // Both kinds of thing a tab can hold, and both answers to whether an
                   // opening takes the screen — the one field that decides whether a reader
                   // is moved, which is the field a wire is most expensive to be wrong about.

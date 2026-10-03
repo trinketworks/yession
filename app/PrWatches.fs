@@ -44,14 +44,19 @@ type PrFetchFailure =
     /// Gone, or a credential that cannot see it — a provider cannot tell those apart,
     /// which is why this is one case and the message says so.
     | PrNotFound
-    /// Rate limited, with the epoch second the provider says the window resets at, when
-    /// it said one.
+    /// Rate limited BY THE PROVIDER, with the epoch second it says the window resets at,
+    /// when it said one, and what it said — status, what is left, a secondary limit — so a
+    /// refusal kept in the log says which limit it was, not only that there was one.
     ///
     /// `int64`, like `WatchEntry.DueAtEpoch` beside it and unlike what this used to be: an
     /// `int` cannot hold a unix second past January 2038, so the header carrying one parsed
     /// as nothing and the hold fell back to a fixed window — a rate-limit reading that
     /// stops being read, silently, on a date already inside some certificates' lifetimes.
-    | PrRateLimited of resetEpoch: int64 option
+    | PrRateLimited of resetEpoch: int64 option * said: string
+    /// Held back by THIS SESSION, until the epoch second the window turns: its reading of
+    /// the credential's budget is down to what is kept for a person. Nothing was asked, so
+    /// it is not `PrRateLimited` — reported as one, a local hold read as the provider's.
+    | PrHeld of untilEpoch: int64
     /// Seen and refused: the credential works, and is not allowed to do this — a scope it
     /// lacks, an App not granted the repo. No wait changes it, which is why it is not
     /// `PrRateLimited`, and no sign-in fixes it the way a dead one's does.
@@ -327,7 +332,8 @@ module PrWatchers =
 
 /// Build the poller.
 ///
-/// `record` is how a transition becomes durable; `resolveToken` answers with the
+/// `record` is how a transition becomes durable, and `readability` how a watch that stops
+/// (or starts again) being readable does; `resolveToken` answers with the
 /// credential of whoever's watch this is (the per-operation rule every other GitHub verb
 /// follows); `onUnauthorized` is the broker's rejection path, so a dead credential is
 /// reported by whoever spent it.
@@ -338,6 +344,7 @@ let create
     (resolveToken: CredentialFor -> Async<string option>)
     (onUnauthorized: CredentialFor -> Async<unit>)
     (record: Principal -> PrRef -> PrSnapshot -> PrTransition list -> Async<unit>)
+    (readability: Principal -> PrRef -> string option -> Async<unit>)
     : PrWatchers =
 
     /// What a failed look says, and whether the provider said when to come back. The
@@ -346,19 +353,29 @@ let create
     /// and a reply this session cannot read is the provider working and us not understanding
     /// it, which no wait fixes.
     let refusal (nowEpoch: int64) (failure: PrFetchFailure) : Watches.Refusal =
+        // When a hold ends, said to the minute: the same within a window, so a refusal that
+        // repeats each look is one sentence, and one durable change, rather than one a look.
+        let until (epoch: int64 option) =
+            match epoch with
+            | Some at ->
+                let utc = DateTimeOffset.FromUnixTimeSeconds at
+                sprintf " until %02d:%02dZ" utc.Hour utc.Minute
+            | None -> " for the window to reset"
         let health =
             match failure with
             | PrUnauthorized -> sprintf "%s rejected this credential" provider
             | PrNotFound ->
                 sprintf "%s cannot see this pull request — it may be gone, or the credential cannot reach it" provider
-            | PrRateLimited _ -> sprintf "rate limited by %s — waiting for the window to reset" provider
+            | PrRateLimited (reset, said) -> sprintf "rate limited by %s (%s) — waiting%s" provider said (until reset)
+            | PrHeld at -> sprintf "held back by this session, its reading of the %s budget down to what is kept for people — waiting%s" provider (until (Some at))
             | PrForbidden -> sprintf "%s does not let this credential read this pull request" provider
             | PrUnreadable reason -> sprintf "%s answered with something this session could not read: %s" provider reason
             | PrUnreachable reason -> reason
         { Health = health
           HoldUntilEpoch =
             match failure with
-            | PrRateLimited reset -> Some (defaultArg reset (nowEpoch + 900L))
+            | PrRateLimited (reset, _) -> Some (defaultArg reset (nowEpoch + 900L))
+            | PrHeld at -> Some at
             | PrUnauthorized | PrNotFound | PrForbidden | PrUnreadable _ | PrUnreachable _ -> None
           CredentialRejected = (failure = PrUnauthorized) }
 
@@ -384,7 +401,7 @@ let create
                 | Some ChecksPending -> int64 PendingIntervalMs / 1000L
                 | _ -> int64 SettledIntervalMs / 1000L
           NoCursor = PrEtags.none
-          Describe = PrRef.render
+          Readability = readability
           Record = record }
 
     let watchers = Watches.create now resolveToken onUnauthorized kind
@@ -490,7 +507,8 @@ let service
         // "Sign in", not "sign in again": a credential somebody connects is spent ahead of
         // an ambient GITHUB_TOKEN, so signing in is the fix whichever of the two was refused.
         | PrUnauthorized -> sprintf "%s rejected the credential — sign in to %s on the settings panel" provider provider
-        | PrRateLimited _ -> sprintf "rate limited by %s — try again shortly" provider
+        | PrRateLimited _
+        | PrHeld _ -> sprintf "rate limited by %s — try again shortly" provider
         | PrForbidden -> sprintf "%s does not let this credential do that to %s" provider what
         | PrUnreadable reason ->
             sprintf "%s answered with something this session could not read: %s" provider reason
