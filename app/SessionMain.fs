@@ -321,8 +321,7 @@ let private makeSandboxes
                                                 ReadPaths = List.distinct (policy.ReadPaths @ provision.Reads)
                                                 // What the provision must be SEEN at — the
                                                 // proxy's trust mounted into a container.
-                                                Binds = List.distinct (policy.Binds @ provision.Binds)
-                                                Intercept = provision.Intercept }
+                                                Binds = List.distinct (policy.Binds @ provision.Binds) }
                             })
                         (Sandboxes.summaryFor backend workSpec)
                         (sprintf "env-%s" (SandboxRef.objectName sessionId sandbox)))
@@ -1232,7 +1231,6 @@ Async.StartImmediate (
             CredentialProxy.start
                 [ GitHubAccess.route ]
                 CredentialProxy.direct
-                (Sandboxes.SessionLayout.credentialProxySocket ())
                 (Sandboxes.SessionLayout.prepareTrustBundle dataDir)
                 (fun fault -> eprintfn "[session %s] credential proxy: %s" (SessionId.value sessionId) fault)
         // Who commits in a BLOCK are by: the account behind the credential the block's act

@@ -967,8 +967,7 @@ let private sandboxPolicyTests =
             let config =
                 { namedToolsConfig with
                     AllowedDomains = [ "api.github.com" ]
-                    AllowUnixSockets = [ "/run/nix.sock" ]
-                    MitmProxy = Some { Interception.Socket = "/tmp/p.sock"; Interception.Hosts = [ "api.github.com" ] } }
+                    AllowUnixSockets = [ "/run/nix.sock" ] }
             let sent = Sandboxes.SrtSandbox.HostWire.Start config
             Expect.equal
                 (Sandboxes.SrtSandbox.HostWire.parseRequest (Sandboxes.SrtSandbox.HostWire.request sent))

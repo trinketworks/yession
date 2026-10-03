@@ -339,22 +339,9 @@ module SessionLayout =
     /// policy directly). It is what srt would use in that case, so they still agree.
     let tmpDir () : string = Interop.envOr "CLAUDE_CODE_TMPDIR" "/tmp/claude"
 
-    /// Where the credential proxy listens. In the system temp and SHORT, for the reason srt's
-    /// own bridge sockets are: a unix socket's path is capped (`sun_path`, 104 bytes on
-    /// macOS), and a session directory alone can be deeper than that. Named for the process,
-    /// which is the session, AND a random word: a process killed before it closed leaves its
-    /// socket behind, and a later one handed the same pid — which a container recycles — would
-    /// find the name taken.
-    let credentialProxySocket () : string =
-        sprintf
-            "%s/yession-%s-%s.sock"
-            (Node.Api.os.tmpdir ())
-            (string Node.Api.``process``.pid)
-            ((Interop.randomSecret ()).Substring (0, 8))
-
     /// Where the credential proxy's trust bundle is written, the directory made — canonical,
-    /// because srt matches the read grant a sandbox is given against the path as written, and
-    /// on macOS the session directory can sit behind a symlink.
+    /// because a container's bind of it names the path as written, and on macOS the session
+    /// directory can sit behind a symlink.
     let prepareTrustBundle (dataDir: string) : string =
         let directory = sprintf "%s/credential-proxy" dataDir
         Fs.ensureDir directory
@@ -981,9 +968,7 @@ let policyFor
           // sandbox that starts in its checkout still writes where it always did.
           WorkingDirectory = SandboxPath.resolvedFrom workspace spec.WorkingDirectory
           Filesystem = Confined
-          Derived = Map.empty
-          // What a forwarded credential provisions, joined where the provision is.
-          Intercept = None }
+          Derived = Map.empty }
 
 /// A one-line description of the backend + spec for the start-requested event.
 let summaryFor (backend: SandboxBackend) (spec: EnvironmentSpec) : string =
@@ -1928,11 +1913,6 @@ type SrtConfig =
       /// above is not read at all, so this is the only way a granted socket works there, and
       /// it is set only when the policy already SAID it would be.
       AllowAllUnixSockets : bool
-      /// srt's `network.mitmProxy`: the hosts whose `CONNECT`s its proxy hands to another
-      /// proxy's socket instead of dialling — the credential proxy. Read from the config the
-      /// manager was initialized with, like the allowlist — which is this sandbox's own,
-      /// because each sandbox's manager runs in a process of its own (`HostWire`).
-      MitmProxy : Interception option
       Bwrap : string option
       Socat : string option
       Ripgrep : string option
@@ -2145,7 +2125,6 @@ module SrtSandbox =
                 match leaf, outcome with
                 | Socket _, LeafRealisation.Coarsened _ -> true
                 | _ -> false)
-          MitmProxy = policy.Intercept
           Bwrap = tools.Bwrap
           Socat = tools.Socat
           Ripgrep = tools.Ripgrep
@@ -2218,12 +2197,6 @@ module SrtSandbox =
     /// absent rather than `false`, for the same reason. A blank tool path is an absent one,
     /// as the ternaries this replaced read it: `toolsFrom` already refuses to make one, and
     /// a config that slipped one through would fail srt's own schema instead of falling back.
-    /// An interception as srt spells it.
-    let private mitmConfig (interception: Interception) : MitmProxyConfig =
-        jsOptions<MitmProxyConfig> (fun mitm ->
-            mitm.socketPath <- interception.Socket
-            mitm.domains <- List.toArray interception.Hosts)
-
     let private toJs (config: SrtConfig) : RuntimeConfig =
         let named (value: string option) : string option = value |> Option.filter (fun named -> named <> "")
         jsOptions<RuntimeConfig> (fun srt ->
@@ -2233,8 +2206,7 @@ module SrtSandbox =
                     network.deniedDomains <- [||]
                     network.strictAllowlist <- true
                     network.allowUnixSockets <- List.toArray config.AllowUnixSockets
-                    if config.AllowAllUnixSockets then network.allowAllUnixSockets <- true
-                    config.MitmProxy |> Option.iter (fun interception -> network.mitmProxy <- mitmConfig interception))
+                    if config.AllowAllUnixSockets then network.allowAllUnixSockets <- true)
             srt.filesystem <-
                 jsOptions<FilesystemConfig> (fun filesystem ->
                     filesystem.denyRead <- List.toArray config.DenyRead
@@ -2383,19 +2355,11 @@ module SrtSandbox =
                     id
                     [ optional "bwrap" config.Bwrap
                       optional "socat" config.Socat
-                      optional "ripgrep" config.Ripgrep
-                      config.MitmProxy
-                      |> Option.map (fun interception ->
-                          "mitmProxy",
-                          Encode.object [ "socket", Encode.string interception.Socket; "hosts", strings interception.Hosts ]) ]
+                      optional "ripgrep" config.Ripgrep ]
             )
 
         let private decodeConfig : Decoder<SrtConfig> =
             let strings = Decode.list Decode.string
-            let interception : Decoder<Interception> =
-                Decode.object (fun get ->
-                    { Interception.Socket = get.Required.Field "socket" Decode.string
-                      Interception.Hosts = get.Required.Field "hosts" strings })
             Decode.object (fun get ->
                 { DenyRead = get.Required.Field "denyRead" strings
                   AllowRead = get.Required.Field "allowRead" strings
@@ -2403,7 +2367,6 @@ module SrtSandbox =
                   AllowedDomains = get.Required.Field "allowedDomains" strings
                   AllowUnixSockets = get.Required.Field "allowUnixSockets" strings
                   AllowAllUnixSockets = get.Required.Field "allowAllUnixSockets" Decode.bool
-                  MitmProxy = get.Optional.Field "mitmProxy" interception
                   Bwrap = get.Optional.Field "bwrap" Decode.string
                   Socat = get.Optional.Field "socat" Decode.string
                   Ripgrep = get.Optional.Field "ripgrep" Decode.string
@@ -2815,8 +2778,7 @@ module AgentSandbox =
           Env = env
           WorkingDirectory = None
           Filesystem = Confined
-          Derived = Map.empty
-          Intercept = None }
+          Derived = Map.empty }
 
     /// Where a spawn request says to start the child: `None` for a request that named no
     /// directory. Both spawners read the request here and hand this on as it is — each

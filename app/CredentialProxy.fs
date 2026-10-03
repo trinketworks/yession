@@ -10,9 +10,7 @@ module Yession.Host.CredentialProxy
 //
 // It is the git gateway's idea (`GitGateway.fs`) moved down a layer. The gateway rewrites
 // git's URLs to a plain-HTTP route of its own, which only works for a client that can be told
-// a different URL; a proxy works for any client that honours `HTTPS_PROXY` — and srt's own
-// egress proxy can hand it a domain's `CONNECT`s directly (`network.mitmProxy`), so under srt
-// nothing in the sandbox has to be told anything but the stand-in and what to trust.
+// a different URL; a proxy works for any client that honours `HTTPS_PROXY`.
 //
 // Nothing here knows a provider. A provider DECLARES a route — its name for sentences, the
 // hosts its credential is spent on, the variables its tools read one from — and
@@ -20,19 +18,17 @@ module Yession.Host.CredentialProxy
 // route's hosts, so a stand-in carried to another provider's host goes out as the worthless
 // value it is, and never as the credential behind it.
 //
-// It has two doors. The UNIX socket is srt's: srt's own egress proxy hands it the `CONNECT`s
-// for declared hosts and nothing else, and a `CONNECT` there to anything else is refused —
-// this is a credential route, not a way out of a sandbox's egress policy, and an open tunnel
-// there would be one. The TCP port is for a sandbox that reaches the network directly (docker,
-// the unconfined host), which cannot dial a socket in this process's filesystem and is told
-// `HTTPS_PROXY` instead. It binds every interface, as the git gateway does and for its
-// reason (a container reaches the host at a different address per daemon), so it admits a
-// client only by a capability minted for its sandbox (`Admit`), carried as the proxy URL's
-// credentials. An admitted client's `CONNECT` to a declared host is answered as the socket's
-// is; to any other host it is TUNNELLED, untouched — a sandbox that reaches the internet
-// anyway loses nothing by going this way, and a tool that honours `HTTPS_PROXY` for every
-// host has to be carried for every host. That is also why an srt sandbox is never admitted:
-// its egress IS its policy, and the tunnel would be a way round it.
+// It has one door, a TCP port, for a sandbox that reaches the network directly — a container,
+// or the unconfined host — and is told `HTTPS_PROXY`. It binds every interface, as the git
+// gateway does and for its reason (a container reaches the host at a different address per
+// daemon), so it admits a client only by a capability minted for its sandbox (`Admit`), carried
+// as the proxy URL's credentials. An admitted client's `CONNECT` to a declared host is answered
+// here; to any other host it is TUNNELLED, untouched — a sandbox that reaches the internet
+// anyway loses nothing by going this way, and a tool that honours `HTTPS_PROXY` for every host
+// has to be carried for every host. That is why an srt sandbox is never admitted: its egress
+// IS its policy, and the tunnel would be a way round it. srt is not given the api route at all
+// (`forwardApi`); it once had a door of its own, a UNIX socket srt's `mitmProxy` handed
+// declared hosts to, and that went with the route.
 //
 // What this does NOT do: a stand-in is in the environment `env` prints, and every process in a
 // sandbox shares one uid — so a stand-in read out of a neighbour's environment spends the
@@ -265,9 +261,7 @@ let private trustBundle (authority: Authority) : string =
 let direct (host: string) : string = "https://" + host
 
 type Proxy =
-    { /// The UNIX socket it listens on — what srt's `network.mitmProxy` names.
-      Socket : string
-      /// The TCP port it listens on, every interface — the door for a sandbox with direct
+    { /// The TCP port it listens on, every interface — the door for a sandbox with direct
       /// egress, which a client passes only with a capability from `Admit`.
       Port : int
       /// Admit a sandbox on a backend through the TCP door: the capability its proxy URL
@@ -312,14 +306,12 @@ let presentedCapability (proxyAuthorization: string) : string option =
         with _ -> None
     | _ -> None
 
-/// Start the proxy on a UNIX socket at `socket`, with its trust bundle written to
-/// `trustFile`. `upstream` is where a declared host is reached (`direct`, outside a suite);
+/// Start the proxy on a TCP port of its own, with its trust bundle written to `trustFile`. `upstream` is where a declared host is reached (`direct`, outside a suite);
 /// `report` is where a fault goes that no client can be told about any more — once an
 /// answer's head is out there is nothing left to say it on.
 let start
     (routes: CredentialRoute list)
     (upstream: string -> string)
-    (socket: string)
     (trustFile: string)
     (report: string -> unit)
     : Async<Proxy> =
@@ -485,20 +477,6 @@ let start
             upstream.pipe client.sink
             client.pipe upstream.sink)
 
-    let onSocketConnect (request: ConnectRequest) (client: Duplex) (head: Buffer) =
-        client.onError ignore
-        match authority request.url with
-        | None -> refuseConnect client "400 Bad Request" "" (sprintf "not a CONNECT target: %s" request.url)
-        | Some (host, _) ->
-            match routeFor routes host with
-            | None ->
-                refuseConnect
-                    client
-                    "403 Forbidden"
-                    ""
-                    (sprintf "%s is not a host any credential here is spent on, and this proxy carries nothing else" host)
-            | Some route -> intercept host route client head
-
     /// Capabilities admitted through the TCP door, by sandbox.
     let mutable admitted : Map<SandboxRef, string> = Map.empty
 
@@ -526,8 +504,6 @@ let start
                 "this proxy admits a sandbox by the capability in the proxy URL it was given, and this request carried none that is live"
 
     let refuseRequest = fun _ res -> answer res 405 "this proxy carries HTTPS, through CONNECT, and nothing else"
-    let onSocket = createServer refuseRequest
-    onSocket.onConnect (Func<_, _, _, _> onSocketConnect)
     let onPort = createServer refuseRequest
     onPort.onConnect (Func<_, _, _, _> onPortConnect)
     let listening (server: HttpServer) (where: string) (listen: (unit -> unit) -> unit) =
@@ -536,12 +512,10 @@ let start
                 fail (exn (sprintf "credential proxy cannot listen on %s: %s" where (StreamError.describe error))))
             listen cont)
     async {
-        do! listening onSocket socket (fun cont -> onSocket.listen (socket, fun () -> cont ()) |> ignore)
         do! listening onPort "a TCP port" (fun cont -> onPort.listen (0, "0.0.0.0", fun () -> cont ()) |> ignore)
         let close (server: HttpServer) = Async.FromContinuations (fun (cont, _, _) -> server.close (fun _ -> cont ()))
         return
-            { Socket = socket
-              Port = serverPort onPort
+            { Port = serverPort onPort
               Admit =
                 fun backend sandbox ->
                     match backend, Map.tryFind sandbox admitted with
@@ -570,7 +544,6 @@ let start
               Close =
                 fun () ->
                     async {
-                        do! close onSocket
                         do! close onPort
                     } }
     }
@@ -598,16 +571,6 @@ let forwardApi (backend: SandboxBackend) : WorkSandboxes.CredentialForwarding =
     | HostBackend
     | DockerBackend -> WorkSandboxes.CredentialForwarding.Forwarded WorkSandboxes.Provision.empty
 
-/// What `api` is under srt: `route`'s hosts' HTTPS handed to this proxy, and leave to reach
-/// them. Nothing a client reads — which bundle to trust and where a token goes are bound by
-/// whoever wants them (`${proxy.ca-file}`, `${<connection>.token}`), and a sandbox that binds
-/// neither reaches the provider through the proxy as an unauthenticated client would, which is
-/// what it asked for. Nothing of anybody's credential either — that is per block (`lend`).
-let provision (proxy: Proxy) (route: CredentialRoute) : WorkSandboxes.Provision =
-    { WorkSandboxes.Provision.empty with
-        Domains = route.Hosts
-        Intercept = Some { Interception.Socket = proxy.Socket; Interception.Hosts = route.Hosts } }
-
 /// What one block is lent on `route`: a fresh stand-in, in each of `variables` — the same
 /// stand-in in each, so the block's requests are one loan whichever variable a tool happened
 /// to read. Nothing at all for no variables: a loan nobody could read is one not worth minting.
@@ -626,8 +589,9 @@ let private inContainer = "/run/yession/proxy"
 
 /// What the proxy provides a sandbox on `backend` that asked for `asked`, reaching this host as
 /// `hostAddress` — each value as THIS sandbox sees it, and what it needs to use them. Refused,
-/// saying why, for `${proxy.https}` under srt, whose own proxy already routes the hosts this one
-/// answers (and whose egress is its policy, which the TCP door would go round).
+/// saying why, for an srt sandbox: it is not given the api route (`forwardApi`), so nothing
+/// should ask on its behalf, and one that did is told so rather than handed paths to a proxy
+/// it has no way to.
 let provide
     (proxy: Proxy)
     (backend: SandboxBackend)
@@ -642,34 +606,37 @@ let provide
             { WorkSandboxes.Provision.empty with
                 Binds = [ { From = hostPath; At = containerPath; Mode = ResourceMountMode.Read } ] }
         | HostBackend
-        | SrtBackend -> hostPath, { WorkSandboxes.Provision.empty with Reads = [ hostPath ] }
+        | SrtBackend -> hostPath, WorkSandboxes.Provision.empty
     let one (value: ProxyValue) : Result<string * WorkSandboxes.Provision, string> =
         match value with
         | ProxyValue.CaFile -> Ok (seen proxy.TrustFile (inContainer + "/bundle.pem"))
         | ProxyValue.CaDir -> Ok (seen proxy.AuthorityDir (inContainer + "/authority"))
         | ProxyValue.Https ->
-            match backend, hostAddress with
-            | SrtBackend, _ ->
-                Error (
-                    sprintf
-                        "sandbox '%s' is confined by srt, which already routes the hosts this proxy answers through its own — '${proxy.https}' is for a sandbox that reaches the network directly (docker, host), and '${proxy.ca-file}' or '${proxy.ca-dir}' is all an srt one needs"
-                        (SandboxRef.render sandbox)
-                )
-            | _, None ->
+            match hostAddress with
+            | None ->
                 Error (sprintf "sandbox '%s' has no way to reach this host, so no proxy URL would get anywhere" (SandboxRef.render sandbox))
-            | _, Some host ->
+            | Some host ->
                 proxy.Admit backend sandbox
                 |> Result.map (fun capability ->
                     sprintf "http://yession:%s@%s:%d" capability host proxy.Port, WorkSandboxes.Provision.empty)
-    asked
-    |> List.distinct
-    |> List.fold
-        (fun acc value ->
-            acc
-            |> Result.bind (fun (values, provision) ->
-                one value
-                |> Result.map (fun (text, given) -> Map.add value text values, WorkSandboxes.Provision.merge provision given)))
-        (Ok (Map.empty, WorkSandboxes.Provision.empty))
+    match backend with
+    | SrtBackend ->
+        Error (
+            sprintf
+                "sandbox '%s' is confined by srt, which takes a connection by git alone — the credential proxy is for a container sandbox"
+                (SandboxRef.render sandbox)
+        )
+    | HostBackend
+    | DockerBackend ->
+        asked
+        |> List.distinct
+        |> List.fold
+            (fun acc value ->
+                acc
+                |> Result.bind (fun (values, provision) ->
+                    one value
+                    |> Result.map (fun (text, given) -> Map.add value text values, WorkSandboxes.Provision.merge provision given)))
+            (Ok (Map.empty, WorkSandboxes.Provision.empty))
 
 /// The session's proxy, as a sandbox registry asks it: `provide` for each sandbox's backend and
 /// the name that sandbox reaches this host by, and a sandbox forgotten through the TCP door

@@ -805,8 +805,8 @@ first's.
     repository path, so a cap is not a token for the rest of github.com.
   - **The GitHub API reaches a sandbox only as far as somebody bound it.** A connection
     forwarded by `api` routes `api.github.com` and `uploads.github.com` to the credential
-    proxy — under srt by srt's own `mitmProxy`, under docker or the host only by a
-    `${proxy.https}` the sandbox was given — and nothing else: which bundle a client trusts
+    proxy — by a `${proxy.https}` the sandbox was given, so only under docker or the host;
+    srt is not given the route at all (`CredentialProxy.forwardApi`) — and nothing else: which bundle a client trusts
     (`${proxy.ca-file}`) and which variables carry a stand-in (`${github.token}`) are bound by
     the operator in a resource's `env` or by a repo's declaration, never set on a sandbox's
     behalf. A sandbox that binds neither reaches the API through the proxy unauthenticated.

@@ -41,8 +41,7 @@ let private runOnPty (executable: string) (arguments: string list) : Async<Resul
               Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
               WorkingDirectory = None
               Filesystem = Confined
-              Derived = Map.empty
-              Intercept = None }
+              Derived = Map.empty }
         match! Sandboxes.HostSandbox.create () policy with
         | Error e -> return Error e
         | Ok sandbox ->
@@ -104,8 +103,7 @@ let private withShellTerminal
               Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
               WorkingDirectory = None
               Filesystem = Confined
-              Derived = Map.empty
-              Intercept = None }
+              Derived = Map.empty }
         match! Sandboxes.HostSandbox.create () policy with
         | Error e -> failwith e
         | Ok sandbox ->
@@ -1200,8 +1198,7 @@ let tests =
                       Env = Map.empty
                       WorkingDirectory = None
                       Filesystem = Confined
-                      Derived = Map.empty
-                      Intercept = None }
+                      Derived = Map.empty }
                 match! Sandboxes.HostSandbox.create () policy with
                 | Error e -> failwith e
                 | Ok sandbox ->
@@ -1255,8 +1252,7 @@ let tests =
                       Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
                       WorkingDirectory = None
                       Filesystem = Confined
-                      Derived = Map.empty
-                      Intercept = None }
+                      Derived = Map.empty }
                 match! Sandboxes.HostSandbox.create () policy with
                 | Error e -> failwith e
                 | Ok sandbox ->
@@ -1295,8 +1291,7 @@ let tests =
                       Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
                       WorkingDirectory = None
                       Filesystem = Confined
-                      Derived = Map.empty
-                      Intercept = None }
+                      Derived = Map.empty }
                 match! Sandboxes.HostSandbox.create () policy with
                 | Error e -> failwith e
                 | Ok sandbox ->
@@ -1343,8 +1338,7 @@ let tests =
                       Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
                       WorkingDirectory = None
                       Filesystem = Confined
-                      Derived = Map.empty
-                      Intercept = None }
+                      Derived = Map.empty }
                 match! Sandboxes.HostSandbox.create () policy with
                 | Error e -> failwith e
                 | Ok sandbox ->
@@ -1531,8 +1525,7 @@ let tests =
                       Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ())
                       WorkingDirectory = None
                       Filesystem = Confined
-                      Derived = Map.empty
-                      Intercept = None }
+                      Derived = Map.empty }
                 match! Sandboxes.HostSandbox.create () policy with
                 | Error e -> failwith e
                 | Ok sandbox ->

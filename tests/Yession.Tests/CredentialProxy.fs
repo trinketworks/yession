@@ -3,8 +3,8 @@ module Yession.Tests.CredentialProxy
 // The credential proxy: a sandbox's tools hold a stand-in, and the provider's credential is
 // swapped in here on the way to the provider's host. The pure half (what a CONNECT names, what
 // goes up and what comes down) runs in the cheap tier. The [Ports] half drives a real client
-// the way a sandbox's does — CONNECT over the proxy's UNIX socket, TLS trusting only the
-// bundle it was handed, one request — at a recording stand-in for the provider, because the
+// the way a container's does — CONNECT through the proxy's TCP door with the capability its
+// proxy URL carried, TLS trusting only the bundle it was handed, one request — at a recording stand-in for the provider, because the
 // thing under test is what arrives at the far end, and only a real handshake gets there.
 
 open System
@@ -133,30 +133,6 @@ let private carryTests =
             | WorkSandboxes.CredentialForwarding.Unforwardable reason -> failwithf "a container was refused: %s" reason
     ]
 
-// --- cheap: what srt is told ------------------------------------------------------------------
-
-let private interception (socket: string) (hosts: string list) : Interception =
-    { Interception.Socket = socket; Interception.Hosts = hosts }
-
-let private srtTests =
-    testList "what srt is told" [
-
-        // srt's proxy only hands a host to ours if its config says so, and that config is
-        // built from the policy alone.
-        testCase "a policy's interception is the mitm proxy srt is configured with" <| fun () ->
-            let intercept = interception "/tmp/y.sock" [ "api.example.test" ]
-            let tools : Sandboxes.SrtTools =
-                { Bwrap = None; Socat = None; Ripgrep = None; Nesting = Sandboxes.StrictNesting; Runtime = [] }
-            let config = Sandboxes.SrtSandbox.configFor tools { Support.emptyPolicy with Intercept = Some intercept }
-            Expect.equal config.MitmProxy (Some intercept) "the socket and the hosts, as the policy said"
-
-        // There was a case here that the manager's interception only ever widened: srt reads
-        // `mitmProxy` from the manager, and one manager served every sandbox of a session.
-        // Each sandbox's manager is now its own process, initialized with that sandbox's
-        // config and nothing else, so there is no union left to take — what one sandbox
-        // intercepts is pinned by the config case above and by the `Srt` tier.
-    ]
-
 // --- [Ports]: a real client, through a real proxy -------------------------------------------
 
 /// A stand-in for a provider's API: records the `authorization` of every request that
@@ -187,51 +163,42 @@ let private startUpstream () : Async<Upstream> =
 /// What one request came back with: the status line's code and everything after the head.
 type private Reply = { Status : int; Text : string }
 
-/// Which of the proxy's doors a client comes through: srt's socket, or the TCP port with
-/// whatever capability its proxy URL carried.
-[<RequireQualifiedAccess>]
-type private Door =
-    | Socket
-    | Port of capability: string option
+/// The connection a client dials, and the `proxy-authorization` line its `CONNECT` carries —
+/// the capability its proxy URL held, or none.
+let private dial (proxy: Proxy) (capability: string option) : Duplex * string =
+    connectTcp (proxy.Port, "127.0.0.1"),
+    capability
+    |> Option.map (fun held ->
+        sprintf "Proxy-Authorization: Basic %s\r\n" (Convert.ToBase64String (Text.Encoding.UTF8.GetBytes ("yession:" + held))))
+    |> Option.defaultValue ""
 
-/// The connection a client dials, and the `proxy-authorization` line its `CONNECT` carries.
-let private dial (proxy: Proxy) (door: Door) : Duplex * string =
-    match door with
-    | Door.Socket -> connectPath proxy.Socket, ""
-    | Door.Port capability ->
-        connectTcp (proxy.Port, "127.0.0.1"),
-        capability
-        |> Option.map (fun held ->
-            sprintf "Proxy-Authorization: Basic %s\r\n" (Convert.ToBase64String (Text.Encoding.UTF8.GetBytes ("yession:" + held))))
-        |> Option.defaultValue ""
-
-/// A `CONNECT` to `target` through `door`, and the status line it was answered with, over
+/// A `CONNECT` to `target` with `capability`, and the status line it was answered with, over
 /// the connection that is now the tunnel when that line says so.
-let private connectThrough (proxy: Proxy) (door: Door) (target: string) : Async<Result<string * Duplex, string>> =
+let private connectThrough (proxy: Proxy) (capability: string option) (target: string) : Async<Result<string * Duplex, string>> =
     Async.FromContinuations (fun (cont, _, _) ->
         let mutable settled = false
         let finish outcome =
             if not settled then
                 settled <- true
                 cont outcome
-        let raw, credentials = dial proxy door
+        let raw, credentials = dial proxy capability
         raw.onError (fun error -> finish (Error (StreamError.describe error)))
         raw.writeText (sprintf "CONNECT %s HTTP/1.1\r\nHost: %s\r\n%s\r\n" target target credentials)
         raw.onceData (fun chunk ->
             let head = chunk.toString BufferEncoding.Utf8
             finish (Ok (head.Split("\r\n").[0], raw))))
 
-/// What a sandbox's client does: `CONNECT` through `door`, TLS to `host` trusting the
+/// What a container's client does: `CONNECT` with `capability`, TLS to `host` trusting the
 /// proxy's bundle and nothing else, one `GET`. `Error` carries what refused it — the proxy's
 /// answer to the `CONNECT`, or the TLS failure.
-let private requestThrough (proxy: Proxy) (door: Door) (host: string) (authorization: string option) : Async<Result<Reply, string>> =
+let private requestThrough (proxy: Proxy) (capability: string option) (host: string) (authorization: string option) : Async<Result<Reply, string>> =
     Async.FromContinuations (fun (cont, _, _) ->
         let mutable settled = false
         let finish outcome =
             if not settled then
                 settled <- true
                 cont outcome
-        let raw, credentials = dial proxy door
+        let raw, credentials = dial proxy capability
         raw.onError (fun error -> finish (Error (StreamError.describe error)))
         raw.writeText (sprintf "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n%s\r\n" host host credentials)
         raw.onceData (fun chunk ->
@@ -258,9 +225,9 @@ let private requestThrough (proxy: Proxy) (door: Door) (host: string) (authoriza
                 let auth = authorization |> Option.map (sprintf "Authorization: %s\r\n") |> Option.defaultValue ""
                 secure.writeText (sprintf "GET /user HTTP/1.1\r\nHost: %s\r\n%sConnection: close\r\n\r\n" host auth)))
 
-/// The same, through srt's socket — what every case below but the TCP door's makes.
+/// The same, as an admitted container — what every case below but the door's own makes.
 let private request (proxy: Proxy) (host: string) (authorization: string option) : Async<Result<Reply, string>> =
-    requestThrough proxy Door.Socket host authorization
+    requestThrough proxy (proxy.Admit DockerBackend admitted |> Result.toOption) host authorization
 
 /// A lender whose answers a case controls, and which counts the provider's refusals.
 type private Lend =
@@ -272,15 +239,14 @@ let private lenderOf (lend: Lend) : Lender =
       Resolve = fun () -> async { return lend.Token }
       Refused = fun () -> async { lend.Refusals <- lend.Refusals + 1 } }
 
-/// A proxy for both routes in front of `upstream`, on a socket of its own, for `body`.
+/// A proxy for both routes in front of `upstream`, on a port of its own, for `body`.
 let private withProxy (upstream: Upstream) (body: Proxy -> Async<unit>) : Async<unit> =
     async {
-        // Canonical, because srt matches a read grant against the path as written (the note in
-        // GitIntegration.fs), and the srt case hands a sandbox the trust file in here.
+        // Canonical, as the session's own is (`SessionLayout.prepareTrustBundle`).
         let dir =
             let made = TestFiles.tempDir "yession-credproxy-"
             Fs.canonical made |> Option.defaultValue made
-        let! proxy = CredentialProxy.start [ route; other ] (fun _ -> upstream.Origin) (dir + "/proxy.sock") (dir + "/trust.pem") ignore
+        let! proxy = CredentialProxy.start [ route; other ] (fun _ -> upstream.Origin) (dir + "/trust.pem") ignore
         try
             do! body proxy
         finally
@@ -316,24 +282,6 @@ let private portsTests =
                     })
         }
 
-        // A socket path already bound — a process killed before it closed, a pid handed on —
-        // is a start that fails in words, never an `error` event that takes the session down.
-        testCaseAsync "a socket already taken fails the start in words" <| async {
-            let! upstream = startUpstream ()
-            do!
-                withProxy upstream (fun proxy ->
-                    async {
-                        let dir = TestFiles.tempDir "yession-credproxy-"
-                        let! second =
-                            CredentialProxy.start [ route ] (fun _ -> upstream.Origin) proxy.Socket (dir + "/trust.pem") ignore
-                            |> Async.Catch
-                        TestFiles.removeTree dir
-                        match second with
-                        | Choice1Of2 _ -> failwith "a second proxy bound a socket the first holds"
-                        | Choice2Of2 refused -> Expect.stringContains refused.Message proxy.Socket "the refusal names the socket"
-                    })
-        }
-
         // The TCP door binds every interface, so what keeps it this session's is the
         // capability: a client with none is refused before anything is carried.
         testCaseAsync "the TCP door refuses a CONNECT that carries no live capability" <| async {
@@ -341,7 +289,7 @@ let private portsTests =
             do!
                 withProxy upstream (fun proxy ->
                     async {
-                        for door in [ Door.Port None; Door.Port (Some "not-one-it-minted") ] do
+                        for door in [ None; Some "not-one-it-minted" ] do
                             match! connectThrough proxy door "api.example.test:443" with
                             | Ok (status, raw) ->
                                 raw.destroy ()
@@ -357,7 +305,7 @@ let private portsTests =
                     async {
                         let capability = proxy.Admit DockerBackend admitted |> expect
                         let standIn = proxy.Lend route terminal (lenderOf { Token = Some "ghu_real"; Refusals = 0 })
-                        let! answered = requestThrough proxy (Door.Port (Some capability)) "api.example.test" (Some ("token " + standIn))
+                        let! answered = requestThrough proxy ((Some capability)) "api.example.test" (Some ("token " + standIn))
                         Expect.equal (reply answered).Status 200 "answered"
                         Expect.equal (List.ofSeq upstream.Authorizations) [ Some "token ghu_real" ] "the lender's credential"
                     })
@@ -373,7 +321,7 @@ let private portsTests =
                     async {
                         let capability = proxy.Admit DockerBackend admitted |> expect
                         let target = upstream.Origin.Replace ("http://", "")
-                        match! connectThrough proxy (Door.Port (Some capability)) target with
+                        match! connectThrough proxy ((Some capability)) target with
                         | Error e -> failwithf "the tunnel did not open: %s" e
                         | Ok (status, raw) ->
                             Expect.stringContains status "200" "the tunnel opens"
@@ -410,7 +358,7 @@ let private portsTests =
                     async {
                         let capability = proxy.Admit DockerBackend admitted |> expect
                         proxy.Dismiss admitted
-                        match! connectThrough proxy (Door.Port (Some capability)) "api.example.test:443" with
+                        match! connectThrough proxy ((Some capability)) "api.example.test:443" with
                         | Ok (status, raw) ->
                             raw.destroy ()
                             Expect.stringContains status "407" "dismissed is refused"
@@ -455,30 +403,20 @@ let private portsTests =
                     })
         }
 
-        testCaseAsync "srt is refused the proxy's URL, told what it needs instead" <| async {
+        // srt is not given the api route, so nothing should ask the proxy on its behalf; one
+        // that did is told so, rather than handed paths to a proxy it has no way to.
+        testCaseAsync "srt is refused the proxy, any of it, pointed at a container" <| async {
             let! upstream = startUpstream ()
             do!
                 withProxy upstream (fun proxy ->
                     async {
-                        match provide proxy SrtBackend (Some "127.0.0.2") admitted [ ProxyValue.Https ] with
-                        | Ok _ -> failwith "an srt sandbox was given the TCP door"
-                        | Error reason -> Expect.stringContains reason "${proxy.ca-file}" "names what an srt sandbox does need"
-                        Expect.isOk (provide proxy SrtBackend (Some "127.0.0.2") admitted [ ProxyValue.CaFile ]) "the trust it may have"
+                        for asked in [ ProxyValue.Https; ProxyValue.CaFile; ProxyValue.CaDir ] do
+                            match provide proxy SrtBackend (Some "127.0.0.2") admitted [ asked ] with
+                            | Ok _ -> failwithf "an srt sandbox was given %A" asked
+                            | Error reason -> Expect.stringContains reason "container" (sprintf "%A refused, saying where it is had" asked)
                     })
         }
 
-        // A credential route, not a way out of a sandbox's egress policy.
-        testCaseAsync "a host no route declares is refused at the CONNECT" <| async {
-            let! upstream = startUpstream ()
-            do!
-                withProxy upstream (fun proxy ->
-                    async {
-                        let! answered = request proxy "example.com" None
-                        Expect.equal answered (Error "HTTP/1.1 403 Forbidden") "refused before any TLS"
-                    })
-        }
-
-        // A stand-in carried to another provider's host goes up as the worthless value it is.
         testCaseAsync "a stand-in is never swapped on another route's host" <| async {
             let! upstream = startUpstream ()
             do!
@@ -556,86 +494,10 @@ let private portsTests =
                         | other -> failwithf "expected one stand-in in %A, got %A" lentInto other
                     })
         }
-
-        // Which bundle a client trusts is bound by whoever wants it (`${proxy.ca-file}`): srt's
-        // route to the proxy sets nothing a client reads, so nothing it did not ask for changes
-        // what it trusts.
-        testCaseAsync "a sandbox routed to the proxy is told nothing it did not ask for" <| async {
-            let! upstream = startUpstream ()
-            do!
-                withProxy upstream (fun proxy ->
-                    async {
-                        let provision = CredentialProxy.provision proxy route
-                        Expect.isEmpty provision.Env "no variable set on its behalf"
-                    })
-        }
-    ]
-
-// --- [Srt]: a confined client, through srt's proxy into this one ----------------------------------
-//
-// The seam the Ports suite cannot reach: a sandboxed command's only way out is srt's filtering
-// proxy, and what hands a declared host's CONNECT to this proxy is srt's `mitmProxy`, set from
-// the policy. Only a real confined curl proves the stand-in survives that route, TLS verifies
-// against the bundle it was told to trust, and the provider sees the lender's credential.
-
-let private srtTools () =
-    match Sandboxes.SrtSandbox.toolsFrom (Sandboxes.ambientEnv ()) with
-    | Ok tools -> tools
-    | Error reason -> failwithf "srt tools: %s" reason
-
-let private confinedTests =
-    testList "from an srt sandbox" [
-
-        testCaseAsync "a confined curl spends a lent stand-in, through srt's proxy, as the lender" <| async {
-            let! upstream = startUpstream ()
-            do!
-                withProxy upstream (fun proxy ->
-                    async {
-                        let workspace =
-                            let made = TestFiles.tempDir "yession-credproxy-srt-"
-                            Fs.canonical made |> Option.defaultValue made
-                        let provision = CredentialProxy.provision proxy route
-                        let lent = CredentialProxy.lend proxy route lentInto terminal (lenderOf { Token = Some "ghu_real"; Refusals = 0 })
-                        let policy : SandboxPolicy =
-                            // The bundle, as `${proxy.ca-file}` provides it: told, and readable.
-                            { ReadPaths = workspace :: proxy.TrustFile :: provision.Reads
-                              WritePaths = [ workspace ]
-                              AllowedDomains = Some provision.Domains
-                              Sockets = []
-                              Binds = []
-                              Volumes = []
-                              Realisation = []
-                              Env =
-                                Sandboxes.mergeEnv (Sandboxes.hostBaseline (Sandboxes.ambientEnv ())) provision.Env
-                                |> Map.add "SSL_CERT_FILE" proxy.TrustFile
-                                |> Map.add "HOME" workspace
-                              WorkingDirectory = Some workspace
-                              Filesystem = Confined
-                              Derived = Map.empty
-                              Intercept = provision.Intercept }
-                        match! Sandboxes.SrtSandbox.create (srtTools ()) policy with
-                        | Error reason -> failwithf "srt sandbox failed: %s" reason
-                        | Ok confined ->
-                            let blockEnv = lent.Vars |> List.choose (fun (name, value) -> value |> Option.map (fun v -> name, v)) |> Map.ofList
-                            let! run, _, err =
-                                runInSandbox
-                                    confined
-                                    "/bin/sh"
-                                    [ "-c"; "curl -sS --fail -H \"Authorization: token $EXAMPLE_TOKEN\" https://api.example.test/user" ]
-                                    blockEnv
-                                    None
-                            Expect.equal run (SandboxExited 0) (sprintf "curl was answered from inside: %s" err)
-                            Expect.equal (List.ofSeq upstream.Authorizations) [ Some "token ghu_real" ] "the provider saw the lender's credential"
-                            do! confined.Dispose ()
-                        TestFiles.removeTree workspace
-                    })
-        }
     ]
 
 let tests =
     testList "The credential proxy" [
         carryTests
-        srtTests
         Tag.needs "The credential proxy, driven by a client" [ Tag.Ports ] (fun () -> portsTests)
-        Tag.needs "The credential proxy, from srt" [ Tag.Srt ] (fun () -> confinedTests)
     ]
