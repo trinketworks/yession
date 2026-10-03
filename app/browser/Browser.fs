@@ -45,12 +45,24 @@ type private Transport =
     { Channel : Browser.Types.RTCDataChannel
       Peer : Browser.Types.RTCPeerConnection }
 
-/// What one attempt at the handshake settled as. Three outcomes, three remedies: a transport to
-/// use, a session that answered with a refusal, and a session that did not answer at all.
+/// What one attempt at the handshake settled as. Four outcomes, four remedies: a transport to
+/// use, a session that answered with a refusal, a session that answered and could not be
+/// reached, and a session that did not answer at all.
 type private Handshake =
     | Opened of Transport
     | Refused of detail: string
+    | Unrouted
     | TimedOut
+
+module private Handshake =
+
+    /// What the handshake's own line says it settled as.
+    let word =
+        function
+        | Opened _ -> "opened"
+        | Refused _ -> "refused"
+        | Unrouted -> "unrouted"
+        | TimedOut -> "timed out"
 
 /// How long a whole handshake gets before it counts as "the session did not answer". Long
 /// enough for ICE gathering on a slow machine, short enough that a dead session is reported
@@ -98,7 +110,13 @@ let private listening (target: #Browser.Types.EventTarget) (event: string) (hand
 /// waits on an event that is never coming and can only ever time out.
 ///
 /// `timeoutMs` bounds the whole thing (offer, gathering, answer, channel open); it is the
-/// difference between "not connected, the session did not answer" and an eternal wait.
+/// difference between "not connected, the session did not answer" and an eternal wait. What
+/// the deadline says depends on how far the handshake got. Before an answer it is silence;
+/// after one, the session DID answer and what failed is the route between the two sets of
+/// addresses — no overlay, no relay — which wants the network looked at, never the session.
+/// That is decided here, on this deadline, rather than by the connection's own `failed`:
+/// headless Chromium never finishes gathering, and an ICE agent that has not finished
+/// gathering never declares failure, so a verdict waiting on it would never arrive there.
 let private openDataChannel (signalUrl: string) (timeoutMs: int) : JS.Promise<Handshake> =
     Promise.create (fun resolve _ ->
         // No ICE servers: host candidates only, which is what `Gathering.quiet` is sized for.
@@ -114,12 +132,14 @@ let private openDataChannel (signalUrl: string) (timeoutMs: int) : JS.Promise<Ha
                 settled <- true
                 match outcome with
                 | Opened _ -> ()
-                | Refused _ | TimedOut -> try peer.close () with _ -> ()
+                | Refused _ | Unrouted | TimedOut -> try peer.close () with _ -> ()
                 resolve outcome
         // The offer goes once. `sent` is what makes four triggers for one send idempotent;
         // `settled` is what keeps a timer — the quiet window or the cap — from posting an
         // offer for a handshake that is already over.
         let mutable sent = false
+        // Whether the session has answered, which is what the deadline's verdict turns on.
+        let mutable answered = false
         let send () =
             if not sent && not settled then
                 sent <- true
@@ -147,6 +167,7 @@ let private openDataChannel (signalUrl: string) (timeoutMs: int) : JS.Promise<Ha
                                 do!
                                     peer.setRemoteDescription (
                                         Browser.WebRTC.RTCSessionDescriptionInit.Create (Browser.Types.RTCSdpType.Answer, sdp))
+                                answered <- true
                             | Some { Kind = SdpKind.Offer } -> settle (Refused "the session answered with an offer")
                             | None -> settle (Refused "the session answered with no session description")
                         else
@@ -167,7 +188,7 @@ let private openDataChannel (signalUrl: string) (timeoutMs: int) : JS.Promise<Ha
                     quietWindow |> Option.iter JS.clearTimeout
                     quietWindow <- Some (JS.setTimeout send (int Client.Gathering.quiet.TotalMilliseconds))
         JS.setTimeout send (int Client.Gathering.cap.TotalMilliseconds) |> ignore
-        JS.setTimeout (fun () -> settle TimedOut) timeoutMs |> ignore
+        JS.setTimeout (fun () -> settle (if answered then Unrouted else TimedOut)) timeoutMs |> ignore
         channel.onopen <- fun _ -> settle (Opened { Channel = channel; Peer = peer })
         // One catch for both steps: a rejected `setLocalDescription` used to fall outside the
         // handler `createOffer` carried, and reached the page as an unhandled rejection with
@@ -282,12 +303,13 @@ let private connectChannel (signalUrl: string) : Async<Result<FrameChannel<strin
         JS.console.debug (
             sprintf
                 "yession/link: handshake %s in %dms"
-                (match outcome with Opened _ -> "opened" | Refused _ | TimedOut -> "failed")
+                (Handshake.word outcome)
                 (int (Math.Round (Browser.Performance.performance.now () - startedAt))))
         return
             match outcome with
             | Opened transport -> Ok (frameChannel transport)
             | TimedOut -> Error Client.ChannelTimedOut
+            | Unrouted -> Error Client.ChannelUnrouted
             | Refused detail -> Error (Client.ChannelUnreachable detail)
     }
 

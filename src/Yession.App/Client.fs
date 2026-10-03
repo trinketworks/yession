@@ -1064,6 +1064,9 @@ module Client =
     /// total function it either yields a channel or says why not.
     type ChannelFault =
         | ChannelUnreachable of detail: string
+        /// The session answered, and no address either side offered reached the other. Not
+        /// silence: the remedy is the network between them, never the session.
+        | ChannelUnrouted
         | ChannelTimedOut
 
     module ChannelFault =
@@ -1071,6 +1074,7 @@ module Client =
         let describe =
             function
             | ChannelUnreachable detail -> if detail = "" then "session unreachable" else detail
+            | ChannelUnrouted -> "the session answered, but no network route reached it"
             | ChannelTimedOut -> "the session did not answer"
 
     /// When the browser's offer goes. The handshake is non-trickle — ONE complete SDP, posted
