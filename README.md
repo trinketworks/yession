@@ -43,7 +43,8 @@ Three components, and these are their names everywhere — in prose, in code, an
 
 Each has a pure core of its own — `Yession.Manager`, `Yession.Session`, `Yession.App`
 (bundled from `app/browser`). `Yession.Host` (`app/`) is the Node shell both bins run in, and
-`Yession.Domain` is the model all three share.
+`Yession.Domain` is the model all three share. It references nothing — no package, no
+project — so nothing a library needs can bend the model; `DomainReferences` holds it there.
 
 ### Contracts
 
