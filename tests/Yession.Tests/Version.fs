@@ -11,6 +11,7 @@ module Yession.Tests.Version
 
 open Fable.Pyxpecto
 open Yession.Host
+open Yession.Manager
 
 let private currentTests =
     testList "Version.current" [
@@ -69,29 +70,43 @@ let private readinessTests =
     testList "the readiness line" [
         testCase "a readiness line without a version is still a readiness line" <| fun () ->
             Expect.equal
-                (Spawn.parseReady """{"yession":"ready","port":1234}""")
-                (Some { Spawn.ReadyLine.Port = 1234; Version = None })
+                (ReadyLine.parse """{"yession":"ready","port":1234}""")
+                (Some { ReadyLine.Port = 1234; Version = None })
                 "an older session bundle reports no version — and is not compared against one"
 
         testCase "a current bundle reports its build on the same line" <| fun () ->
             Expect.equal
-                (Spawn.parseReady """{"yession":"ready","port":1234,"version":"2.0.0-beta.1"}""")
-                (Some { Spawn.ReadyLine.Port = 1234; Version = Some "2.0.0-beta.1" })
+                (ReadyLine.parse """{"yession":"ready","port":1234,"version":"2.0.0-beta.1"}""")
+                (Some { ReadyLine.Port = 1234; Version = Some "2.0.0-beta.1" })
                 "the port and the build arrive together, read once"
 
         testCase "a log line is not a readiness line" <| fun () ->
-            Expect.equal (Spawn.parseReady "not json at all") None "what the child prints for a person is passed through"
+            Expect.equal (ReadyLine.parse "not json at all") None "what the child prints for a person is passed through"
 
         // The port is the whole point of the line, and `typeof port === 'number'` was what
         // used to ask for it. A line that states none — or states one that is not a number —
         // is not a session this Manager can reach.
         testCase "a line stating no usable port is not a readiness line" <| fun () ->
-            Expect.equal (Spawn.parseReady """{"yession":"ready"}""") None "no port is nothing to connect to"
-            Expect.equal (Spawn.parseReady """{"yession":"ready","port":"1234"}""") None "the text of a number is not a port"
+            Expect.equal (ReadyLine.parse """{"yession":"ready"}""") None "no port is nothing to connect to"
+            Expect.equal (ReadyLine.parse """{"yession":"ready","port":"1234"}""") None "the text of a number is not a port"
+
+        // The bytes, because a Manager from an earlier release reads this line too: what a
+        // Session prints must stay the line every Manager has always waited for.
+        testCase "a session announces itself in the shape every manager reads" <| fun () ->
+            Expect.equal
+                (ReadyLine.encode { Port = 1234; Version = Some "2.0.0-beta.1" })
+                """{"yession":"ready","port":1234,"version":"2.0.0-beta.1"}"""
+                "the line, byte for byte"
+
+        // It used to be a format string with the version pasted between quotes, so a version
+        // that needed escaping printed a line nothing could read.
+        testCase "a version that needs escaping still reads back" <| fun () ->
+            let line = { ReadyLine.Port = 1234; Version = Some "1.0.0-\"odd\"" }
+            Expect.equal (ReadyLine.parse (ReadyLine.encode line)) (Some line) "the same line"
 
         testCase "json that is not this message is not a readiness line" <| fun () ->
-            Expect.equal (Spawn.parseReady """{"port":1234}""") None "a line that does not say it is ready is not"
-            Expect.equal (Spawn.parseReady "null") None "and neither is a bare null"
+            Expect.equal (ReadyLine.parse """{"port":1234}""") None "a line that does not say it is ready is not"
+            Expect.equal (ReadyLine.parse "null") None "and neither is a bare null"
     ]
 
 let tests = testList "Version" [ currentTests; majorTests; skewTests; readinessTests ]

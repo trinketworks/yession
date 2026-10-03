@@ -16,6 +16,7 @@
     <Compile Include="SecretsState.fs" />
     <Compile Include="BrokerState.fs" />
     <Compile Include="ControlWire.fs" />
+    <Compile Include="SpawnWire.fs" />
   </ItemGroup>
 
   <ItemGroup>

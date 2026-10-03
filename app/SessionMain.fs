@@ -18,6 +18,7 @@ open Yession.Domain.Prs
 open Yession.Domain.Terminals
 open Yession.Session
 open Yession.Host
+open Yession.Manager
 
 // This bin takes no options of its own — everything it needs arrives in the environment the
 // Manager spawns it with. `--version` and `--help` still answer, before any configuration is
@@ -1582,7 +1583,7 @@ Async.StartImmediate (
         // treat everything before it as logs and everything after as a live session.
         // `version` lets the Manager notice it just launched a session from a different
         // release; a Manager old enough not to read the field simply ignores it.
-        printfn """{"yession":"ready","port":%d,"version":"%s"}""" host.Port Version.current
+        printfn "%s" (ReadyLine.encode { Port = host.Port; Version = Some Version.current })
         // The first fold (Plan 27) — AFTER readiness, and fire-and-forget, for the same
         // reason the MCP handshake is: a declaration can be a container to pull, and a boot
         // that waited for one would look to the Manager like a session that failed to
