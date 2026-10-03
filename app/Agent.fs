@@ -497,14 +497,19 @@ let private claudePath () = Interop.envOr "YESSION_BIN_CLAUDE" ""
 /// One prompt per turn: the completed conversation as a transcript plus the message to
 /// answer. Built from the projection only — draft/Yjs state never appears here.
 let promptOf (context: AgentContextPack) : string =
+    // A person by the name everybody here sees them under, so "@swift-heron" in a message
+    // names someone the agent can find in the transcript; the id only for somebody the log
+    // never named. Never `agent`, which is the agent's own name: a person who joined
+    // under it would otherwise put lines in the transcript the model reads as its own.
     let label (author: ActorRef) =
-        match author with
-        | UserRef u -> UserId.value u
-        | PeerRef p -> PeerId.value p
-        | ActorRef.Agent -> "agent"
-        | ActorRef.Session -> "session-process"
-        | ActorRef.System -> "system"
-        | ActorRef.Configured repo -> RepoRef.value repo
+        match Attribution.nameOf context.People author, author with
+        | Some name, _ when not (name.Trim().Equals ("agent", System.StringComparison.OrdinalIgnoreCase)) -> name
+        | _, ActorRef.Agent -> "agent"
+        | _, UserRef u -> UserId.value u
+        | _, PeerRef p -> PeerId.value p
+        | _, ActorRef.Session -> "session-process"
+        | _, ActorRef.System -> "system"
+        | _, ActorRef.Configured repo -> RepoRef.value repo
     let transcript =
         context.Conversation
         |> List.filter (fun item -> item.Status = Complete)
