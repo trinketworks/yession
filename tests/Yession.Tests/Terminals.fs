@@ -1218,6 +1218,97 @@ let private leaseCommandTests =
             }
     ]
 
+/// Where a PERSON's terminal lands. It used to be `default` and nothing else, on the reading
+/// that naming a sandbox is a command and commands are the agent's — so somebody who wanted a
+/// shell in `dev` asked for one and waited a turn. The set they can name is the set this
+/// session already has, declared by a repo's own file and consented to here, so choosing
+/// between them takes no judgement a turn could add.
+let private peerOpenTests =
+    let hello = RepoRef.create "octo/hello" |> expect
+    let dev = SandboxRef.inScope hello (SandboxName.create "dev" |> expect)
+    /// The handler with only its open wired up, recording what the terminal manager was asked
+    /// for. `answer` is what the manager says back, so a refusal can be driven too.
+    let handling (answer: Source -> Result<TerminalId, string>) =
+        let asked = ResizeArray<Source * TerminalTitle> ()
+        let handle =
+            SessionCommands.handle
+                (fun _ _ -> Ok ())
+                (fun _ source title ->
+                    async {
+                        asked.Add (source, title)
+                        return answer source
+                    })
+                (fun _ _ -> async { return Error "not this test" })
+                (fun _ _ -> async { return Error "not this test" })
+                (fun _ _ -> async { return Error "not this test" })
+                (fun _ -> async { return Error "not this test" })
+                (fun id -> async { return Ok id })
+                (fun _ _ _ -> async { return Error "no repos in this composition" })
+                (fun _ _ _ -> async { return Error "no repos in this composition" })
+                Principal.Peer
+        handle, asked
+
+    testList "Where a person's terminal lands" [
+        testCaseAsync "a peer may name a sandbox, and gets a shell in it" <|
+            async {
+                let handle, asked = handling (fun _ -> Ok terminalA)
+                let! answer = handle ada (OpenTerminal ("build", dev))
+                Expect.equal answer CommandAccepted "accepted"
+                Expect.equal (asked |> Seq.map fst |> List.ofSeq) [ SandboxShell dev ] "a shell, where they said"
+            }
+
+        testCaseAsync "a peer's open is a shell whatever they named" <|
+            async {
+                // Plan 16, part D, intact and the whole of it: an attached source needs a
+                // ticket from a provider, and a peer command carrying a URL would be a peer
+                // choosing what this session connects to. Naming WHERE is not naming WHAT.
+                let handle, asked = handling (fun _ -> Ok terminalA)
+                let! _ = handle ada (OpenTerminal ("build", SandboxRef.defaultRef))
+                Expect.equal
+                    (asked |> Seq.map fst |> List.ofSeq)
+                    [ SandboxShell SandboxRef.defaultRef ]
+                    "a shell in default, as it always was"
+            }
+
+        testCaseAsync "a peer who named nothing gets the sandbox as the name" <|
+            async {
+                // The only thing they said was where, so where is what the tab says. This is
+                // what a terminal opened by picking a sandbox and nothing else is called.
+                let handle, asked = handling (fun _ -> Ok terminalA)
+                let! _ = handle ada (OpenTerminal ("", dev))
+                Expect.equal
+                    (asked |> Seq.map (snd >> TerminalTitle.value) |> List.ofSeq)
+                    [ "octo/hello:dev" ]
+                    "named by where it is"
+            }
+
+        testCaseAsync "a title a peer typed is kept, with no sandbox put in front of it" <|
+            async {
+                // The bracket the agent's terminals wear is prose we wrote. In front of
+                // somebody's own words it would make us the author of a title we would then
+                // have to shorten to fit.
+                let handle, asked = handling (fun _ -> Ok terminalA)
+                let! _ = handle ada (OpenTerminal ("mine", dev))
+                Expect.equal
+                    (asked |> Seq.map (snd >> TerminalTitle.value) |> List.ofSeq)
+                    [ "mine" ]
+                    "theirs, untouched"
+            }
+
+        testCaseAsync "a sandbox this session does not have is refused in the manager's words" <|
+            async {
+                // Not checked in the handler: `Open` ensures the one named exists and says
+                // what there is instead, for every caller alike. A second test here would be
+                // a second answer to one question, and the one further from the state.
+                let handle, _ = handling (fun _ -> Error "there is no sandbox named 'octo/hello:dev' in this session")
+                let! answer = handle ada (OpenTerminal ("", dev))
+                Expect.equal
+                    answer
+                    (CommandRejected "there is no sandbox named 'octo/hello:dev' in this session")
+                    "the sentence that knows, passed through"
+            }
+    ]
+
 let private turnStarted (n: string) =
     SessionEvent.AgentTurnStarted
         { AgentTurnId = AgentTurnId.create ("t-" + n) |> expect
@@ -1660,6 +1751,25 @@ let private codecTests =
                 Expect.equal decoded.Authority (Authority.ofAuthor (Principal.Peer ada)) "and it is her own act"
             | other -> failwithf "a pre-Plan-20 block must still read back, got %A" other
 
+        testCase "an open written before a peer could name a sandbox still decodes" <| fun () ->
+            // Every client that could not say where meant `default`, because that was the
+            // only place a peer's open could land. So the absent key IS its meaning, and
+            // reading it back as anything else — or refusing it — would break a client
+            // mid-upgrade for a field it had no way to send.
+            // Built by taking the sandbox key back OUT of what this version writes, so the
+            // envelope around it is whatever the codec really puts there rather than a shape
+            // this case guessed.
+            let current =
+                Command (Request (RequestId.fresh (), OpenTerminal ("build", SandboxRef.defaultRef)))
+                |> Codec.toString (Frames.session Codec.string)
+            let old = current.Replace(sprintf ",\"sandbox\":\"%s\"" (SandboxRef.render SandboxRef.defaultRef), "")
+            Expect.isFalse (old.Contains "sandbox") (sprintf "the key is gone: %s" old)
+            match Codec.fromString (Frames.session Codec.string) old with
+            | Ok (Command (Request (_, OpenTerminal (title, sandbox)))) ->
+                Expect.equal title "build" "the title it did send"
+                Expect.equal sandbox SandboxRef.defaultRef "and the only sandbox it could have meant"
+            | other -> failwithf "an open written before sandboxes must still read back, got %A" other
+
         testCase "an agent's block written before Plan 20 is refused, not recovered" <| fun () ->
             // The same absent key on an AGENT block says nobody's authority — a value the
             // sum cannot hold. This used to decode as the agent on nobody's credential, and
@@ -1767,7 +1877,15 @@ let private codecTests =
         testCase "the terminal commands and focus fields round-trip" <| fun () ->
             let codec = Yession.App.Codecs.Frames.session Codec.string
             let frames =
-                [ Command (Request (RequestId.fresh (), OpenTerminal "build"))
+                [ Command (Request (RequestId.fresh (), OpenTerminal ("build", SandboxRef.defaultRef)))
+                  // And in a sandbox a repo declared, which is the half a bare name cannot
+                  // carry: the scope rides beside it.
+                  Command (
+                      Request (
+                          RequestId.fresh (),
+                          OpenTerminal (
+                              "",
+                              SandboxRef.inScope (RepoRef.create "octo/hello" |> expect) (SandboxName.create "dev" |> expect))))
                   // The launch surface's act, with and without a branch chosen.
                   Command (Request (RequestId.fresh (), AddRepo (RepoRef.create "octo/hello" |> expect, Some "feature/x")))
                   Command (Request (RequestId.fresh (), AddRepo (RepoRef.create "octo/hello" |> expect, None)))
@@ -4836,6 +4954,7 @@ let tests =
         retentionTests
         leaseGateTests
         leaseCommandTests
+        peerOpenTests
         waitTests
         digestTests
         ansiTests

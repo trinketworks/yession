@@ -60,22 +60,42 @@ module SessionCommands =
                 match requestInterrupt peerId turnId with
                 | Ok () -> return CommandAccepted
                 | Error reason -> return CommandRejected reason
-            | OpenTerminal raw ->
+            | OpenTerminal (raw, sandbox) ->
                 // The title a peer typed, parsed here at the edge it arrived on. What used
                 // to be an inline trim-and-default is `TerminalTitle.create`, so every other
                 // way of opening a terminal gets the same rules without remembering them —
                 // and an over-long one is refused with the words the composer already shows,
                 // rather than silently kept as a prefix in a durable event.
-                match TerminalTitle.create raw with
+                //
+                // A peer who NAMED nothing gets the name the sandbox gives it — `terminal`
+                // for `default`, the sandbox itself for a named one — because the only thing
+                // they said was where. A title they DID type stays exactly theirs, prefix
+                // and all absent: the bracket the agent's terminals wear is prose we wrote,
+                // and putting it in front of somebody's own words would make us the author
+                // of a title we would then have to shorten to fit.
+                let said = if isNull (box raw) then "" else raw.Trim ()
+                match TerminalTitle.create said with
                 | Error reason -> return CommandRejected reason
-                | Ok title ->
-                // A peer's Open is always a SHELL in `default` (Plan 16, part D): an
-                // attached source needs a ticket from a provider, and a peer command
-                // carrying a URL would be a peer choosing what this session connects to.
-                // Choosing a NAMED sandbox is likewise a command, and commands are the
-                // agent's (Plan 15) — a human who wants a terminal in `test` asks for one,
-                // and sees the act-line for it.
-                match! openTerminal (Principal.toActor (principalFor peerId)) (SandboxShell SandboxRef.defaultRef) title with
+                | Ok typed ->
+                let title = if said = "" then TerminalTitle.inSandbox sandbox "" else typed
+                // A peer's Open is always a SHELL (Plan 16, part D): an attached source needs
+                // a ticket from a provider, and a peer command carrying a URL would be a peer
+                // choosing what this session connects to. That rule is intact and it is the
+                // whole of it.
+                //
+                // WHERE is theirs now. It used to be the agent's alone, on the reading that
+                // naming a sandbox is a command and commands are the agent's (Plan 15) — so a
+                // person who wanted a shell in `dev` asked for one and waited a turn. But the
+                // set they can name is the set this session already has: the repo's own file
+                // declared it and somebody here consented to it, so choosing between them
+                // takes no judgement the agent could add. `AddRepo` above admitted a second,
+                // human caller for the same kind of reason, and said so.
+                //
+                // Not checked here: `Open` ensures the sandbox named exists and refuses an
+                // unknown name with a sentence saying what there is, for every caller alike.
+                // A test in this handler would be a second answer to one question, and the
+                // one further from the state.
+                match! openTerminal (Principal.toActor (principalFor peerId)) (SandboxShell sandbox) title with
                 | Ok _ -> return CommandAccepted
                 | Error reason -> return CommandRejected reason
             | CloseTerminal terminalId ->

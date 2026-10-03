@@ -108,8 +108,11 @@ module Frames =
                 match c with
                 | InterruptAgentTurn t ->
                     Encode.object [ "kind", Encode.string "interruptAgentTurn"; "agentTurnId", Codec.agentTurnId.Encode t ]
-                | OpenTerminal title ->
-                    Encode.object [ "kind", Encode.string "openTerminal"; "title", Encode.string title ]
+                | OpenTerminal (title, sandbox) ->
+                    Encode.object
+                        [ "kind", Encode.string "openTerminal"
+                          "title", Encode.string title
+                          "sandbox", Codec.sandboxRef.Encode sandbox ]
                 | CloseTerminal id ->
                     Encode.object [ "kind", Encode.string "closeTerminal"; "terminalId", Codec.terminalId.Encode id ]
                 | TakeTerminalLease id ->
@@ -145,7 +148,13 @@ module Frames =
                         (fun repo branch -> AddRepo (repo, branch))
                         (Decode.field "repo" Codec.repoRef.Decode)
                         (Decode.optional "branch" Decode.string)
-                | "openTerminal" -> Decode.field "title" Decode.string |> Decode.map OpenTerminal
+                | "openTerminal" ->
+                    // An absent sandbox is `default`, which is what a client that could not
+                    // name one meant: a peer's open was a shell in `default` and nothing else.
+                    Decode.map2
+                        (fun title sandbox -> OpenTerminal (title, sandbox |> Option.defaultValue SandboxRef.defaultRef))
+                        (Decode.field "title" Decode.string)
+                        (Decode.optional "sandbox" Codec.sandboxRef.Decode)
                 | "closeTerminal" -> Decode.field "terminalId" Codec.terminalId.Decode |> Decode.map CloseTerminal
                 | "takeTerminalLease" -> Decode.field "terminalId" Codec.terminalId.Decode |> Decode.map TakeTerminalLease
                 | "releaseTerminalLease" ->
