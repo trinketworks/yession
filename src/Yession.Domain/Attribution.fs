@@ -36,9 +36,14 @@ module Attribution =
           /// a missing one: `--auth localhost` grants one principal and verifies nobody, so
           /// there is no user whose session this is. What reads this for a credential turns
           /// that into `CredentialFor.Deployment`, which is the scope such a launch holds.
-          Creator : UserId option }
+          Creator : UserId option
+          /// The name each peer joined under — what everybody in the session sees it called.
+          /// Kept beside attribution because "who is this" has two halves, which user and
+          /// what to call them, and a reader that is not a screen (the agent's transcript)
+          /// needs both from the log alone: the client's live presence is not there to ask.
+          Names : Map<PeerId, string> }
 
-    let empty : State = { PeerUsers = Map.empty; UserPeers = Map.empty; Creator = None }
+    let empty : State = { PeerUsers = Map.empty; UserPeers = Map.empty; Creator = None; Names = Map.empty }
 
     /// The single-event step: fold one more event into an existing state, updating both
     /// directions from the one match arm. This is what a live process replays
@@ -46,13 +51,20 @@ module Attribution =
     /// replay starting from empty.
     let applyEvent (acc: State) (event: SessionEvent) : State =
         match event with
-        | PeerJoined { PeerId = peer; User = Some user } ->
-            { PeerUsers = Map.add peer user acc.PeerUsers
-              UserPeers = Map.add user peer acc.UserPeers
-              // First wins, for ever. A session's creator is not its most recent visitor, and
-              // a rule that let the newest join take it would hand the session to whoever
-              // opened the tab last.
-              Creator = acc.Creator |> Option.orElse (Some user) }
+        | PeerJoined joined ->
+            let named =
+                if joined.DisplayName.Trim () = "" then acc.Names
+                else Map.add joined.PeerId joined.DisplayName acc.Names
+            match joined.User with
+            | Some user ->
+                { PeerUsers = Map.add joined.PeerId user acc.PeerUsers
+                  UserPeers = Map.add user joined.PeerId acc.UserPeers
+                  // First wins, for ever. A session's creator is not its most recent visitor,
+                  // and a rule that let the newest join take it would hand the session to
+                  // whoever opened the tab last.
+                  Creator = acc.Creator |> Option.orElse (Some user)
+                  Names = named }
+            | None -> { acc with Names = named }
         | _ -> acc
 
     /// A whole event log, folded from empty. Same result as replaying `applyEvent` one
@@ -82,3 +94,13 @@ module Attribution =
     /// session has no creator rather than an anonymous one.
     let creator (state: State) : Principal option =
         state.Creator |> Option.map Principal.User
+
+    /// What a person is called, by the log: a peer by the name it joined under, a user by the
+    /// name of the peer they most recently joined as — the rule the client's `userName`
+    /// follows, so the agent and the screen call one person one thing. `None` for anybody
+    /// the log never named, and for what is not a person (the agent, the process).
+    let nameOf (state: State) (actor: ActorRef) : string option =
+        match actor with
+        | PeerRef peer -> Map.tryFind peer state.Names
+        | UserRef user -> Map.tryFind user state.UserPeers |> Option.bind (fun peer -> Map.tryFind peer state.Names)
+        | ActorRef.Agent | ActorRef.Session | ActorRef.System | ActorRef.Configured _ -> None

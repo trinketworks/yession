@@ -632,6 +632,24 @@ module ConversationProjection =
             | item :: tail -> walk (item :: seen) tail
         walk [] items
 
+    /// Drop one item, copying only as far as it — `updateItem`'s shape, for the same reason.
+    let private removeItem (messageId: MessageId) (items: ConversationItem list) =
+        let rec walk (seen: ConversationItem list) (rest: ConversationItem list) =
+            match rest with
+            | [] -> items
+            | item :: tail when item.MessageId = messageId -> List.rev seen @ tail
+            | item :: tail -> walk (item :: seen) tail
+        walk [] items
+
+    /// Whether the given message is there and has said nothing yet.
+    let private unspoken (messageId: MessageId) (items: ConversationItem list) : bool =
+        items
+        |> List.exists (fun item ->
+            item.MessageId = messageId
+            && (match item.Content with
+                | ItemContent.Message body -> body.Trim () = ""
+                | ItemContent.Act _ | ItemContent.Stopped _ -> false))
+
     /// Why the given turn exists, if nobody asked for it. Matched on the turn id rather than
     /// taken on trust: a late event from a turn the wake did not start must not inherit the
     /// current one's reason.
@@ -1009,6 +1027,14 @@ module ConversationProjection =
                         | ItemContent.Message _
                         | ItemContent.Act _
                         | ItemContent.Stopped _ -> item) }
+        // A message that ends having said nothing is not drawn as an empty bubble: among
+        // several people, saying nothing is how the agent answers a conversation that was not
+        // for it, and a blank line under its name would read as a reply that went missing.
+        // Only a message that never spoke goes — anything streamed stands as what was said.
+        | AgentMessageCompleted a when a.Body.Trim () = "" && unspoken a.MessageId proj.Recent ->
+            { proj with
+                Recent = proj.Recent |> removeItem a.MessageId
+                ActiveAgentMessages = Map.remove a.AgentTurnId proj.ActiveAgentMessages }
         | AgentMessageCompleted a ->
             { proj with
                 Recent =

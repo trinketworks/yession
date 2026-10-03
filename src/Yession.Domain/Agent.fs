@@ -106,6 +106,10 @@ type AgentContextPack =
       /// written with.
       Now            : System.DateTimeOffset
       History        : SessionHistory
+      /// Who is who here, folded from the same page as `Conversation` — so the transcript
+      /// can call each person by the name everybody else sees them under, and a message
+      /// that says "@swift-heron" names somebody the agent can find in it.
+      People         : Attribution.State
       SystemPrompt   : string }
 
 /// What a runner streams, in the order it arrives. `Text` is the model speaking. A

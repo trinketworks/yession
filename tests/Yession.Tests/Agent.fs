@@ -104,7 +104,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "Running it.")
                             return AgentCompleted ("Running it.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
                 let! events = eventsOf log
                 Expect.equal
                     events
@@ -131,8 +131,8 @@ let private turnTests =
                             return AgentCompleted ("", None)
                         }
                 let words = "Never push to main on this host."
-                do! AgentTurn.run (newLog ()) capturing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] [] [] None (Some words) asked
-                do! AgentTurn.run (newLog ()) capturing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run (newLog ()) capturing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None (Some words) asked
+                do! AgentTurn.run (newLog ()) capturing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
                 match List.rev seen.Value with
                 | [ guided; bare ] ->
                     Expect.equal bare AgentTurn.systemPrompt "no guidance is the core alone"
@@ -175,7 +175,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Thinking "still weighing it up")
                             return AgentCompleted ("", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
                 let! events = eventsOf log
                 let started =
                     events |> List.filter (function AgentMessageStarted _ -> true | _ -> false) |> List.length
@@ -197,7 +197,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "lo!")
                             return AgentCompleted ("Hello!", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
                 let! events = eventsOf log
                 Expect.equal
                     events
@@ -226,7 +226,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "It finished.")
                             return AgentCompleted ("Let me run it again.It finished.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
                 let! events = eventsOf log
                 Expect.equal
                     (events |> List.skip 2)
@@ -251,7 +251,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "Done.")
                             return AgentCompleted ("Done.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
                 let! events = eventsOf log
                 Expect.equal
                     (events |> List.skip 2)
@@ -271,7 +271,7 @@ let private turnTests =
                             onChunk AgentResponseChunk.MessageBoundary
                             return AgentCompleted ("Done.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
                 let! events = eventsOf log
                 Expect.equal
                     (events |> List.skip 2)
@@ -285,7 +285,7 @@ let private turnTests =
             async {
                 let log = newLog ()
                 let failing : RunAgent = fun _ _ _ _ -> async { return AgentFailed ("boom", None) }
-                do! AgentTurn.run log failing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log failing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
                 let! events = eventsOf log
                 Expect.equal
                     (List.last events)
@@ -297,7 +297,7 @@ let private turnTests =
             async {
                 let log = newLog ()
                 let throwing : RunAgent = fun _ _ _ _ -> failwith "runner exploded"
-                do! AgentTurn.run log throwing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log throwing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
                 let! events = eventsOf log
                 match List.last events with
                 | AgentTurnFailed f -> Expect.equal f.Reason "runner exploded" "the thrown reason is captured"
@@ -626,7 +626,7 @@ let private liveTests =
                 let log = newLog ()
                 let mintLiveTurn () = AgentTurnId.create (string (Guid.NewGuid ())) |> expect
                 let mintLiveMessage () = MessageId.create (string (Guid.NewGuid ())) |> expect
-                do! AgentTurn.run log (Agent.run Yession.Manager.Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log (Agent.run Yession.Manager.Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
                 let! events = eventsOf log
                 match List.last events with
                 | AgentMessageCompleted completed ->
@@ -647,7 +647,7 @@ let private liveTests =
                 let log = newLog ()
                 let mintLiveTurn () = AgentTurnId.create (string (Guid.NewGuid ())) |> expect
                 let mintLiveMessage () = MessageId.create (string (Guid.NewGuid ())) |> expect
-                do! AgentTurn.run log (Agent.runWith Yession.Manager.Launch.unlaunched.DataDir HostBackend (Some credential)) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ triggerItem ] [] [] None None asked
+                do! AgentTurn.run log (Agent.runWith Yession.Manager.Launch.unlaunched.DataDir HostBackend (Some credential)) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
                 let! events = eventsOf log
                 match List.last events with
                 | AgentMessageCompleted completed ->
@@ -724,7 +724,7 @@ let private liveTests =
                 let log = newLog ()
                 let mintLiveTurn () = AgentTurnId.create (string (Guid.NewGuid ())) |> expect
                 let mintLiveMessage () = MessageId.create (string (Guid.NewGuid ())) |> expect
-                do! AgentTurn.run log (Agent.run Yession.Manager.Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ probeItem ] [] [] None None (AgentTurn.FromMessage probe)
+                do! AgentTurn.run log (Agent.run Yession.Manager.Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ probeItem ] Attribution.empty [] [] None None (AgentTurn.FromMessage probe)
                 let! events = eventsOf log
                 match List.last events with
                 | AgentMessageCompleted completed ->
@@ -796,6 +796,7 @@ let private sessionTimeTests =
           Model = None
           Now = now
           History = history
+          People = Attribution.empty
           SystemPrompt = "" }
     testList "What a turn is told about time" [
         testCase "a turn is told the time, and when its session began" <| fun () ->
@@ -2097,6 +2098,59 @@ let private argumentTests =
             Expect.isTrue (refused None) "nothing at all"
     ]
 
+/// Several people in one session: the agent reads each by the name everybody sees, and a
+/// turn that decides a conversation was not for it leaves nothing behind.
+let private multiplayerTests =
+    let alice = UserId.create "alice-subject" |> expect
+    let joined (peer: PeerId) (name: string) (user: UserId option) =
+        PeerJoined { PeerId = peer; DisplayName = name; User = user }
+    let people events = Attribution.ofEvents events
+    let promptWith (people: Attribution.State) (author: ActorRef) =
+        let item = { triggerItem with Author = author }
+        Yession.Host.Agent.promptOf
+            { SessionId = sessionId
+              Conversation = [ item ]
+              TurnActor = Principal.Peer ada
+              CurrentMessage = Some item
+              Woke = None
+              Terminals = []
+              Repos = []
+              Model = None
+              Now = DateTimeOffset.UtcNow
+              History = SessionHistory.none
+              People = people
+              SystemPrompt = "" }
+    testList "Several people in one session" [
+
+        testCase "the core prompt tells the agent the name people address it by" <| fun () ->
+            Expect.stringContains AgentTurn.systemPrompt "@agent" "the address a message for it carries"
+
+        testCase "a peer is named in the transcript by the name it joined under" <| fun () ->
+            let prompt = promptWith (people [ joined ada "swift-heron" None ]) (PeerRef ada)
+            Expect.stringContains prompt "swift-heron: hi agent" "the line wears the name, not the id"
+
+        testCase "a user is named by the peer they last joined as" <| fun () ->
+            let prompt =
+                promptWith
+                    (people [ joined bob "old-name" (Some alice); joined ada "brave-owl" (Some alice) ])
+                    (UserRef alice)
+            Expect.stringContains prompt "brave-owl: hi agent" "the current name, not the subject"
+
+        testCase "a person who joined as agent is not named agent" <| fun () ->
+            let prompt = promptWith (people [ joined ada "Agent" None ]) (PeerRef ada)
+            Expect.isFalse (prompt.Contains "Agent: hi agent") "their line cannot pass for the agent's own"
+
+        testCase "a turn that ends having said nothing leaves no message" <| fun () ->
+            let projection, _ =
+                ConversationProjection.applyEvents
+                    None
+                    [ envelope 0L (AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy humanMessageId })
+                      envelope 1L (AgentMessageStarted { AgentTurnId = turnId; MessageId = agentMessageId; Antecedent = None })
+                      envelope 2L (AgentMessageCompleted { AgentTurnId = turnId; MessageId = agentMessageId; Body = "" }) ]
+                    ConversationProjection.empty
+            Expect.isEmpty projection.Items "silence is not drawn as an empty reply"
+    ]
+
 let tests =
     testList "Agent" [
         turnTests
@@ -2118,6 +2172,7 @@ let tests =
         replyRefTests
         armTests
         restartTests
+        multiplayerTests
         Tag.needs "Agent E2E" [ Tag.Ports; Tag.Native ] (fun () -> e2eTests)
         Tag.needs "Agent live SDK" [ Tag.LiveAgent; Tag.Native ] (fun () -> liveTests)
     ]

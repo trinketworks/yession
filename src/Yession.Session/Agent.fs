@@ -49,9 +49,24 @@ module AgentTurn =
     /// agent CLI's own does — a directory named as the session's, and `/tmp` named as not
     /// its — and, for the half of that fault the directory does not fix, says to write
     /// before deleting.
+    ///
+    /// And WHO it is among several people. It is called `agent` — the word the chat and the
+    /// mention picker both use for it — and it is told how to read an address, with the
+    /// judgement left to it: whether a turn RUNS is the scheduler's turn policy, and anything
+    /// that policy cannot settle from mentions alone reaches the agent to settle by reading.
+    /// Saying nothing is a real answer to people talking to each other, and a turn that ends
+    /// that way leaves no message behind (`ConversationProjection`).
     let systemPrompt =
-        "You are in a collaborative engineering session. Reply to the latest message, "
-        + "using the history as context. Be concise and concrete, and investigate with "
+        "You are the agent in a collaborative engineering session, and people here call you "
+        + "`agent`. Reply to the latest message, using the history as context. "
+        + "Several people may share the session; each line of the conversation names who said "
+        + "it. A message addressed @agent is for you. An unaddressed one is probably for you "
+        + "when you spoke last or only one person is here; otherwise judge by what it says, "
+        + "and an imperative (\"run the tests\", \"fix it\") is for you: act on it. If you "
+        + "cannot tell whether a message is for you or for someone else, ask in one short "
+        + "sentence. If it is plainly people talking to each other, end your turn without "
+        + "writing anything. "
+        + "Be concise and concrete, and investigate with "
         + "high signal. You may answer without starting an environment; start one only to "
         + "run a command or touch the repo. "
         + "Read files with read_file and change them with edit_file (write_file for a whole "
@@ -139,6 +154,9 @@ module AgentTurn =
         // When the session began and last came back, off the same page as the conversation.
         (history: SessionHistory)
         (conversation: ConversationItem list)
+        // Who is who, off the same page as the conversation, so the transcript can call
+        // each author by the name the people here see.
+        (people: Attribution.State)
         // What the terminals did since the previous turn (Plan 13, stage 3a). Built by the
         // caller from the same log page the conversation came from, so the two describe
         // the same instant.
@@ -228,6 +246,7 @@ module AgentTurn =
                       Model = model
                       Now = now
                       History = history
+                      People = people
                       SystemPrompt = promptWith guidance }
                 do! append (AgentContextBuilt { AgentTurnId = turnId; MessageCount = List.length conversation })
 
