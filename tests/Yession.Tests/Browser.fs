@@ -110,6 +110,113 @@ let internal chromiumPath () : string =
 let internal await (t: Task<'a>) : Async<'a> = Async.AwaitTask t
 let internal awaitU (t: Task) : Async<unit> = Async.AwaitTask t
 
+// --- One Chromium per process, one context per case ---------------------------------------
+//
+// Every case used to launch a Chromium of its own and close it again: a driver handshake, a
+// browser process and its first renderer, paid seventy-odd times a run for an isolation the
+// browser already offers more cheaply. A BrowserContext is Chromium's own unit of separation —
+// cookies, localStorage, IndexedDB, caches, service workers, the HTTP cache and the clock
+// `page.Clock` installs are all per context — so a case that opens fresh contexts in a shared
+// browser starts from exactly the nothing it started from in a browser of its own. Measured on
+// the editor suite, the launches were half its time.
+//
+// So the browser is the process's, launched on first use, and a case borrows contexts from it
+// through `withContexts`, which closes every one it opened however the case ends. The two halves
+// are one verb because a case that could open a context without the close is the leak — one
+// case's page still running, still holding its service worker, into the next case.
+//
+// One set of launch options for every case. The mDNS switch is what the WebRTC cases need
+// (headless sandboxes stall ICE gathering when host candidates hide behind mDNS), and it does
+// nothing a case without a peer connection could observe — so it is not worth a second browser.
+//
+// A browser that has DIED is launched again rather than handed out: one Chromium crash would
+// otherwise turn every case after it red, and every one of those reds would be a lie about
+// the case it is printed under.
+
+let private browserLaunch () =
+    BrowserTypeLaunchOptions (
+        ExecutablePath = chromiumPath (),
+        Args = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |])
+
+/// One at a time through the launch, so two cases asking at once get one browser between them.
+let private launching = new SemaphoreSlim (1, 1)
+let mutable private playwright : IPlaywright option = None
+let mutable private browser : IBrowser option = None
+
+/// The process's Chromium, launched on first use and relaunched if it has gone.
+let private sharedBrowser () : Async<IBrowser> =
+    async {
+        do! awaitU (launching.WaitAsync ())
+        try
+            match browser with
+            | Some live when live.IsConnected -> return live
+            | _ ->
+                let! pw =
+                    match playwright with
+                    | Some pw -> async.Return pw
+                    | None ->
+                        async {
+                            let! pw = await (Playwright.CreateAsync ())
+                            playwright <- Some pw
+                            // Closed with the process. Pyxpecto ends a run with an explicit exit,
+                            // so nothing after `runTests` ever runs — this is the one place left
+                            // to say goodbye from. Bounded: a browser refusing to close must not
+                            // hold the exit code hostage.
+                            AppDomain.CurrentDomain.ProcessExit.Add (fun _ ->
+                                match browser with
+                                | Some b -> try b.CloseAsync().Wait (TimeSpan.FromSeconds 5.0) |> ignore with _ -> ()
+                                | None -> ()
+                                try pw.Dispose () with _ -> ())
+                            return pw
+                        }
+                let! launched = await (pw.Chromium.LaunchAsync (browserLaunch ()))
+                browser <- Some launched
+                return launched
+        finally
+            launching.Release () |> ignore
+    }
+
+/// A case's share of the browser: the contexts it opened, every one closed when it ends.
+type internal Contexts (browser: IBrowser) =
+    let opened = ResizeArray<IBrowserContext> ()
+
+    /// A fresh context — one person, with nothing kept from anybody before them.
+    member _.Open (options: BrowserNewContextOptions option) : Async<IBrowserContext> =
+        async {
+            let! context =
+                match options with
+                | None -> await (browser.NewContextAsync ())
+                | Some o -> await (browser.NewContextAsync o)
+            lock opened (fun () -> opened.Add context)
+            return context
+        }
+
+    /// A page in a context of its own.
+    member this.Page (options: BrowserNewContextOptions option) : Async<IPage> =
+        async {
+            let! context = this.Open options
+            return! await (context.NewPageAsync ())
+        }
+
+    member internal _.CloseAll () : Async<unit> =
+        async {
+            for context in lock opened (fun () -> List.ofSeq opened) do
+                try do! awaitU (context.CloseAsync ()) with _ -> ()
+        }
+
+/// Run a case against the shared browser, its contexts closed however it ends.
+let internal withContexts (body: Contexts -> Async<'a>) : Async<'a> =
+    async {
+        let! br = sharedBrowser ()
+        let contexts = Contexts br
+        let! outcome = Async.Catch (body contexts)
+        do! contexts.CloseAll ()
+        return
+            match outcome with
+            | Choice1Of2 value -> value
+            | Choice2Of2 e -> raise e
+    }
+
 // --- Loopback servers, on ports nobody chose ----------------------------------------------
 //
 // Nothing in this file names a port, and no case can ask for one. Hand-picked numbers are what
@@ -416,7 +523,8 @@ let private terminalTabs (page: IPage) : Async<string[]> =
 // --- One case, one world -----------------------------------------------------------------
 //
 // Every case below arranges what it asserts on and takes it away again: its own data dir, its
-// own Manager + session on ports the OS picks, its own browser, and a fresh peer per page.
+// own Manager + session on ports the OS picks, contexts of its own in the browser the process
+// shares (`withContexts`), and a fresh peer per page.
 //
 // It used to be one host and one pair of pages threaded through module-level mutables, set up
 // by the FIRST case and torn down by a last one that asserted nothing. Three things came with
@@ -502,7 +610,7 @@ let private reportingAll (name: string) (pages: (IPage * Evidence) list) (body: 
     |> List.mapi (fun i (page, ev) -> (fun inner -> reporting (sprintf "%s [peer %d]" name (i + 1)) page ev inner))
     |> List.fold (fun inner wrap -> wrap inner) body
 
-/// A case and the world it runs in: a host, a browser, and `peers` first visits that have
+/// A case and the world it runs in: a host, its contexts, and `peers` first visits that have
 /// settled into Connected. Everything is gone when the case ends, however it ends.
 ///
 /// One CONTEXT per peer, never two pages in one: a peer id lives in origin-partitioned
@@ -512,43 +620,37 @@ let private peersCase (name: string) (peers: int) (body: Host -> IPage list -> A
     testCaseAsync name <|
         async {
             let host = startHost ()
-            let! pw = await (Playwright.CreateAsync ())
-            let! br =
-                await (pw.Chromium.LaunchAsync (
-                    BrowserTypeLaunchOptions (
-                        ExecutablePath = chromiumPath (),
-                        // Headless sandboxes stall ICE gathering when host candidates hide behind mDNS.
-                        Args = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |])))
-            let! opened =
-                [ 1 .. peers ]
-                |> List.map (fun _ ->
-                    async {
-                        let! ctx = await (br.NewContextAsync ())
-                        let! page = await (ctx.NewPageAsync ())
-                        page.SetDefaultTimeout 30000.0f
-                        return page, watching page
-                    })
-                |> Async.Sequential
-            let opened = List.ofArray opened
-            let pages = opened |> List.map fst
-            let arranged =
-                async {
-                    // A first visit, through the login bounce, to a shell that has connected.
-                    // Nothing may be evaluated before that: the bounce destroys the execution
-                    // context, and `connected` is only true back on the shell.
-                    for page in pages do
-                        let! _ = await (page.GotoAsync host.Base)
-                        ()
-                    for i, page in List.indexed pages do
-                        do! waitFor (sprintf "peer %d to connect" (i + 1)) page connected
-                    do! body host pages
-                }
-            let! outcome = Async.Catch (reportingAll name opened arranged)
-            // Teardown that cannot strand a host: a browser refusing to close must not stop
-            // the process being killed or its data dir going. A leaked Chromium costs memory;
-            // a leaked host holds a port and a session nobody will ever look at again.
-            try do! awaitU (br.CloseAsync ()) with _ -> ()
-            try pw.Dispose () with _ -> ()
+            let! outcome =
+                Async.Catch <| withContexts (fun contexts -> async {
+                    let! opened =
+                        [ 1 .. peers ]
+                        |> List.map (fun _ ->
+                            async {
+                                let! page = contexts.Page None
+                                page.SetDefaultTimeout 30000.0f
+                                return page, watching page
+                            })
+                        |> Async.Sequential
+                    let opened = List.ofArray opened
+                    let pages = opened |> List.map fst
+                    let arranged =
+                        async {
+                            // A first visit, through the login bounce, to a shell that has
+                            // connected. Nothing may be evaluated before that: the bounce
+                            // destroys the execution context, and `connected` is only true
+                            // back on the shell.
+                            for page in pages do
+                                let! _ = await (page.GotoAsync host.Base)
+                                ()
+                            for i, page in List.indexed pages do
+                                do! waitFor (sprintf "peer %d to connect" (i + 1)) page connected
+                            do! body host pages
+                        }
+                    do! reportingAll name opened arranged
+                })
+            // Teardown that cannot strand a host: contexts that refuse to close must not stop
+            // the process being killed or its data dir going. A leaked host holds a port and a
+            // session nobody will ever look at again.
             stopHost host
             match outcome with
             | Choice1Of2 () -> ()
@@ -1284,7 +1386,7 @@ let internal serveStatic (root: string) : Serving =
     Async.Start (loop ())
     served
 
-/// One editor case: a served harness, a browser, a page that is being LISTENED to, and the
+/// One editor case: a served harness, a context, a page that is being LISTENED to, and the
 /// teardown — so a case is its body and nothing else.
 ///
 /// The listening is the point. `watching`/`reporting` had exactly one call site, in the Native
@@ -1308,24 +1410,14 @@ let private editorCaseOn
     testCaseAsync name <|
         async {
             let server = serveStatic harnessRoot
-            let! pw = await (Playwright.CreateAsync ())
-            let! br =
-                await (pw.Chromium.LaunchAsync (
-                    BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
-            let! page =
-                match context with
-                | None -> await (br.NewPageAsync ())
-                | Some options ->
-                    async {
-                        let! ctx = await (br.NewContextAsync options)
-                        return! await (ctx.NewPageAsync ())
-                    }
-            page.SetDefaultTimeout 15000.0f
-            let evidence = watching page
-            let! _ = await (page.GotoAsync (server.At "/"))
-            let! outcome = Async.Catch (reporting name page evidence (body page))
-            do! awaitU (br.CloseAsync ())
-            pw.Dispose ()
+            let! outcome =
+                Async.Catch <| withContexts (fun contexts -> async {
+                    let! page = contexts.Page context
+                    page.SetDefaultTimeout 15000.0f
+                    let evidence = watching page
+                    let! _ = await (page.GotoAsync (server.At "/"))
+                    do! reporting name page evidence (body page)
+                })
             server.Stop ()
             match outcome with
             | Choice1Of2 () -> ()
@@ -4205,57 +4297,46 @@ let private offlineReopen (name: string) (make: IPage -> Async<unit>) (check: IP
     testCaseAsync name <|
         async {
             let mounted = startMounted (fun _ -> false)
-            let mutable browserToClose : IBrowser option = None
-            let mutable playwrightToDispose : IPlaywright option = None
             try
-                let publicUrl = mounted.PublicUrl
-                let! pw = await (Playwright.CreateAsync ())
-                playwrightToDispose <- Some pw
-                let! br =
-                    await (pw.Chromium.LaunchAsync (
-                        BrowserTypeLaunchOptions (
-                            ExecutablePath = chromiumPath (),
-                            Args = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |])))
-                browserToClose <- Some br
-                let! context = await (br.NewContextAsync ())
-                let! page = await (context.NewPageAsync ())
-                page.SetDefaultTimeout 20000.0f
-                let evidence = watching page
-                do! reporting name page evidence <| async {
-                let! _ = await (page.GotoAsync publicUrl)
-                let! _ = await (page.WaitForFunctionAsync connected)
+                do! withContexts (fun contexts -> async {
+                    let publicUrl = mounted.PublicUrl
+                    let! page = contexts.Page None
+                    page.SetDefaultTimeout 20000.0f
+                    let evidence = watching page
+                    do! reporting name page evidence <| async {
+                    let! _ = await (page.GotoAsync publicUrl)
+                    let! _ = await (page.WaitForFunctionAsync connected)
 
-                do! make page
+                    do! make page
 
-                // The worker has to be RUNNING before the session goes, or the reload has
-                // nothing serving it. Waiting on the registration is the difference between
-                // testing this and testing a race — but only through `waitFor`, which awaits: a
-                // bare `WaitForFunctionAsync` of this `.then`-chained Promise settles at once (see
-                // `waitFor`), so it was not waiting on the worker at all. `getRegistration`
-                // resolves promptly each poll (unlike `.ready`, which never settles with no active
-                // worker and would hang a single evaluation), and the loop supplies the timeout.
-                do! waitFor "the service worker to be active" page
-                        "navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"
+                    // The worker has to be RUNNING before the session goes, or the reload has
+                    // nothing serving it. Waiting on the registration is the difference between
+                    // testing this and testing a race — but only through `waitFor`, which awaits: a
+                    // bare `WaitForFunctionAsync` of this `.then`-chained Promise settles at once (see
+                    // `waitFor`), so it was not waiting on the worker at all. `getRegistration`
+                    // resolves promptly each poll (unlike `.ready`, which never settles with no active
+                    // worker and would hang a single evaluation), and the loop supplies the timeout.
+                    do! waitFor "the service worker to be active" page
+                            "navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"
 
-                // Gone, and staying gone. The proxy stays up, which is the honest shape of a
-                // reaped session behind an operator's front door — and it means the shell
-                // request comes back 502 rather than failing outright, which the worker has
-                // to treat as the failure it is.
-                mountedHost.Kill true
-                mountedHost.WaitForExit ()
+                    // Gone, and staying gone. The proxy stays up, which is the honest shape of a
+                    // reaped session behind an operator's front door — and it means the shell
+                    // request comes back 502 rather than failing outright, which the worker has
+                    // to treat as the failure it is.
+                    mountedHost.Kill true
+                    mountedHost.WaitForExit ()
 
-                let! _ = await (page.ReloadAsync ())
+                    let! _ = await (page.ReloadAsync ())
 
-                // The page loaded at all — the whole of what the worker adds, and the
-                // precondition every case here is really about rather than the thing it
-                // asserts.
-                let! _ = await (page.WaitForSelectorAsync "[data-conversation]")
+                    // The page loaded at all — the whole of what the worker adds, and the
+                    // precondition every case here is really about rather than the thing it
+                    // asserts.
+                    let! _ = await (page.WaitForSelectorAsync "[data-conversation]")
 
-                do! check page
-                }
+                    do! check page
+                    }
+                })
             finally
-                browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
-                playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
                 mounted.Stop ()
         }
 
@@ -4268,108 +4349,97 @@ let mountedTests =
                 // Manager, its session child and the proxy holding their ports, so one red run
                 // could poison whatever ran next (the failing CI run showed exactly that, as
                 // "Terminate orphan process" lines).
-                let mutable browserToClose : IBrowser option = None
-                let mutable playwrightToDispose : IPlaywright option = None
                 try
-                    let publicUrl = mounted.PublicUrl
-                    let! pw = await (Playwright.CreateAsync ())
-                    playwrightToDispose <- Some pw
-                    let! br =
-                        await (pw.Chromium.LaunchAsync (
-                            BrowserTypeLaunchOptions (
-                                ExecutablePath = chromiumPath (),
-                                Args = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |])))
-                    browserToClose <- Some br
-                    let! context = await (br.NewContextAsync ())
-                    let! page = await (context.NewPageAsync ())
-                    page.SetDefaultTimeout 20000.0f
+                    do! withContexts (fun contexts -> async {
+                        let publicUrl = mounted.PublicUrl
+                        let! page = contexts.Page None
+                        page.SetDefaultTimeout 20000.0f
 
-                    // Everything below happens at the PUBLIC path. Nothing in the browser was
-                    // told about a prefix: the shell's `<base href>` is the only thing making
-                    // its relative routes resolve under the mount.
-                    let! _ = await (page.GotoAsync publicUrl)
+                        // Everything below happens at the PUBLIC path. Nothing in the browser was
+                        // told about a prefix: the shell's `<base href>` is the only thing making
+                        // its relative routes resolve under the mount.
+                        let! _ = await (page.GotoAsync publicUrl)
 
-                    // NOTHING may be evaluated until the page has settled. On a 401 from `me`
-                    // the client RENAVIGATES through the login bounce (session -> manager ->
-                    // `<mount>/callback` -> `./` -> the shell), and an `EvaluateAsync` racing
-                    // that navigation dies with "Execution context was destroyed" — which is
-                    // exactly how this test passed locally and broke master. `connected` is only
-                    // true on the shell after the bounce, and `WaitForFunctionAsync` re-arms
-                    // across navigations, so it is the one safe thing to await first.
-                    let! _ = await (page.WaitForFunctionAsync connected)
+                        // NOTHING may be evaluated until the page has settled. On a 401 from `me`
+                        // the client RENAVIGATES through the login bounce (session -> manager ->
+                        // `<mount>/callback` -> `./` -> the shell), and an `EvaluateAsync` racing
+                        // that navigation dies with "Execution context was destroyed" — which is
+                        // exactly how this test passed locally and broke master. `connected` is only
+                        // true on the shell after the bounce, and `WaitForFunctionAsync` re-arms
+                        // across navigations, so it is the one safe thing to await first.
+                        let! _ = await (page.WaitForFunctionAsync connected)
 
-                    let! baseHref = await (page.EvaluateAsync<string> "() => document.querySelector('base')?.getAttribute('href')")
-                    Expect.equal baseHref (sprintf "/s/%s/" MOUNT_SESSION) "the shell declares its mount"
+                        let! baseHref = await (page.EvaluateAsync<string> "() => document.querySelector('base')?.getAttribute('href')")
+                        Expect.equal baseHref (sprintf "/s/%s/" MOUNT_SESSION) "the shell declares its mount"
 
-                    // Installable, and installable AS ITSELF. The manifest is addressed
-                    // relatively like every other route here, and the URLs INSIDE it resolve
-                    // against its own address — so the app a person adds to their home screen
-                    // launches at this session rather than at whatever sits on the origin's
-                    // root. Resolved by the browser rather than compared as text, because the
-                    // resolution is the property; the icon is fetched for the same reason a
-                    // manifest naming an icon nobody serves would still parse.
-                    let! installed =
-                        await (page.EvaluateAsync<string>
-                                """async () => {
-                                     const href = document.querySelector('link[rel=manifest]').href
-                                     const manifest = await (await fetch(href)).json()
-                                     const icon = await fetch(new URL(manifest.icons[0].src, href))
-                                     return [new URL(manifest.start_url, href).pathname,
-                                             new URL(icon.url).pathname,
-                                             icon.status,
-                                             icon.headers.get('content-type')].join(' ')
-                                   }""")
-                    Expect.equal
-                        installed
-                        (sprintf "/s/%s/ /s/%s/icon.png 200 image/png" MOUNT_SESSION MOUNT_SESSION)
-                        "the installed app starts at this session, and its mark is served under the same mount"
+                        // Installable, and installable AS ITSELF. The manifest is addressed
+                        // relatively like every other route here, and the URLs INSIDE it resolve
+                        // against its own address — so the app a person adds to their home screen
+                        // launches at this session rather than at whatever sits on the origin's
+                        // root. Resolved by the browser rather than compared as text, because the
+                        // resolution is the property; the icon is fetched for the same reason a
+                        // manifest naming an icon nobody serves would still parse.
+                        let! installed =
+                            await (page.EvaluateAsync<string>
+                                    """async () => {
+                                         const href = document.querySelector('link[rel=manifest]').href
+                                         const manifest = await (await fetch(href)).json()
+                                         const icon = await fetch(new URL(manifest.icons[0].src, href))
+                                         return [new URL(manifest.start_url, href).pathname,
+                                                 new URL(icon.url).pathname,
+                                                 icon.status,
+                                                 icon.headers.get('content-type')].join(' ')
+                                       }""")
+                        Expect.equal
+                            installed
+                            (sprintf "/s/%s/ /s/%s/icon.png 200 image/png" MOUNT_SESSION MOUNT_SESSION)
+                            "the installed app starts at this session, and its mark is served under the same mount"
 
-                    // No assertion here that the bundle was fetched under the mount: reaching
-                    // `connected` above already required it. The bundle IS the client, and a
-                    // root-anchored URL would have hit the proxy's root and 404'd, so nothing
-                    // would have run to set the flag. Scraping `performance` entries for the
-                    // bundle's path restated that, and only added a second place that had to
-                    // know how the bundle is addressed — which is what broke when it became
-                    // `client.<digest>.js`.
+                        // No assertion here that the bundle was fetched under the mount: reaching
+                        // `connected` above already required it. The bundle IS the client, and a
+                        // root-anchored URL would have hit the proxy's root and 404'd, so nothing
+                        // would have run to set the flag. Scraping `performance` entries for the
+                        // bundle's path restated that, and only added a second place that had to
+                        // know how the bundle is addressed — which is what broke when it became
+                        // `client.<digest>.js`.
 
-                    // The auth cookie is scoped to this session's mount, not the whole origin.
-                    let! cookies = await (context.CookiesAsync ())
-                    let sessionCookie =
-                        cookies |> Seq.tryFind (fun c -> c.Name.StartsWith "yession_auth_")
-                    match sessionCookie with
-                    | None -> failwith "no session auth cookie was set"
-                    | Some cookie ->
-                        Expect.equal cookie.Path (sprintf "/s/%s/" MOUNT_SESSION) "scoped to the mount, not shared with siblings"
+                        // The auth cookie is scoped to this session's mount, not the whole origin.
+                        let! cookies = await (page.Context.CookiesAsync ())
+                        let sessionCookie =
+                            cookies |> Seq.tryFind (fun c -> c.Name.StartsWith "yession_auth_")
+                        match sessionCookie with
+                        | None -> failwith "no session auth cookie was set"
+                        | Some cookie ->
+                            Expect.equal cookie.Path (sprintf "/s/%s/" MOUNT_SESSION) "scoped to the mount, not shared with siblings"
 
-                    // Client-side persistence across a full server wipe (Step 20), which is
-                    // only observable where the ADDRESS survives the restart. This used to
-                    // live in the unmounted fixture and passed because that fixture pinned
-                    // the session's port; Plan 13 deleted the pinning, so the property now
-                    // belongs where it actually holds — and proving it here is the point of
-                    // path-mounting rather than an accident of it.
-                    let composerSel = """[data-rich-readonly="false"] .ProseMirror"""
-                    let! _ = await (page.WaitForSelectorAsync composerSel)
-                    do! awaitU (page.ClickAsync composerSel)
-                    do! awaitU (page.Keyboard.TypeAsync "persisted across the wipe")
-                    let hasDraft =
-                        """[...document.querySelectorAll('.ProseMirror')].some(p => p.textContent === 'persisted across the wipe')"""
-                    let! _ = await (page.WaitForFunctionAsync hasDraft)
+                        // Client-side persistence across a full server wipe (Step 20), which is
+                        // only observable where the ADDRESS survives the restart. This used to
+                        // live in the unmounted fixture and passed because that fixture pinned
+                        // the session's port; Plan 13 deleted the pinning, so the property now
+                        // belongs where it actually holds — and proving it here is the point of
+                        // path-mounting rather than an accident of it.
+                        let composerSel = """[data-rich-readonly="false"] .ProseMirror"""
+                        let! _ = await (page.WaitForSelectorAsync composerSel)
+                        do! awaitU (page.ClickAsync composerSel)
+                        do! awaitU (page.Keyboard.TypeAsync "persisted across the wipe")
+                        let hasDraft =
+                            """[...document.querySelectorAll('.ProseMirror')].some(p => p.textContent === 'persisted across the wipe')"""
+                        let! _ = await (page.WaitForFunctionAsync hasDraft)
 
-                    mountedHost.Kill true
-                    mountedHost.WaitForExit ()
-                    if Directory.Exists mountDataDir then Directory.Delete (mountDataDir, true)
-                    mounted.Restart ()
+                        mountedHost.Kill true
+                        mountedHost.WaitForExit ()
+                        if Directory.Exists mountDataDir then Directory.Delete (mountDataDir, true)
+                        mounted.Restart ()
 
-                    // The SAME url — the session came back on a different loopback port and
-                    // the proxy followed it, which the browser never saw. So the origin is
-                    // unchanged, its IndexedDB is still this session's, and the draft can
-                    // only have come from there: the server's copy was deleted.
-                    let! _ = await (page.ReloadAsync ())
-                    let! _ = await (page.WaitForFunctionAsync connected)
-                    do! await (page.WaitForFunctionAsync hasDraft) |> Async.Ignore
+                        // The SAME url — the session came back on a different loopback port and
+                        // the proxy followed it, which the browser never saw. So the origin is
+                        // unchanged, its IndexedDB is still this session's, and the draft can
+                        // only have come from there: the server's copy was deleted.
+                        let! _ = await (page.ReloadAsync ())
+                        let! _ = await (page.WaitForFunctionAsync connected)
+                        do! await (page.WaitForFunctionAsync hasDraft) |> Async.Ignore
+                    })
                 finally
-                    browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
-                    playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
                     mounted.Stop ()
             }
 
@@ -4506,37 +4576,26 @@ let mountedTests =
         testCaseAsync "back from a freshly opened session is the Manager, not a sign-in bounce" <|
             async {
                 let mounted = startMounted (fun _ -> false)
-                let mutable browserToClose : IBrowser option = None
-                let mutable playwrightToDispose : IPlaywright option = None
                 try
-                    let managerUrl = mounted.ManagerOrigin + "/"
-                    let publicUrl = mounted.PublicUrl
-                    let! pw = await (Playwright.CreateAsync ())
-                    playwrightToDispose <- Some pw
-                    let! br =
-                        await (pw.Chromium.LaunchAsync (
-                            BrowserTypeLaunchOptions (
-                                ExecutablePath = chromiumPath (),
-                                Args = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |])))
-                    browserToClose <- Some br
-                    let! context = await (br.NewContextAsync ())
-                    let! page = await (context.NewPageAsync ())
-                    page.SetDefaultTimeout 20000.0f
-                    let evidence = watching page
-                    do! reporting "back from a freshly opened session" page evidence <| async {
-                    let! _ = await (page.GotoAsync managerUrl)
-                    // The session, as a person reaches it from the Manager: the first visit,
-                    // with no cookie, so the sign-in bounce runs. `connected` is only true on
-                    // the shell after it, and re-arms across the navigations in between.
-                    let! _ = await (page.GotoAsync publicUrl)
-                    let! _ = await (page.WaitForFunctionAsync connected)
-                    let! _ = await (page.GoBackAsync ())
-                    do! waitFor "the Manager, one step back" page
-                            (sprintf "location.href === %s" (System.Text.Json.JsonSerializer.Serialize managerUrl))
-                    }
+                    do! withContexts (fun contexts -> async {
+                        let managerUrl = mounted.ManagerOrigin + "/"
+                        let publicUrl = mounted.PublicUrl
+                        let! page = contexts.Page None
+                        page.SetDefaultTimeout 20000.0f
+                        let evidence = watching page
+                        do! reporting "back from a freshly opened session" page evidence <| async {
+                        let! _ = await (page.GotoAsync managerUrl)
+                        // The session, as a person reaches it from the Manager: the first visit,
+                        // with no cookie, so the sign-in bounce runs. `connected` is only true on
+                        // the shell after it, and re-arms across the navigations in between.
+                        let! _ = await (page.GotoAsync publicUrl)
+                        let! _ = await (page.WaitForFunctionAsync connected)
+                        let! _ = await (page.GoBackAsync ())
+                        do! waitFor "the Manager, one step back" page
+                                (sprintf "location.href === %s" (System.Text.Json.JsonSerializer.Serialize managerUrl))
+                        }
+                    })
                 finally
-                    browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
-                    playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
                     mounted.Stop ()
             }
 
@@ -4555,43 +4614,32 @@ let mountedTests =
                         let stalls = stalling && url.EndsWith "/me"
                         if stalls then stalled.TrySetResult () |> ignore
                         stalls)
-                let mutable browserToClose : IBrowser option = None
-                let mutable playwrightToDispose : IPlaywright option = None
                 try
-                    let publicUrl = mounted.PublicUrl
-                    let! pw = await (Playwright.CreateAsync ())
-                    playwrightToDispose <- Some pw
-                    let! br =
-                        await (pw.Chromium.LaunchAsync (
-                            BrowserTypeLaunchOptions (
-                                ExecutablePath = chromiumPath (),
-                                Args = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |])))
-                    browserToClose <- Some br
-                    let! context = await (br.NewContextAsync ())
-                    let! page = await (context.NewPageAsync ())
-                    page.SetDefaultTimeout 20000.0f
-                    let evidence = watching page
-                    do! reporting "a probe that never answers" page evidence <| async {
-                    // Signed in and connected first, so the reload below is a client that has
-                    // everything but an answer — not one that is off to log in.
-                    let! _ = await (page.GotoAsync publicUrl)
-                    let! _ = await (page.WaitForFunctionAsync connected)
-                    stalling <- true
-                    // The page's time from here is the case's to turn, so the probe's deadline
-                    // passes when the case says rather than ten real seconds later. Flowing,
-                    // not paused: everything else on the page keeps its ordinary pace.
-                    do! awaitU (page.Clock.InstallAsync ())
-                    let! _ = await (page.ReloadAsync ())
-                    // The probe is out, and held: its deadline is armed before it is sent.
-                    let! asked = Async.AwaitTask (Task.WhenAny (stalled.Task, Task.Delay 20000))
-                    Expect.isTrue (obj.ReferenceEquals (asked, stalled.Task)) "the reloaded page asked who it is, and the question was held"
-                    do! awaitU (page.Clock.FastForwardAsync (int64 Yession.App.Client.Probe.deadline.TotalMilliseconds))
-                    do! waitFor "the offer to reopen, once the probe has been given up on" page
-                            """document.querySelector('[data-session-reopen]') !== null"""
-                    }
+                    do! withContexts (fun contexts -> async {
+                        let publicUrl = mounted.PublicUrl
+                        let! page = contexts.Page None
+                        page.SetDefaultTimeout 20000.0f
+                        let evidence = watching page
+                        do! reporting "a probe that never answers" page evidence <| async {
+                        // Signed in and connected first, so the reload below is a client that has
+                        // everything but an answer — not one that is off to log in.
+                        let! _ = await (page.GotoAsync publicUrl)
+                        let! _ = await (page.WaitForFunctionAsync connected)
+                        stalling <- true
+                        // The page's time from here is the case's to turn, so the probe's deadline
+                        // passes when the case says rather than ten real seconds later. Flowing,
+                        // not paused: everything else on the page keeps its ordinary pace.
+                        do! awaitU (page.Clock.InstallAsync ())
+                        let! _ = await (page.ReloadAsync ())
+                        // The probe is out, and held: its deadline is armed before it is sent.
+                        let! asked = Async.AwaitTask (Task.WhenAny (stalled.Task, Task.Delay 20000))
+                        Expect.isTrue (obj.ReferenceEquals (asked, stalled.Task)) "the reloaded page asked who it is, and the question was held"
+                        do! awaitU (page.Clock.FastForwardAsync (int64 Yession.App.Client.Probe.deadline.TotalMilliseconds))
+                        do! waitFor "the offer to reopen, once the probe has been given up on" page
+                                """document.querySelector('[data-session-reopen]') !== null"""
+                        }
+                    })
                 finally
-                    browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
-                    playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
                     mounted.Stop ()
             }
 
@@ -4868,66 +4916,59 @@ let frontDoorTests =
                 // door is told where to forward before the Manager exists to be asked.
                 let frontManagerPort = freeLoopbackPort ()
                 let door = startFrontDoor frontManagerPort 2
-                let mutable browserToClose : IBrowser option = None
-                let mutable playwrightToDispose : IPlaywright option = None
                 try
-                    startFrontedHost door.Origin frontManagerPort
-                    let! pw = await (Playwright.CreateAsync ())
-                    playwrightToDispose <- Some pw
-                    let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
-                    browserToClose <- Some br
-                    // Declining motion skips the opening screen's 2.8s dwell, which is the
-                    // opening page's own cases' subject and not this one's.
-                    let! context = await (br.NewContextAsync (BrowserNewContextOptions (ReducedMotion = ReducedMotion.Reduce)))
-                    let! page = await (context.NewPageAsync ())
-                    page.SetDefaultTimeout 30000.0f
-                    let evidence = watching page
-                    do! reporting "create behind a front door" page evidence <| async {
-                    let! _ = await (page.GotoAsync (door.At "/"))
+                    do! withContexts (fun contexts -> async {
+                        startFrontedHost door.Origin frontManagerPort
+                        // Declining motion skips the opening screen's 2.8s dwell, which is the
+                        // opening page's own cases' subject and not this one's.
+                        let! page = contexts.Page (Some (BrowserNewContextOptions (ReducedMotion = ReducedMotion.Reduce)))
+                        page.SetDefaultTimeout 30000.0f
+                        let evidence = watching page
+                        do! reporting "create behind a front door" page evidence <| async {
+                        let! _ = await (page.GotoAsync (door.At "/"))
 
-                    // Pressed, not POSTed: the whole fault lives in what the browser does with
-                    // the answer, so the browser has to be the thing that asks.
-                    let create = sprintf "[%s] button[type=submit]" Yession.App.Dom.Manager.createSession
-                    let! _ = await (page.WaitForSelectorAsync create)
-                    do! awaitU (page.ClickAsync create)
+                        // Pressed, not POSTed: the whole fault lives in what the browser does with
+                        // the answer, so the browser has to be the thing that asks.
+                        let create = sprintf "[%s] button[type=submit]" Yession.App.Dom.Manager.createSession
+                        let! _ = await (page.WaitForSelectorAsync create)
+                        do! awaitU (page.ClickAsync create)
 
-                    // THE promise: pressing Create puts you in the session it created. One
-                    // fact, read off the page rather than off its words — the shell says which
-                    // session it is, and the address says which session was asked for, and
-                    // they have to be the same one.
-                    let landed =
-                        sprintf
-                            """() => {
-                                 const at = /^\/s\/([^/]+)\//.exec(location.pathname)
-                                 const shell = document.querySelector('meta[name="%s"]')?.getAttribute('content')
-                                 return !!at && !!shell && shell === at[1]
-                               }"""
-                            Yession.App.Dom.sessionMetaName
-                    // Launching a real child and waiting out the door's lag is the slow part;
-                    // the failure this guards is instant, so a long wait only ever costs a
-                    // green run time.
-                    try
-                        do!
-                            await (page.WaitForFunctionAsync (landed, null, PageWaitForFunctionOptions (Timeout = 90000.0f)))
-                            |> Async.Ignore
-                    with _ ->
-                        // A browser case can only fail by a wait not settling, and that failure
-                        // names the wait rather than the fault. The page has been holding the
-                        // answer the whole time: say what it is showing.
-                        let! showing =
-                            await (page.EvaluateAsync<string>
-                                    """() => JSON.stringify({
-                                         url: location.href,
-                                         title: document.title,
-                                         text: document.body?.innerText?.slice(0, 200) ?? null
-                                       })""")
-                        failwithf
-                            "creating a session must land in that session; the browser is showing %s"
-                            showing
-                    }
+                        // THE promise: pressing Create puts you in the session it created. One
+                        // fact, read off the page rather than off its words — the shell says which
+                        // session it is, and the address says which session was asked for, and
+                        // they have to be the same one.
+                        let landed =
+                            sprintf
+                                """() => {
+                                     const at = /^\/s\/([^/]+)\//.exec(location.pathname)
+                                     const shell = document.querySelector('meta[name="%s"]')?.getAttribute('content')
+                                     return !!at && !!shell && shell === at[1]
+                                   }"""
+                                Yession.App.Dom.sessionMetaName
+                        // Launching a real child and waiting out the door's lag is the slow part;
+                        // the failure this guards is instant, so a long wait only ever costs a
+                        // green run time.
+                        try
+                            do!
+                                await (page.WaitForFunctionAsync (landed, null, PageWaitForFunctionOptions (Timeout = 90000.0f)))
+                                |> Async.Ignore
+                        with _ ->
+                            // A browser case can only fail by a wait not settling, and that failure
+                            // names the wait rather than the fault. The page has been holding the
+                            // answer the whole time: say what it is showing.
+                            let! showing =
+                                await (page.EvaluateAsync<string>
+                                        """() => JSON.stringify({
+                                             url: location.href,
+                                             title: document.title,
+                                             text: document.body?.innerText?.slice(0, 200) ?? null
+                                           })""")
+                            failwithf
+                                "creating a session must land in that session; the browser is showing %s"
+                                showing
+                        }
+                    })
                 finally
-                    browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
-                    playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
                     door.Stop ()
                     try if frontedHost <> null then frontedHost.Kill true with _ -> ()
             }
@@ -5017,102 +5058,96 @@ let frontedTests =
         testCaseAsync "pressing Create on the tailnet lands you in that session, as yourself" <|
             async {
                 let deployed = deployFronted ()
-                let mutable browserToClose : IBrowser option = None
-                let mutable playwrightToDispose : IPlaywright option = None
                 try
-                    let! pw = await (Playwright.CreateAsync ())
-                    playwrightToDispose <- Some pw
-                    let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
-                    browserToClose <- Some br
-                    // The browser IS the ingress here: what `serve` would assert about the
-                    // caller rides every request, including the sign-in bounce a session sends
-                    // through the Manager — which is the request the identity has to survive.
-                    let! context =
-                        await (br.NewContextAsync (
-                            BrowserNewContextOptions (
-                                // Past the opening screen's dwell, which is not this case's.
-                                ReducedMotion = ReducedMotion.Reduce,
-                                ExtraHTTPHeaders =
-                                    dict [ "Tailscale-User-Login", FRONTED_LOGIN
-                                           "Tailscale-User-Name", FRONTED_NAME
-                                           "Tailscale-User-Profile-Pic", "https://example.com/alice.png" ])))
-                    let! page = await (context.NewPageAsync ())
-                    page.SetDefaultTimeout 30000.0f
-                    let evidence = watching page
-                    do! reporting "a fronted deployment" page evidence <| async {
-                    // The first answer is the Manager's own verdict on the identity the proxy
-                    // handed it, so read it rather than wait thirty seconds for a Create
-                    // button a 401 page will never show. (The deletion-ordering trap in the
-                    // Caddyfile fails exactly here: the Manager sees nobody.)
-                    let! landing = await (page.GotoAsync (deployed.Origin + "/"))
-                    if landing.Status <> 200 then
-                        let! body = await (landing.TextAsync ())
-                        failwithf
-                            "the Manager answered %d through the proxy — the identity the ingress asserted did not survive it: %s"
-                            landing.Status
-                            (body.Trim ())
-                    let create = sprintf "[%s] button[type=submit]" Yession.App.Dom.Manager.createSession
-                    let! _ = await (page.WaitForSelectorAsync create)
-                    do! awaitU (page.ClickAsync create)
+                    do! withContexts (fun contexts -> async {
+                        // The browser IS the ingress here: what `serve` would assert about the
+                        // caller rides every request, including the sign-in bounce a session sends
+                        // through the Manager — which is the request the identity has to survive.
+                        let! page =
+                            contexts.Page (
+                                Some (
+                                    BrowserNewContextOptions (
+                                        // Past the opening screen's dwell, which is not this case's.
+                                        ReducedMotion = ReducedMotion.Reduce,
+                                        ExtraHTTPHeaders =
+                                            dict [ "Tailscale-User-Login", FRONTED_LOGIN
+                                                   "Tailscale-User-Name", FRONTED_NAME
+                                                   "Tailscale-User-Profile-Pic", "https://example.com/alice.png" ])))
+                        page.SetDefaultTimeout 30000.0f
+                        let evidence = watching page
+                        do! reporting "a fronted deployment" page evidence <| async {
+                        // The first answer is the Manager's own verdict on the identity the proxy
+                        // handed it, so read it rather than wait thirty seconds for a Create
+                        // button a 401 page will never show. (The deletion-ordering trap in the
+                        // Caddyfile fails exactly here: the Manager sees nobody.)
+                        let! landing = await (page.GotoAsync (deployed.Origin + "/"))
+                        if landing.Status <> 200 then
+                            let! body = await (landing.TextAsync ())
+                            failwithf
+                                "the Manager answered %d through the proxy — the identity the ingress asserted did not survive it: %s"
+                                landing.Status
+                                (body.Trim ())
+                        let create = sprintf "[%s] button[type=submit]" Yession.App.Dom.Manager.createSession
+                        let! _ = await (page.WaitForSelectorAsync create)
+                        do! awaitU (page.ClickAsync create)
 
-                    // One promise, read off the page: the address names a session, the shell
-                    // says it is that one, the client is connected to it (so the sign-in went
-                    // through the Manager as issuer, at the proxy's origin, and came back),
-                    // and the name on the roster is the one the ingress asserted — through
-                    // caddy's translation, the Manager's ID token and the session's cookie.
-                    let landedAsYourself =
-                        sprintf
-                            """() => {
-                                 const at = /^\/s\/([^/]+)\//.exec(location.pathname)
-                                 const shell = document.querySelector('meta[name="%s"]')?.getAttribute('content')
-                                 const connection = document.querySelector('[%s]')?.getAttribute('%s')
-                                 const name = document.querySelector('[%s]')?.textContent?.trim()
-                                 return !!at && shell === at[1] && connection === 'Connected' && name === '%s'
-                               }"""
-                            Yession.App.Dom.sessionMetaName
-                            Yession.App.Dom.Hooks.connection
-                            Yession.App.Dom.Hooks.connection
-                            Yession.App.Dom.Hooks.displayName
-                            FRONTED_NAME
-                    // A real child launches, the map catches up, caddy re-adapts within a
-                    // second, and the sign-in round-trips — slow on a cold runner, and the
-                    // faults this guards are all instant, so a long wait only costs green time.
-                    try
-                        do!
-                            await (page.WaitForFunctionAsync (landedAsYourself, null, PageWaitForFunctionOptions (Timeout = 90000.0f)))
-                            |> Async.Ignore
-                    with _ ->
-                        let! showing =
-                            await (page.EvaluateAsync<string>
-                                    (sprintf
-                                        """async () => JSON.stringify({
-                                             url: location.href,
-                                             title: document.title,
-                                             // Whether the page is being RENDERED at all, which
-                                             // "Connected with the right name" does not say: a
-                                             // document whose script runs while its rendering is
-                                             // suppressed reads as a wait that simply never fires.
-                                             // Cost one whole CI round to tell apart once.
-                                             rafAlive: await Promise.race([new Promise(r => requestAnimationFrame(() => r(true))), new Promise(r => setTimeout(() => r(false), 2000))]),
-                                             connection: document.querySelector('[%s]')?.getAttribute('%s') ?? null,
-                                             name: document.querySelector('[%s]')?.textContent ?? null,
-                                             text: document.body?.innerText?.slice(0, 200) ?? null
-                                           })"""
-                                        Yession.App.Dom.Hooks.connection
-                                        Yession.App.Dom.Hooks.connection
-                                        Yession.App.Dom.Hooks.displayName))
-                        let said =
-                            deployed.Pieces
-                            |> List.map (fun d -> sprintf "--- %s said ---\n%s" d.Label (lock d.Said (fun () -> string d.Said)))
-                            |> String.concat "\n"
-                        failwithf
-                            "pressing Create must land in that session as the asserted user; the browser is showing %s\n%s"
-                            showing
-                            said
-                    }
+                        // One promise, read off the page: the address names a session, the shell
+                        // says it is that one, the client is connected to it (so the sign-in went
+                        // through the Manager as issuer, at the proxy's origin, and came back),
+                        // and the name on the roster is the one the ingress asserted — through
+                        // caddy's translation, the Manager's ID token and the session's cookie.
+                        let landedAsYourself =
+                            sprintf
+                                """() => {
+                                     const at = /^\/s\/([^/]+)\//.exec(location.pathname)
+                                     const shell = document.querySelector('meta[name="%s"]')?.getAttribute('content')
+                                     const connection = document.querySelector('[%s]')?.getAttribute('%s')
+                                     const name = document.querySelector('[%s]')?.textContent?.trim()
+                                     return !!at && shell === at[1] && connection === 'Connected' && name === '%s'
+                                   }"""
+                                Yession.App.Dom.sessionMetaName
+                                Yession.App.Dom.Hooks.connection
+                                Yession.App.Dom.Hooks.connection
+                                Yession.App.Dom.Hooks.displayName
+                                FRONTED_NAME
+                        // A real child launches, the map catches up, caddy re-adapts within a
+                        // second, and the sign-in round-trips — slow on a cold runner, and the
+                        // faults this guards are all instant, so a long wait only costs green time.
+                        try
+                            do!
+                                await (page.WaitForFunctionAsync (landedAsYourself, null, PageWaitForFunctionOptions (Timeout = 90000.0f)))
+                                |> Async.Ignore
+                        with _ ->
+                            let! showing =
+                                await (page.EvaluateAsync<string>
+                                        (sprintf
+                                            """async () => JSON.stringify({
+                                                 url: location.href,
+                                                 title: document.title,
+                                                 // Whether the page is being RENDERED at all, which
+                                                 // "Connected with the right name" does not say: a
+                                                 // document whose script runs while its rendering is
+                                                 // suppressed reads as a wait that simply never fires.
+                                                 // Cost one whole CI round to tell apart once.
+                                                 rafAlive: await Promise.race([new Promise(r => requestAnimationFrame(() => r(true))), new Promise(r => setTimeout(() => r(false), 2000))]),
+                                                 connection: document.querySelector('[%s]')?.getAttribute('%s') ?? null,
+                                                 name: document.querySelector('[%s]')?.textContent ?? null,
+                                                 text: document.body?.innerText?.slice(0, 200) ?? null
+                                               })"""
+                                            Yession.App.Dom.Hooks.connection
+                                            Yession.App.Dom.Hooks.connection
+                                            Yession.App.Dom.Hooks.displayName))
+                            let said =
+                                deployed.Pieces
+                                |> List.map (fun d -> sprintf "--- %s said ---\n%s" d.Label (lock d.Said (fun () -> string d.Said)))
+                                |> String.concat "\n"
+                            failwithf
+                                "pressing Create must land in that session as the asserted user; the browser is showing %s\n%s"
+                                showing
+                                said
+                        }
+                    })
                 finally
-                    browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
-                    playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
                     // Reverse order: the map and the Manager before the proxy they sit behind.
                     for d in List.rev deployed.Pieces do d.Stop ()
             }
@@ -5144,47 +5179,41 @@ let filterTests =
                           "--port"; "0"; "--data-dir"; filtersDataDir ]
                         []
                         (fun line -> line.Contains "management UI at")
-                let mutable browserToClose : IBrowser option = None
-                let mutable playwrightToDispose : IPlaywright option = None
                 try
-                    let! pw = await (Playwright.CreateAsync ())
-                    playwrightToDispose <- Some pw
-                    let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
-                    browserToClose <- Some br
-                    let! page = await (br.NewPageAsync ())
-                    page.SetDefaultTimeout 30000.0f
-                    let evidence = watching page
-                    do! reporting "filter history" page evidence <| async {
-                    let! _ = await (page.GotoAsync (manager.At "/"))
-                    let archived = sprintf "[%s=\"show-archived\"]" Yession.App.Dom.Manager.filter
-                    let! _ = await (page.WaitForSelectorAsync archived)
-                    do! awaitU (page.ClickAsync archived)
+                    do! withContexts (fun contexts -> async {
+                        let! page = contexts.Page None
+                        page.SetDefaultTimeout 30000.0f
+                        let evidence = watching page
+                        do! reporting "filter history" page evidence <| async {
+                        let! _ = await (page.GotoAsync (manager.At "/"))
+                        let archived = sprintf "[%s=\"show-archived\"]" Yession.App.Dom.Manager.filter
+                        let! _ = await (page.WaitForSelectorAsync archived)
+                        do! awaitU (page.ClickAsync archived)
 
-                    // Both halves of one click, read off the page: the address carries the
-                    // filter, and the rows stream has answered for it — which shows as the chip
-                    // re-rendered for the NEW query, linking back to the one without it.
-                    let lit =
-                        sprintf
-                            """() => location.search.includes('show=archived')
-                                  && !document.querySelector('[%s="show-archived"]')?.getAttribute('href')?.includes('show=archived')"""
-                            Yession.App.Dom.Manager.filter
-                    let! _ = await (page.WaitForFunctionAsync lit)
+                        // Both halves of one click, read off the page: the address carries the
+                        // filter, and the rows stream has answered for it — which shows as the chip
+                        // re-rendered for the NEW query, linking back to the one without it.
+                        let lit =
+                            sprintf
+                                """() => location.search.includes('show=archived')
+                                      && !document.querySelector('[%s="show-archived"]')?.getAttribute('href')?.includes('show=archived')"""
+                                Yession.App.Dom.Manager.filter
+                        let! _ = await (page.WaitForFunctionAsync lit)
 
-                    // Back is the promise. It must stay on this page, take the filter out of
-                    // the address, and move the rows with it — the chip links to adding it again.
-                    let! _ = await (page.GoBackAsync ())
-                    let unlit =
-                        sprintf
-                            """() => location.pathname === '/'
-                                  && !location.search.includes('show=archived')
-                                  && !!document.querySelector('[%s="show-archived"]')?.getAttribute('href')?.includes('show=archived')"""
-                            Yession.App.Dom.Manager.filter
-                    let! _ = await (page.WaitForFunctionAsync unlit)
-                    ()
-                    }
+                        // Back is the promise. It must stay on this page, take the filter out of
+                        // the address, and move the rows with it — the chip links to adding it again.
+                        let! _ = await (page.GoBackAsync ())
+                        let unlit =
+                            sprintf
+                                """() => location.pathname === '/'
+                                      && !location.search.includes('show=archived')
+                                      && !!document.querySelector('[%s="show-archived"]')?.getAttribute('href')?.includes('show=archived')"""
+                                Yession.App.Dom.Manager.filter
+                        let! _ = await (page.WaitForFunctionAsync unlit)
+                        ()
+                        }
+                    })
                 finally
-                    browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
-                    playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
                     manager.Stop ()
             }
     ]
@@ -5251,7 +5280,7 @@ let private push (page: IPage) ((x, y): float32 * float32) : Async<unit> =
 let private withHeldCreate
     (name: string)
     (release: Release)
-    (body: Deployed -> IBrowser -> IPage -> Hold -> Async<unit>)
+    (body: Deployed -> Contexts -> IPage -> Hold -> Async<unit>)
     : Async<unit> =
     async {
         if Directory.Exists pressDataDir then Directory.Delete (pressDataDir, true)
@@ -5267,48 +5296,42 @@ let private withHeldCreate
                   "--port"; "0"; "--data-dir"; pressDataDir ]
                 []
                 (fun line -> line.Contains "management UI at")
-        let mutable browserToClose : IBrowser option = None
-        let mutable playwrightToDispose : IPlaywright option = None
         try
-            let! pw = await (Playwright.CreateAsync ())
-            playwrightToDispose <- Some pw
-            let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
-            browserToClose <- Some br
-            // Declining motion skips the opening screen's 2.8s dwell on the way to the
-            // session, which is the opening page's own cases' subject and not these.
-            let! page = await (br.NewPageAsync (BrowserNewPageOptions (ReducedMotion = ReducedMotion.Reduce)))
-            page.SetDefaultTimeout 30000.0f
-            let evidence = watching page
-            do! reporting name page evidence <| async {
-                // Continuations on their own threads, never on the one that settles a source:
-                // that thread is Playwright's, and a route call issued from inside the driver's
-                // own dispatch is a deadlock rather than a call.
-                let held = TaskCompletionSource<unit> (TaskCreationOptions.RunContinuationsAsynchronously)
-                let gate = TaskCompletionSource<unit> (TaskCreationOptions.RunContinuationsAsynchronously)
-                let hold =
-                    { Held = Async.AwaitTask held.Task
-                      LetGo = fun () -> gate.TrySetResult () |> ignore }
-                let holding (route: IRoute) =
-                    async {
-                        held.TrySetResult () |> ignore
-                        do! Async.AwaitTask gate.Task
-                        match release with
-                        | LetThrough -> do! awaitU (route.ContinueAsync ())
-                        | AnswerNothing -> do! awaitU (route.FulfillAsync (RouteFulfillOptions (Status = 204)))
-                    }
-                do! awaitU (page.RouteAsync ("**/sessions", fun route ->
-                        if route.Request.Method = "POST" then Async.Start (holding route)
-                        else route.ContinueAsync () |> ignore))
-                let! _ = await (page.GotoAsync (manager.At "/"))
-                let! _ = await (page.WaitForSelectorAsync createButton)
-                try
-                    do! body manager br page hold
-                finally
-                    hold.LetGo ()
-            }
+            do! withContexts (fun contexts -> async {
+                // Declining motion skips the opening screen's 2.8s dwell on the way to the
+                // session, which is the opening page's own cases' subject and not these.
+                let! page = contexts.Page (Some (BrowserNewContextOptions (ReducedMotion = ReducedMotion.Reduce)))
+                page.SetDefaultTimeout 30000.0f
+                let evidence = watching page
+                do! reporting name page evidence <| async {
+                    // Continuations on their own threads, never on the one that settles a source:
+                    // that thread is Playwright's, and a route call issued from inside the driver's
+                    // own dispatch is a deadlock rather than a call.
+                    let held = TaskCompletionSource<unit> (TaskCreationOptions.RunContinuationsAsynchronously)
+                    let gate = TaskCompletionSource<unit> (TaskCreationOptions.RunContinuationsAsynchronously)
+                    let hold =
+                        { Held = Async.AwaitTask held.Task
+                          LetGo = fun () -> gate.TrySetResult () |> ignore }
+                    let holding (route: IRoute) =
+                        async {
+                            held.TrySetResult () |> ignore
+                            do! Async.AwaitTask gate.Task
+                            match release with
+                            | LetThrough -> do! awaitU (route.ContinueAsync ())
+                            | AnswerNothing -> do! awaitU (route.FulfillAsync (RouteFulfillOptions (Status = 204)))
+                        }
+                    do! awaitU (page.RouteAsync ("**/sessions", fun route ->
+                            if route.Request.Method = "POST" then Async.Start (holding route)
+                            else route.ContinueAsync () |> ignore))
+                    let! _ = await (page.GotoAsync (manager.At "/"))
+                    let! _ = await (page.WaitForSelectorAsync createButton)
+                    try
+                        do! body manager contexts page hold
+                    finally
+                        hold.LetGo ()
+                }
+            })
         finally
-            browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
-            playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
             manager.Stop ()
     }
 
@@ -5330,7 +5353,7 @@ let pressTests =
             })
 
         testCaseAsync "a rows frame under a held Create leaves it held, and under the same finger" <|
-            withHeldCreate "held through a frame" AnswerNothing (fun manager br page hold -> async {
+            withHeldCreate "held through a frame" AnswerNothing (fun manager contexts page hold -> async {
                 let! at = whereCreateIs page
                 do! push page at
                 do! hold.Held
@@ -5338,8 +5361,9 @@ let pressTests =
                 // the seeded session, and the stream this page holds answers with the whole
                 // table. (Nothing can be read off this page until the hold ends, so the hold
                 // is let go — answered with nothing, which leaves the page where it was — and
-                // the frame confirmed afterwards.)
-                let! other = await (br.NewPageAsync ())
+                // the frame confirmed afterwards.) A context of its own, because another
+                // reader is another person, and one that closes with the case.
+                let! other = contexts.Page None
                 let! _ = await (other.GotoAsync (manager.At "/"))
                 do! awaitU (other.ClickAsync (sprintf "[%s]" Yession.App.Dom.Manager.archive))
                 hold.LetGo ()
@@ -5371,31 +5395,25 @@ let private withOpening (name: string) (prepare: IPage -> Async<unit>) (body: De
                   "--port"; "0"; "--data-dir"; openingDataDir ]
                 []
                 (fun line -> line.Contains "management UI at")
-        let mutable browserToClose : IBrowser option = None
-        let mutable playwrightToDispose : IPlaywright option = None
         try
-            let! pw = await (Playwright.CreateAsync ())
-            playwrightToDispose <- Some pw
-            let! br = await (pw.Chromium.LaunchAsync (BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
-            browserToClose <- Some br
-            let! page = await (br.NewPageAsync ())
-            page.SetDefaultTimeout 30000.0f
-            let evidence = watching page
-            do! reporting name page evidence <| async {
-                do! prepare page
-                // A session to open, created the way the button creates one; the answer to
-                // that is the address of the page under test.
-                use handler = new HttpClientHandler (AllowAutoRedirect = false)
-                use http = new HttpClient (handler)
-                let! created = await (http.PostAsync (manager.At "/sessions", new FormUrlEncodedContent (dict [ "name", "opening" ])))
-                let location = created.Headers.Location
-                Expect.isNotNull (box location) "Create answers with where the session now is"
-                let opening = if location.IsAbsoluteUri then location.ToString () else manager.At location.OriginalString
-                do! body manager page opening
-            }
+            do! withContexts (fun contexts -> async {
+                let! page = contexts.Page None
+                page.SetDefaultTimeout 30000.0f
+                let evidence = watching page
+                do! reporting name page evidence <| async {
+                    do! prepare page
+                    // A session to open, created the way the button creates one; the answer to
+                    // that is the address of the page under test.
+                    use handler = new HttpClientHandler (AllowAutoRedirect = false)
+                    use http = new HttpClient (handler)
+                    let! created = await (http.PostAsync (manager.At "/sessions", new FormUrlEncodedContent (dict [ "name", "opening" ])))
+                    let location = created.Headers.Location
+                    Expect.isNotNull (box location) "Create answers with where the session now is"
+                    let opening = if location.IsAbsoluteUri then location.ToString () else manager.At location.OriginalString
+                    do! body manager page opening
+                }
+            })
         finally
-            browserToClose |> Option.iter (fun b -> b.CloseAsync () |> ignore)
-            playwrightToDispose |> Option.iter (fun p -> p.Dispose ())
             manager.Stop ()
     }
 
