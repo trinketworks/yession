@@ -91,11 +91,11 @@ module Entity =
     /// is one colour everywhere they appear. It was a hue hashed over the whole wheel from the
     /// reference instead: unrelated to the checker beside it, a second colour for one person
     /// whenever attribution named them both ways, and free to land on the agent's blue —
-    /// which `Style.humanTones` exists to keep off every person. The agent wears that blue,
+    /// which the people's colours exist to stay off. The agent wears that blue,
     /// and a thing the grey its mark is drawn in.
     let presenceColour (model: ClientModel) (actor: ActorRef) : string =
         match wearer model actor with
-        | Person who -> fst (Style.humanTone (Attribution.seatOf model.Attribution who))
+        | Person who -> Style.humanColour (Attribution.seatOf model.Attribution who)
         | Agent -> "var(--color-blue)"
         | Thing -> "var(--color-ink-faint)"
 

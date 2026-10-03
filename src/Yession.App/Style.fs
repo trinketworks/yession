@@ -666,10 +666,7 @@ module Style =
     // Two-tone checkers stand in for people until real avatars exist; the variant is the
     // person's seat, the order they joined the session in, so identity is stable and two
     // people share one only when there are more people than checkers. The agent is not a
-    // checker: it is a blue diamond (`agentAvatar`), and the palette below keeps it that way.
-    // The checker hexes are deliberately NOT theme tokens: they are artwork constants, and
-    // each class must appear as the same literal in the `@source inline` mirror in
-    // app/tailwind.css — a var() inside would decouple nothing and complicate the mirror.
+    // checker: it is a blue diamond (`agentAvatar`), and the palette keeps it that way.
 
     let avatar = "w-5 h-5 shrink-0"
     let avatarSm = "w-3.5 h-3.5 shrink-0"
@@ -708,53 +705,34 @@ module Style =
     /// name beside it, so the name is what the eye reads and the mark says what kind.
     let entityMark = cls [ entitySeat; "text-ink-dim" ]
 
-    /// The class that paints one checker from its two tones.
-    let checker (light: string) (dark: string) =
-        sprintf "bg-[conic-gradient(from_0deg,%s_25%%,%s_0_50%%,%s_0_75%%,%s_0)]" light dark light dark
-
-    /// The people's checkers, as (light, dark) tone pairs.
+    /// The people's colours, one per seat: the theme's `--color-person-n`, said as the text
+    /// colour the `checker` utility paints with. Written out, not composed, because Tailwind
+    /// generates only the classes that appear literally in the source.
     ///
     /// BLUE IS THE AGENT. The mark is a blue cube held by green panels — the agent and the
     /// people (`assets/logo`) — and the agent's avatar is a blue diamond, so no person is
-    /// drawn in blue or in anything that reads as it: no tone between cyan and violet (HSL hue
-    /// 180°–270°). A checker once carried the mark's own `#1ba1e2` and sat directly above the
-    /// agent's diamond in the same colour. The people's side is the mark's green and the hues
-    /// either side of it — teal, green, lime, yellow, amber — plus the warm accents the Metro
-    /// palette the product is drawn from carries (orange, pink, magenta) and pale tints of
-    /// the greens and warms. Never red either, which is `--color-err`.
+    /// drawn in blue or in anything that reads as it: no colour between cyan and violet (HSL
+    /// hue 180°–270°). A checker once carried the mark's own `#1ba1e2` and sat directly above
+    /// the agent's diamond in the same colour. Never red either, which is `--color-err`.
     ///
-    /// A person's checker is their seat modulo the length, so the length is how many people
-    /// a room holds before two share one. It was their id's hash, which made the length a
-    /// collision RATE instead — even at eleven entries a three-person room shared a checker
-    /// about a quarter of the time. Every entry is
-    /// one hue at two values (the light tone carries the shape at >= 3:1 on every surface;
-    /// the dark tone is its shadow), and no two sit close enough in hue and value to be
-    /// mistaken for each other at 14px. Adding one means checking it against its neighbours
-    /// on the page, not only the rule — and mirroring it in `app/tailwind.css`.
-    ///
-    /// `Phase4`'s "People's marks" suite pins the rule, the contrast and the mirror.
-    let humanTones =
-        [| "#17c3b2", "#0a5c54" // teal
-           "#3fd75f", "#186a2c" // green
-           "#b8f7d4", "#3d7a5a" // mint
-           "#a8dd00", "#55700a" // lime: the mark's green
-           "#f3f59a", "#7a7a2a" // lemon
-           "#ecd000", "#665a00" // yellow
-           "#ffa928", "#7a4a06" // amber
-           "#ffc9a3", "#8a5230" // peach
-           "#ff7a45", "#803010" // orange
-           "#ff8fd8", "#7a2a66" // pink
-           "#e8469e", "#6e1349" // magenta
-        |]
+    /// A person's colour is their seat modulo the length, so the length is how many people a
+    /// room holds before two share one. It was their id's hash, which made the length a
+    /// collision RATE instead — even at eleven colours a three-person room shared one about a
+    /// quarter of the time. The colours themselves are in `app/tailwind.css`, and `Phase4`'s
+    /// "People's marks" suite holds them to the rule, the contrast and each other.
+    let private personColours =
+        [| "text-person-1"; "text-person-2"; "text-person-3"; "text-person-4"; "text-person-5"; "text-person-6" |]
 
-    /// A person's two tones, picked by their seat (`Attribution.seatOf`). Everything drawn
-    /// for a person — the checker, and the caret and selection they wear in a shared field —
-    /// is read from this one pair, so their mark and their cursor cannot disagree. Past the
-    /// last tone the seats start again at the first.
-    let humanTone (seat: int) : string * string = humanTones.[seat % humanTones.Length]
+    /// How many people a room seats before colours repeat.
+    let seats = personColours.Length
 
-    /// A person's checker, from their seat.
-    let humanAvatar (seat: int) : string = humanTone seat ||> checker
+    /// A person's colour, as a CSS colour for an inline style: the caret and its flag, a
+    /// presence dot, a draft's edge. Read from the seat, as the checker is, so a person's mark
+    /// and their cursor cannot disagree.
+    let humanColour (seat: int) : string = sprintf "var(--color-person-%d)" (seat % seats + 1)
+
+    /// A person's checker, from their seat (`Attribution.seatOf`).
+    let humanAvatar (seat: int) : string = "checker " + personColours.[seat % seats]
 
     /// The agent's mark: a dark square holding a small solid blue DIAMOND — the product's
     /// mark seen from above, its first frame, in the same blue the mark is drawn in. The

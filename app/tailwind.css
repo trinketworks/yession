@@ -122,8 +122,8 @@
 
      CONSTANTS are every colour the product draws with: the ground and the light, the mark's
      two hues (assets/logo: the agent's blue cube, the people's green panels), and the red
-     an error is said in. The chrome draws with nothing else; the terminal's sixteen below
-     are a palette of their own, and the people's checker tones are listed in `Style.fs`.
+     an error is said in — and the six people's colours. Nothing else draws with a hex but the
+     terminal's sixteen below, which are a palette of their own.
 
      VARIANTS are a constant made lighter or darker by a number of steps, and every one is
      the same rule: a mix toward white or black in OKLab, whose lightness is perceptual, so
@@ -142,6 +142,17 @@
   --color-blue: #1ba1e2;
   --color-green: #a8dd00;
   --color-red: #ff4a4a;
+  /* The people's six colours, one per seat (`Attribution.seatOf`): the order a person first
+     joined in, so six people never share one. None is in the agent's blue band and none is
+     the error red; each clears 3:1 as a mark on every surface, and no two sit close enough to
+     be mistaken for each other — the People's marks suite (Phase4) pins all three. The first
+     seat, the session's creator, wears the mark's own green. */
+  --color-person-1: var(--color-green);
+  --color-person-2: #14c8b4;
+  --color-person-3: #fff2a8;
+  --color-person-4: #ff7d3b;
+  --color-person-5: #f2549e;
+  --color-person-6: #c88cff;
 
   --step-tone: 15%;
   --step-grey: 4%;
@@ -974,21 +985,14 @@ summary::-webkit-details-marker { display: none; }
 @source "../src/**/*.fs";
 @source "../app/**/*.fs";
 
-/* The avatar checkers are assembled at runtime (`Style.checker` over `Style.humanTones`) and
-   so never appear as literals for the scanner — declare them inline (replaces the old
-   `safelist`). One line per tone pair, in the same order; the cheap tier fails if one is
-   missing, because a checker Tailwind never generated paints nothing at all. */
-@source inline("bg-[conic-gradient(from_0deg,#17c3b2_25%,#0a5c54_0_50%,#17c3b2_0_75%,#0a5c54_0)]");
-@source inline("bg-[conic-gradient(from_0deg,#3fd75f_25%,#186a2c_0_50%,#3fd75f_0_75%,#186a2c_0)]");
-@source inline("bg-[conic-gradient(from_0deg,#b8f7d4_25%,#3d7a5a_0_50%,#b8f7d4_0_75%,#3d7a5a_0)]");
-@source inline("bg-[conic-gradient(from_0deg,#a8dd00_25%,#55700a_0_50%,#a8dd00_0_75%,#55700a_0)]");
-@source inline("bg-[conic-gradient(from_0deg,#f3f59a_25%,#7a7a2a_0_50%,#f3f59a_0_75%,#7a7a2a_0)]");
-@source inline("bg-[conic-gradient(from_0deg,#ecd000_25%,#665a00_0_50%,#ecd000_0_75%,#665a00_0)]");
-@source inline("bg-[conic-gradient(from_0deg,#ffa928_25%,#7a4a06_0_50%,#ffa928_0_75%,#7a4a06_0)]");
-@source inline("bg-[conic-gradient(from_0deg,#ffc9a3_25%,#8a5230_0_50%,#ffc9a3_0_75%,#8a5230_0)]");
-@source inline("bg-[conic-gradient(from_0deg,#ff7a45_25%,#803010_0_50%,#ff7a45_0_75%,#803010_0)]");
-@source inline("bg-[conic-gradient(from_0deg,#ff8fd8_25%,#7a2a66_0_50%,#ff8fd8_0_75%,#7a2a66_0)]");
-@source inline("bg-[conic-gradient(from_0deg,#e8469e_25%,#6e1349_0_50%,#e8469e_0_75%,#6e1349_0)]");
+/* A person's checker: the seat's colour (`Style.humanAvatar` sets it as the mark's text
+   colour, `text-person-n`) in two quarters, and that colour three tone steps down in the
+   other two — the theme's variant rule, written once here for all six seats rather than as a
+   `person-n-down-3` apiece. */
+@utility checker {
+  --checker-down: color-mix(in oklab, currentColor, var(--color-black) calc(var(--step-tone) * 3));
+  background: conic-gradient(from 0deg, currentColor 25%, var(--checker-down) 0 50%, currentColor 0 75%, var(--checker-down) 0);
+}
 
 /* While the chat/terminal split is being dragged (`PaneShell.installPaneResize` sets this on
    the root): the pointer is captured by a 6px handle but the gesture is a page-wide one, so

@@ -1128,10 +1128,12 @@ let private themeContrastTests =
             // A mark, not text: WCAG 2.1's non-text floor is 3:1, and it is the checker's light
             // tone that draws its shape — the dark one is the shadow between its squares.
             let colour = themeColour (TestFiles.read "app/tailwind.css")
-            for light, _ in Style.humanTones do
+            let css = TestFiles.read "app/tailwind.css"
+            for seat in 0 .. Style.seats - 1 do
+                let light = resolve css (Style.humanColour seat)
                 for bg in [ "bg"; "panel"; "surface"; "surface-2" ] do
                     let ratio = contrast light (colour bg)
-                    Expect.isTrue (ratio >= 3.0) (sprintf "the %s checker on --color-%s is %.2f:1 — a mark needs 3:1" light bg ratio)
+                    Expect.isTrue (ratio >= 3.0) (sprintf "seat %d's checker on --color-%s is %.2f:1 — a mark needs 3:1" seat bg ratio)
 
         // The theme's colours are written once: a hex is a constant, and everything else is
         // made from one. A variant picked by hand — a "bright" that was its own hex — is how
@@ -1139,12 +1141,13 @@ let private themeContrastTests =
         testCase "the only colours written as hex are the constants and the terminal's palette" <| fun () ->
             let css = TestFiles.read "app/tailwind.css"
             let constants = set [ "black"; "white"; "blue"; "green"; "red" ]
+            let isPerson (name: string) = name.StartsWith "person-"
             let written =
                 System.Text.RegularExpressions.Regex.Matches (css, @"--color-([a-z0-9-]+):\s*#")
                 |> Seq.map (fun m -> m.Groups.[1].Value)
             for name in written do
                 Expect.isTrue
-                    (constants.Contains name || name.StartsWith "term-")
+                    (constants.Contains name || isPerson name || name.StartsWith "term-")
                     (sprintf "--color-%s is a hex; make it a variant of a constant, or a role pointing at one" name)
 
         testCase "inverse text on filled (active) buttons keeps >= 4.5:1" <| fun () ->
@@ -1155,7 +1158,7 @@ let private themeContrastTests =
     ]
 
 // --- People's marks: blue is the agent -----------------------------------------------------
-// A person's checker (`Style.humanTones`) must never be mistaken for the agent's diamond,
+// A person's checker (`Style.humanAvatar`) must never be mistaken for the agent's diamond,
 // which is drawn in the mark's blue. What reads as blue is a hue band, not one hex: a
 // checker in a lighter blue beside the diamond says "agent" just as loudly as the exact one.
 
@@ -1168,6 +1171,13 @@ let private inBlueBand (hex: string) =
     | Some h -> h >= lo && h < hi
     | None -> false
 
+/// A seat's two tones as hex: its colour, and the shade the `checker` utility paints the
+/// other two quarters in — read from the utility's own rule, with the seat's colour put
+/// where it says `currentColor`, so this checks the shade that is actually drawn.
+let private seatTones (css: string) (seat: int) : string * string =
+    let colour = Style.humanColour seat
+    resolve css colour, resolve css ((declared css "checker-down").Replace ("currentColor", colour))
+
 let private peopleMarkTests =
     testList "People's marks" [
         testCase "the blue band holds every blue the agent is drawn in" <| fun () ->
@@ -1178,7 +1188,9 @@ let private peopleMarkTests =
                 Expect.isTrue (inBlueBand (colour token)) (sprintf "--color-%s (%s) is outside the blue band %A" token (colour token) blueBand)
 
         testCase "no person's checker is drawn in the agent's blue" <| fun () ->
-            for light, dark in Style.humanTones do
+            let css = TestFiles.read "app/tailwind.css"
+            for seat in 0 .. Style.seats - 1 do
+                let light, dark = seatTones css seat
                 for tone in [ light; dark ] do
                     Expect.isFalse (inBlueBand tone) (sprintf "%s reads as the agent's blue (hue %A); a person's checker may not wear it" tone (hue tone))
 
@@ -1187,10 +1199,11 @@ let private peopleMarkTests =
         // type in the agent's blue. Many seeds, because which one lands where is the hash's
         // business; that none of them can is the rule.
         testCase "no person's caret is drawn in the agent's blue" <| fun () ->
+            let css = TestFiles.read "app/tailwind.css"
             let model = ClientModel.init { PeerId = PeerId.create "peer-caret" |> expect; DisplayName = "Grace" }
             for i in 0 .. 199 do
                 let who = PeerRef (PeerId.create (sprintf "peer-%d" i) |> expect)
-                let colour = Entity.presenceColour model who
+                let colour = resolve css (Entity.presenceColour model who)
                 Expect.isFalse (inBlueBand colour) (sprintf "peer-%d's caret is %s, the agent's blue (hue %A)" i colour (hue colour))
 
         // The session, the system and a repo's file are not people, and once wore a person's
@@ -1198,19 +1211,18 @@ let private peopleMarkTests =
         // exactly the colour of the person who configured it.
         testCase "nothing that is not a person wears a person's colour" <| fun () ->
             let model = ClientModel.init { PeerId = PeerId.create "peer-thing" |> expect; DisplayName = "Grace" }
-            let people = [ for light, dark in Style.humanTones do yield light; yield dark ]
             let things = [ ActorRef.Session; ActorRef.System; ActorRef.Configured (RepoRef.create "octo/hello" |> expect) ]
             for thing in things do
                 let caret = Entity.presenceColour model thing
-                Expect.isFalse (List.contains caret people) (sprintf "%A's caret is %s, a person's colour" thing caret)
                 let mark = Entity.actorMark model thing
-                for tone in people do
-                    Expect.isFalse (mark.Contains tone) (sprintf "%A's mark is drawn in %s, a person's colour" thing tone)
+                for seat in 0 .. Style.seats - 1 do
+                    Expect.notEqual caret (Style.humanColour seat) (sprintf "%A's caret is seat %d's colour" thing seat)
+                    Expect.isFalse (mark.Contains (Style.humanAvatar seat)) (sprintf "%A's mark is seat %d's checker" thing seat)
 
         // A colour is how a person is told apart at a glance, so a room must not hand two of
         // them the same one. It did, routinely, while the colour was an id's hash.
         testCase "six people in a room wear six colours" <| fun () ->
-            // `cy` and `gus` hash to the same checker, which is the room seats exist for.
+            // Two of these ids hash to the same colour, which is the room seats exist for.
             let peers = [ for n in [ "ada"; "bob"; "cy"; "dee"; "eve"; "gus" ] -> PeerId.create n |> expect ]
             let model =
                 { ClientModel.init { PeerId = List.head peers; DisplayName = "ada" } with
@@ -1220,13 +1232,23 @@ let private peopleMarkTests =
             let colours = [ for p in peers -> Entity.presenceColour model (PeerRef p) ]
             Expect.equal (List.length (List.distinct colours)) 6 (sprintf "six people wore %A" colours)
 
-        testCase "every person's checker is declared to Tailwind" <| fun () ->
-            // The checkers are assembled at runtime, so the stylesheet generates only the ones
-            // app/tailwind.css names inline; one it does not name paints nothing at all.
+        // Distinct, not merely unequal: two colours a step apart in lightness are two values
+        // and one person at 14px. The floor is a distance in OKLab, the space whose distances
+        // are what an eye reads as difference.
+        testCase "no two people's colours can be mistaken for each other" <| fun () ->
             let css = TestFiles.read "app/tailwind.css"
-            for light, dark in Style.humanTones do
-                let declared = sprintf "@source inline(\"%s\");" (Style.checker light dark)
-                Expect.isTrue (css.Contains declared) (sprintf "app/tailwind.css does not declare the %s/%s checker" light dark)
+            let lab seat = toOklab (channels (resolve css (Style.humanColour seat)))
+            for a in 0 .. Style.seats - 1 do
+                for b in a + 1 .. Style.seats - 1 do
+                    let l1, a1, b1 = lab a
+                    let l2, a2, b2 = lab b
+                    let distance = sqrt ((l1 - l2) ** 2.0 + (a1 - a2) ** 2.0 + (b1 - b2) ** 2.0)
+                    Expect.isTrue (distance >= 0.1) (sprintf "seats %d and %d are %.3f apart in OKLab; a person needs 0.1" a b distance)
+
+        // "every person's checker is declared to Tailwind" pinned a hand-kept `@source inline`
+        // copy of each checker's hexes. There is no copy now: a checker is the `checker`
+        // utility over a theme colour Tailwind generates `text-person-n` from, and a seat with
+        // no colour declared fails every case above that resolves it.
     ]
 
 /// A form POST that does NOT follow its redirect. Where the create route points is the
