@@ -24,6 +24,7 @@ open Fable.Core.JsInterop
 open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Hooks
+open Yession.Manager
 
 // --- how a provider signs ------------------------------------------------------------
 

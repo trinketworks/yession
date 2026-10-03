@@ -18,6 +18,7 @@
     <Compile Include="BrokerState.fs" />
     <Compile Include="ControlWire.fs" />
     <Compile Include="SpawnWire.fs" />
+    <Compile Include="HookDelivery.fs" />
   </ItemGroup>
 
   <ItemGroup>
