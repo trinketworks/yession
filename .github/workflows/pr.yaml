@@ -244,3 +244,17 @@ jobs:
             (error) => { console.error(String(error)); process.exit(1); });
           EOF
           nix shell --inputs-from . nixpkgs#nodejs_24 --command node "$RUNNER_TEMP/addon-smoke.cjs"
+      # The confined route to the git gateway, on the platform where it is spelled
+      # differently. srt's way to this host is `127.0.0.2` on Linux and the box's own NAME
+      # on macOS (`Sandboxes.hostAddressFrom`), and only the name is something srt's proxy
+      # re-judges by what it resolves to. sandbox-runtime 0.0.77 began refusing names that
+      # resolve to this host's own addresses, and every confined push on a Mac answered 403
+      # for days while the Srt tier — Linux only — stayed green, because the Linux route is a
+      # literal the new guard never looks at. This runs that tier's gateway cases here, with
+      # real git through real Seatbelt-confined srt: the only place the macOS spelling is
+      # ever exercised. `from an srt sandbox` also names the credential proxy's confined
+      # case, the other route into this host a confined command takes. Narrowed to those
+      # because the rest of the Srt tier has not been made to hold on macOS, and a gate that
+      # is red for reasons nobody is fixing is not a gate.
+      - name: A confined git reaches the gateway on darwin
+        run: DEVENV_ROOT="$PWD" nix develop --impure --command check Srt --only "from an srt sandbox"
