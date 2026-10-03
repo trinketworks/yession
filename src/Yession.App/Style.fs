@@ -1573,12 +1573,29 @@ module Style =
     /// movement; a pulse on top of them said nothing they were not already saying.
     let agentCaret = agentMark + " ml-[0.35em]"
 
-    /// Thinking — a turn accepted and nothing said yet: a quarter-turn, then a rest. A diamond
-    /// turned a quarter is the same diamond, so at rest it is exactly the writing mark, never
-    /// faint and never gone (the fault `caretWorking` above was brought in for). No margin:
-    /// alone in its body it stands on the content column, where the first word will.
-    /// Without motion it is dimmed instead, so thinking and writing still differ.
-    let agentCaretThinking = agentMark + " animate-think motion-reduce:animate-none motion-reduce:opacity-60"
+    /// Thinking — a turn accepted and nothing said yet, or what it said gone quiet: the cube
+    /// the diamond is the top of, turned in the hand (`.agent-think` in `app/tailwind.css`,
+    /// which says how). Its box is the still caret's and every move ends on the still caret's
+    /// picture, so thinking and writing differ only while it moves. No margin: alone in its
+    /// body it stands on the content column, where the first word will. Without motion it is
+    /// dimmed instead, so thinking and writing still differ.
+    let agentThinking = "agent-think"
+    /// What it turns: the tip and the cube inside it, drawn by `View.thinkingCube`.
+    let agentThinkingTip = "agent-think-tip"
+    let agentThinkingCube = "agent-think-cube"
+
+    /// How many slots the thinking series has and how long each lasts — `think-tip` in
+    /// `app/tailwind.css` is ten moves of two seconds. Kept beside `thinkFrom`, the one place
+    /// that steps through them.
+    let private thinkSlots, thinkSlotSeconds = 10, 2
+
+    /// Where in the series a thinking mark starts, as the inline style that says so: a slot
+    /// picked by its seed, so each turn opens on a move of its own rather than all of them on
+    /// the same nod, and one turn keeps its start however often it is drawn. Always a slot's
+    /// start, which is the rest picture, so a mark never appears mid-move.
+    let thinkFrom (seed: string) : string =
+        let hash = seed |> Seq.fold (fun acc c -> (acc * 31 + int c) &&& 0x7fffffff) 7
+        sprintf "--think-from:-%ds" (hash % thinkSlots * thinkSlotSeconds)
 
     /// The empty timeline's own mark: the blinking caret, standing where the first message will
     /// land. Dimmed on top of that, because it is an invitation rather than an event — a
@@ -2072,7 +2089,7 @@ module Style =
     /// and an agent thinking are the same statement, and where the mark stands says which.
     /// One mark on the screen at a time: a message's caret goes when the message closes,
     /// before a tool runs.
-    let actNoteRunningAgent = agentCaretThinking
+    let actNoteRunningAgent = agentThinking
 
     /// The mark for an act the agent is not doing — the session bringing a sandbox up at
     /// boot, a repository's file configuring one: a circle, because the diamond is the
@@ -2083,11 +2100,11 @@ module Style =
     /// so it spans the title's lowercase, overshot as a round letter is. Its diameter is
     /// rounded to an odd number of pixels (`mark-round` in `app/tailwind.css`, which says
     /// why) so it paints centred on the one-pixel line of the cause it hangs under, rather
-    /// than half a pixel to its side. It keeps the diamond's rhythm, the same animation: the
-    /// turn does nothing to a circle, so what shows is its dip in scale, one beat and a rest.
+    /// than half a pixel to its side. Its motion is a beat — one dip in scale and a rest —
+    /// on the tempo the agent's cube keeps, so the two read as the same kind of statement.
     let actNoteRunningOther =
         "inline-block mark-round rounded-full bg-ink-dim "
-        + "animate-think motion-reduce:animate-none motion-reduce:opacity-60"
+        + "animate-beat motion-reduce:animate-none motion-reduce:opacity-60"
     /// Sentence case, deliberately. This wore the caps LABEL voice, and a label voice is for
     /// two or three words: `STARTED SANDBOX WORK (DOCKER), FORWARDING ANTHROPIC_API_KEY FROM
     /// ADA` is a line nobody reads, because uppercase flattens the word shapes a reader scans

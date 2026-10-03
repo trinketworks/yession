@@ -134,6 +134,10 @@ module private Published =
     /// amount of typing on this page can reach, and how many marks a person sees while one is
     /// running is a question only a laid-out page can answer.
     let agentTurn : PageGlobal<unit -> unit> = PageGlobal.named "__agentTurn"
+    /// The same turn before its first word: begun, a message opened, nothing said. The agent
+    /// is thinking, which is the mark that MOVES, and this harness runs no timers to let a
+    /// written turn go quiet, so the case that measures the moving mark starts here instead.
+    let agentThinks : PageGlobal<unit -> unit> = PageGlobal.named "__agentThinks"
     /// Hand a terminal's lease to this peer WITHOUT a press, as the alt-screen flip does: a block
     /// takes the screen and the Session gives its author the keyboard. Exposed for the
     /// same reason the snapshot is — it is the arrival of a fact from elsewhere, and a test that
@@ -1454,7 +1458,7 @@ do
                 terminal
                 { Seq = seq; Cols = defaultArg cols 80; Rows = defaultArg rows 24; Screen = screen }
         | Error _ -> ()))
-    PageGlobal.set Published.agentTurn (fun () ->
+    let startTurn (said: string option) =
         let expect = function Ok v -> v | Error e -> failwith e
         let turn : AgentTurnId = AgentTurnId.create "turn-live" |> expect
         let messageId : MessageId = MessageId.create "msg-live" |> expect
@@ -1474,9 +1478,14 @@ do
                 { Events =
                     [ envelope 40L (SessionEvent.AgentTurnStarted { AgentTurnId = turn; Cause = TurnCause.TriggeredBy asked })
                       envelope 41L (SessionEvent.AgentMessageStarted { AgentTurnId = turn; MessageId = messageId; Antecedent = None })
-                      envelope 42L (SessionEvent.AgentMessageDelta { AgentTurnId = turn; MessageId = messageId; Delta = "Looking at it" }) ]
-                  LastOffset = EventOffset.create 42L |> expect |> Some
-                  IsEnd = true }))
+                      yield!
+                          said
+                          |> Option.map (fun delta -> envelope 42L (SessionEvent.AgentMessageDelta { AgentTurnId = turn; MessageId = messageId; Delta = delta }))
+                          |> Option.toList ]
+                  LastOffset = EventOffset.create (if said.IsSome then 42L else 41L) |> expect |> Some
+                  IsEnd = true })
+    PageGlobal.set Published.agentTurn (fun () -> startTurn (Some "Looking at it"))
+    PageGlobal.set Published.agentThinks (fun () -> startTurn None)
     PageGlobal.set Published.take (fun id ->
         match TerminalId.create id with
         | Ok terminal -> takeRef terminal
