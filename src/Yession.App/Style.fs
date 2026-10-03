@@ -765,6 +765,13 @@ module Style =
     let agentAvatarSm =
         "bg-agent-ground grid place-items-center after:content-[''] after:w-1.5 after:h-1.5 after:bg-blue after:rotate-45"
 
+    /// A thing's mark — the session, the system, a repo's file: the agent's shape with the
+    /// colour taken out. A dark square holding a small grey SQUARE, upright where the agent's
+    /// is turned, so the two read as kin and never as each other, and grey because a colour
+    /// on this page is somebody: blue the agent, the checker tones the people.
+    let thingAvatar =
+        "bg-surface-2 grid place-items-center after:content-[''] after:w-2 after:h-2 after:bg-ink-faint"
+
     // --- The starting screen: what a browser looks at while a session launches -----------
     // Black, one object, one line of type. The mark's intro plays once at 224px, the
     // wordmark rises under it as the last frame lands, and the status line under that says
