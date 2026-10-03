@@ -2845,17 +2845,28 @@ module View =
             match block.Status with
             | BlockFinished (CommandSucceeded _) -> Lit.nothing
             | status -> html $"""<span class="shrink-0">{terminalBlockStatus model status}</span>"""
-        // Whose command this was, on the same terms: a mark only when the answer is not the
+        // Whose command this was, on the same terms: shown only when the answer is not the
         // obvious one. Your own commands need no attribution in your own terminal — but a
-        // command the AGENT ran is the thing a person scanning a scrollback is looking for,
-        // and with the facts behind a disclosure there was nothing on the line to say so.
+        // command the AGENT ran, or a collaborator did, is the thing a person scanning a
+        // scrollback is looking for.
+        //
+        // Named, not merely MARKED. It was a bare coloured square whose only identification
+        // was a `title`: nothing on a phone, which has no hover, and nothing to a screen
+        // reader either, because `title` on a non-interactive span is not an accessible name.
+        // So a scrollback mixing one person's commands with the agent's and a collaborator's
+        // told them apart by hue, and the name was reachable only by opening the facts below.
+        // Three colours and no words is a legend a reader has to have been given.
+        //
+        // As a REFERENCE (`Entity.render`), which is the same mark and name the person wears
+        // on every other surface — the roster, the timeline, the facts under this very block —
+        // rather than a second way of saying who somebody is.
         let author =
             let who = Authority.author block.Authority
             if ClientModel.isMine who model then Lit.nothing
             else
                 html $"""
-                    <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model who ]}" title="{Entity.actorName model who}"
-                          data-terminal-block-author="{Entity.actorToken who}"></span>"""
+                    <span class="{Style.terminalBlockAuthor}" data-terminal-block-author="{Entity.actorToken who}"
+                          >{Entity.render model who (EntityRef.Actor who)}</span>"""
         // The facts that used to have nowhere to go, or nowhere better than a status beside
         // the command: who ran it, who let it through, and how it ended. Behind a
         // disclosure, because a scrollback is read for its OUTPUT and who was behind it is what
