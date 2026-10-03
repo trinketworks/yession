@@ -830,6 +830,17 @@ type ClientModel =
       /// says. Borrowing the key would make a break the fourth kind of fold and the doc
       /// comment on `FoldKey` a lie.
       DatedBreaks   : Set<MessageId>
+      /// Which queued entry's delete is ARMED — one press from gone, waiting on a second
+      /// press to confirm it (`ArmQueueDeleteMsg`). View state, local and transient for the
+      /// same reason `Copied` below is: an unconfirmed press is one person's moment, not a
+      /// fact the room needs to agree on.
+      ///
+      /// ONE slot rather than a set, same rule as `ItemMenu`: arming a second entry disarms
+      /// whatever was armed before it, so at most one delete in the queue is ever a press
+      /// away from happening. Taken back on its own after `queueDeleteArmedMs`
+      /// (`ClientModel.timers`) — an arm nobody confirms must not stay armed forever, the way
+      /// a menu left open or a copy's confirmation left showing would be wrong too.
+      QueueDeleteArmed : QueueId option
       /// What this client has just put on the clipboard, named by the hook of the box it
       /// came out of (`Dom.Hooks.githubUserCode` and whatever joins it). View state, local
       /// and transient for the same reason the menu above is: copying is one person's act
@@ -967,7 +978,19 @@ type ClientMsg =
     | ReorderQueuedMsg of QueueId * order: float
     /// Delete a queued message. Until consumed, deletion wins: a deleted entry never
     /// becomes an event.
+    ///
+    /// Dispatched by the view only on a SECOND press, once the entry is already
+    /// `QueueDeleteArmed` — the first press sends `ArmQueueDeleteMsg` instead. This message
+    /// itself still deletes unconditionally, the way it always has: the two-press rule is a
+    /// property of the click handler, not of the delete, so nothing here changes for a test
+    /// (or a race) that dispatches it directly.
     | DeleteQueuedMsg of QueueId
+    /// Arm (`Some`) or take back the arming (`None`) of a queued entry's delete — the
+    /// confirm-before-destroy a mis-tap next to reorder needs, and did not have. `Some`
+    /// replaces whatever was armed before it, the one-slot rule `ItemMenu` already uses;
+    /// `None` is sent back by the entry's own wait (`queueDeleteArmedMs`) when nobody
+    /// confirms it, the same shape as `CopiedMsg`'s expiry.
+    | ArmQueueDeleteMsg of QueueId option
     /// A fresh /claude status probe result (Plan 08).
     | ClaudeStatusMsg of ClaudePanel
     /// The Claude sign-in flow moved (the authorize tab opened, or the person cancelled).
@@ -1354,6 +1377,7 @@ module ClientModel =
           PaneMenu = false
           OpenFolds = Set.empty
           DatedBreaks = Set.empty
+          QueueDeleteArmed = None
           Copied = None
           Claude =
             { Status = None
@@ -2231,6 +2255,12 @@ module ClientModel =
     /// enough that the code it stands in front of comes back before anybody needs it again.
     let copiedShownMs = 1500
 
+    /// How long a queue delete stays armed waiting for the confirming press. Long enough
+    /// that the second press is the same gesture as the first — a deliberate double-tap,
+    /// not a race against a clock — short enough that a row left alone settles back to
+    /// "editable", not "one press from gone", by the time anyone returns to it.
+    let queueDeleteArmedMs = 2000
+
     /// A message's stamp, while it is one the agent is still writing and has said something in.
     /// Nothing is a stamp before the first word: an empty body already reads as thinking, and
     /// has no quiet to wait for.
@@ -2292,6 +2322,13 @@ module ClientModel =
             | Some copy ->
                 [ { Key = [ "copied"; copy.Box; string copy.Nth ]; After = copiedShownMs; Fire = CopiedMsg None } ]
             | None -> []
+        let queueDeleteArmed =
+            match model.QueueDeleteArmed with
+            | Some queueId ->
+                [ { Key = [ "queue-delete-armed"; QueueId.value queueId ]
+                    After = queueDeleteArmedMs
+                    Fire = ArmQueueDeleteMsg None } ]
+            | None -> []
         let pending =
             [ "claude", model.Claude.Pending; "github", model.GitHub.Pending ]
             |> List.choose (fun (panel, pending) ->
@@ -2302,7 +2339,7 @@ module ClientModel =
                           After = int Pending.deadlineMillis
                           Fire = PendingWaitedMsg (since + Pending.deadlineMillis) }
                 | Pending.Ready | Pending.Sending | Pending.Refused _ -> None)
-        catchUp @ copied @ pending @ quiet @ GitHubPoll.timer model.GitHub
+        catchUp @ copied @ queueDeleteArmed @ pending @ quiet @ GitHubPoll.timer model.GitHub
 
     /// Fold a message into the model — the state half of `update`, its only caller.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
@@ -2607,7 +2644,13 @@ module ClientModel =
                     { model.Synced with Queue = Map.add queueId { entry with Order = order } model.Synced.Queue }
             | None -> model
         | DeleteQueuedMsg queueId ->
+            // The armed slot dies with the entry it was guarding either way — a confirmed
+            // press consumes it, and a direct dispatch (a test, a race) finds the entry gone
+            // and nothing left for the armed id to mean.
+            let model = if model.QueueDeleteArmed = Some queueId then { model with QueueDeleteArmed = None } else model
             model |> withSynced { model.Synced with Queue = Map.remove queueId model.Synced.Queue }
+        | ArmQueueDeleteMsg next ->
+            { model with QueueDeleteArmed = next }
         | ClaudeStatusMsg status ->
             // A connected credential ends the wait for the human in the other tab (the
             // callback completed there); otherwise the flow is untouched by a mere probe.

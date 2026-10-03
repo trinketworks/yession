@@ -1224,6 +1224,14 @@ module View =
             entries
             |> List.map (fun entry ->
                 let id = entry.QueueId
+                // The second press of a two-press delete: armed by the first (below), and
+                // taken back on its own after `ClientModel.queueDeleteArmedMs` if nobody
+                // follows through. One mis-tap next to reorder used to be irreversible; now
+                // it is a press that does nothing but ask again.
+                let armed = model.QueueDeleteArmed = Some id
+                let deleteFace = if armed then Style.btnIconBareDangerArmed else Style.btnIconBareDanger
+                let deleteLabel = if armed then "Confirm delete" else "Delete"
+                let onDelete = if armed then DeleteQueuedMsg id else ArmQueueDeleteMsg (Some id)
                 html $"""
                     <article class="{Style.queueItem}" data-queue-id="{QueueId.value id}" data-queue-author="{PeerId.value entry.Author}" data-queue-order="{string entry.Order}">
                       <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model (PeerRef entry.Author) ]}"></span>
@@ -1231,7 +1239,7 @@ module View =
                       <div class="{Style.queueTools}">
                         <button type="button" class="{Style.btnIconBare}" aria-label="Move up" data-queue-up="{QueueId.value id}" @click={Ev(fun _ -> match QueueOrder.moveUp synced.Queue id with Some o -> dispatch (ReorderQueuedMsg (id, o)) | None -> ())}>{Icon.up}</button>
                         <button type="button" class="{Style.btnIconBare}" aria-label="Move down" data-queue-down="{QueueId.value id}" @click={Ev(fun _ -> match QueueOrder.moveDown synced.Queue id with Some o -> dispatch (ReorderQueuedMsg (id, o)) | None -> ())}>{Icon.down}</button>
-                        <button type="button" class="{Style.btnIconBareDanger}" aria-label="Delete" data-queue-delete="{QueueId.value id}" @click={Ev(fun _ -> dispatch (DeleteQueuedMsg id))}>{Icon.close}</button>
+                        <button type="button" class="{Style.cls [ deleteFace; Style.queueDeleteGap ]}" aria-label="{deleteLabel}" data-queue-delete="{QueueId.value id}" data-queue-delete-armed="{if armed then "true" else "false"}" @click={Ev(fun _ -> dispatch onDelete)}>{Icon.close}</button>
                       </div>
                     </article>""")
         let band = if List.isEmpty entries then Style.queueEmpty else Style.queue

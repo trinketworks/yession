@@ -201,6 +201,30 @@ let tests =
             clock.Advance most
             Expect.isSome (model ()).Copied "the second copy is shown for as long as the first was"
 
+        testCase "a queue delete armed by one press is taken back if nobody confirms it" <| fun () ->
+            let clock, send, model = program ()
+            let queueId = QueueId.create "q-armed" |> expect
+            send (ArmQueueDeleteMsg (Some queueId))
+            clock.Advance ClientModel.queueDeleteArmedMs
+            Expect.isNone (model ()).QueueDeleteArmed "an unconfirmed press does not stay armed forever"
+
+        // Same one-slot rule `ItemMenu` uses: a second entry armed is the first disarmed, so
+        // at most one delete in the queue is ever one press from happening.
+        testCase "arming a different entry replaces whatever was armed before it" <| fun () ->
+            let _, send, model = program ()
+            let first = QueueId.create "q-first" |> expect
+            let second = QueueId.create "q-second" |> expect
+            send (ArmQueueDeleteMsg (Some first))
+            send (ArmQueueDeleteMsg (Some second))
+            Expect.equal (model ()).QueueDeleteArmed (Some second) "one slot, like the item menu"
+
+        testCase "a confirmed delete clears the armed slot along with the entry" <| fun () ->
+            let _, send, model = program ()
+            let queueId = QueueId.create "q-confirmed" |> expect
+            send (ArmQueueDeleteMsg (Some queueId))
+            send (DeleteQueuedMsg queueId)
+            Expect.isNone (model ()).QueueDeleteArmed "nothing left for the armed id to mean"
+
         testCase "a copy the clipboard took is confirmed on the box it came from" <| fun () ->
             let send, model = copying true
             send (CopyMsg ("data-box", "ABCD-1234"))
