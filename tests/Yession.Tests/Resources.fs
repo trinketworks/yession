@@ -25,6 +25,7 @@ open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
 open Yession.Host
 open Yession.Peer
+open Yession.Session
 
 let private expect = function Ok v -> v | Error e -> failwithf "%A" e
 

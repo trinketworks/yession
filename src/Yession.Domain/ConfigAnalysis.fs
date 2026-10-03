@@ -10,7 +10,7 @@ open Yession.Domain
 //   text ──parse──▶ tree + SourceIndex ──decode──▶ ConfigFile ──analyze──▶ LocatedFinding list
 //
 // Parsing is the bridge's (`RepoConfig.fs`: the only stage that touches a parser, and the only
-// one that reads a file). Decoding is `ConfigFile.decoder` (Config.fs), and what it refuses
+// one that reads a file). Decoding is `ConfigFile.decoder` (Yession.Session), and what it refuses
 // fails the file. This module is the stage after: a file that decoded is honoured as written,
 // and an analyzer only has something to TELL its author — a thing that is legal and almost
 // certainly not what they meant. A finding never changes what the file does; a refusal
