@@ -165,13 +165,14 @@ module RepoCapabilitiesChanged =
     /// have" — which needs the whole of it.
     let phrase (c: RepoCapabilitiesChanged) : Phrase =
         match c.Granted with
-        | [] -> Phrase.text "asks for nothing"
-        | [ one ] -> Phrase.text (sprintf "asks for %s" one)
-        | granted -> Phrase.text (sprintf "asks for %d capabilities" (List.length granted))
+        | [] -> Phrase.text "asked for nothing"
+        | [ one ] -> Phrase.text (sprintf "asked for %s" one)
+        | granted -> Phrase.text (sprintf "asked for %d capabilities" (List.length granted))
 
-    /// The whole set, never a count on its own: the particulars are rendered beside the
-    /// headline rather than behind a disclosure, so what a person has to decide about is
-    /// still on the screen. One clause, because one is already the headline.
+    /// The whole set, never a count on its own: the sentence the agent reads carries every
+    /// grant. A screen lays the same set out as one fact per grant (`View`), rather than
+    /// printing this semicolon chain under the headline. None for one, because one is
+    /// already the headline.
     let particulars (c: RepoCapabilitiesChanged) : Phrase list =
         match c.Granted with
         | []

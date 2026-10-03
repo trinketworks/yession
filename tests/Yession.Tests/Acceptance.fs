@@ -1463,6 +1463,43 @@ let private uiChecklistTests =
                 (row.Contains (Dom.attr "data-entity" (EntityRef.said (EntityRef.Connection github))))
                 "and what it forwards is the connection, as a reference"
 
+        /// A repo's capability ask, as its file made it.
+        let capabilityAsk (granted: string list) : ConversationItem =
+            let hello = RepoRef.create "octo/hello" |> expect
+            { MessageId = MessageId.create "msg-asked" |> expect
+              Author = ActorRef.Configured hello
+              Content =
+                ItemContent.Act (
+                    Act.RepoCapabilitiesChanged
+                        { RepoCapabilitiesChanged.MessageId = MessageId.create "msg-asked" |> expect
+                          RepoCapabilitiesChanged.Repo = hello
+                          RepoCapabilitiesChanged.Granted = granted
+                          RepoCapabilitiesChanged.Sensitive = false
+                          RepoCapabilitiesChanged.Actor = ActorRef.Configured hello
+                          RepoCapabilitiesChanged.CausedBy = None })
+              Status = Complete
+              Offset = EventOffset.create 1L |> expect
+              Woke = None; CausedBy = None }
+
+        let renderedAsk (granted: string list) =
+            { representativeModel with
+                Conversation = { representativeModel.Conversation with Recent = [ capabilityAsk granted ] } }
+
+        // What a repo asks for is a list a person reads DOWN, deciding about each line. The
+        // promise is that each grant is its own element in the fold — not that it is drawn
+        // any particular way.
+        testCase "a capability ask lays out each grant as its own fact" <| fun () ->
+            let granted = [ "conn:github/api"; "vol:yession-nix>/nix" ]
+            let behind = Support.behindFold (FoldKey.Act (MessageId.create "msg-asked" |> expect)) (renderedAsk granted)
+            let facts = behind.Split (Dom.attr "data-act-fact" "grant") |> Array.length |> fun n -> n - 1
+            Expect.equal facts (List.length granted) "one fact per grant"
+
+        // The chain the agent reads is not also printed under the headline: the line says
+        // how many, and the fold says which.
+        testCase "a capability ask does not print its grants under the headline" <| fun () ->
+            let html = Support.render (renderedAsk [ "conn:github/api"; "vol:yession-nix>/nix" ])
+            Expect.isFalse (html.Contains "data-act-detail") "no second line under it"
+
         /// A repo-declared sandbox coming up, started by `by`.
         let sandboxStartBy (by: ActorRef) : ConversationItem =
             let hello = RepoRef.create "octo/hello" |> expect

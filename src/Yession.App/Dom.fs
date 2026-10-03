@@ -787,6 +787,8 @@ module Dom =
         let sandboxFactCheckout = "checkout"
         let sandboxFactForwarding = "forwarding"
         let sandboxFactAdjusted = "adjusted"
+        /// A repo's capability ask's one fact label (`View.capabilityFacts`).
+        let capabilityFactGrants = "grants"
         // A tool call's two blocks (`View.toolCall`): what it was given, what it answered.
         let toolInput = "input"
         let toolOutput = "output"

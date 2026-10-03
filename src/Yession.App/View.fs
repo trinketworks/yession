@@ -1968,6 +1968,26 @@ module View =
                           <div class="{Style.actNoteFactStack}">{vals}</div>
                         </div>""" ]
             List.concat [ describedAs; backend; checkout; forwarded; realisation; [ toldRow act ] ]
+        // What a repo asked for, laid out the way a start is: the count on the line and,
+        // behind ONE disclosure, every grant as its own fact — the semicolon chain the agent
+        // reads was a paragraph of notation printed under the headline, which is not how a
+        // person reads down a list they are deciding about. The sentence stays as the last
+        // row. An empty ask has no grants to lay out and shows only that.
+        let capabilityFacts (act: Act) (c: Repos.RepoCapabilitiesChanged) : TemplateResult list =
+            let grants =
+                match c.Granted with
+                | [] -> []
+                | granted ->
+                    let vals =
+                        granted
+                        |> List.map (fun grant ->
+                            html $"""<code class="{Style.actNotePath}" data-act-fact="grant">{grant}</code>""")
+                    [ html $"""
+                        <div class="{Style.actNoteFactRow}">
+                          <span class="{Style.actNoteFactKey}">{Dom.Text.capabilityFactGrants}</span>
+                          <div class="{Style.actNoteFactStack}">{vals}</div>
+                        </div>""" ]
+            grants @ [ toldRow act ]
         // A file change (the file verbs), laid out the way a start is: the title on the line
         // — which file, how much — and behind ONE disclosure the change itself, one row per
         // `-`/`+` line, with the sentence the agent read as its last row. The edit a reader
@@ -2164,6 +2184,7 @@ module View =
                 | Act.SandboxStarting s ->
                     [ Segment.Text "starting sandbox "; Segment.Ref (EntityRef.Sandbox s.Sandbox) ], [], [ toldRow act ]
                 | Act.FileChanged { FileChanged.Diff = Some diff } -> Act.deed act, [], fileChangeFacts act diff
+                | Act.RepoCapabilitiesChanged c -> Act.deed act, [], capabilityFacts act c
                 | _ -> Act.deed act, actNoteParticulars by act, [ toldRow act ]
             // The fold (`foldArrow`/`foldBody`): the particulars under the title, behind the
             // arrow on the gutter. While the act is still RUNNING the gutter holds the mark

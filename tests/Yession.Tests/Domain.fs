@@ -1073,7 +1073,7 @@ let private repoTests =
                 | other -> failwithf "expected one note, got %A" other
             Expect.equal
                 (asked [ "/nix, read-only"; "reaches cache.nixos.org"; "reaches anywhere (sensitive)" ])
-                ("asks for 3 capabilities", Some "/nix, read-only; reaches cache.nixos.org; reaches anywhere (sensitive)")
+                ("asked for 3 capabilities", Some "/nix, read-only; reaches cache.nixos.org; reaches anywhere (sensitive)")
                 "counted, then named — every one of them"
 
         // The counterpart, and the reason the count is not unconditional: "asks for 1
@@ -1097,7 +1097,7 @@ let private repoTests =
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
-                Expect.equal (ConversationItem.headline item) "asks for /nix, read-only" "the grant itself"
+                Expect.equal (ConversationItem.headline item) "asked for /nix, read-only" "the grant itself"
                 Expect.equal (noteDetail item) None "and no second line restating it"
             | other -> failwithf "expected one note, got %A" other
     ]
