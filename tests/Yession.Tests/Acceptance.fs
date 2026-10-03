@@ -309,6 +309,30 @@ let private withChapters (ids: string list) : ClientModel =
                         MessageId.create id |> expect, { Opens = true; Name = Ylmish.Text.empty })
                     |> Map.ofList } }
 
+/// The representative terminal, with its one fixture block replaced by whatever a case
+/// wants to assert the pane's grouping fold against (`terminalBlockRun`).
+let private runModelWith (blocks: Block list) : ClientModel =
+    { representativeModel with
+        Terminals =
+            { representativeModel.Terminals with
+                Terminals =
+                    representativeModel.Terminals.Terminals
+                    |> List.map (fun t ->
+                        if t.TerminalId = terminalId then { t with Blocks = blocks } else t) } }
+
+/// One block for a grouping case: `n` only tells its command and its id apart from its
+/// run-mates, never its order — `FromSeq`/`ToSeq` carry no real transcript, because the
+/// grouping fold reads only `Authority` and `Status`.
+let private runBlock (authority: Authority) (n: int) (status: BlockStatus) : Block =
+    { BlockId = BlockId.create (sprintf "block-run-%d" n) |> expect
+      QueueId = None
+      Authority = authority
+      Command = sprintf "step %d" n
+      Background = false
+      FromSeq = 0
+      ToSeq = Some 1
+      Status = status }
+
 /// How many times a hook appears in a rendered page. Counting MOUNTS rather than words: what
 /// these cases promise is one control per item and one stroke per mark, and a substring of
 /// somebody's prose is not either.
@@ -1011,6 +1035,49 @@ let private uiChecklistTests =
             Expect.isFalse (chat.Contains Dom.Hooks.terminalOutput) "and nothing it printed"
             // The panel is where output lives, and it still does.
             Expect.isTrue (html.Contains Dom.Hooks.terminalOutput) "the terminal panel is unchanged"
+
+        // Nick, 2026-10-03: "aggregate like we do with tool use" — fold the pane's own
+        // replay the way the chat already folds a turn's tool calls into `chatTaskCard`,
+        // by the same rule: only CONSECUTIVE blocks from one actor group, never past a
+        // command from somebody else, and never a group of one. (Helpers `runModelWith`/
+        // `runBlock` are defined above, beside `representativeModel`.)
+        testCase "consecutive commands from one actor fold under 'ran n commands', with a tally" <| fun () ->
+            let agent = Authority.agentFor (Principal.Peer ada)
+            let html =
+                Support.render
+                    (runModelWith
+                        [ runBlock agent 1 (BlockFinished (CommandSucceeded 0))
+                          runBlock agent 2 (BlockFinished (CommandFailed 1))
+                          runBlock agent 3 BlockRunning ])
+            Expect.isTrue
+                (html.Contains (Dom.attr Dom.Hooks.terminalBlockRun "block-run-1"))
+                "the fold is keyed by the FIRST block in it"
+            Expect.isTrue (html.Contains "ran 3 commands") "the header counts every command inside"
+            for n in 1 .. 3 do
+                Expect.isTrue
+                    (html.Contains (Dom.attr Dom.Hooks.terminalBlock (sprintf "block-run-%d" n)))
+                    (sprintf "command %d is still its own block, nested inside the fold" n)
+
+        testCase "one command from one actor is never wrapped in a fold of one" <| fun () ->
+            // The chat's task card holds the same line — a disclosure around a single chip
+            // hides the only thing the row has to say behind a click.
+            let html = Support.render representativeModel
+            Expect.isFalse
+                (html.Contains Dom.Hooks.terminalBlockRun)
+                "a lone command stays a lone block"
+
+        testCase "a command from somebody else splits a run, even between two of the agent's own" <| fun () ->
+            let agent = Authority.agentFor (Principal.Peer ada)
+            let human = Authority.ofAuthor (Principal.Peer ada)
+            let html =
+                Support.render
+                    (runModelWith
+                        [ runBlock agent 1 (BlockFinished (CommandSucceeded 0))
+                          runBlock human 2 (BlockFinished (CommandSucceeded 0))
+                          runBlock agent 3 (BlockFinished (CommandSucceeded 0)) ])
+            Expect.isFalse
+                (html.Contains Dom.Hooks.terminalBlockRun)
+                "three commands, but no two of them consecutive and same-author — nothing folds"
 
         testCase "a concluded lease stretch is its own item, and says how it ended" <| fun () ->
             let stretchModel =
