@@ -506,22 +506,20 @@ let
     resources:
       nix-container-store:
         volume: { name: yession-nix, at: /nix }
+      # What a repo's CONTAINER sandboxes want: the gateway, and the credential proxy
+      # with what a container needs to use it — the proxy's URL, its trust bundle (every
+      # root, so replacing the image's loses nothing) and a token lent per command.
       github:
-        connection: { github: [ git, api ] }   # the gateway, and the credential proxy
-      # `gh` and other HTTPS clients in `default` (srt): the proxy's trust, and a token
-      # lent per command. srt routes the API's hosts to the proxy itself, so no
-      # HTTPS_PROXY; a container sandbox binds that in its own yession.yaml.
-      github-cli:
-        connection: { github: [ api ] }
+        connection: { github: [ git, api ] }
         env:
+          HTTPS_PROXY: ''${proxy.https}
           SSL_CERT_FILE: ''${proxy.ca-file}
-          CURL_CA_BUNDLE: ''${proxy.ca-file}
-          NODE_EXTRA_CA_CERTS: ''${proxy.ca-file}
-          REQUESTS_CA_BUNDLE: ''${proxy.ca-file}
           GH_TOKEN: ''${github.token}
           GITHUB_TOKEN: ''${github.token}
-      # SSL_CERT_FILE is github-cli's: the proxy's bundle holds these roots and its own
-      # authority, and a variable has one value in a sandbox selecting both.
+      # `default`'s: git through the gateway, and nothing else. `default` runs under srt,
+      # which takes a connection by git alone; the API is the containers' job.
+      github-git:
+        connection: { github: [ git ] }
       ca:
         mount: { from: /private/etc/ssl/cert.pem, mode: read }
         env:
@@ -531,7 +529,7 @@ let
     sandboxes:
       default:
         uses: [ ca ]
-        wants: [ github, github-cli ]
+        wants: [ github-git ]
     # Appended after the product's system prompt, as the operator's words. Host
     # conventions only — the prompt already covers the tools.
     agent:
