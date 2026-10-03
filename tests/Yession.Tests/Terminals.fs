@@ -2626,6 +2626,48 @@ let private terminalTitleTests =
 
         testCase "empty prose falls back too" <| fun () ->
             Expect.equal (TerminalTitle.value (TerminalTitle.fromProse "")) "terminal" "the same fallback"
+
+        // Where a terminal RUNS, in the one place a reader usually meets it: its title. The
+        // rule was spelled out at two callers inside the terminal manager and tested at
+        // neither, so a third way of opening a terminal could silently produce one that does
+        // not say where it is.
+        testCase "a terminal in a named sandbox says which, in brackets" <| fun () ->
+            let dev = SandboxRef.inScope (RepoRef.create "octo/hello" |> expect) (SandboxName.create "dev" |> expect)
+            Expect.equal
+                (TerminalTitle.value (TerminalTitle.inSandbox dev "npm test"))
+                "[octo/hello:dev] npm test"
+                "the sandbox, then what the opener had to say"
+
+        testCase "the default sandbox puts a bracket on nothing" <| fun () ->
+            // Every session has it, so a mark for it on every tab distinguishes nothing.
+            Expect.equal
+                (TerminalTitle.value (TerminalTitle.inSandbox SandboxRef.defaultRef "npm test"))
+                "npm test"
+                "no prefix"
+
+        testCase "a named sandbox with nothing else to say is the whole title" <| fun () ->
+            // What a terminal opened by picking a sandbox and nothing else is called. An
+            // empty name is not a mistake here, so it is not an error.
+            let dev = SandboxRef.inScope (RepoRef.create "octo/hello" |> expect) (SandboxName.create "dev" |> expect)
+            Expect.equal
+                (TerminalTitle.value (TerminalTitle.inSandbox dev ""))
+                "octo/hello:dev"
+                "the sandbox is the name"
+
+        testCase "no sandbox named and nothing to say is the fallback" <| fun () ->
+            Expect.equal
+                (TerminalTitle.value (TerminalTitle.inSandbox SandboxRef.defaultRef "  "))
+                "terminal"
+                "the same fallback every other way of asking gets"
+
+        testCase "a long name is cut around the sandbox rather than instead of it" <| fun () ->
+            // The sandbox is the half a reader cannot work out from context, so it is the
+            // half that survives `ProseLength`. A prefix outside the budget would push the
+            // cut past it instead, and a title that outgrew a tab is what the budget is for.
+            let dev = SandboxRef.inScope (RepoRef.create "octo/hello" |> expect) (SandboxName.create "dev" |> expect)
+            let got = TerminalTitle.value (TerminalTitle.inSandbox dev (String.replicate 200 "y"))
+            Expect.equal got.Length TerminalTitle.ProseLength "cut to fit a tab, prefix included"
+            Expect.isTrue (got.StartsWith "[octo/hello:dev] ") "and the sandbox is what is left"
     ]
 
 let private transcriptCursorTests =

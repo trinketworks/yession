@@ -73,6 +73,34 @@ module TerminalTitle =
         elif trimmed.Length > ProseLength then TerminalTitle (trimmed.Substring (0, ProseLength - 3) + "...")
         else TerminalTitle trimmed
 
+    /// What a terminal is called when it runs in a NAMED sandbox: the sandbox in brackets,
+    /// then whatever the opener had to say about it. Several terminals in a strip are
+    /// navigable only if each says where it is, and a strip is the only place most of them
+    /// are ever read.
+    ///
+    /// Here for the reason the rest of this module is: the convention was spelled out at two
+    /// callers inside the terminal manager, and a third way of opening a terminal would have
+    /// had to remember it. A caller that forgot would not fail to compile — it would simply
+    /// produce a terminal that does not say where it is, in a strip beside ones that do.
+    ///
+    /// `default` carries NO prefix, because every session has it and a bracket on every tab
+    /// is a mark that distinguishes nothing. An empty name is not an error: for a named
+    /// sandbox the sandbox IS the title then, which is what a terminal opened by picking a
+    /// sandbox and nothing else should be called; for `default` it is `fallback`, as
+    /// everywhere else.
+    ///
+    /// Truncating, through `fromProse`, prefix included — this is prose we wrote ourselves,
+    /// and the bracket is part of it. Which means a long scope eats into the name rather
+    /// than past `ProseLength`: the sandbox is the half a reader cannot work out from
+    /// context, so it is the half that survives.
+    let inSandbox (sandbox: SandboxRef) (name: string) : TerminalTitle =
+        let trimmed = if isNull (box name) then "" else name.Trim ()
+        match sandbox = SandboxRef.defaultRef, trimmed with
+        | true, "" -> fallback
+        | true, named -> fromProse named
+        | false, "" -> fromProse (SandboxRef.render sandbox)
+        | false, named -> fromProse (sprintf "[%s] %s" (SandboxRef.render sandbox) named)
+
 type TerminalOpened =
     { TerminalId : TerminalId
       /// Who asked for it. A terminal is opened by a peer or by the agent, and which one
