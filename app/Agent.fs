@@ -27,6 +27,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Terminals
 open Yession.Domain.Tools
 open Yession.Domain.Chat
+open Yession.Session
 
 #if FABLE_COMPILER
 open Thoth.Json

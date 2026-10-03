@@ -1100,6 +1100,7 @@ let hooks
 
 open Yession.Domain.Agent
 open Yession.Domain.Tools
+open Yession.Session
 
 /// A body that always answers, the way every tool in `AgentTools.fs` does: `Error` is
 /// reserved for the call never happening (arguments that could not be read), not for a call
