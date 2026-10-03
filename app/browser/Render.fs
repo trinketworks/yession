@@ -153,7 +153,12 @@ let private restoreSurfaceScroll (selector: string) (positions: Map<string, Surf
         match Map.tryFind (surfaceKey el) positions with
         // At the end before the render, and not on the page at all before it, want the same
         // thing of it now — which is why the two are one case rather than one and a fallback.
-        | Some AtEnd | None -> if not (atEnd el) then el.scrollTop <- el.scrollHeight
+        // `isPinned`, not `atEnd`: `AtEnd` was recorded with `isPinned`'s wider slack, and
+        // checking the narrow one here reads a reader who has only just started scrolling
+        // away (inside 200px, past 4px) as having left — so this wrote `scrollHeight` back
+        // under them on the very next render, cancelling a scroll the reader was still
+        // inside the slack for. Same predicate both ends of the round trip.
+        | Some AtEnd | None -> if not (isPinned el) then el.scrollTop <- el.scrollHeight
         | Some (ScrolledTo position) -> if el.scrollTop <> position then el.scrollTop <- position
 
 /// Show or hide the chat's floating "jump to latest" against how far the reader actually is
