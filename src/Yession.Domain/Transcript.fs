@@ -107,7 +107,7 @@ type TranscriptLine =
 ///
 ///   * **Times are absolute.** asciicast timestamps are relative to the start of the FILE,
 ///     so a block that ran forty minutes in makes the player sit idle for forty minutes
-///     before its first frame. `TranscriptReplay.range` rebases them.
+///     before its first frame. The App's `TranscriptReplay.range` rebases them.
 ///   * **Screen state is path-dependent.** What a terminal shows at line 500 is a function
 ///     of every byte before it — colours set earlier, cursor position, scroll region,
 ///     whether something entered the alternate screen. Replaying a slice into a fresh VT is

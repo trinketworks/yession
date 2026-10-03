@@ -30,7 +30,7 @@ module Frames =
                         [ "kind", Encode.string "record"
                           "terminalId", Codec.terminalId.Encode id
                           "seq", Encode.int seq
-                          "record", Codec.transcriptRecord.Encode record ]
+                          "record", Transcripts.record.Encode record ]
                 | TerminalTranscriptAvailable (id, nextSeq) ->
                     Encode.object
                         [ "kind", Encode.string "available"
@@ -67,7 +67,7 @@ module Frames =
                         (fun id seq record -> TerminalRecord (id, seq, record))
                         (Decode.field "terminalId" Codec.terminalId.Decode)
                         (Decode.field "seq" Decode.int)
-                        (Decode.field "record" Codec.transcriptRecord.Decode)
+                        (Decode.field "record" Transcripts.record.Decode)
                 | "available" ->
                     Decode.map2
                         (fun id nextSeq -> TerminalTranscriptAvailable (id, nextSeq))

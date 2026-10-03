@@ -1193,7 +1193,7 @@ let private start () =
             openQueryStream
                 (Page.href SessionRoute.Queries)
                 (fun data ->
-                    match Codec.fromString Codec.readFrame data with
+                    match Codec.fromString Reads.readFrame data with
                     | Ok (Queried frame) -> dispatchRef (QueryFrameMsg frame)
                     | Ok (Panels (claude, github)) ->
                         dispatchRef (ClaudeStatusMsg claude)

@@ -23,6 +23,7 @@ open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Terminals
 open Yession.SessionProcess
+open Yession.App.Codecs
 
 let private existsSync (path: string) : bool = fs.existsSync (U2.Case1 path)
 let private readFileSync (path: string) : string = fs.readFileSync (path, "utf8")
@@ -99,7 +100,7 @@ let private recordsIn (fromSeq: int) (toSeq: int option) (lines: string list) : 
         |> List.skip first
         |> List.truncate (last - first)
         |> List.choose (fun line ->
-            match Codec.fromString Codec.transcriptLine line with
+            match Codec.fromString Transcripts.line line with
             | Ok (TranscriptRecordLine record) -> Some record
             | _ -> None)
 
@@ -129,11 +130,11 @@ let inMemory () : TranscriptStore =
     { Open =
         fun id header ->
             let lines = linesFor id
-            if lines.Count = 0 then lines.Add (Codec.toString Codec.transcriptLine (TranscriptHeaderLine header))
+            if lines.Count = 0 then lines.Add (Codec.toString Transcripts.line (TranscriptHeaderLine header))
             { Append =
                 fun record ->
                     let seq = lines.Count
-                    lines.Add (Codec.toString Codec.transcriptLine (TranscriptRecordLine record))
+                    lines.Add (Codec.toString Transcripts.line (TranscriptRecordLine record))
                     seq
               NextSeq = fun () -> lines.Count
               Keyframe = appendKeyframe id }
@@ -200,7 +201,7 @@ let openStore (directory: string) : TranscriptStore =
                 let fd = Files.openAppend (keyPathOf id)
                 keyHandles.[TerminalId.value id] <- fd
                 fd
-        writeAndSync fd (Codec.toString Codec.transcriptKeyframe keyframe + "\n")
+        writeAndSync fd (Codec.toString Transcripts.keyframe keyframe + "\n")
 
     let openTranscript : OpenTranscript =
         fun id header ->
@@ -220,7 +221,7 @@ let openStore (directory: string) : TranscriptStore =
                     // that came after.
                     let count =
                         if List.isEmpty existing then
-                            writeAndSync fd (Codec.toString Codec.transcriptLine (TranscriptHeaderLine header) + "\n")
+                            writeAndSync fd (Codec.toString Transcripts.line (TranscriptHeaderLine header) + "\n")
                             ref 1
                         else ref (List.length existing)
                     handles.[key] <- (fd, count)
@@ -230,7 +231,7 @@ let openStore (directory: string) : TranscriptStore =
                     let seq = count.Value
                     // Durability before visibility: one write() of the whole line (atomic
                     // under O_APPEND) followed by fsync, before the record is broadcast.
-                    writeAndSync fd (Codec.toString Codec.transcriptLine (TranscriptRecordLine record) + "\n")
+                    writeAndSync fd (Codec.toString Transcripts.line (TranscriptRecordLine record) + "\n")
                     count.Value <- seq + 1
                     seq
               NextSeq = fun () -> count.Value
@@ -263,7 +264,7 @@ let openStore (directory: string) : TranscriptStore =
                 readLines path
                 |> fst
                 |> List.tryPick (fun line ->
-                    match Codec.fromString Codec.transcriptKeyframe line with
+                    match Codec.fromString Transcripts.keyframe line with
                     | Ok k when k.Seq = seq -> Some k
                     | _ -> None) }
 
@@ -290,4 +291,4 @@ let endpoint (validateToken: string -> bool) (store: TranscriptStore) : Signalli
       ReadKeyframe =
         fun terminal seq ->
             forTerminal terminal (fun id ->
-                store.ReadKeyframe id seq |> Option.map (Codec.toString Codec.transcriptKeyframe)) }
+                store.ReadKeyframe id seq |> Option.map (Codec.toString Transcripts.keyframe)) }

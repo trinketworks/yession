@@ -18,6 +18,7 @@ open Yession.Domain
 open Yession.Domain.Tools
 open Yession.Host
 open Yession.SessionProcess
+open Yession.App.Codecs
 
 let private expect result =
     match result with
@@ -277,8 +278,8 @@ let private codecTests =
                   QueryValued (name "work_environment", FieldsOf [ "backend", CellText "srt" ])
                   QueryValued (name "leases", ValueOf CellAbsent) ]
             for frame in frames do
-                let json = Codec.toString Codec.queryFrame frame
-                Expect.equal (Codec.fromString Codec.queryFrame json) (Ok frame) (sprintf "round trip: %s" json)
+                let json = Codec.toString Reads.queryFrame frame
+                Expect.equal (Codec.fromString Reads.queryFrame json) (Ok frame) (sprintf "round trip: %s" json)
 
         // A cell rides as its native JSON type, which is what keeps the stream readable to
         // anything that consumes it without this codec.
@@ -290,8 +291,8 @@ let private codecTests =
                 QueriesDeclared
                     [ { def "resources" rowsShape with
                           Legend = [ "path:PATH[>AT]:ro|rw|ovl", "a file or directory"; "sock:PATH", "a unix socket" ] } ]
-            let json = Codec.toString Codec.queryFrame frame
-            Expect.equal (Codec.fromString Codec.queryFrame json) (Ok frame) "the legend survives the wire"
+            let json = Codec.toString Reads.queryFrame frame
+            Expect.equal (Codec.fromString Reads.queryFrame json) (Ok frame) "the legend survives the wire"
 
         // A page open since before queries could carry one reads the declarations again on
         // its next connection. Until then a missing legend is a query without one, never a
@@ -299,14 +300,14 @@ let private codecTests =
         testCase "a declaration written before legends decodes as a query with none" <| fun () ->
             let json =
                 """{"tag":"queries","queries":[{"name":"leases","title":"leases","description":"d","shape":{"kind":"value"}}]}"""
-            match Codec.fromString Codec.queryFrame json with
+            match Codec.fromString Reads.queryFrame json with
             | Ok (QueriesDeclared [ declared ]) -> Expect.equal declared.Legend [] "no legend, and no failure"
             | other -> failwithf "expected one declaration, got %A" other
 
         testCase "cells ride as JSON strings, booleans and null" <| fun () ->
             let json =
                 Codec.toString
-                    Codec.queryFrame
+                    Reads.queryFrame
                     (QueryValued (name "repos", RowsOf [ [ "repo", CellText "octo/hello"; "dirty", CellFlag true; "note", CellAbsent ] ]))
             Expect.isTrue (json.Contains "\"dirty\":true") "a flag is a boolean"
             Expect.isTrue (json.Contains "\"note\":null") "an absent cell is null"
@@ -319,8 +320,8 @@ let private codecTests =
                 QueryValued (
                     name "repos",
                     RowsOf [ [ "repo", CellText "octo/hello"; "dirty", CellStatus ("checks red", ToneBad) ] ])
-            let json = Codec.toString Codec.queryFrame frame
-            Expect.equal (Codec.fromString Codec.queryFrame json) (Ok frame) "the tone survives the wire"
+            let json = Codec.toString Reads.queryFrame frame
+            Expect.equal (Codec.fromString Reads.queryFrame json) (Ok frame) "the tone survives the wire"
             Expect.isTrue (json.Contains "\"tone\":\"bad\"") "spelled as a word, so the stream stays readable"
 
         testCase "a tone the client does not know is an error, never a silent default" <| fun () ->
@@ -328,13 +329,13 @@ let private codecTests =
             // rendered confidently, which is worse than a frame that failed to decode.
             Expect.isError
                 (Codec.fromString
-                    Codec.queryFrame
+                    Reads.queryFrame
                     """{"kind":"valued","name":"repos","value":{"rows":[{"dirty":{"text":"x","tone":"lilac"}}]}}""")
                 "an unknown tone is refused"
 
         testCase "an unknown frame tag decodes to an error, never a crash" <| fun () ->
             Expect.isTrue
-                (Result.isError (Codec.fromString Codec.queryFrame """{"tag":"whatever"}"""))
+                (Result.isError (Codec.fromString Reads.queryFrame """{"tag":"whatever"}"""))
                 "a future frame kind is refused legibly"
     ]
 
@@ -434,7 +435,7 @@ let private routeTests =
                         (url + "/queries")
                         [ "cookie", "who=ada" ]
                         (fun data ->
-                            match Codec.fromString Codec.readFrame data with
+                            match Codec.fromString Reads.readFrame data with
                             | Ok (Queried frame) -> frames.Add frame
                             | Ok (Panels _)
                             | Error _ -> ())
@@ -614,11 +615,11 @@ let private panelFeedTests =
 
         testCase "a read frame says which read model it carries" <| fun () ->
             let frame = Panels (panelFor "ada", githubFor "ada")
-            Expect.equal (Codec.toString Codec.readFrame frame |> Codec.fromString Codec.readFrame) (Ok frame) "panels round-trip"
+            Expect.equal (Codec.toString Reads.readFrame frame |> Codec.fromString Reads.readFrame) (Ok frame) "panels round-trip"
             let queried = Queried (QueriesDeclared [])
-            Expect.equal (Codec.toString Codec.readFrame queried |> Codec.fromString Codec.readFrame) (Ok queried) "and so do queries"
+            Expect.equal (Codec.toString Reads.readFrame queried |> Codec.fromString Reads.readFrame) (Ok queried) "and so do queries"
             Expect.isTrue
-                (Result.isError (Codec.fromString Codec.readFrame """{"kind":"whatever"}"""))
+                (Result.isError (Codec.fromString Reads.readFrame """{"kind":"whatever"}"""))
                 "a frame this build does not know is refused, never guessed at"
     ]
 
@@ -640,7 +641,7 @@ let private panelRouteTests =
                         (url + "/queries")
                         [ "cookie", "who=ada" ]
                         (fun data ->
-                            match Codec.fromString Codec.readFrame data with
+                            match Codec.fromString Reads.readFrame data with
                             | Ok frame -> frames.Add frame
                             | Error _ -> ())
 
