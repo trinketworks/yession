@@ -577,16 +577,26 @@ let start
 
 // --- what a sandbox and a block are given ------------------------------------------------------
 
-/// Whether a sandbox on `backend` is routed to this proxy WITHOUT being told so. srt is: its
-/// egress already runs through a proxy of its own, which hands a declared host's `CONNECT` to
-/// this one's socket (`Interception`). Docker and the unconfined host reach the internet
-/// directly; they reach this proxy only through the TCP door, and only by a proxy URL they
-/// were given (`Admit`), which nothing gives them unasked.
-let reachable (backend: SandboxBackend) : bool =
+/// What a connection's `api` route forwards into a sandbox on `backend`. Docker and the
+/// unconfined host reach the internet directly, and reach this proxy only through the TCP door
+/// by a URL their declaration asks for (`${proxy.https}`, `Admit`) — so there is nothing to
+/// set up for them here, and what they are lent is what they declared.
+///
+/// srt is refused. Its sandbox is the session's `default`: a minimal place to check a repo out
+/// and commit, which takes GitHub by `git` through the gateway and nothing more. The API is a
+/// work sandbox's job — a container, where `gh` and its kind work. Under srt they did not: on
+/// macOS a Go client verifies TLS through the Security framework, which srt blocks, so `gh`
+/// failed every request; and Node there cannot resolve `localhost`, the name in srt's own
+/// proxy URL. Offering the route anyway made a sandbox that looked able to reach the API and
+/// was not. Refused in words, so a `uses:` says why at the start, and a `wants:` is had by its
+/// other routes and goes without this one, as a want does.
+let forwardApi (backend: SandboxBackend) : WorkSandboxes.CredentialForwarding =
     match backend with
-    | SrtBackend -> true
+    | SrtBackend ->
+        WorkSandboxes.CredentialForwarding.Unforwardable
+            "an srt sandbox takes a connection by git alone — the api route (gh, the credential proxy) is for a container sandbox, which reaches the proxy by '${proxy.https}'"
     | HostBackend
-    | DockerBackend -> false
+    | DockerBackend -> WorkSandboxes.CredentialForwarding.Forwarded WorkSandboxes.Provision.empty
 
 /// What `api` is under srt: `route`'s hosts' HTTPS handed to this proxy, and leave to reach
 /// them. Nothing a client reads — which bundle to trust and where a token goes are bound by
