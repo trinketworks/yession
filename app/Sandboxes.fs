@@ -593,6 +593,42 @@ let hostAddressFrom (hostname: string) (platform: Node.Base.Platform) (backend: 
 let hostAddressHere (hostname: string) (backend: SandboxBackend) : string option =
     hostAddressFrom hostname (platform ()) backend
 
+/// One allowlist entry for `address` at `port`, in the form srt reads: an IPv6 literal is
+/// bracketed, or its colons would be read as the port's.
+let private atPort (address: string) (port: int) : string =
+    if address.Contains ":" then sprintf "[%s]:%d" address port else sprintf "%s:%d" address port
+
+/// What a sandbox's egress must allow for it to reach the listener at `port` on THIS host,
+/// named `host` (`hostAddressFrom`'s answer) — that listener, and nothing else on the box.
+///
+/// srt on macOS is the case this exists for. Its proxy resolves an allowed NAME before
+/// dialling and refuses any address assigned to one of this host's own interfaces, unless
+/// that address and port are themselves on the allowlist (sandbox-runtime's resolved-address
+/// guard, from 0.0.77). The name macOS gives is the box's own, so it resolves to exactly such
+/// an address — under Tailscale, the tailnet one — and the name alone was refused on every
+/// request: a confined `git push` answered 403 by srt's own proxy, "resolved to one of this
+/// host's addresses". So the name comes with each of `ownAddresses` at `port`, which is the
+/// carve-out srt documents for this: reaching an address by name grants nothing its literal
+/// entry does not, and the literal entry is one port.
+///
+/// On Linux the answer is an address (`127.0.0.2`), which the guard never re-judges, and a
+/// backend that is not srt has no proxy to tell; both are given the route as it is.
+let hostRouteFrom
+    (ownAddresses: string list)
+    (platform: Node.Base.Platform)
+    (backend: SandboxBackend)
+    (host: string)
+    (port: int)
+    : string list =
+    match backend with
+    | SrtBackend when platform = Node.Base.Platform.Darwin ->
+        atPort host port :: (ownAddresses |> List.map (fun address -> atPort address port))
+    | _ -> [ host ]
+
+/// `hostRouteFrom` on the host this process runs on.
+let hostRouteHere (ownAddresses: string list) (backend: SandboxBackend) (host: string) (port: int) : string list =
+    hostRouteFrom ownAddresses (platform ()) backend host port
+
 /// What one set of granted leaves comes to, each channel beside the others because they
 /// are one fact read by different consumers: the host family closes path SETS over the
 /// host's own spellings (`Reads`/`Writes`), the container backend materialises each
