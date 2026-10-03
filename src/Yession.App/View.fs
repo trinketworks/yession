@@ -3574,6 +3574,16 @@ module View =
             // What the declaration said it is FOR, when it said anything — under the name, in
             // the tone the closed terminals wear, so the row reads as one thing with a note
             // rather than two facts of equal weight.
+            //
+            // INSIDE the button rather than under it. The focus ring is drawn round the
+            // control, so a note outside it sits immediately beneath the ring's edge and
+            // reads as a second thing the ring has cut off — photographed at 320px. It also
+            // makes the row's target the height a reader thinks it is: the name alone is 24px
+            // in a 41px row, and the two lines fill their row.
+            //
+            // The button keeps its `aria-label`, which names the whole act ("New terminal in
+            // octo/hello:dev") and overrides this text for a screen reader, so the note joins
+            // the control without lengthening what it is called.
             let purpose =
                 match ClientModel.sandboxPurpose sandbox model with
                 | None -> Lit.nothing
@@ -3584,13 +3594,13 @@ module View =
             html $"""
                 <div class="{Style.terminalListRow}" role="listitem">
                   <span class="{Style.listRowPrompt}" aria-hidden="true">$</span>
-                  <span class="min-w-0 flex flex-col">
-                    <button type="button" class="{Style.terminalListName}"
-                            data-sandbox-new="{SandboxRef.render sandbox}"
-                            aria-label="{Dom.Text.newTerminalIn (SandboxRef.render sandbox)}"
-                            @click={Ev(fun _ -> dispatch (OpenTerminalMsg ("", sandbox)))}>{label}</button>
+                  <button type="button" class="{Style.listRowChoice}"
+                          data-sandbox-new="{SandboxRef.render sandbox}"
+                          aria-label="{Dom.Text.newTerminalIn (SandboxRef.render sandbox)}"
+                          @click={Ev(fun _ -> dispatch (OpenTerminalMsg ("", sandbox)))}>
+                    <span class="{Style.listRowChoiceName}">{label}</span>
                     {purpose}
-                  </span>
+                  </button>
                   {where}
                 </div>"""
         let places = ClientModel.sandboxRows model

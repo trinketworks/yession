@@ -4017,6 +4017,47 @@ let editorTests =
                 return ()
             }
 
+        // One column of names, whatever marks the rows wear. The list puts four different
+        // marks in its first cell — a 6px sync dot, an 8px prompt on a row that offers a
+        // terminal, a 12px status glyph, a 14px content icon — and a ragged left edge is what
+        // makes a list of twenty read as twenty unrelated things.
+        //
+        // Only a browser can answer it, and the markup looks right either way: every row is
+        // its own grid container, so the `auto` track this started with was sized by that
+        // row's own mark and coordinated with nothing. Measured, not pixel-matched — the
+        // offset itself is the design and may move; that they AGREE is the promise.
+        editorCase "the list's names stand in one column, whatever mark each row wears" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-list-toggle='list']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+
+                // Both kinds of row at once, which is the whole point: a run of terminals
+                // alone could line up and still be ragged against what sits above them.
+                let! kinds =
+                    await (page.EvaluateAsync<int> """() => new Set([...document.querySelectorAll(
+                        "#shell [data-content-list] > div[role='listitem'] > :first-child")]
+                        .map(m => Math.round(m.getBoundingClientRect().width))).size""")
+                Expect.isTrue (kinds > 1) (sprintf "the rows wear marks of different widths, got %d width(s)" kinds)
+
+                // The NAMES, by the hooks that make them names — not every button in a row,
+                // which would drag the verbs at the far edge into the count.
+                let names =
+                    [ Yession.App.Dom.Hooks.terminalListRow
+                      Yession.App.Dom.Hooks.artifactListRow
+                      Yession.App.Dom.Hooks.sandboxNew ]
+                    |> List.map (sprintf "#shell [data-content-list] [%s]")
+                    |> String.concat ", "
+                let! counted =
+                    await (page.EvaluateAsync<int> (sprintf """() => document.querySelectorAll("%s").length""" names))
+                Expect.isTrue (counted > 1) (sprintf "more than one name to line up, got %d" counted)
+                let! offsets =
+                    await (page.EvaluateAsync<int> (sprintf """() => new Set([...document.querySelectorAll("%s")]
+                        .map(n => Math.round(n.getBoundingClientRect().left))).size""" names))
+                Expect.equal offsets 1 "every name starts at the same place"
+                return ()
+            }
+
         // The terminal list (Plan 20, stage 0). WHICH verbs a row offers is a fold the cheap
         // tier already pins; what only a browser can answer is the DOM swap — the list
         // replaces the strip and the pane's body at once, so choosing a row removes the
