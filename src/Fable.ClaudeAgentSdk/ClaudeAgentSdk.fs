@@ -508,12 +508,26 @@ type private QueryParameters =
 [<Import("query", "@anthropic-ai/claude-agent-sdk")>]
 let private queryRaw (parameters: QueryParameters) : Query = jsNative
 
-/// Start a turn. Nothing runs until the first `next` — the CLI is spawned lazily.
+/// Start a turn. The CLI is spawned by this call, synchronously, through
+/// `spawnClaudeCodeProcess` — a spawner that throws makes `query` throw — and nothing is read
+/// from it until the first `next`.
 ///
 /// A non-success ending does NOT always arrive as a `result` message: the SDK reports one by
 /// THROWING, so the promise `next` returns rejects. That is the adapter's to catch and say
 /// something about, and it is the single sharpest thing to know about this surface.
+///
+/// The second sharpest: a query with no `pathToClaudeCodeExecutable` picks its vendored CLI
+/// binary by asking whether this is a musl system, and it asks with
+/// `process.report.getReport()` — synchronous, on the caller's event loop, and by default a
+/// reverse lookup of every open socket's endpoints. In a process holding sockets (every
+/// Session Process: its HTTP server, its peers) behind a resolver that does not answer PTR
+/// queries, that froze the whole session for the resolver's timeout at the start of EVERY
+/// turn — ten seconds on the release gate's runner, during which the message that started
+/// the turn could not even reach the person who sent it. The SDK reads one header field of
+/// that report; the network is never what it wanted, so it is kept out here, where the
+/// call that needs it is, rather than by every caller remembering to first.
 let query (prompt: string) (options: Options) : Query =
+    Fable.NodeExtras.Processes.excludeNetworkFromReports ()
     queryRaw (
         jsOptions<QueryParameters> (fun p ->
             p.prompt <- prompt
