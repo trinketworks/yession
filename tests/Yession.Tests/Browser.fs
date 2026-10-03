@@ -4158,6 +4158,49 @@ let editorTests =
                 return ()
             }
 
+        // The menu fits the screen it is on. Only a browser can answer it and the markup is
+        // innocent either way: the menu's entries carry what a repo's file says its sandbox is
+        // FOR, which is a whole sentence — 170 characters in this repository's own
+        // `yession.yaml` — and a box with a minimum width and no maximum grows to its widest
+        // entry. Hung from `right-0`, that growth goes LEFT: measured on a 375px phone, a
+        // 962px menu starting 599px off the side of the screen, its text cut off mid-word.
+        //
+        // What is asserted is that it fits, not what it measures: the width is design and may
+        // move, where staying on the screen is the promise. The long descriptions live in the
+        // harness fixture, because the version of this that shipped broken was green against
+        // a fixture that said "day-to-day work".
+        editorCaseIn 375 812 "the menu of things to open fits the phone it is on" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-pane-new]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-new-menu]")
+
+                // The note is what can push it wide, so a fixture that stopped carrying a long
+                // one would make this pass over nothing. A NAME can push it too, by about
+                // 50px, and is left to: `SandboxName` caps at 40 characters, so that growth is
+                // bounded and small, and a menu sized to its longest name reads better than a
+                // name with its end cut off.
+                let! longestNote =
+                    await (page.EvaluateAsync<int> """() => Math.max(0, ...[...document.querySelectorAll(
+                        "#shell [data-pane-new-menu] [role='menuitem']")].map(e => e.textContent.trim().length))""")
+                Expect.isTrue
+                    (longestNote > 90)
+                    (sprintf "an entry says what its sandbox is for, at length; longest is %d" longestNote)
+
+                let! fits =
+                    await (page.EvaluateAsync<bool> """() => {
+                        const m = document.querySelector("#shell [data-pane-new-menu]").getBoundingClientRect();
+                        return m.left >= 0 && m.right <= window.innerWidth;
+                    }""")
+                let! box =
+                    await (page.EvaluateAsync<string> """() => {
+                        const m = document.querySelector("#shell [data-pane-new-menu]").getBoundingClientRect();
+                        return `left ${Math.round(m.left)}, right ${Math.round(m.right)}, in a ${window.innerWidth}px screen`;
+                    }""")
+                Expect.isTrue fits (sprintf "the menu is on the screen: %s" box)
+                return ()
+            }
+
         // One column of names, whatever marks the rows wear. The list puts four different
         // marks in its first cell — a 6px sync dot, an 8px prompt on a row that offers a
         // terminal, a 12px status glyph, a 14px content icon — and a ragged left edge is what

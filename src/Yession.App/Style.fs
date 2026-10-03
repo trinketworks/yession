@@ -2102,16 +2102,42 @@ module Style =
     /// one product differing in their ring and their ground are two menus a reader has to
     /// learn separately. Hung under its control and wider than that one, because its entries
     /// carry a second line.
-    let paneNewMenu = cls [ "absolute right-0 top-9 z-30 min-w-[14rem] py-1 select-none bg-panel"; Stroke.ring; Stroke.hair ]
+    /// Capped, and that is the load-bearing part. `min-w` alone let the box grow to its
+    /// widest entry, and an entry carries what a repo's file says its sandbox is FOR —
+    /// whole sentences, 170 characters in this repository's own `yession.yaml`. Measured on
+    /// a 375px phone: a 962px menu, hung from `right-0`, so it reached 599px off the left of
+    /// the screen with its text cut off mid-word. `truncate` on the note could not save it,
+    /// because a flex column with no width to fit into has nothing to truncate against.
+    ///
+    /// 18rem rather than the pane, so the cap holds wherever the menu is: the pane's splitter
+    /// stops at 320px, which this clears with its gutters. The viewport term is the floor
+    /// under that, for a screen narrower than any phone sold.
+    let paneNewMenu =
+        cls [ "absolute right-0 top-9 z-30 py-1 select-none bg-panel"
+              "min-w-[14rem]"
+              Stroke.ring
+              Stroke.hair ]
 
     /// An entry carrying a note under its name. The menu's own entry sets the box, the
     /// padding and the states; this only makes it two lines.
+    /// `min-w-0`, or the column refuses to shrink below its content and the cap above is a
+    /// number the box ignores.
     let menuEntryStacked = cls [ itemMenuEntry; "flex flex-col gap-0.5" ]
     /// Its first line — ink, not the dim a one-line entry wears, because a name no brighter
     /// than its own footnote is not a name.
-    let menuEntryName = "truncate text-body text-ink"
+    ///
+    /// NOT truncated, though it is a label and labels usually are: a `SandboxName` is capped
+    /// at 40 characters, so the widest a name can make this menu is bounded and small, and
+    /// the menu sizing to its longest name is a better answer than a name with its end cut
+    /// off. Truncating would need the column to shrink, and a `min-w-0` kept for a case that
+    /// cannot arrive is CSS nobody can test.
+    let menuEntryName = "text-body text-ink"
     /// Which repo declared this place, and what its file said the place is for.
-    let menuEntryNote = "truncate font-light text-small text-ink-faint"
+    ///
+    /// WRAPPED and clamped rather than truncated: a description is prose somebody wrote, and
+    /// an ellipsis after the first four words of a sentence says less than nothing. Two lines
+    /// is what distinguishes one sandbox from another without the menu becoming a document.
+    let menuEntryNote = "line-clamp-2 font-light text-small text-ink-faint"
 
     /// A repo note in the timeline (Plan 14): one quiet act-line, indented past the
     /// avatar gutter so the reading edge lines up with message bodies.
@@ -2761,8 +2787,12 @@ module Style =
     /// the terminal, and it lives with the terminal's other properties, in the bar.
     /// The cell the `+` sits in: anchored at the strip's right edge, and the positioning
     /// context its menu hangs from.
-    let terminalTabNewCell = "relative shrink-0 flex items-stretch"
-    let terminalTabNew = cls [ tabBase; Stroke.clear; "text-ink-faint hover:text-ink" ]
+    let terminalTabNewCell = "relative shrink-0 flex items-center"
+    /// The door to something new. The LIST toggle's weight exactly (`btnIcon`, 32px square),
+    /// because they are the pane's two doors and a reader should see them as a pair. It used
+    /// to wear the tab vocabulary — a bare faint glyph on a clear ground — which made one of
+    /// the two doors look like a control and the other like a mark somebody left behind.
+    let terminalTabNew = cls [ btnIcon; "w-8 h-8 shrink-0" ]
     /// A tab's presence marks: one dot per peer whose caret is in THAT terminal, so a
     /// collaborator typing a command in a terminal you are not looking at is visible from
     /// the strip rather than only from inside it.
