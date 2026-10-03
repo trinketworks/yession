@@ -1,12 +1,13 @@
-namespace Yession.Domain.Agent
+namespace Yession.Session
 
 open Yession.Domain
+open Yession.Domain.Agent
 open Yession.Domain.Sandboxes
 
 // The session's own tools, as a registry (Plan 16, part A).
 //
 // This is the `yession` namespace: the verbs a turn has always had, moved off the
-// runner's parameter list and onto a value. They live in the domain rather than beside the
+// runner's parameter list and onto a value. They live in the session rather than beside the
 // SDK adapter for one reason worth stating — what a tool ANSWERS is the interesting part,
 // and it is now testable without a model, a subprocess or a browser. The adapter is left
 // with the thing only it can do: turning descriptors into SDK tools.

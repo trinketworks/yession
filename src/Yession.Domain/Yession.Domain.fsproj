@@ -147,9 +147,6 @@
          interleaved by offset (Plan 14). A view-level merge, never a third fold. -->
     <Compile Include="Timeline.fs" />
     <Compile Include="Agent.fs" />
-    <!-- The `yession` namespace's registry, built from a turn's capabilities. After
-         Agent.fs (it needs them) and after Queries.fs (it generates a tool per query). -->
-    <Compile Include="AgentTools.fs" />
     <Compile Include="SessionState.fs" />
     <Compile Include="Transport.fs" />
     <!-- The heartbeat that keeps a link honest: straight after the channel it supervises,

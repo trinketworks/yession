@@ -12,6 +12,7 @@ open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
 open Yession.Domain.Tools
+open Yession.Session
 
 let private expect result =
     match result with
