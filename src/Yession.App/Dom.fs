@@ -694,6 +694,10 @@ module Dom =
         /// "dev" twice is a menu nobody reading it aloud can use. It CONTAINS the visible
         /// label, which is what keeps a voice control that hears "dev" able to press it.
         let newTerminalIn (sandbox: string) = sprintf "New terminal in %s" sandbox
+        /// What a refusal notice leads with. The session's own sentence follows it, and says
+        /// which act and why; this is only the word that makes the row scannable.
+        let refused = "refused"
+        let dismissRefusal = "Dismiss"
         /// What the list says when nothing has been opened. It offers nothing: making
         /// something is the other door's job, and this one answers what exists.
         let nothingOpenedYet = "Nothing opened here yet"
