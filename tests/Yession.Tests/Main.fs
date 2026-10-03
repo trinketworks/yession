@@ -138,6 +138,7 @@ let all =
         Tag.needs "ArtifactHttp" [] (fun () -> ArtifactHttp.tests)
         Tag.needs "Transport resilience" [] (fun () -> Resilience.tests)
         Tag.needs "Oidc" [] (fun () -> Oidc.tests)
+        Tag.needs "Manager MCP forms" [] (fun () -> ManagerForms.tests)
         Tag.needs "Phase4" [] (fun () -> Phase4.tests)
         Tag.needs "the resources algebra" [] (fun () -> Resources.tests)
         Tag.needs "Volume leases" [] (fun () -> VolumeLeases.tests)

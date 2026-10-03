@@ -585,13 +585,57 @@ let page
 
 // --- Routing ----------------------------------------------------------------------------
 
-/// One field of a form-encoded body. Absent reads as empty, which is what every reader below
-/// tests for — a form that named the field and left it blank and a form that did not name it
-/// are the same submission.
-let private formField (body: string) (name: string) : string =
-    match (Node.Api.URLSearchParams.Create body).get name with
-    | Some value -> value
-    | None -> ""
+/// One field of a form-encoded body: `None` when the form did not name it, `Some ""` when it
+/// named it and left it blank. Those are different submissions — a select whose first option
+/// is "any session" posts `session=` — and the decoders below are where each gets its meaning.
+let private formField (body: string) (name: string) : string option =
+    (Node.Api.URLSearchParams.Create body).get name
+
+/// Which sessions a server's form says it reaches. The field is REQUIRED: the page always
+/// posts it, empty meaning every session, so a body without one is not that choice made —
+/// it is a caller who did not say, and reading it as `AnySession` would declare a server for
+/// (or withdraw the one that covers) every session on the strength of a typo.
+let private audienceOfForm (body: string) : Result<McpAudience, string> =
+    match formField body "session" with
+    | None -> Error "the form did not say which sessions the server reaches (an empty session field means every session)"
+    | Some "" -> Ok AnySession
+    | Some id -> SessionId.create id |> Result.map OneSession
+
+let private serverNameOfForm (body: string) : Result<McpServerName, string> =
+    match formField body "name" with
+    | None -> Error "the form did not name the MCP server"
+    | Some name -> McpServerName.create name
+
+/// The form that declares an MCP server: a name, an address, who it reaches, and optionally a
+/// sentence for the humans. Pure, so what a body means is answered without a Manager.
+let declarationOfForm (body: string) : Result<McpDeclaration, string> =
+    match serverNameOfForm body, audienceOfForm body with
+    | Error e, _
+    | _, Error e -> Error e
+    | Ok name, Ok audience ->
+        match formField body "url" with
+        | None -> Error "the form did not give the MCP server an address"
+        | Some "" -> Error "an MCP server needs an address"
+        | Some url ->
+            Ok
+                { Server =
+                    { Name = name
+                      Transport = McpHttp url
+                      // No description is a legitimate declaration, so absent and blank agree.
+                      Description =
+                        (match formField body "description" with
+                         | None
+                         | Some "" -> None
+                         | Some description -> Some description) }
+                  Audience = audience }
+
+/// The form that withdraws one declaration: its name and the audience it was declared for,
+/// because the same name may be declared for one session and for every session.
+let withdrawalOfForm (body: string) : Result<McpServerName * McpAudience, string> =
+    match serverNameOfForm body, audienceOfForm body with
+    | Error e, _
+    | _, Error e -> Error e
+    | Ok name, Ok audience -> Ok (name, audience)
 
 /// The same static asset service the Session runs, over this process's OWN set — read
 /// and addressed once at boot rather than per request, so every render of this page (it is
@@ -945,10 +989,12 @@ let tryHandle
             readBody req (fun body ->
                 // The human UI omits the id, so mint a Docker-safe Crockford one; a caller that
                 // supplies an explicit id (automation, tests) keeps it.
+                // Absent and blank agree here, unlike the MCP forms: both mean "mint one".
                 let id =
                     match formField body "id" with
-                    | "" -> SessionId.value (SessionId.mint ())
-                    | provided -> provided
+                    | None
+                    | Some "" -> SessionId.value (SessionId.mint ())
+                    | Some provided -> provided
                 // No name: a session is named from inside itself and reports it back
                 // (`setDisplayName`), so `DisplayName` starts as the minted id and the
                 // list shows that until somebody names it.
@@ -960,40 +1006,14 @@ let tryHandle
         // an operator who declares a server declares it in order for it to be used.
         | ManagerRoute.DeclareMcpServer ->
             readBody req (fun body ->
-                let audience =
-                    match formField body "session" with
-                    | "" -> Ok AnySession
-                    | id -> SessionId.create id |> Result.map OneSession
-                let declared =
-                    match McpServerName.create (formField body "name"), audience with
-                    | Error e, _ -> Error e
-                    | _, Error e -> Error e
-                    | Ok name, Ok audience ->
-                        match formField body "url" with
-                        | "" -> Error "an MCP server needs an address"
-                        | url ->
-                            Ok
-                                { Server =
-                                    { Name = name
-                                      Transport = McpHttp url
-                                      Description =
-                                        (match formField body "description" with
-                                         | "" -> None
-                                         | description -> Some description) }
-                                  Audience = audience }
-                match declared |> Result.bind pm.DeclareMcpServer with
+                match declarationOfForm body |> Result.bind pm.DeclareMcpServer with
                 | Ok () -> html res (mcpSection (pm.Sessions ()) (pm.McpServers ()))
                 | Error e -> respond res 400 "text/plain" e)
         | ManagerRoute.WithdrawMcpServer ->
             readBody req (fun body ->
-                let audience =
-                    match formField body "session" with
-                    | "" -> Ok AnySession
-                    | id -> SessionId.create id |> Result.map OneSession
-                match McpServerName.create (formField body "name"), audience with
-                | Error e, _
-                | _, Error e -> respond res 400 "text/plain" e
-                | Ok name, Ok audience ->
+                match withdrawalOfForm body with
+                | Error e -> respond res 400 "text/plain" e
+                | Ok (name, audience) ->
                     pm.WithdrawMcpServer name audience
                     html res (mcpSection (pm.Sessions ()) (pm.McpServers ())))
         // Both streams are the same subscription projected differently — one publish per
