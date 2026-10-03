@@ -2813,7 +2813,12 @@ module View =
                  data-pane-replay="{PaneTab.key tab}"></div>"""
 
     /// One block: the command that ran, then everything it printed.
-    let private terminalBlockView (model: ClientModel) (feed: TerminalFeed) (block: Block) : TemplateResult =
+    ///
+    /// `showAuthor` is false for a block drawn INSIDE a `terminalBlockRun` group: the group's
+    /// own header already carries the one mark that answers "whose commands are these",
+    /// since a group only forms where every block in it shares an author — repeating the
+    /// mark on each line inside would be the same fact said once too often.
+    let private terminalBlockView (model: ClientModel) (feed: TerminalFeed) (showAuthor: bool) (block: Block) : TemplateResult =
         let body = terminalBlockOutput feed block
         // A command that ran and exited 0 says so by being followed by its output and
         // nothing else — which is what every terminal anyone has used does. `✓ 0` beside
@@ -2830,7 +2835,7 @@ module View =
         // and with the facts behind a disclosure there was nothing on the line to say so.
         let author =
             let who = Authority.author block.Authority
-            if ClientModel.isMine who model then Lit.nothing
+            if not showAuthor || ClientModel.isMine who model then Lit.nothing
             else
                 html $"""
                     <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model who ]}" title="{Entity.actorName model who}"
@@ -2869,6 +2874,56 @@ module View =
                 <div class="{Style.terminalBlockFacts}" data-terminal-block-facts>{facts}</div>
               </details>
               {body}
+            </article>"""
+
+    /// Consecutive blocks, same author, no other author's command between them — the
+    /// pane's own version of what the chat already folds into a task card (`TaskCard`,
+    /// shared with `taskCard` above). Never one block: a run around a single command is a
+    /// disclosure over nothing, so the caller only reaches for this once a group has two.
+    let private terminalRuns (blocks: Block list) : Block list list =
+        let step (groups: Block list list) (next: Block) : Block list list =
+            match groups with
+            | (leader :: _ as group) :: earlier when Authority.author leader.Authority = Authority.author next.Authority ->
+                (next :: group) :: earlier
+            | _ -> [ next ] :: groups
+        List.fold step [] blocks
+        |> List.rev
+        |> List.map List.rev
+
+    /// One fold over a run of commands one actor ran back to back in this terminal — "ran N
+    /// commands", with the same ✓/✗/running tally the chat's task card wears, collapsed to
+    /// one line until pressed. A native `<details>`, like the block it is made of: the pane
+    /// already discloses a block's facts that way, and this is one more of the same control
+    /// around several blocks rather than a second fold mechanism borrowed from the chat.
+    let private terminalBlockRun (model: ClientModel) (feed: TerminalFeed) (blocks: Block list) : TemplateResult =
+        let leader = List.head blocks
+        let tally = blocks |> List.map (fun b -> TaskCard.stateOf b.Status) |> TaskCard.tally
+        let count n inner = if n = 0 then Lit.nothing else inner
+        let failed = count tally.Failed (html $"""<span class="{Style.statusErr}">{Icon.crossSm} {tally.Failed}</span>""")
+        let running = count tally.Running (html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>{tally.Running}</span>""")
+        let done' = count tally.Done (html $"""<span class="{Style.statusOk}">{Icon.checkSm} {tally.Done}</span>""")
+        let counts = html $"""<span class="{Style.terminalBlockRunCounts}">{failed}{running}{done'}</span>"""
+        let commands = if tally.Commands = 1 then "1 command" else sprintf "%d commands" tally.Commands
+        let runAuthor = Authority.author leader.Authority
+        let author =
+            if ClientModel.isMine runAuthor model then Lit.nothing
+            else
+                html $"""
+                    <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model runAuthor ]}" title="{Entity.actorName model runAuthor}"
+                          data-terminal-block-author="{Entity.actorToken runAuthor}"></span>"""
+        html $"""
+            <article class="{Style.terminalBlock}" data-terminal-block-run="{BlockId.value leader.BlockId}">
+              <details>
+                <summary class="{Style.terminalBlockSummary}">
+                  {author}
+                  <span class="{Style.terminalCommandText}">ran {commands}</span>
+                  {counts}
+                  <span class="{Style.terminalBlockMark}" aria-hidden="true">…</span>
+                </summary>
+                <div class="{Style.terminalStream}" data-terminal-block-run-body>
+                  {blocks |> List.map (terminalBlockView model feed false)}
+                </div>
+              </details>
             </article>"""
 
     /// ONE card for a queued act (Plan 15, stage 3c): what is about to run, editable,
@@ -3830,7 +3885,12 @@ module View =
                 // is its placeholder — so drawing a second one above it is one idle prompt too
                 // many. On a closed one there is no command line, and the symbol is the only
                 // thing left to say the surface is a terminal that ran nothing.
-                if not (List.isEmpty view.Blocks) then view.Blocks |> List.map (terminalBlockView model feed)
+                if not (List.isEmpty view.Blocks) then
+                    view.Blocks
+                    |> terminalRuns
+                    |> List.map (function
+                        | [ block ] -> terminalBlockView model feed true block
+                        | many -> terminalBlockRun model feed many)
                 elif view.IsOpen then []
                 else [ html $"""<div class="{Style.terminalOutputEmpty}"><span class="{Style.terminalPrompt}">$</span></div>""" ]
             // A terminal's two reads, and the ONE control between them (Plan 14, stage 7;
