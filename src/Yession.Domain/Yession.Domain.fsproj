@@ -50,7 +50,6 @@
          cases it reads, and before Acts.fs, whose sentences it lengthens. -->
     <Compile Include="WatchChanges.fs" />
     <Compile Include="Attribution.fs" />
-    <Compile Include="MeProbe.fs" />
     <!-- Terminal output as styled text, and the durable transcript that records it.
          Both depend only on Identity/Events, and neither knows what a session is. -->
     <Compile Include="Ansi.fs" />

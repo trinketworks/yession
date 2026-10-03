@@ -1,13 +1,13 @@
-namespace Yession.Domain
+namespace Yession.App.Codecs
 
 open Thoth.Json
 
 /// The `/me` probe's wire payload — one codec, encoded here by the Session Process's
 /// answer and decoded here by the browser's ask, so the two sides fold the SAME shape
 /// rather than a hand-written JSON string on one side and a hand-picked field list on
-/// the other. `Yession.Domain` is compiled both by .NET (the server) and by Fable (the
-/// browser), the same way `Attribution` is — one module, not a server copy and a client
-/// guess that can drift apart.
+/// the other. The App owns it, and `Yession.App` is compiled both by .NET (the server)
+/// and by Fable (the browser) — one module, not a server copy and a client guess that can
+/// drift apart.
 ///
 /// `toJson`/`ofJson` are the only surface callers need: `Thoth.Json`'s own `JsonValue` and
 /// `Decoder<'a>` are distinct concrete types from `Thoth.Json.Net`'s (a plain .NET build

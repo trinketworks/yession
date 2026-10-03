@@ -22,6 +22,7 @@ open Yession.Domain
 open Yession.Domain.Repos
 open Yession.SessionProcess
 open Yession.Host.Interop
+open Yession.App.Codecs
 
 #if FABLE_COMPILER
 open Thoth.Json
@@ -337,11 +338,11 @@ let private respondText (res: ServerResponse) (status: int) (text: string) =
 
 /// The JSON the browser reads a listing as: the codec the picker decodes with, so the
 /// browser reads one wire shape rather than two.
-let encodeListing (page: RepoPage) : string = Codec.toString Codec.repoPage page
+let encodeListing (page: RepoPage) : string = Codec.toString RepoPages.repos page
 
-let encodeBranches (page: BranchPage) : string = Codec.toString Codec.branchPage page
+let encodeBranches (page: BranchPage) : string = Codec.toString RepoPages.branches page
 
-let encodePullHead (head: PullHead) : string = Codec.toString Codec.pullHead head
+let encodePullHead (head: PullHead) : string = Codec.toString RepoPages.pullHead head
 
 /// Which HTTP status a failure is said with. A missing credential and a dead one are both
 /// 401 — the browser's answer to either is the sign-in panel — but with different words.

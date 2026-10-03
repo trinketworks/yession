@@ -26,6 +26,7 @@ open Yession.Domain.Repos
 open Yession.App
 open Yession.Host
 open Yession.SessionProcess
+open Yession.App.Codecs
 
 #if FABLE_COMPILER
 open Thoth.Json
@@ -324,7 +325,7 @@ let private routeTests =
                 let! url = startRoutes api [ alice, "ghp_alice" ]
                 let! reply = get (url + "/github/repos") "who=alice"
                 Expect.equal reply.Status 200 "answered"
-                let listing = Codec.fromString Codec.repoPage reply.Body |> expect
+                let listing = Codec.fromString RepoPages.repos reply.Body |> expect
                 Expect.equal (listing.Candidates |> List.map (fun c -> c.Repo)) [ repo "mine/recent" ] "the provider's name for it, in the codec the picker reads"
                 Expect.equal (listing.Candidates |> List.map (fun c -> c.DefaultBranch)) [ "trunk" ] "and its default branch"
                 let _, bearer = api.Requests.[0]
@@ -347,7 +348,7 @@ let private routeTests =
                 let! url = startRoutes api []
                 let! reply = get (url + "/github/repos?q=hello") "who=alice"
                 Expect.equal reply.Status 200 "answered anonymously"
-                let listing = Codec.fromString Codec.repoPage reply.Body |> expect
+                let listing = Codec.fromString RepoPages.repos reply.Body |> expect
                 Expect.equal (listing.Candidates |> List.map (fun c -> c.Repo)) [ repo "found/by-name" ] "from the search endpoint"
             }
 
@@ -388,7 +389,7 @@ let private routeTests =
                 let! url = startRoutes api [ alice, "ghp_alice" ]
                 let! reply = get (url + "/github/repos/octo/hello/branches") "who=alice"
                 Expect.equal reply.Status 200 "answered"
-                Expect.equal (Codec.fromString Codec.branchPage reply.Body |> Result.map (fun page -> page.Names)) (Ok [ "main"; "next" ]) "the names, in the codec the picker reads"
+                Expect.equal (Codec.fromString RepoPages.branches reply.Body |> Result.map (fun page -> page.Names)) (Ok [ "main"; "next" ]) "the names, in the codec the picker reads"
                 let! gone = get (url + "/github/repos/octo/gone/branches") "who=alice"
                 Expect.equal gone.Status 404 "and a repo the credential cannot see is a 404 with words"
             }
@@ -400,7 +401,7 @@ let private routeTests =
                 let! reply = get (url + "/github/repos/octo/hello/pulls/42") "who=alice"
                 Expect.equal reply.Status 200 "answered"
                 Expect.equal
-                    (Codec.fromString Codec.pullHead reply.Body)
+                    (Codec.fromString RepoPages.pullHead reply.Body)
                     (Ok { PullHead.Repo = repo "fork-owner/hello"; PullHead.Branch = "fix/thing" })
                     "the fork and its branch, in the codec the picker reads"
                 let! notNumber = get (url + "/github/repos/octo/hello/pulls/latest") "who=alice"

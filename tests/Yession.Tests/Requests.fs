@@ -260,10 +260,33 @@ let private signallingTests =
                 "not an offer or an answer"
     ]
 
+// --- the /me probe ---------------------------------------------------------------------------
+
+let private meProbeTests =
+    testList "the /me answer" [
+
+        // The Session encodes this answer and the App decodes it, through the one codec the App
+        // owns. What is pinned is that the answer survives the trip whole.
+        testCase "reads back as the answer that was given" <| fun () ->
+            let answer : MeProbe.Response =
+                { PeerToken = "token"; Sub = "user-1"; Attributed = true; DisplayName = Some "Grace" }
+            Expect.equal (MeProbe.ofJson (MeProbe.toJson answer)) (Ok answer) "the same answer"
+
+        // Unattributed access has no name to give, and saying so must not read back as a name
+        // that is empty.
+        testCase "an answer with no name reads back as no name" <| fun () ->
+            let answer : MeProbe.Response =
+                { PeerToken = "token"; Sub = "shared"; Attributed = false; DisplayName = None }
+            Expect.equal
+                (MeProbe.ofJson (MeProbe.toJson answer) |> Result.map (fun r -> r.DisplayName))
+                (Ok None)
+                "no name"
+    ]
+
 let tests =
     testList
         "Requests"
-        [ reasonTests; mcpTests; claudeTests; githubRequestTests; githubStatusTests; signallingTests ]
+        [ reasonTests; mcpTests; claudeTests; githubRequestTests; githubStatusTests; signallingTests; meProbeTests ]
 
 // --- through the proxy the environment names ----------------------------------------------
 

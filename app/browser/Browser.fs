@@ -414,7 +414,7 @@ let private revealSettings () : unit =
 // "offline" into "log in", and a login bounce against an unreachable session goes nowhere.
 //
 // Expressed as an ordinary F# `async` pipeline over `MeProbe.Response` — the SAME codec
-// (`Yession.Domain.MeProbe`) the Session Process encodes its answer with — rather than one
+// (`Yession.App.Codecs.MeProbe`) the Session Process encodes its answer with — rather than one
 // JS `Emit` string that encoded the branching itself. The fetch call itself goes through
 // `Fable.Fetch` (https://github.com/fable-compiler/fable-fetch), a typed binding, not a
 // hand-rolled Emit; `AbortSignal.timeout` is the one piece it does not cover and comes from
@@ -1028,7 +1028,7 @@ let private fetchRepoPage (url: string) : Async<Result<RepoPage, string * bool>>
                     (if reply.Body = "" then sprintf "the session answered %d" reply.Status else reply.Body),
                     reply.Status = 401)
         else
-            match Codec.fromString Codec.repoPage reply.Body with
+            match Codec.fromString RepoPages.repos reply.Body with
             | Ok page -> return Ok page
             | Error reason -> return Error (reason, false)
     }
@@ -1052,7 +1052,7 @@ let private fetchBranchPage (url: string) : Async<Result<BranchPage, string>> =
         if not reply.Ok then
             return Error (if reply.Body = "" then sprintf "the session answered %d" reply.Status else reply.Body)
         else
-            match Codec.fromString Codec.branchPage reply.Body with
+            match Codec.fromString RepoPages.branches reply.Body with
             | Ok page -> return Ok page
             | Error reason -> return Error reason
     }
@@ -1074,7 +1074,7 @@ let private fetchPullHead (repo: RepoRef) (number: int) : Async<Result<PullHead,
         if not reply.Ok then
             return Error (if reply.Body = "" then sprintf "the session answered %d" reply.Status else reply.Body)
         else
-            return Codec.fromString Codec.pullHead reply.Body
+            return Codec.fromString RepoPages.pullHead reply.Body
     }
 
 // --- The read surface's stream (Plan 15) --------------------------------------------------
