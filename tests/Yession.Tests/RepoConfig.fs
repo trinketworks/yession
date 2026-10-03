@@ -15,6 +15,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Repos
 open Yession.Domain.Chat
 open Yession.Host
+open Yession.App.Codecs
 
 let private expect = function Ok v -> v | Error e -> failwithf "%A" e
 
@@ -937,8 +938,8 @@ let foldTests =
                           RepoCapabilitiesChanged.Sensitive = false
                           RepoCapabilitiesChanged.Actor = ActorRef.Configured r
                           RepoCapabilitiesChanged.CausedBy = Some (Cause.Item (MessageId.create "added" |> expect)) } }
-            let json = Codec.toString Codec.sessionEventEnvelope envelope
-            Expect.equal (Codec.fromString Codec.sessionEventEnvelope json |> expect) envelope "unchanged by the wire"
+            let json = Codec.toString Events.sessionEventEnvelope envelope
+            Expect.equal (Codec.fromString Events.sessionEventEnvelope json |> expect) envelope "unchanged by the wire"
 
         // The fold runs after every repo verb. A note per fold would be the accumulation the
         // whole delta rule exists to avoid.

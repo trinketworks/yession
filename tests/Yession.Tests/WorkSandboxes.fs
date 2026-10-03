@@ -23,6 +23,7 @@ open Yession.Domain.Chat
 open Yession.Domain.Terminals
 open Yession.Host
 open Yession.SessionProcess
+open Yession.App.Codecs
 
 let private expect result =
     match result with
@@ -1245,8 +1246,8 @@ let private timelineTests =
                               RepoConfigRefused.Reason = "the ceiling is closed"
                               RepoConfigRefused.Actor = ActorRef.Configured hello
                               RepoConfigRefused.CausedBy = None } }
-                let json = Codec.toString Codec.sessionEventEnvelope envelope
-                Expect.equal (Codec.fromString Codec.sessionEventEnvelope json |> expect) envelope "unchanged by the wire"
+                let json = Codec.toString Events.sessionEventEnvelope envelope
+                Expect.equal (Codec.fromString Events.sessionEventEnvelope json |> expect) envelope "unchanged by the wire"
     ]
 
 let private backendTests =

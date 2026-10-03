@@ -28,6 +28,7 @@ open Yession.Domain.Tools
 open Fable.BrowserExtras
 open Fable.ProseMirror
 open Yession.App
+open Yession.App.Codecs
 open Thoth.Json
 
 let private host : Browser.Types.HTMLElement = Browser.Dom.document.getElementById "host"
@@ -1270,7 +1271,7 @@ let private openFixture (items: int) (perAnswer: int) : OpenFixture =
             let first = EventOffset.value (List.head chunk).Offset
             let last = EventOffset.value (List.last chunk).Offset
             sprintf "events/%d-%d" first last,
-            chunk |> List.map (Codec.toString Codec.sessionEventEnvelope) |> String.concat "\n" ]
+            chunk |> List.map (Codec.toString Events.sessionEventEnvelope) |> String.concat "\n" ]
     let answered (value: 'a) : Async<'a> =
         async {
             do! Async.AwaitPromise (nextTask ())

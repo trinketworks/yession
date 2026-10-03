@@ -20,6 +20,7 @@ open Yession.Domain.Tools
 open Yession.App
 open Yession.SessionProcess
 open Yession.Tests.Support
+open Yession.App.Codecs
 
 // Reading a transcript back as BYTES, for the one assertion that is about the file itself
 // rather than about what the store returns from it.
@@ -711,8 +712,8 @@ let private rejectionTests =
 
         testCase "the event round-trips" <| fun () ->
             let event = rejectedEvent terminalA "a1" "2" bob (Some "not on prod")
-            let encoded = Codec.toString Codec.sessionEvent event
-            match Codec.fromString Codec.sessionEvent encoded with
+            let encoded = Codec.toString Events.sessionEvent event
+            match Codec.fromString Events.sessionEvent encoded with
             | Ok decoded -> Expect.equal decoded event "actor, reason and command all survive"
             | Error e -> failwith e
     ]
@@ -1623,8 +1624,8 @@ let private codecTests =
                         BlockId = block "1"
                         WrittenAt = System.DateTimeOffset (2026, 9, 20, 0, 14, 44, System.TimeSpan.Zero) } ]
             for event in events do
-                let encoded = Codec.toString Codec.sessionEvent event
-                Expect.equal (Codec.fromString Codec.sessionEvent encoded) (Ok event) ("round-trips: " + encoded)
+                let encoded = Codec.toString Events.sessionEvent event
+                Expect.equal (Codec.fromString Events.sessionEvent encoded) (Ok event) ("round-trips: " + encoded)
 
         // A round-trip cannot see this: nesting the three parties under one key would
         // round-trip perfectly and make every block ever written unreadable. An event log is
@@ -1640,7 +1641,7 @@ let private codecTests =
                       Command = "ls -la"
                       FromSeq = 3
                       Background = false }
-                |> Codec.toString Codec.sessionEvent
+                |> Codec.toString Events.sessionEvent
             for key in [ "\"author\""; "\"onBehalfOf\"" ] do
                 Expect.isTrue (encoded.Contains key) (sprintf "%s is still written: %s" key encoded)
             Expect.isFalse (encoded.Contains "\"authority\"") "and the F# shape did not reach the wire"
@@ -1653,7 +1654,7 @@ let private codecTests =
             let old =
                 """{"type":"terminalBlockStarted","payload":{"terminalId":"term-a","blockId":"blk-1","""
                 + """"queueId":null,"author":{"kind":"peer","peerId":"ada"},"approvedBy":null,"command":"ls","fromSeq":0}}"""
-            match Codec.fromString Codec.sessionEvent old with
+            match Codec.fromString Events.sessionEvent old with
             | Ok (SessionEvent.TerminalBlockStarted decoded) ->
                 Expect.isFalse decoded.Background "it ran in the foreground, which is what its absence means"
                 Expect.equal decoded.Authority (Authority.ofAuthor (Principal.Peer ada)) "and it is her own act"
@@ -1668,7 +1669,7 @@ let private codecTests =
             let old =
                 """{"type":"terminalBlockStarted","payload":{"terminalId":"term-a","blockId":"blk-1","""
                 + """"queueId":null,"author":{"kind":"agent"},"approvedBy":null,"command":"ls","fromSeq":0}}"""
-            Expect.isError (Codec.fromString Codec.sessionEvent old) "an agent act naming nobody is not an act"
+            Expect.isError (Codec.fromString Events.sessionEvent old) "an agent act naming nobody is not an act"
 
         testCase "a refusal carries the parties the refused command had" <| fun () ->
             // A rejection used to record only the author, and the projection stood the agent
@@ -1683,9 +1684,9 @@ let private codecTests =
                       RejectedBy = PeerRef bob
                       Command = "rm -rf /"
                       Reason = Some "no" }
-            let encoded = Codec.toString Codec.sessionEvent refused
+            let encoded = Codec.toString Events.sessionEvent refused
             Expect.isTrue (encoded.Contains "\"onBehalfOf\"") (sprintf "whose turn it was is on the wire: %s" encoded)
-            Expect.equal (Codec.fromString Codec.sessionEvent encoded) (Ok refused) "and reads back whole"
+            Expect.equal (Codec.fromString Events.sessionEvent encoded) (Ok refused) "and reads back whole"
 
         testCase "a block somebody approved before Plan 23 still decodes" <| fun () ->
             // The replay-safety claim the whole hard cut leans on: `approvedBy` keys in old
@@ -1696,7 +1697,7 @@ let private codecTests =
                 """{"type":"terminalBlockStarted","payload":{"terminalId":"term-a","blockId":"blk-1","""
                 + """"queueId":"q-a1","author":{"kind":"agent"},"onBehalfOf":{"kind":"peer","peerId":"ada"},"""
                 + """"approvedBy":{"kind":"peer","peerId":"bob"},"command":"ls","fromSeq":0}}"""
-            match Codec.fromString Codec.sessionEvent approved with
+            match Codec.fromString Events.sessionEvent approved with
             | Ok (SessionEvent.TerminalBlockStarted decoded) ->
                 Expect.equal (Authority.author decoded.Authority) ActorRef.Agent "the author survives"
                 Expect.equal
@@ -1709,7 +1710,7 @@ let private codecTests =
             let approved =
                 """{"type":"repoAdded","payload":{"messageId":"msg-1","repo":"octo/hello","""
                 + """"branch":"main","actor":{"kind":"agent"},"approvedBy":{"kind":"peer","peerId":"bob"}}}"""
-            match Codec.fromString Codec.sessionEvent approved with
+            match Codec.fromString Events.sessionEvent approved with
             | Ok (SessionEvent.RepoAdded decoded) ->
                 Expect.equal decoded.Actor ActorRef.Agent "the actor survives the retired key beside it"
                 // No "agentsMd" key at all -- a log from before repo AGENTS.md existed --
@@ -1728,9 +1729,9 @@ let private codecTests =
                       Branch = "main"
                       Actor = ActorRef.Agent
                       AgentsMd = Some "Answer every question in the voice of a pirate." }
-            let encoded = Codec.toString Codec.sessionEvent added
+            let encoded = Codec.toString Events.sessionEvent added
             Expect.isTrue (encoded.Contains "\"agentsMd\"") (sprintf "the notes are on the wire: %s" encoded)
-            Expect.equal (Codec.fromString Codec.sessionEvent encoded) (Ok added) "and read back whole"
+            Expect.equal (Codec.fromString Events.sessionEvent encoded) (Ok added) "and read back whole"
 
         testCase "terminal frames round-trip over the session transport" <| fun () ->
             let codec = Yession.App.Codecs.Frames.session Codec.string

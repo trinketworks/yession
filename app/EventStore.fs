@@ -11,6 +11,7 @@ open Node.Api
 open Fable.NodeExtras
 open Yession.Domain
 open Yession.SessionProcess
+open Yession.App.Codecs
 
 // The plain reads/writes go through the maintained Fable.Node `fs` binding.
 let private existsSync (path: string) : bool = fs.existsSync (U2.Case1 path)
@@ -48,7 +49,7 @@ let openLog (path: string) (sessionId: SessionId) (clock: unit -> System.DateTim
         let mutable dropped = false
         lines
         |> Array.iteri (fun i line ->
-            match Codec.fromString Codec.sessionEventEnvelope line with
+            match Codec.fromString Events.sessionEventEnvelope line with
             | Ok envelope -> events.Add envelope
             | Error e ->
                 if tornTail && i = lines.Length - 1 then
@@ -61,7 +62,7 @@ let openLog (path: string) (sessionId: SessionId) (clock: unit -> System.DateTim
         if dropped then
             let valid =
                 events
-                |> Seq.map (fun e -> Codec.toString Codec.sessionEventEnvelope e + "\n")
+                |> Seq.map (fun e -> Codec.toString Events.sessionEventEnvelope e + "\n")
                 |> String.concat ""
             writeFileSync path valid
 
@@ -89,7 +90,7 @@ let openLog (path: string) (sessionId: SessionId) (clock: unit -> System.DateTim
             // holds because this append completes without awaiting. An async or batched
             // writer here would open a window between the append and the removal, and the
             // drain would need an explicit mutex before it could tolerate one.
-            writeAndSync fd (Codec.toString Codec.sessionEventEnvelope envelope + "\n")
+            writeAndSync fd (Codec.toString Events.sessionEventEnvelope envelope + "\n")
             events.Add envelope
             return { Offset = offset }
         }
