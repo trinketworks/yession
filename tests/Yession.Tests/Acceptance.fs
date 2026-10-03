@@ -119,7 +119,7 @@ let private representativeModel : ClientModel =
           Model = Some pickedModel
           Chapters = Map.empty }
       Conversation =
-        { Items =
+        ConversationProjection.ofItems
             [ { MessageId = MessageId.create "msg-1" |> expect
                 Author = PeerRef ada
                 Content = ItemContent.Message ("ship it")
@@ -132,8 +132,6 @@ let private representativeModel : ClientModel =
                 Status = Streaming
                 Offset = EventOffset.create 4L |> expect
                 Woke = None; CausedBy = None } ]
-          ActiveAgentMessages = Map.ofList [ turnId, MessageId.create "msg-agent" |> expect ]
-          WokenTurn = None; TriggeredTurn = None }
       // The terminal half of the chat (Plan 14): the fixture's one block, anchored between
       // the two messages — so the checklist renders a chip in the middle of the conversation
       // rather than only at the end, which is the ordering the merge exists for.
@@ -322,8 +320,8 @@ let private silentTurnModel : ClientModel =
     { representativeModel with
         Conversation =
             { representativeModel.Conversation with
-                Items =
-                    representativeModel.Conversation.Items
+                Recent =
+                    representativeModel.Conversation.Recent
                     |> List.map (fun item -> if item.Status = Streaming then { item with Content = ItemContent.Message "" } else item) } }
 
 /// Nothing running: the last turn finished and nobody has asked for another.
@@ -332,7 +330,7 @@ let private restingModel : ClientModel =
         Agent = { ActiveTurn = None; Quiet = None }
         Conversation =
             { representativeModel.Conversation with
-                Items = representativeModel.Conversation.Items |> List.map (fun item -> { item with Status = Complete })
+                Recent = representativeModel.Conversation.Recent |> List.map (fun item -> { item with Status = Complete })
                 ActiveAgentMessages = Map.empty } }
 
 /// The composer when a PEER is the one writing: their draft is what you are in, yours (if any)
@@ -469,7 +467,7 @@ let private renderRunningBy (author: ActorRef) : string =
           Status = ConversationItemStatus.Running
           Offset = EventOffset.create 1L |> expect
           Woke = None; CausedBy = None }
-    Support.render { representativeModel with Conversation = { representativeModel.Conversation with Items = [ running ] } }
+    Support.render { representativeModel with Conversation = { representativeModel.Conversation with Recent = List.rev ([ running ]) } }
 
 let private uiChecklistTests =
     testList "UI checklist" [
@@ -1130,7 +1128,7 @@ let private uiChecklistTests =
                   Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
-                    Conversation = { representativeModel.Conversation with Items = [ richItem ] } }
+                    Conversation = { representativeModel.Conversation with Recent = List.rev ([ richItem ]) } }
             let html = Support.render model
             let timeline =
                 let start = html.IndexOf Dom.Hooks.conversation
@@ -1160,7 +1158,7 @@ let private uiChecklistTests =
                   Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
-                    Conversation = { representativeModel.Conversation with Items = [ note ] } }
+                    Conversation = { representativeModel.Conversation with Recent = List.rev ([ note ]) } }
             let html = Support.render model
             Expect.isTrue (html.Contains "data-act-note") "the note hook renders"
             Expect.isTrue (html.Contains "removed repo ") "the act reads as its sentence"
@@ -1187,7 +1185,7 @@ let private uiChecklistTests =
                   Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
-                    Conversation = { representativeModel.Conversation with Items = [ note ] } }
+                    Conversation = { representativeModel.Conversation with Recent = List.rev ([ note ]) } }
             let html = Support.render model
             let noteStart = html.IndexOf "data-act-note"
             // To the article's own END, not a fixed number of characters: an article grows
@@ -1223,7 +1221,7 @@ let private uiChecklistTests =
                   Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
-                    Conversation = { representativeModel.Conversation with Items = [ edited ] } }
+                    Conversation = { representativeModel.Conversation with Recent = List.rev ([ edited ]) } }
             let html = Support.render model
             Expect.isTrue (html.Contains "edited src/A.fs") "the headline names the file"
             // Behind the disclosure, which is where a diff belongs: the line says what
@@ -1252,7 +1250,7 @@ let private uiChecklistTests =
                   Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
-                    Conversation = { representativeModel.Conversation with Items = [ written ] } }
+                    Conversation = { representativeModel.Conversation with Recent = List.rev ([ written ]) } }
             let html = Support.render model
             Expect.isTrue (html.Contains "wrote src/B.fs") "the headline says it was written"
             Expect.isFalse (html.Contains "data-act-fact=\"diff\"") "nothing pretends to be a diff"
@@ -1281,7 +1279,7 @@ let private uiChecklistTests =
                   Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
-                    Conversation = { representativeModel.Conversation with Items = [ push ] } }
+                    Conversation = { representativeModel.Conversation with Recent = List.rev ([ push ]) } }
             let html = Support.render model
             let start = html.IndexOf (Dom.attr "data-entity" (EntityRef.said (EntityRef.Repo hello)))
             Expect.isTrue (start >= 0) "the repository is its own element on the push"
@@ -1304,7 +1302,7 @@ let private uiChecklistTests =
                   Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
-                    Conversation = { representativeModel.Conversation with Items = [ note ] } }
+                    Conversation = { representativeModel.Conversation with Recent = List.rev ([ note ]) } }
             let behind = Support.behindFold (FoldKey.Act (MessageId.create "msg-said-note" |> expect)) model
             Expect.isTrue (behind.Contains "data-act-said") "every act offers what the agent was told"
             let element = behind.Substring (behind.IndexOf "data-act-said")
@@ -1335,7 +1333,7 @@ let private uiChecklistTests =
                   Woke = None; CausedBy = None }
             let folded =
                 { representativeModel with
-                    Conversation = { representativeModel.Conversation with Items = [ note ] } }
+                    Conversation = { representativeModel.Conversation with Recent = List.rev ([ note ]) } }
             let control (html: string) =
                 let at = html.IndexOf (Dom.attr "data-fold" "act-msg-fold-note")
                 Expect.isTrue (at >= 0) "the act offers a fold"
@@ -1377,7 +1375,7 @@ let private uiChecklistTests =
                   Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
-                    Conversation = { representativeModel.Conversation with Items = [ note ] } }
+                    Conversation = { representativeModel.Conversation with Recent = List.rev ([ note ]) } }
             let shut = Support.render model
             // The wrapper stays, always: `aria-controls` names it, the control's state rides
             // it, and a fold that vanished when shut would be a control pointing at nothing.
@@ -1414,7 +1412,7 @@ let private uiChecklistTests =
             let html =
                 Support.render
                     { representativeModel with
-                        Conversation = { representativeModel.Conversation with Items = [ running ] } }
+                        Conversation = { representativeModel.Conversation with Recent = List.rev ([ running ]) } }
             Expect.isFalse (html.Contains (Dom.attr "data-fold" "act-msg-running")) "no fold while it runs"
             Expect.isTrue (html.Contains "data-act-status=\"running\"") "the pulse has the gutter"
 
@@ -1455,7 +1453,7 @@ let private uiChecklistTests =
                   Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
-                    Conversation = { representativeModel.Conversation with Items = [ start ] } }
+                    Conversation = { representativeModel.Conversation with Recent = List.rev ([ start ]) } }
             let behind = Support.behindFold (FoldKey.Act (MessageId.create "msg-start" |> expect)) model
             let fact = behind.IndexOf (Dom.attr "data-act-fact" "forwarded")
             Expect.isTrue (fact >= 0) "the forwarding is on the start"
@@ -1499,7 +1497,7 @@ let private uiChecklistTests =
             let html =
                 Support.render
                     { representativeModel with
-                        Conversation = { representativeModel.Conversation with Items = [ forAda ] } }
+                        Conversation = { representativeModel.Conversation with Recent = List.rev ([ forAda ]) } }
             let noteStart = html.IndexOf "data-act-note"
             let note = html.Substring (noteStart, html.IndexOf ("</article>", noteStart) - noteStart)
             Expect.isTrue
@@ -1522,7 +1520,7 @@ let private uiChecklistTests =
             let html =
                 Support.render
                     { representativeModel with
-                        Conversation = { representativeModel.Conversation with Items = [ sandboxStartBy by ] } }
+                        Conversation = { representativeModel.Conversation with Recent = List.rev ([ sandboxStartBy by ]) } }
             Expect.equal (sandboxNameOn html) "dev" "the scope is the author's, so the name drops it"
 
         // Under any other author the scope stays: the agent starting `octo/hello:dev` beside
@@ -1531,7 +1529,7 @@ let private uiChecklistTests =
             let html =
                 Support.render
                     { representativeModel with
-                        Conversation = { representativeModel.Conversation with Items = [ sandboxStartBy ActorRef.Agent ] } }
+                        Conversation = { representativeModel.Conversation with Recent = List.rev ([ sandboxStartBy ActorRef.Agent ]) } }
             Expect.equal (sandboxNameOn html) "octo/hello:dev" "nothing over it says which repo, so the name does"
 
         // The one disclosure on a start still carries what the agent read, to the character
@@ -1543,7 +1541,7 @@ let private uiChecklistTests =
                 Support.behindFold
                     (FoldKey.Act (MessageId.create "msg-dev" |> expect))
                     { representativeModel with
-                        Conversation = { representativeModel.Conversation with Items = [ item ] } }
+                        Conversation = { representativeModel.Conversation with Recent = List.rev ([ item ]) } }
             Expect.isTrue (behind.Contains "data-act-said") "the sentence is offered"
             let element = behind.Substring (behind.IndexOf "data-act-said")
             let text = Support.readable (element.Substring (element.IndexOf ">" + 1))
@@ -1564,7 +1562,7 @@ let private uiChecklistTests =
             let html =
                 Support.render
                     { representativeModel with
-                        Conversation = { representativeModel.Conversation with Items = [ note ] } }
+                        Conversation = { representativeModel.Conversation with Recent = List.rev ([ note ]) } }
             let start = html.IndexOf (Dom.attr "data-entity" (EntityRef.said (EntityRef.Pr pr)))
             Expect.isTrue (start >= 0) "the pull request is its own element on the note"
             let opened = html.LastIndexOf ("<a ", start)
@@ -1584,7 +1582,7 @@ let private uiChecklistTests =
                   Woke = None; CausedBy = None }
             let model =
                 { representativeModel with
-                    Conversation = { representativeModel.Conversation with Items = [ note ] } }
+                    Conversation = { representativeModel.Conversation with Recent = List.rev ([ note ]) } }
             let html = Support.render model
             Expect.isTrue (html.Contains "removed repo ") "the act reads as its sentence"
             Expect.isFalse (html.Contains "data-act-detail") "and no second line under it"
@@ -1607,7 +1605,7 @@ let private uiChecklistTests =
                 { representativeModel with
                     Conversation =
                         { representativeModel.Conversation with
-                            Items = [ agentItem asked None; agentItem woken (Some CommandFinished) ] } }
+                            Recent = List.rev [ agentItem asked None; agentItem woken (Some CommandFinished) ] } }
             let html = Support.render model
             // Scoped to each article, because a whole-page render contains both and a bare
             // `Contains` would pass with the mark on the wrong one.
@@ -1709,7 +1707,7 @@ let private uiChecklistTests =
             let next = saidBy "msg-b" 2L
             let joined =
                 { representativeModel with
-                    Conversation = { ConversationProjection.empty with Items = [ first; next ] }
+                    Conversation = { ConversationProjection.empty with Recent = List.rev ([ first; next ]) }
                     Timeline = TimelineProjection.empty }
             let divided =
                 { joined with
@@ -1786,9 +1784,10 @@ let private uiChecklistTests =
                 { representativeModel with
                     Conversation =
                         { representativeModel.Conversation with
-                            Items =
-                                [ item "said" (ItemContent.Message "something happened")
-                                  item "done" (ItemContent.Act (repoRemoved "octo/hello")) ] } }
+                            Recent =
+                                List.rev
+                                    [ item "said" (ItemContent.Message "something happened")
+                                      item "done" (ItemContent.Act (repoRemoved "octo/hello")) ] } }
             let html = Support.render model
             Expect.equal (occurrences "data-message-id=" html) 2 "a message and an act"
             Expect.equal (occurrences "data-item-actions=" html) 2 "one control per item, none left out"
@@ -2036,7 +2035,7 @@ let private contentListTests =
               Woke = None; CausedBy = None }
         let withShare (name: string) =
             { representativeModel with
-                Conversation = { representativeModel.Conversation with Items = [ shareOf name ] } }
+                Conversation = { representativeModel.Conversation with Recent = List.rev ([ shareOf name ]) } }
 
         testCase "an artifact the session holds has a row that opens it in the pane" <| fun () ->
             let html = listed (withShare "chart.png")
@@ -2782,14 +2781,13 @@ let private semanticsTests =
                 Peers = peers
                 Presence = Map.empty
                 Conversation =
-                    { Items =
+                    ConversationProjection.ofItems
                         [ { MessageId = MessageId.create "msg-bob" |> expect
                             Author = PeerRef bob
                             Content = ItemContent.Message ("on it")
                             Status = Complete
                             Offset = EventOffset.create 1L |> expect
                             Woke = None; CausedBy = None } ]
-                      ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
                 Timeline = TimelineProjection.empty }
 
         // A peer id is a token, not a person. The roster, the draft summaries and the lease
@@ -2827,14 +2825,13 @@ let private semanticsTests =
                         Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] }
                         Presence = Map.empty
                         Conversation =
-                            { Items =
+                            ConversationProjection.ofItems
                                 [ { MessageId = MessageId.create "msg-carol" |> expect
                                     Author = UserRef carol
                                     Content = ItemContent.Message ("on it")
                                     Status = Complete
                                     Offset = EventOffset.create 1L |> expect
                                     Woke = None; CausedBy = None } ]
-                              ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
                         Timeline = TimelineProjection.empty }
             let meta = messageMetaOfLabel (UserId.value carol) html
             Expect.isTrue (meta.Contains ">quiet-otter<") "the author is the name the attributed peer's join carried"
@@ -2852,14 +2849,13 @@ let private semanticsTests =
                         Attribution = Attribution.empty
                         Presence = Map.empty
                         Conversation =
-                            { Items =
+                            ConversationProjection.ofItems
                                 [ { MessageId = MessageId.create "msg-carol" |> expect
                                     Author = UserRef carol
                                     Content = ItemContent.Message ("on it")
                                     Status = Complete
                                     Offset = EventOffset.create 1L |> expect
                                     Woke = None; CausedBy = None } ]
-                              ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
                         Timeline = TimelineProjection.empty }
             Expect.isTrue
                 ((messageMetaOfLabel (UserId.value carol) html).Contains ">carol@example.com<")
@@ -2881,14 +2877,13 @@ let private semanticsTests =
                         Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol; dora, carol ]; UserPeers = Map.ofList [ carol, dora ] }
                         Presence = Map.empty
                         Conversation =
-                            { Items =
+                            ConversationProjection.ofItems
                                 [ { MessageId = MessageId.create "msg-carol" |> expect
                                     Author = UserRef carol
                                     Content = ItemContent.Message ("on it")
                                     Status = Complete
                                     Offset = EventOffset.create 1L |> expect
                                     Woke = None; CausedBy = None } ]
-                              ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
                         Timeline = TimelineProjection.empty }
             let meta = messageMetaOfLabel (UserId.value carol) html
             Expect.isTrue (meta.Contains ">warm-tern<") "the current join's name, not the stale one"
@@ -2949,14 +2944,13 @@ let private semanticsTests =
                                 Viewing = None } ]
                     Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol ]; UserPeers = Map.ofList [ carol, bob ] }
                     Conversation =
-                        { Items =
+                        ConversationProjection.ofItems
                             [ { MessageId = MessageId.create "msg-carol" |> expect
                                 Author = UserRef carol
                                 Content = ItemContent.Message ("on it")
                                 Status = Complete
                                 Offset = EventOffset.create 1L |> expect
                                 Woke = None; CausedBy = None } ]
-                          ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
                     Timeline = TimelineProjection.empty }
             let html = Support.render model
             let mark = Entity.actorMark model (UserRef carol)

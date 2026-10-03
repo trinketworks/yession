@@ -146,14 +146,13 @@ let private codecTests =
             // and must survive the program's own decode round-trips untouched.
             let messageId = MessageId.create "m-1" |> expect
             let conversation =
-                { Items =
+                ConversationProjection.ofItems
                     [ { MessageId = messageId
                         Author = ActorRef.System
                         Content = ItemContent.Message ("secret history")
                         Status = Complete
                         Offset = EventOffset.zero
                         Woke = None; CausedBy = None } ]
-                  ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
             let initial = { ClientModel.init (peer "ada" "Ada") with Conversation = conversation }
             let p = Harness.run (Client.makeProgram Client.Ports.offline doc initial)
             Body.author registry p ada "draft body"
