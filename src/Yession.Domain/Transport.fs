@@ -18,12 +18,25 @@ type SessionCommand =
     /// Cancel the running agent turn (Phase 3, Step 17). Rejected if that turn is no
     /// longer running — the interrupt-vs-completion race resolves at the Process.
     | InterruptAgentTurn of AgentTurnId
-    /// Open a terminal on the session's WorkSandbox (Plan 13). A command rather than a
-    /// CRDT write because the terminal's id is minted by the Process and its existence is
-    /// a durable fact — a client cannot conjure one into the doc. The new terminal arrives
-    /// back as a `TerminalOpened` event, not in the response: one path for the fact, and
-    /// it is the one every peer already reads.
-    | OpenTerminal of title: string
+    /// Open a terminal, as a SHELL, in the sandbox named. A command rather than a CRDT write
+    /// because the terminal's id is minted by the Process and its existence is a durable
+    /// fact — a client cannot conjure one into the doc. The new terminal arrives back as a
+    /// `TerminalOpened` event, not in the response: one path for the fact, and it is the one
+    /// every peer already reads.
+    ///
+    /// The sandbox is a `SandboxRef` and not an option, deliberately: `None` on
+    /// `TerminalOpened.Sandbox` means a terminal in NO sandbox — bytes from a stream somebody
+    /// else produces — and that is not something a peer may ask for, because an attached
+    /// source needs a ticket from a provider and a peer command carrying a URL would be a
+    /// peer choosing what this session connects to. A caller who does not care passes
+    /// `SandboxRef.defaultRef`, which is a real name, and the wire reads an absent field back
+    /// as that — which is exactly what every client that could not say meant.
+    ///
+    /// WHICH sandbox is not checked here: `SessionTerminals.Open` already ensures the one
+    /// named exists and refuses an unknown name with a sentence saying what there is, for
+    /// every caller alike. A second rule in the command handler would be a second answer to
+    /// one question.
+    | OpenTerminal of title: string * sandbox: SandboxRef
     /// Close a terminal. Rejected if it is already closed or was never opened.
     | CloseTerminal of TerminalId
     /// Take the terminal's stdin — enter live mode (Plan 13, stage 2e). Succeeds even when

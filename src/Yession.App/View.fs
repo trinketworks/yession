@@ -3567,7 +3567,7 @@ module View =
                 <div class="{Style.contentListEmpty}" data-content-list>
                   <span class="font-terminal text-[28px] leading-8 text-ink-faint select-none" aria-hidden="true">$</span>
                   <button type="button" class="{Style.btnPrimary}" data-terminal-new
-                          @click={Ev(fun _ -> dispatch (OpenTerminalMsg "terminal"))}>New terminal</button>
+                          @click={Ev(fun _ -> dispatch (OpenTerminalMsg ("terminal", SandboxRef.defaultRef)))}>New terminal</button>
                 </div>"""
         | rows, shared ->
             let items = rows |> List.map row
@@ -3889,7 +3889,7 @@ module View =
                     <div class="{Style.terminalEmpty}">
                       <span class="font-terminal text-[28px] leading-8 text-ink-faint select-none" aria-hidden="true">$</span>
                       <button type="button" class="{Style.btnPrimary}" data-terminal-new
-                              @click={Ev(fun _ -> dispatch (OpenTerminalMsg "terminal"))}>New terminal</button>
+                              @click={Ev(fun _ -> dispatch (OpenTerminalMsg ("terminal", SandboxRef.defaultRef)))}>New terminal</button>
                     </div>"""
             | Some tab ->
                 let inner =
@@ -3969,7 +3969,7 @@ module View =
                     {tabs |> List.map tabButton}
                   </div>
                   <button type="button" class="{Style.terminalTabNew}" data-terminal-new
-                          @click={Ev(fun _ -> dispatch (OpenTerminalMsg "terminal"))}>+ new</button>
+                          @click={Ev(fun _ -> dispatch (OpenTerminalMsg ("terminal", SandboxRef.defaultRef)))}>+ new</button>
                 </div>"""
         // ONE control with two faces rather than a pair that swap places: it never leaves the
         // document, so pressing it can never strand the focus that is on it. Its value is the

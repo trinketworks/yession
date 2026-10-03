@@ -71,7 +71,9 @@ module Client =
           /// Ask the Session Process to open a terminal (Plan 13). The new terminal arrives
           /// as a `TerminalOpened` event, not as a response — one source of truth for a
           /// durable fact, and it is the one every peer already reads.
-          OpenTerminal : string -> unit
+          /// A SHELL in the sandbox named — `SandboxRef.defaultRef` from a caller who does
+          /// not care, which is a real name rather than an absence.
+          OpenTerminal : string -> SandboxRef -> unit
           /// Consent to what a repo asks for (Plan 27). Carries the set that was SHOWN, so
           /// the Process can refuse if the file moved between the screen and the button.
           ApproveRepoCapabilities : RepoRef -> string list -> unit
@@ -218,7 +220,7 @@ module Client =
             | ClientEffect.RearmTerminal terminal -> connected (fun c -> c.RearmTerminal terminal)
             | ClientEffect.ReattachTerminal terminal -> connected (fun c -> c.ReattachTerminal terminal)
             | ClientEffect.CloseTerminal terminal -> connected (fun c -> c.CloseTerminal terminal)
-            | ClientEffect.OpenTerminal title -> connected (fun c -> c.OpenTerminal title)
+            | ClientEffect.OpenTerminal (title, sandbox) -> connected (fun c -> c.OpenTerminal title sandbox)
             | ClientEffect.InterruptTurn turn -> connected (fun c -> c.InterruptTurn turn)
             | ClientEffect.ApproveRepoCapabilities (repo, granted) -> connected (fun c -> c.ApproveRepoCapabilities repo granted)
             | ClientEffect.Launch (LaunchEffect.Start target) ->
@@ -1378,8 +1380,8 @@ module Client =
                 reportedViewing <- viewing
                 sendPresence ()
           OpenTerminal =
-            fun title ->
-                Async.StartImmediate (channel.Send (Command (Request (RequestId.fresh (), OpenTerminal title))))
+            fun title sandbox ->
+                Async.StartImmediate (channel.Send (Command (Request (RequestId.fresh (), OpenTerminal (title, sandbox)))))
           ApproveRepoCapabilities =
             fun repo granted ->
                 Async.StartImmediate (

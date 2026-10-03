@@ -1091,7 +1091,7 @@ type ClientMsg =
     /// opened it and cannot say which of their tabs did, so the count is the only thing that
     /// can tell the terminal THIS press asked for from one that merely belongs to the same
     /// person.
-    | OpenTerminalMsg of title: string
+    | OpenTerminalMsg of title: string * sandbox: SandboxRef
     /// Keep this tab, or stop keeping it (Plan 20, stage 1). Unpinning is not closing:
     /// unpinning a terminal leaves it running and leaves its row in the list, and the one
     /// verb that ends a terminal lives on that row.
@@ -1186,7 +1186,7 @@ type ClientEffect =
     | RearmTerminal of TerminalId
     | ReattachTerminal of TerminalId
     | CloseTerminal of TerminalId
-    | OpenTerminal of title: string
+    | OpenTerminal of title: string * sandbox: SandboxRef
     | InterruptTurn of AgentTurnId
     | ApproveRepoCapabilities of RepoRef * granted: string list
     | Launch of LaunchEffect
@@ -2980,7 +2980,7 @@ module ClientModel =
             | RearmTerminalMsg terminal -> [ ClientEffect.RearmTerminal terminal ]
             | ReattachTerminalMsg terminal -> [ ClientEffect.ReattachTerminal terminal ]
             | CloseTerminalMsg terminal -> [ ClientEffect.CloseTerminal terminal ]
-            | OpenTerminalMsg title -> [ ClientEffect.OpenTerminal title ]
+            | OpenTerminalMsg (title, sandbox) -> [ ClientEffect.OpenTerminal (title, sandbox) ]
             | InterruptTurnMsg turn -> [ ClientEffect.InterruptTurn turn ]
             | ApproveRepoCapabilitiesMsg (repo, granted) -> [ ClientEffect.ApproveRepoCapabilities (repo, granted) ]
             | LaunchMsg launchMsg -> Launch.update launchMsg model.Launch |> snd |> List.map ClientEffect.Launch
