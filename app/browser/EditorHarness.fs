@@ -897,20 +897,43 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                             Stdin = false
                             Size = None } ] }
         Conversation =
-                [ // A repo's sandbox, up. The chooser (Plan 20, stage 1) reads the starts on
-                  // the timeline for somewhere to open a terminal, so a harness with only
-                  // `default` could draw that surface and never show what it is FOR: one row
-                  // with no scope beside it and no note under it is the one shape the design
-                  // does not have to get right.
-                  { MessageId = MessageId.create "msg-harness-sandbox" |> expect
+                [ // Two of a repo's sandboxes, up. The menu behind the strip's `+` (Plan 20,
+                  // stage 1) reads the starts on the timeline for somewhere to open a
+                  // terminal, so a harness without them could draw that surface and never
+                  // show what it has to survive.
+                  //
+                  // The DESCRIPTIONS are whole sentences, as a real `yession.yaml` writes
+                  // them — this repository's own are 170 and 100 characters. A fixture that
+                  // said "day-to-day work" was the reason a menu that grows to its text and
+                  // hangs off the left of a phone shipped: it fitted, here, on fifteen
+                  // characters nobody writes.
+                  { MessageId = MessageId.create "msg-harness-dev" |> expect
                     Author = ActorRef.Configured (RepoRef.create "octo/hello" |> expect)
                     Content =
                         ItemContent.Act (
                             Act.SandboxStarted
-                                { MessageId = MessageId.create "msg-harness-sandbox" |> expect
+                                { MessageId = MessageId.create "msg-harness-dev" |> expect
                                   Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
                                   Backend = "docker"
-                                  Description = Some "day-to-day work"
+                                  Description = Some "day-to-day work — the toolchain, and where `check`, `build` and `lint` run; also where `gh` runs, for anything GitHub the first-party tools do not cover"
+                                  Checkout = Some "/repos/octo/hello"
+                                  Forwarded = []
+                                  Realisation = []
+                                  Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect)
+                                  OnBehalfOf = None
+                                  CausedBy = None })
+                    Status = Complete
+                    Offset = offset 0L
+                    Woke = None; CausedBy = None }
+                  { MessageId = MessageId.create "msg-harness-gate" |> expect
+                    Author = ActorRef.Configured (RepoRef.create "octo/hello" |> expect)
+                    Content =
+                        ItemContent.Act (
+                            Act.SandboxStarted
+                                { MessageId = MessageId.create "msg-harness-gate" |> expect
+                                  Sandbox = SandboxRef.parse "octo/hello:gate" |> expect
+                                  Backend = "docker"
+                                  Description = Some "the long `verify`, so it runs beside interactive work instead of holding it; not the one to reach for to run tests"
                                   Checkout = Some "/repos/octo/hello"
                                   Forwarded = []
                                   Realisation = []
