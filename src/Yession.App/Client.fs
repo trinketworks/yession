@@ -1071,6 +1071,34 @@ module Client =
             | ChannelUnreachable detail -> if detail = "" then "session unreachable" else detail
             | ChannelTimedOut -> "the session did not answer"
 
+    /// When the browser's offer goes. The handshake is non-trickle — ONE complete SDP, posted
+    /// once, answered once — so the offer has to wait for the candidates it carries, and the
+    /// question is how long. Gathering announces its own end (`complete`, or the null
+    /// candidate), but headless Chromium and real browsers alike can leave it reporting
+    /// `gathering` indefinitely, so the end has to be inferred as well as heard.
+    module Gathering =
+
+        /// How long the candidates must fall quiet before the offer goes without waiting for
+        /// gathering to say it is done.
+        ///
+        /// This is a number about HOST candidates and nothing else, and it is only safe while
+        /// the browser asks no STUN or TURN server (its `RTCConfiguration` names none). Host
+        /// candidates are local work: Chromium gathers UDP on every interface in one phase, so
+        /// they arrive in a burst a few milliseconds long, and a hundred is a margin of an
+        /// order of magnitude over it. A server-reflexive or relay candidate costs a round trip
+        /// to a server, which can be longer than this — so the day this client asks a server,
+        /// this window has to grow or give way to waiting for that candidate.
+        ///
+        /// A host candidate that misses the window does not cost the connection: the session's
+        /// answer carries every one of ITS candidates, the browser's checks go to those, and an
+        /// address the offer left out is learned from the check that arrives from it.
+        let quiet = System.TimeSpan.FromMilliseconds 100.0
+
+        /// The offer goes this long after negotiation started whatever has been heard — no
+        /// candidate at all, and no end of gathering either. Without it a handshake waits on
+        /// events that may never come and can only ever time out.
+        let cap = System.TimeSpan.FromMilliseconds 1500.0
+
     module Probe =
 
         /// How long the auth probe (`/me`) may go unanswered before it is answered FOR: the
