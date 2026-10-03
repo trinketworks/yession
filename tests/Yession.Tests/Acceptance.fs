@@ -206,6 +206,7 @@ let private representativeModel : ClientModel =
       ItemMenu = None
       OpenFolds = Set.empty
       DatedBreaks = Set.empty
+      QueueDeleteArmed = None
       Copied = None
       // The pane shows a TAB by default; the list is what the cases below turn on.
       Claude =

@@ -416,6 +416,15 @@ module Style =
               "transition-colors"; focusRing ]
     let btnIconBare = cls [ btnIconBareBase; "text-ink-faint hover:text-ink" ]
     let btnIconBareDanger = cls [ btnIconBareBase; "text-ink-faint hover:text-err" ]
+    /// `btnIconBareDanger`, ARMED: a second press away from actually deleting (the queue's
+    /// delete — see `View.queue`), which this says by wearing the err fill AT REST rather
+    /// than only under the hand. A touch has no hover to hold the hint up, so the state a
+    /// phone needs to see has to be worn rather than revealed — the same reasoning
+    /// `btnInterrupt` uses to stay unworn, read the other way: that button is never armed
+    /// twice, this one specifically IS, between the two presses the confirm needs.
+    /// Un-arms itself back to `btnIconBareDanger` on its own (`queueDeleteArmedMs`), so a
+    /// press nobody confirms cannot leave a row looking primed for ever.
+    let btnIconBareDangerArmed = cls [ btnIconBareBase; "bg-err text-bg" ]
     /// The same verb where it is the only control a row offers a thumb — the Manager's
     /// archive, which on a phone is the one per-row target there is. 24px is WCAG 2.5.8's
     /// minimum exactly and far under a comfortable touch target, so the HIT area is 44px
@@ -2275,6 +2284,15 @@ module Style =
 
     let queueTools =
         "flex gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 max-md:opacity-100 transition-opacity"
+
+    /// Extra clearance before Delete, on top of the `gap-1` the row already spends between
+    /// Move-up and Move-down. Reorder and delete used to sit in one evenly-spaced row of
+    /// three — a destructive control 4px from a frequent one, with nothing between them but
+    /// the icon each wears. This does not grow the HIT area (that trick, `btnIconBareTouch`,
+    /// is for a row whose icon has no neighbour to overlap; delete has one on each side of
+    /// it in spirit even though reorder is the only real neighbour) — it grows the DISTANCE
+    /// a thumb has to travel wrong to reach it instead.
+    let queueDeleteGap = "ml-2"
 
     // --- Composer: the one gradient in the product lives on its focus edge --------------------
     // A COMPOSER IS A BAND, not a box on a ground. It used to be a bordered box inside a padded
