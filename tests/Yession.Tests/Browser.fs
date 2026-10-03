@@ -1536,6 +1536,42 @@ let private editorCaseOnTouch (width: int) (height: int) =
                 ViewportSize = ViewportSize (Width = width, Height = height),
                 HasTouch = true)))
 
+/// Reading why a credential stopped working leaves the button that fixes it where it was.
+/// The prompt used to be one wrapping row, so its button sat under a closed reason and beside
+/// an open one — the control a person came for moved the moment they read the reason. Measured
+/// against the prompt's own box, so the page scrolling under it is not a move; opened by a
+/// real click on the summary, because the browser's own toggle is what grows the reason.
+let private signInButtonHoldsStill (width: int) (height: int) =
+    editorCaseIn width height (sprintf "opening a sign-in prompt's reason does not move its button at %dpx" width) <| fun page ->
+        async {
+            do! awaitU (page.EvaluateAsync "() => window.__signInLost()")
+            let! _ = await (page.WaitForSelectorAsync "#shell [data-signin-required] [data-signin-again]")
+            // Settled first: the side panes slide into place as the shell lays out, and the
+            // column between them — the prompt's width — is still changing until they land.
+            let settled () =
+                awaitU (
+                    page.EvaluateAsync
+                        """() => Promise.all(
+                             document.getAnimations()
+                               .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
+                               .map(a => a.finished.catch(() => null)))""")
+            do! settled ()
+            let at =
+                """() => {
+                     const prompt = document.querySelector('#shell [data-signin-required]')
+                     prompt.scrollIntoView({ block: 'start' })
+                     const p = prompt.getBoundingClientRect()
+                     const b = prompt.querySelector('[data-signin-again]').getBoundingClientRect()
+                     return [b.left - p.left, b.top - p.top, b.width, b.height].map(Math.round).join(',')
+                   }"""
+            let! closed = await (page.EvaluateAsync<string> at)
+            do! awaitU (page.ClickAsync "#shell [data-signin-required] [data-detail] summary")
+            let! _ = await (page.WaitForSelectorAsync "#shell [data-signin-required] [data-detail][open]")
+            do! settled ()
+            let! opened = await (page.EvaluateAsync<string> at)
+            Expect.equal opened closed "the button's offset and size in the prompt (left,top,width,height)"
+        }
+
 /// A side column shutting and opening again, with reduced motion asked for, starts no
 /// transition. The column is toggled by the class on `<html>` that the real client sets
 /// (`nav-alt` for the sidebar, `term-closed` for the terminals), since this harness wires no
@@ -3526,6 +3562,9 @@ let editorTests =
         // Reduced motion is honoured by the columns at both widths: a person who asked for no
         // motion gets a drawer that appears rather than slides, and a column that shuts rather
         // than sweeps shut. The phone one used to slide anyway.
+        // A credential that stopped working, at both widths the prompt lays out for.
+        signInButtonHoldsStill 390 844
+        signInButtonHoldsStill 1440 900
         columnHoldsStill 390 844 "terminals" "term-closed"
         columnHoldsStill 390 844 "sidebar" "nav-alt"
         columnHoldsStill 1440 900 "terminals" "term-closed"

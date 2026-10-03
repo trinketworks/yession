@@ -1103,7 +1103,7 @@ module Style =
     /// A hairline notice, never a modal and never a blocker: the client under it stays fully
     /// usable, which is the promise the words in it make.
     ///
-    /// One row that never wraps. `signInPrompt` below wraps because it may hold a sentence;
+    /// One row that never wraps. `signInPrompt` below takes a second row because it holds a sentence;
     /// this holds three short things — a status, a disclosure, and the way back — and its
     /// height is a number the panes reserve, so wrapping is the one thing it must not do.
     let degradedBar =
@@ -1136,15 +1136,30 @@ module Style =
     /// button because unlike a degraded leg — which recovers on its own — a credential that
     /// stopped working recovers only when a person does something.
     ///
-    /// `flex-wrap` and `mr-auto` rather than a fixed row: the provider's own reason can be a
-    /// sentence, and on a phone it has to be able to take the line above the button instead
-    /// of squeezing it off the edge.
+    /// A grid rather than a wrapping row, so where each piece lands is decided here and not
+    /// by how long the provider's reason happens to be. A wrapping row put the button on a
+    /// line of its own under a closed reason, and beside an open one in whatever column was
+    /// left over — the one control that matters moved every time somebody read the reason.
+    ///
+    /// On a phone the status and the button share the top row and the sentence takes the
+    /// full width under them; from `md` all three sit on one row. Either way the button is
+    /// pinned to the top-right corner, and an opened reason grows DOWN from the sentence.
+    /// `items-baseline` aligns on each cell's FIRST line, so that growth moves nothing else.
     let signInPrompt =
-        "shrink-0 flex flex-wrap items-baseline gap-x-3 gap-y-2 px-8 py-2 bg-surface max-md:px-4 "
-        + Stroke.dividerBottom
+        cls [ "shrink-0 grid grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[auto_minmax(0,1fr)_auto] items-baseline"
+              "gap-x-3 gap-y-1 px-8 py-2 bg-surface max-md:px-4"
+              Stroke.dividerBottom ]
 
-    /// The reason, taking the room between the status word and the button.
-    let signInPromptReason = "mr-auto"
+    let signInPromptStatus = cls [ statusErr; "row-start-1 col-start-1" ]
+
+    /// The sentence and its reason, as one cell. The disclosure is inline so its summary
+    /// follows the sentence on the same line, and its body — block-level — breaks under both
+    /// at the cell's full width rather than in a column beside the summary.
+    let signInPromptBody =
+        cls [ "min-w-0 col-span-2 md:col-span-1 md:row-start-1 md:col-start-2"
+              "[&>details]:inline [&>details]:ml-2 [&_summary]:inline" ]
+
+    let signInPromptAction = cls [ btnPrimary; "row-start-1 col-start-2 md:col-start-3 justify-self-end" ]
 
     /// The mechanism behind a notice, folded away (the degradation strip, the sign-in
     /// prompt, the reconnect card, a credential's fault, the history-store note, a terminal
