@@ -816,9 +816,18 @@ let private channelTests =
                 Expect.equal attempts.Value 3 "and it stopped there"
             }
 
+        testCase "a freshly loaded client is connecting, and wears no strip for it" <| fun () ->
+            // The optimistic start: a client that has just loaded is about to connect, so its
+            // first paint says `Connecting` — which `connectionReport` keeps silent. Starting
+            // `Disconnected` flashed the "not connected" strip until the transport was asked and
+            // reflowed the panes under it up by the strip's height on every cold load.
+            let init = ClientModel.init (peer "ada" "Ada")
+            Expect.equal init.Connection Connecting "a fresh client is about to connect, not offline"
+            let html = Support.render init
+            Expect.isFalse (html.Contains Dom.Hooks.degraded) "and nothing degraded is on the first paint"
+
         testCase "a settled disconnection carries its reason into the model and the page" <| fun () ->
             let init = ClientModel.init (peer "ada" "Ada")
-            Expect.equal init.Connection (Disconnected None) "a fresh client knows nothing yet"
             let refused = Support.step (RejectedMsg "peer token expired") init
             let unreachable = Support.step (ConnectFailedMsg "the session did not answer") init
             Expect.equal refused.Connection (Disconnected (Some "peer token expired"))

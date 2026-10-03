@@ -276,10 +276,11 @@ let private storeTests =
 
         testCaseAsync "a local open says it is connecting before it folds what it kept" <|
             async {
-                // The model starts "not connected", and a page wore that from its first paint
-                // until the network was asked. The interval the client is about to connect in
-                // starts at the first paint, so what the page wears through the replay — for
-                // seconds, on a phone with a long session kept — is `Connecting`.
+                // The model starts `Connecting` (`ClientModel.init`), so the first paint is
+                // already silent on connection. The replay reaffirms it before folding the first
+                // kept page, which is what keeps the page off the "not connected" strip through a
+                // long replay — seconds, on a phone with a long session kept — even if a later
+                // transport failure has moved the model on by the time the replay runs.
                 let store = storeOf [ answerOf 0L 3 ]
                 let seen = ResizeArray ()
                 do! Client.LocalOpen.replay store Client.TranscriptCaches.none seen.Add
