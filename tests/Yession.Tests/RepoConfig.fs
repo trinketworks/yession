@@ -17,6 +17,7 @@ open Yession.Domain.Repos
 open Yession.Domain.Chat
 open Yession.Host
 open Yession.App.Codecs
+open Yession.Session
 
 let private expect = function Ok v -> v | Error e -> failwithf "%A" e
 
@@ -347,7 +348,7 @@ let tests =
                               Yession.Domain.Sandboxes.TemplatePart.Proxy Yession.Domain.Sandboxes.ProxyValue.CaDir ]
                     ))
                     "the image's, then the proxy's"
-                Expect.equal (Yession.Domain.Sandboxes.ConfigFile.parseSandbox (Yession.Domain.Sandboxes.SandboxDecl.encode decl)) (Ok decl) "and it crosses the gate as written"
+                Expect.equal (Yession.Session.ConfigFile.parseSandbox (Yession.Session.ConfigFile.encodeSandbox decl)) (Ok decl) "and it crosses the gate as written"
 
         // A token is lent to each command rather than held by the sandbox, so it is a
         // variable's whole value — and reads back across the gate as it was written.
@@ -361,7 +362,7 @@ let tests =
                     (decl.EnvironmentVariables |> Map.tryFind "GH_TOKEN")
                     (Some (Yession.Domain.Sandboxes.Lent (ConnectionName.create "github" |> expect)))
                     "lent, not held"
-                Expect.equal (Yession.Domain.Sandboxes.ConfigFile.parseSandbox (Yession.Domain.Sandboxes.SandboxDecl.encode decl)) (Ok decl) "and it crosses the gate as written"
+                Expect.equal (Yession.Session.ConfigFile.parseSandbox (Yession.Session.ConfigFile.encodeSandbox decl)) (Ok decl) "and it crosses the gate as written"
 
         // Composed into a larger value it would be a value the sandbox holds while the stand-in
         // inside it rotates — so it is refused, pointing at the open question behind the rule.
@@ -402,7 +403,7 @@ let tests =
             | Error e -> failwithf "the file should decode: %s" e
             | Ok read ->
                 let decl = read.File.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
-                Expect.equal (Yession.Domain.Sandboxes.ConfigFile.parseSandbox (Yession.Domain.Sandboxes.SandboxDecl.encode decl)) (Ok decl) "the same declaration after the round trip"
+                Expect.equal (Yession.Session.ConfigFile.parseSandbox (Yession.Session.ConfigFile.encodeSandbox decl)) (Ok decl) "the same declaration after the round trip"
 
         // A container is told what its declaration composed, and nothing copied from beneath.
         testCase "a sandbox's environment resolves each template over what lies beneath it" <| fun () ->

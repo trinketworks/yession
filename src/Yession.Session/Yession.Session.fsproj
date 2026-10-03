@@ -6,6 +6,10 @@
 
   <ItemGroup>
     <Compile Include="McpRpc.fs" />
+    <!-- What a repo (`yession.yaml`) and an operator (`resources.yaml`) write, read into the
+         domain's declarations. -->
+    <Compile Include="ConfigFile.fs" />
+    <Compile Include="OperatorProfile.fs" />
     <Compile Include="EventLog.fs" />
     <Compile Include="Model.fs" />
     <Compile Include="Commands.fs" />

@@ -14,6 +14,7 @@ module Yession.Host.RepoConfig
 
 open Yession.Domain
 open Yession.Domain.Sandboxes
+open Yession.Session
 
 /// A repo's file as it was read: what it declares, and what the analyzers had to say about
 /// it. The findings never change the declarations — see `ConfigAnalysis`.

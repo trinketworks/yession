@@ -181,7 +181,7 @@ let startWorkSandboxCall (authority: Authority) (causedBy: Cause option) (sandbo
     { Tool = startWorkSandboxTool
       Args =
         encodeArgs (
-            [ SandboxRef.render sandbox; SandboxDecl.encode decl ]
+            [ SandboxRef.render sandbox; ConfigFile.encodeSandbox decl ]
             @ (causedBy |> Option.map (Codec.toString Codec.cause) |> Option.toList))
       Summary =
         match decl.Uses with

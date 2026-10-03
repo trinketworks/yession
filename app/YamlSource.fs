@@ -11,6 +11,7 @@ module Yession.Host.YamlSource
 
 open Fable.Yaml
 open Yession.Domain.Sandboxes
+open Yession.Session
 
 /// What the later stages read.
 type Parsed =

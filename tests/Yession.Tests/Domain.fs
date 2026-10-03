@@ -17,6 +17,7 @@ open Yession.Domain.Content
 open Yession.Domain.Hooks
 open Yession.App.Codecs
 open Yession.Manager
+open Yession.Session
 
 let private expect =
     function
@@ -2347,7 +2348,7 @@ let private configTests =
                 ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "nixos/nix", "entrypoint": [ "nix", "develop", "--command" ], "command": "./serve" }, "dialect": "bash" } } }"""
                 |> expect
             let dev = file.Sandboxes |> Map.find (sandboxName "dev")
-            let back = SandboxDecl.encode dev |> ConfigFile.parseSandbox |> expect
+            let back = ConfigFile.encodeSandbox dev |> ConfigFile.parseSandbox |> expect
             Expect.equal back.Container dev.Container "what `encode` writes, `parseSandbox` reads back whole"
 
         // A repo saying where the session's checkouts should appear in its own container.
@@ -2772,7 +2773,7 @@ let private configTests =
                  |> expect).Sandboxes
                 |> Map.find (sandboxName "dev")
             Expect.equal
-                (ConfigFile.parseSandbox (SandboxDecl.encode declared) |> expect)
+                (ConfigFile.parseSandbox (ConfigFile.encodeSandbox declared) |> expect)
                 declared
                 "every field survives the trip"
 
@@ -2786,7 +2787,7 @@ let private configTests =
                             { ContainerSpec.defaults with
                                 Mounts = [ { Source = HostPath "/var/run/docker.sock"; Target = "/s"; Mode = ReadWrite } ] } }
             Expect.isError
-                (ConfigFile.parseSandbox (SandboxDecl.encode smuggled))
+                (ConfigFile.parseSandbox (ConfigFile.encodeSandbox smuggled))
                 "the schema refuses on the way back in, wherever the declaration came from"
 
         // Saying nothing is not asking to be confined — what nothing means is the backend's
