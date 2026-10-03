@@ -22,7 +22,7 @@ A handful of constraints drive the whole design:
 - **Ylmish is the sync boundary.** Elmish owns the model; Ylmish encodes selected Elmish
   state into Yjs and back. Yjs is not the product model.
 - **Durable facts are events.** Collaborative editing state lives in Yjs; durable session
-  history lives in an append-only event log the Session Process owns.
+  history lives in an append-only event log the Session owns.
 - **Capabilities are scoped, not ambient.** Authority is handed out explicitly and
   composed at the application boundary.
 - **Verification is automated end to end.** Manual testing doesn't count.
@@ -30,12 +30,34 @@ A handful of constraints drive the whole design:
 The full reasoning, and the invariants that have to survive code review, are in
 [docs/design.md](docs/design.md).
 
-### Runtime targets
+### Components
 
-- **Browser Client** — F#/Fable running in the browser.
-- **Session Process** — F# on Node, hosting the event log, the Yjs document, the Elmish
-  loop, the agent runtime, and the WebRTC protocol.
-- **Session Manager** — owns container and environment authority.
+Three components, and these are their names everywhere — in prose, in code, and in tests:
+
+- **Manager** — the `yession-manager` bin. Launches and supervises Sessions, owns identity and
+  secret custody, and serves the management UI. Long-lived: it outlives every Session it
+  launches and is upgraded only when none is running.
+- **Session** — the `yession-session` bin, one process per session. Hosts the event log, the
+  Yjs document, the Elmish loop, the agent runtime, and the WebRTC protocol.
+- **App** — F#/Fable in the browser. The Session serves it; it connects back over WebRTC.
+
+Each has a pure core of its own — `Yession.Manager`, `Yession.SessionProcess`, `Yession.App`
+(bundled from `app/browser`). `Yession.Host` (`app/`) is the Node shell both bins run in, and
+`Yession.Domain` is the model all three share.
+
+### Contracts
+
+Every message that crosses between two components is declared once, as a codec both ends
+use, in the project of the component that owns it:
+
+- **App ↔ Session: the App owns it** (`Yession.App.Codecs`). The App is the client of
+  every surface the Session serves, so it says what each exchange carries, and the Session
+  references `Yession.App` to answer in that shape. Both ship in the same build.
+- **Manager ↔ Session: the Manager owns it** (`Yession.Manager`). The Manager moves
+  slowest — it changes only when no Session is running — so the contract lives on the side
+  that holds it still, whichever way a message travels.
+- **Shared by every surface** (identities: ids, actors, timestamps): cross-cutting, in
+  `Yession.Domain`'s `Codec`.
 
 ## Getting started
 
@@ -57,7 +79,7 @@ from that declaration; you never install it by hand.
 devenv shell       # enter the environment (Node, .NET on PATH)
 build              # compile everything
 check              # run the cheap test tier (check Browser / Ports Native / … for more)
-start              # run the Session Process locally
+start              # run the Session locally
 ```
 
 Tasks are devenv scripts — `restore`, `build`, `start`, `dev`, `check` (tests; capabilities pass
@@ -69,7 +91,7 @@ everything on its own if you throw devenv and CI away.
 ### Installing
 
 Yession ships two ways, side by side. Either gives you two commands — `yession-manager` (the
-Manager) and `yession-session` (a Session Process) — and `yession-manager` serves a management UI
+Manager) and `yession-session` (a Session) — and `yession-manager` serves a management UI
 (default http://127.0.0.1:8321) to create, launch, resume, and stop sessions, each in its own
 process.
 
@@ -158,7 +180,7 @@ needs are met, skipping cleanly otherwise. There are two tiers:
 
 Almost everything runs on Node. .NET is a build tool, and the tests exercise the same
 JavaScript the product ships. The one exception is the browser E2E, which runs on the .NET
-CLR so it can drive Chromium through Playwright against a live Session Process.
+CLR so it can drive Chromium through Playwright against a live Session.
 
 Dependency versions are pinned centrally: npm packages in [package.json](package.json), and NuGet
 packages (including [Ylmish](Directory.Packages.props), the Elmish↔Yjs sync boundary) in
