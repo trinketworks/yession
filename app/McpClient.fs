@@ -182,10 +182,10 @@ let create () : McpConnections =
     // ---- one request ----------------------------------------------------------------
     //
     // Answers `Error` for anything that is not a decoded JSON-RPC result: a transport
-    // failure, a non-2xx status, a body with no response to THIS request, or a JSON-RPC error
-    // frame. The
-    // 404-means-restarted case is handled a level up, because only a caller that is in the
-    // middle of a request knows whether re-handshaking and retrying is the right response.
+    // failure, a non-2xx status, a body with no response to THIS request, or a JSON-RPC
+    // error frame. The 404-means-restarted case is handled a level up, because only a caller
+    // that is in the middle of a request knows whether re-handshaking and retrying is the
+    // right response.
     let request (connection: Connection) (method: string) (parameters: string option) : Async<Result<string, string>> =
         async {
             let id = connection.NextId

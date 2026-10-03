@@ -131,20 +131,35 @@ module McpRpc =
     /// its own: it would read a server's request, which has an `id` and neither, as a result
     /// with an empty body. Anything unreadable is skipped rather than reported, since it is
     /// not ours to answer for; the caller names the request that went unanswered.
+    ///
+    /// One exception to "its `id` is ours": an error with a null `id`, which is how JSON-RPC
+    /// answers a request it could not read far enough to identify. A POST carries exactly one
+    /// request, so that error is about ours — taken only when nothing answered by id, so the
+    /// server's reason reaches the caller instead of "no response".
     let replyTo (id: int) (frames: string list) : JsonRpcResponse option =
         let isResponse : Decoder<bool> =
             Decode.object (fun get ->
                 get.Optional.Field "result" Decode.value |> Option.isSome
                 || get.Optional.Field "error" Decode.value |> Option.isSome)
-        let ours (frame: string) =
-            match Decode.fromString isResponse frame with
-            | Ok true ->
-                match Decode.fromString response.Decode frame with
-                | Ok (JsonRpcResult (answered, _) as found) when answered = id -> Some found
-                | Ok (JsonRpcFailure (Some answered, _, _) as found) when answered = id -> Some found
-                | _ -> None
-            | _ -> None
-        frames |> List.tryPick ours
+        let responses =
+            frames
+            |> List.choose (fun frame ->
+                match Decode.fromString isResponse frame with
+                | Ok true -> Decode.fromString response.Decode frame |> Result.toOption
+                | _ -> None)
+        let answers =
+            responses
+            |> List.tryFind (function
+                | JsonRpcResult (answered, _) -> answered = id
+                | JsonRpcFailure (answered, _, _) -> answered = Some id)
+        match answers with
+        | Some found -> Some found
+        | None ->
+            responses
+            |> List.tryFind (function
+                | JsonRpcFailure (None, _, _) -> true
+                | JsonRpcResult _ -> false
+                | JsonRpcFailure (Some _, _, _) -> false)
 
     /// `initialize`'s params. We declare NO client capabilities: a client that declared
     /// `sampling` would be offering the provider a way to drive the model, which is the

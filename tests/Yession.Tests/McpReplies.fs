@@ -60,6 +60,13 @@ let tests =
             | other -> failwithf "expected the failure frame, got %A" other
         }
 
+        test "an error the server could not attach to an id is the response when nothing else is" {
+            let unreadable = """{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"parse error"}}"""
+            match McpClient.replyTo 4 "tools/call" unreadable with
+            | Ok (JsonRpcFailure (None, code, _)) -> Expect.equal code -32700 "the server's own reason"
+            | other -> failwithf "expected the id-less failure, got %A" other
+        }
+
         test "an answer the tool flagged as an error tells the model so" {
             let text = McpRpc.toolText (flagged true)
             Expect.stringContains text "reported an error" "the failure is stated"
