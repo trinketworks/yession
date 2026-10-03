@@ -36,7 +36,7 @@ let create (dispatch: ClientMsg -> unit) : Syncer =
     let players = System.Collections.Generic.Dictionary<string, Replay.Mounted * string> ()
 
     let mount (model: ClientModel) (el: Browser.Types.Element) (key: string) =
-        match ClientModel.paneTabs model |> List.tryFind (fun t -> PaneTab.key t = key) with
+        match model.Tabs |> List.tryFind (fun t -> PaneTab.key t = key) with
         | None -> ()
         | Some tab ->
             // `None` means the recording is not ready to play — chunk 0 has not arrived, or
@@ -75,7 +75,7 @@ let create (dispatch: ClientMsg -> unit) : Syncer =
             // mount down on the way — but a control that moved the position within a mounted tab
             // would need this loop to compare more than the text.
             for KeyValue (key, (_, cast)) in players |> Seq.toList do
-                match ClientModel.paneTabs model |> List.tryFind (fun t -> PaneTab.key t = key) with
+                match model.Tabs |> List.tryFind (fun t -> PaneTab.key t = key) with
                 | Some tab ->
                     match ClientModel.paneReplay tab model with
                     | Some replay when replay.Cast <> cast ->

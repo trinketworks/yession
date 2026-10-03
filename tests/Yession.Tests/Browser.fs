@@ -813,9 +813,15 @@ let tests =
                 do! openNewTerminal pageA
 
                 // Opening is a command; the terminal reaches BOTH peers as an event, so B
-                // learns about it without having asked for anything.
+                // learns about it without having asked for anything — on its row in the list,
+                // because B's strip holds only what B opened. Choosing the row is how B goes
+                // to watch.
                 let hasTab = """!!document.querySelector('[data-terminal-tab]')"""
                 let! _ = await (pageA.WaitForFunctionAsync hasTab)
+                do! awaitU (pageB.Locator("[data-content-toggle='show']").First.ClickAsync ())
+                do! awaitU (pageB.Locator("[data-content-list-toggle='list']").First.ClickAsync ())
+                let! _ = await (pageB.WaitForSelectorAsync "[data-terminal-list-row]")
+                do! awaitU (pageB.Locator("[data-terminal-list-row]").First.ClickAsync ())
                 let! _ = await (pageB.WaitForFunctionAsync hasTab)
 
                 // A types a command with REAL key events, so the input's binding is what
@@ -841,8 +847,8 @@ let tests =
                 let! _ = await (pageA.WaitForFunctionAsync blockRan)
                 let! _ = await (pageB.WaitForFunctionAsync blockRan)
 
-                // And its OUTPUT arrived — over the terminal frames on A, and (for B, whose
-                // panel was never opened) through the same fold either way.
+                // And its OUTPUT arrived — over the terminal frames on both, through the same
+                // fold either way.
                 let hasOutput =
                     """[...document.querySelectorAll('[data-terminal-output]')].some(o => o.textContent.includes('hello-terminal'))"""
                 let! _ = await (pageA.WaitForFunctionAsync hasOutput)
@@ -853,6 +859,44 @@ let tests =
                     await (pageA.WaitForFunctionAsync
                             "document.querySelector(\"[data-terminal-input^='term-draft:']:not([readonly])\")?.value === ''")
                     |> Async.Ignore
+            })
+
+        // Reported from a live session: `+`, a command, then the command's chip in the chat —
+        // and the strip went from `[TERMINAL]` to `[ECHO ONE]`, the live terminal gone from it
+        // and reachable again only through the list. Whatever the pane shows is a tab, so a
+        // chip opened next lands BESIDE the terminal and never in its place.
+        Tag.needs "a command that really runs" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        sessionCase "the first chip tapped keeps the live terminal in the strip" <|
+            fun page ->
+            async {
+                // A fresh session offers its launch card, which overlays the conversation's
+                // lower edge — exactly where the chip this case taps lands. Put it away the way
+                // a person who is not choosing a repo would; it stays away for this client.
+                let! _ = await (page.WaitForSelectorAsync "[data-repo-picker-dismiss]")
+                do! awaitU (page.ClickAsync "[data-repo-picker-dismiss]")
+                let! _ = await (page.WaitForFunctionAsync "!document.querySelector('[data-repo-picker]')")
+                do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
+                do! openNewTerminal page
+                let composerInput = "[data-terminal-input^='term-draft:']:not([readonly])"
+                let! _ = await (page.WaitForSelectorAsync composerInput)
+                do! awaitU (page.ClickAsync composerInput)
+                do! awaitU (page.Keyboard.TypeAsync "echo one")
+                do! awaitU (page.ClickAsync "[data-terminal-send]")
+                let! _ = await (page.WaitForSelectorAsync "[data-chat-block]")
+                do! awaitU (page.ClickAsync "[data-chat-block]")
+                let! _ = await (page.WaitForSelectorAsync "[data-pane-tab^='block:']")
+                let! strip =
+                    await (page.EvaluateAsync<string[]> (
+                            """() => [...document.querySelectorAll('[data-pane-tab]')].map(t => t.getAttribute('data-pane-tab'))"""))
+                let said = String.Join (", ", strip)
+                Expect.equal
+                    (strip |> Array.filter (fun key -> key.StartsWith "terminal:") |> Array.length)
+                    1
+                    (sprintf "the terminal the press opened is still a tab; the strip holds: %s" said)
+                Expect.equal
+                    (strip |> Array.filter (fun key -> key.StartsWith "block:") |> Array.length)
+                    1
+                    (sprintf "and the chip is one tab beside it; the strip holds: %s" said)
             })
 
         // --- Reopening a session, and what it costs -------------------------------------

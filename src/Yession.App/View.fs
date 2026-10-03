@@ -3766,10 +3766,10 @@ module View =
     /// while you look at a picture. The LIST behind the toggle is where kind is the axis, and
     /// it groups by kind for exactly the same reason.
     ///
-    /// Every terminal the session has ever had is furniture in the strip; the read-only tabs
-    /// are the ones this client opened by tapping a chip, and only those can be closed.
+    /// The strip is `Tabs` and nothing else: what this client opened, each closable unless
+    /// kept. Every other terminal the session has is reached through the list.
     let private contentPane (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
-        let tabs = ClientModel.paneTabs model
+        let tabs = model.Tabs
         let selected = ClientModel.selectedPane model
         // What pressing `+` does. One place to put a terminal and no other kind of new thing
         // yet, so it MAKES one — a menu whose only entry is the thing you asked for is a tap
