@@ -270,6 +270,11 @@ module Dom =
         let terminalScrollback = "data-terminal-scrollback"
         let terminalBlock = "data-terminal-block"
         let terminalBlockStatus = "data-terminal-block-status"
+        /// A run of consecutive same-author blocks, folded under one "ran N commands"
+        /// (`View.terminalBlockRun`) — the pane's own version of the chat's `chatTaskCard`.
+        /// Its value is the FIRST block's id, same rule `chatTaskCard` uses for its turn
+        /// key: never one block, so a lone command still carries plain `terminalBlock`.
+        let terminalBlockRun = "data-terminal-block-run"
         let terminalOutput = "data-terminal-output"
         let terminalTruncated = "data-terminal-truncated"
         let terminalInput = "data-terminal-input"
