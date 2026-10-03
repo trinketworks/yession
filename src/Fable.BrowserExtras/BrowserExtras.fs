@@ -156,7 +156,7 @@ module Scrolling =
     /// (`mediaMatches "(prefers-reduced-motion: reduce)"`, in `Media` above) — this only
     /// knows how to ask for the moving form, same as `scrollIntoMiddle` only knows the
     /// centred one.
-    [<Emit("$0.scrollTo({ top: $0.scrollHeight, behavior: 'smooth' })")>]
+    [<Emit("(function (el) { el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }) })($0)")>]
     let scrollToBottomSmooth (element: Browser.Types.HTMLElement) : unit = jsNative
 
 /// What a key event is, beyond the keystroke: whether an IME was mid-composition when it
