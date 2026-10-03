@@ -104,6 +104,9 @@
          items carry one. -->
     <Compile Include="Acts.fs" />
     <Compile Include="Conversation.fs" />
+    <!-- Whether a batch of messages starts a turn: who they address, and the policy the
+         scheduler is handed. After Attribution.fs, whose names an address resolves against. -->
+    <Compile Include="TurnPolicy.fs" />
     <!-- What the session owes in the way of names (Plan 25). After Conversation.fs, whose
          chapters it is about, and after Summaries.fs, whose ask it builds. -->
     <Compile Include="Naming.fs" />
