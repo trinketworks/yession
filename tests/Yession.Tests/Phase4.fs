@@ -1088,6 +1088,20 @@ let private peopleMarkTests =
                 let colour = Entity.presenceColour model who
                 Expect.isFalse (inBlueBand colour) (sprintf "peer-%d's caret is %s, the agent's blue (hue %A)" i colour (hue colour))
 
+        // The session, the system and a repo's file are not people, and once wore a person's
+        // checker anyway — seeded by a constant or a repo's name, so a repo could arrive in
+        // exactly the colour of the person who configured it.
+        testCase "nothing that is not a person wears a person's colour" <| fun () ->
+            let model = ClientModel.init { PeerId = PeerId.create "peer-thing" |> expect; DisplayName = "Grace" }
+            let people = [ for light, dark in Style.humanTones do yield light; yield dark ]
+            let things = [ ActorRef.Session; ActorRef.System; ActorRef.Configured (RepoRef.create "octo/hello" |> expect) ]
+            for thing in things do
+                let caret = Entity.presenceColour model thing
+                Expect.isFalse (List.contains caret people) (sprintf "%A's caret is %s, a person's colour" thing caret)
+                let mark = Entity.actorMark model thing
+                for tone in people do
+                    Expect.isFalse (mark.Contains tone) (sprintf "%A's mark is drawn in %s, a person's colour" thing tone)
+
         testCase "every person's checker is declared to Tailwind" <| fun () ->
             // The checkers are assembled at runtime, so the stylesheet generates only the ones
             // app/tailwind.css names inline; one it does not name paints nothing at all.

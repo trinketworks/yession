@@ -50,7 +50,8 @@ module Entity =
         | ActorRef.Agent | ActorRef.Session | ActorRef.System | ActorRef.Configured _ ->
             actorToken actor
 
-    /// The mark an actor wears: the class that draws it.
+    /// Who wears a mark: a person, seeded by their identity; the agent; or a thing that is
+    /// neither — the session, the system, a repo's file.
     ///
     /// A person's mark is seeded by the PERSON, not by the reference. A `UserRef` and a
     /// `PeerRef` are two ways an event can point at one human — the Session records
@@ -58,23 +59,31 @@ module Entity =
     /// seeded by whichever was recorded gave that human two checkers on one screen. The
     /// durable identity wins when attribution has it: a user keeps one mark across every
     /// device and rejoin, and a peer nobody has attributed is seeded by the only id it has.
-    let private seed (model: ClientModel) (actor: ActorRef) : string option =
+    ///
+    /// The things share one grey mark. They once drew a checker from the people's tones —
+    /// the session seeded by a constant, a repo by its name — so a repo could wear exactly
+    /// the colour of the person beside it. A colour is a person's; a thing has none.
+    type private Wearer =
+        | Person of seed: string
+        | Agent
+        | Thing
+
+    let private wearer (model: ClientModel) (actor: ActorRef) : Wearer =
         match actor with
-        | UserRef u -> Some (UserId.value u)
+        | UserRef u -> Person (UserId.value u)
         | PeerRef p ->
             match Map.tryFind p model.Attribution.PeerUsers with
-            | Some user -> Some (UserId.value user)
-            | None -> Some (PeerId.value p)
-        | ActorRef.Agent -> None
-        | ActorRef.Session | ActorRef.System -> Some "session"
-        // A repo's file is not a person and not the agent. Its own avatar, seeded by the
-        // repo, so two repos configuring one session are told apart on sight.
-        | ActorRef.Configured repo -> Some (RepoRef.value repo)
+            | Some user -> Person (UserId.value user)
+            | None -> Person (PeerId.value p)
+        | ActorRef.Agent -> Agent
+        | ActorRef.Session | ActorRef.System | ActorRef.Configured _ -> Thing
 
+    /// The mark an actor wears: the class that draws it.
     let actorMark (model: ClientModel) (actor: ActorRef) : string =
-        match seed model actor with
-        | Some id -> Style.humanAvatar id
-        | None -> Style.agentAvatar
+        match wearer model actor with
+        | Person id -> Style.humanAvatar id
+        | Agent -> Style.agentAvatar
+        | Thing -> Style.thingAvatar
 
     /// The colour an actor's presence is drawn in — a caret and its name flag, a dot saying
     /// who is in a field, the edge of a draft — as a CSS colour for an inline style.
@@ -83,11 +92,13 @@ module Entity =
     /// is one colour everywhere they appear. It was a hue hashed over the whole wheel from the
     /// reference instead: unrelated to the checker beside it, a second colour for one person
     /// whenever attribution named them both ways, and free to land on the agent's blue —
-    /// which `Style.humanTones` exists to keep off every person. The agent wears that blue.
+    /// which `Style.humanTones` exists to keep off every person. The agent wears that blue,
+    /// and a thing the grey its mark is drawn in.
     let presenceColour (model: ClientModel) (actor: ActorRef) : string =
-        match seed model actor with
-        | Some id -> fst (Style.humanTone id)
-        | None -> "var(--color-blue)"
+        match wearer model actor with
+        | Person id -> fst (Style.humanTone id)
+        | Agent -> "var(--color-blue)"
+        | Thing -> "var(--color-ink-faint)"
 
     /// The same colour at a quarter, for a selection laid under text that must stay legible.
     let presenceSelection (model: ClientModel) (actor: ActorRef) : string =
