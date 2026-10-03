@@ -17,6 +17,8 @@
     <Compile Include="SecretsState.fs" />
     <Compile Include="BrokerState.fs" />
     <Compile Include="ControlWire.fs" />
+    <!-- Where each control call goes: the one spelling of the paths both ends use. -->
+    <Compile Include="ControlRoute.fs" />
     <Compile Include="SpawnWire.fs" />
     <Compile Include="HookDelivery.fs" />
   </ItemGroup>

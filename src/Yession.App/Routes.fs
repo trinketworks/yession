@@ -620,8 +620,8 @@ type SessionVerb =
 /// `RelativeUrl` exists to prevent. Hence `path`, a string that always begins with `/`,
 /// and no `RelativeUrl` here at all.
 ///
-/// The control routes (`ControlServer`, secret-bearing, spoken by a session rather than a
-/// browser) are a different contract and are not here.
+/// The control routes (secret-bearing, spoken by a session rather than a browser) are a
+/// different contract and are not here: they are `ControlRoute`, in `Yession.Manager`.
 [<RequireQualifiedAccess>]
 type ManagerRoute =
     /// The management page.

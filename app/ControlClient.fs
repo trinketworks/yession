@@ -57,7 +57,7 @@ let private decoding (what: string) (codec: Codec<'a>) (sink: Sink<'a>) : Sink<s
 /// stream). Returns a cancel that stops the subscription and closes the connection.
 let subscribeNotifications (baseUrl: string) (secret: string) (onNotification: Sink<SessionNotification>) : Subscription =
     openEventStream
-        (sprintf "%s/control/notifications" baseUrl)
+        (ControlRoute.at baseUrl ControlRoute.Notifications)
         secret
         (decoding "notification" ControlWire.sessionNotification onNotification)
 
@@ -71,7 +71,7 @@ let subscribeNotifications (baseUrl: string) (secret: string) (onNotification: S
 /// configuration.
 let subscribeMcp (baseUrl: string) (secret: string) (onSet: Sink<McpServerSet>) : Subscription =
     openEventStream
-        (sprintf "%s/control/mcp" baseUrl)
+        (ControlRoute.at baseUrl ControlRoute.McpServers)
         secret
         (decoding "mcp server set" McpWire.serverSet onSet)
 
@@ -101,7 +101,7 @@ let nameReporter (baseUrl: string) (secret: string) : string -> Async<unit> =
             try
                 let! _ =
                     postJson
-                        (sprintf "%s/control/name" baseUrl)
+                        (ControlRoute.at baseUrl ControlRoute.Name)
                         secret
                         (ControlWire.toString ControlWire.sessionNameReport name)
                     |> Interop.awaitPromise
@@ -119,7 +119,7 @@ let summaryReporter (baseUrl: string) (secret: string) : string -> Async<unit> =
             try
                 let! _ =
                     postJson
-                        (sprintf "%s/control/summary" baseUrl)
+                        (ControlRoute.at baseUrl ControlRoute.Summary)
                         secret
                         (ControlWire.toString ControlWire.sessionSummaryReport summary)
                     |> Interop.awaitPromise
@@ -133,6 +133,26 @@ let private postJsonReply (url: string) (secret: string) (body: string) : JS.Pro
     |> Promise.bind (fun response ->
         response.text ()
         |> Promise.map (fun said -> {| status = response.Status; body = said |}))
+
+/// One call to a route that answers a body to decode, or the reason it could not: a refusal
+/// names the route and the status (policy 403s carry the Manager's reason), and an
+/// unreachable Manager is a value like any other failure. Shared by the secrets and
+/// connections families, whose calls are this and a codec each.
+let private postRoute
+    (baseUrl: string)
+    (secret: string)
+    (route: ControlRoute)
+    (body: string)
+    (decode: string -> Result<'a, string>)
+    : Async<Result<'a, string>> =
+    async {
+        try
+            let! reply = postJsonReply (ControlRoute.at baseUrl route) secret body |> Interop.awaitPromise
+            if reply.status = 200 then return decode reply.body
+            else return Error (sprintf "%s refused (%d): %s" (ControlRoute.path route) reply.status reply.body)
+        with e ->
+            return Error (sprintf "control unreachable: %s" e.Message)
+    }
 
 /// Report whether this session is in use (Plan 11).
 ///
@@ -148,7 +168,7 @@ let activityReporter (baseUrl: string) (secret: string) : bool -> Async<unit> =
             try
                 let! reply =
                     postJsonReply
-                        (sprintf "%s/control/activity" baseUrl)
+                        (ControlRoute.at baseUrl ControlRoute.Activity)
                         secret
                         (ControlWire.toString ControlWire.sessionActivityReport busy)
                     |> Interop.awaitPromise
@@ -177,28 +197,21 @@ type SessionSecretsCapabilities =
 
 let secretsCapabilities (baseUrl: string) (secret: string) (sessionId: SessionId) : SessionSecretsCapabilities =
     let scope = SessionScope sessionId
-    let post (route: string) (body: string) (decode: string -> Result<'a, string>) : Async<Result<'a, string>> =
-        async {
-            try
-                let! reply = postJsonReply (sprintf "%s/control/secrets/%s" baseUrl route) secret body |> Interop.awaitPromise
-                if reply.status = 200 then return decode reply.body
-                else return Error (sprintf "secrets %s refused (%d): %s" route reply.status reply.body)
-            with e ->
-                return Error (sprintf "control unreachable: %s" e.Message)
-        }
+    let post (route: ControlRoute) (body: string) (decode: string -> Result<'a, string>) : Async<Result<'a, string>> =
+        postRoute baseUrl secret route body decode
     { SetSecret =
         fun name value ->
-            post "set"
+            post ControlRoute.SetSecret
                 (ControlWire.toString ControlWire.setSecretRequest { Scope = scope; Name = name; Value = value })
                 (ControlWire.fromString ControlWire.secretMetadata)
       ListSecrets =
         fun () ->
-            post "list"
+            post ControlRoute.ListSecrets
                 (ControlWire.toString ControlWire.listSecretsRequest { Scope = scope })
                 (ControlWire.fromString ControlWire.listSecretsResponse >> Result.map (fun r -> r.Secrets))
       DeleteSecret =
         fun name ->
-            post "delete"
+            post ControlRoute.DeleteSecret
                 (ControlWire.toString ControlWire.deleteSecretRequest { Scope = scope; Name = name })
                 (ControlWire.fromString ControlWire.deleteSecretResponse >> Result.map (fun r -> r.Deleted)) }
 
@@ -207,22 +220,12 @@ let secretsCapabilities (baseUrl: string) (secret: string) (sessionId: SessionId
 /// dropped; it never reaches the agent loop (no agent tool wraps this).
 let resolveSecret (baseUrl: string) (secret: string) : SecretName -> Async<Result<string, string>> =
     fun name ->
-        async {
-            try
-                let! reply =
-                    postJsonReply
-                        (sprintf "%s/control/secrets/resolve" baseUrl)
-                        secret
-                        (ControlWire.toString ControlWire.resolveSecretRequest { Name = name })
-                    |> Interop.awaitPromise
-                if reply.status = 200 then
-                    return
-                        ControlWire.fromString ControlWire.resolveSecretResponse reply.body
-                        |> Result.map (fun r -> r.Value)
-                else return Error (sprintf "secrets resolve refused (%d): %s" reply.status reply.body)
-            with e ->
-                return Error (sprintf "control unreachable: %s" e.Message)
-        }
+        postRoute
+            baseUrl
+            secret
+            ControlRoute.ResolveSecret
+            (ControlWire.toString ControlWire.resolveSecretRequest { Name = name })
+            (ControlWire.fromString ControlWire.resolveSecretResponse >> Result.map (fun r -> r.Value))
 
 /// The session side of the Manager's connection broker (Plan 08). Service-agnostic like
 /// the wire: callers supply targets and provider endpoints as data. `Resolve` is the one
@@ -244,48 +247,41 @@ type SessionConnections =
       Resolve : SecretId -> Async<Result<ConnectionKind * string, string>> }
 
 let connections (baseUrl: string) (secret: string) : SessionConnections =
-    let post (route: string) (body: string) (decode: string -> Result<'a, string>) : Async<Result<'a, string>> =
-        async {
-            try
-                let! reply = postJsonReply (sprintf "%s/control/connections/%s" baseUrl route) secret body |> Interop.awaitPromise
-                if reply.status = 200 then return decode reply.body
-                else return Error (sprintf "connections %s refused (%d): %s" route reply.status reply.body)
-            with e ->
-                return Error (sprintf "control unreachable: %s" e.Message)
-        }
+    let post (route: ControlRoute) (body: string) (decode: string -> Result<'a, string>) : Async<Result<'a, string>> =
+        postRoute baseUrl secret route body decode
     { Begin =
         fun request ->
-            post "begin"
+            post ControlRoute.BeginConnection
                 (ControlWire.toString ControlWire.connectionBeginRequest request)
                 (ControlWire.fromString ControlWire.connectionBeginResponse)
       Complete =
         fun target code ->
-            post "complete"
+            post ControlRoute.CompleteConnection
                 (ControlWire.toString ControlWire.connectionCompleteRequest { Target = target; Code = code })
                 (fun _ -> Ok ())
       Put =
         fun target value ->
-            post "put"
+            post ControlRoute.PutConnection
                 (ControlWire.toString ControlWire.connectionPutRequest { Target = target; Value = value })
                 (fun _ -> Ok ())
       PutGrant =
         fun request ->
-            post "put-grant"
+            post ControlRoute.PutConnectionGrant
                 (ControlWire.toString ControlWire.connectionPutGrantRequest request)
                 (fun _ -> Ok ())
       Disconnect =
         fun target ->
-            post "disconnect"
+            post ControlRoute.DisconnectConnection
                 (ControlWire.toString ControlWire.connectionDisconnectRequest { Target = target })
                 (ControlWire.fromString ControlWire.connectionDisconnectResponse >> Result.map (fun r -> r.Disconnected))
       Reject =
         fun target reason ->
-            post "reject"
+            post ControlRoute.RejectConnection
                 (ControlWire.toString ControlWire.connectionRejectRequest { Target = target; Reason = reason })
                 (ControlWire.fromString ControlWire.connectionRejectResponse >> Result.map (fun r -> r.Recorded))
       Resolve =
         fun target ->
-            post "resolve"
+            post ControlRoute.ResolveConnection
                 (ControlWire.toString ControlWire.connectionResolveRequest { Target = target })
                 (ControlWire.fromString ControlWire.connectionResolveResponse >> Result.map (fun r -> r.Kind, r.Value)) }
 
@@ -295,7 +291,7 @@ let connections (baseUrl: string) (secret: string) : SessionConnections =
 /// Returns a cancel that stops the subscription and closes the connection.
 let subscribeConnections (baseUrl: string) (secret: string) (onList: Sink<ConnectionStatusList>) : Subscription =
     openEventStream
-        (sprintf "%s/control/connections" baseUrl)
+        (ControlRoute.at baseUrl ControlRoute.ConnectionStatuses)
         secret
         (decoding "connection status" ControlWire.connectionStatusList onList)
 
@@ -309,7 +305,7 @@ let subscribeHook (baseUrl: string) (secret: string) (filter: DeliveryFilter) : 
         try
             let! text =
                 postJson
-                    (sprintf "%s/control/hooks/subscribe" baseUrl)
+                    (ControlRoute.at baseUrl ControlRoute.SubscribeHook)
                     secret
                     (ControlWire.toString ControlWire.subscribeHookRequest { Filter = filter })
                 |> Interop.awaitPromise
@@ -326,7 +322,7 @@ let unsubscribeHook (baseUrl: string) (secret: string) (id: string) : Async<Resu
         try
             let! text =
                 postJson
-                    (sprintf "%s/control/hooks/unsubscribe" baseUrl)
+                    (ControlRoute.at baseUrl ControlRoute.UnsubscribeHook)
                     secret
                     (ControlWire.toString ControlWire.unsubscribeHookRequest { ControlWire.UnsubscribeHookRequest.Id = id })
                 |> Interop.awaitPromise
@@ -344,7 +340,7 @@ let registerClient (baseUrl: string) (secret: string) (redirectUri: string) : As
         try
             let! text =
                 postJson
-                    (sprintf "%s/control/register-client" baseUrl)
+                    (ControlRoute.at baseUrl ControlRoute.RegisterClient)
                     secret
                     (Wire.toString Wire.registerClientRequest { RedirectUri = redirectUri })
                 |> Interop.awaitPromise

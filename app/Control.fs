@@ -8,40 +8,41 @@ module Yession.Host.Control
 // metadata: the session's self-assigned display name (a label, never conversation or
 // event content), so the Manager's list reflects the title.
 //
-// Routes (secret in the `x-yession-control` header):
-//   POST /control/name             { name }         -> "ok" (updates the registry display name)
-//   POST /control/register-client  { redirectUri }  -> { clientId, clientSecret, issuer }
-//   POST /control/secrets/set      { scope, name, value } -> secret metadata (never a value)
-//   POST /control/secrets/list     { scope }        -> { secrets: metadata[] } (never values)
-//   POST /control/secrets/delete   { scope, name }  -> { deleted }
-//   POST /control/secrets/resolve  { name }         -> { value }
+// Routes (secret in the `x-yession-control` header). Each is a `ControlRoute` case, which owns
+// the method and path both ends use; what each carries and answers is below:
+//   Name             { name }         -> "ok" (updates the registry display name)
+//   RegisterClient   { redirectUri }  -> { clientId, clientSecret, issuer }
+//   SetSecret        { scope, name, value } -> secret metadata (never a value)
+//   ListSecrets      { scope }        -> { secrets: metadata[] } (never values)
+//   DeleteSecret     { scope, name }  -> { deleted }
+//   ResolveSecret    { name }         -> { value }
 //        (the one value-returning SECRETS route: a session resolves the values its
 //         sandbox spec references at sandbox spawn — gated by the caller's readable
 //         scopes, the same walk Manager-side injection always used. The value crosses
 //         only this authenticated loopback channel, only at sandbox spawn, and never
 //         reaches the agent loop — there is still no agent-facing read capability.)
-//   GET  /control/notifications                     -> text/event-stream (the reverse leg:
+//   Notifications                          -> text/event-stream (the reverse leg:
 //        the Manager pushing notifications DOWN to this session, multiplexed as SSE frames
 //        of `ControlWire.sessionNotification` JSON — see NotificationHub / SessionNotification)
-//   GET  /control/mcp                               -> text/event-stream (a second reverse leg:
+//   McpServers                             -> text/event-stream (a second reverse leg:
 //        THIS session's resolved MCP server set on subscribe, then a fresh whole set on
 //        every change, as SSE frames of `McpWire.serverSet` (Plan 17). The Manager says
 //        WHERE the servers are; the session is the MCP client that talks to them.)
-//   POST /control/connections/begin      ConnectionBeginRequest -> { authorizeUrl, state }
-//   POST /control/connections/complete   { target, code }       -> "ok" (manual paste completion)
-//   POST /control/connections/put        { target, value }      -> "ok" (static token)
-//   POST /control/connections/put-grant  { target, accessToken, … } -> "ok" (refreshable)
-//   POST /control/connections/disconnect { target }             -> { disconnected }
-//   POST /control/connections/reject     { target, reason }     -> { recorded }
-//   POST /control/connections/resolve    { target }             -> { kind, value }
+//   BeginConnection      ConnectionBeginRequest -> { authorizeUrl, state }
+//   CompleteConnection   { target, code }       -> "ok" (manual paste completion)
+//   PutConnection        { target, value }      -> "ok" (static token)
+//   PutConnectionGrant   { target, accessToken, … } -> "ok" (refreshable)
+//   DisconnectConnection { target }             -> { disconnected }
+//   RejectConnection     { target, reason }     -> { recorded }
+//   ResolveConnection    { target }             -> { kind, value }
 //        (the ONE value-returning route (Plan 08): an agent turn needs the token
 //         in-process; policy gates it to targets whose scope the caller is bound to)
-//   POST /control/hooks/subscribe    { filter }     -> { id }
-//   POST /control/hooks/unsubscribe  { id }         -> { dropped }
+//   SubscribeHook    { filter }     -> { id }
+//   UnsubscribeHook  { id }         -> { dropped }
 //        (the hook relay: what this session wants forwarded from the Manager's hook
 //         endpoints. A filter is DATA — a conjunction of equalities over paths — because
 //         code would make the Manager a version ceiling on the sessions it supervises.)
-//   GET  /control/connections                       -> text/event-stream (a third reverse leg:
+//   ConnectionStatuses                     -> text/event-stream (a third reverse leg:
 //        the caller's readable connection statuses on subscribe, then a fresh list on every
 //        change — metadata frames of `ControlWire.connectionStatusList`, never values)
 //
@@ -167,8 +168,23 @@ let tryHandle
                     match decode body with
                     | Ok value -> handle value
                     | Error e -> respond res 400 (sprintf "malformed control request: %s" e))
-            match req.``method``, path with
-            | "POST", "/control/name" ->
+            // The two policy-gated families share their outcome mapping and their
+            // "no store" refusal; the arms below stay decode -> call -> map.
+            let respondWith (encode: 'ok -> string) (outcome: Result<'ok, SecretsError>) =
+                match outcome with
+                | Ok value -> respondJson res (encode value)
+                | Error (SecretsDenied reason) -> respond res 403 reason
+                | Error (SecretsFailed reason) -> respond res 500 reason
+            let withSecrets (handle: SecretsApi -> unit) =
+                match secretsApi with
+                | None -> respond res 403 "no secrets store configured"
+                | Some api -> handle api
+            let withConnections (handle: ConnectionsApi -> unit) =
+                match connectionsApi with
+                | None -> respond res 403 "no secrets store configured"
+                | Some api -> handle api
+            match ControlRoute.parse req.``method`` path with
+            | Some ControlRoute.Name ->
                 // Session metadata, not environment authority: the secret only names WHICH
                 // session is reporting; the Manager updates that session's display name.
                 decodeAnd (ControlWire.fromString ControlWire.sessionNameReport) (fun name ->
@@ -178,7 +194,7 @@ let tryHandle
                             | Ok () -> respond res 200 "ok"
                             | Error e -> respond res 400 e
                         }))
-            | "POST", "/control/summary" ->
+            | Some ControlRoute.Summary ->
                 // One line the session says about itself, for the roster. Same shape as the
                 // name report — the secret names the session, the body is one fact about it
                 // — and opaque to everything it passes through.
@@ -189,7 +205,7 @@ let tryHandle
                             | Ok () -> respond res 200 "ok"
                             | Error e -> respond res 400 e
                         }))
-            | "POST", "/control/activity" ->
+            | Some ControlRoute.Activity ->
                 // Plan 11. Same shape as the name report — the secret names the session, the
                 // body is one fact about it — and the same discipline: no session content
                 // crosses the control channel, only supervision traffic.
@@ -200,7 +216,7 @@ let tryHandle
                             | Ok () -> respond res 200 "ok"
                             | Error e -> respond res 400 e
                         }))
-            | "POST", "/control/hooks/subscribe" ->
+            | Some ControlRoute.SubscribeHook ->
                 // A filter, not a predicate: the Manager stores what the session said and
                 // compares, never interprets. Taking the session's word here is deliberate —
                 // it is a child this Manager spawned, calling over the authenticated
@@ -210,13 +226,13 @@ let tryHandle
                     respondJson
                         res
                         (ControlWire.toString ControlWire.subscribeHookResponse { ControlWire.SubscribeHookResponse.Id = id }))
-            | "POST", "/control/hooks/unsubscribe" ->
+            | Some ControlRoute.UnsubscribeHook ->
                 decodeAnd (ControlWire.fromString ControlWire.unsubscribeHookRequest) (fun request ->
                     let dropped = unsubscribeHook launchSecret request.Id
                     respondJson
                         res
                         (ControlWire.toString ControlWire.unsubscribeHookResponse { Dropped = dropped }))
-            | "POST", "/control/register-client" ->
+            | Some ControlRoute.RegisterClient ->
                 // Dynamic client registration (the OIDC RP side of this launch). The
                 // secret names the registering session; the redirect URI arrives here —
                 // not at spawn — because the session's port is OS-assigned and only
@@ -224,118 +240,109 @@ let tryHandle
                 decodeAnd (Wire.fromString Wire.registerClientRequest) (fun request ->
                     let response = registerClient launchSecret caller.SessionId request.RedirectUri
                     respondJson res (Wire.toString Wire.registerClientResponse response))
-            | "POST", ("/control/secrets/set" | "/control/secrets/list" | "/control/secrets/delete" | "/control/secrets/resolve" as secretsPath) ->
-                // Secrets (Plan 06). The arms stay thin: decode, hand the verified
-                // caller to the Manager's pre-authorized handlers, map the outcome.
-                // No store configured -> a clean 403; a policy Deny -> 403 with its
-                // reason; a store failure -> 500.
-                match secretsApi with
-                | None -> respond res 403 "no secrets store configured"
-                | Some api ->
-                    let respondWith (encode: 'ok -> string) (outcome: Result<'ok, SecretsError>) =
-                        match outcome with
-                        | Ok value -> respondJson res (encode value)
-                        | Error (SecretsDenied reason) -> respond res 403 reason
-                        | Error (SecretsFailed reason) -> respond res 500 reason
-                    match secretsPath with
-                    | "/control/secrets/set" ->
-                        decodeAnd (ControlWire.fromString ControlWire.setSecretRequest) (fun request ->
-                            Async.StartImmediate (
-                                async {
-                                    let! outcome = api.Set caller request
-                                    respondWith (ControlWire.toString ControlWire.secretMetadata) outcome
-                                }))
-                    | "/control/secrets/list" ->
-                        decodeAnd (ControlWire.fromString ControlWire.listSecretsRequest) (fun request ->
-                            Async.StartImmediate (
-                                async {
-                                    let! outcome = api.List caller request
-                                    respondWith
-                                        (fun secretsList ->
-                                            ControlWire.toString ControlWire.listSecretsResponse { Secrets = secretsList })
-                                        outcome
-                                }))
-                    | "/control/secrets/resolve" ->
-                        decodeAnd (ControlWire.fromString ControlWire.resolveSecretRequest) (fun request ->
-                            Async.StartImmediate (
-                                async {
-                                    let! outcome = api.Resolve caller request
-                                    respondWith
-                                        (fun value ->
-                                            ControlWire.toString ControlWire.resolveSecretResponse { Value = value })
-                                        outcome
-                                }))
-                    | _ ->
-                        decodeAnd (ControlWire.fromString ControlWire.deleteSecretRequest) (fun request ->
-                            Async.StartImmediate (
-                                async {
-                                    let! outcome = api.Delete caller request
-                                    respondWith
-                                        (fun deleted -> ControlWire.toString ControlWire.deleteSecretResponse { Deleted = deleted })
-                                        outcome
-                                }))
-            | "POST", ("/control/connections/begin" | "/control/connections/complete" | "/control/connections/put" | "/control/connections/put-grant" | "/control/connections/disconnect" | "/control/connections/reject" | "/control/connections/resolve" as connectionsPath) ->
-                // Connections (Plan 08). Same thin-arm shape as secrets: decode, hand the
-                // verified caller to the pre-authorized handlers, map the outcome.
-                match connectionsApi with
-                | None -> respond res 403 "no secrets store configured"
-                | Some api ->
-                    let respondWith (encode: 'ok -> string) (outcome: Result<'ok, SecretsError>) =
-                        match outcome with
-                        | Ok value -> respondJson res (encode value)
-                        | Error (SecretsDenied reason) -> respond res 403 reason
-                        | Error (SecretsFailed reason) -> respond res 500 reason
-                    match connectionsPath with
-                    | "/control/connections/begin" ->
-                        decodeAnd (ControlWire.fromString ControlWire.connectionBeginRequest) (fun request ->
-                            Async.StartImmediate (
-                                async {
-                                    let! outcome = api.Begin caller request
-                                    respondWith (ControlWire.toString ControlWire.connectionBeginResponse) outcome
-                                }))
-                    | "/control/connections/complete" ->
-                        decodeAnd (ControlWire.fromString ControlWire.connectionCompleteRequest) (fun request ->
-                            Async.StartImmediate (
-                                async {
-                                    let! outcome = api.Complete caller request
-                                    respondWith (fun () -> "\"ok\"") outcome
-                                }))
-                    | "/control/connections/put" ->
-                        decodeAnd (ControlWire.fromString ControlWire.connectionPutRequest) (fun request ->
-                            Async.StartImmediate (
-                                async {
-                                    let! outcome = api.Put caller request
-                                    respondWith (fun () -> "\"ok\"") outcome
-                                }))
-                    | "/control/connections/put-grant" ->
-                        decodeAnd (ControlWire.fromString ControlWire.connectionPutGrantRequest) (fun request ->
-                            Async.StartImmediate (
-                                async {
-                                    let! outcome = api.PutGrant caller request
-                                    respondWith (fun () -> "\"ok\"") outcome
-                                }))
-                    | "/control/connections/disconnect" ->
-                        decodeAnd (ControlWire.fromString ControlWire.connectionDisconnectRequest) (fun request ->
-                            Async.StartImmediate (
-                                async {
-                                    let! outcome = api.Disconnect caller request
-                                    respondWith (ControlWire.toString ControlWire.connectionDisconnectResponse) outcome
-                                }))
-                    | "/control/connections/reject" ->
-                        decodeAnd (ControlWire.fromString ControlWire.connectionRejectRequest) (fun request ->
-                            Async.StartImmediate (
-                                async {
-                                    let! outcome = api.Reject caller request
-                                    respondWith (ControlWire.toString ControlWire.connectionRejectResponse) outcome
-                                }))
-                    | _ ->
-                        decodeAnd (ControlWire.fromString ControlWire.connectionResolveRequest) (fun request ->
-                            Async.StartImmediate (
-                                async {
-                                    let! outcome = api.Resolve caller request
-                                    respondWith (ControlWire.toString ControlWire.connectionResolveResponse) outcome
-                                }))
-            | "GET", "/control/connections" ->
+            // Secrets (Plan 06). The arms stay thin: decode, hand the verified
+            // caller to the Manager's pre-authorized handlers, map the outcome.
+            // No store configured -> a clean 403; a policy Deny -> 403 with its
+            // reason; a store failure -> 500.
+            | Some ControlRoute.SetSecret ->
+                withSecrets (fun api ->
+                    decodeAnd (ControlWire.fromString ControlWire.setSecretRequest) (fun request ->
+                        Async.StartImmediate (
+                            async {
+                                let! outcome = api.Set caller request
+                                respondWith (ControlWire.toString ControlWire.secretMetadata) outcome
+                            })))
+            | Some ControlRoute.ListSecrets ->
+                withSecrets (fun api ->
+                    decodeAnd (ControlWire.fromString ControlWire.listSecretsRequest) (fun request ->
+                        Async.StartImmediate (
+                            async {
+                                let! outcome = api.List caller request
+                                respondWith
+                                    (fun secretsList ->
+                                        ControlWire.toString ControlWire.listSecretsResponse { Secrets = secretsList })
+                                    outcome
+                            })))
+            | Some ControlRoute.ResolveSecret ->
+                withSecrets (fun api ->
+                    decodeAnd (ControlWire.fromString ControlWire.resolveSecretRequest) (fun request ->
+                        Async.StartImmediate (
+                            async {
+                                let! outcome = api.Resolve caller request
+                                respondWith
+                                    (fun value ->
+                                        ControlWire.toString ControlWire.resolveSecretResponse { Value = value })
+                                    outcome
+                            })))
+            | Some ControlRoute.DeleteSecret ->
+                withSecrets (fun api ->
+                    decodeAnd (ControlWire.fromString ControlWire.deleteSecretRequest) (fun request ->
+                        Async.StartImmediate (
+                            async {
+                                let! outcome = api.Delete caller request
+                                respondWith
+                                    (fun deleted -> ControlWire.toString ControlWire.deleteSecretResponse { Deleted = deleted })
+                                    outcome
+                            })))
+            // Connections (Plan 08). Same thin-arm shape as secrets: decode, hand the
+            // verified caller to the pre-authorized handlers, map the outcome.
+            | Some ControlRoute.BeginConnection ->
+                withConnections (fun api ->
+                    decodeAnd (ControlWire.fromString ControlWire.connectionBeginRequest) (fun request ->
+                        Async.StartImmediate (
+                            async {
+                                let! outcome = api.Begin caller request
+                                respondWith (ControlWire.toString ControlWire.connectionBeginResponse) outcome
+                            })))
+            | Some ControlRoute.CompleteConnection ->
+                withConnections (fun api ->
+                    decodeAnd (ControlWire.fromString ControlWire.connectionCompleteRequest) (fun request ->
+                        Async.StartImmediate (
+                            async {
+                                let! outcome = api.Complete caller request
+                                respondWith (fun () -> "\"ok\"") outcome
+                            })))
+            | Some ControlRoute.PutConnection ->
+                withConnections (fun api ->
+                    decodeAnd (ControlWire.fromString ControlWire.connectionPutRequest) (fun request ->
+                        Async.StartImmediate (
+                            async {
+                                let! outcome = api.Put caller request
+                                respondWith (fun () -> "\"ok\"") outcome
+                            })))
+            | Some ControlRoute.PutConnectionGrant ->
+                withConnections (fun api ->
+                    decodeAnd (ControlWire.fromString ControlWire.connectionPutGrantRequest) (fun request ->
+                        Async.StartImmediate (
+                            async {
+                                let! outcome = api.PutGrant caller request
+                                respondWith (fun () -> "\"ok\"") outcome
+                            })))
+            | Some ControlRoute.DisconnectConnection ->
+                withConnections (fun api ->
+                    decodeAnd (ControlWire.fromString ControlWire.connectionDisconnectRequest) (fun request ->
+                        Async.StartImmediate (
+                            async {
+                                let! outcome = api.Disconnect caller request
+                                respondWith (ControlWire.toString ControlWire.connectionDisconnectResponse) outcome
+                            })))
+            | Some ControlRoute.RejectConnection ->
+                withConnections (fun api ->
+                    decodeAnd (ControlWire.fromString ControlWire.connectionRejectRequest) (fun request ->
+                        Async.StartImmediate (
+                            async {
+                                let! outcome = api.Reject caller request
+                                respondWith (ControlWire.toString ControlWire.connectionRejectResponse) outcome
+                            })))
+            | Some ControlRoute.ResolveConnection ->
+                withConnections (fun api ->
+                    decodeAnd (ControlWire.fromString ControlWire.connectionResolveRequest) (fun request ->
+                        Async.StartImmediate (
+                            async {
+                                let! outcome = api.Resolve caller request
+                                respondWith (ControlWire.toString ControlWire.connectionResolveResponse) outcome
+                            })))
+            | Some ControlRoute.ConnectionStatuses ->
                 // The connections reverse leg: the caller's current readable statuses as
                 // the first frame (so a subscriber needs no separate snapshot call), then
                 // a fresh list whenever one changes. Metadata only, never values.
@@ -353,14 +360,14 @@ let tryHandle
                             let! snapshot = api.Status caller
                             sink snapshot
                         })
-            | "GET", "/control/notifications" ->
+            | Some ControlRoute.Notifications ->
                 // The reverse leg: a long-lived SSE stream the Manager pushes notifications
                 // down. The secret already resolved to capabilities above, so it is valid.
                 Sse.stream req res
                     (ControlWire.toString ControlWire.sessionNotification)
                     (subscribeNotifications launchSecret)
                 |> ignore
-            | "GET", "/control/mcp" ->
+            | Some ControlRoute.McpServers ->
                 // The MCP reverse leg (Plan 17): the servers THIS session may reach, resolved
                 // by the Manager and streamed whole. The secret already resolved to a caller
                 // above, so both the session and the launch are known. Subscribing writes the
@@ -373,5 +380,5 @@ let tryHandle
                     (ControlWire.toString McpWire.serverSet)
                     (subscribeMcp caller.SessionId launchSecret)
                 |> ignore
-            | _ -> respond res 404 "not found"
+            | None -> respond res 404 "not found"
         true

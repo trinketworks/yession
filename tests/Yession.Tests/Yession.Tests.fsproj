@@ -128,6 +128,8 @@
     <Compile Include="LockSource.fs" />
     <!-- That the domain references nothing: a committed-file contract, read from its lockfile. -->
     <Compile Include="DomainReferences.fs" />
+    <!-- Where each control call goes: the one spelling both ends of the channel read. -->
+    <Compile Include="ControlRoutes.fs" />
     <!-- The setup this repository declares for its own work sandbox: a committed-file
          contract, like LockSource above, and cheap for the same reason. -->
     <Compile Include="DeclaredSetup.fs" />
