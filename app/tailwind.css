@@ -118,35 +118,61 @@
    custom properties auto-generate utilities (`--color-blue` -> `bg-blue`/`text-blue`,
    `--font-ui` -> `font-ui`, `--animate-pulse2` -> `animate-pulse2`). */
 @theme {
-  --color-bg: #000;
-  --color-panel: #0a0a0a;
-  --color-surface: #111;
-  --color-surface-2: #191919;
-  --color-hair: #1f1f1f;
-  --color-ink: #fff;
-  --color-ink-dim: #b4b4b4;
-  /* The faintest ink still carries meaning (labels, ids, empty states), so it must keep
-     WCAG 2.0 AA contrast (>= 4.5:1) on EVERY surface it can sit on — #828282 is 4.58:1
-     on surface-2, the dimmest. The theme-contrast test pins this floor. */
-  --color-ink-faint: #828282;
+  /* COLOUR, in three layers, each written once.
+
+     CONSTANTS are every colour the product draws with: the ground and the light, the mark's
+     two hues (assets/logo: the agent's blue cube, the people's green panels), and the red
+     an error is said in. The chrome draws with nothing else; the terminal's sixteen below
+     are a palette of their own, and the people's checker tones are listed in `Style.fs`.
+
+     VARIANTS are a constant made lighter or darker by a number of steps, and every one is
+     the same rule: a mix toward white or black in OKLab, whose lightness is perceptual, so
+     each step reads as the same distance whatever hue it is taken from. Two step sizes,
+     because two scales are wanted: `--step-tone` for a hue's lifts and shades
+     (`X-up-n`, `X-down-n`), `--step-grey` for the neutral ramp (`grey-n`, black lightened n
+     steps; grey-25 would be white). Only the variants something wears are declared; a new
+     one is a line of the same shape with a different n, never a picked hex.
+
+     ROLES are what the interface composes — `surface-2`, `ink-faint`, `err`. A role chooses
+     a constant or a variant and never defines a colour, so retuning a step moves every role
+     on it together. The theme-contrast test (Phase4) reads this same rule, so it is held to
+     the AA floor whatever the steps are set to. */
+  --color-black: #000;
+  --color-white: #fff;
   --color-blue: #1ba1e2;
   --color-green: #a8dd00;
-  --color-err: #ff4a4a;
-  /* The rest of what the chrome wears, so no hex floats in Style.fs: the bordered
-     controls' rest border (a step brighter than hair), and each hue run to a hotter and a
-     deeper self — the mark's own anchors (assets/logo), never toward white, which is Zune's
-     palette move. `blue-bright` is the hover lift and was #7fd0f5 before the mark existed;
-     it is the light the mark throws now, so the two cannot disagree. The deep pair is PAINT:
-     blue-deep is 3.8:1 on black and under the floor on surface-2, so no text is ever set in
-     it, and the theme-contrast test lists it as such; green-deep clears and may carry text.
-     The two grounds are a 950-step tint of each hue, for the avatars' dark squares. */
-  --color-edge: #2e2e2e;
-  --color-blue-bright: #6fd8ff;
-  --color-green-bright: #d8f54a;
-  --color-blue-deep: #0f6ea3;
-  --color-green-deep: #6f9a00;
-  --color-agent-ground: #0e1418;
-  --color-human-ground: #101a00;
+  --color-red: #ff4a4a;
+
+  --step-tone: 15%;
+  --step-grey: 4%;
+  --color-grey-4: color-mix(in oklab, var(--color-white) calc(var(--step-grey) * 4), var(--color-black));
+  --color-grey-5: color-mix(in oklab, var(--color-white) calc(var(--step-grey) * 5), var(--color-black));
+  --color-grey-6: color-mix(in oklab, var(--color-white) calc(var(--step-grey) * 6), var(--color-black));
+  --color-grey-7: color-mix(in oklab, var(--color-white) calc(var(--step-grey) * 7), var(--color-black));
+  --color-grey-8: color-mix(in oklab, var(--color-white) calc(var(--step-grey) * 8), var(--color-black));
+  --color-grey-16: color-mix(in oklab, var(--color-white) calc(var(--step-grey) * 16), var(--color-black));
+  --color-grey-20: color-mix(in oklab, var(--color-white) calc(var(--step-grey) * 20), var(--color-black));
+  /* The hover lift: the lit side of the blue, one step up. */
+  --color-blue-up-1: color-mix(in oklab, var(--color-blue), var(--color-white) calc(var(--step-tone) * 1));
+  /* The agent avatar's dark square: the blue taken most of the way down. Paint, not text. */
+  --color-blue-down-5: color-mix(in oklab, var(--color-blue), var(--color-black) calc(var(--step-tone) * 5));
+
+  /* The grounds: black, then panels and surfaces each one grey step above the last, and the
+     two rules — a hairline and a control's rest border — a step and two above those. */
+  --color-bg: var(--color-black);
+  --color-panel: var(--color-grey-4);
+  --color-surface: var(--color-grey-5);
+  --color-surface-2: var(--color-grey-6);
+  --color-hair: var(--color-grey-7);
+  --color-edge: var(--color-grey-8);
+  /* The inks. The faintest still carries meaning (labels, ids, empty states), so it keeps
+     WCAG 2.0 AA (>= 4.5:1) on EVERY surface it can sit on — surface-2 is the dimmest, and
+     the theme-contrast test pins it. */
+  --color-ink: var(--color-white);
+  --color-ink-dim: var(--color-grey-20);
+  --color-ink-faint: var(--color-grey-16);
+  --color-err: var(--color-red);
+  --color-agent-ground: var(--color-blue-down-5);
 
   /* The acrylic: what one surface wears where it floats over another — the header band over
      a scrolling registry, the settings pane, the ask card. Zune was flat type on black; this
@@ -155,8 +181,8 @@
      radius (a `--blur-*` token drives `backdrop-blur-acrylic`), and the edge is the light
      catching the slab's top — the same idea as the mark's rim. `Style.acrylic` composes
      them and falls back to the opaque panel where transparency is declined. */
-  --color-acrylic: rgb(10 10 10 / 0.72);
-  --color-acrylic-edge: rgb(255 255 255 / 0.06);
+  --color-acrylic: color-mix(in oklab, var(--color-panel) 72%, transparent);
+  --color-acrylic-edge: color-mix(in oklab, var(--color-white) 6%, transparent);
   --blur-acrylic: 24px;
 
   /* The sixteen named ANSI colours a terminal can paint its output with (Plan 13).
@@ -168,8 +194,10 @@
 
      `term-black` is the one deliberate departure. A terminal renders index 0 as black,
      which on this theme's black ground is invisible — so it is a mid grey that clears the
-     floor instead. Text that cannot be read is not a faithful rendering of anything. */
-  --color-term-black: #818181;
+     floor instead. Text that cannot be read is not a faithful rendering of anything. That
+     grey is exactly what `ink-faint` is — the dimmest ink the floor admits on every surface —
+     so it is that role, and moves with it. */
+  --color-term-black: var(--color-ink-faint);
   --color-term-red: #ff5a5a;
   --color-term-green: #96dc3c;
   --color-term-yellow: #ebc83c;
@@ -559,7 +587,7 @@ summary::-webkit-details-marker { display: none; }
   content: '';
   position: absolute;
   inset: 0;
-  background: #000;
+  background: var(--color-black);
   opacity: 0;
   animation: 20s linear var(--think-from, 0s) infinite;
 }
