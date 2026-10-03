@@ -4,7 +4,7 @@ open Yession.Domain
 
 /// The sandbox seam: one confined place a session runs processes. A session owns two
 /// sibling sandboxes — the AgentSandbox hosting the agent CLI and the WorkSandbox
-/// hosting agent-issued commands — both spawned by the Session Process and dying with
+/// hosting agent-issued commands — both spawned by the Session and dying with
 /// it. The Manager holds no environment authority; it keeps custody of secrets, which
 /// cross to a session only at sandbox spawn (resolve-at-spawn, over the authenticated
 /// control channel).
@@ -13,7 +13,7 @@ open Yession.Domain
 /// configuration — so an invalid choice fails the session loudly at start, never
 /// silently mid-turn.
 type SandboxBackend =
-    /// Explicitly unsandboxed: plain child processes of the Session Process. No longer
+    /// Explicitly unsandboxed: plain child processes of the Session. No longer
     /// the default — it has to be asked for, and it is honest about what it is: the env
     /// allowlist still holds, the filesystem and the network do not.
     | HostBackend

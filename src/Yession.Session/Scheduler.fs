@@ -1,4 +1,4 @@
-namespace Yession.SessionProcess
+namespace Yession.Session
 
 open Yession.Domain
 open Yession.Domain.Agent
@@ -7,7 +7,7 @@ open Yession.Domain.Collab
 open Yession.Domain.Chat
 open Yession.Domain.Repos
 
-/// The queue-drain scheduler (Phase 3): the Session Process is the single consumer of
+/// The queue-drain scheduler (Phase 3): the Session is the single consumer of
 /// the shared message queue, and the drain here is the linearization point of
 /// "accepted by the agent". Extracted from the Host composition root so the property
 /// harness (Step 18) drives the exact machinery production runs — no HTTP or WebRTC in
@@ -326,7 +326,7 @@ module Scheduler =
                             page.Events |> List.tryLast |> Option.map (fun envelope -> envelope.Timestamp)
                         let! _ =
                             log.Append
-                                ActorRef.SessionProcess
+                                ActorRef.Session
                                 (AgentTurnFailed
                                     { AgentTurnId = turnId
                                       Reason = "the session was restarted while this turn was running"

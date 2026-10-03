@@ -34,7 +34,7 @@ module Sdk = Fable.ClaudeAgentSdk
 
 // --- Pure policy assembly ----------------------------------------------------------------
 
-/// The variables a host-backend command may inherit from the Session Process's own
+/// The variables a host-backend command may inherit from the Session's own
 /// environment: what a shell needs to resolve and run programs, and nothing that
 /// authenticates anything. An allowlist, so a variable is shared by decision, never by
 /// default.
@@ -850,7 +850,7 @@ let policyFor
         // names `HOME` still wins — the rule that the spec beats the baseline is one rule,
         // and carving `HOME` out of it would make it two.
         //
-        // What this displaces is the Session Process's own `HOME`, which is the operator's:
+        // What this displaces is the Session's own `HOME`, which is the operator's:
         // a directory the sandbox is denied. A tool given no home falls back; a tool given
         // one it cannot touch fails, which is the shape dotnet reports as "The user's home
         // directory could not be determined."
@@ -998,7 +998,7 @@ let summaryFor (backend: SandboxBackend) (spec: EnvironmentSpec) : string =
 let private ambientEntries () : (string * string) array =
     ProcessEnv.names () |> Array.choose (fun name -> ProcessEnv.get name |> Option.map (fun value -> name, value))
 
-/// The Session Process's own environment, as data (the input `policyFor` filters).
+/// The Session's own environment, as data (the input `policyFor` filters).
 let ambientEnv () : Map<string, string> = ambientEntries () |> Map.ofArray
 
 /// The per-(re)creation policy thunk `SessionEnvironment.create` consumes: resolve the
@@ -1231,7 +1231,7 @@ module private Pty =
 
 // --- Host: explicitly unsandboxed --------------------------------------------------------
 
-/// Plain child processes of the Session Process. No confinement — chosen deliberately
+/// Plain child processes of the Session. No confinement — chosen deliberately
 /// now that srt is the default — but the env discipline still holds: the child sees
 /// exactly the policy env plus the request's, never the parent's.
 module HostSandbox =

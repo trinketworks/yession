@@ -3,7 +3,7 @@ namespace Yession.App
 open System
 open Yession.Domain
 
-/// A small pool of friendly display names. The Browser Client picks one at random for the
+/// A small pool of friendly display names. The App picks one at random for the
 /// local peer on load (the product shows a human-readable presence name, not a raw id).
 module PeerName =
 

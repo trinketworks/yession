@@ -25,7 +25,7 @@ open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
 open Yession.Domain.Artifacts
 open Yession.Host.Interop
-open Yession.SessionProcess
+open Yession.Session
 
 /// The most one shared file may weigh. Decimal, because `ContentSize.render` is decimal and
 /// a refusal that disagrees with the number printed beside it is the worse answer.

@@ -41,7 +41,7 @@ Three components, and these are their names everywhere — in prose, in code, an
   Yjs document, the Elmish loop, the agent runtime, and the WebRTC protocol.
 - **App** — F#/Fable in the browser. The Session serves it; it connects back over WebRTC.
 
-Each has a pure core of its own — `Yession.Manager`, `Yession.SessionProcess`, `Yession.App`
+Each has a pure core of its own — `Yession.Manager`, `Yession.Session`, `Yession.App`
 (bundled from `app/browser`). `Yession.Host` (`app/`) is the Node shell both bins run in, and
 `Yession.Domain` is the model all three share.
 

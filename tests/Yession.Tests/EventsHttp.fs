@@ -15,7 +15,7 @@ open Fable.Pyxpecto
 open Ylmish
 open Yession.Domain
 open Yession.App
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Host
 open Yession.Tests.Support
 open Yession.Peer
@@ -44,7 +44,7 @@ let private endpointTests =
                         for i in 1 .. n do
                             let! _ =
                                 h.Log.Append
-                                    ActorRef.SessionProcess
+                                    ActorRef.Session
                                     (PeerJoined
                                         { PeerId = PeerId.create (sprintf "p-%d-%d" n i) |> expect
                                           DisplayName = "filler"
@@ -163,7 +163,7 @@ let private answerOf (first: int64) (count: int) =
             { EventId = EventId.fresh ()
               SessionId = SessionId.create "kept-history" |> expect
               Offset = EventOffset.create offset |> expect
-              Actor = ActorRef.SessionProcess
+              Actor = ActorRef.Session
               Timestamp = System.DateTimeOffset.FromUnixTimeSeconds 0L
               Event =
                 PeerJoined
@@ -458,7 +458,7 @@ let private aheadTests =
                 for i in 1 .. 2 * EventChunk.size + 5 do
                     let! _ =
                         h.Log.Append
-                            ActorRef.SessionProcess
+                            ActorRef.Session
                             (PeerJoined
                                 { PeerId = PeerId.create (sprintf "ahead-%d" i) |> expect
                                   DisplayName = "filler"
@@ -663,7 +663,7 @@ let private pagingTests =
                 let! longLog = logOf long'
                 // The FIRST page of each, which is where the walk and the slice differ most:
                 // one copies the whole log to hand back a hundred, the other copies a hundred.
-                let timeReads (log: Yession.SessionProcess.EventLog<SessionEvent>) =
+                let timeReads (log: Yession.Session.EventLog<SessionEvent>) =
                     async {
                         // Warm first, so neither side pays a one-off the other does not.
                         let! _ = log.Read None 100
@@ -686,7 +686,7 @@ let private pagingTests =
                     (sprintf
                         "a page off a log %dx longer cost %.1fx as much (%.0fms against %.0fms) — \
                          reading a page is walking the log again; see `EventPaging.page` in \
-                         `src/Yession.SessionProcess/EventLog.fs`"
+                         `src/Yession.Session/EventLog.fs`"
                         (long' / short') ratio longMs shortMs)
             }
     ]

@@ -10,7 +10,7 @@ open Yession.Domain.Tools
 open Yession.Domain.Access
 open Yession.Domain.Repos
 
-/// The agent-turn capability vocabulary (Step 08). The Session Process runs an agent
+/// The agent-turn capability vocabulary (Step 08). The Session runs an agent
 /// turn against the *projection-derived* conversation — never Yjs/draft state — and the
 /// response comes back as streamed chunks plus a final result, which the Process turns
 /// into events. The runner is a capability so the real Claude Agent SDK adapter and a
@@ -167,7 +167,7 @@ type EnsureEnvironmentResult =
     | EnvironmentAvailable
     | EnvironmentUnavailable of reason: string
 
-/// Ask the Session Process to make sure an environment exists for the session (Step 12).
+/// Ask the Session to make sure an environment exists for the session (Step 12).
 /// Lazy by design: calling this is the agent *signalling need*; a conversational answer
 /// never calls it, so a one-shot never starts a container.
 type EnsureEnvironment = string -> Async<EnsureEnvironmentResult>
@@ -678,8 +678,8 @@ type SetShellProfile = SandboxRef -> string option -> Async<Result<CommandOutcom
 type ReadQuery = QueryName -> Async<Result<QueryValue, string>>
 
 /// The typed capabilities an agent turn may use. No raw Docker, no handles, no session
-/// ids — everything is already scoped by the Session Process and, beneath it, the
-/// Session Manager.
+/// ids — everything is already scoped by the Session and, beneath it, the
+/// Manager.
 ///
 /// `EnsureEnvironment` retired with stage 3b: it existed to start the environment lazily
 /// before a command, and opening a terminal already does that — so it had nothing left to do.
@@ -956,7 +956,7 @@ module AgentCapabilities =
                 async { return Error (sprintf "no gate to run %s through in this session" call.Tool) } }
 
 /// The abort seam (Phase 3, Step 17): how an interrupt reaches a running turn. The
-/// Session Process owns the signal; the runner observes it — poll `IsAborted` at
+/// Session owns the signal; the runner observes it — poll `IsAborted` at
 /// yield points and/or register `OnAbort` to cancel promptly (e.g. an SDK
 /// AbortController). Once aborted, the turn's result is ignored: the terminal fact is
 /// the `AgentTurnInterrupted` event the Process already appended.
@@ -976,7 +976,7 @@ module AgentAbortSignal =
 /// Run one agent turn: `onChunk` is invoked with each streamed chunk in order, and the
 /// async resolves with the final result once the stream ends. Implementations must not
 /// throw for agent-level errors — failures are values (`AgentFailed`), because the
-/// Session Process represents them as events, not exceptions. The abort signal may end
+/// Session represents them as events, not exceptions. The abort signal may end
 /// the turn early; a well-behaved runner returns promptly once it fires.
 type RunAgent = AgentContextPack -> AgentCapabilities -> AgentAbortSignal -> (AgentResponseChunk -> unit) -> Async<AgentRunResult>
 

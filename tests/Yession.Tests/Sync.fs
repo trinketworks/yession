@@ -7,7 +7,7 @@ module Yession.Tests.Sync
 //   crosses it).
 // - Convergence: two full client programs over two docs converge on one draft, first
 //   synced in-memory (deterministic, no IO), then over a real WebRTC data channel with
-//   the Session Process relaying `State` frames (E2E-1). Drafts are keyed by author (one
+//   the Session relaying `State` frames (E2E-1). Drafts are keyed by author (one
 //   per client); collaboration is co-editing a peer's slot.
 //
 // Event-driven throughout: models are observed via predicate waiters resolved on every
@@ -23,7 +23,7 @@ open Yession.Domain.Content
 open Yession.Domain.Link
 open Yession.Domain.Collab
 open Yession.Domain.Chat
-open Yession.SessionProcess
+open Yession.Session
 open Yession.App
 open Yession.Host
 open Yession.Tests.Support
@@ -219,7 +219,7 @@ let private codecTests =
             Expect.equal (queueIds pB) (queueIds pA) "replicas converge after delete"
 
         // The width a command claims (Plan 13, stage 2b). A client writes it onto the queue
-        // entry and the Session Process reads it back to size the pty before the command runs
+        // entry and the Session reads it back to size the pty before the command runs
         // — so a field that encodes but does not decode is a width that vanishes with nothing
         // to show for it: every block still runs, at eighty columns, exactly as before.
         //
@@ -276,7 +276,7 @@ let private codecTests =
             | Some entry -> Expect.isNone entry.Size "no viewport, no claim"
             | None -> failwith "the command was not queued at all"
 
-        // A replica with no binding of its own — the Session Process — only ever learns of a
+        // A replica with no binding of its own — the Session — only ever learns of a
         // root by a peer's update, and Yjs leaves such a root an untyped placeholder until
         // something asks for it by kind. The structural reader skips what it cannot place, so
         // a read that did not type the roots first would see an empty doc here.
@@ -387,7 +387,7 @@ let private codecTests =
                 "moved, and still a background command that asked for stdin"
 
         // Two writers put pending acts in the doc — the agent's, straight onto a `Y.Map`, and
-        // the client codec — and the Session Process reads both through one decoder. If they
+        // the client codec — and the Session reads both through one decoder. If they
         // disagree about any field, an act means something different depending on who last
         // wrote it.
         testCase "the agent's writer and the client codec write the same act" <| fun () ->
@@ -567,7 +567,7 @@ let private codecTests =
                 (Some 4.0)
                 "the caret still stands where it was put, in the text it was put in"
 
-        // What the Session Process writes when something has written a few words for a
+        // What the Session writes when something has written a few words for a
         // chapter nobody named. The words replace the guess in the session, so every peer
         // reads them and anybody can edit them afterwards — a name that only the writer
         // could see would not be a name the session holds.
@@ -864,7 +864,7 @@ let private reconnect (client: Client) = reconnectClient (signalUrl ()) client
 
 let private e2eTests =
     testList "Draft sync E2E" [
-        testCaseAsync "start the Session Process host" <|
+        testCaseAsync "start the Session host" <|
             async {
                 let! h = Host.start sessionId 0
                 host <- Some h
@@ -1012,7 +1012,7 @@ let private e2eTests =
                 do! awaitAccepted ()
 
                 // Forge a MessageSent inside an EventsPage plus an availability hint.
-                // No frame appends: the Session Process drains both without effect.
+                // No frame appends: the Session drains both without effect.
                 let forged =
                     { EventId = EventId.fresh ()
                       SessionId = sessionId
@@ -1054,7 +1054,7 @@ let private e2eTests =
                 do! channel.Close ()
             }
 
-        testCaseAsync "stop the Session Process host" <|
+        testCaseAsync "stop the Session host" <|
             async {
                 match host with
                 | Some h -> do! h.Stop ()

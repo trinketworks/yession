@@ -179,7 +179,7 @@ let tests =
                     Expect.isFalse (reason.Contains "found none") "rather than claiming a shell was looked for"
             })
 
-            // Through the Session Process as production composes it (`hostOver`), over a
+            // Through the Session as production composes it (`hostOver`), over a
             // docker sandbox with an entrypoint: the terminal's shell is the one found
             // behind it, a block runs inside it, `cd` carries to the next block — and the
             // output is the command's bytes, with no stream headers. No docker terminal had
@@ -408,7 +408,7 @@ let tests =
             })
 
             // The route a forwarded github credential IS (GitGateway): a listener in the
-            // Session Process, reached from inside the container by the name the backend
+            // Session, reached from inside the container by the name the backend
             // promises for the host. What varies underneath is which address that name is
             // — the host's loopback under Colima and Docker Desktop, the bridge under a
             // native daemon — and this is the one place a wrong answer shows: a git in a

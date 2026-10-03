@@ -356,18 +356,18 @@ let private claudeTests =
             // The whole reason `ownerOf` stopped taking a peer id: a browser's self-asserted
             // identity churns (origin-partitioned localStorage) and used to strand the
             // credential behind every new value it took.
-            let identity attribution : Yession.SessionProcess.CookieIdentity =
+            let identity attribution : Yession.Session.CookieIdentity =
                 { Subject = "local"; DisplayName = None; Attribution = attribution }
             Expect.equal
-                (ClaudeConnection.ownerOf (identity (Yession.SessionProcess.AttributedUser alice)))
+                (ClaudeConnection.ownerOf (identity (Yession.Session.AttributedUser alice)))
                 (UserOwner alice)
                 "an attributed user owns their own"
             Expect.equal
-                (ClaudeConnection.ownerOf (identity Yession.SessionProcess.UnattributedAccess))
+                (ClaudeConnection.ownerOf (identity Yession.Session.UnattributedAccess))
                 LocalOwner
                 "unattributed access owns the deployment's"
             Expect.equal
-                (GitHubConnection.ownerOf (identity Yession.SessionProcess.UnattributedAccess))
+                (GitHubConnection.ownerOf (identity Yession.Session.UnattributedAccess))
                 LocalOwner
                 "and GitHub reads the same rule"
 
@@ -1779,10 +1779,10 @@ let private stubAuth () : SessionAuth.Auth =
             match Interop.headerOf req "cookie" with
             | Some cookie when cookie.StartsWith "who=" ->
                 let who = cookie.Substring 4
-                let attribution : Yession.SessionProcess.PeerAttribution =
-                    if who = "anon" then Yession.SessionProcess.UnattributedAccess
-                    else Yession.SessionProcess.AttributedUser (UserId.create who |> expect)
-                Some ({ Subject = who; DisplayName = None; Attribution = attribution } : Yession.SessionProcess.CookieIdentity)
+                let attribution : Yession.Session.PeerAttribution =
+                    if who = "anon" then Yession.Session.UnattributedAccess
+                    else Yession.Session.AttributedUser (UserId.create who |> expect)
+                Some ({ Subject = who; DisplayName = None; Attribution = attribution } : Yession.Session.CookieIdentity)
             | _ -> None
       BeginLogin = fun _ -> async { return None }
       HandleCallback = fun _ -> async { return Error (500, "not under test") }
@@ -1851,10 +1851,10 @@ let private startGitHubRoutes (connections: ControlClient.SessionConnections) =
 /// "mine" is a different credential for different people — so a case about scoping asks
 /// `panelFor` rather than a route: there is no status route any more, and the invariant was
 /// never about HTTP.
-let private identityOf (who: string) (attribution: Yession.SessionProcess.PeerAttribution) : Yession.SessionProcess.CookieIdentity =
+let private identityOf (who: string) (attribution: Yession.Session.PeerAttribution) : Yession.Session.CookieIdentity =
     { Subject = who; DisplayName = None; Attribution = attribution }
 
-let private githubPanelFor (statusOf: SecretId -> ConnectionStatus option) (identity: Yession.SessionProcess.CookieIdentity) =
+let private githubPanelFor (statusOf: SecretId -> ConnectionStatus option) (identity: Yession.Session.CookieIdentity) =
     GitHubConnection.panelFor sessionA statusOf identity
 
 /// Point the module at the stub for the duration of one test, and put the environment back
@@ -1924,7 +1924,7 @@ let private githubRouteTests =
                 // A DIFFERENT browser — no shared storage, no shared id, nothing carried over
                 // but the same deployment. Before this change it saw `"mine":null` and was
                 // shown a Connect button.
-                let elsewhere = githubPanelFor statusOf (identityOf "anon" Yession.SessionProcess.UnattributedAccess)
+                let elsewhere = githubPanelFor statusOf (identityOf "anon" Yession.Session.UnattributedAccess)
                 Expect.isTrue
                     elsewhere.MineCredential.IsSome
                     "already connected, from a browser that never connected anything"
@@ -1932,7 +1932,7 @@ let private githubRouteTests =
 
                 // An attributed user is untouched by any of it — they own their own, and the
                 // deployment's credential is not theirs to see.
-                let alicesView = githubPanelFor statusOf (identityOf "alice" (Yession.SessionProcess.AttributedUser alice))
+                let alicesView = githubPanelFor statusOf (identityOf "alice" (Yession.Session.AttributedUser alice))
                 Expect.isNone alicesView.MineCredential "an attributed user does not inherit it"
                 Expect.equal alicesView.Owner OwnedByUser "and owns by user"
             }
@@ -2120,7 +2120,7 @@ let private githubRouteTests =
             let connected = Map.ofList [ aliceTarget, stored StaticConnection ConnectionUsable aliceTarget ]
             let statusOf target = Map.tryFind target connected
 
-            let forAlice = githubPanelFor statusOf (identityOf "alice" (Yession.SessionProcess.AttributedUser alice))
+            let forAlice = githubPanelFor statusOf (identityOf "alice" (Yession.Session.AttributedUser alice))
             Expect.isTrue forAlice.MineCredential.IsSome "alice is connected"
             Expect.equal
                 (forAlice.MineCredential |> Option.bind (fun row -> row.SignInRequired))
@@ -2131,7 +2131,7 @@ let private githubRouteTests =
 
             // The same session, a different human: the panel is computed from the caller's
             // identity, so bob does not learn he is signed in because alice is.
-            let forBob = githubPanelFor statusOf (identityOf "bob" (Yession.SessionProcess.AttributedUser bob))
+            let forBob = githubPanelFor statusOf (identityOf "bob" (Yession.Session.AttributedUser bob))
             Expect.isNone forBob.MineCredential "bob is not connected"
     ]
 
@@ -3614,7 +3614,7 @@ let private prWatchVerbTests =
     /// The verbs over a real log and the stub provider, wired the way SessionMain wires
     /// them: the log is the one answer to what is watched, re-read on every call.
     let serviceOver (stub: StubGitHubApi) =
-        let log = Yession.SessionProcess.InMemoryEventLog.create watchSessionId (fun () -> DateTimeOffset (2026, 8, 27, 12, 0, 0, TimeSpan.Zero))
+        let log = Yession.Session.InMemoryEventLog.create watchSessionId (fun () -> DateTimeOffset (2026, 8, 27, 12, 0, 0, TimeSpan.Zero))
         let watchesNow () =
             async {
                 let! page = log.Read None System.Int32.MaxValue
@@ -3640,7 +3640,7 @@ let private prWatchVerbTests =
                 applied.Add
         service, log, applied
 
-    let eventsOf (log: Yession.SessionProcess.EventLog<SessionEvent>) =
+    let eventsOf (log: Yession.Session.EventLog<SessionEvent>) =
         async {
             let! page = log.Read None System.Int32.MaxValue
             return page.Events |> List.map (fun e -> e.Event)

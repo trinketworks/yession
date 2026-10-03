@@ -763,7 +763,7 @@ let private routeTests =
                         [ "secret-a", caller sessionA Set.empty ]
                         (Some (apiOver (fun _ -> ()) (fun _ -> Set.empty) store))
                         ignore
-                // The capability a Session Process builds in SessionMain: pre-bound to
+                // The capability a Session builds in SessionMain: pre-bound to
                 // its own scope; failures are values.
                 let capability = ControlClient.secretsCapabilities url "secret-a" sessionA
                 let! set = capability.SetSecret name "hunter2"

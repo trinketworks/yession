@@ -20,7 +20,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Files
 open Yession.Domain.Terminals
 open Yession.Host
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Tests.Support
 
 // --- Node helpers: host-side fixtures the sandbox is then pointed at ----------------------
@@ -72,7 +72,7 @@ let private policyIn (workspace: string) (domains: string list) : SandboxPolicy 
       Intercept = None }
 
 /// How this box confines, as the run's environment configures it — the same parse the
-/// Session Process does at boot, so the suite exercises the deployed shape.
+/// Session does at boot, so the suite exercises the deployed shape.
 let private srtTools () =
     match Sandboxes.SrtSandbox.toolsFrom (Sandboxes.ambientEnv ()) with
     | Ok tools -> tools
@@ -215,7 +215,7 @@ let tests =
             })
 
             // The terminal story's whole precondition, asked of what SHIPS: the Session
-            // Process as production composes it — its shell, its nonce, its drain — opening a
+            // as production composes it — its shell, its nonce, its drain — opening a
             // terminal in a sandbox this box's srt confines, and the shell carrying `cd` into
             // the next block, which only an instrumented one does. Every terminal on a
             // deployed macOS host fell back to a process per block, silently, for weeks, and

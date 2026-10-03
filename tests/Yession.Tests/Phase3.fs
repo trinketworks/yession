@@ -18,7 +18,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Link
 open Yession.Domain.Collab
 open Yession.Domain.Chat
-open Yession.SessionProcess
+open Yession.Session
 open Yession.App
 open Yession.Host
 open Yession.Tests.Support

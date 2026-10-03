@@ -9,7 +9,7 @@ module Yession.Browser.Replay
 // `asciinema-player` rather than the client's own renderer, and it earns itself. PR 1's
 // pure-F# SGR parser (`Ansi.fs`) renders a STREAM, not a SCREEN, so a recording of anything
 // that moves the cursor — `htop`, a progress bar, `vim` — would replay as garbage. That is the
-// same argument the plan made for why the Session Process needed a real emulator rather than
+// same argument the plan made for why the Session needed a real emulator rather than
 // half of one, and it is why the sidecar was written as asciicast v2 in the first place: so
 // the standard player replays it. The player also brings timing, seek and play/pause, which
 // IS the audit-read affordance.

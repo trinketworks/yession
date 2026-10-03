@@ -15,7 +15,7 @@ open System
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Agent
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Tests.Support
 
 let private expect result =

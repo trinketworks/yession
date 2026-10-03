@@ -27,7 +27,7 @@ open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
 open Yession.Domain.Tools
 open Yession.Domain.Terminals
-open Yession.SessionProcess
+open Yession.Session
 
 /// What a forwarded credential puts in a sandbox. Git's config is one variable everything
 /// shares (`GIT_CONFIG_COUNT`) and has to be APPENDED to, where a plain variable is simply set

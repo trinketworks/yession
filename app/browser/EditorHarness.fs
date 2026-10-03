@@ -2,7 +2,7 @@ module Yession.Browser.EditorHarness
 
 // A host-free browser harness for the rich-editor E2E. Mounts a ProseMirror editor on a fresh
 // Yjs fragment into `#host` and exposes its serialized Markdown as `window.__md`. There is NO
-// Session Process, NO WebRTC and NO native addon here — just the editor and a doc — so the
+// Session, NO WebRTC and NO native addon here — just the editor and a doc — so the
 // editor-rendering E2E (`Tag.needs [Browser]`) runs wherever Chromium exists, decoupled from
 // `node-datachannel`. Pure F# (the no-authored-JS invariant holds); Fable-compiles alongside
 // the app browser entry, and the `Browser`-cap test build esbuilds it into the served bundle.
@@ -102,7 +102,7 @@ module private Published =
     /// network, `pageSize` events to a page, a page every `everyMs` — and say what the page did.
     let benchOpenCold : PageGlobal<System.Func<int, int, int, JS.Promise<string>>> = PageGlobal.named "__benchOpenCold"
     let typed : PageGlobal<string> = PageGlobal.named "__typed"
-    /// Hand the shell a terminal SCREEN, as the Session Process does over the data channel
+    /// Hand the shell a terminal SCREEN, as the Session does over the data channel
     /// (Plan 14, stage 6). Exposed so the E2E can drive the one path that puts a real emulator
     /// in a real browser: without it this bundle contains no xterm at all, and the browser tier
     /// silently proved nothing about the client's live screen — which is how a browser-only
@@ -111,12 +111,12 @@ module private Published =
     /// The size is the caller's to leave out — a case that only wants a screen on the page says
     /// nothing about how big it is, and the harness's own 80x24 is what it gets.
     let snapshot : PageGlobal<System.Action<string, int, string, int option, int option>> = PageGlobal.named "__snapshot"
-    /// Hand the shell one transcript record, as the Session Process does as a terminal speaks.
+    /// Hand the shell one transcript record, as the Session does as a terminal speaks.
     /// The companion to the snapshot: a snapshot is where a screen STARTS and records are what
     /// move it, and composing the two — including a resize reshaping the emulator mid-stream —
     /// is the client's own fold.
     let record : PageGlobal<System.Action<string, int, string, string>> = PageGlobal.named "__record"
-    /// The size this client last told the Session Process its screen is. Read back by the E2E,
+    /// The size this client last told the Session its screen is. Read back by the E2E,
     /// because the question there is whether a box that changed without the model changing — a
     /// splitter dragged, a window resized — reached the pty at all.
     let resized : PageGlobal<string> = PageGlobal.named "__resized"
@@ -126,7 +126,7 @@ module private Published =
     /// pty for a lease this peer holds, and this one is measured in BLOCK mode, where nobody holds
     /// anything and nothing is sent at all.
     let viewport : PageGlobal<string> = PageGlobal.named "__viewport"
-    /// Start an agent turn in the shell, as the Session Process does when the model begins to
+    /// Start an agent turn in the shell, as the Session does when the model begins to
     /// answer: the turn, the message it opens, and the first words of it, folded through the same
     /// page the real client reads. Exposed because the browser tier boots its session with NO
     /// model credential (deliberately — see `Browser.fs`), so a turn in flight is a state no
@@ -134,7 +134,7 @@ module private Published =
     /// running is a question only a laid-out page can answer.
     let agentTurn : PageGlobal<unit -> unit> = PageGlobal.named "__agentTurn"
     /// Hand a terminal's lease to this peer WITHOUT a press, as the alt-screen flip does: a block
-    /// takes the screen and the Session Process gives its author the keyboard. Exposed for the
+    /// takes the screen and the Session gives its author the keyboard. Exposed for the
     /// same reason the snapshot is — it is the arrival of a fact from elsewhere, and a test that
     /// could only reach live mode by pressing `take` could never exercise the route that has no
     /// press to make.
@@ -261,7 +261,7 @@ do
 // is a write, and a caret push during convergence is a write that races the content.
 //
 // This surface is that race, reduced: two docs, two editors, relayed to each other IN THIS
-// PAGE. No WebRTC, no Session Process, no native addon — so it runs in the `Browser` tier
+// PAGE. No WebRTC, no Session, no native addon — so it runs in the `Browser` tier
 // wherever Chromium exists, in seconds. The two-peer WebRTC E2E can also see this bug, but
 // only under enough load to lose the race, which cost two runs of the gate to learn once.
 
@@ -521,7 +521,7 @@ let private docB = Y.Doc.Create ()
 
 do
     // The relay: each doc's local updates become the other's remote ones, exactly as the
-    // Session Process relays them between two browsers — minus the transport.
+    // Session relays them between two browsers — minus the transport.
     DocSync.onLocalUpdate docA (fun payload -> DocSync.applyRemote docB payload) |> ignore
     DocSync.onLocalUpdate docB (fun payload ->
         relayObserved ()
@@ -736,7 +736,7 @@ do
 // a surface that needs a real browser and nothing else. What only a browser can answer here
 // is where FOCUS goes when a chip in the chat opens a tab in the pane, and whether the tab
 // strip is a tablist the arrow keys actually walk. Both are DOM-swap behaviours a rendered
-// string cannot show, and neither needs a Session Process, a channel or a native addon.
+// string cannot show, and neither needs a Session, a channel or a native addon.
 //
 // A minimal Elmish: the app's own render (`Render.create`) over a `ClientModel`, re-run on
 // dispatch. The reducer, the view, the syncs after it and the focus moves are the app's own —
@@ -1139,7 +1139,7 @@ let private actsModel : ClientModel =
     // end of a message, where the caret case measures it.
     let starting : ConversationItem =
         { MessageId = MessageId.create "msg-act-starting" |> expect
-          Author = ActorRef.SessionProcess
+          Author = ActorRef.Session
           Content =
             ItemContent.Act (
                 Act.SandboxStarting
@@ -1147,7 +1147,7 @@ let private actsModel : ClientModel =
                       Sandbox = SandboxRef.defaultRef
                       Backend = "srt"
                       Description = None
-                      Actor = ActorRef.SessionProcess; OnBehalfOf = None; CausedBy = None })
+                      Actor = ActorRef.Session; OnBehalfOf = None; CausedBy = None })
           Status = ConversationItemStatus.Running
           Offset = offset 32L
           Woke = None; CausedBy = Some (Cause.Item (MessageId.create "msg-act-start" |> expect)) }
@@ -1178,7 +1178,7 @@ let private launchModel : ClientModel =
         { EventId = EventId.fresh ()
           SessionId = sessionId
           Offset = offset n
-          Actor = ActorRef.SessionProcess
+          Actor = ActorRef.Session
           Timestamp = System.DateTimeOffset (2026, 9, 12, 0, 0, 0, System.TimeSpan.Zero)
           Event = event }
     let events =
@@ -1284,7 +1284,7 @@ let private openFixture (items: int) (perAnswer: int) : OpenFixture =
             { EventId = EventId.fresh ()
               SessionId = session
               Offset = EventOffset.create (int64 offset) |> expect
-              Actor = ActorRef.SessionProcess
+              Actor = ActorRef.Session
               Timestamp = System.DateTimeOffset.UtcNow
               Event = events.[offset] } ]
     // The kept answers: the log cut every `perAnswer` events, each encoded the way the server
@@ -1343,7 +1343,7 @@ let private recordViewport (_terminal: TerminalId) (cols: int) (rows: int) : uni
 
 do
     dressShell Style.app
-    // Taking the keyboard is answered by the Session Process, which appends the lease event
+    // Taking the keyboard is answered by the Session, which appends the lease event
     // and sends it back — so here the harness appends it to the projection itself, through
     // the same fold the real page uses. Without this the one act that puts a screen in front
     // of a keyboard is `ignore` in the harness, and the browser tier cannot reach live mode

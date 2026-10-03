@@ -74,7 +74,7 @@ module Frames =
                         (Decode.field "terminalId" Codec.terminalId.Decode)
                         (Decode.field "nextSeq" Decode.int)
                 // The size is OPTIONAL, and defaults to the size every terminal opens at.
-                // A frame written before it was carried is a frame from a Session Process
+                // A frame written before it was carried is a frame from a Session
                 // that had not resized anything — so 80x24 is not a guess there, it is what
                 // that screen was painted at.
                 | "snapshot" ->

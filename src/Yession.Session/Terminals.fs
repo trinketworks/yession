@@ -1,4 +1,4 @@
-namespace Yession.SessionProcess
+namespace Yession.Session
 
 open System
 open Yession.Domain
@@ -8,7 +8,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Collab
 
 /// One terminal's durable transcript, as a capability (Plan 12). The Session
-/// Process appends to it BEFORE broadcasting a record, so a dropped frame costs latency
+/// appends to it BEFORE broadcasting a record, so a dropped frame costs latency
 /// and never the record — the same "durability before visibility" rule the event log and
 /// the doc sidecar are written under.
 ///
@@ -41,7 +41,7 @@ type OpenTranscript = TerminalId -> TranscriptHeader -> Transcript
 /// not use would make every writer carry a reader it must implement.
 type ReadTranscript = TerminalId -> int -> int option -> TranscriptRecord list
 
-/// One terminal's screen, as the Session Process keeps it (Plan 13, stage 2b).
+/// One terminal's screen, as the Session keeps it (Plan 13, stage 2b).
 ///
 /// The transcript is the audit trail and the screen is not: ANSI moves the cursor and
 /// overwrites what was printed a moment ago, so what a terminal DISPLAYS is a projection
@@ -102,7 +102,7 @@ module Transcript =
         |> List.map (fun r -> r.Data)
         |> String.concat ""
 
-/// The terminal queue's drain decision, as a pure function (Plan 13). The Session Process
+/// The terminal queue's drain decision, as a pure function (Plan 13). The Session
 /// is the single consumer of the terminal queue exactly as it is of the message queue,
 /// and this is the whole policy: what runs next, and what is merely left over.
 ///
@@ -275,7 +275,7 @@ module TerminalQueueDrain =
 /// going to resolve inside one.
 ///
 /// The path is synchronous end to end: the drain subscribes to the doc, the agent's write is
-/// local to the Session Process, and the entry drains on the update — no network hop hides
+/// local to the Session, and the entry drains on the update — no network hop hides
 /// in it.
 module TerminalCommandWait =
 
@@ -1077,7 +1077,7 @@ module SessionTerminals =
 
         let append event =
             async {
-                let! _ = log.Append ActorRef.SessionProcess event
+                let! _ = log.Append ActorRef.Session event
                 return ()
             }
 
@@ -1222,8 +1222,8 @@ module SessionTerminals =
                 | LeaseReleased -> r.Was
                 | LeaseStolen by -> by
                 // Neither a decision by the holder nor by anyone else — the Process noticed.
-                | LeaseHolderGone | LeaseIdle -> ActorRef.SessionProcess
-            | _ -> ActorRef.SessionProcess
+                | LeaseHolderGone | LeaseIdle -> ActorRef.Session
+            | _ -> ActorRef.Session
 
         /// Commit a lease transition: the map first, then its events, then the re-arm.
         ///

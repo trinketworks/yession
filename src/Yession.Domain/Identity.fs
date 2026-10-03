@@ -75,7 +75,7 @@ module SessionId =
     /// Mint a fresh id: 128 random bits, Crockford base32-encoded (26 chars, Docker-safe).
     let mint () : SessionId = SessionId (Base32Crockford.encode (Base32Crockford.guidBytes ()))
 
-    /// The id a Session Process runs under when nobody minted one for it: a bare
+    /// The id a Session runs under when nobody minted one for it: a bare
     /// `yession-session`, the test harness, and the Manager's own default session.
     ///
     /// Named here, beside the rule it satisfies, rather than spelled as a string literal at
@@ -180,7 +180,7 @@ module TerminalId =
     let value (TerminalId s) = s
 
 /// One executed command in a terminal: the command, its output range, and its exit code.
-/// Minted by the Session Process when it starts the run — never by a client, because a
+/// Minted by the Session when it starts the run — never by a client, because a
 /// block is a durable fact about something that actually happened.
 type BlockId = private BlockId of string
 
@@ -189,7 +189,7 @@ module BlockId =
         normalize "BlockId" raw |> Result.map BlockId
     let value (BlockId s) = s
 
-/// One call the agent made to one tool (Plan 16, part C). Minted by the Session Process
+/// One call the agent made to one tool (Plan 16, part C). Minted by the Session
 /// when the call starts, for the same reason `BlockId` is: a fact that will be ADDRESSED —
 /// a chip you can tap, a link you can send someone — must not be identified by something a
 /// reader has to derive, because the derivation rule then lives nowhere in the data.
@@ -309,7 +309,7 @@ type ActorRef =
     | UserRef of UserId
     | PeerRef of PeerId
     | Agent
-    | SessionProcess
+    | Session
     | System
     /// A repository's own `yession.yaml` (Plan 27), as the party that asked for something.
     ///
@@ -336,7 +336,7 @@ module ActorRef =
         | UserRef u -> "user:" + UserId.value u
         | PeerRef p -> "peer:" + PeerId.value p
         | Agent -> "agent"
-        | SessionProcess -> "process"
+        | Session -> "process"
         | System -> "system"
         | Configured repo -> "configured:" + RepoRef.value repo
 
@@ -347,7 +347,7 @@ module ActorRef =
         else
             match raw with
             | "agent" -> Some Agent
-            | "process" -> Some SessionProcess
+            | "process" -> Some Session
             | "system" -> Some System
             | _ ->
                 let idx = raw.IndexOf ':'
@@ -390,7 +390,7 @@ module Principal =
         match actor with
         | UserRef u -> Some (Principal.User u)
         | PeerRef p -> Some (Principal.Peer p)
-        | Agent | SessionProcess | System | Configured _ -> None
+        | Agent | Session | System | Configured _ -> None
 
     /// One string, for the same registers `ActorRef.token` serves.
     let token (principal: Principal) : string = ActorRef.token (toActor principal)
@@ -497,7 +497,7 @@ module Authority =
         | Agent, Some owner -> Ok (Authority.AgentFor owner)
         | Agent, None -> Error "an act by the agent names nobody whose authority it ran on"
         | Configured repo, credential -> Ok (Authority.ConfiguredBy (repo, CredentialFor.ofOption credential))
-        | (SessionProcess | System), _ -> Error (sprintf "%s does not author acts" (ActorRef.token author))
+        | (Session | System), _ -> Error (sprintf "%s does not author acts" (ActorRef.token author))
 
     /// Who acted, as the log records it.
     let author (authority: Authority) : ActorRef =

@@ -27,7 +27,7 @@ module Entity =
         | UserRef u -> UserId.value u
         | PeerRef p -> PeerId.value p
         | ActorRef.Agent -> Dom.Text.agent
-        | ActorRef.SessionProcess -> Dom.Text.sessionProcess
+        | ActorRef.Session -> Dom.Text.sessionProcess
         | ActorRef.System -> Dom.Text.system
         | ActorRef.Configured repo -> RepoRef.value repo
 
@@ -39,7 +39,7 @@ module Entity =
     /// screen: the roster showed a peer's rolled name while chat printed a `UserRef`'s raw
     /// subject, and neither was the person's real name. Both resolve through
     /// `Yession.App.ClientModel`, which folds `UserRef` back to a peer's name through the
-    /// same `Yession.Domain.Attribution` rule the Session Process used to decide the author
+    /// same `Yession.Domain.Attribution` rule the Session used to decide the author
     /// was a `UserRef` in the first place — so chat and the sidebar can no longer show two
     /// names for one person. `Agent`/`System`/etc. are already a word, so only a peer or a
     /// user resolves.
@@ -47,13 +47,13 @@ module Entity =
         match actor with
         | PeerRef peer -> ClientModel.nameOf peer model
         | UserRef user -> ClientModel.userName user model
-        | ActorRef.Agent | ActorRef.SessionProcess | ActorRef.System | ActorRef.Configured _ ->
+        | ActorRef.Agent | ActorRef.Session | ActorRef.System | ActorRef.Configured _ ->
             actorToken actor
 
     /// The mark an actor wears: the class that draws it.
     ///
     /// A person's mark is seeded by the PERSON, not by the reference. A `UserRef` and a
-    /// `PeerRef` are two ways an event can point at one human — the Session Process records
+    /// `PeerRef` are two ways an event can point at one human — the Session records
     /// the user when attribution knows one and the peer when it does not — and a mark
     /// seeded by whichever was recorded gave that human two checkers on one screen. The
     /// durable identity wins when attribution has it: a user keeps one mark across every
@@ -66,7 +66,7 @@ module Entity =
             | Some user -> Some (UserId.value user)
             | None -> Some (PeerId.value p)
         | ActorRef.Agent -> None
-        | ActorRef.SessionProcess | ActorRef.System -> Some "session"
+        | ActorRef.Session | ActorRef.System -> Some "session"
         // A repo's file is not a person and not the agent. Its own avatar, seeded by the
         // repo, so two repos configuring one session are told apart on sight.
         | ActorRef.Configured repo -> Some (RepoRef.value repo)

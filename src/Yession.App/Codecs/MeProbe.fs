@@ -2,7 +2,7 @@ namespace Yession.App.Codecs
 
 open Thoth.Json
 
-/// The `/me` probe's wire payload — one codec, encoded here by the Session Process's
+/// The `/me` probe's wire payload — one codec, encoded here by the Session's
 /// answer and decoded here by the browser's ask, so the two sides fold the SAME shape
 /// rather than a hand-written JSON string on one side and a hand-picked field list on
 /// the other. The App owns it, and `Yession.App` is compiled both by .NET (the server)

@@ -26,7 +26,7 @@ open Yession.Domain.Chat
 open Yession.Oidc
 open Yession.App
 open Yession.Host
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Tests.Support
 open Yession.Peer
 open Yession.App.Codecs
@@ -856,7 +856,7 @@ let private nodeExecutable : string = Node.Api.``process``.execPath
 //
 // The live case below could not catch it either. It settles the moment the checkout appears,
 // which is while the agent is still streaming, so it never observes what the VERB said. This
-// one does, deterministically: a real Session Process over its real composition, a data
+// one does, deterministically: a real Session over its real composition, a data
 // directory that is relative on purpose, a checkout planted where the session will look, and
 // the answer read off the `repos` query — the same projection a person's settings surface
 // shows. No model, so nothing here turns on what a model decides to call.

@@ -10,7 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- The Session Process's own emulator binding, LINKED rather than copied: the browser
+    <!-- The Session's own emulator binding, LINKED rather than copied: the browser
          composes a live screen with the same `@xterm/headless` the Process does, so the two
          screens cannot disagree — the property `TerminalSnapshot` already rests on, and one
          a second browser-only renderer would quietly break. Pure JS, no Node API. -->
@@ -68,7 +68,7 @@
     <ProjectReference Include="..\..\src\Fable.Xterm\Fable.Xterm.fsproj" />
     <ProjectReference Include="..\..\src\Fable.AsciinemaPlayer\Fable.AsciinemaPlayer.fsproj" />
     <ProjectReference Include="..\..\src\Yession.Domain\Yession.Domain.fsproj" />
-    <ProjectReference Include="..\..\src\Yession.SessionProcess\Yession.SessionProcess.fsproj" />
+    <ProjectReference Include="..\..\src\Yession.Session\Yession.Session.fsproj" />
     <ProjectReference Include="..\..\src\Yession.App\Yession.App.fsproj" />
   </ItemGroup>
 

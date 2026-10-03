@@ -11,7 +11,7 @@ module Yession.Tests.Oidc
 //     client — happy path with a jose-verified ID token (the second independent
 //     verifier; the certified openid-client inside the session is the first), code
 //     replay, wrong verifier, wrong secret.
-//   * The composed flow ([Ports]): a real Manager + child Session Process, the full
+//   * The composed flow ([Ports]): a real Manager + child Session, the full
 //     login bounce via OidcHttp, the gated data surfaces, the ungated shell and the
 //     fingerprinted assets it names, and registration revocation on stop.
 //
@@ -245,7 +245,7 @@ let private storeTests =
     testList "Session auth stores" [
         testCase "pending logins are single-use and expire at 5 minutes" <| fun () ->
             let mutable now = 0L
-            let logins = Yession.SessionProcess.PendingLogins (fun () -> now)
+            let logins = Yession.Session.PendingLogins (fun () -> now)
             logins.Add "state-1" "verifier-1"
             Expect.equal (logins.Take "state-1") (Some "verifier-1") "takes once"
             Expect.equal (logins.Take "state-1") None "single use"
@@ -258,23 +258,23 @@ let private storeTests =
             let mutable counter = 0
             let mint () = counter <- counter + 1; sprintf "value-%d" counter
             let user = UserId.create "nick@example.com" |> expect
-            let cookies = Yession.SessionProcess.CookieSessions (mint)
-            let localIdentity : Yession.SessionProcess.CookieIdentity =
-                { Subject = "local"; DisplayName = None; Attribution = Yession.SessionProcess.UnattributedAccess }
+            let cookies = Yession.Session.CookieSessions (mint)
+            let localIdentity : Yession.Session.CookieIdentity =
+                { Subject = "local"; DisplayName = None; Attribution = Yession.Session.UnattributedAccess }
             let value = cookies.Mint localIdentity
             Expect.equal (cookies.IdentityOf value) (Some localIdentity) "a minted cookie has its identity"
             Expect.equal (cookies.SubjectOf value) (Some "local") "and its subject"
             Expect.equal (cookies.IdentityOf "forged") None "a forged cookie has none"
-            let tokens = Yession.SessionProcess.PeerTokens (mint)
-            let unattributed = tokens.Mint Yession.SessionProcess.UnattributedAccess
+            let tokens = Yession.Session.PeerTokens (mint)
+            let unattributed = tokens.Mint Yession.Session.UnattributedAccess
             Expect.equal
                 (tokens.Validate unattributed)
-                (Some Yession.SessionProcess.UnattributedAccess)
+                (Some Yession.Session.UnattributedAccess)
                 "a minted token validates with its attribution"
-            let attributed = tokens.Mint (Yession.SessionProcess.AttributedUser user)
+            let attributed = tokens.Mint (Yession.Session.AttributedUser user)
             Expect.equal
                 (tokens.Validate attributed)
-                (Some (Yession.SessionProcess.AttributedUser user))
+                (Some (Yession.Session.AttributedUser user))
                 "an attributed token carries its user"
             Expect.equal (tokens.Validate "forged") None "a forged token does not validate"
     ]
@@ -518,7 +518,7 @@ let private opTests =
             }
     ]
 
-// --- The composed flow ([Ports]): real Manager + child Session Process --------------
+// --- The composed flow ([Ports]): real Manager + child Session --------------
 
 let private nodePath : string = Node.Api.``process``.execPath
 

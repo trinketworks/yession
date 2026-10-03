@@ -114,7 +114,7 @@ module Provider =
 
     /// Validate an /authorize request's query parameters (RFC 6749 §4.1.1 + RFC 7636).
     /// `state` and `code_challenge` are required here even though OAuth marks state
-    /// RECOMMENDED: the only clients are Session Processes using openid-client, which
+    /// RECOMMENDED: the only clients are Sessions using openid-client, which
     /// always sends both, and requiring them keeps every login CSRF- and
     /// injection-protected.
     let authorize (registry: ClientRegistry) (query: string -> string option) : Result<AuthorizeRequest, AuthorizeError> =

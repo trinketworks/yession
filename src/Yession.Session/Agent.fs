@@ -1,4 +1,4 @@
-namespace Yession.SessionProcess
+namespace Yession.Session
 
 open Yession.Domain
 open Yession.Domain.Agent
@@ -8,7 +8,7 @@ open Yession.Domain.Repos
 
 /// Orchestration of one agent turn (Step 08): builds the context pack from the
 /// projection-derived conversation, drives the injected `RunAgent` capability, and
-/// represents the whole lifecycle — including failure — as events. The Session Process
+/// represents the whole lifecycle — including failure — as events. The Session
 /// is the only writer; the agent itself never touches the log or the Yjs doc.
 module AgentTurn =
 
@@ -119,7 +119,7 @@ module AgentTurn =
     /// Failures — result-level and thrown — become `AgentTurnFailed`, never exceptions
     /// surfaced to callers. Id minting is injected so tests are deterministic.
     ///
-    /// If `signal` fires (Step 17), the Session Process has already appended the
+    /// If `signal` fires (Step 17), the Session has already appended the
     /// terminal `AgentTurnInterrupted`: from that point this orchestrator appends
     /// nothing more — late chunks are dropped and the runner's eventual result is
     /// discarded. The deltas appended before the interrupt stand as the partial body.

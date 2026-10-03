@@ -84,7 +84,7 @@ let private post (cookie: string option) (fields: (string * string) list) : Fetc
 /// still coming up rather than a failure — and so is one that decoded with no token in it.
 /// Absent all the way to the caller: the retry loop is what decides what no token means.
 ///
-/// `MeProbe` is the Session Process's OWN codec for that route, so the shape is stated once,
+/// `MeProbe` is the Session's OWN codec for that route, so the shape is stated once,
 /// on the side that writes it. It is stricter than the `($0.peerToken || undefined)` this
 /// replaced in both directions worth naming: a body missing `sub` or `attributed`, or holding
 /// a `peerToken` that is not a string, is now no token rather than a token read out of a

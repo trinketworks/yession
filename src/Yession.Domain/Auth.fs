@@ -40,7 +40,7 @@ module Cookies =
         sprintf "%s=%s; Path=%s; HttpOnly; SameSite=Lax" name value path
 
     /// The session's auth-cookie name. Cookies on 127.0.0.1 are NOT port-scoped — the
-    /// Manager and every Session Process share one browser cookie jar — so each session's
+    /// Manager and every Session share one browser cookie jar — so each session's
     /// cookie must be namespaced by its id to avoid clobbering.
     let sessionCookieName (sessionId: SessionId) : string =
         "yession_auth_" + SessionId.value sessionId

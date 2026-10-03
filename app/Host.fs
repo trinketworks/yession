@@ -1,6 +1,6 @@
 module Yession.Host.Host
 
-// The Session Process host: owns the event log and accepts WebRTC peer connections,
+// The Session host: owns the event log and accepts WebRTC peer connections,
 // running the token-gated peer-session handshake for each. This is the composition root
 // for the running process (design.md §1 "Composition at the top", §2.1).
 
@@ -14,7 +14,7 @@ open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Tools
-open Yession.SessionProcess
+open Yession.Session
 open Yession.App.Codecs
 open Fable.ProseMirror
 
@@ -42,7 +42,7 @@ type SessionHost =
       /// the boot's own work names as its cause.
       Boot : MessageId
       Log : EventLog<SessionEvent>
-      /// The session's Yjs document. The Session Process owns it; peers hold replicas
+      /// The session's Yjs document. The Session owns it; peers hold replicas
       /// synced over `State` frames.
       Doc : Y.Doc
       /// The session's `default` WorkSandbox (Step 12): where a terminal that names no sandbox
@@ -105,7 +105,7 @@ type SessionHost =
       Connect : FrameChannel<string> -> unit
       Stop : unit -> Async<unit> }
 
-/// Start a Session Process: create the event log and the session's Yjs document, start
+/// Start a Session: create the event log and the session's Yjs document, start
 /// HTTP bootstrap + signalling, and run a peer session for every connection. Each
 /// accepted peer receives the full doc state, then incremental updates are relayed
 /// between peers through the doc. The Process is the single consumer of the shared
@@ -216,7 +216,7 @@ let startFull
             connections
             |> Map.iter (fun id channel -> if id <> except then Async.StartImmediate (channel.Send (Presence payload)))
 
-        // ...and to EVERY peer, which is what the Session Process's own caret needs: it is not
+        // ...and to EVERY peer, which is what the Session's own caret needs: it is not
         // one of the connections, so there is nobody to leave out.
         let broadcastPresence (payload: PresencePayload) =
             connections |> Map.iter (fun _ channel -> Async.StartImmediate (channel.Send (Presence payload)))
@@ -807,7 +807,7 @@ let startFull
                     // ACTS somebody asked for: nobody asked for this, and the one thing
                     // worth recording about whose it is — the credential it spent — the
                     // fact carries itself.
-                    log.Append ActorRef.SessionProcess (SessionNamed named) |> Async.Ignore)
+                    log.Append ActorRef.Session (SessionNamed named) |> Async.Ignore)
                 (fun () -> Attribution.creator attribution)
                 // On the CREATOR's credential. Naming is nobody's turn — no one asked for it
                 // and a chapter mark carries no author — so the session cannot spend
@@ -937,7 +937,7 @@ let startFull
         let boot = mintMessageId ()
         let! _ =
             log.Append
-                ActorRef.SessionProcess
+                ActorRef.Session
                 (match lastHeardAt with
                  | Some at -> SessionResumed { MessageId = boot; LastHeardAt = at }
                  | None -> SessionStarted { MessageId = boot })

@@ -10,7 +10,7 @@ open Fable.Core
 open Fable.Core.JsInterop
 open Yession.Domain
 open Yession.Domain.Link
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Host.Interop
 
 #if FABLE_COMPILER
@@ -145,7 +145,7 @@ let answerOffer (pc: PeerConnection) (offerSdp: string) : Async<string> =
         return! answerReady
     }
 
-/// Client side: connect to a Session Process by posting an offer to its signalling URL,
+/// Client side: connect to a Session by posting an offer to its signalling URL,
 /// applying the returned answer, and resolving once the data channel is open. Auto-
 /// negotiation generates the offer automatically when the data channel is created.
 let connect (signalUrl: string) : Async<FrameChannel<string>> =

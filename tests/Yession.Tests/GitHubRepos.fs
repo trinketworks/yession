@@ -25,7 +25,7 @@ open Yession.Domain
 open Yession.Domain.Repos
 open Yession.App
 open Yession.Host
-open Yession.SessionProcess
+open Yession.Session
 open Yession.App.Codecs
 
 #if FABLE_COMPILER

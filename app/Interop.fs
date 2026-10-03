@@ -1,6 +1,6 @@
 module Yession.Host.Interop
 
-// Minimal Fable bindings for the Node APIs the Session Process host needs:
+// Minimal Fable bindings for the Node APIs the Session host needs:
 // `node-datachannel` (WebRTC) and `node:http` (bootstrap + signalling). Only the surface
 // actually used is bound; everything is event-callback based, matching libdatachannel.
 

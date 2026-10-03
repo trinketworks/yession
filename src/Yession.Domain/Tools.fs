@@ -289,7 +289,7 @@ module ToolArguments =
             |> Some
 
 /// What the audit seam is told when a call starts. The turn and the handle are NOT here:
-/// the log is bound to a turn, and minting the handle is the Session Process's job — the
+/// the log is bound to a turn, and minting the handle is the Session's job — the
 /// same rule `MessageId` and `BlockId` already follow.
 [<RequireQualifiedAccess>]
 type ToolUseBegin =

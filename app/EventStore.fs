@@ -2,15 +2,15 @@ module Yession.Host.EventStore
 
 // A durable event log: an append-only JSONL file behind the same `EventLog` capability
 // as the in-memory implementation, so callers cannot tell the difference. One line per
-// envelope, written synchronously on append (local-first, single writer — the Session
-// Process). The log lives with the Session Process on Node, so durability is a file,
+// envelope, written synchronously on append (local-first, single writer — the Session)
+// . The log lives with the Session on Node, so durability is a file,
 // not a browser store: browser clients already recover by offset catch-up (Step 07).
 
 open Fable.Core
 open Node.Api
 open Fable.NodeExtras
 open Yession.Domain
-open Yession.SessionProcess
+open Yession.Session
 open Yession.App.Codecs
 
 // The plain reads/writes go through the maintained Fable.Node `fs` binding.

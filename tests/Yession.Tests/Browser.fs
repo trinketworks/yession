@@ -8,7 +8,7 @@ module Yession.Tests.Browser
 //
 //     dotnet run --project tests/Yession.Tests/Yession.Tests.fsproj
 //
-// It launches two Chromium peers against a real Session Process (app/out/Main.js), verifies
+// It launches two Chromium peers against a real Session (app/out/Main.js), verifies
 // Markdown typed into the rich composer renders as formatted rich text (input rules), that the
 // SECOND peer's composer joins that draft rather than opening a rival, that it converges over
 // native WebRTC with live carets, that the second peer can co-edit AND send it — whose durable
@@ -1361,7 +1361,7 @@ let tests =
 
 // --- The host-free editor rendering E2E ([Browser], no Native) ---------------------------
 // Serves the static harness (app/browser/EditorHarness.fs, esbuilt to tests/browser/out/) and
-// drives one Chromium page. No Session Process, no WebRTC — so this runs wherever Chromium
+// drives one Chromium page. No Session, no WebRTC — so this runs wherever Chromium
 // exists, decoupled from the native node-datachannel addon. It guards exactly what the DOM-free
 // cheap tests cannot: the input-rule → live formatting → Markdown round-trip in a real browser.
 
@@ -1865,7 +1865,7 @@ let editorTests =
 
                 // Then play it, and wait for the recording's own output to appear on the
                 // screen. This is the assertion that spans the whole stage: bytes the Session
-                // Process wrote, encoded as asciicast, rebuilt by `TranscriptReplay.cast`,
+                // wrote, encoded as asciicast, rebuilt by `TranscriptReplay.cast`,
                 // and rendered by the player.
                 let! _ = await (page.WaitForSelectorAsync "#replay .ap-overlay-start")
                 do! awaitU (page.ClickAsync "#replay .ap-overlay-start")
@@ -2178,7 +2178,7 @@ let editorTests =
 
         // Terminal work in the chat, and the pane's tabs (Plan 14, stages 1-2). Host-free,
         // like the editor and the replay beside it: what needs a real browser here is not the
-        // Session Process but the DOM swaps — where FOCUS goes when a chip in the chat opens
+        // Session but the DOM swaps — where FOCUS goes when a chip in the chat opens
         // a tab in the pane, and whether the tab strip is a tablist the arrow keys walk.
         // Neither is visible to a rendered string, and both are the WCAG floor rather than a
         // nicety: a chip that opens a pane and leaves focus behind, or a close that strands
@@ -2716,7 +2716,7 @@ let editorTests =
                         """document.activeElement?.getAttribute('data-terminal-screen') === 'term-live'""")
 
                 // The screen is composed by a REAL emulator in a real browser: the
-                // Session Process's snapshot seeds it, and the records the client already
+                // Session's snapshot seeds it, and the records the client already
                 // holds are folded on top. This is the only tier that runs xterm in the
                 // browser at all — and it exists because a browser-only module resolution
                 // failure in exactly this path reached a release job while the cheap tier
@@ -4054,7 +4054,7 @@ let editorTests =
                 // on <html> (Style.fs: "Two presentation bits live on the root <html>
                 // element, outside `#app`... toggled by `[data-nav-toggle]`"/`[data-settings-
                 // toggle]`"). This harness mounts `View.view` over a fixed model with no
-                // Session Process behind it (`ToggleNav`/`ToggleSettings` are `ignore` here,
+                // Session behind it (`ToggleNav`/`ToggleSettings` are `ignore` here,
                 // deliberately — see `EditorHarness.fs`), so the buttons that ask for those
                 // classes in the real client do nothing here. Setting them directly is
                 // asking the same question `Browser.fs`'s handlers answer by setting them:

@@ -19,7 +19,7 @@ open Fable.Core.JsInterop
 /// A suite with no needs runs on Node (the product runtime). `[Browser]` pins the .NET CLR;
 /// every other need is a capability the run declares via `YESSION_TEST_CAPS` (e.g.
 /// `check Browser Native`). `Native` marks suites that spawn the real Session
-/// Process (which loads the node-datachannel addon), so they skip — rather than error — where
+/// (which loads the node-datachannel addon), so they skip — rather than error — where
 /// that addon is absent. Whatever this run cannot host or satisfy shows as one visible skip.
 let all =
     testList "Yession" [
@@ -86,7 +86,7 @@ let all =
         // deployment's reverse proxy is fed by. A real Manager, a real session (so there is a
         // port to render), and the example following the one between them.
         Tag.needs "The proxy example" [ Tag.Ports; Tag.Native ] (fun () -> ProxyMap.tests)
-        Tag.needs "SessionProcess" [] (fun () -> SessionProcess.tests)
+        Tag.needs "Session" [] (fun () -> Session.tests)
         Tag.needs "Sync" [] (fun () -> Sync.tests)
         Tag.needs "TerminalPattern" [] (fun () -> TerminalPattern.tests)
         Tag.needs "Terminals" [] (fun () -> Terminals.tests)
@@ -165,7 +165,7 @@ let all =
         Tag.needs "Verify tiers" [] (fun () -> VerifyTiers.tests)
         // The rich editor rendering E2E stands alone: it needs a browser but NOT the native
         // WebRTC host, so it runs wherever Chromium exists ([Browser]). The full two-peer
-        // convergence/persistence E2E spawns the real Session Process, so it also needs Native.
+        // convergence/persistence E2E spawns the real Session, so it also needs Native.
         Tag.needs "Editor rendering (browser)" [ Tag.Browser ] (fun () -> Browser.editorTests)
         // Measuring, not asserting — and never part of `check` or `verify`, which is why it
         // needs a capability nothing else asks for. `tasks.fsx bench` is the only caller.

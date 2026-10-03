@@ -33,7 +33,7 @@ open Yession.Domain.Collab
 open Yession.Domain.Prs
 open Yession.Domain.Repos
 open Yession.Host
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Tests.Support
 
 let private expect result =

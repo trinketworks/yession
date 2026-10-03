@@ -136,7 +136,7 @@ module SyncedStateSync =
     /// for one.
     ///
     /// ONE list because there are two writers: the client codec (`encodePendingAct`) and the
-    /// Session Process's own enqueue (`enqueueTerminalCommand`), both read back by the one
+    /// Session's own enqueue (`enqueueTerminalCommand`), both read back by the one
     /// `decodePendingAct`. They used to spell the entry separately and had drifted — the codec
     /// wrote no `background` or `stdin`, so an act it wrote came back foreground and asking
     /// nothing, and it wrote `""` for "no owner" and "no width" where the other wrote nothing.
@@ -446,7 +446,7 @@ module SyncedStateSync =
     ///
     /// Total over a doc a peer garbled, too: every slot goes through `slot` and every keyed
     /// map through `entries`, so what does not decode is absent rather than fatal. That is
-    /// the browser's binding and the Session Process's `ofDoc` alike — one reader, one answer.
+    /// the browser's binding and the Session's `ofDoc` alike — one reader, one answer.
     let decode<'m> : Decoder<'m, SyncedSessionState> =
         Decode.object {
             let! drafts = slot "drafts" (entries decodeDraft)
@@ -511,8 +511,8 @@ module SyncedStateSync =
             |> Option.bind (fun entry -> entry.get "name")
             |> Option.bind Y.Text.tryOf
 
-    /// Read the synced state currently in a doc — the decode direction alone, for the Session
-    /// Process, which observes the doc without running a Ylmish binding of its own. The same
+    /// Read the synced state currently in a doc — the decode direction alone, for the Session,
+    /// which observes the doc without running a Ylmish binding of its own. The same
     /// `decode` the browser's binding runs, so the two cannot disagree about what a doc says.
     ///
     /// The roots are typed first: a root a *remote* update created is an untyped placeholder
@@ -531,11 +531,11 @@ module SyncedStateSync =
         | Ok synced -> synced
         | Error errors -> failwithf "the session document's decoder refused a doc it is total over: %A" errors
 
-    /// The origin tag on the Session Process's own doc writes (the drain's removals),
+    /// The origin tag on the Session's own doc writes (the drain's removals),
     /// distinct from the remote-apply origin so they broadcast like any local update.
     let processOrigin : obj = box "yession-process-drain"
 
-    /// The Session Process's one structural doc write: remove consumed queue entries, in
+    /// The Session's one structural doc write: remove consumed queue entries, in
     /// a single transaction under the process origin (Phase 3 drain, step 2 — the doc
     /// removal after the durable append). Boundary code may touch Y types; application
     /// logic still never does. Removing an already-removed key merges as a CRDT no-op.
@@ -624,7 +624,7 @@ module SyncedStateSync =
             if addition.Length > 0 then text.insert (held.Length, addition))
 
     /// The Markdown of a queue entry's rich body, read straight from its top-level fragment
-    /// root — the drain's snapshot into the durable `MessageSent` (the Session Process observes
+    /// root — the drain's snapshot into the durable `MessageSent` (the Session observes
     /// the doc without a Ylmish binding, so it reads the body fragment directly). An entry whose
     /// body was never written snapshots as the empty string.
     let queuedBodyMarkdown (doc: Yjs.Y.Doc) (id: QueueId) : string =
@@ -633,7 +633,7 @@ module SyncedStateSync =
     /// The Markdown of a draft slot's rich body, read straight from its top-level fragment root
     /// (keyed by the draft's author). An empty/never-written body reads as the empty string.
     /// Used where a body must be asserted from a doc that has no client registry (e.g. a
-    /// restarted Session Process).
+    /// restarted Session).
     let draftBodyMarkdown (doc: Yjs.Y.Doc) (author: PeerId) : string =
         Markdown.ofFragment (doc.getXmlFragment (BodyKey.draft author))
 
@@ -680,7 +680,7 @@ module SyncedStateSync =
         |> Map.tryFind (terminal, author)
         |> Option.map (fun draft -> draft.QueueId)
 
-    /// Put a command in a terminal's queue, from the Session Process, in ONE transaction:
+    /// Put a command in a terminal's queue, from the Session, in ONE transaction:
     /// the command's text root and the entry that names it (Plan 13).
     ///
     /// This is the Process's one CREATING doc write, and it earns the exception the same way

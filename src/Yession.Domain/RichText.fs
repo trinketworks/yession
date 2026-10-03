@@ -11,7 +11,7 @@ open Yession.Domain
 // (It used to walk one as a plain object into its cyclic internals, which was a second reason
 // the session document was read by hand; Ylmish 1.0.0-beta0227 retired that one.)
 // The body is therefore a CRDT the app co-manages on the doc — synced by the same update
-// transport as everything else, and read by the Session Process straight from the doc (it has
+// transport as everything else, and read by the Session straight from the doc (it has
 // no Ylmish binding). `getXmlFragment key` is idempotent and merges by name, so every replica
 // binds the same fragment with no creation race.
 //

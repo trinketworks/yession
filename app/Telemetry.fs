@@ -1,6 +1,6 @@
 module Yession.Host.Telemetry
 
-// The OpenTelemetry emitter, shared by both the Manager and each Session Process — every
+// The OpenTelemetry emitter, shared by both the Manager and each Session — every
 // process is a *direct* OTel emitter (there is no Manager-side collector). One OTel *log
 // record* per completed agent turn carries token/cache counts — never message content.
 //
@@ -197,7 +197,7 @@ let private build
 
 // --- Constructors ------------------------------------------------------------------------
 
-/// The Session Process emitter, configured from the environment (the Manager passes OTEL_*
+/// The Session emitter, configured from the environment (the Manager passes OTEL_*
 /// through and sets this child's identity). Tags agent-turn records with `sessionId`.
 let fromEnv (sessionId: SessionId) : Emitter =
     build "yession-session" (Some (SessionId.value sessionId)) (Some sessionId) (processorsFromEnv ())

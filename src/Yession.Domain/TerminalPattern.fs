@@ -5,7 +5,7 @@ open Yession.Domain
 // Matching a pattern against what a terminal said (Plan 25, step 9).
 //
 // This exists because the obvious thing is not available. A regular expression here would be
-// a JS `RegExp` — the Session Process is Fable on Node — and JS has no match timeout. A
+// a JS `RegExp` — the Session is Fable on Node — and JS has no match timeout. A
 // catastrophic pattern would not fail a turn, it would wedge the event loop that owns every
 // terminal in the session, the Yjs document and the WebRTC pump. .NET's `Regex` takes a
 // `MatchTimeout`; the runtime this actually runs on does not. So "use a regex and bound it"

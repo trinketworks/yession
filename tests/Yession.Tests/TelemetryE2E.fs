@@ -1,6 +1,6 @@
 module Yession.Tests.TelemetryE2E
 
-// The first telemetry e2e. Cheap tier: a real Session Process Host with the real telemetry
+// The first telemetry e2e. Cheap tier: a real Session Host with the real telemetry
 // emit sink, exporting over real localhost HTTP to a stub OTLP collector (the stand-in for a
 // real OpenTelemetry Collector). A human message (injected the Phase-3 way — an offline peer's
 // enqueue delivered into the Host's doc) drains into a turn; the scripted agent completes with

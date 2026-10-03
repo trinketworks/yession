@@ -65,7 +65,7 @@ type ViewActions =
       SendTerminalDraft : TerminalId -> PeerId -> unit
       /// Send keystrokes to a terminal this peer holds (Plan 14, stage 6). Imperative
       /// because it is a frame, and deliberately not acknowledged: a keystroke that needed a
-      /// reply would make typing a round trip. The Session Process checks the lease, which
+      /// reply would make typing a round trip. The Session checks the lease, which
       /// is the only place it CAN be checked — a client that believes it holds one may be
       /// looking at a steal it has not seen yet.
       TypeIntoTerminal : TerminalId -> string -> unit
@@ -2136,7 +2136,7 @@ module View =
                     let mark, whose =
                         match by with
                         | ActorRef.Agent -> Style.actNoteRunningAgent, "agent"
-                        | PeerRef _ | UserRef _ | ActorRef.SessionProcess | ActorRef.System | ActorRef.Configured _ ->
+                        | PeerRef _ | UserRef _ | ActorRef.Session | ActorRef.System | ActorRef.Configured _ ->
                             Style.actNoteRunningOther, "other"
                     html $"""<span class="{Style.actNoteRunning}"><span class="{mark}" data-act-running="{whose}"></span><span class="{Style.srOnly}">{Dom.Text.running}</span></span>"""
                 | Complete | Streaming | ConversationItemStatus.Failed -> Lit.nothing
@@ -2942,7 +2942,7 @@ module View =
     ///
     /// A SCREEN, not a stream: the program running here moves the cursor, and what it
     /// displays is a projection of what it emitted. The platform half keeps an emulator —
-    /// the same one the Session Process uses, so the two screens cannot disagree — and hands
+    /// the same one the Session uses, so the two screens cannot disagree — and hands
     /// this its serialization; here it is rendered through the same ANSI spans a block's
     /// output uses.
     ///

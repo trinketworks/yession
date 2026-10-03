@@ -1,6 +1,6 @@
 module Yession.Host.Emulator
 
-// The Session Process's terminal emulator (Plan 13, stage 2b): `@xterm/headless`, which is
+// The Session's terminal emulator (Plan 13, stage 2b): `@xterm/headless`, which is
 // the same emulator the browser renders with minus the DOM.
 //
 // That sameness is the point. The Process has to answer three questions about a terminal —
@@ -17,7 +17,7 @@ module Yession.Host.Emulator
 // is bundled for.
 
 open Fable.Xterm
-open Yession.SessionProcess
+open Yession.Session
 
 /// Lines of scrollback the Process keeps per terminal. A snapshot travels in one frame, so
 /// this is a frame-size decision as much as a memory one.

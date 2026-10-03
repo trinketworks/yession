@@ -1,7 +1,7 @@
 namespace Yession.Domain
 
 /// Which durable user a peer connection belongs to, folded from the log — shared by
-/// the Session Process (which stamps chat/act authorship with it) and the client (which
+/// the Session (which stamps chat/act authorship with it) and the client (which
 /// resolves a `UserRef` author back to a name for display). One fold, one decision rule,
 /// used on both sides of the wire, rather than a server copy and a client guess that can
 /// drift apart — which is exactly how "you" ended up with two names on one screen.

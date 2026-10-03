@@ -501,7 +501,7 @@ let promptOf (context: AgentContextPack) : string =
         | UserRef u -> UserId.value u
         | PeerRef p -> PeerId.value p
         | ActorRef.Agent -> "agent"
-        | ActorRef.SessionProcess -> "session-process"
+        | ActorRef.Session -> "session-process"
         | ActorRef.System -> "system"
         | ActorRef.Configured repo -> RepoRef.value repo
     let transcript =

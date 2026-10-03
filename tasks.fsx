@@ -8,7 +8,7 @@
 // bare version (`dotnet fsi tasks.fsx 1.2.3`) is shorthand for `package`.
 //
 // Yession ships as ONE npm package with two bins: `yession` (the Manager) and
-// `yession-session` (a Session Process). Each is esbuild-bundled to a single ESM file
+// `yession-session` (a Session). Each is esbuild-bundled to a single ESM file
 // with the native / self-resolving deps kept EXTERNAL — node-datachannel loads its addon and
 // the Agent SDK resolves its native `claude` sibling via import.meta.url, neither of which
 // works bundled. Assets are copied in and read package-relative at runtime.
@@ -760,7 +760,7 @@ let build () =
     run "dotnet" [ "build"; "Yession.slnx" ] |> ignore
     compile ()
 
-// --- start / dev: run the Session Process locally --------------------------------------------
+// --- start / dev: run the Session locally --------------------------------------------
 
 // The resources profile a session this repository runs for itself is under — the suites'
 // and a local `start`/`dev`'s. A session's own sandboxes are the ones its operator declares,
@@ -1673,7 +1673,7 @@ let private vmCheck (target: LinuxTarget) (args: string list) =
     let node, nodeModules = LinuxTarget.provision target repoPath lockHash
     LinuxTarget.enableStrictNesting target
     // Node walks up from a compiled file to the FIRST `node_modules`. Point the ones the suite
-    // and the child Session Processes it spawns resolve from at the Linux tree — and put them
+    // and the child Sessions it spawns resolve from at the Linux tree — and put them
     // back afterwards, so a later run on THIS box does not load Linux binaries. Cleared up front
     // too, in case a crashed run left one behind.
     let linkPaths = [ "tests/Yession.Tests/node_modules"; "app/node_modules" ] |> List.map (fun r -> Path.Combine (repoRoot, r))

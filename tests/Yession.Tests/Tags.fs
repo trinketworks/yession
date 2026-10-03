@@ -35,7 +35,7 @@ open Fable.Pyxpecto.Model
 type Need =
     | Browser     // a real browser via the Microsoft.Playwright .NET driver -> pins the .NET CLR
     | Ports       // binds TCP ports / spawns processes (HTTP, topology)
-    | Native      // the native `node-datachannel` WebRTC addon (loaded by the real Session Process)
+    | Native      // the native `node-datachannel` WebRTC addon (loaded by the real Session)
     | Docker      // a reachable Docker daemon
     | LiveAgent   // real model credentials
     | LiveGitHub  // a GitHub token GitHub accepts, scoped to this repository

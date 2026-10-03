@@ -139,7 +139,7 @@ open Fable.Core.JsInterop
 open Fable.NodeExtras
 open Yession.App
 open Yession.Host.Interop
-open Yession.SessionProcess
+open Yession.Session
 
 let private respondText (res: ServerResponse) (status: int) (text: string) =
     res.writeHead (status, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])

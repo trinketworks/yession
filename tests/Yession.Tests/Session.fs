@@ -1,10 +1,10 @@
-module Yession.Tests.SessionProcess
+module Yession.Tests.Session
 
 open System
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Link
-open Yession.SessionProcess
+open Yession.Session
 
 let private expect =
     function
@@ -124,7 +124,7 @@ let private processModelTests =
         { EventId = EventId.fresh ()
           SessionId = sessionId
           Offset = EventOffset.create offset |> expect
-          Actor = SessionProcess
+          Actor = Session
           Timestamp = fixedClock ()
           Event = sampleEvent () }
 
@@ -244,7 +244,7 @@ let private handshakeTests =
     ]
 
 let tests =
-    testList "SessionProcess" [
+    testList "Session" [
         eventLogTests
         processModelTests
         handshakeTests

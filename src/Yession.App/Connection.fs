@@ -15,7 +15,7 @@ module Connection =
     ///
     /// Sends `PeerHello`, then dispatches: `ConnectingMsg` immediately, `ConnectedMsg` on
     /// `PeerAccepted`, `RejectedMsg` on `PeerRejected` (and stops), `EventsAvailableMsg`
-    /// when the Session Process advertises a new latest offset, and `DisconnectedMsg`
+    /// when the Session advertises a new latest offset, and `DisconnectedMsg`
     /// when the remote end closes the channel. `State` frame payloads are handed to
     /// `onState` (the sync boundary applies them to the local Yjs doc); command
     /// responses go to `onResponse` and event pages to `onEventsPage` (the driver

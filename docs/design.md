@@ -431,7 +431,7 @@ The actor glossary:
 - **Peer** (`PeerId`) — one client connection (a browser profile, stable via
   localStorage). Connection identity, not human identity; self-minted, never verified.
 - **Actor** (`ActorRef`) — the attribution union on events:
-  `UserRef | PeerRef | Agent | SessionProcess | System`.
+  `UserRef | PeerRef | Agent | Session | System`.
 - **Unattributed access** — the localhost strategy's grant: the request is allowed in
   under the shared `local` subject, but no attributable user stands behind it, so
   events fall back to `PeerRef` attribution. The `Attributed`/`Unattributed` split in

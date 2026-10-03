@@ -2,7 +2,7 @@ namespace Yession.Domain.Terminals
 
 open Yession.Domain
 
-/// OSC 133 semantic marks: how the Session Process learns where a block starts, where it
+/// OSC 133 semantic marks: how the Session learns where a block starts, where it
 /// ends, and with what code (Plan 13, stage 2d).
 ///
 /// The marks are emitted by the shell's own prompt hooks — not by a sentinel the drain
@@ -266,7 +266,7 @@ module Marks =
         scanned |> List.choose (fun piece -> match piece with Printed text -> Some text | Marked _ -> None) |> String.concat ""
 
     /// The shell instrumentation, as the text of an rc file. Parameterised by the terminal's
-    /// nonce, which is minted per terminal and never leaves the Session Process except into
+    /// nonce, which is minted per terminal and never leaves the Session except into
     /// this file.
     ///
     /// Two habits here cost nothing and are taken from Warp's hooks. Every line begins with a

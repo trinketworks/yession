@@ -25,7 +25,7 @@ open Yession.Domain.Repos
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
 open Yession.Domain.Tools
-open Yession.SessionProcess
+open Yession.Session
 
 /// What a repo's selection comes to: the lines a person reads, and whether any of it is
 /// something the operator marked as worth being asked about.

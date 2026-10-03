@@ -39,7 +39,7 @@ module Widgets =
 // --- not reported: the same short name over disjoint members ---------------------------------
 //
 // This is the case the codebase already relies on four times over — `Yession.Domain` beside the
-// suite's `Yession.Tests.Domain`, `Yession.Manager` beside `Yession.Host.Manager`. The
+// suite's `Yession.Tests.Domain`, `Yession.Session` beside its `Yession.Tests.Session`. The
 // reference falls through to the module and the build is clean; sharing the name alone is not
 // the fault, and a rule that said otherwise would be unusable.
 

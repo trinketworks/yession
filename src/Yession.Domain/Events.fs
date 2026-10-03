@@ -28,21 +28,21 @@ type SessionEvent =
     /// This log's first process found nothing in it: the session is beginning. Its pair is
     /// `SessionResumed`, and exactly one of the two is written at every boot.
     | SessionStarted of SessionStarted
-    // Control/presence facts appended by the Session Process on connect/disconnect (Step 03).
+    // Control/presence facts appended by the Session on connect/disconnect (Step 03).
     | PeerJoined of PeerJoined
     | PeerLeft of PeerLeft
-    // A message consumed off the queue: the body snapshotted at drain time by the Session
-    // Process. Immutable — later edits never touch it. Drafts themselves are ephemeral WIP
+    // A message consumed off the queue: the body snapshotted at drain time by the Session.
+    // Immutable — later edits never touch it. Drafts themselves are ephemeral WIP
     // in the synced state and are never durable facts (only their send is).
     | MessageSent of MessageSent
     // What the session decided something should be called (Plan 25). Appended by the Session
-    // Process when it asks a model for a few words, whether or not the answer changed
+    // when it asks a model for a few words, whether or not the answer changed
     // anything — a pass that considered a subject and kept the name it had is the fact that
     // stops the next pass asking the same question of the same material.
     | SessionNamed of SessionNamed
     // Agent turn lifecycle (Step 08): the agent's response is represented entirely as
     // events — streamed deltas project as a Streaming conversation item; completion or
-    // failure flips it. Appended only by the Session Process.
+    // failure flips it. Appended only by the Session.
     | AgentTurnStarted of AgentTurnStarted
     | AgentContextBuilt of AgentContextBuilt
     | AgentMessageStarted of AgentMessageStarted
@@ -54,7 +54,7 @@ type SessionEvent =
     // cancels it. The partial response streamed so far is kept.
     | AgentTurnInterrupted of AgentTurnInterrupted
     // Environment lifecycle (Step 12): environments start lazily — a need is identified
-    // (usually by the agent), then the Session Process starts one through its scoped
+    // (usually by the agent), then the Session starts one through its scoped
     // capability. Every transition is a durable fact.
     | EnvironmentNeedIdentified of EnvironmentNeedIdentified
     | EnvironmentStartRequested of EnvironmentStartRequested
