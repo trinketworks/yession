@@ -82,17 +82,24 @@ let private listening (target: #Browser.Types.EventTarget) (event: string) (hand
 /// stuck on "connecting" with nothing to say and nothing to do.
 ///
 /// Non-trickle, the way the Session's own side does it: gather first, then send ONE
-/// complete SDP, so there are no candidate-timing races and nothing depends on a sleep. Two
-/// events say gathering is done (`iceGatheringState` reaching `complete`, and the null
-/// candidate) and a browser may fire either — but some browsers and sandboxes fire NEITHER,
-/// because mDNS candidate obfuscation can leave gathering stalled indefinitely. So the offer
-/// also goes at 1500ms regardless: without it, a handshake waits on an event that is never
-/// coming and can only ever time out.
+/// complete SDP, so there are no candidate-timing races. Two events say gathering is done
+/// (`iceGatheringState` reaching `complete`, and the null candidate) and a browser may fire
+/// either — but many fire NEITHER for a long time: headless Chromium here reports `gathering`
+/// for as long as anybody waits, with or without mDNS obfuscation, its one host candidate
+/// having arrived inside 20ms. Waiting for the end therefore cost EVERY connect the whole
+/// fallback, a second and a half of a handshake that is otherwise tens of milliseconds.
+///
+/// So the end is also inferred: once candidates have fallen quiet for `Gathering.quiet`, the
+/// offer goes with what has arrived (that window is only honest while this client asks no
+/// STUN or TURN server, and `Gathering.quiet` says why). And it goes at `Gathering.cap`
+/// regardless, for the browser that produces no candidate at all — without that, a handshake
+/// waits on an event that is never coming and can only ever time out.
 ///
 /// `timeoutMs` bounds the whole thing (offer, gathering, answer, channel open); it is the
 /// difference between "not connected, the session did not answer" and an eternal wait.
 let private openDataChannel (signalUrl: string) (timeoutMs: int) : JS.Promise<Handshake> =
     Promise.create (fun resolve _ ->
+        // No ICE servers: host candidates only, which is what `Gathering.quiet` is sized for.
         let peer = Browser.WebRTC.RTCPeerConnection.Create (Browser.WebRTC.RTCConfiguration.Create [||])
         let channel = peer.createDataChannel "session"
         // Five things try to end this handshake and exactly one of them is heard. The flag and
@@ -107,9 +114,9 @@ let private openDataChannel (signalUrl: string) (timeoutMs: int) : JS.Promise<Ha
                 | Opened _ -> ()
                 | Refused _ | TimedOut -> try peer.close () with _ -> ()
                 resolve outcome
-        // The offer goes once. `sent` is what makes three triggers for one send idempotent;
-        // `settled` is what keeps the 1500ms fallback from posting an offer for a handshake
-        // that is already over.
+        // The offer goes once. `sent` is what makes four triggers for one send idempotent;
+        // `settled` is what keeps a timer — the quiet window or the cap — from posting an
+        // offer for a handshake that is already over.
         let mutable sent = false
         let send () =
             if not sent && not settled then
@@ -117,9 +124,9 @@ let private openDataChannel (signalUrl: string) (timeoutMs: int) : JS.Promise<Ha
                 promise {
                     match peer.localDescription with
                     | None ->
-                        // Nothing gathered yet, and nothing to offer. Only the fallback timer
-                        // can arrive here — the two gathering events cannot fire before the
-                        // description is local.
+                        // Nothing gathered yet, and nothing to offer. Only the cap can arrive
+                        // here — no candidate, and so no quiet window, and neither gathering
+                        // event can come before the description is local.
                         settle (Refused "no local description to offer")
                     | Some local when local.``type`` <> Browser.Types.RTCSdpType.Offer ->
                         settle (Refused "the local description is not an offer")
@@ -146,12 +153,18 @@ let private openDataChannel (signalUrl: string) (timeoutMs: int) : JS.Promise<Ha
                 |> Promise.catchEnd (fun error -> settle (Refused error.Message))
         peer.onicegatheringstatechange <-
             fun _ -> if peer.iceGatheringState = Browser.Types.RTCIceGatheringState.Complete then send ()
+        // Each candidate restarts the quiet window, so the offer goes once they stop arriving
+        // rather than after the first. Clearing a window that already fired is harmless: `sent`
+        // has already said no to everything after it.
+        let mutable quietWindow : int option = None
         peer.onicecandidate <-
             fun ice ->
                 match ice.candidate with
                 | None -> send ()
-                | Some _ -> ()
-        JS.setTimeout send 1500 |> ignore
+                | Some _ ->
+                    quietWindow |> Option.iter JS.clearTimeout
+                    quietWindow <- Some (JS.setTimeout send (int Client.Gathering.quiet.TotalMilliseconds))
+        JS.setTimeout send (int Client.Gathering.cap.TotalMilliseconds) |> ignore
         JS.setTimeout (fun () -> settle TimedOut) timeoutMs |> ignore
         channel.onopen <- fun _ -> settle (Opened { Channel = channel; Peer = peer })
         // One catch for both steps: a rejected `setLocalDescription` used to fall outside the

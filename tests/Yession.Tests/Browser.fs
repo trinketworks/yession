@@ -457,6 +457,26 @@ let private waitFor (what: string) (page: IPage) (predicate: string) : Async<uni
 // state token is the only place this can come from, which is where a markup contract belongs.
 let private connected = """document.querySelector('[data-connection]')?.getAttribute('data-connection') === 'Connected'"""
 
+/// An init script that takes away the END of ICE gathering — the `complete` state and the null
+/// candidate — from every peer connection the page makes, and counts the candidates instead.
+/// Its listeners are registered in the constructor, before the page can set a handler of its
+/// own, so they are heard first and can stop the event there.
+let private gatheringNeverEnds =
+    """(() => {
+         const Native = globalThis.RTCPeerConnection
+         globalThis.__yessionCandidates = 0
+         globalThis.RTCPeerConnection = class extends Native {
+           constructor (...args) {
+             super(...args)
+             this.addEventListener('icecandidate', e => {
+               if (e.candidate) globalThis.__yessionCandidates++
+               else e.stopImmediatePropagation()
+             })
+             this.addEventListener('icegatheringstatechange', e => e.stopImmediatePropagation())
+           }
+         }
+       })()"""
+
 // The open draft is a ProseMirror editable (`.ProseMirror`) inside the editable
 // (`data-rich-readonly="false"`) body-mount host — and it is whichever draft this peer has open,
 // which may be someone else's: the composer joins the message already being written. Collapsed
@@ -1356,6 +1376,49 @@ let tests =
                     await (page.EvaluateAsync<string>
                             "() => document.querySelector('[data-claude-error]')?.textContent ?? ''")
                 Expect.equal error "" "connecting must not be refused on a first visit"
+            }
+
+        // The offer does not wait for gathering to say it has finished. Headless Chromium here
+        // never says so — its one host candidate arrives inside 20ms and `iceGatheringState`
+        // stays `gathering` for as long as anybody waits — and waiting for it cost every
+        // connect the whole cap, a second and a half, in every case in this file and for every
+        // person opening a session (`Client.Gathering`).
+        //
+        // A browser that DOES finish gathering promptly would pass this case without the quiet
+        // window ever firing, so the end of gathering is taken away first: the page's own
+        // handlers never hear it, on any box. And the page's time is the case's to turn — paused,
+        // and moved a window at a time to a total short of the cap — so the cap cannot be what
+        // sends the offer, and a client that waits for it sends nothing here at all.
+        sessionCase "the offer goes once the candidates fall quiet, without waiting for gathering to end" <|
+            fun page ->
+            async {
+                do! awaitU (page.AddInitScriptAsync gatheringNeverEnds)
+                let offered = TaskCompletionSource<unit> (TaskCreationOptions.RunContinuationsAsynchronously)
+                let signal = "**" + Yession.App.RelativeUrl.under "" (Yession.App.SessionRoute.relative Yession.App.SessionRoute.Signal)
+                do! awaitU (page.RouteAsync (signal, fun route ->
+                        if route.Request.Method = "POST" then offered.TrySetResult () |> ignore
+                        route.ContinueAsync () |> ignore))
+                let start = DateTime (2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                do! awaitU (page.Clock.InstallAsync (ClockInstallOptions (TimeDate = start)))
+                do! awaitU (page.Clock.PauseAtAsync (start.AddSeconds 1.0))
+                let! _ = await (page.ReloadAsync ())
+                // Candidates arrive on the browser's network thread, which no page clock owns;
+                // until one has, there is no window for page time to close.
+                do! waitFor "the reloaded page to gather a candidate" page "(globalThis.__yessionCandidates ?? 0) > 0"
+                let window = int64 Yession.App.Client.Gathering.quiet.TotalMilliseconds + 1L
+                let cap = int64 Yession.App.Client.Gathering.cap.TotalMilliseconds
+                // A window at a time, because a later candidate restarts it: a box with several
+                // interfaces may still be delivering when the first window closes.
+                let mutable spent = 0L
+                while not offered.Task.IsCompleted && spent + window < cap do
+                    do! awaitU (page.Clock.RunForAsync window)
+                    spent <- spent + window
+                    do! Async.AwaitTask (Task.WhenAny (offered.Task, Task.Delay 250)) |> Async.Ignore
+                // No page time passes from here, so only a send already made can still arrive.
+                do! Async.AwaitTask (Task.WhenAny (offered.Task, Task.Delay 10000)) |> Async.Ignore
+                Expect.isTrue
+                    offered.Task.IsCompleted
+                    (sprintf "an offer posted inside %dms of page time, short of the %dms cap" spent cap)
             }
     ]
 
