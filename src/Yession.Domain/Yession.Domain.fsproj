@@ -151,8 +151,6 @@
          Agent.fs (it needs them) and after Queries.fs (it generates a tool per query). -->
     <Compile Include="AgentTools.fs" />
     <Compile Include="SessionState.fs" />
-    <Compile Include="RichText.fs" />
-    <Compile Include="Markdown.fs" />
     <Compile Include="Transport.fs" />
     <!-- The heartbeat that keeps a link honest: straight after the channel it supervises,
          and after Resilience, whose Sleep port it takes its clock from. -->
@@ -160,7 +158,6 @@
     <Compile Include="Launch.fs" />
     <Compile Include="PublicAccess.fs" />
     <Compile Include="Auth.fs" />
-    <Compile Include="Sync.fs" />
   </ItemGroup>
 
   <ItemGroup>

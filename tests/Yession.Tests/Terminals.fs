@@ -17,6 +17,7 @@ open Yession.Domain.Content
 open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
+open Yession.App.Collab
 open Yession.Domain.Tools
 open Yession.App
 open Yession.Session
@@ -59,7 +60,7 @@ let private eventsOf (log: EventLog<SessionEvent>) =
 // A test driving the Session's own doc makes writes the way a peer's merged update
 // would arrive. These are the only Yjs calls in this file, and they exist so no production
 // API has to grow a setter that only a test would call. They go through the same typed
-// binding the production writers use (`Sync.fs`), and deliberately without `doc.transact`
+// binding the production writers use (`Collab/Sync.fs`), and deliberately without `doc.transact`
 // under the process origin: what a peer's update arrives as is a write nothing here owns.
 
 let private pendingMap (doc: Y.Doc) : Y.Map<obj> = doc.getMap "pending"

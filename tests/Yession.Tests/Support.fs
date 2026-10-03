@@ -21,6 +21,7 @@ open Yession.Domain.Chat
 open Yession.Domain.Sandboxes
 open Yession.Domain.Link
 open Yession.Domain.Collab
+open Yession.App.Collab
 open Yession.App
 open Yession.Host
 open Yession.Peer

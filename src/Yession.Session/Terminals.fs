@@ -6,6 +6,7 @@ open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
+open Yession.App.Collab
 
 /// One terminal's durable transcript, as a capability (Plan 12). The Session
 /// appends to it BEFORE broadcasting a record, so a dropped frame costs latency

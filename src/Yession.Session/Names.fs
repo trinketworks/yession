@@ -4,6 +4,7 @@ open Yession.Domain
 open Yession.Domain.Agent
 open Yession.Domain.Chat
 open Yession.Domain.Collab
+open Yession.App.Collab
 
 /// Naming what nobody has named (Plan 25).
 ///

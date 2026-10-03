@@ -18,6 +18,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
+open Yession.App.Collab
 open Yession.App
 open Yession.Host
 open Yession.Session

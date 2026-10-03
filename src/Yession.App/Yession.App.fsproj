@@ -14,6 +14,13 @@
     <Compile Include="Codecs/Reads.fs" />
     <Compile Include="Codecs/RepoPages.fs" />
     <Compile Include="Codecs/MeProbe.fs" />
+    <!-- The collaborative document both ends hold: the Ylmish sync boundary over the model's
+         synced state, the rich and plain text roots beside it, and markdown at its edges. The
+         App owns it as it owns every App <-> Session contract; the Session references this
+         project to read and drain the same document. -->
+    <Compile Include="Collab/Bodies.fs" />
+    <Compile Include="Collab/Markdown.fs" />
+    <Compile Include="Collab/Sync.fs" />
     <Compile Include="Routes.fs" />
     <Compile Include="Brand.fs" />
     <Compile Include="WebApp.fs" />

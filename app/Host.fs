@@ -14,6 +14,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
+open Yession.App.Collab
 open Yession.Domain.Tools
 open Yession.Session
 open Yession.App.Codecs

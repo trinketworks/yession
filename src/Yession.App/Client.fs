@@ -8,6 +8,7 @@ open Yession.Codecs
 open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
+open Yession.App.Collab
 open Yession.App.Codecs
 
 /// Composition of the App: the Elmish program bound to a Yjs document through
@@ -286,7 +287,7 @@ module Client =
               Create = fun (m: ClientModel) -> SyncedStateSync.create m.Synced
               Update = fun a m -> SyncedStateSync.update a m.Synced
               // Rich bodies are NOT encoded here — they are sibling `Y.XmlFragment` roots the
-              // app manages directly (RichText.fs), so the sync boundary carries only structure.
+              // app manages directly (Collab/Bodies.fs), so the sync boundary carries only structure.
               Encode = SyncedStateSync.encode
               Decode = decodeModel
               OnError = Ylmish.Program.OnError.log }

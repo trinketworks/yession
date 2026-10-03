@@ -4,6 +4,7 @@ open Fable.Core
 open Yjs
 open Yession.Domain
 open Yession.Domain.Collab
+open Yession.App.Collab
 
 /// Reading and editing a plain collaborative command line (Plan 13).
 ///

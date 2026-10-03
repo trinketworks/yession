@@ -1,4 +1,6 @@
-namespace Yession.Domain.Collab
+namespace Yession.App.Collab
+
+open Yession.Domain.Collab
 
 open Yession.Domain
 open Yession.Domain.Agent
@@ -108,7 +110,7 @@ module SyncedStateSync =
     /// every co-editor's send has to write the same queue key for concurrent sends to merge. The
     /// rich body is a top-level `Y.XmlFragment` root (`BodyKey.draft`), NOT nested here: a
     /// fragment in a keyed-map entry crashes Ylmish's structural decode, so it is a sibling root
-    /// the app co-manages (RichText.fs).
+    /// the app co-manages (Collab/Bodies.fs).
     let private encodeDraft (d: DraftState) : Encoded =
         Encode.object
             [ "author", Encode.string (AVal.constant (PeerId.value d.Author))
@@ -216,7 +218,7 @@ module SyncedStateSync =
     /// Which parts of the session sync, and how each merges. Everything else in the
     /// models — the conversation projection above all — is app-only by omission. Rich bodies
     /// are deliberately absent: they live as sibling `Y.XmlFragment` roots the app manages
-    /// directly (RichText.fs), so they never enter this decoded tree.
+    /// directly (Collab/Bodies.fs), so they never enter this decoded tree.
     let encode (a: AdaptiveSyncedState) : Encoded =
         Encode.object
             [ "drafts", Encode.map encodeDraft (a.Drafts :> amap<_, _>)

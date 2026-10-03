@@ -19,6 +19,7 @@ open Yession.Domain.Link
 open Yession.Domain.Repos
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
+open Yession.App.Collab
 open Yession.Domain.Tools
 open Fable.ProseMirror
 open Yession.App
