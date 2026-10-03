@@ -583,6 +583,32 @@ type private Host =
 
 let private hostsStarted = ref 0
 
+/// The product entry as every case here boots it: `node app/out/Main.js`, its arguments, and
+/// the variables the case names — and NO ambient model credential, whatever this run carries.
+///
+/// No case in this suite asks for `LiveAgent`, and `SessionMain`'s documented last resort is
+/// the environment: on a box that has a key, a session booted with this process's environment
+/// runs a real agent turn for every message a case sends. The release gate is exactly such a
+/// box (`verify` carries the LiveAgent secret to every tier), so the cases that let the
+/// environment decide were spending real turns there and nowhere else — one picker case failed
+/// on it outright, and the offline-reopen cases paid a live turn's start inside a wait that is
+/// about something else. One builder, because a spawn site that has to remember this is how
+/// four of six came not to.
+///
+/// Empty rather than removed, which is what `ambientCredential` reads as absent and what the
+/// Node suites plant for the same reason. It reaches the session because the Manager spawns
+/// one with `{...process.env, ...}` (`Spawn.fs`). Set after the case's own variables, so no
+/// case can put one back by naming it.
+let private productStartInfo (args: string list) (env: (string * string) list) : ProcessStartInfo =
+    let psi = ProcessStartInfo "node"
+    psi.ArgumentList.Add "app/out/Main.js"
+    args |> List.iter psi.ArgumentList.Add
+    env |> List.iter (fun (name, value) -> psi.EnvironmentVariables.[name] <- value)
+    psi.EnvironmentVariables.["ANTHROPIC_API_KEY"] <- ""
+    psi.EnvironmentVariables.["CLAUDE_CODE_OAUTH_TOKEN"] <- ""
+    psi.UseShellExecute <- false
+    psi
+
 /// Boot the real product entry on ports the OS picks, in a data dir nothing else touches.
 ///
 /// `--port 0` is what makes a case's host its own: the shipped default is a fixed 8321, so
@@ -593,30 +619,15 @@ let private startHost () : Host =
     let ordinal = System.Threading.Interlocked.Increment hostsStarted
     let dataDir = sprintf "tests/browser/.data/host-%d-%d" (Process.GetCurrentProcess().Id) ordinal
     if Directory.Exists dataDir then Directory.Delete (dataDir, true)
-    let psi = ProcessStartInfo "node"
-    psi.ArgumentList.Add "app/out/Main.js"
-    // Single-machine loopback trust (the shipped default `none` denies everything and
-    // the login bounce would 401 before any page ever connects).
-    psi.ArgumentList.Add "--auth"
-    psi.ArgumentList.Add "localhost"
-    psi.ArgumentList.Add "--data-dir"
-    psi.ArgumentList.Add dataDir
-    psi.ArgumentList.Add "--port"
-    psi.ArgumentList.Add "0"
-    psi.UseShellExecute <- false
+    let psi =
+        productStartInfo
+            // Single-machine loopback trust (the shipped default `none` denies everything and
+            // the login bounce would 401 before any page ever connects).
+            [ "--auth"; "localhost"
+              "--data-dir"; dataDir
+              "--port"; "0" ]
+            []
     psi.RedirectStandardOutput <- true   // stderr inherits → visible in the log
-    // No ambient credential for any session this suite boots. One case is about what a
-    // session with NOTHING connected offers, and `SessionMain`'s documented last resort is
-    // the environment — so on a box that has a key, the picker is filled from it and the
-    // refusal that case begins from never appears. The release gate is exactly such a box
-    // (`verify` carries the LiveAgent secret), which is how a case that let the environment
-    // decide passed on every laptop and failed there.
-    //
-    // Empty rather than removed, which is what `ambientCredential` reads as absent and what
-    // the Node suites plant for the same reason. It reaches the session because the Manager
-    // spawns one with `{...process.env, ...}` (`Spawn.fs`).
-    psi.EnvironmentVariables.["ANTHROPIC_API_KEY"] <- ""
-    psi.EnvironmentVariables.["CLAUDE_CODE_OAUTH_TOKEN"] <- ""
     let p = new Process (StartInfo = psi)
     let ready = TaskCompletionSource<string> ()
     // Keep draining stdout (like the JS 'data' handler) so the pipe never blocks the host;
@@ -4275,22 +4286,17 @@ let mutable private mountedHost : Process = null
 /// Both addresses are the deployment's, never this host's to choose — which is why they
 /// arrive as arguments and why a restart keeps them (`Mounted.Restart`).
 let private startMountedHost (publicOrigin: string) (managerOrigin: string) : unit =
-    let psi = ProcessStartInfo "node"
-    psi.ArgumentList.Add "app/out/Main.js"
-    psi.ArgumentList.Add "--auth"
-    psi.ArgumentList.Add "localhost"
-    psi.ArgumentList.Add "--port"
-    psi.ArgumentList.Add (string (Uri(managerOrigin).Port))
-    psi.ArgumentList.Add "--default-session"
-    psi.ArgumentList.Add MOUNT_SESSION
-    psi.ArgumentList.Add "--data-dir"
-    psi.ArgumentList.Add mountDataDir
-    psi.UseShellExecute <- false
+    let psi =
+        productStartInfo
+            [ "--auth"; "localhost"
+              "--port"; string (Uri(managerOrigin).Port)
+              "--default-session"; MOUNT_SESSION
+              "--data-dir"; mountDataDir ]
+            // The two ADDRESSES stay variables: a session inherits them and parses them the
+            // same way, which is the whole reason they are not options.
+            [ "YESSION_MANAGER_URL", managerOrigin
+              "YESSION_SESSION_URL", publicOrigin + "/s/{id}" ]
     psi.RedirectStandardOutput <- true
-    // The two ADDRESSES stay variables: a session inherits them and parses them the same way,
-    // which is the whole reason they are not options.
-    psi.EnvironmentVariables.["YESSION_MANAGER_URL"] <- managerOrigin
-    psi.EnvironmentVariables.["YESSION_SESSION_URL"] <- publicOrigin + "/s/{id}"
     let p = new Process (StartInfo = psi)
     let ready = TaskCompletionSource<bool> ()
     p.OutputDataReceived.Add (fun e ->
@@ -4849,17 +4855,7 @@ type private Deployed =
 ///
 /// The URL in that line, where there is one, is the address it really came up on — which is
 /// what lets a piece be told `--port 0` and asked afterwards rather than assigned a number.
-let private deploy
-    (label: string)
-    (command: string)
-    (args: string list)
-    (env: (string * string) list)
-    (ready: string -> bool)
-    : Deployed =
-    let psi = ProcessStartInfo command
-    args |> List.iter psi.ArgumentList.Add
-    env |> List.iter (fun (name, value) -> psi.EnvironmentVariables.[name] <- value)
-    psi.UseShellExecute <- false
+let private deployStarting (label: string) (psi: ProcessStartInfo) (ready: string -> bool) : Deployed =
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
     let p = new Process (StartInfo = psi)
@@ -4887,6 +4883,30 @@ let private deploy
     // Read AFTER the wait: the readiness line is where the address is stated, so there is
     // nothing to read until it has arrived.
     { Label = label; Process = p; Origin = origin.Value; Said = said }
+
+/// A piece that is not the product — a front door, a proxy — run as `command` with `args`.
+let private deploy
+    (label: string)
+    (command: string)
+    (args: string list)
+    (env: (string * string) list)
+    (ready: string -> bool)
+    : Deployed =
+    let psi = ProcessStartInfo command
+    args |> List.iter psi.ArgumentList.Add
+    env |> List.iter (fun (name, value) -> psi.EnvironmentVariables.[name] <- value)
+    psi.UseShellExecute <- false
+    deployStarting label psi ready
+
+/// The product itself as a piece of the deployment, booted the one way this suite boots it
+/// (`productStartInfo`).
+let private deployProduct
+    (label: string)
+    (args: string list)
+    (env: (string * string) list)
+    (ready: string -> bool)
+    : Deployed =
+    deployStarting label (productStartInfo args env) ready
 
 
 // --- Creating a session behind a front door (browser) -------------------------------------
@@ -5039,11 +5059,9 @@ let private startFrontedHost (publicOrigin: string) (managerPort: int) : unit =
     // The management UI's line, not the session's: this case drives the Manager, and that line
     // is the last thing a completed boot prints.
     let host =
-        deploy
+        deployProduct
             "fronted host"
-            "node"
-            [ "app/out/Main.js"
-              "--auth"; "localhost"
+            [ "--auth"; "localhost"
               "--port"; string managerPort
               "--default-session"; FRONT_SESSION
               "--data-dir"; frontDataDir ]
@@ -5180,10 +5198,9 @@ let private deployFronted () : Fronted =
               "YESSION_PROXY_SESSIONS", Path.GetFullPath frontedMapDir + "/sessions*.caddy" ]
             (fun line -> line.Contains "serving initial configuration")
     let manager =
-        deploy
+        deployProduct
             "the Manager"
-            "node"
-            [ "app/out/Main.js"; "--auth"; "trusted-headers"; "--secrets"; "ephemeral"
+            [ "--auth"; "trusted-headers"; "--secrets"; "ephemeral"
               "--port"; string frontedManagerPort; "--data-dir"; frontedDataDir ]
             [ "YESSION_MANAGER_URL", origin
               "YESSION_SESSION_URL", origin + "/s/{id}" ]
@@ -5319,12 +5336,11 @@ let filterTests =
             async {
                 if Directory.Exists filtersDataDir then Directory.Delete (filtersDataDir, true)
                 let manager =
-                    deploy
+                    deployProduct
                         "the Manager"
-                        "node"
                         // `--port 0`: the OS chooses, and the readiness line says which, so
                         // this suite knows nothing about any other's address.
-                        [ "app/out/Main.js"; "--auth"; "localhost"; "--secrets"; "ephemeral"
+                        [ "--auth"; "localhost"; "--secrets"; "ephemeral"
                           "--port"; "0"; "--data-dir"; filtersDataDir ]
                         []
                         (fun line -> line.Contains "management UI at")
@@ -5434,14 +5450,13 @@ let private withHeldCreate
     async {
         if Directory.Exists pressDataDir then Directory.Delete (pressDataDir, true)
         let manager =
-            deploy
+            deployProduct
                 "the Manager"
-                "node"
                 // `--port 0`: the OS chooses, and the readiness line says which. The Manager is
                 // handed to the body because two of its cases have to address it — one of them
                 // about the browser having LEFT this port, which is the one thing here that is
                 // genuinely about a number.
-                [ "app/out/Main.js"; "--auth"; "localhost"; "--secrets"; "ephemeral"
+                [ "--auth"; "localhost"; "--secrets"; "ephemeral"
                   "--port"; "0"; "--data-dir"; pressDataDir ]
                 []
                 (fun line -> line.Contains "management UI at")
@@ -5537,10 +5552,9 @@ let private withOpening (name: string) (prepare: IPage -> Async<unit>) (body: De
     async {
         if Directory.Exists openingDataDir then Directory.Delete (openingDataDir, true)
         let manager =
-            deploy
+            deployProduct
                 "the Manager"
-                "node"
-                [ "app/out/Main.js"; "--auth"; "localhost"; "--secrets"; "ephemeral"
+                [ "--auth"; "localhost"; "--secrets"; "ephemeral"
                   "--port"; "0"; "--data-dir"; openingDataDir ]
                 []
                 (fun line -> line.Contains "management UI at")
