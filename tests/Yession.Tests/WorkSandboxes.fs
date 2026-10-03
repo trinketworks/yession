@@ -1620,6 +1620,47 @@ let private proxyTests =
                     Expect.isEmpty fake.Asked "and the proxy never heard of it"
             }
 
+        // A want is silent where it cannot be had, but why it could not is not lost: a sandbox
+        // that WANTED the api route and was refused it names the proxy anyway, and "select a
+        // resource granting one" would send its operator to select what was just refused.
+        testCaseAsync "a sandbox refused the api route it wanted is told why, not what to select" <|
+            async {
+                let fake, proxy = fakeProxy None
+                let refusing : WorkSandboxes.CredentialSource =
+                    { githubCredential "route" with
+                        Provision =
+                            fun _ routes ->
+                                async {
+                                    if List.contains ConnectionRoute.Api routes then
+                                        return WorkSandboxes.CredentialForwarding.Unforwardable "an srt sandbox takes a connection by git alone"
+                                    else
+                                        return WorkSandboxes.CredentialForwarding.Forwarded WorkSandboxes.Provision.empty
+                                } }
+                let! sandboxes =
+                    WorkSandboxes.create
+                        { Backend = fun _ -> "fake"
+                          Describe = fun _ -> None
+                          Checkout = fun _ -> None
+                          Credentials = [ refusing ]
+                          Selection = everyResourceAConnection
+                          Proxy = proxy
+                          Standing = []
+                          Create = fun _ _ _ -> Ok (fakeEnvironment ())
+                          Log = newLog ()
+                          Clock = fixedClock }
+                let wanted =
+                    { Spec =
+                        { (asking "SSL_CERT_FILE" "${proxy.ca-file}").Spec with
+                            Uses = []
+                            Wants = [ ResourceName.create "github" |> expect ] } }
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:dev") wanted with
+                | Ok _ -> failwith "expected a refusal"
+                | Error e ->
+                    Expect.stringContains e "'github' was refused it: an srt sandbox takes a connection by git alone" "the reason it was refused"
+                    Expect.isFalse (e.Contains "select a resource") "and not advice to select it again"
+                    Expect.isEmpty fake.Asked "and the proxy never heard of it"
+            }
+
         testCaseAsync "a sandbox that names nothing of the proxy is never provided for" <|
             async {
                 let fake, proxy = fakeProxy None
