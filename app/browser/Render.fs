@@ -25,6 +25,7 @@ open Fable.BrowserExtras
 open Lit
 open Yjs
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Collab

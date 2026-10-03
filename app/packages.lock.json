@@ -267,8 +267,17 @@
           "Fable.Yjs": "[1.0.0-beta0233, )",
           "Thoth.Json": "[10.5.1, )",
           "Thoth.Json.Net": "[12.0.0, )",
+          "Yession.Codecs": "[1.0.0, )",
           "Yession.Domain": "[1.0.0, )",
           "Ylmish": "[1.0.0-beta0233, )"
+        }
+      },
+      "yession.codecs": {
+        "type": "Project",
+        "dependencies": {
+          "Thoth.Json": "[10.5.1, )",
+          "Thoth.Json.Net": "[12.0.0, )",
+          "Yession.Domain": "[1.0.0, )"
         }
       },
       "yession.domain": {
@@ -288,6 +297,7 @@
         "dependencies": {
           "Thoth.Json": "[10.5.1, )",
           "Thoth.Json.Net": "[12.0.0, )",
+          "Yession.Codecs": "[1.0.0, )",
           "Yession.Domain": "[1.0.0, )"
         }
       },
@@ -296,12 +306,14 @@
         "dependencies": {
           "Thoth.Json": "[10.5.1, )",
           "Thoth.Json.Net": "[12.0.0, )",
+          "Yession.Codecs": "[1.0.0, )",
           "Yession.Domain": "[1.0.0, )"
         }
       },
       "yession.session": {
         "type": "Project",
         "dependencies": {
+          "Yession.Codecs": "[1.0.0, )",
           "Yession.Domain": "[1.0.0, )"
         }
       },

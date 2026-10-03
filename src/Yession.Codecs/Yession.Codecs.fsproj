@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The codecs no one component owns: the identities every contract carries — ids, actors,
+    principals, timestamps, refs — and the stricter decoders those contracts share. A
+    contract itself lives with its owner (Yession.App.Codecs, Yession.Manager,
+    Yession.Session); this project is only what all of them spell the same way. It keeps
+    Yession.Domain free of a JSON library: the model says what a value is, and this says how
+    it crosses a wire.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Codecs.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Thoth.Json" />
+    <PackageReference Include="Thoth.Json.Net" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Yession.Domain\Yession.Domain.fsproj" />
+  </ItemGroup>
+
+</Project>

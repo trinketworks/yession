@@ -6,6 +6,7 @@ module Yession.Tests.Routes
 
 open Fable.Pyxpecto
 open Yession.Domain
+open Yession.Codecs
 open Yession.App
 
 let private offset (n: int64) =

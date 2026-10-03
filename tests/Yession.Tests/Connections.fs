@@ -10,6 +10,7 @@ open Fable.Core
 open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Sandboxes
 open Yession.Domain.Access
 open Yession.Domain.Chat

@@ -19,6 +19,7 @@ module Yession.Tests.Requests
 
 open Fable.Pyxpecto
 open Yession.Domain
+open Yession.Codecs
 open Yession.Host
 open Yession.App.Codecs
 open Yession.Host.PrWatches

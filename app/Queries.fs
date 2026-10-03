@@ -16,6 +16,8 @@ module Yession.Host.Queries
 // value in SessionMain rather than a panel, a route, a message and a reducer case.
 
 open Yession.Domain
+open Yession.Codecs
+
 open Yession.Domain.Tools
 open Yession.App.Codecs
 

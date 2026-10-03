@@ -26,6 +26,8 @@ module Yession.Host.Commands
 // refuses only when the configuration differs.
 
 open Yession.Domain
+open Yession.Codecs
+
 open Yession.Domain.Sandboxes
 open Yession.Domain.Content
 open Yession.Domain.Agent

@@ -10,6 +10,7 @@ open System
 open Fable.Pyxpecto
 open Yjs
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
 open Yession.Domain.Content

@@ -2,6 +2,7 @@ namespace Yession.Manager
 
 open System
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Access
 
 #if FABLE_COMPILER

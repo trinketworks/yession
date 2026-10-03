@@ -1,6 +1,8 @@
 namespace Yession.App
 
 open Yession.Domain
+open Yession.Codecs
+
 open Yession.Domain.Content
 open Yession.Domain.Terminals
 

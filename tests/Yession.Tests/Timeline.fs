@@ -7,6 +7,7 @@ module Yession.Tests.Timeline
 open System
 open Fable.Pyxpecto
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Agent
 open Yession.Domain.Tools
 open Yession.Domain.Terminals

@@ -176,6 +176,7 @@
     <ProjectReference Include="..\src\Fable.OpenIdClient\Fable.OpenIdClient.fsproj" />
     <ProjectReference Include="..\src\Fable.OpenTelemetry\Fable.OpenTelemetry.fsproj" />
     <ProjectReference Include="..\src\Yession.Domain\Yession.Domain.fsproj" />
+    <ProjectReference Include="..\src\Yession.Codecs\Yession.Codecs.fsproj" />
     <ProjectReference Include="..\src\Yession.Manager\Yession.Manager.fsproj" />
     <ProjectReference Include="..\src\Yession.Oidc\Yession.Oidc.fsproj" />
     <ProjectReference Include="..\src\Yession.Session\Yession.Session.fsproj" />

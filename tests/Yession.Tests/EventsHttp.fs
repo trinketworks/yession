@@ -14,6 +14,7 @@ open Fable.Core
 open Fable.Pyxpecto
 open Ylmish
 open Yession.Domain
+open Yession.Codecs
 open Yession.App
 open Yession.Session
 open Yession.Host

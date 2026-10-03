@@ -15,6 +15,7 @@ module Yession.Tests.WorkSandboxes
 open System
 open Fable.Pyxpecto
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Repos
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent

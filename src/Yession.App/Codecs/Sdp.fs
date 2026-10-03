@@ -5,6 +5,7 @@ namespace Yession.App.Codecs
 // it: one declaration, read and written by both ends, where two used to agree by hand.
 
 open Yession.Domain
+open Yession.Codecs
 
 #if FABLE_COMPILER
 open Thoth.Json

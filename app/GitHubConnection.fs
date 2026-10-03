@@ -23,6 +23,7 @@ open Fable.Core
 open Fable.Core.JsInterop
 open Fable.NodeExtras
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Sandboxes
 open Yession.Domain.Access
 open Yession.Manager

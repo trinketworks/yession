@@ -13,6 +13,7 @@ open Fable.Core
 open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Terminals
 open Yession.App
 open Yession.Host

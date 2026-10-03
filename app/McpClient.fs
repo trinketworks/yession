@@ -14,6 +14,7 @@ module Yession.Host.McpClient
 open System
 open Fable.Core
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Terminals
 open Yession.Domain.Tools
 open Yession.Session

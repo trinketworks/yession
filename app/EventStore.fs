@@ -10,6 +10,7 @@ open Fable.Core
 open Node.Api
 open Fable.NodeExtras
 open Yession.Domain
+open Yession.Codecs
 open Yession.Session
 open Yession.App.Codecs
 

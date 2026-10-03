@@ -16,6 +16,7 @@ module Yession.Host.GitHubPrs
 open System
 open Fable.Core
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Hooks
 open Yession.Domain.Prs
 open Yession.Host.PrWatches

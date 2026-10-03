@@ -1,6 +1,8 @@
 namespace Yession.App.Codecs
 
 open Yession.Domain
+open Yession.Codecs
+
 open Yession.Domain.Chat
 open Yession.Domain.Agent
 open Yession.Domain.Link
