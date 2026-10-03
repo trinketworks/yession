@@ -121,6 +121,31 @@ module McpRpc =
                         get.Required.Field "id" Decode.int,
                         get.Optional.Field "result" rawJson.Decode |> Option.defaultValue "{}")) }
 
+    /// The response to request `id`, out of the frames a reply carried, or `None` when none
+    /// of them is.
+    ///
+    /// A POST answered with an SSE stream may put notifications (a long call's
+    /// `notifications/progress`) and even requests of the server's own ahead of the response,
+    /// so "the first frame" is not "the answer". A frame is the answer when it carries a
+    /// `result` or an `error` and its `id` is ours. The `response` codec cannot say that on
+    /// its own: it would read a server's request, which has an `id` and neither, as a result
+    /// with an empty body. Anything unreadable is skipped rather than reported, since it is
+    /// not ours to answer for; the caller names the request that went unanswered.
+    let replyTo (id: int) (frames: string list) : JsonRpcResponse option =
+        let isResponse : Decoder<bool> =
+            Decode.object (fun get ->
+                get.Optional.Field "result" Decode.value |> Option.isSome
+                || get.Optional.Field "error" Decode.value |> Option.isSome)
+        let ours (frame: string) =
+            match Decode.fromString isResponse frame with
+            | Ok true ->
+                match Decode.fromString response.Decode frame with
+                | Ok (JsonRpcResult (answered, _) as found) when answered = id -> Some found
+                | Ok (JsonRpcFailure (Some answered, _, _) as found) when answered = id -> Some found
+                | _ -> None
+            | _ -> None
+        frames |> List.tryPick ours
+
     /// `initialize`'s params. We declare NO client capabilities: a client that declared
     /// `sampling` would be offering the provider a way to drive the model, which is the
     /// opposite of what a proxied server is for. `roots` and `elicitation` are absent for
@@ -199,6 +224,12 @@ module McpRpc =
                   McpCallResult.IsError =
                     get.Optional.Field "isError" Decode.bool |> Option.defaultValue false
                   McpCallResult.Meta = get.Optional.Field "_meta" rawJson.Decode }) }
+
+    /// What the model reads of a `tools/call` result. A tool that RAN and went badly says so
+    /// through `isError`, and the call stays an answer rather than a failure — so the flag
+    /// has to reach the model as words, because its text alone reads exactly like a success.
+    let toolText (result: McpCallResult) : string =
+        if result.IsError then "The tool reported an error:\n" + result.Text else result.Text
 
     /// The stream a provider offered, out of a result's `_meta` (Plan 19).
     ///
