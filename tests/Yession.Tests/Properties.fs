@@ -195,7 +195,7 @@ let private runSchedule (ops: ScheduleOp list) : CaseResult =
             Scheduler.create sessionId processDoc log (fun () -> Some runner)
                 (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId Principal.Peer
                 // No terminals in this harness, so no transcript to read back.
-                (fun _ _ _ -> []) None (consumedNow ())
+                (fun _ _ _ -> []) None TurnPolicy.addressed (consumedNow ())
         scheduler <- sched
         let thisProcess = processDoc
         let thisShadow = shadowDoc

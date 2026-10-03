@@ -106,6 +106,9 @@ module Scheduler =
         // The operator's words for the agent, from the host's profile; `None` is a host that
         // wrote none. Passed straight to `AgentTurn.run`.
         (guidance: string option)
+        // Whether a drained batch starts a turn, and which message it answers. The policy,
+        // handed in: this scheduler is the mechanism that appends, asks, and runs.
+        (turnPolicy: TurnPolicy)
         (initialConsumed: Set<string>)
         : SessionScheduler =
 
@@ -153,7 +156,7 @@ module Scheduler =
                             //    QueueId as the exactly-once anchor) BEFORE the doc
                             //    removal — a crash here leaves only a repairable
                             //    leftover, never a lost or doubled message.
-                            let mutable lastMessage : MessageSent option = None
+                            let mutable sent : MessageSent list = []
                             for entry in plan.Batch do
                                 let message =
                                     { MessageId = mintMessageId ()
@@ -162,13 +165,27 @@ module Scheduler =
                                       Body = SyncedStateSync.queuedBodyMarkdown doc entry.QueueId }
                                 let! _ = log.Append (Principal.toActor message.Author) (MessageSent message)
                                 consumed <- Set.add (QueueId.value entry.QueueId) consumed
-                                lastMessage <- Some message
+                                sent <- sent @ [ message ]
                             // 2. Visible: one transaction under the process origin;
                             //    the removal relays to every peer like any update.
                             SyncedStateSync.removeQueued doc plan.Removals
-                            // 3. Run one coalesced turn, triggered by the batch tail.
-                            match runAgent (), lastMessage with
-                            | Some agent, Some trigger ->
+                            // 3. Run one coalesced turn, answering the message the turn
+                            //    policy picks — or none, when the batch was addressed only to
+                            //    other people. Every message above is on the record either way.
+                            //    The page is read before the slot is taken (`drainBusy` still
+                            //    holds it), because the policy reads who is who off it.
+                            let agent = runAgent ()
+                            let! page =
+                                match agent, sent with
+                                | Some _, _ :: _ -> async { let! read = log.Read None System.Int32.MaxValue in return Some read }
+                                | _ -> async { return None }
+                            let people =
+                                page
+                                |> Option.map (fun page -> page.Events |> List.map (fun e -> e.Event) |> Attribution.ofEvents)
+                            let answering =
+                                people |> Option.bind (fun people -> turnPolicy people sent)
+                            match agent, page, people, answering with
+                            | Some agent, Some page, Some people, Some trigger ->
                                 let trigger = AgentTurn.FromMessage trigger
                                 generation <- generation + 1
                                 let turn =
@@ -178,7 +195,6 @@ module Scheduler =
                                       AbortCallbacks = [] }
                                 running <- Some turn
                                 drainBusy <- false
-                                let! page = log.Read None System.Int32.MaxValue
                                 let projection, _ =
                                     ConversationProjection.applyEvents None page.Events ConversationProjection.empty
                                 // The terminal digest comes off the SAME page, so the
@@ -195,7 +211,7 @@ module Scheduler =
                                         (Digest.window events)
                                 let repos =
                                     events |> List.fold ReposProjection.applyEvent ReposProjection.empty
-                                do! AgentTurn.run log agent (signalFor turn) capabilitiesFor emitUsage (fun () -> turn.TurnId) mintMessageId sessionId (SessionHistory.ofEnvelopes page.Events) projection.Items (Attribution.ofEvents events) terminals repos.Repos (selectedModel ()) guidance trigger
+                                do! AgentTurn.run log agent (signalFor turn) capabilitiesFor emitUsage (fun () -> turn.TurnId) mintMessageId sessionId (SessionHistory.ofEnvelopes page.Events) projection.Items people terminals repos.Repos (selectedModel ()) guidance trigger
                                 // Release the slot and re-arm — unless an interrupt
                                 // already released it (and possibly started a successor).
                                 match running with
@@ -215,6 +231,10 @@ module Scheduler =
                                 drainBusy <- false
                                 // Re-arm: anything enqueued during the appends drains now.
                                 drain ()
+                                // A batch the policy held ran no turn, so no turn's end will
+                                // re-read the log for a completion that arrived while this
+                                // drain held the slot. Same re-read, here.
+                                wake ()
                         })
 
         /// Run the turn the log owes, if it owes one. Same shape as the message path's turn

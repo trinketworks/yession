@@ -1235,7 +1235,7 @@ let private armedSchedulerOver (doc: Y.Doc) (seed: SessionEvent list) (duringTur
     let scheduler =
         Scheduler.create sessionId doc log (fun () -> Some runner)
             (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId Principal.Peer
-            (fun _ _ _ -> []) None Set.empty
+            (fun _ _ _ -> []) None TurnPolicy.addressed Set.empty
     scheduler, log
 
 let private armedScheduler (seed: SessionEvent list) (duringTurn: EventLog<SessionEvent> -> unit) =
@@ -1532,7 +1532,7 @@ let private schedulerOverPickedModel (choice: ModelId option) =
     let scheduler =
         Scheduler.create (SessionId.create "model-session" |> expect) doc log (fun () -> Some runner)
             (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) (fun () -> turnId) (fun () -> agentMessageId) Principal.Peer
-            (fun _ _ _ -> []) None Set.empty
+            (fun _ _ _ -> []) None TurnPolicy.addressed Set.empty
     scheduler, (fun () -> seen)
 
 let private modelChoiceTests =
@@ -2151,6 +2151,86 @@ let private multiplayerTests =
             Expect.isEmpty projection.Items "silence is not drawn as an empty reply"
     ]
 
+/// Who a message is for, and whether that starts a turn: the mention parse and the policy the
+/// scheduler is handed, then the scheduler honouring it.
+let private addressTests =
+    let alice = UserId.create "alice-subject" |> expect
+    let room =
+        Attribution.ofEvents
+            [ PeerJoined { PeerId = ada; DisplayName = "swift-heron"; User = None }
+              PeerJoined { PeerId = bob; DisplayName = "brave-owl"; User = Some alice } ]
+    let said (who: PeerId) (body: string) : MessageSent =
+        { MessageId = MessageId.create ("m-" + body) |> expect; QueueId = None; Author = Principal.Peer who; Body = body }
+    /// Drain one message bob sent, into a session where ada joined as swift-heron, and answer
+    /// the turns that ran.
+    let drained (body: string) =
+        async {
+            let peerDoc = Y.Doc.Create ()
+            let registry = Yession.App.Collab.BodyRegistry peerDoc
+            let runner = Harness.run (Client.makeProgram Client.Ports.offline peerDoc (ClientModel.init (peer "bob" "Bob")))
+            Body.author registry runner bob body
+            Body.send registry runner bob |> ignore
+            let processDoc = Y.Doc.Create ()
+            Yession.App.Collab.DocSync.applyRemote processDoc (Yession.App.Collab.DocSync.fullState peerDoc)
+            let scheduler, log =
+                armedSchedulerOver processDoc [ PeerJoined { PeerId = ada; DisplayName = "swift-heron"; User = None } ] ignore
+            do! scheduler.Boot ()
+            let! events = eventsOf log
+            let! turns = startedTurns log
+            return events, turns
+        }
+    testList "Who a message is for" [
+
+        testCase "@agent addresses the agent" <| fun () ->
+            Expect.isTrue (Addressed.ofBody room "@agent run the tests").Agent "typed, with no picker"
+
+        testCase "an address is not case-sensitive" <| fun () ->
+            Expect.isTrue (Addressed.ofBody room "hey @Agent?").Agent "a person is not spelling an identifier"
+
+        testCase "an email address addresses nobody" <| fun () ->
+            Expect.equal (Addressed.ofBody room "mail agent@example.com") Addressed.nobody "the @ inside a word is not an address"
+
+        testCase "@name addresses whoever joined under it" <| fun () ->
+            Expect.equal (Addressed.ofBody room "@swift-heron, look").People [ Principal.Peer ada ] "trailing punctuation is the sentence's"
+
+        testCase "@name of an attributed peer addresses their user" <| fun () ->
+            Expect.equal (Addressed.ofBody room "@brave-owl look").People [ Principal.User alice ] "the same rule that stamps an author"
+
+        testCase "@name that names nobody here is just text" <| fun () ->
+            Expect.equal (Addressed.ofBody room "@nobody look") Addressed.nobody "no one to address"
+
+        testCase "a message addressed only to someone else starts no turn" <| fun () ->
+            Expect.isNone (TurnPolicy.addressed room [ said bob "@swift-heron can you look" ]) "it was not for the agent"
+
+        testCase "a message addressed to nobody starts a turn" <| fun () ->
+            Expect.isSome (TurnPolicy.addressed room [ said bob "can you look" ]) "the agent decides whether it was for it"
+
+        testCase "a message addressing the agent and someone else starts a turn" <| fun () ->
+            Expect.isSome (TurnPolicy.addressed room [ said bob "@agent and @swift-heron, look" ]) "the agent was asked"
+
+        testCase "a batch answers its newest message that is for the agent" <| fun () ->
+            let asked = said ada "@agent run the tests"
+            Expect.equal
+                (TurnPolicy.addressed room [ asked; said bob "@swift-heron lunch?" ])
+                (Some asked)
+                "the aside after it is not what the turn answers"
+
+        testCaseAsync "a drained message addressed to someone else is recorded and starts no turn" <|
+            async {
+                let! events, turns = drained "@swift-heron can you look"
+                Expect.isEmpty turns "no turn ran"
+                Expect.isTrue
+                    (events |> List.exists (function MessageSent m -> m.Body.Contains "can you look" | _ -> false))
+                    "the message is on the record"
+            }
+
+        testCaseAsync "a drained message addressed to the agent starts a turn" <|
+            async {
+                let! _, turns = drained "@agent can you look"
+                Expect.equal (List.length turns) 1 "one turn ran"
+            }
+    ]
+
 let tests =
     testList "Agent" [
         turnTests
@@ -2173,6 +2253,7 @@ let tests =
         armTests
         restartTests
         multiplayerTests
+        addressTests
         Tag.needs "Agent E2E" [ Tag.Ports; Tag.Native ] (fun () -> e2eTests)
         Tag.needs "Agent live SDK" [ Tag.LiveAgent; Tag.Native ] (fun () -> liveTests)
     ]
