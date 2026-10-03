@@ -19,6 +19,7 @@ open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Terminals
 open Yession.Domain.Tools
+open Yession.Session
 
 let private expect result =
     match result with
@@ -27,7 +28,7 @@ let private expect result =
 
 let private meta (body: string) = sprintf """{"%s":%s}""" StreamOffer.metaKey body
 
-let private offerOf (body: string) = Codec.streamOffer (meta body)
+let private offerOf (body: string) = McpRpc.streamOffer (meta body)
 
 let private ticket (url: string) : AttachTicket =
     { Url = url; Capabilities = SourceCapabilities.byteStream; Label = Some "a device" }
@@ -73,14 +74,14 @@ let private decodeTests =
         test "an unreadable offer is no offer, never a failed call" {
             Expect.isNone (offerOf """{"label":"no url here"}""") "an offer with no address"
             Expect.isNone (offerOf """"a string where an object goes" """) "the wrong shape entirely"
-            Expect.isNone (Codec.streamOffer """{"someone.else/thing":{"url":"ws://h/s"}}""") "somebody else's key"
-            Expect.isNone (Codec.streamOffer "{}") "an empty _meta"
-            Expect.isNone (Codec.streamOffer "not json at all") "and something that is not JSON"
+            Expect.isNone (McpRpc.streamOffer """{"someone.else/thing":{"url":"ws://h/s"}}""") "somebody else's key"
+            Expect.isNone (McpRpc.streamOffer "{}") "an empty _meta"
+            Expect.isNone (McpRpc.streamOffer "not json at all") "and something that is not JSON"
         }
 
         test "an offer travels beside other people's metadata rather than instead of it" {
             let both = sprintf """{"progressToken":7,"%s":{"url":"ws://h/s"}}""" StreamOffer.metaKey
-            Expect.isSome (Codec.streamOffer both) "a key we do not read does not hide the one we do"
+            Expect.isSome (McpRpc.streamOffer both) "a key we do not read does not hide the one we do"
         }
     ]
 

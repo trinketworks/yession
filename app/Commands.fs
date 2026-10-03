@@ -103,7 +103,7 @@ type CommandServices =
       NoteTabOpened : ViewRef -> bool -> ActorRef -> Async<unit>
       NoteTabClosed : ViewRef -> ActorRef -> Async<unit> }
 
-let private encodeArgs (values: string list) : string = Codec.toString Codec.gatedArgs values
+let private encodeArgs (values: string list) : string = Codec.toString CommandGates.args values
 
 /// Re-read every checkout's `yession.yaml` once a verb has actually changed what checkouts
 /// exist or what is in them (Plan 27).
@@ -741,7 +741,7 @@ let dispatch (services: CommandServices) : CommandDispatch =
             } ]
     |> Map.map (fun _ (run: GatedInvocation -> string list -> Async<Result<string, string>>) ->
         fun (invocation: GatedInvocation) ->
-            match Codec.fromString Codec.gatedArgs invocation.Args with
+            match Codec.fromString CommandGates.args invocation.Args with
             | Ok args -> run invocation args
             | Error reason -> async { return Error (sprintf "the call's arguments could not be read: %s" reason) })
 

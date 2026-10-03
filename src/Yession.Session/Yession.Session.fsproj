@@ -5,6 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="McpRpc.fs" />
     <Compile Include="EventLog.fs" />
     <Compile Include="Model.fs" />
     <Compile Include="Commands.fs" />

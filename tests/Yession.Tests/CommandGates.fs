@@ -68,7 +68,7 @@ let private eventsOf (log: EventLog<SessionEvent>) : Async<SessionEvent list> =
 
 let private call (tool: string) (args: string list) (summary: string) : GatedCall =
     { Tool = tool
-      Args = Codec.toString Codec.gatedArgs args
+      Args = Codec.toString CommandGates.args args
       Summary = summary
       Authority = Authority.agentFor ada' }
 

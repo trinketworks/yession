@@ -4,6 +4,12 @@ open System
 open Yession.Domain
 open Yession.Domain.Agent
 
+#if FABLE_COMPILER
+open Thoth.Json
+#else
+open Thoth.Json.Net
+#endif
+
 /// The gate for structured commands (Plan 15, stage 3b; Plan 23).
 ///
 /// Every command passes the CLASSIFIER on its way to the dispatch table: approved, it runs
@@ -16,6 +22,21 @@ open Yession.Domain.Agent
 /// deadline, and yields `CommandRunning` with a handle rather than holding the turn — a
 /// six-second clone is work in progress, not a decision anybody was offered.
 module CommandGates =
+
+    /// A gated command's arguments, on the wire (Plan 15, stage 3b).
+    ///
+    /// A list of strings, deliberately — every gated command's arguments are names, branches
+    /// and flags, and a positional list is the smallest thing that survives the doc and comes
+    /// back to a process that did not write it. A per-command schema would be the
+    /// JSON-Schema-subset renderer this plan already deferred, arriving through the back
+    /// door; when that lands, the card can read these and this becomes its encoding.
+    ///
+    /// Never a credential. `PendingAct.OnBehalfOf` names WHOSE, and the value is resolved at
+    /// execution — the pending list replicates to every peer, and a shape that could hold a
+    /// token eventually does.
+    let args : Codec<string list> =
+        { Encode = fun values -> Encode.list (values |> List.map Encode.string)
+          Decode = Decode.list Decode.string }
 
     // The outcome shapes (`CommandStatus`, `CommandOutcome`, `GatedCall`) live in
     // `Yession.Domain.Agent`, beside `TerminalCommandOutcome` and for its reason: they are

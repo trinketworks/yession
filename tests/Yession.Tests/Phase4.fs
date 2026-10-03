@@ -24,6 +24,7 @@ open Yession.App
 open Yession.Host
 open Yession.Tests.Support
 open Yession.Peer
+open Yession.Session
 
 /// What a browser makes of a link on a page: the href resolved against the page's own URL —
 /// the WHATWG `URL` constructor, which Node ships as the browser does.
@@ -2809,13 +2810,13 @@ let private mcpTests =
                     [ searchTool
                       { McpTool.Name = "noop"; Title = None; Description = None; InputSchema = "{}" } ] }
             let roundTripped =
-                ControlWire.toString Codec.mcpToolList original
-                |> ControlWire.fromString Codec.mcpToolList
+                ControlWire.toString McpRpc.toolList original
+                |> ControlWire.fromString McpRpc.toolList
                 |> expect
             Expect.equal roundTripped original "round-trip is identity (schema stays an object, optionals preserved)"
 
         testCase "inputSchema is a real JSON object on the wire, not a quoted string" <| fun () ->
-            let json = ControlWire.toString Codec.mcpToolList { Tools = [ searchTool ] }
+            let json = ControlWire.toString McpRpc.toolList { Tools = [ searchTool ] }
             Expect.isTrue (json.Contains "\"inputSchema\":{") "the schema serialises as an embedded object"
 
         testCase "a server set round-trips, and carries no audience" <| fun () ->
