@@ -22,14 +22,15 @@ open Yession.App.Codecs
 
 type ConnectionState =
     /// Not connected and not trying. Carries WHY whenever the client knows — a rejected
-    /// token, a session that never answered — because a bare "disconnected" is the same
-    /// dead end the event feed used to be: a true statement that helps nobody.
+    /// token — because a bare "disconnected" is the same dead end the event feed used to
+    /// be: a true statement that helps nobody. A session that could not be reached is never
+    /// this: it is `Retrying`, because it is being tried again.
     | Disconnected of reason: string option
     | Connecting
     | Connected
     | Reconnecting
-    /// Not connected, and still trying: the last attempt to open the transport failed for
-    /// `reason`, and `failures` attempts have failed in a row. Distinct from `Disconnected`
+    /// Not connected, and still trying: the last attempt to reach the session (`/me`, or
+    /// opening the transport) failed for `reason`, and `failures` attempts have failed in a row. Distinct from `Disconnected`
     /// because what a person should take from it differs — not "this is broken" but "this is
     /// being worked on" — and from `Connecting` because it has news: why, and how long.
     | Retrying of reason: string * failures: int
@@ -921,12 +922,10 @@ type ClientMsg =
     | ConnectingMsg
     | ConnectedMsg of PeerAcceptedPayload
     | RejectedMsg of reason: string
-    /// The session could not be reached to ask who this is (`/me`), so there is nothing to
-    /// connect with. Distinct from `RejectedMsg` (which is the session refusing a peer it did
-    /// hear from) because the remedy differs: wait, versus re-auth.
-    | ConnectFailedMsg of reason: string
-    /// An attempt to open the transport failed, and the lifecycle will try again: `reason`
-    /// is why this one failed and `failures` how many have failed in a row.
+    /// The session could not be reached — to ask who this is (`/me`), or to open the
+    /// transport — and it will be tried again: `reason` is why this attempt failed and
+    /// `failures` how many have failed in a row. Distinct from `RejectedMsg` (the session
+    /// refusing a peer it did hear from) because the remedy differs: wait, versus re-auth.
     | RetryingMsg of reason: string * failures: int
     | EventsAvailableMsg of latestOffset: EventOffset
     /// A read-only event page from the Session (Step 07): the conversation is
@@ -2397,8 +2396,6 @@ module ClientModel =
                 Peer = { model.Peer with DisplayName = accepted.AssignedDisplayName }
                 EventConsumer = withLatestKnown accepted.LatestOffset model.EventConsumer }
         | RejectedMsg reason ->
-            { model with Connection = Disconnected (Some reason) }
-        | ConnectFailedMsg reason ->
             { model with Connection = Disconnected (Some reason) }
         | RetryingMsg (reason, failures) ->
             { model with Connection = Retrying (reason, failures) }

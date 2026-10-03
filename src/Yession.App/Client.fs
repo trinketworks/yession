@@ -1119,8 +1119,9 @@ module Client =
         ///
         /// Ten seconds: past a session's cold boot behind a front door (a few seconds) and a
         /// tailnet's first handshake, short of a person concluding the app is dead. Past it
-        /// the probe reports unreachable with the timeout as its reason, and the reopen offer
-        /// and the retry are on the screen — the two things that can change the answer.
+        /// the probe reports unreachable with the timeout as its reason, is asked again on the
+        /// lifecycle's schedule (`SessionLifecycle.reach`), and the reopen offer and the retry
+        /// are on the screen meanwhile — the two things that can change the answer sooner.
         let deadline = System.TimeSpan.FromSeconds 10.0
 
     /// Wire a connected channel to the client's doc and the event log: locally-originated
@@ -1505,6 +1506,35 @@ module Client =
                 (System.TimeSpan.FromMinutes 1.0)
                 System.Int32.MaxValue
             |> Resilience.Schedule.jittered 0.5 random
+
+        /// Ask until the session answers. The probe that comes before the transport (`/me`)
+        /// settles three ways and only one of them means "not yet": a session that could not
+        /// be reached may still come back, exactly as one the transport lost may, so it is
+        /// reported as `Retrying` — the reason and the count — and asked again on the same
+        /// schedule. It used to settle on the first failure, so a page opened while its
+        /// session was down said "session stopped" and never tried again: reloading was the
+        /// only cure, for a session that might have been back a second later.
+        ///
+        /// `None` is the page stopping the wait; every answer that WAS heard, refusal
+        /// included, is the caller's to act on.
+        let reach
+            (supervision: Resilience.Schedule)
+            (ask: unit -> Async<Result<'answer, string>>)
+            (waitBeforeRetry: System.TimeSpan option -> Async<bool>)
+            (dispatch: ClientMsg -> unit)
+            : Async<'answer option> =
+            let rec attempt (failures: int) =
+                async {
+                    match! ask () with
+                    | Ok answer -> return Some answer
+                    | Error reason ->
+                        let failures = failures + 1
+                        dispatch (RetryingMsg (reason, failures))
+                        match! waitBeforeRetry (supervision failures) with
+                        | true -> return! attempt failures
+                        | false -> return None
+                }
+            attempt 0
 
         /// Drive the session leg to a settled state and keep it there.
         ///
