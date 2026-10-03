@@ -117,6 +117,20 @@ let private carryTests =
 
         testCase "gh's requests reach the swap" <| fun () ->
             Expect.equal (routeFor [ GitHubAccess.route ] "api.github.com") (Some GitHubAccess.route) "the host gh calls"
+
+        // The session's `default` is srt, and it takes a connection by git alone: the API is
+        // a container's. Refused rather than given nothing, so a `uses:` of it says why.
+        testCase "an srt sandbox is refused the api route, pointed at a container" <| fun () ->
+            match forwardApi SrtBackend with
+            | WorkSandboxes.CredentialForwarding.Unforwardable reason ->
+                Expect.stringContains reason "container" "says where the API is had instead"
+            | WorkSandboxes.CredentialForwarding.Forwarded _ -> failwith "srt was given the api route"
+
+        testCase "a container is given the api route, with nothing set up on its behalf" <| fun () ->
+            match forwardApi DockerBackend with
+            | WorkSandboxes.CredentialForwarding.Forwarded provision ->
+                Expect.equal provision WorkSandboxes.Provision.empty "what it reaches the proxy by is what it declared"
+            | WorkSandboxes.CredentialForwarding.Unforwardable reason -> failwithf "a container was refused: %s" reason
     ]
 
 // --- cheap: what srt is told ------------------------------------------------------------------

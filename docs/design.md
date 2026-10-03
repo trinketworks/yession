@@ -312,8 +312,14 @@ like any value:
       SSL_CERT_DIR: ${env.SSL_CERT_DIR}:${proxy.ca-dir}
 ```
 
-Under srt, whose own proxy already routes the hosts this one answers, `${proxy.https}` is
-refused and the trust references are all a sandbox needs.
+An srt sandbox is not given a connection's `api` route at all (`CredentialProxy.forwardApi`):
+it is the session's `default`, a minimal place to check a repo out and commit, and takes a
+connection by `git` alone. The API — `gh`, Actions, releases — is a container's. Under srt it
+did not work anyway: on macOS a Go client verifies TLS through the Security framework, which
+srt blocks, and Node there cannot resolve `localhost`, the name in srt's own proxy URL. So a
+`uses:` of an `api` route under srt refuses the start, a `wants:` goes without it, and a
+`${<connection>.token}` or `${proxy.…}` named there refuses, as it does wherever nothing
+forwards that connection by `api`.
 
 `${github.token}` — any connection's `.token` — is a variable's whole value and nothing else:
 a stand-in the credential proxy swaps for the credential of whoever each command runs for,

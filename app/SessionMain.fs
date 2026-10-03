@@ -1278,7 +1278,12 @@ Async.StartImmediate (
                 Provision =
                     fun sandbox routes ->
                         async {
-                            let git =
+                            // The API: refused under srt, and nothing to set up anywhere else.
+                            // Decided first, so a refused start grants the gateway nothing.
+                            let api =
+                                if List.contains ConnectionRoute.Api routes then CredentialProxy.forwardApi (sandboxBackend sandbox)
+                                else WorkSandboxes.CredentialForwarding.Forwarded WorkSandboxes.Provision.empty
+                            let git () =
                                 if not (List.contains ConnectionRoute.Git routes) then Ok WorkSandboxes.Provision.empty
                                 else
                                     match gatewayHostFor sandbox with
@@ -1303,14 +1308,13 @@ Async.StartImmediate (
                                                         (sandboxBackend sandbox)
                                                         host
                                                         gitGateway.Port }
-                            // The API, where the proxy can be reached from.
-                            let api =
-                                if List.contains ConnectionRoute.Api routes && CredentialProxy.reachable (sandboxBackend sandbox) then
-                                    CredentialProxy.provision credentialProxy GitHubAccess.route
-                                else WorkSandboxes.Provision.empty
-                            match git with
-                            | Error reason -> return WorkSandboxes.CredentialForwarding.Unforwardable reason
-                            | Ok git -> return WorkSandboxes.CredentialForwarding.Forwarded (WorkSandboxes.Provision.merge git api)
+                            match api with
+                            | WorkSandboxes.CredentialForwarding.Unforwardable reason ->
+                                return WorkSandboxes.CredentialForwarding.Unforwardable reason
+                            | WorkSandboxes.CredentialForwarding.Forwarded api ->
+                                match git () with
+                                | Error reason -> return WorkSandboxes.CredentialForwarding.Unforwardable reason
+                                | Ok git -> return WorkSandboxes.CredentialForwarding.Forwarded (WorkSandboxes.Provision.merge git api)
                         }
                 Revoke = gitGateway.Revoke
                 // What a block is lent, by the routes its sandbox forwards.
