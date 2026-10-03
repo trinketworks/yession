@@ -311,7 +311,7 @@ module TimelineProjection =
           BlockTurns = Map.empty }
 
     /// The turn that started this block, when the agent started it. `None` for a human's
-    /// command, for one the Session Process ran on its own behalf, and for any block whose
+    /// command, for one the Session ran on its own behalf, and for any block whose
     /// start this fold has not seen — all three mean the same thing to a card: not mine.
     let blockTurn (id: BlockId) (proj: TimelineProjection) : AgentTurnId option =
         Map.tryFind (BlockId.value id) proj.BlockTurns

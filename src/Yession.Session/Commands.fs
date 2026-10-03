@@ -1,11 +1,11 @@
-namespace Yession.SessionProcess
+namespace Yession.Session
 
 open Yession.Domain
 open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
 
-/// Handling of `SessionCommand` requests on the Session Process. Commands are how
+/// Handling of `SessionCommand` requests on the Session. Commands are how
 /// clients ask for durable facts the CRDT cannot express: that is the agent-turn
 /// interrupt alone — draft creation and sending are pure CRDT writes.
 module SessionCommands =
@@ -132,7 +132,7 @@ module SessionCommands =
                 | Error reason -> return CommandRejected reason
         }
 
-/// The queue drain's pure decision core (Phase 3, Step 16). The Session Process is the
+/// The queue drain's pure decision core (Phase 3, Step 16). The Session is the
 /// queue's single consumer; `plan` computes, from a snapshot of its replica plus the
 /// log-derived set of already-consumed entries, exactly what one drain does: which
 /// entries become `MessageSent` events (in which order) and which doc keys to remove.

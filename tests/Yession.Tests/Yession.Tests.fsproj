@@ -34,7 +34,7 @@
     <Compile Include="Assets.fs" />
     <Compile Include="Reaper.fs" />
     <Compile Include="Secrets.fs" />
-    <Compile Include="SessionProcess.fs" />
+    <Compile Include="Session.fs" />
     <Compile Include="Support.fs" />
     <Compile Include="Connections.fs" />
     <Compile Include="Queries.fs" />
@@ -161,7 +161,7 @@
     <ProjectReference Include="..\..\src\Fable.OpenTelemetry\Fable.OpenTelemetry.fsproj" />
     <ProjectReference Include="..\..\src\Yession.Domain\Yession.Domain.fsproj" />
     <ProjectReference Include="..\..\src\Yession.Manager\Yession.Manager.fsproj" />
-    <ProjectReference Include="..\..\src\Yession.SessionProcess\Yession.SessionProcess.fsproj" />
+    <ProjectReference Include="..\..\src\Yession.Session\Yession.Session.fsproj" />
     <ProjectReference Include="..\..\src\Yession.App\Yession.App.fsproj" />
     <ProjectReference Include="..\..\app\Yession.Host.fsproj" />
     <ProjectReference Include="..\..\src\Yession.Peer\Yession.Peer.fsproj" />

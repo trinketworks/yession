@@ -21,7 +21,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Host
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Tests.Support
 
 // Host-side fixtures the pty is then pointed at (same shape as SrtIntegration's).
@@ -905,7 +905,7 @@ let private agentLeaseTests =
                 })
     ]
 
-/// Through the Session Process as production composes it (`hostOver`): the agent's one
+/// Through the Session as production composes it (`hostOver`): the agent's one
 /// execution path, `TerminalCommands.Execute`, over a terminal the Host opens with ITS shell
 /// and ITS nonce. The fixtures below compose `SessionTerminals` by hand to reach seams this
 /// cannot — a scripted clock, a counted re-drain — and each of them names things production

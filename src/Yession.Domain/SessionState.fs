@@ -5,8 +5,8 @@ open Yession.Domain.Agent
 open Yession.Domain.Chat
 open Yession.Domain.Terminals
 
-/// Collaborative session state shapes shared by the Session Process and the Browser
-/// Client. These are the model shapes only; the Yjs/Ylmish encoding that keeps them in
+/// Collaborative session state shapes shared by the Session and the App.
+/// These are the model shapes only; the Yjs/Ylmish encoding that keeps them in
 /// sync lives in Sync.fs. See docs/design.md §2.2 and Plan 01.
 
 /// A client's work-in-progress draft: the WIP tail, not yet queued. Keyed by its
@@ -28,7 +28,7 @@ type DraftState =
 
 /// A message waiting for the agent (Phase 3). Queued messages are collaborative state:
 /// any peer may edit the rich body (the `Y.XmlFragment` merges), reorder (one
-/// fractional-index write), or delete — until the Session Process drains the queue, which
+/// fractional-index write), or delete — until the Session drains the queue, which
 /// snapshots the body to Markdown in an immutable `MessageSent`.
 type QueuedMessage =
     { QueueId : QueueId

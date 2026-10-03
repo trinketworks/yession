@@ -26,7 +26,7 @@ open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Access
 open Yession.Manager
-open Yession.SessionProcess
+open Yession.Session
 open Yession.App
 open Yession.Host.Interop
 

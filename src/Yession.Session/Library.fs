@@ -1,9 +1,9 @@
-﻿namespace Yession.SessionProcess
+﻿namespace Yession.Session
 
 open Yession.Domain
 
 /// Placeholder that establishes the dependency on the shared domain library. The real
-/// Session Process (event log, Yjs document, Elmish loop, agent runtime, WebRTC
+/// Session (event log, Yjs document, Elmish loop, agent runtime, WebRTC
 /// protocol) is built up across later delivery steps.
 module Bootstrap =
 

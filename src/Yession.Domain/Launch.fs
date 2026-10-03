@@ -2,8 +2,8 @@ namespace Yession.Domain.Link
 
 open Yession.Domain
 
-/// Session launch vocabulary (Step 10). The Session Manager owns process launch: a
-/// Session Process is started by the Manager, never directly, establishing the authority
+/// Session launch vocabulary (Step 10). The Manager owns process launch: a
+/// Session is started by the Manager, never directly, establishing the authority
 /// boundary later steps delegate scoped capabilities across (docs/design.md §3).
 
 #if FABLE_COMPILER
@@ -30,7 +30,7 @@ type StartSession = SessionLaunchRequest -> Async<SessionLaunchResult>
 // What the Manager mints for ONE launch, as one value rather than six environment
 // variables. The six were minted at a single site and read back with five independent
 // `envOr` fallbacks, and the FALLBACKS were the defect: an unset session id fabricated
-// one, so a Session Process nobody launched was indistinguishable from one whose launch
+// one, so a Session nobody launched was indistinguishable from one whose launch
 // forgot to say who it was. The url and the secret were separately re-matched into a pair
 // at three call sites, which is a product type spelled as two strings.
 
@@ -64,7 +64,7 @@ type Launch =
 
 module Launch =
 
-    /// The one variable the Manager mints and the Session Process decodes.
+    /// The one variable the Manager mints and the Session decodes.
     ///
     /// MINTED, NEVER AUTHORED. Anything that could set this could claim to be a session the
     /// Manager launched, holding that launch's control secret — which is custody of the
@@ -74,7 +74,7 @@ module Launch =
     [<Literal>]
     let Variable = "YESSION_LAUNCH"
 
-    /// A Session Process nobody launched: `yession-session` run by hand, or a test harness
+    /// A Session nobody launched: `yession-session` run by hand, or a test harness
     /// driving one directly. ONE value, so "there is no Manager" is a thing to point at
     /// rather than five defaults that can disagree about it.
     let unlaunched : Launch =
@@ -120,7 +120,7 @@ module Launch =
     /// What the Manager puts in the variable.
     let encode (launch: Launch) : string = encoder launch |> Encode.toString 0
 
-    /// What the Session Process reads back.
+    /// What the Session reads back.
     ///
     /// Blank or absent is the UNLAUNCHED case, not an error — `yession-session` run by hand
     /// still runs. Anything else that fails to decode IS an error, and fails the boot: a

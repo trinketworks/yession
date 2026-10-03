@@ -1,6 +1,6 @@
 module Yession.Host.Spawn
 
-// Child-process interop for the Manager (Phase 4, Step 23): spawn a Session Process,
+// Child-process interop for the Manager (Phase 4, Step 23): spawn a Session,
 // await its readiness line, observe its exit, stop it. The spawn contract is
 // environment variables in and exactly one JSON readiness line out on stdout
 // (Plan 02 § Topology); everything else the child prints is

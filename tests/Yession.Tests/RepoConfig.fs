@@ -529,7 +529,7 @@ let private granting (lines: string list) : ResourceName list * ResourceName lis
 /// what a fold says is a delta against what the session was already told, so a shared log
 /// would make one case's notes another's silence.
 let private foldLog () =
-    Yession.SessionProcess.InMemoryEventLog.create
+    Yession.Session.InMemoryEventLog.create
         (SessionId.create "fold" |> expect)
         (fun () -> System.DateTimeOffset.UtcNow)
 

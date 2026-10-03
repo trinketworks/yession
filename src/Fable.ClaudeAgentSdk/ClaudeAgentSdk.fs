@@ -520,7 +520,7 @@ let private queryRaw (parameters: QueryParameters) : Query = jsNative
 /// binary by asking whether this is a musl system, and it asks with
 /// `process.report.getReport()` — synchronous, on the caller's event loop, and by default a
 /// reverse lookup of every open socket's endpoints. In a process holding sockets (every
-/// Session Process: its HTTP server, its peers) behind a resolver that does not answer PTR
+/// Session: its HTTP server, its peers) behind a resolver that does not answer PTR
 /// queries, that froze the whole session for the resolver's timeout at the start of EVERY
 /// turn — ten seconds on the release gate's runner, during which the message that started
 /// the turn could not even reach the person who sent it. The SDK reads one header field of

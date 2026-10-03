@@ -22,7 +22,7 @@ open Node.Api
 open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Terminals
-open Yession.SessionProcess
+open Yession.Session
 open Yession.App.Codecs
 
 let private existsSync (path: string) : bool = fs.existsSync (U2.Case1 path)
@@ -38,7 +38,7 @@ let private writeAndSync (fd: int) (text: string) : unit =
     Files.writeText fd text |> ignore
     Files.fsync fd
 
-/// Everything the Session Process and its HTTP surface need from transcript storage.
+/// Everything the Session and its HTTP surface need from transcript storage.
 type TranscriptStore =
     { /// Open (or reopen) one terminal's transcript.
       Open : OpenTranscript

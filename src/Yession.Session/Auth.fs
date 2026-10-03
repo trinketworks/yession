@@ -1,4 +1,4 @@
-namespace Yession.SessionProcess
+namespace Yession.Session
 
 open Yession.Domain
 

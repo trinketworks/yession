@@ -8,7 +8,7 @@ module Yession.Tests.Resilience
 // to win. Everything on either side of that function is production code — the real
 // `EventFetch.overHttp` (URL scheme, chunk math, JSONL codec), the real resilience policy
 // that ships in the browser, the real `Client.connect` read loop, the real `ClientModel`, and
-// the real Session Process host on the other end of an in-memory channel. That combination —
+// the real Session host on the other end of an in-memory channel. That combination —
 // durable history over HTTP, collaborative state over the data channel — is precisely the one
 // the browser runs, and the one no existing suite covered.
 //
@@ -586,7 +586,7 @@ let private classificationTests =
 
 // --- The integration test ----------------------------------------------------------------
 
-/// A stand-in for the Session Process's event cursor that can be switched off. When
+/// A stand-in for the Session's event cursor that can be switched off. When
 /// up it serves the host's REAL log through the REAL codec — byte-identical to the HTTP route
 /// (app/Host.fs `eventsEndpoint`); when down it fails the way an unreachable session does.
 type private Socket =
@@ -798,7 +798,7 @@ let private channelTests =
 
         testCaseAsync "a session that comes back mid-retry is connected to" <|
             async {
-                // A restarting Session Process is the ordinary case, and every fault this port
+                // A restarting Session is the ordinary case, and every fault this port
                 // produces means "not there YET" — which is why the policy retries all of them.
                 let attempts = ref 0
                 let policy = Client.SessionChannel.policy (recordingSleep (ResizeArray ())) noJitter
@@ -873,7 +873,7 @@ let private linkTests =
             async {
                 let clock = TestClock ()
                 let seen = ResizeArray ()
-                let carrier, remote = Yession.SessionProcess.InMemoryChannel.createPair<string> ()
+                let carrier, remote = Yession.Session.InMemoryChannel.createPair<string> ()
                 let _link = Link.supervise (linkPolicy clock seen) carrier
                 // Well past the death threshold, but never quiet for a whole tick.
                 for i in 1 .. Link.LinkPolicy.quietTicksBeforeDeath * 3 do
@@ -886,7 +886,7 @@ let private linkTests =
             async {
                 let clock = TestClock ()
                 let seen = ResizeArray ()
-                let carrier, remote = Yession.SessionProcess.InMemoryChannel.createPair<string> ()
+                let carrier, remote = Yession.Session.InMemoryChannel.createPair<string> ()
                 let _link = Link.supervise (linkPolicy clock seen) carrier
                 // The other end supervises too, which is all that answering a probe takes.
                 let _peer = Link.supervise (linkPolicy clock (ResizeArray ())) remote
@@ -899,7 +899,7 @@ let private linkTests =
             async {
                 let clock = TestClock ()
                 let seen = ResizeArray ()
-                let carrier, _remote = Yession.SessionProcess.InMemoryChannel.createPair<string> ()
+                let carrier, _remote = Yession.Session.InMemoryChannel.createPair<string> ()
                 // `_remote` is never supervised and never speaks: the half-open transport a
                 // backgrounded phone leaves behind — open, and carrying nothing.
                 let link = Link.supervise (linkPolicy clock seen) carrier
@@ -913,7 +913,7 @@ let private linkTests =
             async {
                 let clock = TestClock ()
                 let seen = ResizeArray ()
-                let carrier, remote = Yession.SessionProcess.InMemoryChannel.createPair<string> ()
+                let carrier, remote = Yession.Session.InMemoryChannel.createPair<string> ()
                 let _link = Link.supervise (linkPolicy clock seen) carrier
                 for _ in 1 .. Link.LinkPolicy.quietTicksBeforeDeath do
                     clock.Tick ()
@@ -934,7 +934,7 @@ let private linkTests =
         testCaseAsync "a probe is answered without ever reaching the pump" <|
             async {
                 let clock = TestClock ()
-                let carrier, remote = Yession.SessionProcess.InMemoryChannel.createPair<string> ()
+                let carrier, remote = Yession.Session.InMemoryChannel.createPair<string> ()
                 let link = Link.supervise (linkPolicy clock (ResizeArray ())) carrier
                 do! remote.Send (Control Ping)
                 do! remote.Send (traffic "after the probe")
@@ -946,7 +946,7 @@ let private linkTests =
         testCaseAsync "an inbound probe is answered" <|
             async {
                 let clock = TestClock ()
-                let carrier, remote = Yession.SessionProcess.InMemoryChannel.createPair<string> ()
+                let carrier, remote = Yession.Session.InMemoryChannel.createPair<string> ()
                 let _link = Link.supervise (linkPolicy clock (ResizeArray ())) carrier
                 do! remote.Send (Control Ping)
                 let! answer = remote.Receive ()
@@ -961,16 +961,16 @@ let private linkTests =
                 let token = "handshake-token"
                 let peerId = PeerId.create "peer-ada" |> expect
                 let clock = TestClock ()
-                let log = Yession.SessionProcess.InMemoryEventLog.create (SessionId.create "handshake" |> expect) (fun () -> DateTimeOffset (2026, 6, 14, 0, 0, 0, TimeSpan.Zero))
-                let clientCarrier, serverCarrier = Yession.SessionProcess.InMemoryChannel.createPair<string> ()
+                let log = Yession.Session.InMemoryEventLog.create (SessionId.create "handshake" |> expect) (fun () -> DateTimeOffset (2026, 6, 14, 0, 0, 0, TimeSpan.Zero))
+                let clientCarrier, serverCarrier = Yession.Session.InMemoryChannel.createPair<string> ()
                 let server = Link.supervise (linkPolicy clock (ResizeArray ())) serverCarrier
                 let client = Link.supervise (linkPolicy clock (ResizeArray ())) clientCarrier
                 Async.StartImmediate (
-                    Yession.SessionProcess.PeerSession.run
+                    Yession.Session.PeerSession.run
                         (SessionId.create "handshake" |> expect)
-                        (fun t -> if t = token then Some Yession.SessionProcess.UnattributedAccess else None)
+                        (fun t -> if t = token then Some Yession.Session.UnattributedAccess else None)
                         log
-                        Yession.SessionProcess.PeerSession.PeerHandlers.none
+                        Yession.Session.PeerSession.PeerHandlers.none
                         server)
                 // Both ends probe each other before a word of the protocol is spoken.
                 clock.Tick ()
@@ -1011,7 +1011,7 @@ type private Lifecycle =
       /// Compose a body and send it through the LIVE connection — the app's own atomic send,
       /// so the drain sees one update and the timeline is reached the way it really is.
       Say : string -> Async<unit>
-      /// Cut the SERVER end of the current session — a Session Process dropping its peer.
+      /// Cut the SERVER end of the current session — a Session dropping its peer.
       DropSession : unit -> Async<unit>
       /// How many times a transport was opened.
       Opens : unit -> int
@@ -1058,7 +1058,7 @@ let private startLifecycle (host: Host.SessionHost) (token: string) (id: string)
                 fun () ->
                     async {
                         opens.Value <- opens.Value + 1
-                        let clientEnd, server = Yession.SessionProcess.InMemoryChannel.createPair<string> ()
+                        let clientEnd, server = Yession.Session.InMemoryChannel.createPair<string> ()
                         serverEnd.Value <- Some server
                         // The Host drives the server end exactly as it would a WebRTC connection.
                         host.Connect server
@@ -1127,7 +1127,7 @@ let private lifecycleTests =
                 let readTo = (ada.Runner.Model ()).EventConsumer.LastProcessedOffset
                 Expect.isTrue readTo.IsSome "the client consumed the message it sent"
 
-                // The Session Process drops the peer. The old shell set `Reconnecting` and then
+                // The Session drops the peer. The old shell set `Reconnecting` and then
                 // did nothing at all — a state that was a promise no code kept. Now the session
                 // comes back on its own, and the client is usable again without a reload.
                 do! ada.DropSession ()
@@ -1332,7 +1332,7 @@ let private releaseTests =
                 let doc = Y.Doc.Create ()
                 let registry = BodyRegistry doc
                 let local = peer "ada" "Ada"
-                let clientEnd, serverEnd = Yession.SessionProcess.InMemoryChannel.createPair<string> ()
+                let clientEnd, serverEnd = Yession.Session.InMemoryChannel.createPair<string> ()
                 let channel, sent = recordingOver clientEnd
                 let connection =
                     Client.connect
@@ -1374,12 +1374,12 @@ let private releaseTests =
                 // The browser holds the connection the moment `connect` returns — BEFORE `Run`
                 // has sent the hello — and reports what the pane shows on every render. So a
                 // presence frame can be asked for while the channel has said nothing yet, and
-                // the hello has to stay the first thing on the wire: the Session Process reads
+                // the hello has to stay the first thing on the wire: the Session reads
                 // an unannounced peer's frame as a peer it does not know, and the connection
                 // dies there, which presents as a browser that never reaches Connected.
                 let doc = Y.Doc.Create ()
                 let local = peer "ada" "Ada"
-                let clientEnd, serverEnd = Yession.SessionProcess.InMemoryChannel.createPair<string> ()
+                let clientEnd, serverEnd = Yession.Session.InMemoryChannel.createPair<string> ()
                 let channel, sent = recordingOver clientEnd
                 let connection =
                     Client.connect

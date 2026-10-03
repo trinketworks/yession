@@ -8,7 +8,7 @@ module Yession.Host.Signalling
 // those bytes are the same for ever and a client can keep them, the growing tail included.
 // Everything interactive stays
 // on the data channel (design.md §2.3). `/signal` accepts a peer's offer and returns the
-// Session Process's answer; the established data channel becomes a session `FrameChannel`.
+// Session's answer; the established data channel becomes a session `FrameChannel`.
 
 open Fable.Core.JsInterop
 open Fable.NodeExtras
@@ -16,7 +16,7 @@ open Node.Api
 open Node.Buffer
 open Yession.Domain
 open Yession.Domain.Link
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Host.Interop
 open Yession.Host.WebRtc
 open Fable.NodeDataChannel

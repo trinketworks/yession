@@ -16,7 +16,7 @@ open Yession.Domain
 open Yession.Domain.Content
 open Yession.App
 open Yession.Host
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Tests.Support
 
 /// `who=<name>` is an identity; anything else is nobody — the same stand-in the query stream's
@@ -44,7 +44,7 @@ let private stamp = ArtifactStamp.create "7f2a91" |> expect
 
 let private version (name: string) (seq: int) = ArtifactRef.create name seq stamp |> expect
 
-/// An artifacts directory holding the versions named, served the way the Session Process serves
+/// An artifacts directory holding the versions named, served the way the Session serves
 /// it: `Signalling.start` with the store's own routes as its extra routes. So the fall-through
 /// that sends a `Content` route there is under test beside the answers — a route the composition
 /// forgot to compose would 404 here exactly as it would in production.

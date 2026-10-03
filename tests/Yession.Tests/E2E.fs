@@ -1,6 +1,6 @@
 module Yession.Tests.E2E
 
-// End-to-end verification of the real WebRTC transport: starts a Session Process and a
+// End-to-end verification of the real WebRTC transport: starts a Session and a
 // client peer in this Node process, connects them over an actual libdatachannel data
 // channel, and checks the token-gated handshake plus presence events.
 //
@@ -12,7 +12,7 @@ open System
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Link
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Host
 open Yession.Tests.Support
 
@@ -49,7 +49,7 @@ let private signalUrl () =
 
 let tests =
     testList "WebRTC E2E" [
-        testCaseAsync "start the Session Process host" <|
+        testCaseAsync "start the Session host" <|
             async {
                 let! h = Host.start sessionId 0
                 host <- Some h
@@ -104,7 +104,7 @@ let tests =
                 do! badChannel.Close ()
             }
 
-        testCaseAsync "stop the Session Process host" <|
+        testCaseAsync "stop the Session host" <|
             async {
                 match host with
                 | Some h -> do! h.Stop ()

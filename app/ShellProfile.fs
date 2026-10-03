@@ -4,7 +4,7 @@ module Yession.Host.ShellProfile
 //
 // Here rather than beside the projection, for the reason `Repos.query` and
 // `WorkSandboxes.query` are where they are: `QueryRegistration` is a Host-layer type, and
-// the Session Process — which owns the answer — cannot see it. What lives here is the
+// the Session — which owns the answer — cannot see it. What lives here is the
 // declaration and the projection into rows; the state itself stays with the terminal
 // manager, which is the only thing that can change it.
 //
@@ -14,7 +14,7 @@ module Yession.Host.ShellProfile
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
-open Yession.SessionProcess
+open Yession.Session
 
 let queryName : QueryName =
     match QueryName.create "shell_profile" with

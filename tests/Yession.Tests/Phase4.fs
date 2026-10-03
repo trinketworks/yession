@@ -390,7 +390,7 @@ let private queryTests =
     ]
 
 // -----------------------------------------------------------------------------
-// Step 23 — the Session Process as an OS process. Verify tier: these spawn REAL
+// Step 23 — the Session as an OS process. Verify tier: these spawn REAL
 // child processes over the Fable output (`app/SessionMain.js` — built
 // by `verify` before the suite runs) and connect real WebRTC clients.
 // -----------------------------------------------------------------------------
@@ -400,7 +400,7 @@ let private nodePath : string = Node.Api.``process``.execPath
 let private sigkill (pid: int) : unit = Fable.NodeExtras.Processes.kill pid "SIGKILL"
 
 let private processTests =
-    testList "Session Process as an OS process (Step 23)" [
+    testList "Session as an OS process (Step 23)" [
         testCaseAsync "spawn contract: launch, serve, message, stop, resume with history, crash observation, manager restart" <|
             async {
                 let dataDir =
@@ -543,7 +543,7 @@ let private startControlServer (secrets: (string * SessionId) list) =
 
 let private controlRpcTests =
     testList "Session-owned environment across real processes (Step 24, reworked)" [
-        testCaseAsync "a child Session Process runs its own WorkSandbox end to end (diagnostic agent across real processes)" <|
+        testCaseAsync "a child Session runs its own WorkSandbox end to end (diagnostic agent across real processes)" <|
             async {
                 let dataDir =
                     sprintf "tests/Yession.Tests/out/.data/rpc-%d" (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
@@ -3318,7 +3318,7 @@ let tests =
         hookRelayTests
         mcpTests
         registryTests
-        Tag.needs "Session Process as an OS process (Step 23)" [ Tag.Ports; Tag.Native ] (fun () -> processTests)
+        Tag.needs "Session as an OS process (Step 23)" [ Tag.Ports; Tag.Native ] (fun () -> processTests)
         // `Srt` because this is the one suite that lets a real child session pick its own
         // sandbox DEFAULT, and that default has been srt since "confine by default" (#83).
         // Untagged, on a box that cannot build the nested sandbox, the child's environment

@@ -3061,7 +3061,7 @@ module Style =
     /// different ground between two surfaces that share one.
     let standalone = "bg-bg text-ink font-ui antialiased"
 
-    /// Tailwind, built locally into a stylesheet and served by both the Session Process and
+    /// Tailwind, built locally into a stylesheet and served by both the Session and
     /// the Manager UI — never a CDN (local first). The utilities and the theme tokens come
     /// from the CLI build over `app/tailwind.css`, whose `@source` rules scan the F# sources
     /// for the composed class names.

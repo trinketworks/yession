@@ -101,7 +101,7 @@ module TerminalText =
 
     /// Copy a command line into another root and clear the source, in ONE transaction.
     ///
-    /// One transaction because this is a send: the Session Process drains on the queue
+    /// One transaction because this is a send: the Session drains on the queue
     /// entry's arrival, so an entry that arrived without its command would be snapshotted
     /// as an empty one — the same atomicity the message send needs, for the same reason.
     /// Copy-then-clear rather than a move because shared types cannot be re-parented.

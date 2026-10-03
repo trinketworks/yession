@@ -1,7 +1,7 @@
 module Yession.Host.Assets
 
 // The static asset service: the files a build ships, read once and served by path, by whichever
-// process is running. Both bins use it — the Session Process for the client shell, the Manager
+// process is running. Both bins use it — the Session for the client shell, the Manager
 // for its own page — and neither one names a single asset.
 //
 // That ignorance is the point. A session may be upgraded on its own (`--spawn-bin`

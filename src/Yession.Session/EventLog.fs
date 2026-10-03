@@ -1,9 +1,9 @@
-namespace Yession.SessionProcess
+namespace Yession.Session
 
 open System
 open Yession.Domain
 
-/// Function-shaped event-log capabilities. The Session Process is the only caller of
+/// Function-shaped event-log capabilities. The Session is the only caller of
 /// these. See docs/design.md §1 ("Durable facts are events", "Composition at the top").
 ///
 /// `ReadEvents` returns a single page of at most `limit` events after the given offset.

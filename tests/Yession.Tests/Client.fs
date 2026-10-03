@@ -1,6 +1,6 @@
 module Yession.Tests.Client
 
-// End-to-end verification of the Browser Client shell against a real Session Process: the
+// End-to-end verification of the App shell against a real Session: the
 // client connects over an actual WebRTC data channel, completes the token-gated
 // handshake, and its Elmish model reflects the connection-state transitions and the
 // offset / catch-up indicators the product requires. A dropped channel moves the model to
@@ -12,7 +12,7 @@ module Yession.Tests.Client
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Link
-open Yession.SessionProcess
+open Yession.Session
 open Yession.App
 open Yession.Host
 
@@ -53,7 +53,7 @@ let private waiterFor (predicate: ClientModel -> bool) : (ClientModel -> unit) *
 
 let tests =
     testList "Client shell E2E" [
-        testCaseAsync "start the Session Process host" <|
+        testCaseAsync "start the Session host" <|
             async {
                 let! h = Host.start sessionId 0
                 host <- Some h
@@ -129,7 +129,7 @@ let tests =
         // case that had nothing to do with whatever libdatachannel was waiting for. What the
         // closes are actually worth is said on `Live connections`, which asks the question
         // this ritual could not answer: is anything still open, and who opened it.
-        testCaseAsync "stop the Session Process host" <|
+        testCaseAsync "stop the Session host" <|
             async {
                 match host with
                 | Some h -> do! h.Stop ()

@@ -27,7 +27,7 @@ open Yession.Analyzers.Surfaces
 /// The rule is therefore about MEMBERS, not names. Two things may share a short name; they may
 /// not also share a member. Sharing the name alone is not the fault, which matters because the
 /// codebase already does it four times over (`Yession.Domain` beside the suite's
-/// `Yession.Tests.Domain`, `Yession.Manager` beside `Yession.Host.Manager`) and those are
+/// `Yession.Tests.Domain`, `Yession.Session` beside its `Yession.Tests.Session`) and those are
 /// correct — they are simply disjoint, and this pins them there.
 ///
 /// A namespace's members are its types and its nested namespaces and modules: a namespace

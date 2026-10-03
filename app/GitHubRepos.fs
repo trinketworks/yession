@@ -20,7 +20,7 @@ open Node.Api
 open Node.Buffer
 open Yession.Domain
 open Yession.Domain.Repos
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Host.Interop
 open Yession.App.Codecs
 

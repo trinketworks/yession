@@ -1,13 +1,13 @@
 module Fable.OpenIdClient
 
 // Fable bindings to the `openid-client` npm package (v6, functional API) — the
-// OpenID-Foundation-CERTIFIED relying-party implementation. The Session Process uses it
+// OpenID-Foundation-CERTIFIED relying-party implementation. The Session uses it
 // for the whole client side of the flow: discovery, PKCE, the authorization-code
 // exchange, and ID-token validation against the provider's JWKS. Using the certified
 // client instead of hand-rolled protocol code means every full-flow test doubles as a
 // conformance check of our provider.
 //
-// Binding layer only (Fable.Dockerode pattern): the slice the Session Process uses.
+// Binding layer only (Fable.Dockerode pattern): the slice the Session uses.
 // Fable-only: `dotnet build` type-checks it; Fable emits the JS that runs on Node.
 
 open Fable.Core

@@ -1,7 +1,7 @@
 module Fable.AsciinemaPlayer
 
 // Fable bindings to the `asciinema-player` npm package: the standard player for asciicast
-// v2, which is what the Session Process records a terminal as. The binding layer only — the
+// v2, which is what the Session records a terminal as. The binding layer only — the
 // slice of its surface the replay view uses, and nothing else.
 //
 // Fable-only: `dotnet build` type-checks it; Fable emits the JS that runs in the browser.

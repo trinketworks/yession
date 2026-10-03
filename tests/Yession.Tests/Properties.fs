@@ -28,7 +28,7 @@ open Yession.Domain
 open Yession.Domain.Agent
 open Yession.Domain.Collab
 open Yession.Domain.Chat
-open Yession.SessionProcess
+open Yession.Session
 open Yession.App
 open Yession.Tests.Support
 open Yession.Peer
@@ -93,7 +93,7 @@ let private epoch = System.DateTimeOffset (1970, 1, 1, 0, 0, 0, System.TimeSpan.
 let private runSchedule (ops: ScheduleOp list) : CaseResult =
     // Peers: real client programs on pinned-clientID docs, never on a channel. Each carries
     // its own `BodyRegistry` (over its doc) so the rich body seam binds the same top-level
-    // fragment roots the Session Process reads.
+    // fragment roots the Session reads.
     let mkPeer (i: int) =
         let doc = Y.Doc.Create ()
         doc.clientID <- float (i + 1)
@@ -438,7 +438,7 @@ let tests =
                     { EventId = EventId.fresh ()
                       SessionId = SessionId.create "property-session" |> expect
                       Offset = EventOffset.create (int64 i) |> expect
-                      Actor = ActorRef.SessionProcess
+                      Actor = ActorRef.Session
                       Timestamp = epoch
                       Event = e })
             let first, _ = ConversationProjection.applyEvents None envelopes ConversationProjection.empty

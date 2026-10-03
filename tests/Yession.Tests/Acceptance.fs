@@ -2,7 +2,7 @@ module Yession.Tests.Acceptance
 
 // Step 09 — the Phase 1 acceptance gate's own checks. The seven required E2E scenarios
 // and the model/protocol invariants live in their step suites (Sync/Agent/E2E/Client/
-// Domain/SessionProcess — every E2E-N is named in its test title); this file pins the
+// Domain/Session — every E2E-N is named in its test title); this file pins the
 // remaining acceptance items: the UI checklist, rendered from one representative model,
 // and the random peer display name.
 //
@@ -1423,7 +1423,7 @@ let private uiChecklistTests =
         // doing it, and a diamond there would say it was.
         testCase "an act the session is doing is not marked as the agent's" <| fun () ->
             Expect.isTrue
-                ((renderRunningBy ActorRef.SessionProcess).Contains (Dom.attr "data-act-running" "other"))
+                ((renderRunningBy ActorRef.Session).Contains (Dom.attr "data-act-running" "other"))
                 "the session's running act wears a mark that is not the agent's"
 
         testCase "the agent's own act in flight is marked as the agent's" <| fun () ->
@@ -2800,7 +2800,7 @@ let private semanticsTests =
                 "no name known, so the id stands in rather than nothing"
 
         // A `UserRef` author is an attributed peer's durable identity — the same one the
-        // Session Process's `actorFor` (`Yession.Domain.Attribution`) stamped `MessageSent`
+        // Session's `actorFor` (`Yession.Domain.Attribution`) stamped `MessageSent`
         // with. Resolving it means finding the peer this client saw join AS that user and
         // reading the roster's name for THAT peer, exactly as `nameOf` already does for a
         // `PeerRef` — which is the unification this whole thread was about: chat and the
@@ -2895,7 +2895,7 @@ let private semanticsTests =
             Expect.isFalse (html.Contains "a-stale-name-from-the-log") "the log's older name is nobody's current name"
 
         // One person, one mark. A `UserRef` and a `PeerRef` are two ways an event can point
-        // at one human — the Session Process records the user when attribution knows one and
+        // at one human — the Session records the user when attribution knows one and
         // the peer when it does not — and a mark seeded by whichever was recorded gave that
         // human two checkers on one screen: one over their messages, another on the blocks
         // they ran. What is pinned is the AGREEMENT, never which checker it is.

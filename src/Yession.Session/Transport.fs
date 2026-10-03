@@ -1,9 +1,9 @@
-namespace Yession.SessionProcess
+namespace Yession.Session
 
 open Yession.Domain
 open Yession.Domain.Link
 
-/// The Session Process side of a single peer connection: the token-gated hello/accept
+/// The Session side of a single peer connection: the token-gated hello/accept
 /// handshake, presence events, and the receive pump. `State` frames are handed to the
 /// injected handlers (the sync boundary, Step 05); Command/EventLog handlers arrive in
 /// later steps and are still drained.
@@ -52,7 +52,7 @@ module PeerSession =
     /// - On an invalid token or an unexpected first frame: reply `PeerRejected` and close.
     ///
     /// Side effects (appends) go through the injected `EventLog`, honouring "the Session
-    /// Process is the only event writer".
+    /// is the only event writer".
     let run
         (sessionId: SessionId)
         (attributionOf: string -> PeerAttribution option)

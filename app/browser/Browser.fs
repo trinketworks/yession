@@ -1,7 +1,7 @@
 module Yession.Browser.Main
 
 // The browser client entry: the same Elmish/Ylmish program as everywhere else, wired to
-// the Session Process over a *native* WebRTC data channel (the Node tests use
+// the Session over a *native* WebRTC data channel (the Node tests use
 // libdatachannel; the protocol and signalling are identical). The shell is rendered by
 // Fable.Lit — `View.view` into `#app` on every model change. Lit diffs the DOM, so focus,
 // caret, and the collaborative textareas survive re-renders with no manual bookkeeping;
@@ -81,7 +81,7 @@ let private listening (target: #Browser.Types.EventTarget) (event: string) (hand
 /// — or a session that simply was not there — left this promise pending forever and the shell
 /// stuck on "connecting" with nothing to say and nothing to do.
 ///
-/// Non-trickle, the way the Session Process's own side does it: gather first, then send ONE
+/// Non-trickle, the way the Session's own side does it: gather first, then send ONE
 /// complete SDP, so there are no candidate-timing races and nothing depends on a sleep. Two
 /// events say gathering is done (`iceGatheringState` reaching `complete`, and the null
 /// candidate) and a browser may fire either — but some browsers and sandboxes fire NEITHER,
@@ -414,7 +414,7 @@ let private revealSettings () : unit =
 // "offline" into "log in", and a login bounce against an unreachable session goes nowhere.
 //
 // Expressed as an ordinary F# `async` pipeline over `MeProbe.Response` — the SAME codec
-// (`Yession.App.Codecs.MeProbe`) the Session Process encodes its answer with — rather than one
+// (`Yession.App.Codecs.MeProbe`) the Session encodes its answer with — rather than one
 // JS `Emit` string that encoded the branching itself. The fetch call itself goes through
 // `Fable.Fetch` (https://github.com/fable-compiler/fable-fetch), a typed binding, not a
 // hand-rolled Emit; `AbortSignal.timeout` is the one piece it does not cover and comes from
@@ -493,7 +493,7 @@ let private metaContent (name: string) : string option =
     |> Option.bind (fun tag -> tag.getAttribute "content" |> Option.ofObj)
     |> Option.filter (String.IsNullOrEmpty >> not)
 
-// The store is keyed by SESSION: the serving Session Process embeds its session id in the
+// The store is keyed by SESSION: the serving Session embeds its session id in the
 // bootstrap page (a synchronous, pre-connection identity), so two sessions served from one
 // address never share a store. The KEY is stable wherever the session is served from; the
 // STORE is not. IndexedDB is partitioned by origin and a port is part of one, so a deployment
@@ -1132,7 +1132,7 @@ let private start () =
         let mutable dispatchRef : (ClientMsg -> unit) = ignore
 
         // The doc's roots by name: each rich body's live Y.XmlFragment (a top-level root keyed
-        // by BodyKey, so the editor and the Session Process bind the same fragment), and the
+        // by BodyKey, so the editor and the Session bind the same fragment), and the
         // plain-text roots the terminal composers live in (Plan 13), resolved the same way.
         let registry = BodyRegistry doc
         let texts = TextRegistry doc
@@ -1365,7 +1365,7 @@ let private start () =
             // Events come over HTTP by CURSOR: a client asks from the position it has folded
             // through and is answered with a range whose bounds never move, so history is
             // served out of this client's own Cache API store and only what is past its
-            // position reaches the Session Process. The HTTP cache holds none of it — every
+            // position reaches the Session. The HTTP cache holds none of it — every
             // response on that surface is `no-store`, because a second copy there would be a
             // spare nobody reads. Availability hints still arrive over the data channel. The
             // same-origin auth cookie rides each fetch, so no token in the URL (history stays

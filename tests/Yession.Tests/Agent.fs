@@ -20,7 +20,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Chat
-open Yession.SessionProcess
+open Yession.Session
 open Yession.App
 open Yession.Host
 open Yession.Tests.Support
@@ -547,7 +547,7 @@ let private signalUrl () =
 
 let private e2eTests =
     testList "Agent E2E" [
-        testCaseAsync "start the Session Process host (scripted agent)" <|
+        testCaseAsync "start the Session host (scripted agent)" <|
             async {
                 let scripted : RunAgent =
                     fun context _capabilities _signal onChunk ->
@@ -603,7 +603,7 @@ let private e2eTests =
                 do! a.Channel.Close ()
             }
 
-        testCaseAsync "stop the Session Process host" <|
+        testCaseAsync "stop the Session host" <|
             async {
                 match host with
                 | Some h -> do! h.Stop ()
@@ -659,7 +659,7 @@ let private liveTests =
         testCaseAsync "the live agent runs a real command through its MCP tools" <|
             async {
                 let m =
-                    Manager.create
+                    InProcessManager.create
                         (Some (Agent.run Launch.unlaunched.DataDir HostBackend))
                         (Some (fun sid -> Sandboxes.forBackend HostBackend (SessionId.value sid) EnvironmentSpec.defaults |> expect))
                         8135

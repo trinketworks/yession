@@ -1,6 +1,6 @@
 module Yession.Host.SandboxHost
 
-// The srt host entry: ONE sandbox's srt manager, in a process of its own. A Session Process
+// The srt host entry: ONE sandbox's srt manager, in a process of its own. A Session
 // starts one per srt sandbox (`Sandboxes.SrtSandbox.create`, and the agent's `wrapperFor`)
 // and speaks `SrtSandbox.HostWire` to it over stdin and stdout.
 //

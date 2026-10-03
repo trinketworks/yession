@@ -593,7 +593,7 @@ let private formField (body: string) (name: string) : string =
     | Some value -> value
     | None -> ""
 
-/// The same static asset service the Session Process runs, over this process's OWN set — read
+/// The same static asset service the Session runs, over this process's OWN set — read
 /// and addressed once at boot rather than per request, so every render of this page (it is
 /// rendered per request) names the same bytes. Where the set lives is `Assets`' own business,
 /// which is also why this page can link a stylesheet whose faces this file has never heard of.
@@ -905,7 +905,7 @@ let tryHandle
             html res (page cssUrl managerProgramUrl pm.Public query (pm.Sessions ()) (pm.McpServers ()) pm.HookEndpoints)
         | ManagerRoute.Asset (build, file) ->
             // Everything static this build ships, served by path and by nothing else — the
-            // same service the Session Process runs, over this process's own set. The Manager
+            // same service the Session runs, over this process's own set. The Manager
             // page links the stylesheet, and the stylesheet names its own faces; neither this
             // route nor this file knows what those are, which is the point: a build that adds
             // an asset adds a file, not a case.

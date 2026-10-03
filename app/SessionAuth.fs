@@ -1,11 +1,11 @@
 module Yession.Host.SessionAuth
 
-// The Session Process as an OAuth/OIDC client (RP), over the certified `openid-client`
+// The Session as an OAuth/OIDC client (RP), over the certified `openid-client`
 // library: discovery, PKCE, the code exchange, and ID-token validation are all the
 // certified implementation — nothing protocol-shaped is hand-rolled here. This module
 // only adapts it to the session's plain `node:http` surface: begin-login builds the
 // authorize redirect, the callback redeems the code and mints an HttpOnly cookie, and
-// `/me` turns a valid cookie into a peer token (see SessionProcess.Auth).
+// `/me` turns a valid cookie into a peer token (see Session.Auth).
 //
 // Configuration is DEFERRED: the client registers with the Manager only after its
 // server listens (the redirect URI needs the OS-assigned port), so the Auth value
@@ -18,7 +18,7 @@ open Fable.Core.JsInterop
 open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Access
-open Yession.SessionProcess
+open Yession.Session
 open Fable.OpenIdClient
 open Yession.Host.Interop
 

@@ -13,7 +13,7 @@ open System
 /// association is gone but `readyState` still reads `open`, so sends are accepted into
 /// nothing and no `close` event ever fires. Both pumps in this repo react correctly to a
 /// channel that CLOSES (the client reconnects and re-pushes its full doc state; the Session
-/// Process runs its cleanup, releasing terminal leases and clearing presence) — they simply
+/// runs its cleanup, releasing terminal leases and clearing presence) — they simply
 /// never learned that this one had. A message queued on a phone therefore sat on screen
 /// until the page was reloaded.
 ///
@@ -67,7 +67,7 @@ module Link =
         /// Three, so a dead link is detected in about three seconds.
         ///
         /// The cost of being wrong in this direction is one reconnect: the client re-opens and
-        /// re-pushes full doc state, which is idempotent, and the Session Process re-accepts a
+        /// re-pushes full doc state, which is idempotent, and the Session re-accepts a
         /// peer it just lost. The cost of being wrong in the other direction is a person
         /// staring at a message that will never send. They are not the same size.
         let quietTicksBeforeDeath = 3

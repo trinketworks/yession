@@ -17,7 +17,7 @@ open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Tools
 open Yession.Host
-open Yession.SessionProcess
+open Yession.Session
 open Yession.App.Codecs
 
 let private expect result =

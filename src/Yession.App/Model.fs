@@ -14,7 +14,7 @@ open Yession.Domain.Artifacts
 open Yession.Domain.Prs
 open Yession.App.Codecs
 
-/// The Browser Client Elmish model and update loop shell. It holds a single typed
+/// The App Elmish model and update loop shell. It holds a single typed
 /// snapshot of what the client knows: the local peer, connection state, synced
 /// collaborative state, the conversation projection, the event-consumer read position,
 /// and the agent view state. See docs/design.md §2.1, §2.3.
@@ -688,7 +688,7 @@ type ClientModel =
       /// Live carets+selections, keyed by WHO. Cleared when somebody moves their caret out of
       /// every collaborative field, or disconnects (their `Focus` becomes `None`).
       ///
-      /// Keyed by actor rather than peer because the Session Process edits here too (Plan 25),
+      /// Keyed by actor rather than peer because the Session edits here too (Plan 25),
       /// and it never joined as a peer. `Peers` below stays peer-keyed: it is a fold of who
       /// has connected, which is a different question with a different answer.
       Presence      : Map<ActorRef, RemotePresence>
@@ -697,7 +697,7 @@ type ClientModel =
       /// author even while that author is away. Presence is who is here NOW; this is who is who.
       Peers         : Map<PeerId, string>
       /// Peer↔user attribution, the client's own copy of `Yession.Domain.Attribution`,
-      /// folded from the same `PeerJoined` events the Session Process folds. It exists so
+      /// folded from the same `PeerJoined` events the Session folds. It exists so
       /// chat can resolve a `UserRef` author to a real name — and a peer to its durable
       /// user — through the exact rule that decided the author was a `UserRef` in the
       /// first place, rather than a client-side guess that could disagree with it.
@@ -886,7 +886,7 @@ type ClientMsg =
     /// refusing a peer it did hear from) because the remedy differs: wait, versus re-auth.
     | ConnectFailedMsg of reason: string
     | EventsAvailableMsg of latestOffset: EventOffset
-    /// A read-only event page from the Session Process (Step 07): the conversation is
+    /// A read-only event page from the Session (Step 07): the conversation is
     /// built by folding pages through the shared projection; offsets track progress.
     | EventsPageMsg of EventPage<SessionEvent>
     /// A page this client had already been given and kept (Plan 20): replayed out of its own
@@ -926,7 +926,7 @@ type ClientMsg =
     | AgentQuietMsg of WritingStamp
     | DisconnectedMsg
     /// Edit the session title (collaborative text, merges like a draft body). A pure CRDT
-    /// write; the Session Process reports the settled title to the Manager for the list.
+    /// write; the Session reports the settled title to the Manager for the list.
     | EditTitleMsg of Ylmish.Text
     /// A remote peer's cursor moved (or cleared) in the title — ephemeral presence folded
     /// into `Presence`, never into the synced state.
@@ -1968,7 +1968,7 @@ module ClientModel =
         |> List.choose id
 
     /// Everyone whose caret is somewhere right now, except you. Actors rather than peers,
-    /// because the Session Process is one of them.
+    /// because the Session is one of them.
     let presentEditors (model: ClientModel) : (ActorRef * string * FocusField) list =
         model.Presence
         |> Map.toList
@@ -1997,7 +1997,7 @@ module ClientModel =
         |> List.filter (fun (_, _, field) -> terminalOfFocus field model = Some terminal)
         |> List.map (fun (who, name, _) -> who, name)
 
-    /// Which actor THIS client is, by the same rule the Session Process used to stamp what
+    /// Which actor THIS client is, by the same rule the Session used to stamp what
     /// this client asked for: `Attribution.actorFor` — the durable user when this peer's join
     /// was attributed, the peer connection itself when it was not.
     ///
@@ -2041,7 +2041,7 @@ module ClientModel =
                 | Some presence when presence.DisplayName <> "" -> presence.DisplayName
                 | _ -> PeerId.value peer
 
-    /// A `UserRef` author's real name, resolved through the SAME rule the Session Process
+    /// A `UserRef` author's real name, resolved through the SAME rule the Session
     /// used to decide the author was a `UserRef` in the first place
     /// (`Yession.Domain.Attribution`) rather than a client-side guess that could disagree
     /// with it: ask `Attribution.UserPeers` for the peer THIS user most recently joined
@@ -2345,7 +2345,7 @@ module ClientModel =
                         | _ -> roster)
                     model.Peers
             // Same fold, same events, but the DECISION `Yession.Domain.Attribution` makes —
-            // shared with the Session Process, which stamps `MessageSent.Author` with it — so
+            // shared with the Session, which stamps `MessageSent.Author` with it — so
             // a `UserRef` author resolves to a name through the identical rule that decided
             // it was a `UserRef` in the first place, not a client-side guess that could
             // disagree with it. One state, one incremental step per event — `applyEvent`
@@ -2370,7 +2370,7 @@ module ClientModel =
             // off it.
             //
             // "I asked for it" is `ClientModel.me`'s rule — `Attribution.actorFor`, the same
-            // one the Session Process stamped the open with — asked of the attribution this
+            // one the Session stamped the open with — asked of the attribution this
             // page has just been folded into rather than of `model.Attribution`, because the
             // `PeerJoined` that says who I am can arrive in the SAME page as the terminal I
             // opened. Reading the older copy here would leave the session's first page
@@ -2887,7 +2887,7 @@ module ClientModel =
                       Terminal = terminal
                       Order = TerminalQueueOrder.nextFor terminal model.Synced.Pending
                       // The author is the PEER who wrote it. Attribution to a verified user
-                      // happens at the durable append, where the Session Process knows the
+                      // happens at the durable append, where the Session knows the
                       // binding — the doc only ever knows connections.
                       //
                       // `ofAuthor`, so it runs as its own author: a terminal command is a

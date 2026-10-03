@@ -940,7 +940,7 @@ first's.
   This is not a new privilege — any peer could already ask the agent to run `env` — but a
   terminal makes it one keystroke, and a future per-user terminal gate would attach here.
 - **A screen that showed a secret is in the recording, permanently, one tap from the chat.**
-  Keystrokes are deliberately not captured (`SessionProcess/Terminals.fs`, `Input`) because
+  Keystrokes are deliberately not captured (`Session/Terminals.fs`, `Input`) because
   live mode makes typing a password ordinary — but output is, and the replay work both
   removed the age at which a closed transcript was deleted and put a tappable chip on every
   block and lease stretch. So the distance between a secret and a casual reader is now one

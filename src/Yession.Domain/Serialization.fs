@@ -130,7 +130,7 @@ module Codec =
                 | UserRef u -> Encode.object [ "kind", Encode.string "user"; "sub", userId.Encode u ]
                 | PeerRef p -> Encode.object [ "kind", Encode.string "peer"; "peerId", peerId.Encode p ]
                 | Agent -> Encode.object [ "kind", Encode.string "agent" ]
-                | SessionProcess -> Encode.object [ "kind", Encode.string "sessionProcess" ]
+                | Session -> Encode.object [ "kind", Encode.string "sessionProcess" ]
                 | System -> Encode.object [ "kind", Encode.string "system" ]
                 | Configured repo ->
                     Encode.object [ "kind", Encode.string "configured"; "repo", repoRef.Encode repo ])
@@ -141,7 +141,7 @@ module Codec =
                 | "user" -> Decode.field "sub" userId.Decode |> Decode.map UserRef
                 | "peer" -> Decode.field "peerId" peerId.Decode |> Decode.map PeerRef
                 | "agent" -> Decode.succeed Agent
-                | "sessionProcess" -> Decode.succeed SessionProcess
+                | "sessionProcess" -> Decode.succeed Session
                 | "system" -> Decode.succeed System
                 | "configured" -> Decode.field "repo" repoRef.Decode |> Decode.map Configured
                 | other -> Decode.fail (sprintf "Unknown actor kind: %s" other)) }
@@ -584,7 +584,7 @@ module Codec =
         { Encode = Encode.string; Decode = Decode.string }
 
     // --- the query surface (Plan 15) ------------------------------------------------------
-    // The wire between the Session Process's query registry and the browser's generated
+    // The wire between the Session's query registry and the browser's generated
     // read surface. Both a query's DECLARATION and its VALUE cross it: the declaration
     // because the client renders a query it has never heard of, the value because that is
     // the point. Shape and value are encoded separately rather than as one fused blob, so

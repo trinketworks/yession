@@ -1,7 +1,7 @@
 module Yession.Host.Control
 
 // The Manager's control endpoint (Phase 4, Step 24): the supervision + custody surface
-// for its child Session Processes, across the process boundary. The child
+// for its child Sessions, across the process boundary. The child
 // authenticates each call with its per-launch secret; 127.0.0.1 only. Environments and
 // commands are session-owned (the sandbox seam) and never cross this channel — it
 // carries secrets custody, connections, supervision reports, and ONE piece of session

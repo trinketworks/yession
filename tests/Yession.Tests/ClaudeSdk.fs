@@ -122,7 +122,7 @@ let private queryTests =
     testList "starting a query" [
         // The SDK picks its CLI binary with a synchronous `process.report.getReport()`, and a
         // report that reads the network reverse-resolves every open socket on the event loop:
-        // behind a resolver that never answers a PTR, a Session Process froze for ten seconds
+        // behind a resolver that never answers a PTR, a Session froze for ten seconds
         // at the start of every turn. The spawner refuses, so nothing is run — and the SDK has
         // already chosen its binary by the time it asks for a process.
         testCase "a started query leaves this process's diagnostic reports off the network" <| fun () ->

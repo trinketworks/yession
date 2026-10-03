@@ -1,6 +1,6 @@
 module Yession.Tests.InMemory
 
-// Cheap-tier end-to-end coverage that drives the REAL Session Process host over an
+// Cheap-tier end-to-end coverage that drives the REAL Session host over an
 // in-memory channel pair (`host.Connect` + `Client.connect`) instead of a WebRTC data channel.
 // Same production code path — the peer handshake, the doc State relay, the queue drain, the
 // cursor-presence relay, and the title→Manager report — but with no WebRTC, no HTTP, and no
@@ -20,7 +20,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.App
 open Yession.Host
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Tests.Support
 open Yession.Peer
 
@@ -77,7 +77,7 @@ let tests =
                 let asked = MessageId.create "msg-asked" |> expect
                 let! _ =
                     log.Append
-                        ActorRef.SessionProcess
+                        ActorRef.Session
                         (AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy asked })
                 let! host = Host.startWithEnvironment None None (Some log) (sid ()) 0
                 let! a = connectInMemoryClient host "ada" "Ada"
@@ -210,7 +210,7 @@ let tests =
             }
 
         // Naming a chapter nobody named, through the whole path: a person divides the
-        // session, the Session Process notices the doc write, asks whatever can write a few
+        // session, the Session notices the doc write, asks whatever can write a few
         // words, and the answer comes back as the name every peer reads.
         //
         // Here rather than around the namer alone because what would break silently is the
@@ -705,7 +705,7 @@ let tests =
         // in the composer, the `OpenTerminal` command frame, the drain, the block events,
         // and the transcript records broadcast back as `Terminal` frames. The sandbox is
         // scripted (a `SessionEnvironment` record), so this stays in the cheap tier while
-        // exercising every seam between the browser client and the Session Process.
+        // exercising every seam between the browser client and the Session.
         testCaseAsync "a peer opens a terminal, runs a command, and both peers see the block and its output" <|
             async {
                 let environment : SessionEnvironment.SessionEnvironment =

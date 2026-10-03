@@ -6,7 +6,7 @@ open Yession.Domain.Content
 open Yession.Domain.Terminals
 
 /// The multiplexed session transport protocol. These are pure protocol shapes shared by
-/// the Session Process and the Browser Client; the actual WebRTC/HTTP carrier is an
+/// the Session and the App; the actual WebRTC/HTTP carrier is an
 /// adapter that implements a frame channel over these types. State-sync payloads are
 /// opaque to the transport (owned by the Ylmish sync boundary in Step 05), hence the
 /// `'State` type parameter. See docs/design.md §2.3.
@@ -142,7 +142,7 @@ type TerminalFrame =
     /// behind. The exact counterpart of `EventsAvailable`: a hint that triggers a read,
     /// never data.
     | TerminalTranscriptAvailable of TerminalId * nextSeq: int
-    /// The terminal's screen as the Session Process has it, with the transcript position
+    /// The terminal's screen as the Session has it, with the transcript position
     /// it represents (Plan 13, stage 2b) — what a peer joining mid-session renders instead
     /// of replaying every byte the terminal ever printed.
     ///
@@ -162,7 +162,7 @@ type TerminalFrame =
     | TerminalSnapshot of TerminalId * TranscriptKeyframe
     /// Keystrokes from the lease holder, relayed straight to the pty (Plan 13, stage 2e).
     ///
-    /// Lease-checked at the Session Process, which is the only place it CAN be checked: a
+    /// Lease-checked at the Session, which is the only place it CAN be checked: a
     /// client that believes it holds the lease may be wrong (a steal it has not seen yet),
     /// and the pty is the Process's. A frame from a non-holder is dropped, not answered —
     /// there is no response frame here by design, because a keystroke that needed an
@@ -211,7 +211,7 @@ type CursorPos = { Anchor : string; Head : string }
 type Focus = { Field : FocusField; Pos : CursorPos }
 
 /// Ephemeral presence: where a peer's caret+selection is. Relayed peer-to-peer by the Session
-/// Process (never durable, never in Yjs, never an event) so a collaborator's cursor is visible
+/// (never durable, never in Yjs, never an event) so a collaborator's cursor is visible
 /// while they edit. `Focus = None` when the peer's caret is nowhere collaborative, or the peer
 /// has left (which clears it everywhere).
 ///
@@ -221,7 +221,7 @@ type Focus = { Field : FocusField; Pos : CursorPos }
 /// The typed frame costs a little more render code and buys one identity, one relay, and a
 /// payload the cheap tier can round-trip.
 type PresencePayload =
-    { /// Who is present. An `ActorRef` rather than a `PeerId` because the Session Process is
+    { /// Who is present. An `ActorRef` rather than a `PeerId` because the Session is
       /// one of the parties editing now (Plan 25): it writes a name into the same `Y.Text` a
       /// person types into, and a collaborator you cannot see the caret of is the thing this
       /// frame exists to prevent.
@@ -248,12 +248,12 @@ type SessionFrame<'State> =
     /// Ephemeral cursor presence; relayed to other peers, never logged or persisted.
     | Presence of PresencePayload
     /// Live terminal traffic (Plan 13). Durable by the time it is sent — the Session
-    /// Process appends to the transcript before it broadcasts — so a dropped frame costs
+    /// appends to the transcript before it broadcasts — so a dropped frame costs
     /// latency, never the record.
     | Terminal of TerminalFrame
 
 /// An abstract, bidirectional channel of session frames shared by both peers (Session
-/// Process and Browser Client). The real carrier is a WebRTC data channel (with HTTP used
+/// and App). The real carrier is a WebRTC data channel (with HTTP used
 /// only for static bootstrap and temporary signalling); this abstraction lets the
 /// handshake and frame-pump logic be written and tested without the Node/WebRTC IO. The
 /// WebRTC adapter is a thin shell that implements this interface.

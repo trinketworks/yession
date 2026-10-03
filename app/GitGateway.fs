@@ -11,7 +11,7 @@ module Yession.Host.GitGateway
 // whole life, printable by `env`, and frozen at the moment of the start — a refreshed token
 // never reached a sandbox already running (docs/GAPS.md).
 //
-// So the credential stays here, in the Session Process, and what the sandbox gets instead is
+// So the credential stays here, in the Session, and what the sandbox gets instead is
 // a ROUTE: this process listens for git's smart-HTTP requests, adds the credential on the
 // way to github.com, and streams the answer back. The sandbox's git is told, through one
 // `url.<here>.insteadOf` config, that `https://github.com/` is spelled `http://<this

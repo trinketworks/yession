@@ -10,7 +10,7 @@ open Thoth.Json
 open Thoth.Json.Net
 #endif
 
-/// The HTTP contract of a Session Process: every path it serves — and, for the two write
+/// The HTTP contract of a Session: every path it serves — and, for the two write
 /// surfaces that carry one, the body it is served with — declared once. The server matches
 /// on these, the shell emits them, and the browser client fetches them — the same role
 /// `Dom` plays for markup hooks, one level up. Before this, `/client.js`
@@ -604,7 +604,7 @@ type SessionVerb =
     | Unarchive
 
 /// The HTTP contract of the Manager's management surface (`ManagerUi`): every path it
-/// claims, declared once — the same role `SessionRoute` plays for a Session Process. The
+/// claims, declared once — the same role `SessionRoute` plays for a Session. The
 /// server dispatches over this, the page emits these, and the session client's reconnect
 /// link and the registry subscriber address the Manager through them. Before this, the
 /// page's inline script spelled `/sessions/{id}/launch` on its own, the router matched

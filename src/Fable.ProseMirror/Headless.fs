@@ -5,13 +5,13 @@ open Yjs
 
 /// The DOM-free half of the ProseMirror surface: the `prosemirror-markdown` schema, its
 /// default parser and serializer, and the `y-prosemirror` conversions between a Yjs
-/// `XmlFragment` and a ProseMirror document. Nothing here needs a page, so the Session Process
+/// `XmlFragment` and a ProseMirror document. Nothing here needs a page, so the Session
 /// drain can serialize a body with exactly the vocabulary the browser editor writes it in.
 ///
 /// Its own file, apart from `ProseMirror`, because a module compiles to one JavaScript file and
 /// whoever names one of its values loads all of it. `ProseMirror` constructs things at load —
 /// the composer's parser is the default one with `file:///` links admitted, patched in place,
-/// and the timeline's table parser is built beside it — so reaching it from the Session Process
+/// and the timeline's table parser is built beside it — so reaching it from the Session
 /// would change what that process parses. This module only imports, and every value in it is
 /// the library's own, untouched.
 module Headless =

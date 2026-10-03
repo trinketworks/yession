@@ -21,7 +21,7 @@ open Fable.Core
 open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
-open Yession.SessionProcess
+open Yession.Session
 
 /// Every path a resource names must be the one the KERNEL will check.
 ///

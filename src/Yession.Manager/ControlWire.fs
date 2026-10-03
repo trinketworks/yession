@@ -13,7 +13,7 @@ open Thoth.Json.Net
 #endif
 
 /// The control-RPC wire shapes (Phase 4, Step 24): the supervision and custody traffic
-/// between a Session Process and its Manager. Hand-written codecs like every boundary;
+/// between a Session and its Manager. Hand-written codecs like every boundary;
 /// NO session content crosses this channel — environments and commands are
 /// session-owned (the sandbox seam) and never appear here.
 module ControlWire =

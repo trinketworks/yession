@@ -115,7 +115,7 @@ type TranscriptLine =
 ///     and it is not close at all for a lease stretch, which by definition begins with a
 ///     program already owning the screen.
 ///
-/// So the Session Process serializes the emulator at each range START — every block's
+/// So the Session serializes the emulator at each range START — every block's
 /// `FromSeq`, every lease stretch's — and a ranged replay becomes *header + one synthesized
 /// output record that paints this + the rebased range*, which is a valid asciicast the stock
 /// player renders with no modification.

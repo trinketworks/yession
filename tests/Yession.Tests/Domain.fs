@@ -103,7 +103,7 @@ let private envelopeSerializationTests =
         testCase "a title the session settled round-trips through the envelope codec" <| fun () ->
             let original =
                 { sampleEnvelope () with
-                    Actor = SessionProcess
+                    Actor = Session
                     Event =
                         SessionNamed
                             { Subject = NamingSubject.Title
@@ -116,7 +116,7 @@ let private envelopeSerializationTests =
         testCase "a name the session settled round-trips through the envelope codec" <| fun () ->
             let original =
                 { sampleEnvelope () with
-                    Actor = SessionProcess
+                    Actor = Session
                     Event =
                         SessionNamed
                             { Subject = NamingSubject.Chapter (MessageId.create "m1" |> expect)
@@ -168,7 +168,7 @@ let private notableAct : Act =
           Command = "make ready"
           Handle = None
           Problem = Some "the terminal could not be opened"
-          Actor = ActorRef.SessionProcess }
+          Actor = ActorRef.Session }
 
 let private conversationProjectionTests =
     let sessionId = SessionId.create "session-proj" |> expect
@@ -186,7 +186,7 @@ let private conversationProjectionTests =
             { EventId = EventId.fresh ()
               SessionId = sessionId
               Offset = EventOffset.create n |> expect
-              Actor = SessionProcess
+              Actor = Session
               Timestamp = DateTimeOffset(2026, 6, 14, 0, 0, 0, TimeSpan.Zero)
               Event = PeerJoined { PeerId = peerId; DisplayName = "swift-heron"; User = None } })
 
@@ -862,7 +862,7 @@ let private repoTests =
                     { EventId = EventId.fresh ()
                       SessionId = sessionId
                       Offset = EventOffset.create (int64 (i + 1)) |> expect
-                      Actor = ActorRef.SessionProcess
+                      Actor = ActorRef.Session
                       Timestamp = DateTimeOffset(2026, 8, 8, 10, 0, 0, TimeSpan.Zero)
                       Event = event })
             let proj, _ = ConversationProjection.applyEvents None envelopes ConversationProjection.empty
@@ -894,7 +894,7 @@ let private repoTests =
                 { EventId = EventId.fresh ()
                   SessionId = sessionId
                   Offset = EventOffset.create 1L |> expect
-                  Actor = ActorRef.SessionProcess
+                  Actor = ActorRef.Session
                   Timestamp = DateTimeOffset(2026, 8, 8, 10, 0, 0, TimeSpan.Zero)
                   Event =
                     GatedCommandFailed
@@ -965,7 +965,7 @@ let private repoTests =
                     { EventId = EventId.fresh ()
                       SessionId = SessionId.create "caps-session" |> expect
                       Offset = EventOffset.create 1L |> expect
-                      Actor = ActorRef.SessionProcess
+                      Actor = ActorRef.Session
                       Timestamp = DateTimeOffset (2026, 8, 8, 10, 0, 0, TimeSpan.Zero)
                       Event =
                         SessionEvent.RepoCapabilitiesChanged
@@ -973,7 +973,7 @@ let private repoTests =
                               RepoCapabilitiesChanged.Repo = RepoRef.create "octo/hello" |> expect
                               RepoCapabilitiesChanged.Granted = granted
                               RepoCapabilitiesChanged.Sensitive = false
-                              RepoCapabilitiesChanged.Actor = ActorRef.SessionProcess
+                              RepoCapabilitiesChanged.Actor = ActorRef.Session
                               RepoCapabilitiesChanged.CausedBy = None } }
                 let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
                 match proj.Items with
@@ -992,7 +992,7 @@ let private repoTests =
                 { EventId = EventId.fresh ()
                   SessionId = SessionId.create "caps-session" |> expect
                   Offset = EventOffset.create 1L |> expect
-                  Actor = ActorRef.SessionProcess
+                  Actor = ActorRef.Session
                   Timestamp = DateTimeOffset (2026, 8, 8, 10, 0, 0, TimeSpan.Zero)
                   Event =
                     SessionEvent.RepoCapabilitiesChanged
@@ -1000,7 +1000,7 @@ let private repoTests =
                           RepoCapabilitiesChanged.Repo = RepoRef.create "octo/hello" |> expect
                           RepoCapabilitiesChanged.Granted = [ "/nix, read-only" ]
                           RepoCapabilitiesChanged.Sensitive = false
-                          RepoCapabilitiesChanged.Actor = ActorRef.SessionProcess
+                          RepoCapabilitiesChanged.Actor = ActorRef.Session
                           RepoCapabilitiesChanged.CausedBy = None } }
             let proj, _ = ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
@@ -1234,7 +1234,7 @@ let private sessionLifecycleTests =
         { EventId = EventId.fresh ()
           SessionId = SessionId.create "resume-session" |> expect
           Offset = EventOffset.create offset |> expect
-          Actor = ActorRef.SessionProcess
+          Actor = ActorRef.Session
           Timestamp = time
           Event = event }
     let started = SessionStarted { MessageId = MessageId.create "s1" |> expect }
@@ -1830,7 +1830,7 @@ let private prWatchTests =
                     { EventId = EventId.fresh ()
                       SessionId = SessionId.create "pr-session" |> expect
                       Offset = EventOffset.create (int64 (i + 1)) |> expect
-                      Actor = ActorRef.SessionProcess
+                      Actor = ActorRef.Session
                       Timestamp = DateTimeOffset (2026, 8, 27, 10, 0, 0, TimeSpan.Zero)
                       Event = event })
             let proj, _ = ConversationProjection.applyEvents None envelopes ConversationProjection.empty
@@ -1933,7 +1933,7 @@ let private authorityTests =
                 (Authority.recover (ActorRef.Configured repo) (Some (Principal.Peer ada)))
                 (Ok (Authority.configuredBy repo (CredentialFor.Person (Principal.Peer ada))))
                 "and a triggered one, on the person who triggered it"
-            for actor in [ ActorRef.System; ActorRef.SessionProcess ] do
+            for actor in [ ActorRef.System; ActorRef.Session ] do
                 Expect.isError (Authority.recover actor None) (sprintf "%s authors no acts" (ActorRef.token actor))
     ]
 
@@ -3433,7 +3433,7 @@ let private namingTests =
             let asked = saying "a" "fix the refresh token"
             let noted =
                 { saying "b" "repo octo/hello added" with
-                    Author = ActorRef.SessionProcess
+                    Author = ActorRef.Session
                     Content = ItemContent.Act notableAct }
             Expect.equal
                 (Naming.owed Map.empty "" Map.empty [ asked; noted ] |> List.collect (fun job -> job.Ask.Lines))

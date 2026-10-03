@@ -308,7 +308,7 @@ type PendingFlow =
 /// Flows redirected to a provider and not yet called back. Single-use and short-lived
 /// (10 minutes — the human is clicking through a consent screen, not parking a tab);
 /// clock injected so the cheap tier covers the lifecycle deterministically. Mirrors
-/// `Yession.SessionProcess.PendingLogins`.
+/// `Yession.Session.PendingLogins`.
 type PendingFlows (nowUnix: unit -> int64) =
     let lifetimeSeconds = 600L
     let mutable pending : Map<string, PendingFlow * int64> = Map.empty

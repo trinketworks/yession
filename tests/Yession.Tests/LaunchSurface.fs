@@ -41,7 +41,7 @@ let private at (n: int64) (event: SessionEvent) : EventEnvelope<SessionEvent> =
     { EventId = EventId.fresh ()
       SessionId = sessionId
       Offset = offset n
-      Actor = ActorRef.SessionProcess
+      Actor = ActorRef.Session
       Timestamp = DateTimeOffset (2026, 9, 12, 0, 0, 0, TimeSpan.Zero)
       Event = event }
 

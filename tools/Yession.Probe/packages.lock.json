@@ -240,7 +240,7 @@
           "Yession.Domain": "[1.0.0, )",
           "Yession.Manager": "[1.0.0, )",
           "Yession.Oidc": "[1.0.0, )",
-          "Yession.SessionProcess": "[1.0.0, )",
+          "Yession.Session": "[1.0.0, )",
           "Ylmish": "[1.0.0-beta0233, )"
         }
       },
@@ -267,7 +267,7 @@
           "Yession.Host": "[1.0.0, )"
         }
       },
-      "yession.sessionprocess": {
+      "yession.session": {
         "type": "Project",
         "dependencies": {
           "Yession.Domain": "[1.0.0, )"

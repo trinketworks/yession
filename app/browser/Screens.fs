@@ -4,7 +4,7 @@ module Yession.Browser.Screens
 //
 // A terminal in live mode is running a program that moves the cursor, so what it DISPLAYS is
 // a projection of what it emitted — not the stream itself. The client therefore needs an
-// emulator, and it uses the SAME one the Session Process does (`@xterm/headless`, driven
+// emulator, and it uses the SAME one the Session does (`@xterm/headless`, driven
 // through `Emulator.fs`'s contract): fed the same bytes in the same order AT THE SAME SIZE,
 // the two screens cannot disagree, which is the property `TerminalSnapshot` rests on and
 // which a second, browser-only renderer would quietly break.
@@ -36,7 +36,7 @@ open Fable.BrowserExtras
 open Yession.Domain
 open Yession.Domain.Terminals
 open Yession.App
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Host
 
 /// How many times this module has asked the DOCUMENT where the terminal boxes are, published
@@ -150,7 +150,7 @@ type Screens =
       Forget : TerminalId -> unit }
 
 /// `report` is told the holder's viewport size whenever it changes — the app relays it to the
-/// Session Process, which resizes the pty.
+/// Session, which resizes the pty.
 ///
 /// It lives here, with the screen, rather than in the app beside the connection. The size of a
 /// screen is a fact about that screen: the element to measure is the one this already tracks,
@@ -277,7 +277,7 @@ let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> un
             // person who now owns the keyboard is typing into `body`.
             //
             // Here rather than on the `take` press because the flip has no press to hang it
-            // on: it is the Session Process saying the mode changed, which reaches this client
+            // on: it is the Session saying the mode changed, which reaches this client
             // as a model change like any other. One edge, both routes.
             let mine = ClientModel.me model
             let showing = ClientModel.selectedTerminal model

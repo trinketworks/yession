@@ -2,7 +2,7 @@ module Yession.Tests.Phase2
 
 // Phase 2 verification, step by step:
 //
-// - Step 10: the Session Manager owns launch — launching registers a Session Process
+// - Step 10: the Manager owns launch — launching registers a Session
 //   and returns a reachable bootstrap URI; Phase 1 behaviour is preserved under a
 //   Manager-launched Process.
 //
@@ -79,20 +79,20 @@ open Yession.Host
 open Yession.Tests.Support
 
 // -----------------------------------------------------------------------------
-// Step 10 — Session Manager & launch.
+// Step 10 — Manager & launch.
 // -----------------------------------------------------------------------------
 
-let mutable private manager : Manager.SessionManager option = None
+let mutable private manager : InProcessManager option = None
 
 let private launchTests =
-    testList "Session Manager launch" [
-        testCaseAsync "launching a session registers a Session Process and returns its bootstrap URI" <|
+    testList "Manager launch" [
+        testCaseAsync "launching a session registers a Session and returns its bootstrap URI" <|
             async {
                 // A base the OS picked, not a number this file chose. It stays a KNOWN
                 // number, because what this case pins is that the launch result names the
                 // address the Manager was told to allocate from.
                 let! basePort = freePort ()
-                let m = Manager.create None None basePort
+                let m = InProcessManager.create None None basePort
                 manager <- Some m
                 let request : SessionLaunchRequest =
                     { SessionLaunchRequest.SessionId = SessionId.create "managed-1" |> expect }
@@ -769,7 +769,7 @@ let private sandboxPolicyTests =
                         Env = Map.ofList [ "HOME", "/data/home" ] }
                 // A shell that fails the FIRST check and no other, which is what a real
                 // unwritable HOME does.
-                match! Yession.SessionProcess.SessionEnvironment.verify policy (failingAt 0) with
+                match! Yession.Session.SessionEnvironment.verify policy (failingAt 0) with
                 | Ok () -> failwith "expected the sandbox to be refused"
                 | Error reason ->
                     Expect.isTrue (reason.Contains "/data/home")
@@ -786,8 +786,8 @@ let private sandboxPolicyTests =
                 let policy = { Support.emptyPolicy with Env = Map.ofList [ "HOME", "/data/home" ] }
                 let unnamed = ref 3
                 let retrying =
-                    Yession.SessionProcess.SessionEnvironment.verificationPolicy (fun _ -> async { return () })
-                match! Yession.SessionProcess.SessionEnvironment.verifyUnder retrying policy (settlingAfter unnamed) with
+                    Yession.Session.SessionEnvironment.verificationPolicy (fun _ -> async { return () })
+                match! Yession.Session.SessionEnvironment.verifyUnder retrying policy (settlingAfter unnamed) with
                 | Ok () -> Expect.equal unnamed.Value 0 "every unsettled answer was asked again, and the fourth stood"
                 | Error reason -> failwithf "expected the sandbox to settle, said: %s" reason
             }
@@ -809,8 +809,8 @@ let private sandboxPolicyTests =
                                         Exited = async { return SandboxExited 1 } }
                         })
                 let retrying =
-                    Yession.SessionProcess.SessionEnvironment.verificationPolicy (fun _ -> async { return () })
-                match! Yession.SessionProcess.SessionEnvironment.verifyUnder retrying policy counting with
+                    Yession.Session.SessionEnvironment.verificationPolicy (fun _ -> async { return () })
+                match! Yession.Session.SessionEnvironment.verifyUnder retrying policy counting with
                 | Ok () -> failwith "expected the sandbox to be refused"
                 | Error _ -> Expect.equal asked.Value 1 "asked once, and believed"
             }
@@ -820,7 +820,7 @@ let private sandboxPolicyTests =
         testCaseAsync "a sandbox that cannot run a command at all is refused in those words" <|
             async {
                 let policy = { Support.emptyPolicy with Env = Map.ofList [ "HOME", "/data/home" ] }
-                match! Yession.SessionProcess.SessionEnvironment.verify policy cannotSpawn with
+                match! Yession.Session.SessionEnvironment.verify policy cannotSpawn with
                 | Ok () -> failwith "expected the sandbox to be refused"
                 | Error reason ->
                     Expect.isTrue (reason.Contains "cannot run a command at all")
@@ -1465,7 +1465,7 @@ let private sandboxPolicyTests =
 // need starts (or restarts) the session's one environment, all as events.
 // -----------------------------------------------------------------------------
 
-let private environmentEventsOf (log: Yession.SessionProcess.EventLog<SessionEvent>) =
+let private environmentEventsOf (log: Yession.Session.EventLog<SessionEvent>) =
     async {
         let! page = log.Read None Int32.MaxValue
         return
@@ -1536,10 +1536,10 @@ let private environmentRecordingTests =
             async {
                 let sessionId = SessionId.create "unverified-1" |> expect
                 let log =
-                    Yession.SessionProcess.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
                 let creating : CreateSandbox = fun _ -> async { return Ok (failingAt 0) }
                 let environment =
-                    Yession.SessionProcess.SessionEnvironment.create
+                    Yession.Session.SessionEnvironment.create
                         log creating policyWithAHome "scripted" "env-unverified-1"
 
                 match! environment.Ensure None "the fold asked" with
@@ -1563,10 +1563,10 @@ let private environmentRecordingTests =
             async {
                 let sessionId = SessionId.create "realised-1" |> expect
                 let log =
-                    Yession.SessionProcess.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
                 let creating : CreateSandbox = fun _ -> async { return Ok passesEveryCheck }
                 let environment =
-                    Yession.SessionProcess.SessionEnvironment.create
+                    Yession.Session.SessionEnvironment.create
                         log creating policyOnACoarserHost "scripted" "env-realised-1"
 
                 let! outcome = environment.Ensure None "the fold asked"
@@ -1585,10 +1585,10 @@ let private environmentRecordingTests =
             async {
                 let sessionId = SessionId.create "realised-2" |> expect
                 let log =
-                    Yession.SessionProcess.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
                 let creating : CreateSandbox = fun _ -> async { return Ok passesEveryCheck }
                 let environment =
-                    Yession.SessionProcess.SessionEnvironment.create
+                    Yession.Session.SessionEnvironment.create
                         log creating policyOnACoarserHost "scripted" "env-realised-2"
                 Expect.equal (environment.Realisation ()) [] "nothing runs, nothing is claimed"
             }
@@ -1600,10 +1600,10 @@ let private environmentRecordingTests =
             async {
                 let sessionId = SessionId.create "realised-3" |> expect
                 let log =
-                    Yession.SessionProcess.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
                 let creating : CreateSandbox = fun _ -> async { return Ok passesEveryCheck }
                 let environment =
-                    Yession.SessionProcess.SessionEnvironment.create
+                    Yession.Session.SessionEnvironment.create
                         log creating policyOnACoarserHost "scripted" "env-realised-3"
                 let! _ = environment.Ensure None "the fold asked"
                 do! environment.Stop ()
@@ -1618,7 +1618,7 @@ let private environmentRecordingTests =
             async {
                 let sessionId = SessionId.create "unverified-2" |> expect
                 let log =
-                    Yession.SessionProcess.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
                 let mutable created = 0
                 let creating : CreateSandbox =
                     fun _ ->
@@ -1627,7 +1627,7 @@ let private environmentRecordingTests =
                             return Ok (failingAt 0)
                         }
                 let environment =
-                    Yession.SessionProcess.SessionEnvironment.create
+                    Yession.Session.SessionEnvironment.create
                         log creating policyWithAHome "scripted" "env-unverified-2"
 
                 let! _ = environment.Ensure None "the fold asked"
@@ -1648,7 +1648,7 @@ let private environmentRecordingTests =
             async {
                 let sessionId = SessionId.create "unverified-3" |> expect
                 let log =
-                    Yession.SessionProcess.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
                 let mutable disposed = 0
                 let creating : CreateSandbox =
                     fun _ ->
@@ -1656,7 +1656,7 @@ let private environmentRecordingTests =
                             return Ok { failingAt 0 with Dispose = fun () -> async { disposed <- disposed + 1 } }
                         }
                 let environment =
-                    Yession.SessionProcess.SessionEnvironment.create
+                    Yession.Session.SessionEnvironment.create
                         log creating policyWithAHome "scripted" "env-unverified-3"
 
                 let! _ = environment.Ensure None "the fold asked"
@@ -1671,10 +1671,10 @@ let private environmentRecordingTests =
             async {
                 let sessionId = SessionId.create "refused-1" |> expect
                 let log =
-                    Yession.SessionProcess.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
                 let refusing : CreateSandbox = fun _ -> async { return Error "the ceiling is closed" }
                 let environment =
-                    Yession.SessionProcess.SessionEnvironment.create
+                    Yession.Session.SessionEnvironment.create
                         log refusing preparedEmptyPolicy "scripted" "env-refused-1"
 
                 let! first = environment.Ensure None "the fold asked"
@@ -1699,11 +1699,11 @@ let private environmentRecordingTests =
             async {
                 let sessionId = SessionId.create "refused-2" |> expect
                 let log =
-                    Yession.SessionProcess.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
                 let mutable said = "the ceiling is closed"
                 let refusing : CreateSandbox = fun _ -> async { return Error said }
                 let environment =
-                    Yession.SessionProcess.SessionEnvironment.create
+                    Yession.Session.SessionEnvironment.create
                         log refusing preparedEmptyPolicy "scripted" "env-refused-2"
 
                 let! _ = environment.Ensure None "the fold asked"
@@ -1727,14 +1727,14 @@ let private environmentRecordingTests =
                 let recorder = SandboxRecorder ()
                 let sessionId = SessionId.create "refused-3" |> expect
                 let log =
-                    Yession.SessionProcess.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
                 let mutable up = false
                 let flaky : CreateSandbox =
                     fun policy ->
                         if up then scriptedSandbox recorder echoSandboxScript policy
                         else async { return Error "not yet" }
                 let environment =
-                    Yession.SessionProcess.SessionEnvironment.create
+                    Yession.Session.SessionEnvironment.create
                         log flaky preparedEmptyPolicy "scripted" "env-refused-3"
 
                 let! _ = environment.Ensure None "too early"
@@ -1767,7 +1767,7 @@ let private lazyLifecycleTests =
                             onChunk (AgentResponseChunk.Text "just an answer")
                             return AgentCompleted ("just an answer", None)
                         }
-                let m = Manager.create (Some conversational) (Some (fun _ -> scriptedSandbox recorder echoSandboxScript)) 0
+                let m = InProcessManager.create (Some conversational) (Some (fun _ -> scriptedSandbox recorder echoSandboxScript)) 0
                 let! _ =
                     m.StartSession
                         { SessionLaunchRequest.SessionId = SessionId.create "lazy-1" |> expect }
@@ -1806,7 +1806,7 @@ let private lazyLifecycleTests =
                                 return AgentCompleted ("environment is up", None)
                             | other -> return AgentFailed (sprintf "%A" other, None)
                         }
-                let m = Manager.create (Some taskAgent) (Some (fun _ -> scriptedSandbox recorder echoSandboxScript)) 0
+                let m = InProcessManager.create (Some taskAgent) (Some (fun _ -> scriptedSandbox recorder echoSandboxScript)) 0
                 let! _ =
                     m.StartSession
                         { SessionLaunchRequest.SessionId = SessionId.create "lazy-2" |> expect }
@@ -1848,9 +1848,9 @@ let private lazyLifecycleTests =
                 let recorder = SandboxRecorder ()
                 let sessionId = SessionId.create "lazy-3" |> expect
                 let log =
-                    Yession.SessionProcess.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                    Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
                 let environment =
-                    Yession.SessionProcess.SessionEnvironment.create
+                    Yession.Session.SessionEnvironment.create
                         log (scriptedSandbox recorder echoSandboxScript) preparedEmptyPolicy "scripted" "env-lazy-3"
 
                 let! first = environment.Ensure None "initial task"
@@ -1888,10 +1888,10 @@ let private lazyLifecycleTests =
 
 /// A real host-backend WorkSandbox composition over the given log — exactly what
 /// SessionMain wires, minus the control channel (no secret refs here).
-let private hostEnvironment (log: Yession.SessionProcess.EventLog<SessionEvent>) (name: string) =
+let private hostEnvironment (log: Yession.Session.EventLog<SessionEvent>) (name: string) =
     let createSandbox = Sandboxes.forBackend HostBackend name EnvironmentSpec.defaults |> expect
     let noSecrets = fun (n: SecretName) -> async { return Error (sprintf "no secrets: %s" (SecretName.value n)) }
-    Yession.SessionProcess.SessionEnvironment.create
+    Yession.Session.SessionEnvironment.create
         log
         createSandbox
         (Sandboxes.preparePolicy HostBackend noSecrets (Sandboxes.SessionLayout.nothing SandboxRef.defaultRef) (fun _ _ -> Ok ([], Set.empty)) EnvironmentSpec.defaults)
@@ -2065,7 +2065,7 @@ let private commandFoldTests =
                     Support.withEnv [ "ANTHROPIC_API_KEY", Some "planted-credential" ] (fun () -> async {
                         let sessionId = SessionId.create "cmd-leak" |> expect
                         let log =
-                            Yession.SessionProcess.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                            Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
                         let environment = hostEnvironment log "cmd-leak"
                         let! _ = environment.Ensure None "leak probe"
                         let mutable output = ""
@@ -2109,7 +2109,7 @@ let private commandTests =
                         }
                 // `0`: an OS-assigned port per session, which is the Manager's own default
                 // and all this suite needs — it reaches the session through `BootstrapUri`.
-                let m = Manager.create (Some devAgent) (Some hostSandboxFor) 0
+                let m = InProcessManager.create (Some devAgent) (Some hostSandboxFor) 0
                 let! _ =
                     m.StartSession
                         { SessionLaunchRequest.SessionId = SessionId.create "cmd-e2e-session" |> expect }
@@ -2170,7 +2170,7 @@ let private acceptanceTests =
         testCaseAsync "event offsets remain monotonic across message, agent, environment, and terminal events" <|
             async {
                 let sessionId = SessionId.create "mixed-offsets" |> expect
-                let log = Yession.SessionProcess.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
+                let log = Yession.Session.InMemoryEventLog.create sessionId (fun () -> DateTimeOffset.UtcNow)
                 let ada = PeerId.create "ada" |> expect
                 let mixed : SessionEvent list =
                     [ MessageSent
@@ -2199,7 +2199,7 @@ let private acceptanceTests =
                           Result = CommandSucceeded 0
                           ToSeq = 1 } ]
                 for event in mixed do
-                    let! _ = log.Append ActorRef.SessionProcess event
+                    let! _ = log.Append ActorRef.Session event
                     ()
                 let! page = log.Read None Int32.MaxValue
                 let offsets = page.Events |> List.map (fun e -> EventOffset.value e.Offset)
@@ -2218,7 +2218,7 @@ let private acceptanceE2eTests =
                             onChunk (AgentResponseChunk.Text "done")
                             return AgentCompleted ("done", None)
                         }
-                let m = Manager.create (Some devAgent) (Some hostSandboxFor) 0
+                let m = InProcessManager.create (Some devAgent) (Some hostSandboxFor) 0
                 let! _ =
                     m.StartSession
                         { SessionLaunchRequest.SessionId = SessionId.create "catchup-session" |> expect }
@@ -2282,7 +2282,7 @@ let private acceptanceE2eTests =
     ]
 
 // -----------------------------------------------------------------------------
-// Durable event log: history survives a Session Process restart.
+// Durable event log: history survives a Session restart.
 // -----------------------------------------------------------------------------
 
 let private persistenceTests =
@@ -2295,7 +2295,7 @@ let private persistenceTests =
                 let makeLog (id: SessionId) = EventStore.openLog path id (fun () -> DateTimeOffset.UtcNow)
 
                 // First life: a client drafts and sends a message.
-                let m1 = Manager.createWith None None (Some makeLog) 0
+                let m1 = InProcessManager.createWith None None (Some makeLog) 0
                 let! _ = m1.StartSession { SessionLaunchRequest.SessionId = sessionId }
                 let managed1 = (m1.Registered ()) |> List.head
                 let! a = connectClient (managed1.BootstrapUri + "signal") (managed1.Host.MintPeerToken ()) "ada" "Ada"
@@ -2317,7 +2317,7 @@ let private persistenceTests =
                 // Second life: a fresh Manager + Process over the same file.
                 // Its own OS-assigned port, as the first life had: the second life is a
                 // fresh Manager over the same FILE, and nothing here is about where it listens.
-                let m2 = Manager.createWith None None (Some makeLog) 0
+                let m2 = InProcessManager.createWith None None (Some makeLog) 0
                 let! _ = m2.StartSession { SessionLaunchRequest.SessionId = sessionId }
                 let managed2 = (m2.Registered ()) |> List.head
                 let! after = managed2.Host.Log.Read None Int32.MaxValue
@@ -2592,7 +2592,7 @@ let tests =
         acceptanceTests
         agentSpawnerTests
         // Needs ports: everything that binds ports / spawns hosts over real WebRTC.
-        Tag.needs "Session Manager launch" [ Tag.Ports; Tag.Native ] (fun () -> launchTests)
+        Tag.needs "Manager launch" [ Tag.Ports; Tag.Native ] (fun () -> launchTests)
         Tag.needs "Lazy environment lifecycle" [ Tag.Ports; Tag.Native ] (fun () -> lazyLifecycleTests)
         Tag.needs "Command execution" [ Tag.Ports; Tag.Native ] (fun () -> commandTests)
         Tag.needs "Phase 2 acceptance E2E" [ Tag.Ports; Tag.Native ] (fun () -> acceptanceE2eTests)

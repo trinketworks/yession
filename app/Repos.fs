@@ -35,7 +35,7 @@ open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
 open Yession.Domain.Repos
-open Yession.SessionProcess
+open Yession.Session
 
 // --- pure pieces (cheap-tier tested) -----------------------------------------------------
 

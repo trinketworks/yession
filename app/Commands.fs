@@ -32,7 +32,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Files
 open Yession.Domain.Tools
 open Yession.Domain.Repos
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Domain.Prs
 
 /// What the commands need from the session around them, as getters — the services are

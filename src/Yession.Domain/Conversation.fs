@@ -10,7 +10,7 @@ open Yession.Domain.Sandboxes
 
 /// The conversation is a *projection* of the event log — never read from Yjs/draft state.
 /// The projection type and its fold live in the shared Domain library because both the
-/// Session Process and the Browser Client derive the conversation the same way.
+/// Session and the App derive the conversation the same way.
 /// See docs/design.md §1 "Reactive" and §2.2.
 
 type ConversationItemStatus =
@@ -901,11 +901,11 @@ module ConversationProjection =
         // first boot brings up (a repo's sandboxes) names it as its cause, and a cause is an
         // item a reader can be pointed at. It draws as a rule, not a line anybody said.
         | SessionEvent.SessionStarted s ->
-            proj |> noted s.MessageId ActorRef.SessionProcess (Act.SessionStarted (s, envelope.Timestamp)) envelope
+            proj |> noted s.MessageId ActorRef.Session (Act.SessionStarted (s, envelope.Timestamp)) envelope
         // Coming BACK is a different matter: it says a stretch passed in which nothing ran,
         // which nothing else on the screen says.
         | SessionEvent.SessionResumed r ->
-            proj |> noted r.MessageId ActorRef.SessionProcess (Act.SessionResumed (r, envelope.Timestamp)) envelope
+            proj |> noted r.MessageId ActorRef.Session (Act.SessionResumed (r, envelope.Timestamp)) envelope
         | SessionEvent.McpServerUnavailable m -> proj |> noted m.MessageId ActorRef.System (Act.McpServerUnavailable m) envelope
         // Watched pull requests fold in for the repo notes' reason: a watch is a
         // session-shaping act, and a transition is exactly what a joining human or the

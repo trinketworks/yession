@@ -22,7 +22,7 @@ open Yession.Domain.Tools
 open Yession.Domain.Chat
 open Yession.Domain.Terminals
 open Yession.Host
-open Yession.SessionProcess
+open Yession.Session
 open Yession.App.Codecs
 
 let private expect result =

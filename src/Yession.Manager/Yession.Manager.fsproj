@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    The Session Manager's pure state and wire layer: the durable registry, port and
+    The Manager's pure state and wire layer: the durable registry, port and
     reaper policy, secrets/broker state, and the control-RPC codecs. Environments are
     session-owned (the sandbox seam in Yession.Domain); this project holds no
     environment authority.

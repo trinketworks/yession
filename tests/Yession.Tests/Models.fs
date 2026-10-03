@@ -28,7 +28,7 @@ open Yession.Domain.Access
 open Yession.Domain.Agent
 open Yession.App
 open Yession.Host
-open Yession.SessionProcess
+open Yession.Session
 
 let private expect result =
     match result with

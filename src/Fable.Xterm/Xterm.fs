@@ -6,7 +6,7 @@ module Fable.Xterm
 // else is opaque.
 //
 // Fable-only: `dotnet build` type-checks it; Fable emits the JS that runs on Node and in the
-// browser alike, because this module is bundled for BOTH platforms — the Session Process
+// browser alike, because this module is bundled for BOTH platforms — the Session
 // keeps a screen with it, and the client composes a live one from it.
 
 open Fable.Core
@@ -61,7 +61,7 @@ type [<AllowNullLiteral>] HeadlessExports =
     abstract Terminal : TerminalClass
 
 // The two packages ship differently, and each import has to be the form that resolves under
-// both platforms — Node for the Session Process, esbuild-for-the-browser for the client —
+// both platforms — Node for the Session, esbuild-for-the-browser for the client —
 // and they are not the same form.
 //
 // `@xterm/headless` is a DEFAULT import: its `main` is a CommonJS bundle and it declares no

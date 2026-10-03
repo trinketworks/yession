@@ -7,7 +7,7 @@ open Yjs
 
 /// Headless ProseMirror-markdown serialization for rich-text bodies. A body is a
 /// `Y.XmlFragment` holding a ProseMirror document; this converts between that fragment and
-/// Markdown with no DOM, so it is shared by the browser editor AND the Session Process drain
+/// Markdown with no DOM, so it is shared by the browser editor AND the Session drain
 /// (which snapshots a queue body to Markdown for the durable `MessageSent`). The bindings are
 /// `Fable.ProseMirror.Headless`, the same npm packages the editor uses — no authored JS.
 module Markdown =

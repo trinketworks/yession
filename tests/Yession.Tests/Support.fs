@@ -90,7 +90,7 @@ let emptyPolicy : SandboxPolicy =
 let preparedEmptyPolicy : unit -> Async<Result<SandboxPolicy, string>> =
     fun () -> async { return Ok emptyPolicy }
 
-/// A Session Process as production composes it — `Host.startFull`'s own wiring: its shell,
+/// A Session as production composes it — `Host.startFull`'s own wiring: its shell,
 /// its nonce, its drain, its command path — over ONE sandbox built by `createSandbox`
 /// under `policy`, standing as the session's default.
 ///
@@ -105,10 +105,10 @@ let hostOver
     (policy: SandboxPolicy)
     (name: string)
     : Async<Host.SessionHost> =
-    let makeSandboxes (log: Yession.SessionProcess.EventLog<SessionEvent>) =
+    let makeSandboxes (log: Yession.Session.EventLog<SessionEvent>) =
         async {
             return
-                Yession.SessionProcess.SessionEnvironment.create
+                Yession.Session.SessionEnvironment.create
                     log
                     createSandbox
                     (fun () -> async { return Ok policy })
@@ -584,7 +584,7 @@ let connectInMemoryClientVia
     (name: string)
     : Async<Client> =
     async {
-        let carrier, serverEnd = Yession.SessionProcess.InMemoryChannel.createPair<string> ()
+        let carrier, serverEnd = Yession.Session.InMemoryChannel.createPair<string> ()
         // The Host drives the server end exactly as it would a WebRTC connection.
         host.Connect serverEnd
         // ...and this end is supervised exactly as the browser supervises its own. Not
@@ -687,7 +687,7 @@ module Body =
         | None -> None
         | Some queueId ->
             // Seed the queue body BEFORE the entry (mirrors `Connection.SendDraft`): over an
-            // ordered transport the body update reaches a draining Session Process before the
+            // ordered transport the body update reaches a draining Session before the
             // entry, so the drain never snapshots an entry whose body has not yet landed. Only
             // when there IS body text — an absent or empty draft fragment has nothing to copy.
             match draft registry peer with

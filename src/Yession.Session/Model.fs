@@ -1,10 +1,10 @@
-namespace Yession.SessionProcess
+namespace Yession.Session
 
 open Yession.Domain
 open Yession.Domain.Collab
 open Yession.Domain.Chat
 
-/// The Session Process Elmish model and its sub-states. The model holds a single typed
+/// The Session Elmish model and its sub-states. The model holds a single typed
 /// snapshot of the session: synced collaborative state, event-log read position, peers,
 /// the conversation projection, and the agent runtime state. See docs/design.md §1
 /// "Reactive", §2.2.

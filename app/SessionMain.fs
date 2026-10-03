@@ -1,6 +1,6 @@
 module Yession.Host.SessionMain
 
-// The Session Process entry (Phase 4, Steps 23–24): runs exactly ONE session,
+// The Session entry (Phase 4, Steps 23–24): runs exactly ONE session,
 // configured from the environment — the Manager's spawn contract — over the session's
 // own data directory. Once listening it prints exactly one JSON readiness line to
 // stdout; everything else it writes is logging. Environment authority arrives as a
@@ -16,12 +16,12 @@ open Yession.Domain.Tools
 open Yession.Domain.Access
 open Yession.Domain.Prs
 open Yession.Domain.Terminals
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Host
 
 // This bin takes no options of its own — everything it needs arrives in the environment the
 // Manager spawns it with. `--version` and `--help` still answer, before any configuration is
-// read: no data directory, no ports, no Manager. They are the only things a Session Process
+// read: no data directory, no ports, no Manager. They are the only things a Session
 // will do without a session.
 Interop.parseOrExit (Cli.spec "yession-session") Version.current |> ignore
 
@@ -148,7 +148,7 @@ let private grantsFor (uses: ResourceName list) (wants: ResourceName list) : Res
 // binary whose API egress does not honour `HTTP_PROXY`, so under srt's `--unshare-net` it
 // connects DIRECT to the API, fails instantly, and retries to the deadline. srt confines
 // the COMMANDS the agent runs (the WorkSandbox), not the agent CLI itself, so `host` stays
-// the default until either the CLI runs on Node or the agent gets its own Session Process.
+// the default until either the CLI runs on Node or the agent gets its own Session.
 let private agentBackend =
     match SandboxBackend.parseAgent (Interop.envOr "YESSION_SESSION_AGENT_BACKEND" "host") with
     | Ok backend -> backend
@@ -246,7 +246,7 @@ let private workspaceFor (sandbox: SandboxRef) =
 let private makeSandboxes
     (credentials: WorkSandboxes.CredentialSource list)
     (proxy: WorkSandboxes.ProxyProvider)
-    : Yession.SessionProcess.EventLog<SessionEvent> -> Async<WorkSandboxes.WorkSandboxes> =
+    : Yession.Session.EventLog<SessionEvent> -> Async<WorkSandboxes.WorkSandboxes> =
     let name = SessionId.value sessionId
     fun log ->
         let create (sandbox: SandboxRef) (requested: EnvironmentSpec) (provision: WorkSandboxes.Provision) =

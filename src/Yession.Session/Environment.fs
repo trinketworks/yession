@@ -1,4 +1,4 @@
-namespace Yession.SessionProcess
+namespace Yession.Session
 
 open System
 open Yession.Domain
@@ -9,7 +9,7 @@ open Yession.Domain.Agent
 /// One environment per session: nothing starts at session creation; a signalled need
 /// (usually from the agent) creates a sandbox through the injected `CreateSandbox`; a
 /// stopped environment is recreated by the next need under the same environment id.
-/// Every transition is appended as an event — the Session Process is the only writer,
+/// Every transition is appended as an event — the Session is the only writer,
 /// and the event flow is the pinned observable protocol.
 module SessionEnvironment =
 
@@ -181,7 +181,7 @@ module SessionEnvironment =
 
         let append event =
             async {
-                let! _ = log.Append ActorRef.SessionProcess event
+                let! _ = log.Append ActorRef.Session event
                 return ()
             }
 

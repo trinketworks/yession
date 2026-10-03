@@ -9,7 +9,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.App.Codecs
 
-/// Composition of the Browser Client: the Elmish program bound to a Yjs document through
+/// Composition of the App: the Elmish program bound to a Yjs document through
 /// the Ylmish sync boundary, and the wiring of a connected `FrameChannel` to that
 /// document. The Elmish model stays the single typed snapshot; only `ClientModel.Synced`
 /// crosses into the doc (docs/design.md §1 "Ylmish is the sync boundary").
@@ -47,16 +47,16 @@ module Client =
           /// Send the draft in the given peer's slot: enqueue it (Phase 3). ANY co-editor may
           /// send, so the `PeerId` names whose draft it is, which is not necessarily the local
           /// peer. A pure CRDT model update under the key the slot has carried since it was
-          /// published — no command round-trip; the Session Process consumes the queue and the
+          /// published — no command round-trip; the Session consumes the queue and the
           /// message lands in the timeline as events.
           SendDraft : PeerId -> unit
-          /// Ask the Session Process to cancel the running agent turn (Step 17). The
+          /// Ask the Session to cancel the running agent turn (Step 17). The
           /// outcome arrives as events: `AgentTurnInterrupted` on success, or nothing
           /// if the turn already finished (the request is then rejected).
           InterruptTurn : AgentTurnId -> unit
           /// Broadcast the local peer's caret+selection focus (or `None` when it leaves every
           /// collaborative field), so collaborators see the cursor. Ephemeral presence — the
-          /// Session Process relays it to other peers and never persists it.
+          /// Session relays it to other peers and never persists it.
           ReportPresence : Focus option -> unit
           /// Broadcast what this peer has OPEN in the pane (or `None` when it has nothing on
           /// screen), so collaborators can see who else is reading a file or a terminal.
@@ -68,7 +68,7 @@ module Client =
           /// frame: the connection remembers the last of each, which is what makes "the peer
           /// stopped typing" unable to erase "the peer is still watching".
           ReportViewing : ViewRef option -> unit
-          /// Ask the Session Process to open a terminal (Plan 13). The new terminal arrives
+          /// Ask the Session to open a terminal (Plan 13). The new terminal arrives
           /// as a `TerminalOpened` event, not as a response — one source of truth for a
           /// durable fact, and it is the one every peer already reads.
           /// A SHELL in the sandbox named — `SandboxRef.defaultRef` from a caller who does
@@ -81,7 +81,7 @@ module Client =
           /// request's id, so the surface can tell the session's reply to THIS command from
           /// any other's (`CommandAnsweredMsg`); the outcome itself arrives as events.
           AddRepo : RepoRef -> string option -> RequestId
-          /// Ask the Session Process to close a terminal.
+          /// Ask the Session to close a terminal.
           CloseTerminal : TerminalId -> unit
           /// Take a terminal's stdin — enter live mode, stealing the lease if another peer
           /// holds it (Plan 13, stage 2e). The outcome arrives as a `TerminalLeaseTaken`
@@ -94,7 +94,7 @@ module Client =
           ReattachTerminal : TerminalId -> unit
           /// Keystrokes for a terminal this peer holds (Plan 14, stage 6). A FRAME, not a
           /// command: there is no response by design, because a keystroke that needed an
-          /// acknowledgement would make typing a round trip. The Session Process checks the
+          /// acknowledgement would make typing a round trip. The Session checks the
           /// lease and drops what a non-holder sends.
           TypeIntoTerminal : TerminalId -> string -> unit
           /// The holder's viewport size, so the pty and the program inside it agree about
@@ -621,7 +621,7 @@ module Client =
           /// leaves a client with only what arrives live — which is correct for a peer
           /// that has no HTTP leg, and is why this is optional rather than required.
           FetchTranscripts : TranscriptFetch.TranscriptFeed option
-          /// What to do with a terminal's screen when the Session Process sends one (Plan
+          /// What to do with a terminal's screen when the Session sends one (Plan
           /// 14, stage 6). The browser seeds its emulator; a client with none — a headless
           /// peer, a test — ignores it and loses nothing, because the transcript is the
           /// record and this is only the view.
@@ -1001,7 +1001,7 @@ module Client =
 
         /// The shipped resilience policy for the HTTP feed: five retries, exponentially
         /// backed off from 250ms with a 10s ceiling, jittered by up to half so a Session
-        /// Process restart does not bring every peer back in lockstep, and applied only to
+        /// restart does not bring every peer back in lockstep, and applied only to
         /// faults retrying can fix. `sleep` and `random` are parameters so the policy a test
         /// drives is the policy that ships — the schedule is fixed here, the clock is not.
         let policy
@@ -1094,7 +1094,7 @@ module Client =
         /// The shipped policy for opening the transport: four retries, exponentially backed
         /// off from 500ms to a 15s ceiling, jittered. EVERY fault is retryable here, and that
         /// is not laziness — the only faults this port can produce mean "the session is not
-        /// there yet", and a Session Process that is restarting comes back. Authorization is
+        /// there yet", and a Session that is restarting comes back. Authorization is
         /// settled before this point (`/me`) and peer admission after it (the hello
         /// handshake), so neither is in scope for a retry decision.
         ///
@@ -1341,7 +1341,7 @@ module Client =
                 // Carry the rich body over: seed the queue entry's body root AND create the entry
                 // in ONE Yjs transaction, so the send is a SINGLE doc update — exactly as the old
                 // nested-body design was. Two reasons this must be atomic:
-                //   1. the Session Process drains on the entry's arrival, so an entry that arrives
+                //   1. the Session drains on the entry's arrival, so an entry that arrives
                 //      without its body would be snapshotted as an empty durable message; and
                 //   2. splitting it into multiple interleaved State frames shifts the relay timing
                 //      so a `withYlmish` Set (from applying the drain's queue removal) can clobber
@@ -1372,7 +1372,7 @@ module Client =
           ReportPresence =
             fun focus ->
                 // Presence carries who is editing so collaborators can label and colour the
-                // caret; the Session Process relays it to everyone else.
+                // caret; the Session relays it to everyone else.
                 reportedFocus <- focus
                 sendPresence ()
           ReportViewing =
@@ -1421,7 +1421,7 @@ module Client =
                 //
                 // Command text copied over, the model updated, and the composer emptied all
                 // in ONE transaction, for the same two reasons the message send is atomic:
-                // the Session Process drains on the entry's arrival (an entry without its
+                // the Session drains on the entry's arrival (an entry without its
                 // command would run as an empty one), and a split update lets a `withYlmish`
                 // Set from the drain's removal clobber non-synced model fields.
                 match SyncedStateSync.terminalDraftQueueId doc terminal author with

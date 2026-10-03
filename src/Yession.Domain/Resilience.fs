@@ -42,7 +42,7 @@ module Resilience =
                     Some (TimeSpan.FromMilliseconds (min grown cap.TotalMilliseconds))
 
         /// Spread an inner schedule's delays uniformly over `[(1 - spread)·d, d]`, so peers
-        /// that failed together come back apart. That case is real here: a Session Process
+        /// that failed together come back apart. That case is real here: a Session
         /// restart drops every peer of a session at the same instant, and an unjittered
         /// backoff would have all of them retry the tail chunk in lockstep, forever in step.
         /// `random` yields uniform `[0, 1)`.

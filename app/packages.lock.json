@@ -299,7 +299,7 @@
           "Yession.Domain": "[1.0.0, )"
         }
       },
-      "yession.sessionprocess": {
+      "yession.session": {
         "type": "Project",
         "dependencies": {
           "Yession.Domain": "[1.0.0, )"

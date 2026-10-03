@@ -178,7 +178,7 @@ and TerminalBlockStarted =
     { TerminalId : TerminalId
       BlockId : BlockId
       /// The queue entry this block was drained from, when it came through the composer.
-      /// `None` for a block the Session Process ran on its own behalf.
+      /// `None` for a block the Session ran on its own behalf.
       QueueId : QueueId option
       /// The three parties behind the command: who wrote it, whose credential it ran on when
       /// that was not their own, and who released it when the terminal's mode required an
@@ -210,7 +210,7 @@ and TerminalBlockStarted =
 /// half of the two.
 ///
 /// Deliberately NOT a `SessionCommand`. A command frame from a peer that drops mid-flight
-/// is lost, and the log stays the Session Process's alone to write — so a peer writes
+/// is lost, and the log stays the Session's alone to write — so a peer writes
 /// `RejectedBy` on the doc entry and the drain, which is already the queue's single
 /// consumer, observes it and appends this.
 

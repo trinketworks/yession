@@ -18,7 +18,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Tools
 open Yession.App
-open Yession.SessionProcess
+open Yession.Session
 open Yession.Tests.Support
 open Yession.App.Codecs
 
@@ -55,7 +55,7 @@ let private eventsOf (log: EventLog<SessionEvent>) =
     }
 
 // --- Writing the doc as a remote peer would -------------------------------------------------
-// A test driving the Session Process's own doc makes writes the way a peer's merged update
+// A test driving the Session's own doc makes writes the way a peer's merged update
 // would arrive. These are the only Yjs calls in this file, and they exist so no production
 // API has to grow a setter that only a test would call. They go through the same typed
 // binding the production writers use (`Sync.fs`), and deliberately without `doc.transact`
@@ -349,7 +349,7 @@ let private blockStdinTests =
         testCase "the agent's blocks read end-of-file unless it asked; everyone else's read the terminal" <| fun () ->
             Expect.equal (BlockStdinPolicy.forAct ActorRef.Agent false) BlockStdin.Closed "nobody is at the agent's keyboard unless it says it will be"
             Expect.equal (BlockStdinPolicy.forAct ActorRef.Agent true) BlockStdin.Terminal "asked for, so the prompt is its to answer"
-            for author in [ PeerRef ada; UserRef (UserId.create "u1" |> expect); ActorRef.System; ActorRef.SessionProcess; ActorRef.Configured (RepoRef.create "octo/hello" |> expect) ] do
+            for author in [ PeerRef ada; UserRef (UserId.create "u1" |> expect); ActorRef.System; ActorRef.Session; ActorRef.Configured (RepoRef.create "octo/hello" |> expect) ] do
                 for asked in [ false; true ] do
                     Expect.equal (BlockStdinPolicy.forAct author asked) BlockStdin.Terminal (sprintf "%A keeps the terminal, asked or not" author)
     ]
@@ -628,7 +628,7 @@ let private emulatorTests =
             Expect.isTrue (Size.isValid Size.default') "the default is always valid"
 
         testCase "a size round-trips through the record a transcript writes it as" <| fun () ->
-            // The two halves of this run in different processes — the Session Process writes
+            // The two halves of this run in different processes — the Session writes
             // the record when it resizes a pty, a browser reads it to reshape the emulator
             // composing that terminal's screen — so the format is only ever right if one of
             // them cannot drift from the other.
@@ -1013,7 +1013,7 @@ let private flipTests =
         testCase "nothing flips to a party that cannot type" <| fun () ->
             // Not a policy: there is no surface anywhere that sends keystrokes as the process
             // or as the system, so a lease here would be held by nobody.
-            Expect.equal (Flip.propose true None false (Some ActorRef.SessionProcess)) FlipNothing "nor the process"
+            Expect.equal (Flip.propose true None false (Some ActorRef.Session)) FlipNothing "nor the process"
             Expect.equal (Flip.propose true None false (Some ActorRef.System)) FlipNothing "nor the system"
             Expect.equal (Flip.propose true None false None) FlipNothing "nor with no block at all"
 
@@ -1921,7 +1921,7 @@ let private codecTests =
         testCase "an actor token round-trips through the CRDT's one-string form" <| fun () ->
             let actors =
                 [ ActorRef.Agent
-                  ActorRef.SessionProcess
+                  ActorRef.Session
                   ActorRef.System
                   PeerRef ada
                   UserRef (UserId.create "https://issuer/sub:with:colons" |> expect)
@@ -1993,7 +1993,7 @@ let private scriptedEnvironment (script: string -> (OutputStream * string) list 
     environment, spawned
 
 /// An in-memory transcript, a reader for what it holds, and a reader for the keyframes the
-/// Session Process recorded beside it (Plan 14, stage 3).
+/// Session recorded beside it (Plan 14, stage 3).
 let private recordingTranscripts () =
     let lines = Collections.Generic.Dictionary<string, ResizeArray<TranscriptLine>> ()
     let keyframes = Collections.Generic.Dictionary<string, ResizeArray<TranscriptKeyframe>> ()

@@ -31,7 +31,7 @@ let private serving (records: int) =
         let transcript = store.Open terminal { Width = 80; Height = 24; Timestamp = 0L }
         for i in 1 .. records do
             transcript.Append { At = 0.0; Kind = TranscriptOutput; Data = sprintf "line %d" i } |> ignore
-        // The REAL endpoint the Session Process serves from, not a stand-in: what these cases
+        // The REAL endpoint the Session serves from, not a stand-in: what these cases
         // are about is the wire, and a hand-built endpoint here would agree with the store by
         // construction and prove nothing about the one production uses.
         let endpoint = TranscriptStore.endpoint (fun t -> t = token) store

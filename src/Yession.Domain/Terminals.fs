@@ -7,7 +7,7 @@ open Yession.Domain.Terminals
 /// is a pure fold over ordered events and nothing else — never the doc, never live
 /// output. That is what makes the terminal list, its blocks, and their exit codes
 /// identical on every replica and after every reload, and it is why there is no way for a
-/// client to invent a block: the only constructor is an event the Session Process wrote.
+/// client to invent a block: the only constructor is an event the Session wrote.
 ///
 /// The bytes a block printed are NOT here. They live in the terminal's transcript
 /// (`Transcript.fs`); a block records the transcript range it produced, and a renderer
@@ -74,7 +74,7 @@ module Size =
     /// asciicast `"r"` record's payload.
     ///
     /// The pair lives here, with the type, because the two halves run in different processes:
-    /// the Session Process writes the record when it resizes a pty, and a browser reads it to
+    /// the Session writes the record when it resizes a pty, and a browser reads it to
     /// reshape the emulator composing that terminal's screen. A `sprintf` on one side and a
     /// regex on the other is one format in two places, and the side that drifts is the side
     /// nothing round-trips.
@@ -411,7 +411,7 @@ module Flip =
     ///     `write_terminal`/`read_terminal`, and what the exception left behind was a wedge —
     ///     an agent command that takes the screen waits for a keystroke nobody is allowed to
     ///     send, so its block never finishes and the queue behind it never moves. Nothing
-    ///     flips to `SessionProcess`, `System` or a repo's file, and that is not policy
+    ///     flips to `Session`, `System` or a repo's file, and that is not policy
     ///     either: nothing in the session can type as any of them.
     let propose
         (altScreen: bool)
@@ -423,7 +423,7 @@ module Flip =
         | true, None ->
             match runningAuthor with
             | Some (PeerRef _ as author) | Some (UserRef _ as author) | Some (Agent as author) -> FlipToLive author
-            | Some SessionProcess | Some System | Some (Configured _) | None -> FlipNothing
+            | Some Session | Some System | Some (Configured _) | None -> FlipNothing
         | true, Some _ -> FlipNothing
         | false, Some _ when autoHeld -> FlipToBlock
         | false, _ -> FlipNothing

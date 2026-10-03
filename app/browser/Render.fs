@@ -13,7 +13,7 @@ module Yession.Browser.Render
 // that ran the view, the replays, the screens and the rail and nothing else — so the harness
 // measured about six sevenths of what a person waits for, and a change to the other seventh
 // (the scroll restore, the editor mounts, the presence push) was invisible to every test and
-// every benchmark that did not need a Session Process. What is measured has to be what runs.
+// every benchmark that did not need a Session. What is measured has to be what runs.
 //
 // What this does NOT know is where the session is. Sending a draft, reporting a caret,
 // relaying a resize, fetching a keyframe: each is handed in (`Links`), because the harness has
@@ -557,7 +557,7 @@ let create (deps: Deps) : Renderer =
     let sendFocus = deps.Links.ReportFocus
 
     // Rich-text editor mounts. `registry` resolves each body's live Y.XmlFragment (a
-    // top-level doc root keyed by BodyKey, so the editor and the Session Process bind the
+    // top-level doc root keyed by BodyKey, so the editor and the Session bind the
     // same fragment); `latest` lets the mount see the current draft slots. Each mount
     // records the fragment it bound so a fragment swap (a sent draft's slot recreated)
     // triggers a remount.

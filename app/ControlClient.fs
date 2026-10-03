@@ -1,9 +1,9 @@
 module Yession.Host.ControlClient
 
-// The Session Process side of the control RPC (Phase 4, Step 24): the supervision,
+// The Session side of the control RPC (Phase 4, Step 24): the supervision,
 // secrets, and connections calls to the Manager's control endpoint, authenticated by
 // this launch's secret. Failures are values — a transport error degrades to a failed
-// result shape, never an exception, because the Session Process turns them into
+// result shape, never an exception, because the Session turns them into
 // events.
 
 open Fable.Core

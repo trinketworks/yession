@@ -48,7 +48,7 @@ let private at (offset: int64) (seconds: float) (event: SessionEvent) : EventEnv
     { EventId = EventId.fresh ()
       SessionId = sessionId
       Offset = EventOffset.create offset |> expect
-      Actor = ActorRef.SessionProcess
+      Actor = ActorRef.Session
       Timestamp = epoch.AddSeconds seconds
       Event = event }
 
@@ -607,7 +607,7 @@ let private keyframeTests =
                 let ranged = [ "printed under that state\r\n" ]
 
                 // The truth: one emulator fed the whole stream, exactly as the Session
-                // Process's own emulator was.
+                // 's own emulator was.
                 let! truth = screenOf 80 24 (prefix @ ranged)
                 // The keyframe: the same serializer, at the range's start.
                 let! keyScreen = screenOf 80 24 prefix
@@ -1978,7 +1978,7 @@ let private cardTests =
             Expect.equal (drawn events) [ "ran:b-1"; "ran:b-2" ] "two chips, no card"
 
         testCase "a command nobody's turn started never groups" <| fun () ->
-            // A block the Session Process ran on its own behalf, before any turn: no turn to
+            // A block the Session ran on its own behalf, before any turn: no turn to
             // attribute it to, and inventing one would be a task nobody asked for.
             let events =
                 [ at 1L 0.0 (opened terminalA "boot")
@@ -2589,7 +2589,7 @@ let private sessionBreakTests =
         { EventId = EventId.fresh ()
           SessionId = sessionId
           Offset = EventOffset.create offset |> expect
-          Actor = ActorRef.SessionProcess
+          Actor = ActorRef.Session
           Timestamp = at'
           Event = SessionResumed { MessageId = message id; LastHeardAt = at'.AddHours -hours } }
     let showing (reading: string) = Dom.attr Dom.Hooks.sessionBreak reading
