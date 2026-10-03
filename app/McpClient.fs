@@ -81,17 +81,23 @@ let private post (url: string) (session: string) (protocol: string) (body: strin
     }
 
 /// Streamable HTTP lets a server answer a POST with either `application/json` or an SSE
-/// stream carrying the same frame. We do not open the optional GET stream (see below), so a
-/// response body is always ONE frame either way — which makes unwrapping it this small.
-let private frameOf (body: string) : string =
+/// stream. A JSON body is the one frame; a stream is one frame per event, and the response
+/// is not necessarily the first — notifications and server requests may precede it.
+let private framesOf (body: string) : string list =
     let trimmed = body.Trim ()
-    if trimmed.StartsWith "{" || trimmed.StartsWith "[" then trimmed
+    if trimmed.StartsWith "{" || trimmed.StartsWith "[" then [ trimmed ]
     else
-        // SSE-framed: the `data:` lines of the one event, rejoined.
         trimmed.Replace("\r\n", "\n").Split ([| "\n\n" |], StringSplitOptions.RemoveEmptyEntries)
         |> Array.choose Sse.dataOf
-        |> Array.tryHead
-        |> Option.defaultValue trimmed
+        |> Array.toList
+
+/// The response to request `id` out of a POST's body, or an `Error` naming `method` when the
+/// body held none — never a guess at some other frame. We do not open the optional GET
+/// stream (see below), so the response rides this body or does not exist.
+let replyTo (id: int) (method: string) (body: string) : Result<JsonRpcResponse, string> =
+    match McpRpc.replyTo id (framesOf body) with
+    | Some found -> Ok found
+    | None -> Error (sprintf "the reply to %s held no response to request %d" method id)
 
 /// A live connection to one server. Everything mutable about talking to it lives here, so
 /// the connection map below holds values rather than coordinating state.
@@ -176,9 +182,10 @@ let create () : McpConnections =
     // ---- one request ----------------------------------------------------------------
     //
     // Answers `Error` for anything that is not a decoded JSON-RPC result: a transport
-    // failure, a non-2xx status, an undecodable body, or a JSON-RPC error frame. The
-    // 404-means-restarted case is handled a level up, because only a caller that is in the
-    // middle of a request knows whether re-handshaking and retrying is the right response.
+    // failure, a non-2xx status, a body with no response to THIS request, or a JSON-RPC
+    // error frame. The 404-means-restarted case is handled a level up, because only a caller
+    // that is in the middle of a request knows whether re-handshaking and retrying is the
+    // right response.
     let request (connection: Connection) (method: string) (parameters: string option) : Async<Result<string, string>> =
         async {
             let id = connection.NextId
@@ -190,8 +197,8 @@ let create () : McpConnections =
             | None ->
                 // A server that names a session wants it quoted on everything after.
                 if outcome.Session <> "" then connection.SessionId <- outcome.Session
-                match Codec.fromString McpRpc.response (frameOf outcome.Body) with
-                | Error e -> return Error (sprintf "could not read the reply to %s: %s" method e)
+                match replyTo id method outcome.Body with
+                | Error e -> return Error e
                 | Ok (JsonRpcFailure (_, code, message)) ->
                     return Error (sprintf "%s failed (%d): %s" method code message)
                 | Ok (JsonRpcResult (_, result)) -> return Ok result
@@ -265,21 +272,22 @@ let create () : McpConnections =
             // meant to read it and choose differently. Only a call that never reached a
             // tool is an `Error`.
             | Ok answer ->
+                let text = McpRpc.toolText answer
                 // A stream the provider offered (Plan 19). Admitted HERE because this is
                 // where the server's declared url is known — the thing an offered url has
                 // to agree with — and never in the terminal manager, which would have to be
                 // told which server an offer came from to ask the same question.
                 match answer.Meta |> Option.bind McpRpc.streamOffer with
-                | None -> Ok (ToolAnswer.text answer.Text)
+                | None -> Ok (ToolAnswer.text text)
                 | Some offer ->
                     let fallback = sprintf "%s/%s" (McpServerName.value connection.Server.Name) name
                     match StreamOffer.admit (McpTransport.describe connection.Server.Transport) (StreamOffer.named fallback offer) with
-                    | Ok admitted -> Ok { ToolAnswer.text answer.Text with Stream = Some admitted }
+                    | Ok admitted -> Ok { ToolAnswer.text text with Stream = Some admitted }
                     | Error reason ->
                         // Said in the answer rather than logged: a stream that will not open
                         // is a fact the model has to act on, and silence would read as a
                         // terminal that simply has not appeared yet.
-                        Ok (ToolAnswer.text (answer.Text + "\n\nThis session refused the stream that was offered: " + reason))
+                        Ok (ToolAnswer.text (text + "\n\nThis session refused the stream that was offered: " + reason))
         async {
             match! request connection "tools/call" (Some parameters) with
             | Ok result -> return read result

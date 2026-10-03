@@ -63,6 +63,7 @@
     <Compile Include="ToolCalls.fs" />
     <Compile Include="Mcp.fs" />
     <Compile Include="ToolStreams.fs" />
+    <Compile Include="McpReplies.fs" />
     <Compile Include="SerialEngine.fs" />
     <Compile Include="Jumpstarter.fs" />
     <Compile Include="OtlpStub.fs" />
