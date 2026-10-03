@@ -7,6 +7,7 @@ open Yession.Domain
 open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
+open Yession.App.Codecs
 
 /// Composition of the Browser Client: the Elmish program bound to a Yjs document through
 /// the Ylmish sync boundary, and the wiring of a connected `FrameChannel` to that
@@ -677,7 +678,7 @@ module Client =
                 match remaining with
                 | [] -> Ok (List.rev acc)
                 | line :: rest ->
-                    match Codec.fromString Codec.sessionEventEnvelope line with
+                    match Codec.fromString Events.sessionEventEnvelope line with
                     | Ok envelope -> decode rest (envelope :: acc)
                     | Error e -> Error (FeedCorrupt e)
             decode (List.ofArray lines) []
@@ -858,7 +859,7 @@ module Client =
                         | body :: _ ->
                             match body.Split '\n' |> Array.tryFind (fun l -> l.Trim().Length > 0) with
                             | Some line ->
-                                match Codec.fromString Codec.sessionEventEnvelope line with
+                                match Codec.fromString Events.sessionEventEnvelope line with
                                 | Ok envelope -> Some (EventOffset.value envelope.Offset)
                                 | Error _ -> None
                             | None -> None

@@ -8,6 +8,7 @@
     <Compile Include="AssetFile.fs" />
     <Compile Include="Dom.fs" />
     <Compile Include="Codecs/Sdp.fs" />
+    <Compile Include="Codecs/Events.fs" />
     <Compile Include="Codecs/Frames.fs" />
     <Compile Include="Routes.fs" />
     <Compile Include="Brand.fs" />

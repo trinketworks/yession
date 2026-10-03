@@ -14,6 +14,7 @@ open Yession.Domain.Files
 open Yession.Domain.Artifacts
 open Yession.Domain.Content
 open Yession.Domain.Hooks
+open Yession.App.Codecs
 
 let private expect =
     function
@@ -79,12 +80,12 @@ let private envelopeSerializationTests =
     testList "Envelope serialization" [
         testCase "EventEnvelope<SessionEvent> round-trips through serialization unchanged" <| fun () ->
             let original = sampleEnvelope ()
-            let json = Codec.toString Codec.sessionEventEnvelope original
-            let roundTripped = Codec.fromString Codec.sessionEventEnvelope json |> expect
+            let json = Codec.toString Events.sessionEventEnvelope original
+            let roundTripped = Codec.fromString Events.sessionEventEnvelope json |> expect
             Expect.equal roundTripped original "round-trip should be identical"
 
         testCase "Decoding malformed JSON yields an Error" <| fun () ->
-            Expect.isError (Codec.fromString Codec.sessionEventEnvelope "{ not valid json ") "malformed JSON should fail"
+            Expect.isError (Codec.fromString Events.sessionEventEnvelope "{ not valid json ") "malformed JSON should fail"
 
         testCase "a gated command's failure round-trips through the envelope codec" <| fun () ->
             let original =
@@ -96,8 +97,8 @@ let private envelopeSerializationTests =
                               Summary = "add_repo octo/hello"
                               Author = UserRef (UserId.create "ada" |> expect)
                               Reason = "github says not found" } }
-            let json = Codec.toString Codec.sessionEventEnvelope original
-            Expect.equal (Codec.fromString Codec.sessionEventEnvelope json) (Ok original) "round-trip should be identical"
+            let json = Codec.toString Events.sessionEventEnvelope original
+            Expect.equal (Codec.fromString Events.sessionEventEnvelope json) (Ok original) "round-trip should be identical"
 
         testCase "a title the session settled round-trips through the envelope codec" <| fun () ->
             let original =
@@ -109,8 +110,8 @@ let private envelopeSerializationTests =
                               Name = "The refresh-token bug"
                               Read = 9
                               OnBehalfOf = None } }
-            let json = Codec.toString Codec.sessionEventEnvelope original
-            Expect.equal (Codec.fromString Codec.sessionEventEnvelope json) (Ok original) "round-trip should be identical"
+            let json = Codec.toString Events.sessionEventEnvelope original
+            Expect.equal (Codec.fromString Events.sessionEventEnvelope json) (Ok original) "round-trip should be identical"
 
         testCase "a name the session settled round-trips through the envelope codec" <| fun () ->
             let original =
@@ -122,14 +123,14 @@ let private envelopeSerializationTests =
                               Name = "The refresh-token bug"
                               Read = 4
                               OnBehalfOf = Some (Principal.User (UserId.create "ada" |> expect)) } }
-            let json = Codec.toString Codec.sessionEventEnvelope original
-            Expect.equal (Codec.fromString Codec.sessionEventEnvelope json) (Ok original) "round-trip should be identical"
+            let json = Codec.toString Events.sessionEventEnvelope original
+            Expect.equal (Codec.fromString Events.sessionEventEnvelope json) (Ok original) "round-trip should be identical"
 
         testCase "UserRef actor round-trips through the envelope codec" <| fun () ->
             let user = UserId.create "nick@example.com" |> expect
             let original = { sampleEnvelope () with Actor = UserRef user }
-            let json = Codec.toString Codec.sessionEventEnvelope original
-            let roundTripped = Codec.fromString Codec.sessionEventEnvelope json |> expect
+            let json = Codec.toString Events.sessionEventEnvelope original
+            let roundTripped = Codec.fromString Events.sessionEventEnvelope json |> expect
             Expect.equal roundTripped original "round-trip should be identical"
     ]
 
@@ -274,8 +275,8 @@ let private frameSerializationTests =
             let left = { sampleEnvelope with Event = PeerLeft { PeerId = peerId } }
             for env in [ joined; left ] do
                 let roundTripped =
-                    Codec.toString Codec.sessionEventEnvelope env
-                    |> Codec.fromString Codec.sessionEventEnvelope
+                    Codec.toString Events.sessionEventEnvelope env
+                    |> Codec.fromString Events.sessionEventEnvelope
                     |> expect
                 Expect.equal roundTripped env "event round-trip"
 
@@ -491,8 +492,8 @@ let private frameSerializationTests =
             for event in everyCase do
                 let env = { sampleEnvelope with Event = event }
                 let roundTripped =
-                    Codec.toString Codec.sessionEventEnvelope env
-                    |> Codec.fromString Codec.sessionEventEnvelope
+                    Codec.toString Events.sessionEventEnvelope env
+                    |> Codec.fromString Events.sessionEventEnvelope
                     |> expect
                 Expect.equal roundTripped env "event round-trip"
 
@@ -507,10 +508,10 @@ let private frameSerializationTests =
                     """{"type":"prTransitioned","payload":{"messageId":"t1","pr":{"repo":"octo/hello","number":12},"transition":"merged","state":"merged","checks":"green","watcher":%s}}"""
                     watcher
             Expect.isOk
-                (Codec.fromString Codec.sessionEvent (stored """{"kind":"peer","peerId":"ada"}"""))
+                (Codec.fromString Events.sessionEvent (stored """{"kind":"peer","peerId":"ada"}"""))
                 "a person reads back"
             Expect.isError
-                (Codec.fromString Codec.sessionEvent (stored """{"kind":"agent"}"""))
+                (Codec.fromString Events.sessionEvent (stored """{"kind":"agent"}"""))
                 "the agent is not a watcher this version can represent"
 
         testCase "the conflict transitions pin their wire strings and round-trip" <| fun () ->
@@ -526,16 +527,16 @@ let private frameSerializationTests =
                 | PrTransitioned p -> p.Transition
                 | _ -> failwith "not a transition"
             Expect.equal
-                (Codec.fromString Codec.sessionEvent (stored "conflicted") |> expect |> transitionOf)
+                (Codec.fromString Events.sessionEvent (stored "conflicted") |> expect |> transitionOf)
                 PrTransition.Conflicted "conflicted decodes"
             Expect.equal
-                (Codec.fromString Codec.sessionEvent (stored "resolved") |> expect |> transitionOf)
+                (Codec.fromString Events.sessionEvent (stored "resolved") |> expect |> transitionOf)
                 PrTransition.Resolved "resolved decodes"
             Expect.equal
-                (Codec.fromString Codec.sessionEvent (stored "readyForReview") |> expect |> transitionOf)
+                (Codec.fromString Events.sessionEvent (stored "readyForReview") |> expect |> transitionOf)
                 PrTransition.ReadyForReview "readyForReview decodes"
             Expect.equal
-                (Codec.fromString Codec.sessionEvent (stored "drafted") |> expect |> transitionOf)
+                (Codec.fromString Events.sessionEvent (stored "drafted") |> expect |> transitionOf)
                 PrTransition.Drafted "drafted decodes"
             for t in [ PrTransition.Conflicted; PrTransition.Resolved; PrTransition.ReadyForReview; PrTransition.Drafted ] do
                 let event =
@@ -546,7 +547,7 @@ let private frameSerializationTests =
                           State = PrOpen
                           Checks = ChecksGreen
                           Watcher = Principal.Peer (PeerId.create "ada" |> expect); OccurredAt = None }
-                Expect.equal (Codec.fromString Codec.sessionEvent (Codec.toString Codec.sessionEvent event) |> expect) event "round-trip"
+                Expect.equal (Codec.fromString Events.sessionEvent (Codec.toString Events.sessionEvent event) |> expect) event "round-trip"
 
         testCase "a watch recorded before drafts were read decodes as not a draft" <| fun () ->
             // Wire compatibility: every existing log's watches carry no `draft`, and one
@@ -554,7 +555,7 @@ let private frameSerializationTests =
             // A stored line, as written: the agent's watch on a draft it had just opened.
             let legacy =
                 """{"type":"prWatched","payload":{"messageId":"05cca7f2-8b14-4c13-9e96-6dc3c41e9e31","pr":{"repo":"trinketworks/yession","number":875},"initial":{"state":"open","title":"feat(artifacts): serve a shared artifact over the content route","headSha":"4e14219ff7c5b91cfa38a03e352daffc40f0ee45","checks":"pending","queued":false,"mergeable":true},"author":{"kind":"agent"},"onBehalfOf":{"kind":"user","sub":"ada@example.com"}}}"""
-            match Codec.fromString Codec.sessionEvent legacy |> expect with
+            match Codec.fromString Events.sessionEvent legacy |> expect with
             | PrWatched watched -> Expect.isFalse (PrWatched.initial watched).Draft "no draft field is not a draft"
             | other -> failwithf "expected a watch, got %A" other
 
@@ -562,7 +563,7 @@ let private frameSerializationTests =
             // Wire compatibility: `queued` was GitHub's REST `auto_merge`, and nothing else.
             let legacy =
                 """{"type":"prWatched","payload":{"messageId":"w1","pr":{"repo":"octo/hello","number":12},"initial":{"state":"open","title":"t","headSha":"abc","checks":"pending","queued":true,"mergeable":true},"author":{"kind":"peer","peerId":"ada"}}}"""
-            match Codec.fromString Codec.sessionEvent legacy |> expect with
+            match Codec.fromString Events.sessionEvent legacy |> expect with
             | PrWatched watched -> Expect.equal (PrWatched.initial watched).Route (Some PrRoute.GitHubAutoMerge) "armed"
             | other -> failwithf "expected a watch, got %A" other
 
@@ -570,7 +571,7 @@ let private frameSerializationTests =
             // It was only ever auto merge arriving; `enqueued` is the queue's own word now.
             let legacy =
                 """{"type":"prTransitioned","payload":{"messageId":"t1","pr":{"repo":"octo/hello","number":12},"transition":"queued","state":"open","checks":"green","watcher":{"kind":"peer","peerId":"ada"}}}"""
-            match Codec.fromString Codec.sessionEvent legacy |> expect with
+            match Codec.fromString Events.sessionEvent legacy |> expect with
             | PrTransitioned p -> Expect.equal p.Transition PrTransition.Armed "armed"
             | other -> failwithf "expected a transition, got %A" other
 
@@ -584,14 +585,14 @@ let private frameSerializationTests =
                           State = PrOpen
                           Checks = ChecksGreen
                           Watcher = Principal.Peer (PeerId.create "ada" |> expect); OccurredAt = None }
-                Expect.equal (Codec.fromString Codec.sessionEvent (Codec.toString Codec.sessionEvent event) |> expect) event "round-trip"
+                Expect.equal (Codec.fromString Events.sessionEvent (Codec.toString Events.sessionEvent event) |> expect) event "round-trip"
 
         testCase "a MessageSent persisted before Phase 3 (no queueId field) still decodes" <| fun () ->
             // Wire compatibility: event-log lines written by earlier versions carry no
             // queueId; they must decode to None, not fail the whole log open.
             let legacy =
                 """{"type":"messageSent","payload":{"messageId":"msg-legacy","author":{"kind":"peer","peerId":"ada"},"body":"old line"}}"""
-            let decoded = Codec.fromString Codec.sessionEvent legacy |> expect
+            let decoded = Codec.fromString Events.sessionEvent legacy |> expect
             Expect.equal
                 decoded
                 (MessageSent
@@ -607,7 +608,7 @@ let private frameSerializationTests =
             // recorded before it.
             let legacy =
                 """{"type":"agentMessageStarted","payload":{"agentTurnId":"turn-legacy","messageId":"msg-legacy"}}"""
-            let decoded = Codec.fromString Codec.sessionEvent legacy |> expect
+            let decoded = Codec.fromString Events.sessionEvent legacy |> expect
             Expect.equal
                 decoded
                 (AgentMessageStarted
@@ -622,7 +623,7 @@ let private frameSerializationTests =
             // `TriggeredBy`, so the whole history of every session opens.
             let legacy =
                 """{"type":"agentTurnStarted","payload":{"agentTurnId":"turn-legacy","triggeredByMessageId":"msg-legacy"}}"""
-            let decoded = Codec.fromString Codec.sessionEvent legacy |> expect
+            let decoded = Codec.fromString Events.sessionEvent legacy |> expect
             Expect.equal
                 decoded
                 (AgentTurnStarted
@@ -635,7 +636,7 @@ let private frameSerializationTests =
             // thing this event can be. No real log holds such a line — this pins that a
             // corrupt one is refused, not silently admitted as an unauditable turn.
             let malformed = """{"type":"agentTurnStarted","payload":{"agentTurnId":"turn-x"}}"""
-            Expect.isError (Codec.fromString Codec.sessionEvent malformed) "neither cause present is not decodable"
+            Expect.isError (Codec.fromString Events.sessionEvent malformed) "neither cause present is not decodable"
 
         testCase "a sandbox persisted before repos could declare one still decodes" <| fun () ->
             // The scope rides in the SAME string rather than a new field, so a log written
@@ -643,7 +644,7 @@ let private frameSerializationTests =
             // compatibility is a property of the wire form, not a branch in the decoder.
             let legacy =
                 """{"type":"workSandboxStarted","payload":{"messageId":"msg-legacy","sandbox":"build","backend":"srt","forwarded":[],"credentialOwner":null,"actor":{"kind":"agent"}}}"""
-            let decoded = Codec.fromString Codec.sessionEvent legacy |> expect
+            let decoded = Codec.fromString Events.sessionEvent legacy |> expect
             Expect.equal
                 decoded
                 (WorkSandboxStarted
@@ -722,7 +723,7 @@ let private shellProfileTests =
             let pinned =
                 """{"type":"shellProfileSet","payload":{"messageId":"msg-1","sandbox":"default","workingDirectory":"/repos/octo/hello","actor":{"kind":"agent"}}}"""
             Expect.equal
-                (Codec.fromString Codec.sessionEvent pinned |> expect)
+                (Codec.fromString Events.sessionEvent pinned |> expect)
                 (profileSet SandboxRef.defaultRef (Some "/repos/octo/hello"))
                 "the durable form decodes to the event"
 
@@ -763,7 +764,7 @@ let private shellProfileTests =
             let pinned =
                 """{"type":"shellProfileSet","payload":{"messageId":"msg-1","sandbox":"default","actor":{"kind":"agent"}}}"""
             Expect.equal
-                (Codec.fromString Codec.sessionEvent pinned |> expect)
+                (Codec.fromString Events.sessionEvent pinned |> expect)
                 (profileSet SandboxRef.defaultRef None)
                 "an absent directory decodes as None rather than failing the log open"
     ]
@@ -1841,7 +1842,7 @@ let private prWatchTests =
             let pinned =
                 """{"type":"prTransitioned","payload":{"messageId":"t1","pr":{"repo":"octo/hello","number":12},"transition":"merged","state":"merged","checks":"green","watcher":{"kind":"peer","peerId":"ada"}}}"""
             Expect.equal
-                (Codec.fromString Codec.sessionEvent pinned |> expect)
+                (Codec.fromString Events.sessionEvent pinned |> expect)
                 (transitioned PrTransition.Merged PrMerged ChecksGreen)
                 "the durable form decodes to the event"
     ]
@@ -3526,14 +3527,14 @@ let private fileChangedTests =
             let pinned =
                 """{"type":"fileChanged","payload":{"messageId":"msg-1","sandbox":"default","path":"src/A.fs","change":{"kind":"edited","replaced":1,"linesRemoved":1,"linesAdded":2},"diff":"-a\n+b\n+c","actor":{"kind":"agent"}}}"""
             Expect.equal
-                (Codec.fromString Codec.sessionEvent pinned |> expect)
+                (Codec.fromString Events.sessionEvent pinned |> expect)
                 (changed (FileChange.Edited (1, 1, 2)) (Some "-a\n+b\n+c"))
                 "the durable form decodes to the event"
 
         testCase "a write on the wire carries no diff" <| fun () ->
             let pinned =
                 """{"type":"fileChanged","payload":{"messageId":"msg-1","sandbox":"default","path":"src/A.fs","change":{"kind":"written","lines":12},"actor":{"kind":"agent"}}}"""
-            Expect.equal (Codec.fromString Codec.sessionEvent pinned |> expect) (changed (FileChange.Written 12) None) "absent is none"
+            Expect.equal (Codec.fromString Events.sessionEvent pinned |> expect) (changed (FileChange.Written 12) None) "absent is none"
 
         testCase "an edit reads in the timeline as a sentence with its counts" <| fun () ->
             let envelope : EventEnvelope<SessionEvent> =
@@ -3739,7 +3740,7 @@ let private artifactTests =
             // stamp cannot arrive disagreeing.
             let pinned =
                 """{"type":"artifactShared","payload":{"messageId":"msg-1","ref":"artifacts/chart.png/0003-7f2a91","mediaType":"image/png","bytes":1500,"digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","actor":{"kind":"agent"}}}"""
-            Expect.equal (Codec.fromString Codec.sessionEvent pinned |> expect) (shared (chart 3)) "the durable form decodes to the event"
+            Expect.equal (Codec.fromString Events.sessionEvent pinned |> expect) (shared (chart 3)) "the durable form decodes to the event"
 
         testCase "a share and an update read as different acts, and count separately" <| fun () ->
             let act (ref: ArtifactRef) =

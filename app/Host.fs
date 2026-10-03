@@ -15,6 +15,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.Domain.Tools
 open Yession.SessionProcess
+open Yession.App.Codecs
 open Fable.ProseMirror
 
 /// How often a busy session repeats its activity report (Plan 11). Comfortably shorter
@@ -1072,7 +1073,7 @@ let startFull
         // expose, and the read is over an in-memory log: one extra read per NEW range is
         // not worth a second way to ask how long the log is.
         let encodeLines (page: EventPage<SessionEvent>) =
-            page.Events |> List.map (Codec.toString Codec.sessionEventEnvelope)
+            page.Events |> List.map (Codec.toString Events.sessionEventEnvelope)
 
         let eventsEndpoint : Signalling.EventsEndpoint =
             { ValidateToken = peerTokens.Validate >> Option.isSome

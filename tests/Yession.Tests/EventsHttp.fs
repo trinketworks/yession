@@ -19,6 +19,7 @@ open Yession.SessionProcess
 open Yession.Host
 open Yession.Tests.Support
 open Yession.Peer
+open Yession.App.Codecs
 
 // The chunk GET shaped as `Client.HttpGet` is — total, with the status on a refusal. What
 // the browser's port does with the same answer is in app/browser/Browser.fs; failure
@@ -69,7 +70,7 @@ let private endpointTests =
                 Expect.equal (TestHttp.requiredHeader "cache-control" first) "no-store" "the client keeps this, not the HTTP cache"
                 let lines (body: string) = body.Split '\n' |> Array.filter (fun l -> l.Trim().Length > 0)
                 Expect.equal (lines first.Body).Length EventChunk.size "one answer's worth"
-                let decoded = Codec.fromString Codec.sessionEventEnvelope (lines first.Body).[0] |> expect
+                let decoded = Codec.fromString Events.sessionEventEnvelope (lines first.Body).[0] |> expect
                 Expect.equal (EventOffset.value decoded.Offset) 0L "starting at the beginning"
 
                 // The tail, at an address of its own — and still five events after the log
@@ -158,7 +159,7 @@ let private storeOf (entries: (string * string) list) =
 let private answerOf (first: int64) (count: int) =
     let line (offset: int64) =
         Codec.toString
-            Codec.sessionEventEnvelope
+            Events.sessionEventEnvelope
             { EventId = EventId.fresh ()
               SessionId = SessionId.create "kept-history" |> expect
               Offset = EventOffset.create offset |> expect

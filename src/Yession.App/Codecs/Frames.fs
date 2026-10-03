@@ -213,7 +213,7 @@ module Frames =
                     Encode.object
                         [ "kind", Encode.string "eventsPage"
                           "requestId", Codec.requestId.Encode rid
-                          "page", Codec.sessionEventPage.Encode page ])
+                          "page", Events.sessionEventPage.Encode page ])
           Decode =
             Decode.field "kind" Decode.string
             |> Decode.andThen (function
@@ -229,7 +229,7 @@ module Frames =
                     Decode.map2
                         (fun rid page -> EventsPage(rid, page))
                         (Decode.field "requestId" Codec.requestId.Decode)
-                        (Decode.field "page" Codec.sessionEventPage.Decode)
+                        (Decode.field "page" Events.sessionEventPage.Decode)
                 | other -> Decode.fail (sprintf "Unknown event-log frame: %s" other)) }
 
     let private peerHello : Codec<PeerHelloPayload> =

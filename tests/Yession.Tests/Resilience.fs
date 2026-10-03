@@ -37,6 +37,7 @@ open Yession.App
 open Yession.Host
 open Yession.Tests.Support
 open Yession.Peer
+open Yession.App.Codecs
 
 // --- Test clock: the whole point of injecting `Sleep` ------------------------------------
 
@@ -634,7 +635,7 @@ let private fakeSocket (host: Host.SessionHost) : Socket =
                             { Url = url
                               Body =
                                 page.Events
-                                |> List.map (Codec.toString Codec.sessionEventEnvelope)
+                                |> List.map (Codec.toString Events.sessionEventEnvelope)
                                 |> String.concat "\n" }
             } }
 
