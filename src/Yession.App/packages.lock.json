@@ -145,13 +145,8 @@
       "yession.domain": {
         "type": "Project",
         "dependencies": {
-          "FSharp.Data.Adaptive": "[1.2.26, )",
-          "Fable.Core": "[5.2.0, )",
-          "Fable.ProseMirror": "[1.0.0, )",
-          "Fable.Yjs": "[1.0.0-beta0233, )",
           "Thoth.Json": "[10.5.1, )",
-          "Thoth.Json.Net": "[12.0.0, )",
-          "Ylmish": "[1.0.0-beta0233, )"
+          "Thoth.Json.Net": "[12.0.0, )"
         }
       },
       "Fable.Browser.WebStorage": {

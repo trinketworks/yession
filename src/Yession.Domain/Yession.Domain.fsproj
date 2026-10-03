@@ -163,15 +163,6 @@
   <ItemGroup>
     <PackageReference Include="Thoth.Json" />
     <PackageReference Include="Thoth.Json.Net" />
-    <PackageReference Include="Fable.Core" />
-    <PackageReference Include="FSharp.Data.Adaptive" />
-    <PackageReference Include="Fable.Yjs" />
-    <PackageReference Include="Ylmish" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <!-- The DOM-free ProseMirror bindings `Markdown` converts a rich-text body through. -->
-    <ProjectReference Include="..\Fable.ProseMirror\Fable.ProseMirror.fsproj" />
   </ItemGroup>
 
 </Project>
