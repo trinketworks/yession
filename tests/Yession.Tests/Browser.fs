@@ -1797,6 +1797,37 @@ let editorTests =
                 Expect.stringContains md "* item one" "bullet serialized to markdown"
             }
 
+        // Addressing somebody is reachable from the keyboard alone: the picker opens on an @,
+        // the arrows and Enter take an offer, and Enter does not open a paragraph under it.
+        editorCase "an @ address is completed from the keyboard" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "thanks @")
+                let! _ = await (page.WaitForSelectorAsync "[role=listbox] [role=option]")
+                do! awaitU (page.Keyboard.PressAsync "ArrowDown")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                let! md = await (page.EvaluateAsync<string> "() => window.__md()")
+                Expect.equal (md.TrimEnd ()) "thanks @swift-heron" "the second offer, after the agent, was taken"
+            }
+
+        // Escape puts the list away, and Enter is the paragraph key again — a picker that
+        // could not be dismissed would take the composer's own Enter hostage.
+        editorCase "Escape puts the @ picker away and gives Enter back" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "@ag")
+                let! _ = await (page.WaitForSelectorAsync "[role=listbox] [role=option]")
+                do! awaitU (page.Keyboard.PressAsync "Escape")
+                let! _ = await (page.WaitForSelectorAsync ("[role=listbox]", PageWaitForSelectorOptions (State = WaitForSelectorState.Detached)))
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        "document.querySelectorAll('#host .ProseMirror > p').length === 2")
+                ()
+            }
+
         editorCase "Ctrl+Enter sends, Shift+Enter breaks the line, Enter opens a paragraph" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync ".ProseMirror")

@@ -59,6 +59,28 @@ module Addressed =
                     { acc with People = acc.People @ named |> List.distinct })
             nobody
 
+    /// The address being typed at the caret: the name characters after an `@` that starts a
+    /// token, when the text before the caret ends in one. `Some ""` right after a bare `@`.
+    /// The composer's picker opens on this, so what it offers to complete is exactly what
+    /// `tokens` will read once the message is sent.
+    let typing (beforeCaret: string) : string option =
+        let mutable i = beforeCaret.Length
+        while i > 0 && isNameChar beforeCaret.[i - 1] do i <- i - 1
+        if i > 0 && beforeCaret.[i - 1] = '@' && (i = 1 || not (isNameChar beforeCaret.[i - 2])) then
+            Some (beforeCaret.Substring i)
+        else None
+
+    /// What the picker offers for a partial address: the agent first, then everybody here,
+    /// each name once, those starting with what was typed. Bounded, because it is a list a
+    /// person scans with the arrow keys, not a directory.
+    let offer (names: string list) (partial: string) : string list =
+        let starts (name: string) = name.StartsWith (partial, StringComparison.OrdinalIgnoreCase)
+        agentName :: names
+        |> List.filter (fun name -> name.Trim () <> "" && Seq.forall isNameChar name)
+        |> List.distinctBy (fun name -> name.ToLowerInvariant ())
+        |> List.filter starts
+        |> List.truncate 6
+
 /// Whether a batch of messages starts a turn, and which message it answers (Plan: multiplayer
 /// conversations). The SCHEDULER is the mechanism — it appends every message, asks this, and
 /// runs a turn on the answer's author's credential or runs none — and this is the policy, a

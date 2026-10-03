@@ -50,6 +50,8 @@ module ProseMirror =
         abstract addMark : int * int * Mark -> Transaction
         abstract removeStoredMark : MarkType -> Transaction
         abstract replaceSelectionWith : Node * bool -> Transaction
+        /// Replace `from..to` with plain text, keeping the marks there.
+        abstract insertText : string * int * int -> Transaction
 
     type [<AllowNullLiteral>] EditorState =
         abstract tr : Transaction
@@ -523,6 +525,12 @@ module ProseMirror =
     let selAnchor (sel: obj) : int = jsNative
     [<Emit("$0.head")>]
     let selHead (sel: obj) : int = jsNative
+    [<Emit("$0.empty")>]
+    let selEmpty (sel: obj) : bool = jsNative
+    /// The text of the caret's own block up to the caret — what a person has just typed on
+    /// this line. A leaf inside it (a hard break) reads as U+FFFC, which no word contains.
+    [<Emit("(function (state) { const at = state.selection['\\x24from']; return at.parent.textBetween(0, at.parentOffset, undefined, '\ufffc') })($0)")>]
+    let textBeforeCaret (state: EditorState) : string = jsNative
     [<Emit("$0.docChanged")>]
     let trDocChanged (tr: Transaction) : bool = jsNative
     /// How positions moved across a transaction's steps, for carrying decorations through it.
@@ -587,6 +595,9 @@ module ProseMirror =
 
     type [<AllowNullLiteral>] PluginProps =
         abstract handleDOMEvents : DomEventHandlers with get, set
+        /// A key pressed in the editor, before any keymap after this plugin sees it; `true`
+        /// when it was handled.
+        abstract handleKeyDown : System.Func<EditorView, Browser.Types.KeyboardEvent, bool> with get, set
         abstract decorations : System.Func<EditorState, DecorationSet> with get, set
 
     /// A plugin's state: made once from the config the editor state was created with, then

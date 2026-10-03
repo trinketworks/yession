@@ -630,6 +630,8 @@ module Dom =
         /// surface — `composerKeys` above teaches the keys, and this only says what the bar
         /// is. Drawn from a node decoration (`Editor.placeholderPlugin`), never content.
         let composerPlaceholder = "write a message"
+        /// The @ picker's accessible name: a list of who a message can be addressed to.
+        let mentionPickerLabel = "address to"
         /// What the timeline's pulse means, for a reader who cannot see it pulse (Plan 20).
         let readingHistory = "Reading this session's history"
         /// The floating "jump to latest" control's accessible name, since it carries only a down

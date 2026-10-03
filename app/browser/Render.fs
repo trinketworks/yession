@@ -622,8 +622,10 @@ let create (deps: Deps) : Renderer =
                     match fieldOfKey key with
                     | Some (DraftBody _) -> Dom.Text.composerPlaceholder
                     | _ -> ""
+                // Who an @ can name, off whatever model is latest at the keystroke.
+                let addressable () = latest |> Option.map ClientModel.addressable |> Option.defaultValue []
                 mountedBodies.[key] <-
-                    (fragment, readOnly, Editor.mountEditor host fragment readOnly reportFocus onSubmit placeholder)
+                    (fragment, readOnly, Editor.mountEditor host fragment readOnly reportFocus onSubmit placeholder addressable)
             match mountedBodies.TryGetValue key with
             | true, (bound, readOnly, handle) when
                 not (System.Object.ReferenceEquals (bound, fragment)) || readOnly <> hostReadOnly host ->
