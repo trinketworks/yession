@@ -256,11 +256,11 @@
 
   --animate-pulse2: pulse2 1.1s ease-in-out infinite;
   --animate-blink: blink 1s steps(1) infinite;
-  /* The agent thinking (`Style.agentCaretThinking`): its diamond turned a quarter and set
-     down, the way the cube in the mark would be turned over in the hand. Ease-in-out so it
-     starts and stops like a thing with weight, a dip in scale mid-turn so the turn reads at
-     8px, and a rest so it is still more often than it is moving. */
-  --animate-think: think 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  /* Work in flight that is not the agent's (`Style.actNoteRunningOther`): one dip in scale
+     and a rest, eased so it starts and stops like a thing with weight, and still more often
+     than it is moving. The beat the agent's diamond used to keep before it became a cube
+     (`.agent-think`), which is why the two still share a tempo. */
+  --animate-beat: beat 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
   /* "Show in terminal" (Plan 25, stage 3): the block the reader was sent to, said once and
      then gone. A scroll alone lands them in a wall of identical mono and leaves them hunting
      for which line they were brought here for; a permanent mark would still be claiming it
@@ -284,10 +284,10 @@
     0%, 100% { opacity: 0.25; }
     50% { opacity: 1; }
   }
-  @keyframes think {
-    0% { rotate: 0deg; scale: 1; }
-    45% { rotate: 90deg; scale: 0.72; }
-    55%, 100% { rotate: 90deg; scale: 1; }
+  @keyframes beat {
+    0% { scale: 1; }
+    45% { scale: 0.72; }
+    55%, 100% { scale: 1; }
   }
   @keyframes blink {
     50% { opacity: 0; }
@@ -492,6 +492,445 @@ summary::-webkit-details-marker { display: none; }
   color: var(--color-ink);
   pointer-events: none;
   user-select: none;
+}
+
+/* The agent thinking (`Style.agentThinking`): the cube in the mark, turned in the hand. The
+   diamond IS that cube seen from straight above — its top face, the box `1ex` and the
+   overshoot `agentMark` gives the still caret — so every move starts and ends on exactly the
+   picture the still caret paints, and only the moves are 3D.
+
+   Three boxes: the mark (the caret's box, and the perspective), the TIP (tilts, flips and
+   tumbles about an axis in the screen, scaled), and the CUBE (turns about its own upright,
+   standing at 45deg so its top is a diamond). The cube's top face lies in the mark's plane and
+   the rest of it behind, so at rest the depth cannot show. Its faces are all the brand blue;
+   each is darkened by a black veil whose opacity is that face's angle to one light, which is
+   what puts the logo's own two side blues on the sides when it tips toward you and dims the
+   top when it tips away.
+
+   One series of ten moves in equal two-second slots — tip toward you and turn half (a nod),
+   flip over either diagonal, tumble over either edge, turn a quarter — ordered so no move
+   follows itself, and each slot ending on the rest picture. A move that ends upside down or
+   turned is put back between two keyframes a millionth of the cycle apart, at rest,
+   where only the top face shows and the swap cannot be seen. Each turn starts at its own slot
+   (`--think-from`, from `Style.thinkFrom`), so one turn does not look like the last.
+
+   The keyframes are computed, not drawn. Each move's angle runs on the brand ease; the scale
+   samples hold the cube's projected outline — all eight corners, through the perspective —
+   inside the mark's box, so a tipped cube never stands taller than the letters (a cube tipped
+   to its corner is 1.2x its top's diagonal); the scale is three-valued because a 2D scale
+   leaves the depth full size. The veils are Lambert against a light up and to the left, with
+   the face toward you at full strength, sampled with the scale. Everything that moves is
+   `rotate`, `scale` and `opacity`, so it runs on the compositor and never lays out or paints.
+   The browser tier holds the outline to the letters through the whole cycle. */
+.agent-think {
+  display: inline-block;
+  position: relative;
+  width: calc(1ex + 0.06em);
+  height: calc(1ex + 0.06em);
+  vertical-align: -0.03em;
+  perspective: 8em;
+  --think-side: calc((1ex + 0.06em) * 0.70710678);
+}
+.agent-think-tip {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--think-side);
+  height: var(--think-side);
+  margin: calc(var(--think-side) / -2) 0 0 calc(var(--think-side) / -2);
+  transform-style: preserve-3d;
+  transform-origin: 50% 50% calc(var(--think-side) / -2);
+  animation: think-tip 20s linear var(--think-from, 0s) infinite;
+}
+.agent-think-cube {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transform: rotate(45deg);
+  animation: think-turn 20s linear var(--think-from, 0s) infinite;
+}
+.agent-think-cube > i {
+  position: absolute;
+  inset: 0;
+  background: var(--color-blue);
+  backface-visibility: hidden;
+}
+.agent-think-cube > i::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: #000;
+  opacity: 0;
+  animation: 20s linear var(--think-from, 0s) infinite;
+}
+/* top, bottom, then the sides on the top's upper, lower, left and right edges, each hinged
+   back from that edge and turned to face out */
+.agent-think-cube > i:nth-child(1)::after { animation-name: think-shade-t; }
+.agent-think-cube > i:nth-child(2) { transform: translateZ(calc(var(--think-side) * -1)) rotateY(180deg); }
+.agent-think-cube > i:nth-child(2)::after { animation-name: think-shade-b; }
+.agent-think-cube > i:nth-child(3) { transform-origin: 50% 0; transform: rotateX(-90deg) rotateY(180deg); }
+.agent-think-cube > i:nth-child(3)::after { animation-name: think-shade-n; }
+.agent-think-cube > i:nth-child(4) { transform-origin: 50% 100%; transform: rotateX(90deg) rotateY(180deg); }
+.agent-think-cube > i:nth-child(4)::after { animation-name: think-shade-s; }
+.agent-think-cube > i:nth-child(5) { transform-origin: 0 50%; transform: rotateY(90deg) rotateX(180deg); }
+.agent-think-cube > i:nth-child(5)::after { animation-name: think-shade-w; }
+.agent-think-cube > i:nth-child(6) { transform-origin: 100% 50%; transform: rotateY(-90deg) rotateX(180deg); }
+.agent-think-cube > i:nth-child(6)::after { animation-name: think-shade-e; }
+/* Without motion it holds the rest picture, dimmed, so thinking still differs from writing. */
+@media (prefers-reduced-motion: reduce) {
+  .agent-think { opacity: 0.6; }
+  .agent-think-tip, .agent-think-cube, .agent-think-cube > i::after { animation: none; }
+}
+@keyframes think-tip {
+  0%{rotate:none;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  2%{rotate:x 40deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  4.75%{rotate:x 40deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  6.75%{rotate:none;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  9.9999%{rotate:none}
+  10%{rotate:none;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  14%{rotate:x 180deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  19.9999%{rotate:x 180deg}
+  20%{rotate:none;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  24.25%{rotate:1 1 0 180deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  29.9999%{rotate:1 1 0 180deg}
+  30%{rotate:none;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  33%{rotate:none;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  39.9999%{rotate:none}
+  40%{rotate:none;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  44%{rotate:y 180deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  49.9999%{rotate:y 180deg}
+  50%{rotate:none;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  52%{rotate:x 40deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  54.75%{rotate:x 40deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  56.75%{rotate:none;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  59.9999%{rotate:none}
+  60%{rotate:none;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  64.25%{rotate:1 -1 0 -180deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  69.9999%{rotate:1 -1 0 -180deg}
+  70%{rotate:none;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  74%{rotate:x 180deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  79.9999%{rotate:x 180deg}
+  80%{rotate:none;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  83%{rotate:none;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  89.9999%{rotate:none}
+  90%{rotate:none;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  94.25%{rotate:1 -1 0 -180deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  99.9999%{rotate:1 -1 0 -180deg}
+  100%{rotate:none}
+  0%{scale:1 1 1}
+  0.4%{scale:1 1 1}
+  0.8%{scale:0.91 0.91 0.91}
+  1.2%{scale:0.827 0.827 0.827}
+  1.6%{scale:0.839 0.839 0.839}
+  2%{scale:0.839 0.839 0.839}
+  2.55%{scale:0.8 0.8 0.8}
+  3.1%{scale:0.819 0.819 0.819}
+  3.65%{scale:0.863 0.863 0.863}
+  4.2%{scale:0.843 0.843 0.843}
+  4.75%{scale:0.839 0.839 0.839}
+  5.15%{scale:0.837 0.837 0.837}
+  5.55%{scale:0.826 0.826 0.826}
+  5.95%{scale:0.911 0.911 0.911}
+  6.35%{scale:1 1 1}
+  6.75%{scale:1 1 1}
+  9.9999%{scale:1 1 1}
+  10%{scale:1 1 1}
+  10.8%{scale:0.908 0.908 0.908}
+  11.6%{scale:0.817 0.817 0.817}
+  12.4%{scale:0.817 0.817 0.817}
+  13.2%{scale:0.908 0.908 0.908}
+  14%{scale:1 1 1}
+  19.9999%{scale:1 1 1}
+  20%{scale:1 1 1}
+  20.85%{scale:0.952 0.952 0.952}
+  21.7%{scale:0.837 0.837 0.837}
+  22.55%{scale:0.837 0.837 0.837}
+  23.4%{scale:0.952 0.952 0.952}
+  24.25%{scale:1 1 1}
+  29.9999%{scale:1 1 1}
+  30%{scale:1 1 1}
+  30.6%{scale:1 1 1}
+  31.2%{scale:1 1 1}
+  31.8%{scale:1 1 1}
+  32.4%{scale:1 1 1}
+  33%{scale:1 1 1}
+  39.9999%{scale:1 1 1}
+  40%{scale:1 1 1}
+  40.8%{scale:0.908 0.908 0.908}
+  41.6%{scale:0.817 0.817 0.817}
+  42.4%{scale:0.817 0.817 0.817}
+  43.2%{scale:0.908 0.908 0.908}
+  44%{scale:1 1 1}
+  49.9999%{scale:1 1 1}
+  50%{scale:1 1 1}
+  50.4%{scale:1 1 1}
+  50.8%{scale:0.91 0.91 0.91}
+  51.2%{scale:0.827 0.827 0.827}
+  51.6%{scale:0.839 0.839 0.839}
+  52%{scale:0.839 0.839 0.839}
+  52.55%{scale:0.8 0.8 0.8}
+  53.1%{scale:0.819 0.819 0.819}
+  53.65%{scale:0.863 0.863 0.863}
+  54.2%{scale:0.843 0.843 0.843}
+  54.75%{scale:0.839 0.839 0.839}
+  55.15%{scale:0.837 0.837 0.837}
+  55.55%{scale:0.826 0.826 0.826}
+  55.95%{scale:0.911 0.911 0.911}
+  56.35%{scale:1 1 1}
+  56.75%{scale:1 1 1}
+  59.9999%{scale:1 1 1}
+  60%{scale:1 1 1}
+  60.85%{scale:0.952 0.952 0.952}
+  61.7%{scale:0.837 0.837 0.837}
+  62.55%{scale:0.837 0.837 0.837}
+  63.4%{scale:0.952 0.952 0.952}
+  64.25%{scale:1 1 1}
+  69.9999%{scale:1 1 1}
+  70%{scale:1 1 1}
+  70.8%{scale:0.908 0.908 0.908}
+  71.6%{scale:0.817 0.817 0.817}
+  72.4%{scale:0.817 0.817 0.817}
+  73.2%{scale:0.908 0.908 0.908}
+  74%{scale:1 1 1}
+  79.9999%{scale:1 1 1}
+  80%{scale:1 1 1}
+  80.6%{scale:1 1 1}
+  81.2%{scale:1 1 1}
+  81.8%{scale:1 1 1}
+  82.4%{scale:1 1 1}
+  83%{scale:1 1 1}
+  89.9999%{scale:1 1 1}
+  90%{scale:1 1 1}
+  90.85%{scale:0.952 0.952 0.952}
+  91.7%{scale:0.837 0.837 0.837}
+  92.55%{scale:0.837 0.837 0.837}
+  93.4%{scale:0.952 0.952 0.952}
+  94.25%{scale:1 1 1}
+  100%{scale:1 1 1}
+  100%{scale:1 1 1}
+}
+@keyframes think-turn {
+  0%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  2%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  4.75%{rotate:180deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  6.75%{rotate:180deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  9.9999%{rotate:180deg}
+  10%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  14%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  19.9999%{rotate:0deg}
+  20%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  24.25%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  29.9999%{rotate:0deg}
+  30%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  33%{rotate:90deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  39.9999%{rotate:90deg}
+  40%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  44%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  49.9999%{rotate:0deg}
+  50%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  52%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  54.75%{rotate:180deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  56.75%{rotate:180deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  59.9999%{rotate:180deg}
+  60%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  64.25%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  69.9999%{rotate:0deg}
+  70%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  74%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  79.9999%{rotate:0deg}
+  80%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  83%{rotate:90deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  89.9999%{rotate:90deg}
+  90%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  94.25%{rotate:0deg;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  99.9999%{rotate:0deg}
+  100%{rotate:0deg}
+}
+@keyframes think-shade-t {
+  0%{opacity:0}
+  0.8%{opacity:0}
+  1.2%{opacity:0.01}
+  1.6%{opacity:0.03}
+  2%{opacity:0.04}
+  4.75%{opacity:0.04}
+  5.15%{opacity:0.03}
+  5.55%{opacity:0.01}
+  5.95%{opacity:0}
+  10.8%{opacity:0}
+  11.6%{opacity:0.06}
+  12.4%{opacity:0.38}
+  19.9999%{opacity:0.38}
+  20%{opacity:0}
+  20.85%{opacity:0.01}
+  21.7%{opacity:0.17}
+  22.55%{opacity:0.38}
+  29.9999%{opacity:0.38}
+  30%{opacity:0}
+  40%{opacity:0}
+  40.8%{opacity:0.03}
+  41.6%{opacity:0.25}
+  42.4%{opacity:0.38}
+  49.9999%{opacity:0.38}
+  50%{opacity:0}
+  50.8%{opacity:0}
+  51.2%{opacity:0.01}
+  51.6%{opacity:0.03}
+  52%{opacity:0.04}
+  54.75%{opacity:0.04}
+  55.15%{opacity:0.03}
+  55.55%{opacity:0.01}
+  55.95%{opacity:0}
+  60%{opacity:0}
+  60.85%{opacity:0.03}
+  61.7%{opacity:0.25}
+  62.55%{opacity:0.38}
+  69.9999%{opacity:0.38}
+  70%{opacity:0}
+  70.8%{opacity:0}
+  71.6%{opacity:0.06}
+  72.4%{opacity:0.38}
+  79.9999%{opacity:0.38}
+  80%{opacity:0}
+  90%{opacity:0}
+  90.85%{opacity:0.03}
+  91.7%{opacity:0.25}
+  92.55%{opacity:0.38}
+  100%{opacity:0.38}
+  100%{opacity:0}
+}
+@keyframes think-shade-b {
+  11.6%{opacity:0.38}
+  12.4%{opacity:0.17}
+  13.2%{opacity:0.01}
+  14%{opacity:0}
+  19.9999%{opacity:0}
+  20%{opacity:0.38}
+  21.7%{opacity:0.38}
+  22.55%{opacity:0.06}
+  23.4%{opacity:0}
+  29.9999%{opacity:0}
+  30%{opacity:0.38}
+  41.6%{opacity:0.38}
+  42.4%{opacity:0}
+  49.9999%{opacity:0}
+  50%{opacity:0.38}
+  61.7%{opacity:0.38}
+  62.55%{opacity:0}
+  69.9999%{opacity:0}
+  70%{opacity:0.38}
+  71.6%{opacity:0.38}
+  72.4%{opacity:0.17}
+  73.2%{opacity:0.01}
+  74%{opacity:0}
+  79.9999%{opacity:0}
+  80%{opacity:0.38}
+  91.7%{opacity:0.38}
+  92.55%{opacity:0}
+  100%{opacity:0}
+  100%{opacity:0.38}
+}
+@keyframes think-shade-n {
+  2.55%{opacity:0.38}
+  3.1%{opacity:0.38}
+  3.65%{opacity:0.2}
+  4.2%{opacity:0.12}
+  4.75%{opacity:0.11}
+  5.15%{opacity:0.12}
+  5.55%{opacity:0.16}
+  5.95%{opacity:0.25}
+  6.35%{opacity:0.29}
+  6.75%{opacity:0.3}
+  52.55%{opacity:0.38}
+  53.1%{opacity:0.38}
+  53.65%{opacity:0.2}
+  54.2%{opacity:0.12}
+  54.75%{opacity:0.11}
+  55.15%{opacity:0.12}
+  55.55%{opacity:0.16}
+  55.95%{opacity:0.25}
+  56.35%{opacity:0.29}
+  56.75%{opacity:0.3}
+}
+@keyframes think-shade-s {
+  0%{opacity:0.3}
+  0.4%{opacity:0.29}
+  0.8%{opacity:0.25}
+  1.2%{opacity:0.16}
+  1.6%{opacity:0.12}
+  2%{opacity:0.11}
+  2.55%{opacity:0.12}
+  3.1%{opacity:0.19}
+  10%{opacity:0.3}
+  10.8%{opacity:0.26}
+  11.6%{opacity:0.09}
+  12.4%{opacity:0.02}
+  13.2%{opacity:0.16}
+  14%{opacity:0.19}
+  20%{opacity:0.3}
+  20.85%{opacity:0.25}
+  21.7%{opacity:0.05}
+  22.55%{opacity:0.17}
+  23.4%{opacity:0.38}
+  40%{opacity:0.3}
+  40.8%{opacity:0.27}
+  41.6%{opacity:0.15}
+  42.4%{opacity:0.34}
+  43.2%{opacity:0.38}
+  50%{opacity:0.3}
+  50.4%{opacity:0.29}
+  50.8%{opacity:0.25}
+  51.2%{opacity:0.16}
+  51.6%{opacity:0.12}
+  52%{opacity:0.11}
+  52.55%{opacity:0.12}
+  53.1%{opacity:0.19}
+  70%{opacity:0.3}
+  70.8%{opacity:0.26}
+  71.6%{opacity:0.09}
+  72.4%{opacity:0.02}
+  73.2%{opacity:0.16}
+  74%{opacity:0.19}
+}
+@keyframes think-shade-w {
+  3.65%{opacity:0.38}
+  40%{opacity:0.19}
+  40.8%{opacity:0.16}
+  41.6%{opacity:0.04}
+  42.4%{opacity:0.23}
+  43.2%{opacity:0.38}
+  60%{opacity:0.19}
+  60.85%{opacity:0.14}
+  61.7%{opacity:0}
+  62.55%{opacity:0.24}
+  63.4%{opacity:0.38}
+  90%{opacity:0.19}
+  90.85%{opacity:0.14}
+  91.7%{opacity:0}
+  92.55%{opacity:0.24}
+  93.4%{opacity:0.38}
+}
+@keyframes think-shade-e {
+  0%{opacity:0.38}
+  2%{opacity:0.38}
+  2.55%{opacity:0.35}
+  3.1%{opacity:0.19}
+  3.65%{opacity:0.19}
+  4.2%{opacity:0.34}
+  10%{opacity:0.38}
+  10.8%{opacity:0.38}
+  11.6%{opacity:0.36}
+  12.4%{opacity:0.29}
+  13.2%{opacity:0.38}
+  52%{opacity:0.38}
+  52.55%{opacity:0.35}
+  53.1%{opacity:0.19}
+  53.65%{opacity:0.19}
+  54.2%{opacity:0.34}
+  70%{opacity:0.38}
+  70.8%{opacity:0.38}
+  71.6%{opacity:0.36}
+  72.4%{opacity:0.29}
+  73.2%{opacity:0.38}
 }
 
 /* v4 auto-detection does not scan `.fs`, so declare the F# sources explicitly (replaces the

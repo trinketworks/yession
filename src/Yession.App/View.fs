@@ -1810,6 +1810,12 @@ module View =
               </div>
             </section>"""
 
+    /// The agent thinking, drawn: the cube `Style.agentThinking` turns — a tip, the cube, its
+    /// six faces (`.agent-think` in `app/tailwind.css` says which is which) — inside a mark the
+    /// caller makes, because what the mark is ON is the caller's to say and so is its hook.
+    let private thinkingCube : TemplateResult =
+        html $"""<span class="{Style.agentThinkingTip}"><span class="{Style.agentThinkingCube}"><i></i><i></i><i></i><i></i><i></i><i></i></span></span>"""
+
     let private chat (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         // A file an agent linked to in a message, drawn as the reference it is — the SAME chip
         // the fold below it draws for the act of sharing one (`Entity.render`), because a body
@@ -2133,12 +2139,13 @@ module View =
                 | ConversationItemStatus.Running ->
                     // Who is doing it, as the hook says it too: whose mark this is is the
                     // promise, whatever the marks look like.
-                    let mark, whose =
+                    let mark =
                         match by with
-                        | ActorRef.Agent -> Style.actNoteRunningAgent, "agent"
+                        | ActorRef.Agent ->
+                            html $"""<span class="{Style.actNoteRunningAgent}" style="{Style.thinkFrom (MessageId.value item.MessageId)}" data-act-running="agent">{thinkingCube}</span>"""
                         | PeerRef _ | UserRef _ | ActorRef.Session | ActorRef.System | ActorRef.Configured _ ->
-                            Style.actNoteRunningOther, "other"
-                    html $"""<span class="{Style.actNoteRunning}"><span class="{mark}" data-act-running="{whose}"></span><span class="{Style.srOnly}">{Dom.Text.running}</span></span>"""
+                            html $"""<span class="{Style.actNoteRunningOther}" data-act-running="other"></span>"""
+                    html $"""<span class="{Style.actNoteRunning}">{mark}<span class="{Style.srOnly}">{Dom.Text.running}</span></span>"""
                 | Complete | Streaming | ConversationItemStatus.Failed -> Lit.nothing
             let failedMark =
                 match item.Status with
@@ -2260,8 +2267,13 @@ module View =
                     // says so is what a test counts: there must never be a second. Turning
                     // while it thinks — nothing said yet, or what it said has gone quiet
                     // (`ClientModel.agentThinking`) — and still while the words are arriving.
-                    let mark = if ClientModel.agentThinking model item then Style.agentCaretThinking else Style.agentCaret
-                    Style.messageBodyStreaming, html $"""<span class="{mark}" data-agent-writing></span>"""
+                    // Each turn's cube starts on a move of its own, seeded by its message.
+                    let mark =
+                        if ClientModel.agentThinking model item then
+                            html $"""<span class="{Style.agentThinking}" style="{Style.thinkFrom (MessageId.value item.MessageId)}" data-agent-writing>{thinkingCube}</span>"""
+                        else
+                            html $"""<span class="{Style.agentCaret}" data-agent-writing></span>"""
+                    Style.messageBodyStreaming, mark
                 | _ -> Style.messageBody, Lit.nothing
             let bodyClass = Style.cls [ bodyClass; Style.messageVoice isAgent ]
             // The author line is the GROUP's to say (see `group` below); a message's own meta

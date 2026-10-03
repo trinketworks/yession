@@ -3624,6 +3624,45 @@ let editorTests =
                 Expect.equal misplaced "" "the caret stands where the next word lands"
                 return ()
             }
+        // The thinking mark MOVES — a cube tipped, flipped and tumbled — and a cube turned
+        // toward its corner stands 1.2x taller than the diamond on top of it. So the promise
+        // the still caret keeps by its box, the moving one has to keep in every frame: what it
+        // paints stays within the lowercase it stands among, baseline to x-height, within the
+        // overshoot a point is carried past its line. Measured on what paints — the leaves of
+        // the mark, each a face whose projected box a browser reports through the perspective
+        // — at every 20ms of one whole cycle, its animations paused and stepped together.
+        editorCaseIn 390 844 "the agent's thinking mark stays within its letters through every move" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
+                do! awaitU (page.EvaluateAsync "() => window.__agentThinks()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
+                let! outside =
+                    await (page.EvaluateAsync<string>
+                            """() => {
+                                 const mark = document.querySelector('#shell [data-agent-writing]')
+                                 const probe = document.createElement('span')
+                                 probe.style.cssText = 'display:inline-block;width:0;height:1ex'
+                                 mark.before(probe)
+                                 const letters = probe.getBoundingClientRect()
+                                 probe.remove()
+                                 const em = parseFloat(getComputedStyle(mark).fontSize)
+                                 const leaves = [...mark.querySelectorAll('*')].filter(e => !e.firstElementChild)
+                                 const moves = mark.getAnimations({ subtree: true })
+                                 if (moves.length === 0) return 'the thinking mark does not move'
+                                 const cycle = Math.max(...moves.map(a => a.effect.getComputedTiming().duration))
+                                 let worst = null
+                                 for (let t = 0; t < cycle; t += 20) {
+                                   moves.forEach(a => { a.pause(); a.currentTime = t })
+                                   const boxes = (leaves.length ? leaves : [mark]).map(e => e.getBoundingClientRect())
+                                   const top = Math.min(...boxes.map(b => b.top)), bottom = Math.max(...boxes.map(b => b.bottom))
+                                   const over = Math.max(letters.top - top, bottom - letters.bottom) - 0.05 * em
+                                   if (over > 0 && (!worst || over > worst.over)) worst = { over, t }
+                                 }
+                                 return worst ? 'it paints ' + worst.over.toFixed(2) + 'px past its letters at ' + worst.t + 'ms' : ''
+                               }""")
+                Expect.equal outside "" "the thinking mark never stands taller than the letters"
+                return ()
+            }
         // What the band it replaced could not take away, and what a control arriving in a band
         // can: the composer. A turn starting must not push what a person types with off the
         // screen, or the one thing to do while the agent writes — queue the next message — is
