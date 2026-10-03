@@ -255,7 +255,12 @@ module Dom =
         /// One per peer whose caret is in THAT terminal, on its tab — the strip's share of
         /// the same presence the roster reports.
         let terminalTabPeer = "data-terminal-tab-peer"
-        let terminalNew = "data-terminal-new"
+        /// The strip's door to the chooser (Plan 20, stage 1). Not `terminal-new`, which is
+        /// what it was called while it opened one: it opens the surface that offers them.
+        let paneNew = "data-pane-new"
+        /// One per place a terminal can be opened, carrying that sandbox's rendered ref —
+        /// which is what makes two repos both declaring `dev` tellable apart in a selector.
+        let sandboxNew = "data-sandbox-new"
         let terminalClose = "data-terminal-close"
         let terminalId = "data-terminal-id"
         /// The scrolling block history — the surface that stays pinned to its newest line.
@@ -672,6 +677,13 @@ module Dom =
         /// the one this product uses for ending a terminal, and it names which tab so that a
         /// reader who arrives on the control knows what it is about.
         let closeTab (what: string) = sprintf "Close tab %s" what
+        /// The strip's door. "New" is what the control used to promise and only half of what
+        /// it offers: the chooser holds what is already running too.
+        let openSomethingElse = "Open something else"
+        /// A chooser row's name. The visible label is the sandbox's short name, so the
+        /// accessible one carries the scope: two repos may both declare `dev`, and "dev"
+        /// twice is a list nobody reading it aloud can use.
+        let newTerminalIn (sandbox: string) = sprintf "New terminal in %s" sandbox
         /// A queued command that will run as soon as the terminal is free.
         let queuedReady = "ready"
         /// A queued command held because a peer is typing in its terminal (Plan 13, stage

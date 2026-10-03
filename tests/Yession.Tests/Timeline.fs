@@ -1395,6 +1395,23 @@ let private toolTests =
 let private closedNow (id: TerminalId) =
     SessionEvent.TerminalClosed { TerminalId = id; Reason = "closed by a peer" }
 
+/// A sandbox a repo declared and this session brought up — what the chooser offers beside
+/// `default`. Scoped, because the scope is what makes two repos' `dev` two places.
+let private devInHello = SandboxRef.parse "octo/hello:dev" |> expect
+
+let private sandboxStarted (sandbox: SandboxRef) (description: string option) =
+    SessionEvent.WorkSandboxStarted
+        { MessageId = message ("started-" + SandboxRef.render sandbox)
+          Sandbox = sandbox
+          Backend = "docker"
+          Description = description
+          Checkout = Some "/repos/octo/hello"
+          Forwarded = []
+          Realisation = []
+          Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect)
+          OnBehalfOf = None
+          CausedBy = None }
+
 let private listTests =
     testList "The terminal list (Plan 20, stage 0)" [
 
@@ -1508,6 +1525,62 @@ let private listTests =
             let listed = Support.step ToggleContentListMsg model
             Expect.isTrue (ClientModel.showsList listed) "the list is showing"
             Expect.isTrue listed.TerminalsOpen "and the column came with it"
+
+        // --- Somewhere to open one (Plan 20, stage 1) ---------------------------------------
+
+        testCase "the chooser always offers this session's own sandbox" <| fun () ->
+            // Every session has `default` from boot, so nothing started it and no event says
+            // so. It is offered because the session exists.
+            Expect.equal
+                (ClientModel.sandboxRows (clientOf []) |> List.map SandboxRef.render)
+                [ "default" ]
+                "one place, always"
+
+        testCase "a sandbox a repo started is offered after it" <| fun () ->
+            // `default` leads because it is the plain answer, and a reader scanning for one
+            // place to put a shell should not have to read past three repos to find it.
+            let model = clientOf [ at 1L 0.0 (sandboxStarted devInHello (Some "the work sandbox")) ]
+            Expect.equal
+                (ClientModel.sandboxRows model |> List.map SandboxRef.render)
+                [ "default"; "octo/hello:dev" ]
+                "the session's own, then what came up"
+
+        testCase "a chooser row says what its sandbox is for, as the declaration said it" <| fun () ->
+            // From the start that brought it up, which is the only place it is recorded —
+            // never today's file read onto last week's event.
+            let model = clientOf [ at 1L 0.0 (sandboxStarted devInHello (Some "where the tests run")) ]
+            Expect.equal
+                (ClientModel.sandboxPurpose devInHello model)
+                (Some "where the tests run")
+                "the words the file used"
+
+        testCase "a sandbox whose declaration said nothing has nothing to say" <| fun () ->
+            // Absent is not empty: a row with no note is a row, and inventing one would be
+            // this surface writing the file's prose for it.
+            let model = clientOf [ at 1L 0.0 (sandboxStarted devInHello None) ]
+            Expect.equal (ClientModel.sandboxPurpose devInHello model) None "nothing to say"
+
+        testCase "a pane with nothing to show is the chooser" <| fun () ->
+            // It used to be an empty state of its own — an idle prompt with one button — so a
+            // session with nothing open had a second surface saying what the list was already
+            // saying, and the only one of the two that could not offer a sandbox.
+            Expect.isTrue (ClientModel.showsList (clientOf [])) "nothing open, so the chooser"
+
+        testCase "a pane with a terminal to show is not the chooser" <| fun () ->
+            // The other half, and the one that makes the rule above a rule rather than a
+            // surface that never goes away.
+            let model = clientOf [ at 1L 0.0 (opened terminalA "build") ]
+            Expect.isFalse (ClientModel.showsList model) "there is a terminal, so show it"
+
+        testCase "choosing a place asks for a terminal there, named by nothing" <| fun () ->
+            // The only thing the press says is WHERE, so the session names the terminal after
+            // it (`TerminalTitle.inSandbox`). A title invented here would be this surface
+            // guessing at a rule the session already holds.
+            let _, effects = ClientModel.update (OpenTerminalMsg ("", devInHello)) (clientOf [])
+            Expect.equal
+                effects
+                [ ClientEffect.OpenTerminal ("", devInHello) ]
+                "where they pressed, and no name of our own"
     ]
 
 // --- Tabs, pins, and the preview slot (Plan 20, stage 1) ------------------------------------

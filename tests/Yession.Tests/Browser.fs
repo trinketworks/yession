@@ -409,6 +409,21 @@ let private someOwnText (selector: string) (text: string) =
 /// function form `() => (async () => false)()` settles at once, while `() => false` correctly times
 /// out. `EvaluateAsync` awaits a returned Promise (confirmed: `(async () => false)()` -> false), so
 /// polling it is correct for both predicate shapes.
+/// Open a terminal the way a person does now (Plan 20, stage 1): the strip's `+` is a DOOR to
+/// the chooser, and a row in the chooser says where the terminal goes. Two presses, because the
+/// second one is the choice — it used to be one, and that one could only ever give you
+/// `default`.
+///
+/// The chooser is already showing when there is nothing else to show, and the strip (and so the
+/// door) is not in the document while it is — one surface at a time, which `role="tablist"`
+/// requires. So this asks for the chooser only when it is not already up.
+let private openNewTerminal (page: IPage) : Async<unit> =
+    async {
+        let! showing = await (page.EvaluateAsync<bool> "() => !!document.querySelector('[data-sandbox-new]')")
+        if not showing then do! awaitU (page.Locator("[data-pane-new]").First.ClickAsync ())
+        do! awaitU (page.Locator("[data-sandbox-new='default']").First.ClickAsync ())
+    }
+
 let private waitTimeoutMs = 30000.0
 let private waitFor (what: string) (page: IPage) (predicate: string) : Async<unit> =
     async {
@@ -746,9 +761,7 @@ let tests =
                 // The column starts shut, so the header control is the way back in — and
                 // that this can find it is the test that one exists at all.
                 do! awaitU (pageA.Locator("[data-content-toggle='show']").First.ClickAsync ())
-                // `.First`: a session with no terminal open offers "new" twice — in the tab
-                // strip and in the empty state — and either will do.
-                do! awaitU (pageA.Locator("[data-terminal-new]").First.ClickAsync ())
+                do! openNewTerminal pageA
 
                 // Opening is a command; the terminal reaches BOTH peers as an event, so B
                 // learns about it without having asked for anything.
@@ -928,7 +941,7 @@ let tests =
                     }
 
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
-                do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
+                do! openNewTerminal page
                 let! _ = await (page.WaitForFunctionAsync "!!document.querySelector('[data-terminal-tab]')")
 
                 let small = 100
@@ -1022,7 +1035,7 @@ let tests =
                 let enough = sprintf "document.querySelectorAll('[data-terminal-tab]').length >= %d" opened
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 for _ in 1 .. opened do
-                    do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
+                    do! openNewTerminal page
                 do! await (page.WaitForFunctionAsync enough) |> Async.Ignore
 
                 let! _ = await (page.ReloadAsync ())
@@ -1106,8 +1119,8 @@ let tests =
                 // before it had left the column open, which is a question a case that arranges
                 // its own session does not have.)
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
-                do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
-                do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
+                do! openNewTerminal page
+                do! openNewTerminal page
                 do!
                     await (page.WaitForFunctionAsync
                             "document.querySelectorAll('[data-terminal-tab]').length >= 2")
@@ -3909,6 +3922,38 @@ let editorTests =
                 return ()
             }
 
+        // The chooser's door (Plan 20, stage 1). WHAT it offers is a fold the cheap tier
+        // pins; what only a browser can answer is that the control at the end of the strip
+        // leads somewhere — and that getting there takes the strip away, because
+        // `role="tablist"` promises a panel showing one of its tabs and a strip left standing
+        // over the chooser would promise a panel that is not in the document.
+        //
+        // Driven from the KEYBOARD, because the door replaced a button that acted on the
+        // press: a control that now opens a surface has to be reachable and pressable without
+        // a pointer, and the surface it opens has to contain a real control too.
+        editorCase "the strip's door leads to somewhere a terminal can be opened" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [role='tablist']")
+
+                do! awaitU (page.Locator("#shell [data-pane-new]").First.PressAsync "Enter")
+
+                // One surface at a time, both halves of it.
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [role='tablist']")""")
+
+                // And somewhere to open one, as a control somebody can reach and press.
+                let! row = await (page.WaitForSelectorAsync "#shell [data-sandbox-new]")
+                let! named = await (row.GetAttributeAsync "aria-label")
+                Expect.isTrue
+                    (named.StartsWith "New terminal in ")
+                    (sprintf "a row says where the terminal would go, got '%s'" named)
+                do! awaitU (page.Locator("#shell [data-sandbox-new]").First.FocusAsync ())
+                let! focused = await (page.EvaluateAsync<bool> "() => document.activeElement?.hasAttribute('data-sandbox-new') === true")
+                Expect.isTrue focused "the row takes focus without a pointer"
+                return ()
+            }
+
         // The terminal list (Plan 20, stage 0). WHICH verbs a row offers is a fold the cheap
         // tier already pins; what only a browser can answer is the DOM swap — the list
         // replaces the strip and the pane's body at once, so choosing a row removes the
@@ -4653,7 +4698,7 @@ let mountedTests =
             (fun page ->
                 async {
                     do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
-                    do! awaitU (page.Locator("[data-terminal-new]").First.ClickAsync ())
+                    do! openNewTerminal page
                     let composerInput = "[data-terminal-input^='term-draft:']:not([readonly])"
                     let! _ = await (page.WaitForSelectorAsync composerInput)
                     do! awaitU (page.ClickAsync composerInput)

@@ -889,7 +889,30 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                             Size = None } ] }
         Conversation =
             { Items =
-                [ { MessageId = messageId
+                [ // A repo's sandbox, up. The chooser (Plan 20, stage 1) reads the starts on
+                  // the timeline for somewhere to open a terminal, so a harness with only
+                  // `default` could draw that surface and never show what it is FOR: one row
+                  // with no scope beside it and no note under it is the one shape the design
+                  // does not have to get right.
+                  { MessageId = MessageId.create "msg-harness-sandbox" |> expect
+                    Author = ActorRef.Configured (RepoRef.create "octo/hello" |> expect)
+                    Content =
+                        ItemContent.Act (
+                            Act.SandboxStarted
+                                { MessageId = MessageId.create "msg-harness-sandbox" |> expect
+                                  Sandbox = SandboxRef.parse "octo/hello:dev" |> expect
+                                  Backend = "docker"
+                                  Description = Some "day-to-day work"
+                                  Checkout = Some "/repos/octo/hello"
+                                  Forwarded = []
+                                  Realisation = []
+                                  Actor = ActorRef.Configured (RepoRef.create "octo/hello" |> expect)
+                                  OnBehalfOf = None
+                                  CausedBy = None })
+                    Status = Complete
+                    Offset = offset 0L
+                    Woke = None; CausedBy = None }
+                  { MessageId = messageId
                     Author = PeerRef peerId
                     Content = ItemContent.Message ("ship it")
                     Status = Complete

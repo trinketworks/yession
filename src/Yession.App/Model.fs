@@ -1524,7 +1524,12 @@ module ClientModel =
     let showsList (model: ClientModel) : bool =
         match model.Pane with
         | Some (OnList _) -> true
-        | Some (OnTab _) | None -> false
+        // Nothing to show IS the chooser (Plan 20, stage 1). A pane with no tab used to wear
+        // an empty state of its own — an idle prompt and one button — which was a second
+        // surface saying what the list behind the toggle was already saying, and the one that
+        // could not offer a sandbox. A session with nothing open is now this same list with
+        // two of its three sections empty.
+        | Some (OnTab _) | None -> (selectedPane model).IsNone
 
     /// The command the pane's text read is positioned at (Plan 25, stage 3) — what the
     /// browser scrolls into view once the render that put it on screen has happened.
@@ -1878,6 +1883,25 @@ module ClientModel =
     /// the panel and the timeline cannot disagree about what exists: both are the same fold.
     let artifactRows (model: ClientModel) : ArtifactShared list =
         ConversationProjection.artifacts model.Conversation
+
+    /// Everywhere this session can open a terminal, in the order the chooser offers them:
+    /// `default` first, because every session has it, then the ones a repo declared and this
+    /// session started.
+    ///
+    /// `SandboxRef` and nothing else, because the only thing a row needs to ACT is where —
+    /// what each one is FOR is on the start the view reads beside this. `default` is prepended
+    /// rather than folded for the reason `startedSandboxes` leaves it out: nothing started it,
+    /// so no event says so, and it is a fact about the session existing.
+    let sandboxRows (model: ClientModel) : SandboxRef list =
+        SandboxRef.defaultRef
+        :: (ConversationProjection.startedSandboxes model.Conversation |> List.map (fun s -> s.Sandbox))
+
+    /// What a repo's file said one of those sandboxes is FOR, when it said anything. From the
+    /// start that brought it up, which is the only place it is recorded.
+    let sandboxPurpose (sandbox: SandboxRef) (model: ClientModel) : string option =
+        ConversationProjection.startedSandboxes model.Conversation
+        |> List.tryFind (fun s -> s.Sandbox = sandbox)
+        |> Option.bind (fun s -> s.Description)
 
     /// A terminal's queued commands in run order.
     let terminalQueue (terminal: TerminalId) (model: ClientModel) : PendingAct list =
