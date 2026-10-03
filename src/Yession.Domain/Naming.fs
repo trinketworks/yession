@@ -141,9 +141,10 @@ module Naming =
                   Read = List.length reading }
 
     let owed
+        (text: CollabText<'Text>)
         (settled: Map<NamingSubject, Settled>)
         (title: string)
-        (chapters: Map<MessageId, ChapterMark>)
+        (chapters: Map<MessageId, ChapterMark<'Text>>)
         (items: ConversationItem list)
         : Job list =
         let chapterJobs =
@@ -155,8 +156,8 @@ module Naming =
             |> List.choose (fun item ->
                 let subject = NamingSubject.Chapter item.MessageId
                 let last = Map.tryFind subject settled
-                let held = Chapters.name chapters item
-                if not (Chapters.unwritten chapters item || ours last held) then None
+                let held = Chapters.name text chapters item
+                if not (Chapters.unwritten text chapters item || ours last held) then None
                 elif finished last Chapters.ReadItems then None
                 else
                     let covered = Chapters.reading chapters items item

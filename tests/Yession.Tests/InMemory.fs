@@ -230,7 +230,7 @@ let tests =
                 // Ada divides the session here. The chapter is made wearing the guess, which
                 // is what the process finds and what it is allowed to replace.
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
-                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name CollabText.ylmish m.Synced.Chapters item = "Where it was settled")
                 do! host.Stop ()
             }
 
@@ -260,7 +260,7 @@ let tests =
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "ship it"))
                 let item = itemSaying "ship it" (a.Runner.Model ())
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
-                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name CollabText.ylmish m.Synced.Chapters item = "Where it was settled")
                 // More doc updates, of the kind a session makes constantly: somebody typing.
                 do! compose a ada "and then this"
                 do! a.Runner.WaitFor (fun m -> Map.containsKey ada m.Synced.Drafts)
@@ -289,11 +289,11 @@ let tests =
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "run tests"))
                 let item = itemSaying "run tests" (a.Runner.Model ())
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
-                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Name from 1")
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name CollabText.ylmish m.Synced.Chapters item = "Name from 1")
                 // ...and then the substance, inside the same chapter.
                 do! compose a ada "the auth middleware drops the refresh token"
                 a.Connection.SendDraft ada
-                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Name from 2")
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name CollabText.ylmish m.Synced.Chapters item = "Name from 2")
                 do! host.Stop ()
             }
 
@@ -322,13 +322,13 @@ let tests =
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "run tests"))
                 let item = itemSaying "run tests" (a.Runner.Model ())
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
-                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name CollabText.ylmish m.Synced.Chapters item = "Where it was settled")
                 // Twice the material, so it is re-read — and answered with the same words.
                 do! compose a ada "the auth middleware drops the refresh token"
                 a.Connection.SendDraft ada
                 do! a.Runner.WaitFor (fun m -> List.length (Support.timelineOf m) = 2)
                 do! a.Runner.WaitFor (fun _ -> asked.Count = 2)
-                Expect.equal (Chat.Chapters.name (a.Runner.Model ()).Synced.Chapters item) "Where it was settled" "unchanged, as the answer said"
+                Expect.equal (Chat.Chapters.name CollabText.ylmish (a.Runner.Model ()).Synced.Chapters item) "Where it was settled" "unchanged, as the answer said"
                 // A draft keystroke afterwards: the material has not doubled again, and the
                 // pass that kept the name recorded that it had considered this much.
                 do! compose a ada "typing"
@@ -361,16 +361,16 @@ let tests =
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "run tests"))
                 let item = itemSaying "run tests" (a.Runner.Model ())
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
-                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name CollabText.ylmish m.Synced.Chapters item = "Where it was settled")
                 // Ada does not like it, and says so.
                 let named = (a.Runner.Model ()).Synced.Chapters |> Map.find item.MessageId
                 a.Runner.Dispatch (user (EditChapterNameMsg (item.MessageId, Text.edit "Mine" named.Name)))
-                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Mine")
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name CollabText.ylmish m.Synced.Chapters item = "Mine")
                 // ...and then says twice as much, which would otherwise be worth re-reading.
                 do! compose a ada "the auth middleware drops the refresh token"
                 a.Connection.SendDraft ada
                 do! a.Runner.WaitFor (fun m -> List.length (Support.timelineOf m) = 2)
-                Expect.equal (Chat.Chapters.name (a.Runner.Model ()).Synced.Chapters item) "Mine" "theirs, and nothing wrote over it"
+                Expect.equal (Chat.Chapters.name CollabText.ylmish (a.Runner.Model ()).Synced.Chapters item) "Mine" "theirs, and nothing wrote over it"
                 Expect.equal asked.Count 1 "and it was not even asked again"
                 do! host.Stop ()
             }
@@ -396,7 +396,7 @@ let tests =
                         match Map.tryFind ActorRef.Agent m.Presence with
                         | Some p -> p.Focus |> Option.exists (fun f -> f.Field = ChapterName item.MessageId)
                         | None -> false)
-                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name m.Synced.Chapters item = "Where it was settled")
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.name CollabText.ylmish m.Synced.Chapters item = "Where it was settled")
                 // ...and it is gone when the typing is. A caret left by a writer that has
                 // stopped says somebody is still there.
                 do! a.Runner.WaitFor (fun m -> not (Map.containsKey ActorRef.Agent m.Presence))
@@ -438,7 +438,7 @@ let tests =
                 // Far more time than typing the whole name would take. Nothing of it lands,
                 // because none of it was ever started.
                 for _ in 1 .. 40 do vc.Advance (System.TimeSpan.FromMilliseconds 100.0)
-                Expect.equal (Chat.Chapters.name (a.Runner.Model ()).Synced.Chapters item) "ship it" "his field, so the guess stands"
+                Expect.equal (Chat.Chapters.name CollabText.ylmish (a.Runner.Model ()).Synced.Chapters item) "ship it" "his field, so the guess stands"
                 Expect.isFalse (Map.containsKey ActorRef.Agent (a.Runner.Model ()).Presence) "and it never put a caret there"
                 do! host.Stop ()
             }
@@ -533,7 +533,7 @@ let tests =
                 let item = itemSaying "ship it" (a.Runner.Model ())
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 do! a.Runner.WaitFor (fun m -> Chat.Chapters.opens m.Synced.Chapters item)
-                Expect.equal (Chat.Chapters.name (a.Runner.Model ()).Synced.Chapters item) "ship it" "the guess, as before"
+                Expect.equal (Chat.Chapters.name CollabText.ylmish (a.Runner.Model ()).Synced.Chapters item) "ship it" "the guess, as before"
                 do! host.Stop ()
             }
 

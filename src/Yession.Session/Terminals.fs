@@ -3037,7 +3037,7 @@ module TerminalCommands =
         (doc: Yjs.Y.Doc)
         (terminals: SessionTerminals.SessionTerminals)
         (projection: unit -> Projection)
-        (syncedOf: unit -> SyncedSessionState)
+        (syncedOf: unit -> SyncedSessionState<Ylmish.Text>)
         (readOutput: TerminalId -> int -> int option -> string)
         /// The session's agent terminal, opened on first use with `reason` as its TITLE — so
         /// the strip says "running the test suite" rather than "agent", which is what the

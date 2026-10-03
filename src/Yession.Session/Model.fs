@@ -24,7 +24,7 @@ type AgentRuntimeState =
 
 type ProcessModel =
     { SessionId    : SessionId
-      Synced       : SyncedSessionState
+      Synced       : SyncedSessionState<Ylmish.Text>
       EventLog     : EventLogState
       Peers        : Map<PeerId, PeerConnectionState>
       Conversation : ConversationProjection
@@ -35,7 +35,7 @@ module ProcessModel =
     /// The model for a freshly created session: nothing synced, nothing consumed, idle.
     let initial (sessionId: SessionId) : ProcessModel =
         { SessionId = sessionId
-          Synced = SyncedSessionState.empty
+          Synced = (SyncedSessionState.empty CollabText.ylmish)
           EventLog = { LatestOffset = None }
           Peers = Map.empty
           Conversation = ConversationProjection.empty

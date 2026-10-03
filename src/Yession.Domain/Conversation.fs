@@ -250,9 +250,9 @@ module ConversationItem =
 ///
 /// A name outlives the chapter being closed. Whoever wrote it wrote it about this message, and
 /// a close that dropped it would make a mis-tap cost somebody their sentence.
-type ChapterMark =
+type ChapterMark<'Text> =
     { Opens : bool
-      Name : Ylmish.Text }
+      Name : 'Text }
 
 /// Where a chapter opens in a conversation.
 ///
@@ -335,7 +335,7 @@ module Chapters =
     let defaultName (item: ConversationItem) : string = cutToLimit (headline (ConversationItem.headline item))
 
     /// Whether a chapter opens at this item.
-    let opens (chapters: Map<MessageId, ChapterMark>) (item: ConversationItem) : bool =
+    let opens (chapters: Map<MessageId, ChapterMark<'Text>>) (item: ConversationItem) : bool =
         match chapters |> Map.tryFind item.MessageId with
         | Some mark -> mark.Opens
         | None ->
@@ -346,10 +346,10 @@ module Chapters =
     /// What a WRITER needs, where `name` is what a reader sees. An edit is a splice against
     /// the text that is there, so a field diffing against the guess would be a field whose
     /// first keystroke re-wrote a name nobody had chosen.
-    let written (chapters: Map<MessageId, ChapterMark>) (item: ConversationItem) : Ylmish.Text =
+    let written (text: CollabText<'Text>) (chapters: Map<MessageId, ChapterMark<'Text>>) (item: ConversationItem) : 'Text =
         match chapters |> Map.tryFind item.MessageId with
         | Some mark -> mark.Name
-        | None -> Ylmish.Text.empty
+        | None -> text.Empty
 
     /// What the chapter here is called: what somebody wrote, or the guess until they do.
     ///
@@ -357,8 +357,8 @@ module Chapters =
     /// is: an act that opens a chapter by nature has no entry at all until somebody touches
     /// it, so a surface reading the map on its own would draw a rule with nothing written on
     /// it — and the next surface would have to remember the same rule.
-    let name (chapters: Map<MessageId, ChapterMark>) (item: ConversationItem) : string =
-        match Ylmish.Text.toString (written chapters item) with
+    let name (text: CollabText<'Text>) (chapters: Map<MessageId, ChapterMark<'Text>>) (item: ConversationItem) : string =
+        match text.ToString (written text chapters item) with
         | "" -> defaultName item
         | said -> said
 
@@ -373,11 +373,15 @@ module Chapters =
     /// does. A name each replica computed at render instead would be a name two replicas could
     /// disagree about the day the heuristic changed, and one nobody could edit without writing
     /// it out first.
-    let toggle (item: ConversationItem) (chapters: Map<MessageId, ChapterMark>) : Map<MessageId, ChapterMark> =
+    let toggle
+        (text: CollabText<'Text>)
+        (item: ConversationItem)
+        (chapters: Map<MessageId, ChapterMark<'Text>>)
+        : Map<MessageId, ChapterMark<'Text>> =
         let named =
             match chapters |> Map.tryFind item.MessageId with
-            | Some mark when Ylmish.Text.toString mark.Name <> "" -> mark.Name
-            | _ -> Ylmish.Text.ofString (defaultName item)
+            | Some mark when text.ToString mark.Name <> "" -> mark.Name
+            | _ -> text.OfString (defaultName item)
         chapters |> Map.add item.MessageId { Opens = not (opens chapters item); Name = named }
 
     /// Call the chapter here something else.
@@ -386,11 +390,11 @@ module Chapters =
     /// so writing one has to record the verdict it already had rather than invent one — a
     /// rename that quietly opened a chapter would be a rename that changed what the transcript
     /// says.
-    let rename (item: ConversationItem) (said: Ylmish.Text) (chapters: Map<MessageId, ChapterMark>) : Map<MessageId, ChapterMark> =
+    let rename (item: ConversationItem) (said: 'Text) (chapters: Map<MessageId, ChapterMark<'Text>>) : Map<MessageId, ChapterMark<'Text>> =
         chapters |> Map.add item.MessageId { Opens = opens chapters item; Name = said }
 
     /// The items a chapter opens at, in the order the conversation holds them.
-    let over (chapters: Map<MessageId, ChapterMark>) (items: ConversationItem list) : ConversationItem list =
+    let over (chapters: Map<MessageId, ChapterMark<'Text>>) (items: ConversationItem list) : ConversationItem list =
         items |> List.filter (opens chapters)
 
     /// Whether the chapter here is still wearing the guess rather than a name somebody chose.
@@ -404,15 +408,15 @@ module Chapters =
     ///
     /// An act that opens a chapter by nature has no entry at all until somebody touches it,
     /// and that is unwritten too.
-    let unwritten (chapters: Map<MessageId, ChapterMark>) (item: ConversationItem) : bool =
-        match Ylmish.Text.toString (written chapters item) with
+    let unwritten (text: CollabText<'Text>) (chapters: Map<MessageId, ChapterMark<'Text>>) (item: ConversationItem) : bool =
+        match text.ToString (written text chapters item) with
         | "" -> true
         | said -> said = defaultName item
 
     /// The stretch a chapter covers: from the item it opens at, up to wherever the next
     /// chapter begins. What a reader takes it to mean, and so what naming it has to read.
     let covers
-        (chapters: Map<MessageId, ChapterMark>)
+        (chapters: Map<MessageId, ChapterMark<'Text>>)
         (items: ConversationItem list)
         (item: ConversationItem)
         : ConversationItem list =
@@ -451,7 +455,7 @@ module Chapters =
     /// ask cannot read is a trigger that fires on a question with a known answer — which is
     /// what the bounded reading already taught, and an act note would teach again.
     let reading
-        (chapters: Map<MessageId, ChapterMark>)
+        (chapters: Map<MessageId, ChapterMark<'Text>>)
         (items: ConversationItem list)
         (item: ConversationItem)
         : ConversationItem list =
