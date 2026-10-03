@@ -2094,7 +2094,9 @@ let private paneNewTests =
               Offset = EventOffset.create 1L |> expect
               Woke = None; CausedBy = None }
         { representativeModel with
-            Conversation = { representativeModel.Conversation with Items = [ started ] } }
+            // `Recent` is the write order (newest first) and `Items` is the read view over
+            // it, so a fixture sets the field. One item, so the order says nothing here.
+            Conversation = { representativeModel.Conversation with Recent = [ started ] } }
 
     /// The door's own tag and nothing else. A whole page carries every timeline item's
     /// actions control, and each of those says `aria-haspopup="menu"` too — so an unscoped
