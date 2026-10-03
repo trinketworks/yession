@@ -954,14 +954,6 @@ let private uiRenderTests =
 
 let private parseHex (s: string) : float = Fable.Core.JS.parseInt s 16
 
-let private themeColour (css: string) (name: string) : string =
-    let marker = sprintf "--color-%s:" name
-    match css.IndexOf marker with
-    | -1 -> failwithf "token --color-%s not found in app/tailwind.css" name
-    | start ->
-        let from = start + marker.Length
-        css.Substring(from, css.IndexOf (';', from) - from).Trim ()
-
 /// A colour's red, green and blue as 0..1. Tokens use both #rgb and #rrggbb — expand the
 /// short form before slicing channels.
 let private channels (hex: string) : float * float * float =
@@ -971,6 +963,108 @@ let private channels (hex: string) : float * float * float =
         else hex
     let channel (i: int) = parseHex (h.Substring (i, 2)) / 255.0
     channel 1, channel 3, channel 5
+
+/// A declaration's value as `app/tailwind.css` writes it: `--name: value;`.
+let private declared (css: string) (name: string) : string =
+    let marker = sprintf "--%s:" name
+    match css.IndexOf marker with
+    | -1 -> failwithf "--%s is not declared in app/tailwind.css" name
+    | start ->
+        let from = start + marker.Length
+        css.Substring(from, css.IndexOf (';', from) - from).Trim ()
+
+let private linearOf (c: float) = if c <= 0.04045 then c / 12.92 else ((c + 0.055) / 1.055) ** 2.4
+let private gammaOf (c: float) = if c <= 0.0031308 then 12.92 * c else 1.055 * (c ** (1.0 / 2.4)) - 0.055
+
+/// sRGB (0..1) to OKLab and back — the space the theme's variants are mixed in, with the
+/// matrices CSS Color 4 specifies, so a mix computed here is the mix a browser paints.
+let private toOklab (r: float, g: float, b: float) =
+    let r, g, b = linearOf r, linearOf g, linearOf b
+    let cbrt (x: float) = if x < 0.0 then -((-x) ** (1.0 / 3.0)) else x ** (1.0 / 3.0)
+    let l = cbrt (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+    let m = cbrt (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+    let s = cbrt (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+    0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+
+let private ofOklab (lightness: float, a: float, b: float) =
+    let l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3.0
+    let m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3.0
+    let s = (lightness - 0.0894841775 * a - 1.2914855480 * b) ** 3.0
+    let channel (x: float) = gammaOf (max 0.0 (min 1.0 x))
+    channel (4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
+    channel (-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
+    channel (-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s)
+
+let private hexOf (r: float, g: float, b: float) : string =
+    let digits = "0123456789abcdef"
+    let two (c: float) =
+        let n = int (System.Math.Round (c * 255.0))
+        sprintf "%c%c" digits.[n / 16] digits.[n % 16]
+    "#" + two r + two g + two b
+
+/// `a, b` at the top level of a function's arguments, leaving commas inside a nested call alone.
+let private topLevelArguments (inner: string) : string list =
+    let parts = ResizeArray<string> ()
+    let mutable depth, from = 0, 0
+    for i in 0 .. inner.Length - 1 do
+        match inner.[i] with
+        | '(' -> depth <- depth + 1
+        | ')' -> depth <- depth - 1
+        | ',' when depth = 0 ->
+            parts.Add (inner.Substring(from, i - from).Trim ())
+            from <- i + 1
+        | _ -> ()
+    parts.Add (inner.Substring(from).Trim ())
+    List.ofSeq parts
+
+/// A colour token, resolved the way the stylesheet resolves it: a hex is itself, a role is
+/// whatever it points at, and a variant is its `color-mix(in oklab, …)` computed through the
+/// step it names. So the contrast floor below is held by the RULE, not by a hex somebody
+/// derived from it once — retune a step and every role on it is re-checked.
+let rec private resolve (css: string) (value: string) : string =
+    let value = value.Trim ()
+    if value.StartsWith "#" then
+        value
+    elif value.StartsWith "var(--" && value.EndsWith ")" then
+        resolve css (declared css (value.Substring (6, value.Length - 7)))
+    elif value.StartsWith "color-mix(in oklab," && value.EndsWith ")" then
+        let inner = value.Substring (19, value.Length - 20)
+        // One side of the mix: its colour, and the share it names, if it names one — a
+        // `calc(var(--step-*) * n)` or a plain `n%`.
+        let side (arg: string) : string * float option =
+            match arg.IndexOf " calc(" with
+            | -1 ->
+                match arg.LastIndexOf ' ' with
+                | at when at > 0 && arg.EndsWith "%" ->
+                    arg.Substring(0, at), Some (System.Double.Parse (arg.Substring(at + 1).TrimEnd '%') / 100.0)
+                | _ -> arg, None
+            | at ->
+                let calc = arg.Substring (at + 6)
+                let step = calc.Substring (calc.IndexOf "var(--" + 6, calc.IndexOf ")" - calc.IndexOf "var(--" - 6)
+                let times = System.Double.Parse (calc.Substring(calc.IndexOf "*" + 1).TrimEnd(')').Trim ())
+                let stepShare = System.Double.Parse ((declared css step).TrimEnd '%') / 100.0
+                arg.Substring(0, at), Some (stepShare * times)
+        match topLevelArguments inner with
+        | [ first; second ] ->
+            let c1, p1 = side first
+            let c2, p2 = side second
+            let share2 =
+                match p1, p2 with
+                | _, Some p -> p
+                | Some p, None -> 1.0 - p
+                | None, None -> 0.5
+            let l1, a1, b1 = toOklab (channels (resolve css c1))
+            let l2, a2, b2 = toOklab (channels (resolve css c2))
+            let at (x: float) (y: float) = x * (1.0 - share2) + y * share2
+            hexOf (ofOklab (at l1 l2, at a1 a2, at b1 b2))
+        | _ -> failwithf "a color-mix of two colours was expected: %s" value
+    else
+        failwithf "the test cannot resolve %s" value
+
+let private themeColour (css: string) (name: string) : string =
+    resolve css (declared css ("color-" + name))
 
 let private luminance (hex: string) : float =
     let linear c = if c <= 0.03928 then c / 12.92 else ((c + 0.055) / 1.055) ** 2.4
@@ -1017,21 +1111,18 @@ let private themeContrastTests =
                 [ for name in [ "black"; "red"; "green"; "yellow"; "blue"; "magenta"; "cyan"; "white" ] do
                     yield "term-" + name
                     yield "term-" + name + "-bright" ]
-            // The hue anchors that may carry text: each hue's hot self (the hover lift) and
-            // green's deep. Blue's deep is NOT here, and that is the assertion below.
-            let anchors = [ "blue-bright"; "green-bright"; "green-deep" ]
+            // The variants that carry text: the hover lift. The agent's ground is paint, and
+            // never set text on, so it is not here.
+            let anchors = [ "blue-up-1" ]
             for fg in [ "ink"; "ink-dim"; "ink-faint"; "blue"; "green"; "err" ] @ anchors @ terminalPalette do
                 for bg in [ "bg"; "panel"; "surface"; "surface-2" ] do
                     let ratio = contrast (colour fg) (colour bg)
                     Expect.isTrue (ratio >= 4.5) (sprintf "--color-%s on --color-%s is %.2f:1 — the AA floor is 4.5:1" fg bg ratio)
 
-        testCase "blue-deep is paint: it does not clear the floor, so it is never a text token" <| fun () ->
-            // Pinned the other way round on purpose. If a retune ever lifts blue-deep over the
-            // floor, this goes red and the token moves into the list above — which is the
-            // moment somebody decides it is text, rather than a surface finding out.
-            let colour = themeColour (TestFiles.read "app/tailwind.css")
-            let ratio = contrast (colour "blue-deep") (colour "surface-2")
-            Expect.isTrue (ratio < 4.5) (sprintf "--color-blue-deep on surface-2 is %.2f:1 — it clears the floor now; list it as text" ratio)
+        // "blue-deep is paint" pinned a hand-picked deep blue BELOW the floor, so that lifting
+        // it would force a decision about whether it was text. The token is gone: a hue's
+        // shades are now its `down-n` variants, and the only one declared is the agent's
+        // ground, which no text is set in.
 
         testCase "a person's checker keeps >= 3:1 on every surface" <| fun () ->
             // A mark, not text: WCAG 2.1's non-text floor is 3:1, and it is the checker's light
@@ -1041,6 +1132,20 @@ let private themeContrastTests =
                 for bg in [ "bg"; "panel"; "surface"; "surface-2" ] do
                     let ratio = contrast light (colour bg)
                     Expect.isTrue (ratio >= 3.0) (sprintf "the %s checker on --color-%s is %.2f:1 — a mark needs 3:1" light bg ratio)
+
+        // The theme's colours are written once: a hex is a constant, and everything else is
+        // made from one. A variant picked by hand — a "bright" that was its own hex — is how
+        // the palette drifted from its hues before, so a new one has to arrive as a mix.
+        testCase "the only colours written as hex are the constants and the terminal's palette" <| fun () ->
+            let css = TestFiles.read "app/tailwind.css"
+            let constants = set [ "black"; "white"; "blue"; "green"; "red" ]
+            let written =
+                System.Text.RegularExpressions.Regex.Matches (css, @"--color-([a-z0-9-]+):\s*#")
+                |> Seq.map (fun m -> m.Groups.[1].Value)
+            for name in written do
+                Expect.isTrue
+                    (constants.Contains name || name.StartsWith "term-")
+                    (sprintf "--color-%s is a hex; make it a variant of a constant, or a role pointing at one" name)
 
         testCase "inverse text on filled (active) buttons keeps >= 4.5:1" <| fun () ->
             let colour = themeColour (TestFiles.read "app/tailwind.css")
@@ -1069,7 +1174,7 @@ let private peopleMarkTests =
             // The band is only a rule about the agent while the agent is inside it: retune the
             // blue out of it and this says so, rather than the case below going vacuous.
             let colour = themeColour (TestFiles.read "app/tailwind.css")
-            for token in [ "blue"; "blue-bright"; "blue-deep" ] do
+            for token in [ "blue"; "blue-up-1"; "blue-down-5" ] do
                 Expect.isTrue (inBlueBand (colour token)) (sprintf "--color-%s (%s) is outside the blue band %A" token (colour token) blueBand)
 
         testCase "no person's checker is drawn in the agent's blue" <| fun () ->

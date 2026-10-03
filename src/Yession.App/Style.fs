@@ -298,7 +298,7 @@ module Style =
     /// finger's press AND the hold after it (`aria-busy`), for a button whose act takes the
     /// browser somewhere else and has nothing to show on this page until it arrives. Filled
     /// while down, and down until it lands.
-    let private btnPrimaryFace = cls [ Stroke.blue; "text-blue hover:text-blue-bright pressed:bg-blue pressed:text-bg" ]
+    let private btnPrimaryFace = cls [ Stroke.blue; "text-blue hover:text-blue-up-1 pressed:bg-blue pressed:text-bg" ]
 
     let btn =
         cls [ btnFace; btnFlex; Stroke.rim; "text-ink-dim"; Stroke.hoverInk; "hover:text-ink pressed:bg-ink pressed:text-bg" ]
@@ -388,7 +388,7 @@ module Style =
     /// filled. Which is this design's own vocabulary: a Metro button IS its border, hover
     /// brightens it, press fills it.
     ///
-    /// Deliberately NOT an opacity dim: fading `text-blue` on the composer's `#111` takes it
+    /// Deliberately NOT an opacity dim: fading `text-blue` on the composer's surface takes it
     /// from 6.5:1 to about 2.5:1, and an 11px caps label at 2.5:1 is below the AA floor this
     /// product holds. The word stays exactly as legible as it was; only the frame changes.
     let btnWaiting = "!border-edge"
@@ -471,7 +471,7 @@ module Style =
     let private btnInField =
         cls [ "w-8 h-8 shrink-0 grid place-items-center bg-transparent border-0 cursor-pointer p-0"
               "transition-colors"; focusRing ]
-    let btnSendInField = cls [ btnInField; "text-blue hover:text-blue-bright" ]
+    let btnSendInField = cls [ btnInField; "text-blue hover:text-blue-up-1" ]
     /// Waiting for something to run. The same control in the same place, at the weight of a
     /// thing with nothing to do — never `disabled`, in either spelling: an empty command line
     /// is not a blocked one.
@@ -500,7 +500,7 @@ module Style =
     /// growing left would widen onto that presence display rather than onto nothing.
     let private btnComposerSendTouch =
         "relative before:absolute before:content-[''] before:-top-1.5 before:-bottom-1.5 before:-right-1.5"
-    let btnComposerSend = cls [ btnComposerWord; btnComposerSendTouch; "text-blue hover:text-blue-bright" ]
+    let btnComposerSend = cls [ btnComposerWord; btnComposerSendTouch; "text-blue hover:text-blue-up-1" ]
     /// Waiting for something to send. The same control in the same place, at the weight of a
     /// thing with nothing to do — never `disabled`, in either spelling: an empty composer is
     /// not a blocked one.
@@ -691,7 +691,7 @@ module Style =
     /// a real link and LOOKS like the links in the transcript's prose: blue, underlined, a
     /// step brighter under the pointer (`proseLink`, the one hyperlink face on this page).
     /// The mark inherits the blue, since it is part of the same link.
-    let entityLink = cls [ entity; "text-blue underline decoration-1 underline-offset-2 hover:text-blue-bright"; focusRing ]
+    let entityLink = cls [ entity; "text-blue underline decoration-1 underline-offset-2 hover:text-blue-up-1"; focusRing ]
     /// The name inside a link inherits the link's ink rather than wearing `text-ink`.
     let entityLinkName = ""
     /// The mark's seat on the line: an inline box the small avatar's size, its bottom two
@@ -1095,7 +1095,7 @@ module Style =
     /// on a phone is most of the time. Never both at once, so it is a relocation, not a repeat.
     /// Same visibility rule as `navReopen`, for the same reason.
     let headerNoAgent =
-        "bg-transparent border-0 cursor-pointer " + caps + " text-blue hover:text-blue-bright transition-colors "
+        "bg-transparent border-0 cursor-pointer " + caps + " text-blue hover:text-blue-up-1 transition-colors "
         + focusRing + " "
         + "hidden md:[.nav-alt_&]:block max-md:block max-md:[.nav-alt_&]:hidden"
 
@@ -1788,7 +1788,7 @@ module Style =
     /// it is a link and the things beside it are labels — in the label's own faint ink the two
     /// read as one grey line of which only half could be pressed.
     let askLink =
-        cls [ caps; "text-blue hover:text-blue-bright transition-colors"
+        cls [ caps; "text-blue hover:text-blue-up-1 transition-colors"
               "inline-flex items-center gap-1 bg-transparent border-0 cursor-pointer"; focusRing ]
 
     let askRows = "flex flex-col divide-y divide-hair"
@@ -1816,7 +1816,7 @@ module Style =
     /// that somewhere is to the right.
     let askRowBranch =
         cls [ caps; "ml-auto shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer"
-              "text-blue hover:text-blue-bright transition-colors"; focusRing ]
+              "text-blue hover:text-blue-up-1 transition-colors"; focusRing ]
     let askRowBranchName = "font-terminal text-small normal-case tracking-normal"
     /// What a branch row says about itself beside its name — the provider's default, or that
     /// this one does not exist yet.
@@ -2291,7 +2291,7 @@ module Style =
     let proseQuote = Stroke.lead + " " + Stroke.hair + " pl-3 text-ink-dim [&:not(:first-child)]:mt-2"
     /// The one hyperlink face: prose links and the references that lead somewhere
     /// (`entityLink`) compose the same words, so a link is a link wherever it stands.
-    let proseLink = "text-blue underline decoration-1 underline-offset-2 hover:text-blue-bright"
+    let proseLink = "text-blue underline decoration-1 underline-offset-2 hover:text-blue-up-1"
     let proseHr = "border-0 " + Stroke.dividerTop + " my-3"
     /// A GFM table (`RichText`). The wrapper carries the horizontal scroll — WCAG 1.4.10's own
     /// exemption from reflow is two-dimensional content such as a table, so a wide one scrolls
