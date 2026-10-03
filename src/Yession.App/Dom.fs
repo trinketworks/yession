@@ -255,9 +255,12 @@ module Dom =
         /// One per peer whose caret is in THAT terminal, on its tab — the strip's share of
         /// the same presence the roster reports.
         let terminalTabPeer = "data-terminal-tab-peer"
-        /// The strip's door to the chooser (Plan 20, stage 1). Not `terminal-new`, which is
-        /// what it was called while it opened one: it opens the surface that offers them.
+        /// The strip's `+` — the door to making something, which is a different door from
+        /// the list's. It is called `pane-new` rather than `terminal-new` because a terminal
+        /// is only the first kind of thing it will offer.
         let paneNew = "data-pane-new"
+        /// Its menu, while it is open.
+        let paneNewMenu = "data-pane-new-menu"
         /// One per place a terminal can be opened, carrying that sandbox's rendered ref —
         /// which is what makes two repos both declaring `dev` tellable apart in a selector.
         let sandboxNew = "data-sandbox-new"
@@ -677,13 +680,23 @@ module Dom =
         /// the one this product uses for ending a terminal, and it names which tab so that a
         /// reader who arrives on the control knows what it is about.
         let closeTab (what: string) = sprintf "Close tab %s" what
-        /// The strip's door. "New" is what the control used to promise and only half of what
-        /// it offers: the chooser holds what is already running too.
-        let openSomethingElse = "Open something else"
-        /// A chooser row's name. The visible label is the sandbox's short name, so the
-        /// accessible one carries the scope: two repos may both declare `dev`, and "dev"
-        /// twice is a list nobody reading it aloud can use.
+        /// The strip's `+`, when there is a choice behind it.
+        let openSomethingNew = "Open something new"
+        /// The same control when there is only one thing it could make, and the word the
+        /// empty pane's button carries.
+        let aNewTerminal = "New terminal"
+        /// The menu's entry for this session's own sandbox. "default" is a word about
+        /// configuration, and nobody opening a shell is thinking about configuration.
+        let aTerminal = "terminal"
+        /// A menu entry's name. The visible label is the sandbox's short name, because a
+        /// column of "New terminal in …" is a column of one phrase; the accessible one says
+        /// the whole act and carries the scope, since two repos may both declare `dev` and
+        /// "dev" twice is a menu nobody reading it aloud can use. It CONTAINS the visible
+        /// label, which is what keeps a voice control that hears "dev" able to press it.
         let newTerminalIn (sandbox: string) = sprintf "New terminal in %s" sandbox
+        /// What the list says when nothing has been opened. It offers nothing: making
+        /// something is the other door's job, and this one answers what exists.
+        let nothingOpenedYet = "Nothing opened here yet"
         /// A queued command that will run as soon as the terminal is free.
         let queuedReady = "ready"
         /// A queued command held because a peer is typing in its terminal (Plan 13, stage

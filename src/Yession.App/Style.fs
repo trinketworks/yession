@@ -2068,6 +2068,22 @@ module Style =
     /// viewport-sized element can never take a selection that was in flight when it mounted.
     let itemMenuBackdrop = "fixed inset-0 z-20 bg-transparent cursor-default select-none"
 
+    /// The strip's menu of things to open (Plan 20, stage 1). `itemMenu`'s own chrome, because
+    /// it is the same KIND of surface — a short set of acts over the page — and two menus in
+    /// one product differing in their ring and their ground are two menus a reader has to
+    /// learn separately. Hung under its control and wider than that one, because its entries
+    /// carry a second line.
+    let paneNewMenu = cls [ "absolute right-0 top-9 z-30 min-w-[14rem] py-1 select-none bg-panel"; Stroke.ring; Stroke.hair ]
+
+    /// An entry carrying a note under its name. The menu's own entry sets the box, the
+    /// padding and the states; this only makes it two lines.
+    let menuEntryStacked = cls [ itemMenuEntry; "flex flex-col gap-0.5" ]
+    /// Its first line — ink, not the dim a one-line entry wears, because a name no brighter
+    /// than its own footnote is not a name.
+    let menuEntryName = "truncate text-body text-ink"
+    /// Which repo declared this place, and what its file said the place is for.
+    let menuEntryNote = "truncate font-light text-small text-ink-faint"
+
     /// A repo note in the timeline (Plan 14): one quiet act-line, indented past the
     /// avatar gutter so the reading edge lines up with message bodies.
     let actNote = cls [ itemGround; readingColumn; foldRow; "max-md:pl-4" ]
@@ -2634,7 +2650,14 @@ module Style =
     /// padding box is something to scroll TO — a 1px overhang made the row scrollable on the
     /// vertical axis (`overflow-x` forces `overflow-y` to `auto`) and Chromium drew a scrollbar
     /// down the side of the tabs for it.
-    let terminalTabs = "shrink-0 flex items-stretch gap-1 px-3 pt-2 pb-px overflow-x-auto " + Stroke.dividerBottom
+    /// The strip's row. It no longer scrolls — the SCROLLER inside it does — for two reasons
+    /// that arrived together: the `+` used to sit inside the scroll box, so a session with
+    /// enough tabs put the way to open another one off the right-hand edge; and a menu hung
+    /// inside an `overflow-x-auto` box is clipped to that box, because a scroll container
+    /// clips both axes whichever one you asked to scroll.
+    let terminalTabs = "shrink-0 flex items-stretch gap-1 px-3 pt-2 pb-px " + Stroke.dividerBottom
+    /// The tabs' own scroll box: everything that moves when there are more tabs than room.
+    let terminalTabScroller = "flex-1 min-w-0 flex items-stretch overflow-x-auto"
     /// The tabs THEMSELVES, and nothing else. `role="tablist"` is a promise about what its
     /// children are, and the strip also holds two things that are not tabs — "+ new" and
     /// "close" — which a reader was told were tabs (four of them, in a list of two) and which
@@ -2698,6 +2721,9 @@ module Style =
     /// terminal, and dressing that as a sibling of "switch to this one" put the most
     /// destructive control in the pane one pixel from the most routine. It is an act about
     /// the terminal, and it lives with the terminal's other properties, in the bar.
+    /// The cell the `+` sits in: anchored at the strip's right edge, and the positioning
+    /// context its menu hangs from.
+    let terminalTabNewCell = "relative shrink-0 flex items-stretch"
     let terminalTabNew = cls [ tabBase; Stroke.clear; "text-ink-faint hover:text-ink" ]
     /// A tab's presence marks: one dot per peer whose caret is in THAT terminal, so a
     /// collaborator typing a command in a terminal you are not looking at is visible from
@@ -2797,9 +2823,18 @@ module Style =
     /// The row's verbs, kept on one baseline at its right edge.
     let terminalListVerbs = "flex items-center gap-1 shrink-0"
 
-    /// The list's own empty state: the same idle prompt the empty pane wears, because a
-    /// session with nothing to show is one fact however you arrive at it.
+    /// The list's own empty state. It used to wear the empty pane's idle prompt and its
+    /// button, "because a session with nothing to show is one fact however you arrive at it" —
+    /// which is true of the fact and wrong about the surfaces: the pane is where a session
+    /// with nothing is SENT, and this is where somebody came to look at what exists. One
+    /// carries a way to make something and the other says there is nothing.
     let contentListEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
+    /// What it says, and all it says.
+    let contentListEmptyWord = "font-ui font-light text-body text-ink-faint select-none"
+
+    /// The empty pane: the terminal's own symbol, display-sized, over the one press that
+    /// fills it.
+    let terminalEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
 
     /// What a section of the list is called. Quiet and small: the rows are the content, and a
     /// heading that competed with them would make a list of three terminals read as two lists.
@@ -2815,40 +2850,6 @@ module Style =
     /// The size beside an artifact's name — the one fact that decides whether to open it here
     /// or take it away, so it is on the row rather than behind it.
     let artifactListSize = "shrink-0 font-ui font-light text-small text-ink-faint tabular-nums"
-
-    /// The mark on a row that OFFERS a terminal — the idle prompt, in the tone the other
-    /// rows' marks wear rather than the terminal's own green. On a surface this is a mark in
-    /// column one beside a name, and a green glyph against two grey ones reads as the row
-    /// being special rather than as the row being a terminal.
-    let listRowPrompt = "font-terminal text-small leading-none text-ink-faint select-none"
-
-    /// Which repo declared the sandbox a row offers. Dimmer than the name and no dimmer than
-    /// the note under it: with two repos both declaring `dev`, this is the whole of what tells
-    /// their rows apart, so it is not the tone a size beside a filename gets.
-    let listRowScope = "shrink-0 font-ui font-light text-small text-ink-dim"
-
-    /// A row that OFFERS something — the whole middle cell, name and note together, as one
-    /// control. The name's own class dresses the first line inside it, so a chooser row and a
-    /// terminal row set their names identically; what this adds is the box the focus ring is
-    /// drawn round, which has to hold everything the press is about.
-    /// A named group, so the NAME inside answers to the whole control rather than to itself:
-    /// the note and the empty space to the right of a short name are part of what you press,
-    /// and a row where only the word reacts tells a pointer the wrong thing about where it may
-    /// click. Named for `btnFace`'s reason — a control inside some other group must answer to
-    /// its own state.
-    let listRowChoice =
-        cls [ "group/choice bg-transparent cursor-pointer text-left w-full min-w-0 p-0 flex flex-col"; focusRing ]
-
-    /// The name on such a row: the terminal list's own type, reacting to the control around it
-    /// instead of to the pointer being on the word.
-    let listRowChoiceName =
-        cls [ "truncate font-ui text-body text-ink no-underline transition-colors"
-              "group-hover/choice:text-blue" ]
-
-    /// A note under a row's name — what a repo's file said one of its sandboxes is FOR. In the
-    /// tone a closed terminal's name wears, so the row reads as one thing with a note rather
-    /// than two facts of equal weight.
-    let listRowNote = "truncate font-ui font-light text-small text-ink-dim"
 
     /// The block history's scroll box, and the stream inside it.
     ///

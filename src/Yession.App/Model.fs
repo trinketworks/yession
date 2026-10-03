@@ -806,6 +806,13 @@ type ClientModel =
       /// open, because opening one is writing this. Two open menus would be two popovers
       /// over one column with one Escape between them.
       ItemMenu      : MessageId option
+      /// Whether the strip's `+` has its menu open (Plan 20, stage 1).
+      ///
+      /// A `bool` rather than an option of something, because there is one of these on the
+      /// screen: it hangs off one control, where `ItemMenu` hangs off whichever timeline item
+      /// was asked. Model state rather than the DOM's own, for `ItemMenu`'s reason — a menu
+      /// rendered only while open cannot be asked whether it is open.
+      PaneMenu      : bool
       /// Which folds are UNFOLDED — an act's particulars, a turn's tool calls, one call's
       /// input and output. View state like the menu above — what one person opened to read
       /// is nobody else's — but a set rather than one slot: two folds open at once are two
@@ -865,6 +872,11 @@ type DomMove =
     /// Back to one item's actions control, after the menu it opened has gone. Without it,
     /// dismissing a menu strands focus on `body`.
     | FocusItemActions of MessageId
+    /// Back to the strip's `+`, after the menu it opened has gone — `FocusItemActions`'
+    /// reason, for the other menu this shell has. It is also where the pane's empty state
+    /// sends a press, because that press opens a menu hanging off this control rather than
+    /// off itself.
+    | FocusPaneNew
     /// Scroll a terminal's history to one of its commands and mark it.
     | RevealBlock of TerminalId * BlockId
     /// Scroll the conversation to one message and mark it.
@@ -1126,6 +1138,11 @@ type ClientMsg =
     /// Shut whatever menu is open. Everything that dismisses one sends this: Escape, a
     /// press outside it, and choosing something from it.
     | CloseItemMenuMsg
+    /// Open or shut the strip's menu of things to open (Plan 20, stage 1). Opening is a
+    /// toggle rather than a pair, so the control that opened it is the control that shuts it
+    /// and focus never has to go looking for a replacement.
+    | TogglePaneMenuMsg
+    | ClosePaneMenuMsg
     /// Something was copied to the clipboard (`Some` the hook of the box it came from), or
     /// the moment for saying so has passed (`None`).
     ///
@@ -1333,6 +1350,7 @@ module ClientModel =
           Pane = None
           TerminalsOpen = false
           ItemMenu = None
+          PaneMenu = false
           OpenFolds = Set.empty
           DatedBreaks = Set.empty
           Copied = None
@@ -1524,12 +1542,7 @@ module ClientModel =
     let showsList (model: ClientModel) : bool =
         match model.Pane with
         | Some (OnList _) -> true
-        // Nothing to show IS the chooser (Plan 20, stage 1). A pane with no tab used to wear
-        // an empty state of its own — an idle prompt and one button — which was a second
-        // surface saying what the list behind the toggle was already saying, and the one that
-        // could not offer a sandbox. A session with nothing open is now this same list with
-        // two of its three sections empty.
-        | Some (OnTab _) | None -> (selectedPane model).IsNone
+        | Some (OnTab _) | None -> false
 
     /// The command the pane's text read is positioned at (Plan 25, stage 3) — what the
     /// browser scrolls into view once the render that put it on screen has happened.
@@ -2759,7 +2772,10 @@ module ClientModel =
             if Size.isValid size then
                 { model with TerminalViewports = Map.add terminal size model.TerminalViewports }
             else model
-        | OpenTerminalMsg _ -> { model with Opening = model.Opening + 1 }
+        // Asking shuts the menu that asked. The entry pressed is about to leave the
+        // document, and a menu left standing over a terminal that is on its way is a surface
+        // the reader has to dismiss before they can see what they asked for.
+        | OpenTerminalMsg _ -> { model with Opening = model.Opening + 1; PaneMenu = false }
         | ShowInPaneMsg mode ->
             // The WHOLE next face, stated by every way in. Nothing here clears a subset and
             // hopes the rest was already right: the list cannot survive a choice that
@@ -2848,6 +2864,8 @@ module ClientModel =
             let next = if model.ItemMenu = Some messageId then None else Some messageId
             { model with ItemMenu = next }
         | CloseItemMenuMsg -> { model with ItemMenu = None }
+        | TogglePaneMenuMsg -> { model with PaneMenu = not model.PaneMenu }
+        | ClosePaneMenuMsg -> { model with PaneMenu = false }
         | ToggleFoldMsg key ->
             let next =
                 if Set.contains key model.OpenFolds then Set.remove key model.OpenFolds

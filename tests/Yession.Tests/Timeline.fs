@@ -1561,17 +1561,31 @@ let private listTests =
             let model = clientOf [ at 1L 0.0 (sandboxStarted devInHello None) ]
             Expect.equal (ClientModel.sandboxPurpose devInHello model) None "nothing to say"
 
-        testCase "a pane with nothing to show is the chooser" <| fun () ->
-            // It used to be an empty state of its own — an idle prompt with one button — so a
-            // session with nothing open had a second surface saying what the list was already
-            // saying, and the only one of the two that could not offer a sandbox.
-            Expect.isTrue (ClientModel.showsList (clientOf [])) "nothing open, so the chooser"
+        testCase "the list is where somebody asked for it and nowhere else" <| fun () ->
+            // It briefly answered an empty pane too, on the reading that a session with
+            // nothing open is one list with its sections empty. But the list answers what
+            // EXISTS, and "nothing, and here is a button" is not an answer to that question —
+            // which is how a list and a chooser came to be one surface. The empty pane has its
+            // own answer again, and this one is reached by asking.
+            Expect.isFalse (ClientModel.showsList (clientOf [])) "nothing open is not a reason to show a census"
+            Expect.isTrue (ClientModel.showsList (Support.step ToggleContentListMsg (clientOf []))) "asked for, shown"
 
-        testCase "a pane with a terminal to show is not the chooser" <| fun () ->
-            // The other half, and the one that makes the rule above a rule rather than a
-            // surface that never goes away.
-            let model = clientOf [ at 1L 0.0 (opened terminalA "build") ]
-            Expect.isFalse (ClientModel.showsList model) "there is a terminal, so show it"
+        testCase "asking for a terminal shuts the menu that asked" <| fun () ->
+            // The entry pressed is about to leave the document, and a menu left standing over
+            // a terminal on its way is a surface the reader has to dismiss before they can see
+            // what they asked for.
+            let opened =
+                clientOf []
+                |> Support.step TogglePaneMenuMsg
+                |> Support.step (OpenTerminalMsg ("", devInHello))
+            Expect.isFalse opened.PaneMenu "shut by the asking"
+
+        testCase "the menu opens and shuts on the one control" <| fun () ->
+            // A toggle rather than a pair, so the control that opened it is the control that
+            // shuts it and focus never has to go looking for a replacement.
+            let model = clientOf [] |> Support.step TogglePaneMenuMsg
+            Expect.isTrue model.PaneMenu "open"
+            Expect.isFalse (Support.step TogglePaneMenuMsg model).PaneMenu "and shut by the same press"
 
         testCase "choosing a place asks for a terminal there, named by nothing" <| fun () ->
             // The only thing the press says is WHERE, so the session names the terminal after
