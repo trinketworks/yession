@@ -252,9 +252,7 @@ jobs:
       # for days while the Srt tier — Linux only — stayed green, because the Linux route is a
       # literal the new guard never looks at. This runs that tier's gateway cases here, with
       # real git through real Seatbelt-confined srt: the only place the macOS spelling is
-      # ever exercised. `from an srt sandbox` also names the credential proxy's confined
-      # case, the other route into this host a confined command takes. Narrowed to those
-      # because the rest of the Srt tier has not been made to hold on macOS, and a gate that
-      # is red for reasons nobody is fixing is not a gate.
+      # ever exercised. Narrowed to them because the rest of the Srt tier has not been made
+      # to hold on macOS, and a gate that is red for reasons nobody is fixing is not a gate.
       - name: A confined git reaches the gateway on darwin
         run: DEVENV_ROOT="$PWD" nix develop --impure --command check Srt --only "from an srt sandbox"

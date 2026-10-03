@@ -43,8 +43,6 @@ type Provision =
       /// Files the sandbox must be able to read — a trust bundle. Read by a backend that
       /// confines reads (srt); the rest read everything already.
       Reads : string list
-      /// Hosts whose HTTPS the credential proxy answers (`Interception`).
-      Intercept : Interception option
       /// Files the sandbox must SEE, at a path of its own — a trust bundle mounted into a
       /// container. Read by a backend that materialises mounts (docker); the rest see the
       /// host's paths and are told those instead.
@@ -52,21 +50,13 @@ type Provision =
 
 module Provision =
 
-    let empty : Provision = { Env = Map.empty; GitConfig = []; Domains = []; Reads = []; Intercept = None; Binds = [] }
+    let empty : Provision = { Env = Map.empty; GitConfig = []; Domains = []; Reads = []; Binds = [] }
 
     let merge (a: Provision) (b: Provision) : Provision =
         { Env = Sandboxes.mergeEnv a.Env b.Env
           GitConfig = a.GitConfig @ b.GitConfig
           Domains = List.distinct (a.Domains @ b.Domains)
           Reads = List.distinct (a.Reads @ b.Reads)
-          // One credential proxy per session: two provisions naming it are the same socket,
-          // and the hosts are the union of what each routes there.
-          Intercept =
-            match a.Intercept, b.Intercept with
-            | Some x, Some y ->
-                Some { Interception.Socket = y.Socket; Interception.Hosts = List.distinct (x.Hosts @ y.Hosts) }
-            | x, None -> x
-            | None, y -> y
           Binds = List.distinct (a.Binds @ b.Binds) }
 
 /// What the session's credential proxy provides a sandbox whose declaration asks for it

@@ -70,17 +70,6 @@ type FilesystemConfinement =
     | Confined
     | Unconfined
 
-/// HTTPS to some hosts, answered by a proxy of this session's instead of the host itself —
-/// the credential proxy, which swaps a stand-in for the credential behind it. A sandbox is
-/// told where the proxy listens, and which hosts go there; everything else it reaches as
-/// before.
-[<RequireQualifiedAccess>]
-type Interception =
-    { /// The UNIX socket the proxy listens on.
-      Socket : string
-      /// The hosts whose `CONNECT`s go to it.
-      Hosts : string list }
-
 /// Everything a sandbox needs to know at creation. `Env` is the sandbox's WHOLE base
 /// environment — backends pass it verbatim and must never merge the parent process's
 /// env over or under it (that merge is exactly the credential leak this seam removes).
@@ -142,11 +131,7 @@ type SandboxPolicy =
       /// backend: only it knows what lies beneath — for a container, the image's own `ENV`,
       /// which exists only once the image has been pulled or built. `Env` never carries a
       /// name that is here.
-      Derived : Map<string, EnvTemplate>
-      /// Hosts whose HTTPS a proxy of this session's answers (`Interception`). Read by a
-      /// backend whose egress already runs through a proxy it can tell (srt); `None` where
-      /// nothing forwarded provisioned one.
-      Intercept : Interception option }
+      Derived : Map<string, EnvTemplate> }
 
 /// Whether a process runs behind the sandbox's declared entrypoint, or bare.
 ///
