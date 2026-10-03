@@ -3554,32 +3554,70 @@ module View =
                   </span>
                   <span class="{Style.artifactListSize}">{ContentSize.render a.Bytes}</span>
                 </div>"""
+        // Somewhere a terminal can be opened — a row in the same grid as the things that
+        // already exist, because "open the shell I left running" and "open a new one in dev"
+        // are one question with two answers, and a person asking it does not care which of
+        // the two their answer turns out to be.
+        //
+        // The name is the sandbox and the particulars sit beside it, which is what makes two
+        // repos both declaring `dev` tellable apart. `default` wears the word every session
+        // has used for it, because "default" is a word about configuration and nobody opening
+        // a shell is thinking about configuration.
+        let newTerminalRow (sandbox: SandboxRef) =
+            let own = sandbox = SandboxRef.defaultRef
+            let label = if own then "terminal" else SandboxName.value (SandboxRef.name sandbox)
+            let where =
+                match SandboxRef.scope sandbox with
+                | SessionOwned -> Lit.nothing
+                | RepoOwned repo ->
+                    html $"""<span class="{Style.listRowScope}">{RepoRef.value repo}</span>"""
+            // What the declaration said it is FOR, when it said anything — under the name, in
+            // the tone the closed terminals wear, so the row reads as one thing with a note
+            // rather than two facts of equal weight.
+            let purpose =
+                match ClientModel.sandboxPurpose sandbox model with
+                | None -> Lit.nothing
+                | Some said -> html $"""<span class="{Style.listRowNote}">{said}</span>"""
+            // The sandbox NAMES the terminal: the only thing this press says is where, so
+            // where is what the tab will say. That rule is the session's
+            // (`TerminalTitle.inSandbox`), and an empty title is how a caller asks for it.
+            html $"""
+                <div class="{Style.terminalListRow}" role="listitem">
+                  <span class="{Style.listRowPrompt}" aria-hidden="true">$</span>
+                  <span class="min-w-0 flex flex-col">
+                    <button type="button" class="{Style.terminalListName}"
+                            data-sandbox-new="{SandboxRef.render sandbox}"
+                            aria-label="{Dom.Text.newTerminalIn (SandboxRef.render sandbox)}"
+                            @click={Ev(fun _ -> dispatch (OpenTerminalMsg ("", sandbox)))}>{label}</button>
+                    {purpose}
+                  </span>
+                  {where}
+                </div>"""
+        let places = ClientModel.sandboxRows model
         let terminals = ClientModel.terminalRows model
         let artifacts = ClientModel.artifactRows model
-        // Headings only when there are two kinds to tell apart: over a list of terminals alone,
-        // "Terminals" names the only thing on screen, which is a word that says nothing.
+        // Headings only when there are two kinds to tell apart: over one section alone the
+        // heading names the only thing on screen, which is a word that says nothing. `New` is
+        // always a section — every session can open a terminal somewhere — so what decides is
+        // whether anything ELSE has rows.
+        let sections = (if List.isEmpty terminals then 0 else 1) + (if List.isEmpty artifacts then 0 else 1)
         let heading (label: string) =
-            if List.isEmpty artifacts then Lit.nothing
+            if sections = 0 then Lit.nothing
             else html $"""<div class="{Style.listSectionLabel}">{label}</div>"""
-        match terminals, artifacts with
-        | [], [] ->
-            html $"""
-                <div class="{Style.contentListEmpty}" data-content-list>
-                  <span class="font-terminal text-[28px] leading-8 text-ink-faint select-none" aria-hidden="true">$</span>
-                  <button type="button" class="{Style.btnPrimary}" data-terminal-new
-                          @click={Ev(fun _ -> dispatch (OpenTerminalMsg ("terminal", SandboxRef.defaultRef)))}>New terminal</button>
-                </div>"""
-        | rows, shared ->
-            let items = rows |> List.map row
-            let files = shared |> List.map artifactRow
-            html $"""
-                <div class="{Style.contentListBody}" data-content-list role="list"
-                     aria-label="Everything in this session">
-                  {if List.isEmpty rows then Lit.nothing else heading "Terminals"}
-                  {items}
-                  {if List.isEmpty shared then Lit.nothing else heading "Artifacts"}
-                  {files}
-                </div>"""
+        // No empty state of its own. A session with nothing open is this same surface with two
+        // of its three sections empty — which is what it was always going to look like, and
+        // two hand-made empty states saying "New terminal" were two more places for it to
+        // stop agreeing with the list it stood in front of.
+        html $"""
+            <div class="{Style.contentListBody}" data-content-list role="list"
+                 aria-label="Everything in this session">
+              {heading "New"}
+              {places |> List.map newTerminalRow}
+              {if List.isEmpty terminals then Lit.nothing else heading "Terminals"}
+              {terminals |> List.map row}
+              {if List.isEmpty artifacts then Lit.nothing else heading "Artifacts"}
+              {artifacts |> List.map artifactRow}
+            </div>"""
 
     /// The content pane: a tab strip over four kinds of thing — a terminal, a block's
     /// read-only view, a stretch's replay (Plan 14, stage 2), and a file shared into the
@@ -3881,16 +3919,11 @@ module View =
         // produce markup nothing mounts, on every keystroke and every arriving record.
         let body () =
             match selected with
-            // The empty pane wears the terminal's own symbol — an idle prompt, display-sized
-            // — and the one button that fills it. What a terminal IS was a paragraph here;
-            // the glyph and the verb say it.
-            | None ->
-                html $"""
-                    <div class="{Style.terminalEmpty}">
-                      <span class="font-terminal text-[28px] leading-8 text-ink-faint select-none" aria-hidden="true">$</span>
-                      <button type="button" class="{Style.btnPrimary}" data-terminal-new
-                              @click={Ev(fun _ -> dispatch (OpenTerminalMsg ("terminal", SandboxRef.defaultRef)))}>New terminal</button>
-                    </div>"""
+            // Unreachable, and stated: a pane with nothing to show IS the chooser
+            // (`ClientModel.showsList`), so this branch is not rendered. It used to be an
+            // idle prompt with one button under it — a third place saying "new terminal",
+            // and the only one of the three that could not offer a sandbox.
+            | None -> Lit.nothing
             | Some tab ->
                 let inner =
                     match tab with
@@ -3968,8 +4001,14 @@ module View =
                                                 dispatch (CloseTabMsg tab)))}>
                     {tabs |> List.map tabButton}
                   </div>
-                  <button type="button" class="{Style.terminalTabNew}" data-terminal-new
-                          @click={Ev(fun _ -> dispatch (OpenTerminalMsg ("terminal", SandboxRef.defaultRef)))}>+ new</button>
+                  <!-- The door to the chooser, where the tabs run out — which is where "and
+                       what else?" is asked, and the answer is both something running and
+                       something new. It used to open a terminal in `default` on the press,
+                       which is one tap rather than two and could only ever give you one
+                       answer. -->
+                  <button type="button" class="{Style.terminalTabNew}" data-pane-new
+                          aria-label="{Dom.Text.openSomethingElse}"
+                          @click={Ev(fun _ -> dispatch ToggleContentListMsg)}>+</button>
                 </div>"""
         // ONE control with two faces rather than a pair that swap places: it never leaves the
         // document, so pressing it can never strand the focus that is on it. Its value is the

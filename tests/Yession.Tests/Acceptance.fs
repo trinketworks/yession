@@ -614,7 +614,7 @@ let private uiChecklistTests =
                   // command.
                   "content panel", Dom.Hooks.contentPanel
                   "terminal tab", Dom.attr Dom.Hooks.terminalTab "term-ui"
-                  "new terminal", Dom.Hooks.terminalNew
+                  "the chooser's door", Dom.Hooks.paneNew
                   "terminal block", Dom.attr Dom.Hooks.terminalBlock "block-ui"
                   "terminal block status", Dom.attr Dom.Hooks.terminalBlockStatus Dom.Text.blockOk
                   "terminal block command", "ls -la"
@@ -2048,11 +2048,25 @@ let private contentListTests =
                 ((listed representativeModel).Contains Dom.Hooks.artifactListRow)
                 "a session that has shared nothing grows no rows"
 
-        // The headings exist to tell two kinds apart. Over terminals alone, "Terminals" names
-        // the only thing on screen — a word that says nothing and costs a line.
-        testCase "the sections are named only when there are two kinds to tell apart" <| fun () ->
-            Expect.isTrue ((listed (withShare "chart.png")).Contains "Artifacts") "both kinds present, both named"
-            Expect.isFalse ((listed representativeModel).Contains ">Terminals<") "terminals alone need no heading"
+        // The headings exist to tell kinds apart. This used to read "terminals alone need no
+        // heading", which was the whole rule while the list held only what existed; `New` is
+        // a section every session has, so what decides now is whether anything ELSE has rows.
+        testCase "the sections are named when there is more than one of them" <| fun () ->
+            let html = listed (withShare "chart.png")
+            for named in [ ">New<"; ">Terminals<"; ">Artifacts<" ] do
+                Expect.isTrue (html.Contains named) (sprintf "three sections, so %s is named" named)
+
+        testCase "somewhere to open one, alone, needs no heading over it" <| fun () ->
+            // A session that has opened nothing and shared nothing: the chooser is the only
+            // thing on screen, and "New" over it names it — a word that says nothing and
+            // costs a line.
+            let bare =
+                { representativeModel with
+                    Terminals = { representativeModel.Terminals with Terminals = [] }
+                    Conversation = ConversationProjection.empty }
+            let html = listed bare
+            Expect.isTrue (html.Contains Dom.Hooks.sandboxNew) "somewhere to open one is still offered"
+            Expect.isFalse (html.Contains ">New<") "and nothing names it"
     ]
 
 // The pane's action row: the acts about the thing on screen, in ONE place whatever kind it is.

@@ -2789,6 +2789,22 @@ module Style =
     /// or take it away, so it is on the row rather than behind it.
     let artifactListSize = "shrink-0 font-ui font-light text-small text-ink-faint tabular-nums"
 
+    /// The mark on a row that OFFERS a terminal — the idle prompt, in the tone the other
+    /// rows' marks wear rather than the terminal's own green. On a surface this is a mark in
+    /// column one beside a name, and a green glyph against two grey ones reads as the row
+    /// being special rather than as the row being a terminal.
+    let listRowPrompt = "font-terminal text-small leading-none text-ink-faint select-none"
+
+    /// Which repo declared the sandbox a row offers. Dimmer than the name and no dimmer than
+    /// the note under it: with two repos both declaring `dev`, this is the whole of what tells
+    /// their rows apart, so it is not the tone a size beside a filename gets.
+    let listRowScope = "shrink-0 font-ui font-light text-small text-ink-dim"
+
+    /// A note under a row's name — what a repo's file said one of its sandboxes is FOR. In the
+    /// tone a closed terminal's name wears, so the row reads as one thing with a note rather
+    /// than two facts of equal weight.
+    let listRowNote = "truncate font-ui font-light text-small text-ink-dim"
+
     /// The block history's scroll box, and the stream inside it.
     ///
     /// A terminal grows DOWNWARD from the top and the viewport rides the tail. Those are two
@@ -2938,7 +2954,6 @@ module Style =
     let terminalEditors = "shrink-0 flex items-center gap-1"
 
     /// The empty state, when no terminal is open.
-    let terminalEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
 
     /// Reopens the column once it is shut — the mirror of the sidebar's reopen chevron,
     /// leaning the way the column travels. Rendered from the model rather than hidden by a
