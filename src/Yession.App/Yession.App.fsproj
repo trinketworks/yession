@@ -14,6 +14,8 @@
     <Compile Include="Codecs/Reads.fs" />
     <Compile Include="Codecs/RepoPages.fs" />
     <Compile Include="Codecs/MeProbe.fs" />
+    <!-- What the connection panels' writes answer: both ends' reading of one reply. -->
+    <Compile Include="Codecs/Panels.fs" />
     <!-- The collaborative document both ends hold: the Ylmish sync boundary over the model's
          synced state, the rich and plain text roots beside it, and markdown at its edges. The
          App owns it as it owns every App <-> Session contract; the Session references this

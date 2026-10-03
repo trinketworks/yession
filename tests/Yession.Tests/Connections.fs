@@ -228,7 +228,7 @@ let private wireTests =
             Expect.equal (ControlWire.toString ControlWire.connectionBeginRequest beginRequest |> ControlWire.fromString ControlWire.connectionBeginRequest |> expect) beginRequest "request"
             let withRedirect = { beginRequest with RedirectUri = Some "https://provider.example/code" }
             Expect.equal (ControlWire.toString ControlWire.connectionBeginRequest withRedirect |> ControlWire.fromString ControlWire.connectionBeginRequest |> expect) withRedirect "request with a provider redirect"
-            let resp : ControlWire.ConnectionBeginResponse = { AuthorizeUrl = "https://u"; State = "st" }
+            let resp : ControlWire.ConnectionBeginResponse = { ControlWire.ConnectionBeginResponse.AuthorizeUrl = "https://u"; ControlWire.ConnectionBeginResponse.State = "st" }
             Expect.equal (ControlWire.toString ControlWire.connectionBeginResponse resp |> ControlWire.fromString ControlWire.connectionBeginResponse |> expect) resp "response"
 
         testCase "the token dialect crosses the wire, and an older session still means the standard" <| fun () ->

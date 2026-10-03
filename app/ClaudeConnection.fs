@@ -18,6 +18,7 @@ open Yession.Domain.Access
 open Yession.Manager
 open Yession.Session
 open Yession.App
+open Yession.App.Codecs
 open Yession.Host.Interop
 
 #if FABLE_COMPILER
@@ -453,8 +454,6 @@ let private respondText (res: ServerResponse) (status: int) (text: string) =
     res.writeHead (status, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
     res.``end`` text
 
-let private jsonString (raw: string) : string = Encode.toString 0 (Encode.string raw)
-
 /// The credential owner behind a browser request: the cookie's Manager-verified user, or
 /// — where this deployment attributes nobody — the deployment itself.
 ///
@@ -544,27 +543,28 @@ let routes
                                         respondOutcome (
                                             outcome
                                             |> Result.map (fun r ->
-                                                sprintf """{"authorizeUrl":%s,"state":%s}"""
-                                                    (jsonString r.AuthorizeUrl) (jsonString r.State)))
+                                                Codec.toString
+                                                    AuthorizeBegun.codec
+                                                    { AuthorizeBegun.AuthorizeUrl = r.AuthorizeUrl; AuthorizeBegun.State = r.State }))
                                     | ClaudeAction.Complete ->
                                         match body.Code with
                                         | None -> respondText res 400 "missing code"
                                         | Some code ->
                                             let! outcome = connections.Complete target code
-                                            respondOutcome (outcome |> Result.map (fun () -> """{"ok":true}"""))
+                                            respondOutcome (outcome |> Result.map (fun () -> Codec.toString WriteAccepted.codec WriteAccepted))
                                     | ClaudeAction.Token ->
                                         match body.Token |> Option.map classifyPasted with
                                         | None -> respondText res 400 "missing token"
                                         | Some (Error e) -> respondText res 400 e
                                         | Some (Ok token) ->
                                             let! outcome = connections.Put target token
-                                            respondOutcome (outcome |> Result.map (fun () -> """{"ok":true}"""))
+                                            respondOutcome (outcome |> Result.map (fun () -> Codec.toString WriteAccepted.codec WriteAccepted))
                                     | ClaudeAction.Disconnect ->
                                         let! outcome = connections.Disconnect target
                                         respondOutcome (
                                             outcome
                                             |> Result.map (fun existed ->
-                                                sprintf """{"disconnected":%b}""" existed))
+                                                Codec.toString DisconnectAnswered.codec { DisconnectAnswered.Existed = existed }))
                                 })
                     // Unreachable: this handler only runs for the two cases above.
                     | Some _

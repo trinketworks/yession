@@ -250,6 +250,7 @@ module ControlWire =
           RedirectUri : string option
           TokenDialect : TokenRequestDialect }
 
+    [<RequireQualifiedAccess>]
     type ConnectionBeginResponse = { AuthorizeUrl : string; State : string }
 
     /// Manual completion (the paste path): the pasted payload is `code` or `code#state`.
