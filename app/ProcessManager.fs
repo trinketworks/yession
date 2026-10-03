@@ -29,6 +29,15 @@ type SessionStatus =
     /// and nothing about this one. Two rows wearing two builds is what says so out loud.
     /// `None` from a bundle older than the field (see `Spawn.LaunchedSession`).
     | Running of port: int * pid: int * build: string option
+    /// A child is spawning and has not printed its readiness line yet. A status rather than
+    /// a call somebody is awaiting, because the browser that asked for the launch must not
+    /// be held on a navigation for as long as a boot takes: the answer to "open it" goes out
+    /// at once, and what the launch is doing is read here afterwards.
+    | Launching
+    /// The last launch never came up, and why. Kept until the next one starts, for the same
+    /// reason as `Launching`: the asker has already been answered, so the refusal has to
+    /// outlive the call that met it or nobody ever reads it.
+    | LaunchFailed of reason: string
     /// The child exited without the Manager stopping it (crash or self-exit).
     | Exited of code: int option
 
@@ -58,6 +67,8 @@ let registryFrameOf (views: SessionView list) : ControlWire.SessionRegistryFrame
                       Pid = pid
                       Build = build }
             | NotRunning
+            | Launching
+            | LaunchFailed _
             | Exited _ -> None) }
 
 type ProcessManager =
@@ -65,6 +76,11 @@ type ProcessManager =
       CreateSession : string -> string -> Result<SessionRecord, string>
       /// Launch (or resume — same thing) a registered session; resolves with its port.
       Launch : SessionId -> Async<Result<int, string>>
+      /// Start a launch WITHOUT waiting for it: refused at once if the session may not be
+      /// launched (unknown, archived), otherwise the spawn runs behind and its progress is
+      /// the session's status — `Launching`, then `Running` or `LaunchFailed`. Already
+      /// running or already launching is not a refusal; there is simply nothing to start.
+      Start : SessionId -> Result<unit, string>
       /// Stop a running session (SIGTERM, SIGKILL after a grace period).
       Stop : SessionId -> Async<Result<unit, string>>
       /// Archive a session (durable): stop its running child, then mark it. ONE verb,
@@ -532,6 +548,8 @@ let createWithUi
     // whichever registration had won. A second asker is not refused, either: it wanted the
     // session up, and the session is coming up, so it is answered with the same outcome.
     let mutable launching : Map<string, (Result<int, string> -> unit) list> = Map.empty
+    // Why each session's last launch failed, until the next one starts (`LaunchFailed`).
+    let mutable launchFailures : Map<string, string> = Map.empty
 
     // What each RUNNING launch has told us about being in use (Plan 11). Runtime-only and
     // keyed like `children`, so it is born at launch and dies at exit — a stopped session
@@ -577,10 +595,12 @@ let createWithUi
         let key = SessionId.value record.SessionId
         match Map.tryFind key children with
         | Some launched -> Running (launched.Port, launched.Child.Pid, launched.Build)
+        | None when Map.containsKey key launching -> Launching
         | None ->
-            match Map.tryFind key lastExit with
-            | Some code -> Exited code
-            | None -> NotRunning
+            match Map.tryFind key launchFailures, Map.tryFind key lastExit with
+            | Some reason, _ -> LaunchFailed reason
+            | None, Some code -> Exited code
+            | None, None -> NotRunning
 
     /// One record as the roster sees it. ONE assembler, because a view built in two places
     /// is a view that eventually disagrees with itself — which is how a lookup and a listing
@@ -1071,6 +1091,10 @@ let createWithUi
                 // Taken HERE, before anything awaits, so the next asker joins above
                 // whichever way this spawn turns out; settled on both of its outcomes.
                 launching <- Map.add key [] launching
+                // A new attempt supersedes the last one's failure, and the roster hears that
+                // the session is coming up rather than finding out when it is up.
+                launchFailures <- Map.remove key launchFailures
+                publishSessions ()
                 // Step 24: mint the per-launch secret — every launch gets one; it
                 // authenticates OAuth client registration, supervision reports, and the
                 // secrets/connections custody calls. The session scope is established
@@ -1161,6 +1185,8 @@ let createWithUi
                     revokeSecret ()
                     activity <- Map.remove key activity
                     summaries <- Map.remove key summaries
+                    launchFailures <- Map.add key reason launchFailures
+                    publishSessions ()
                     settle (Error reason)
                     return Error reason
                 | Ok launched ->
@@ -1205,6 +1231,18 @@ let createWithUi
                     settle (Ok port)
                     return Ok port
         }
+
+    // The admission is `launch`'s own (`launchable`), asked here only so a refusal can be
+    // answered before anything runs; whatever is admitted is handed to `launch` itself,
+    // which joins an attempt already in flight rather than spawning beside it.
+    let start (sessionId: SessionId) : Result<unit, string> =
+        let key = SessionId.value sessionId
+        match ManagerState.launchable sessionId state with
+        | Error reason -> Error reason
+        | Ok _ when Map.containsKey key children -> Ok ()
+        | Ok _ ->
+            Async.StartImmediate (launch sessionId |> Async.Ignore)
+            Ok ()
 
     let stop (sessionId: SessionId) : Async<Result<unit, string>> =
         async {
@@ -1302,6 +1340,7 @@ let createWithUi
     let pm =
         { CreateSession = createSession
           Launch = launch
+          Start = start
           Stop = stop
           Archive = archive
           Unarchive = unarchive
@@ -1334,6 +1373,13 @@ let createWithUi
                     // reap sessions this loop is already stopping.
                     reapSweep |> Option.iter (fun stop -> stop ())
                     reapSweep <- None
+                    // Launches in flight first, by joining them: one that landed after the
+                    // loop below would leave a child nothing stops. `/open` answers before its
+                    // launch does, so a launch outliving its asker is the ordinary case.
+                    for record in state.Sessions do
+                        if Map.containsKey (SessionId.value record.SessionId) launching then
+                            let! _ = launch record.SessionId
+                            ()
                     for record in state.Sessions do
                         if Map.containsKey (SessionId.value record.SessionId) children then
                             let! _ = stop record.SessionId

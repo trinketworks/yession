@@ -858,15 +858,12 @@ module Dom =
         let mcpWithdraw = "data-mcp-withdraw"
         let mcpAudience = "data-mcp-audience"
         /// The opening screen's hooks. Its program is inline and literal
-        /// (`ManagerUi.openingProgram`), so it names these four by VALUE: rename one here and
+        /// (`ManagerUi.openingProgram`), so it names these three by VALUE: rename one here and
         /// rename it there.
         ///
         /// The readiness address (`/sessions/{id}/ready`), on the screen it polls for —
         /// spelled by the server, like every other address its pages carry.
         let openingReady = "data-opening-ready"
-        /// The opening screen's way in: the session's own address, and where the screen hands
-        /// the browser once the readiness address answers.
-        let openingTarget = "data-opening-target"
         /// The opening screen's status word: `starting`, then `ready`.
         let openingWord = "data-word"
         /// The classes the opening screen's status line takes when it gives up waiting, carried
@@ -876,6 +873,9 @@ module Dom =
         let statusStopped = "stopped"
         let statusRunning = "running"
         let statusExited = "exited"
+        let statusStarting = "starting"
+        /// The last launch never came up; the row says why.
+        let statusFailed = "failed"
         /// Not a process status — an operator's durable decision. It sits in the same cell
         /// because "archived" is the answer a reader wants there, and "stopped" for a
         /// session that can no longer start is true and useless.

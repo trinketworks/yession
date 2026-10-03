@@ -1593,6 +1593,91 @@ let private openRunningTests =
             }
     ]
 
+/// A Manager with its management endpoint up over stub sessions, and a session in it that has
+/// never run: what `/open` meets when it has a launch to start.
+///
+/// The launch timeout is the case's to set: a launch that never comes up is joined by
+/// `StopAll`, so it is also how long that case's teardown takes.
+let private stoppedBehindUi (name: string) (launchTimeoutMs: int) (body: string) =
+    let dataDir =
+        sprintf "tests/Yession.Tests/out/.data/%s-%d" name (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
+    Fs.ensureDir dataDir
+    let ledger = dataDir + "/spawned"
+    async {
+        let! pm =
+            ProcessManager.createWithUi
+                { ProcessManager.Options.defaults dataDir nodePath (stubSession ledger body) with
+                    Strategy = Some Strategy.localhost
+                    LaunchTimeoutMs = launchTimeoutMs }
+                (Some ManagerUi.tryHandle)
+        let record = pm.CreateSession name "" |> expect
+        let at (route: ManagerRoute) = sprintf "http://127.0.0.1:%d%s" pm.EndpointPort.Value (ManagerRoute.path route)
+        return pm, ledger, record.SessionId, at
+    }
+
+/// A child that never prints its readiness line: a launch that stays in flight for as long as
+/// a case needs it to, which is what a slow boot looks like from the Manager.
+let private neverReady = "setInterval(() => {}, 1000)"
+
+// `/open` on a session it has to launch. The screen is answered BEFORE the launch is: a
+// browser held on a navigation for as long as a boot takes has no document to paint, which
+// Chromium hides by keeping the last page up and an installed app on iOS shows as a white
+// screen. So the launch's progress is read afterwards, from the readiness route.
+let private openStoppedTests =
+    testList "Opening a session that is not running yet" [
+        testCaseAsync "/open answers its screen while the launch it started is still in flight" <|
+            async {
+                let! pm, ledger, sessionId, at = stoppedBehindUi "open-early" 3000 neverReady
+                let! answer = TestHttp.get (at (ManagerRoute.OpenSession sessionId))
+                let status = (pm.TryFind sessionId).Value.Status
+                do! pm.StopAll ()
+                spawnedChildren ledger |> ignore
+                Expect.equal (answer.Status, status) (200, ProcessManager.Launching) "the screen, with the launch still behind it"
+            }
+
+        testCaseAsync "while the launch is in flight, readiness says to keep waiting without spending the wait" <|
+            async {
+                let! pm, ledger, sessionId, at = stoppedBehindUi "ready-launching" 3000 neverReady
+                let! _ = TestHttp.get (at (ManagerRoute.OpenSession sessionId))
+                let! ready = TestHttp.get (at (ManagerRoute.SessionReady sessionId))
+                do! pm.StopAll ()
+                spawnedChildren ledger |> ignore
+                Expect.equal ready.Status 202 "accepted: the launch is under way, and bounded by the Manager"
+            }
+
+        // The answer used to be the `/open` response itself — a problem page. That response
+        // has gone out before the launch fails now, so the failure has to be somewhere the
+        // screen can still read it, or it reaches nobody and the screen waits out its bound
+        // to report the wrong reason.
+        testCaseAsync "a launch that fails is the readiness route's answer, with its reason" <|
+            async {
+                let! pm, ledger, sessionId, at = stoppedBehindUi "ready-failed" 15_000 exitBeforeReady
+                let! _ = TestHttp.get (at (ManagerRoute.OpenSession sessionId))
+                do! waitUntil "the launch to have failed" (fun () ->
+                        match (pm.TryFind sessionId).Value.Status with
+                        | ProcessManager.LaunchFailed _ -> true
+                        | _ -> false)
+                let! ready = TestHttp.get (at (ManagerRoute.SessionReady sessionId))
+                do! pm.StopAll ()
+                spawnedChildren ledger |> ignore
+                Expect.equal
+                    (ready.Status, ready.Body.Contains "exited before ready")
+                    (500, true)
+                    (sprintf "a refusal that says why: %d %s" ready.Status ready.Body)
+            }
+
+        testCaseAsync "a failed launch is forgotten when the next one starts" <|
+            async {
+                let! pm, ledger, sessionId, at = stoppedBehindUi "failed-then-again" 15_000 exitBeforeReady
+                let! _ = pm.Launch sessionId
+                let! _ = TestHttp.get (at (ManagerRoute.OpenSession sessionId))
+                let status = (pm.TryFind sessionId).Value.Status
+                do! pm.StopAll ()
+                spawnedChildren ledger |> ignore
+                Expect.equal status ProcessManager.Launching "the new attempt, not the old failure"
+            }
+    ]
+
 let private uiFlowTests =
     testList "Management UI flow (Step 25)" [
         testCaseAsync "create -> launch -> open -> stop -> resume -> crash, all over the management endpoint, with live status pushed on the rows stream" <|
@@ -1709,17 +1794,22 @@ let private uiFlowTests =
 
                 // Stopped: /open has to start it before there is any address to give.
                 Expect.equal (pm.TryFind sessionId).Value.Status ProcessManager.NotRunning "created, not launched"
-                let! opened = Interop.getText (baseUrl + "/sessions/open-1/open") |> Interop.awaitPromise
-                let launchedPort =
+                let! _ = Interop.getText (baseUrl + "/sessions/open-1/open") |> Interop.awaitPromise
+                let launchedPort () =
                     match (pm.TryFind sessionId).Value.Status with
-                    | ProcessManager.Running (port, _, _) -> port
-                    | other -> failwithf "expected /open to have launched it, got %A" other
+                    | ProcessManager.Running (port, _, _) -> Some port
+                    | _ -> None
+                do! waitUntilWithin 20_000 "/open to have launched it" (fun () -> (launchedPort ()).IsSome)
                 // Its sign-in entry, not its shell: entered at the shell, a browser paints
-                // it, is told 401 by `/me`, bounces, and paints it again. The page hands
-                // the browser to `/login` so the bounce runs BEFORE the one paint.
-                Expect.isTrue
-                    (opened.Contains (sprintf "http://127.0.0.1:%d/login" launchedPort))
-                    "the landing page names the session's sign-in entry"
+                // it, is told 401 by `/me`, bounces, and paints it again. The landing page
+                // is sent before the launch has a port, so the address arrives as the
+                // readiness route's answer, and it is `/login`, so the bounce runs BEFORE
+                // the one paint.
+                let! ready = TestHttp.get (baseUrl + "/sessions/open-1/ready")
+                Expect.equal
+                    ready.Body
+                    (sprintf "http://127.0.0.1:%d/login" (launchedPort ()).Value)
+                    "the landing page is told the session's sign-in entry"
 
                 // What /open does with a session that is ALREADY running is its own pair of
                 // cases (`openRunningTests`): a redirect, and not a relaunch.
@@ -1826,14 +1916,17 @@ let private reapingTests =
                 // address that survives a reap is what lets a client keep what it wrote.
                 // Under a `{id}` template that holds by construction rather than by
                 // bookkeeping — the address never mentioned the port to begin with.
-                let! reopened = Interop.getText (baseUrl + "/sessions/reap-1/open") |> Interop.awaitPromise
+                let! _ = Interop.getText (baseUrl + "/sessions/reap-1/open") |> Interop.awaitPromise
+                do! waitUntilWithin 20_000 "/open to have relaunched it" (fun () ->
+                        match (pm.TryFind sessionId).Value.Status with
+                        | ProcessManager.Running _ -> true
+                        | _ -> false)
+                // Running again, so `/open` now answers with where it is.
+                let! reopened = TestHttp.getUnredirected [] (baseUrl + "/sessions/reap-1/open")
                 Expect.isTrue
-                    (reopened.Contains (origin + "/s/reap-1/"))
+                    ((TestHttp.requiredHeader "location" reopened).StartsWith (origin + "/s/reap-1/"))
                     "reopening lands on the address the reaped session had"
                 Expect.equal (address ()) (origin + "/s/reap-1") "and it is unchanged by the reap"
-                match (pm.TryFind sessionId).Value.Status with
-                | ProcessManager.Running _ -> ()
-                | other -> failwithf "expected /open to have relaunched it, got %A" other
 
                 do! pm.StopAll ()
             }
@@ -3348,6 +3441,7 @@ let tests =
         Tag.needs "Registry writes announce themselves (UX review P0)" [ Tag.Ports ] (fun () -> registryPublishTests)
         Tag.needs "One session, one child (the launch in flight)" [ Tag.Ports ] (fun () -> launchOnceTests)
         Tag.needs "Opening a session that is already running" [ Tag.Ports ] (fun () -> openRunningTests)
+        Tag.needs "Opening a session that is not running yet" [ Tag.Ports ] (fun () -> openStoppedTests)
         Tag.needs "Idle reaping over the process boundary (Plan 11)" [ Tag.Ports; Tag.Native ] (fun () -> reapingTests)
         // `Srt` for the same reason: the packaged child picks the sandbox DEFAULT, and this
         // suite waits on an environment that reached Running and a command that exited 0 —
