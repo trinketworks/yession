@@ -16,6 +16,7 @@ open Fable.Core
 open Yession.Domain
 open Yession.Domain.Terminals
 open Yession.Domain.Tools
+open Yession.Session
 
 /// What one POST came back as.
 type private PostOutcome =
@@ -181,14 +182,14 @@ let create () : McpConnections =
         async {
             let id = connection.NextId
             connection.NextId <- id + 1
-            let body = Codec.toString Codec.jsonRpcRequest { Id = id; Method = method; Params = parameters }
+            let body = Codec.toString McpRpc.request { Id = id; Method = method; Params = parameters }
             let! outcome = post (urlOf connection.Server) connection.SessionId McpProtocol.Version body
             match postFailure outcome.Reached outcome.Status outcome.Reason with
             | Some failure -> return Error failure
             | None ->
                 // A server that names a session wants it quoted on everything after.
                 if outcome.Session <> "" then connection.SessionId <- outcome.Session
-                match Codec.fromString Codec.jsonRpcResponse (frameOf outcome.Body) with
+                match Codec.fromString McpRpc.response (frameOf outcome.Body) with
                 | Error e -> return Error (sprintf "could not read the reply to %s: %s" method e)
                 | Ok (JsonRpcFailure (_, code, message)) ->
                     return Error (sprintf "%s failed (%d): %s" method code message)
@@ -200,7 +201,7 @@ let create () : McpConnections =
     let notify (connection: Connection) (method: string) : Async<unit> =
         async {
             let! _ =
-                post (urlOf connection.Server) connection.SessionId McpProtocol.Version (Codec.jsonRpcNotification method)
+                post (urlOf connection.Server) connection.SessionId McpProtocol.Version (McpRpc.notification method)
             return ()
         }
 
@@ -225,11 +226,11 @@ let create () : McpConnections =
     let handshake (connection: Connection) : Async<Result<ToolDescriptor list, string>> =
         async {
             connection.SessionId <- ""
-            let initialize = Codec.mcpInitializeParams Version.current
+            let initialize = McpRpc.initializeParams Version.current
             match! request connection "initialize" (Some initialize) with
             | Error e -> return Error e
             | Ok result ->
-                match Codec.fromString Codec.mcpHandshake result with
+                match Codec.fromString McpRpc.handshake result with
                 | Error e -> return Error (sprintf "could not read the handshake: %s" e)
                 | Ok handshake when handshake.ProtocolVersion <> McpProtocol.Version ->
                     // A refusal, recorded as this server's status — not an exception, and
@@ -245,7 +246,7 @@ let create () : McpConnections =
                     match! request connection "tools/list" None with
                     | Error e -> return Error e
                     | Ok listed ->
-                        match Codec.fromString Codec.mcpToolList listed with
+                        match Codec.fromString McpRpc.toolList listed with
                         | Error e -> return Error (sprintf "could not read the tool list: %s" e)
                         | Ok list -> return Ok (list.Tools |> List.map (foreignOf connection))
         }
@@ -255,9 +256,9 @@ let create () : McpConnections =
     /// lifecycle once and retry the call. A second `404` is a failure and is reported as
     /// one, so a genuinely broken provider cannot loop.
     let callTool (connection: Connection) (name: string) (arguments: string) : Async<Result<ToolAnswer, string>> =
-        let parameters = Codec.mcpCallParams name arguments
+        let parameters = McpRpc.callParams name arguments
         let read (result: string) =
-            match Codec.fromString Codec.mcpCallResult result with
+            match Codec.fromString McpRpc.callResult result with
             | Error e -> Error (sprintf "could not read what %s answered: %s" name e)
             // A tool that RAN and went badly is `Ok` with text saying so — the model is
             // meant to read it and choose differently. Only a call that never reached a
@@ -267,7 +268,7 @@ let create () : McpConnections =
                 // where the server's declared url is known — the thing an offered url has
                 // to agree with — and never in the terminal manager, which would have to be
                 // told which server an offer came from to ask the same question.
-                match answer.Meta |> Option.bind Codec.streamOffer with
+                match answer.Meta |> Option.bind McpRpc.streamOffer with
                 | None -> Ok (ToolAnswer.text answer.Text)
                 | Some offer ->
                     let fallback = sprintf "%s/%s" (McpServerName.value connection.Server.Name) name
@@ -329,7 +330,7 @@ let create () : McpConnections =
                 connection.Status <- McpUnreachable e
                 return not (List.isEmpty before)
             | Ok listed ->
-                match Codec.fromString Codec.mcpToolList listed with
+                match Codec.fromString McpRpc.toolList listed with
                 | Error e ->
                     connection.Tools <- []
                     connection.Status <- McpUnreachable (sprintf "could not read the tool list: %s" e)
