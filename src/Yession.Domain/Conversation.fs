@@ -561,7 +561,21 @@ module Titles =
           Budget = Chapters.Limit }
 
 type ConversationProjection =
-    { Items : ConversationItem list
+    { /// The transcript, NEWEST FIRST — which is the order it is written in and the order
+      /// the hot edit reaches for, and neither is the order it is read in. `Items` below is
+      /// the read.
+      ///
+      /// An agent message is appended when it starts and then edited once per word that
+      /// arrives, and an immutable list can only be edited cheaply at its HEAD: everything
+      /// before the match is copied. Oldest-first put the item being written at the far
+      /// end, so each word rebuilt the whole transcript — 13,020 deltas over 780 items on
+      /// one real session, about ten million item copies, which measured as 373ms of the
+      /// 402ms that folding its conversation cost at all, and several seconds of a phone's
+      /// cold open.
+      ///
+      /// Nothing outside this module reads it. The field is the write order; `Items` is the
+      /// read order, and keeping them apart is the whole point.
+      Recent : ConversationItem list
       /// Agent messages currently streaming, by turn — so a turn failure (which carries
       /// only the turn id) can mark its item `Failed`. Projection-internal bookkeeping.
       ActiveAgentMessages : Map<AgentTurnId, MessageId>
@@ -579,13 +593,40 @@ type ConversationProjection =
       /// for the same reason `WokenTurn` does.
       TriggeredTurn : (AgentTurnId * MessageId) option }
 
+    /// The transcript in reading order, oldest first.
+    ///
+    /// O(n), and a view rather than a field: it is computed from `Recent` on every access,
+    /// so BIND IT ONCE and read the binding. A caller that reaches for it inside a loop over
+    /// the items has written the quadratic this type exists to avoid, one level up.
+    member this.Items : ConversationItem list = List.rev this.Recent
+
 module ConversationProjection =
 
     let empty : ConversationProjection =
-        { Items = []; ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
+        { Recent = []; ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
 
+    /// A projection holding exactly these items, given in READING order — which is how a
+    /// fixture writes a transcript down, and the opposite of how `Recent` stores one.
+    let ofItems (items: ConversationItem list) : ConversationProjection =
+        { empty with Recent = List.rev items }
+
+    /// Replace one item, copying only as far as it.
+    ///
+    /// Two differences from the `List.map` this replaces, and both are about what it does
+    /// NOT touch: the tail past the match is shared rather than copied, and an id that is
+    /// not there gives back the very list it was handed. Over a newest-first transcript the
+    /// item being edited is at or near the head, so this is the difference between copying
+    /// a couple of cells and copying the session.
     let private updateItem (messageId: MessageId) (f: ConversationItem -> ConversationItem) (items: ConversationItem list) =
-        items |> List.map (fun item -> if item.MessageId = messageId then f item else item)
+        // Accumulated and reversed rather than written as a plain recursion: the prefix is
+        // short in the case this is written for, and unbounded in the case it is not, and a
+        // transcript is not a thing to put on the stack.
+        let rec walk (seen: ConversationItem list) (rest: ConversationItem list) =
+            match rest with
+            | [] -> items
+            | item :: tail when item.MessageId = messageId -> List.rev seen @ (f item :: tail)
+            | item :: tail -> walk (item :: seen) tail
+        walk [] items
 
     /// Why the given turn exists, if nobody asked for it. Matched on the turn id rather than
     /// taken on trust: a late event from a turn the wake did not start must not inherit the
@@ -595,8 +636,12 @@ module ConversationProjection =
     /// so its last entry is exactly what will render above: adjacent means it already sits
     /// under its cause, and the ref would say what the eye can see. An act's cause is kept
     /// whole instead (`ConversationItem.causeLinks`).
+    ///
+    /// The newest item is the HEAD of `Recent`, and asking it that way rather than through
+    /// `Items` is the difference between a glance and reversing the transcript — which this
+    /// does once per item folded, so reading it the other way was quadratic on its own.
     let private detached (cause: Cause option) (proj: ConversationProjection) : Cause option =
-        match cause, List.tryLast proj.Items with
+        match cause, List.tryHead proj.Recent with
         | Some (Cause.Item item), Some last when last.MessageId = item -> None
         | _ -> cause
 
@@ -612,14 +657,14 @@ module ConversationProjection =
         (proj: ConversationProjection)
         : ConversationProjection =
         { proj with
-            Items =
-                proj.Items
-                @ [ { MessageId = messageId
-                      Author = actor
-                      Content = ItemContent.Act act
-                      Status = Complete
-                      Offset = envelope.Offset
-                      Woke = None; CausedBy = causedBy } ] }
+            Recent =
+                { MessageId = messageId
+                  Author = actor
+                  Content = ItemContent.Act act
+                  Status = Complete
+                  Offset = envelope.Offset
+                  Woke = None; CausedBy = causedBy }
+                :: proj.Recent }
 
     let private noted messageId actor act envelope proj = causedNote messageId None actor act envelope proj
 
@@ -644,21 +689,21 @@ module ConversationProjection =
         (envelope: EventEnvelope<SessionEvent>)
         (proj: ConversationProjection)
         : ConversationProjection =
-        if proj.Items |> List.exists (fun i -> i.MessageId = messageId) then
+        if proj.Recent |> List.exists (fun i -> i.MessageId = messageId) then
             { proj with
-                Items =
-                    proj.Items
+                Recent =
+                    proj.Recent
                     |> updateItem messageId (fun item -> { item with Content = ItemContent.Act act; Status = status }) }
         else
             { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = messageId
-                          Author = actor
-                          Content = ItemContent.Act act
-                          Status = status
-                          Offset = envelope.Offset
-                          Woke = None; CausedBy = causedBy } ] }
+                Recent =
+                    { MessageId = messageId
+                      Author = actor
+                      Content = ItemContent.Act act
+                      Status = status
+                      Offset = envelope.Offset
+                      Woke = None; CausedBy = causedBy }
+                    :: proj.Recent }
 
     let private wokeBy (turnId: AgentTurnId) (proj: ConversationProjection) : WakeReason option =
         match proj.WokenTurn with
@@ -715,22 +760,24 @@ module ConversationProjection =
         let spoke =
             Map.tryFind turnId proj.ActiveAgentMessages
             |> Option.bind (fun messageId ->
-                proj.Items
+                // `Recent`, not `Items`: a search does not care which end it starts from,
+                // and the streaming message this is looking for is at the near one.
+                proj.Recent
                 |> List.tryFind (fun item -> item.MessageId = messageId)
                 |> Option.map (fun item -> messageId, (ConversationItem.said item).Trim () <> ""))
         match spoke with
         | Some (messageId, true) ->
             { proj with
-                Items = (proj.Items |> updateItem messageId (fun item -> { item with Status = Complete })) @ [ stopped false ]
+                Recent = stopped false :: (proj.Recent |> updateItem messageId (fun item -> { item with Status = Complete }))
                 ActiveAgentMessages = closed }
         | Some (messageId, false) ->
             { proj with
-                Items = (proj.Items |> List.filter (fun item -> item.MessageId <> messageId)) @ [ stopped true ]
+                Recent = stopped true :: (proj.Recent |> List.filter (fun item -> item.MessageId <> messageId))
                 ActiveAgentMessages = closed }
         | None ->
             // The turn stopped before its message started: same item, same derivation —
             // there was simply never a placeholder to drop.
-            { proj with Items = proj.Items @ [ stopped true ]; ActiveAgentMessages = closed }
+            { proj with Recent = stopped true :: proj.Recent; ActiveAgentMessages = closed }
 
 
     /// Fold one event into the projection. The match is total over `SessionEvent`, so
@@ -742,14 +789,14 @@ module ConversationProjection =
         | SessionNamed _ -> proj   // what a chapter is CALLED, not something said in one
         | MessageSent m ->
             { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = m.MessageId
-                          Author = Principal.toActor m.Author
-                          Content = ItemContent.Message m.Body
-                          Status = Complete
-                          Offset = envelope.Offset
-                          Woke = None; CausedBy = None } ] }
+                Recent =
+                    { MessageId = m.MessageId
+                      Author = Principal.toActor m.Author
+                      Content = ItemContent.Message m.Body
+                      Status = Complete
+                      Offset = envelope.Offset
+                      Woke = None; CausedBy = None }
+                    :: proj.Recent }
         // Lifecycle; the item appears at `AgentMessageStarted`. What is remembered here is
         // only the turn's REASON for existing, which that item cannot re-derive: by the time
         // it arrives, the event that carried the reason is pages behind it.
@@ -822,14 +869,14 @@ module ConversationProjection =
         // dead air a person used to see between "asks for" and "started sandbox".
         | SessionEvent.WorkSandboxStarting s ->
             { proj with
-                Items =
-                    proj.Items
-                    @ [ { MessageId = s.MessageId
-                          Author = s.Actor
-                          Content = ItemContent.Act (Act.SandboxStarting s)
-                          Status = Running
-                          Offset = envelope.Offset
-                          Woke = None; CausedBy = s.CausedBy } ] }
+                Recent =
+                    { MessageId = s.MessageId
+                      Author = s.Actor
+                      Content = ItemContent.Act (Act.SandboxStarting s)
+                      Status = Running
+                      Offset = envelope.Offset
+                      Woke = None; CausedBy = s.CausedBy }
+                    :: proj.Recent }
         // Resolve the running item this start's `WorkSandboxStarting` opened, in place. A
         // start from a log written before `Starting` existed has no such item — so it is
         // appended, exactly as it was before, and the two readings never both fire because
@@ -923,32 +970,32 @@ module ConversationProjection =
             let closed =
                 match a.Antecedent with
                 | Some previous ->
-                    proj.Items
+                    proj.Recent
                     |> updateItem previous (fun item ->
                         if item.Status = Streaming then { item with Status = Complete } else item)
-                | None -> proj.Items
+                | None -> proj.Recent
             { proj with
-                Items =
-                    closed
-                    @ [ { MessageId = a.MessageId
-                          Author = ActorRef.Agent
-                          Content = ItemContent.Message ""
-                          Status = Streaming
-                          Offset = envelope.Offset
-                          // Why the turn ran is attribution for the TURN, said once where it
-                          // begins; a follower's antecedent already wears it.
-                          Woke = (match a.Antecedent with None -> wokeBy a.AgentTurnId proj | Some _ -> None)
-                          // The reply ref sits on the turn's first message for the same
-                          // reason — a follower answers its antecedent, not the trigger.
-                          CausedBy = (match a.Antecedent with None -> replyingTo a.AgentTurnId proj | Some _ -> None) } ]
+                Recent =
+                    { MessageId = a.MessageId
+                      Author = ActorRef.Agent
+                      Content = ItemContent.Message ""
+                      Status = Streaming
+                      Offset = envelope.Offset
+                      // Why the turn ran is attribution for the TURN, said once where it
+                      // begins; a follower's antecedent already wears it.
+                      Woke = (match a.Antecedent with None -> wokeBy a.AgentTurnId proj | Some _ -> None)
+                      // The reply ref sits on the turn's first message for the same
+                      // reason — a follower answers its antecedent, not the trigger.
+                      CausedBy = (match a.Antecedent with None -> replyingTo a.AgentTurnId proj | Some _ -> None) }
+                    :: closed
                 ActiveAgentMessages = Map.add a.AgentTurnId a.MessageId proj.ActiveAgentMessages }
         // The first word anchors the item (see `Offset`); every later one only lengthens it.
         // A completion that carries a body nobody streamed — a turn whose only words arrived
         // whole — is that message's first word too, and anchors it the same way.
         | AgentMessageDelta a ->
             { proj with
-                Items =
-                    proj.Items
+                Recent =
+                    proj.Recent
                     |> updateItem a.MessageId (fun item ->
                         match item.Content with
                         | ItemContent.Message body when item.Status = Streaming ->
@@ -960,8 +1007,8 @@ module ConversationProjection =
                         | ItemContent.Stopped _ -> item) }
         | AgentMessageCompleted a ->
             { proj with
-                Items =
-                    proj.Items
+                Recent =
+                    proj.Recent
                     |> updateItem a.MessageId (fun item ->
                         let spoken =
                             match item.Content with

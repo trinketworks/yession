@@ -888,7 +888,6 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                             Stdin = false
                             Size = None } ] }
         Conversation =
-            { Items =
                 [ // A repo's sandbox, up. The chooser (Plan 20, stage 1) reads the starts on
                   // the timeline for somewhere to open a terminal, so a harness with only
                   // `default` could draw that surface and never show what it is FOR: one row
@@ -952,7 +951,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                       Status = Complete
                       Offset = offset 31L
                       Woke = None; CausedBy = None } ]
-              ActiveAgentMessages = Map.empty; WokenTurn = None; TriggeredTurn = None }
+                |> ConversationProjection.ofItems
         Timeline =
             { TimelineProjection.empty with
                 TerminalItems =
@@ -1151,7 +1150,7 @@ let private actsModel : ClientModel =
           Status = ConversationItemStatus.Running
           Offset = offset 32L
           Woke = None; CausedBy = Some (Cause.Item (MessageId.create "msg-act-start" |> expect)) }
-    { shellModel with Conversation = { shellModel.Conversation with Items = shellModel.Conversation.Items @ [ start; starting ] } }
+    { shellModel with Conversation = { shellModel.Conversation with Recent = List.rev (shellModel.Conversation.Items @ [ start; starting ]) } }
 
 /// The session's FIRST screen: connected, the log read to an end holding nothing, and the
 /// provider's listing arrived — so the ask card stands where the timeline's first line will

@@ -191,7 +191,96 @@ let private conversationProjectionTests =
               Timestamp = DateTimeOffset(2026, 6, 14, 0, 0, 0, TimeSpan.Zero)
               Event = PeerJoined { PeerId = peerId; DisplayName = "swift-heron"; User = None } })
 
+    /// One envelope carrying whatever event a case wants at whatever offset it wants.
+    let envelopeOf (offset: int64) (event: SessionEvent) : EventEnvelope<SessionEvent> =
+        { EventId = EventId.fresh ()
+          SessionId = sessionId
+          Offset = EventOffset.create offset |> expect
+          Actor = Session
+          Timestamp = DateTimeOffset(2026, 6, 14, 0, 0, 0, TimeSpan.Zero)
+          Event = event }
+
     testList "Conversation projection" [
+        // The transcript is STORED newest-first and READ oldest-first, and the two names say
+        // which is which. Written down because the storage order is the whole reason a word
+        // arriving costs what it costs — an immutable list is only cheap to edit at its head
+        // — and because a reader who assumed `Recent` was reading order would get a
+        // transcript upside down with nothing to tell them.
+        testCase "the transcript is kept newest first and read oldest first" <| fun () ->
+            let item (n: int) : ConversationItem =
+                { MessageId = MessageId.create (sprintf "m-%d" n) |> expect
+                  Author = ActorRef.System
+                  Content = ItemContent.Message (string n)
+                  Status = Complete
+                  Offset = EventOffset.create (int64 n) |> expect
+                  Woke = None; CausedBy = None }
+            let reading = [ item 1; item 2; item 3 ]
+            let proj = ConversationProjection.ofItems reading
+            Expect.equal proj.Items reading "what went in in reading order comes back in it"
+            Expect.equal
+                (proj.Recent |> List.map (fun i -> i.Offset))
+                (reading |> List.rev |> List.map (fun i -> i.Offset))
+                "and the field behind it holds them the other way up"
+
+        // What one streamed word costs does not grow with the transcript behind it.
+        //
+        // An agent message is appended when it starts and edited once per word that arrives,
+        // and an immutable list can only be edited cheaply at its HEAD — everything before
+        // the match is copied. Stored oldest-first, the item being written sat at the far
+        // end, so every word rebuilt the whole transcript: 13,020 deltas over 780 items on
+        // one real session, about ten million item copies, which measured as 373ms of the
+        // 402ms that folding its conversation cost at all.
+        //
+        // Pinned as a RATIO for the reason the render budget is a count and not a duration:
+        // a millisecond figure on a shared runner is the flaky test this repository warns
+        // about, while "a word costs the same into a long transcript as into a short one" is
+        // the same claim on every box. Loose on purpose — ten times the transcript may cost
+        // three times the word and still pass — because what it exists to catch is the copy,
+        // which makes it cost ten times.
+        testCase "one streamed word costs the same whatever the transcript behind it holds" <| fun () ->
+            let turn = AgentTurnId.create "t-1" |> expect
+            let filler (n: int) =
+                [ for i in 1 .. n ->
+                    envelopeOf
+                        (int64 i)
+                        (MessageSent
+                            { MessageId = MessageId.create (sprintf "f-%d" i) |> expect
+                              QueueId = None
+                              Author = Principal.Peer peerId
+                              Body = "filler" }) ]
+            let streaming (first: int64) (words: int) =
+                [ yield envelopeOf first (AgentTurnStarted { AgentTurnId = turn; Cause = TurnCause.Woke WakeReason.CommandFinished })
+                  yield envelopeOf (first + 1L)
+                            (AgentMessageStarted
+                                { MessageId = MessageId.create "streamed" |> expect
+                                  AgentTurnId = turn
+                                  Antecedent = None })
+                  for w in 1 .. words ->
+                    envelopeOf (first + 1L + int64 w)
+                        (AgentMessageDelta
+                            { MessageId = MessageId.create "streamed" |> expect
+                              AgentTurnId = turn
+                              Delta = "x" }) ]
+            let costOf (behind: int) =
+                let seeded, hw = ConversationProjection.applyEvents None (filler behind) ConversationProjection.empty
+                let words = streaming (int64 behind + 1L) 2000
+                let started = DateTimeOffset.UtcNow
+                let folded, _ = ConversationProjection.applyEvents hw words seeded
+                let ms = (DateTimeOffset.UtcNow - started).TotalMilliseconds
+                Expect.equal (List.length folded.Items) (behind + 1) "the transcript is what the seed plus the one message make it"
+                ms
+            let short' = costOf 50
+            let long' = costOf 800
+            let ratio = long' / (max short' 1.0)
+            printfn "  2000 words into 50 items: %.0fms; into 800: %.0fms — %.1fx" short' long' ratio
+            Expect.isTrue
+                (ratio < 3.0)
+                (sprintf
+                    "a word cost %.1fx as much into a transcript 16x longer (%.0fms against %.0fms) — \
+                     folding a word is copying the transcript again; see `Recent` and `updateItem` \
+                     in `src/Yession.Domain/Conversation.fs`"
+                    ratio long' short')
+
         testCase "folding a fixed ordered sequence is deterministic" <| fun () ->
             let events = envelopes [ 0L; 1L; 2L; 3L ]
             let first = ConversationProjection.applyEvents None events ConversationProjection.empty
