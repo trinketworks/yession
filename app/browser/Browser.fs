@@ -927,25 +927,6 @@ let private postJson (url: string) (body: string) : Async<Answered> =
 let private claudeBody (request: ClaudeRequest) : string =
     Codec.toString ClaudeRequest.codec request
 
-/// A field off an already-parsed JSON value, or None wherever JavaScript's `||` default fell
-/// through — absent, `null`, `''` and `0` alike. That falsiness is not incidental: a poll reply
-/// A field that is present but EMPTY is absent here: a blank url ends the flow exactly as a
-/// missing one does, and a stated `interval: 0` has to take the default rather than ask this
-/// tab to poll flat out. `|| undefined` used to say both inside a macro; `Option.filter` says
-/// it in F#, where the rule can be read without reconstructing JavaScript truthiness.
-let private stated (value: string option) : string option =
-    value |> Option.filter (fun text -> text <> "")
-
-let private statedSeconds (value: int option) : int option =
-    value |> Option.filter (fun seconds -> seconds <> 0)
-
-/// The authorize url the session answered with, or None for a body that is not JSON, carries
-/// no url, or carries a blank one — all three of which the caller ends the flow on.
-let private parseAuthorizeUrl (body: string) : string option =
-    Decode.fromString (Decode.field "authorizeUrl" Decode.string) body
-    |> Result.toOption
-    |> stated
-
 /// One Claude panel write, answered as the panel's next step. A sign-in answers with the
 /// authorize URL it opens, and a reply that carries none is refused rather than taken as
 /// accepted: there would be nothing for the human to approve.
@@ -954,9 +935,9 @@ let private claudeWrite (action: ClaudeAction) (request: ClaudeRequest) : Async<
         let! reply = postJson (Page.href (Claude action)) (claudeBody request)
         if not reply.Ok then return Error reply.Body
         elif action = ClaudeAction.Begin then
-            match parseAuthorizeUrl reply.Body with
-            | None -> return Error "no authorize url in the reply"
-            | Some url -> return Ok (Some url)
+            match Codec.fromString AuthorizeBegun.codec reply.Body with
+            | Error reason -> return Error (sprintf "the session's sign-in reply could not be read: %s" reason)
+            | Ok begun -> return Ok (Some begun.AuthorizeUrl)
         else return Ok None
     }
 
@@ -969,49 +950,6 @@ let private claudeWrite (action: ClaudeAction) (request: ClaudeRequest) : Async<
 let private githubBody (request: GitHubRequest) : string =
     Codec.toString GitHubRequest.codec request
 
-/// The begin reply: the code to type, where to type it, and the seconds GitHub asks this tab to
-/// leave between polls. A reply that states no interval — or states `0` — gets 5, which is the
-/// device flow's own floor and a number that means something.
-///
-/// The code and the uri are both REQUIRED, and that is a change this file used to say it could
-/// not make. `($0.verificationUri || '')` answered a missing uri with `""` inside a macro —
-/// the fault YES009 names, kept where the rule could not see it, and rendered as an Approve
-/// button linking to this very page. It does not need the model to learn a "no uri" case after
-/// all: a begin that says nowhere to approve is no more a flow than one that says no code, and
-/// the caller already had an answer for that. So the absence is unrepresentable here, and
-/// `GitHubAwaitingApproval` goes on holding two strings that mean what they say.
-type private DeviceBegin =
-    { UserCode : string
-      VerificationUri : string
-      Interval : int }
-
-let private deviceBegin : Decoder<DeviceBegin> =
-    Decode.object (fun get ->
-        { UserCode = get.Required.Field "userCode" Decode.string
-          VerificationUri = get.Required.Field "verificationUri" Decode.string
-          Interval = statedSeconds (get.Optional.Field "interval" Decode.int) |> Option.defaultValue 5 })
-
-/// A body that is not JSON, one carrying neither half, and one carrying a blank half are the
-/// same nothing to the caller.
-let private parseDeviceBegin (body: string) : DeviceBegin option =
-    Decode.fromString deviceBegin body
-    |> Result.toOption
-    |> Option.filter (fun began -> began.UserCode <> "" && began.VerificationUri <> "")
-
-/// The poll reply: where the grant has got to, and a revised interval when GitHub asks to be
-/// asked less often. No status is not a status — the caller reads anything that is not
-/// `connected` as "still waiting", and an unreadable reply is still waiting too. `0` is no
-/// revision, which is what the caller compares against the interval it is already leaving.
-let private devicePoll : Decoder<{| status: string option; interval: int |}> =
-    Decode.object (fun get ->
-        {| status = stated (get.Optional.Field "status" Decode.string)
-           interval = statedSeconds (get.Optional.Field "interval" Decode.int) |> Option.defaultValue 0 |})
-
-let private parseDevicePoll (body: string) : {| status: string option; interval: int |} =
-    Decode.fromString devicePoll body
-    |> Result.toOption
-    |> Option.defaultValue {| status = None; interval = 0 |}
-
 /// One GitHub panel write, answered as the panel's next step. A begin answers with the device
 /// flow it started, under the scope it was asked for; a reply that begins none is refused.
 let private githubWrite (action: GitHubAction) (request: GitHubRequest) : Async<GitHubAnswer> =
@@ -1019,9 +957,9 @@ let private githubWrite (action: GitHubAction) (request: GitHubRequest) : Async<
         let! reply = postJson (Page.href (GitHub action)) (githubBody request)
         if not reply.Ok then return Error reply.Body
         elif action = GitHubAction.Begin then
-            match parseDeviceBegin reply.Body with
-            | None -> return Error "the reply began no device flow"
-            | Some began ->
+            match Codec.fromString DeviceBegun.codec reply.Body with
+            | Error reason -> return Error (sprintf "the session's device-flow reply could not be read: %s" reason)
+            | Ok began ->
                 return Ok (Some (GitHubAwaitingApproval (began.UserCode, began.VerificationUri, request.Scope, began.Interval)))
         else return Ok None
     }
@@ -1035,10 +973,13 @@ let private githubPoll (scope: string) : Async<GitHubPollAnswer> =
         if not reply.Ok then
             return if GitHubFlow.ended reply.Status then PollEnded reply.Body else PollFailed
         else
-            let outcome = parseDevicePoll reply.Body
-            match outcome.status with
-            | Some "connected" -> return PollConnected
-            | _ -> return PollPending outcome.interval
+            match Codec.fromString DevicePoll.codec reply.Body with
+            | Ok DevicePoll.Connected -> return PollConnected
+            | Ok (DevicePoll.Pending interval) -> return PollPending interval
+            // A reply this client cannot read is the session and this build disagreeing about
+            // the wire, which asking again will not mend: end the flow and say why, rather than
+            // wait on a grant nobody can tell has landed.
+            | Error reason -> return PollEnded (sprintf "the session's poll reply could not be read: %s" reason)
     }
 
 // --- The launch surface's reads ---------------------------------------------------------------

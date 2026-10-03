@@ -241,12 +241,13 @@ type GitHubPolling =
 /// What one poll came back with.
 type GitHubPollAnswer =
     /// The session said this flow is over — the code expired, the human denied it, nothing is
-    /// pending for that scope (`GitHubFlow.ended`) — with its reason.
+    /// pending for that scope (`GitHubFlow.ended`) — with its reason. Or said something this
+    /// client cannot read, which is the same ending: asking again gets the same reply.
     | PollEnded of reason: string
     /// A bad moment, not an ending: a 5xx, a proxy, a fetch that never answered. The code on
     /// screen, which the human may already have approved, is still good.
     | PollFailed
-    /// Still waiting, at the interval GitHub now asks for (`0` when it revised nothing).
+    /// Still waiting, at the interval the session says GitHub now asks for.
     | PollPending of interval: int
     | PollConnected
 

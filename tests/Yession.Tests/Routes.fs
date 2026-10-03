@@ -8,6 +8,7 @@ open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Codecs
 open Yession.App
+open Yession.App.Codecs
 
 let private offset (n: int64) =
     match EventOffset.create n with
@@ -418,5 +419,112 @@ let private githubBodyTests =
                 "mine, and nothing pasted"
     ]
 
+// --- the replies those write routes give ---------------------------------------------------
+//
+// The other direction of the same contract (`Codecs/Panels.fs`). The session used to `sprintf`
+// each reply and the browser to decode it with a reader of its own, one of which answered a
+// reply it could not read as "still waiting". Now both ends hold one codec. The encoded cases
+// pin the BYTES for the same reason the bodies above do: a browser from an older build is
+// reading what this session writes, so a field renamed here is a panel silently reading nothing.
+
+let private replyTests =
+    testList "a connection panel's reply" [
+
+        testCase "a sign-in begin names the url to approve at and the flow's state" <| fun () ->
+            Expect.equal
+                (Codec.toString AuthorizeBegun.codec { AuthorizeBegun.AuthorizeUrl = "https://claude.ai/authorize?x=1"; AuthorizeBegun.State = "st" })
+                """{"authorizeUrl":"https://claude.ai/authorize?x=1","state":"st"}"""
+                "the names an older browser reads it by"
+
+        testCase "a sign-in begin is read back as the one that was sent" <| fun () ->
+            let begun : AuthorizeBegun = { AuthorizeBegun.AuthorizeUrl = "https://claude.ai/authorize"; AuthorizeBegun.State = "st" }
+            Expect.equal
+                (Codec.fromString AuthorizeBegun.codec (Codec.toString AuthorizeBegun.codec begun))
+                (Ok begun)
+                "the same begin"
+
+        testCase "a sign-in begin with a blank url is refused" <| fun () ->
+            Expect.isError
+                (Codec.fromString AuthorizeBegun.codec """{"authorizeUrl":"","state":"st"}""")
+                "there is nothing to approve at"
+
+        testCase "a device-flow begin says the code, where to type it and how often to ask" <| fun () ->
+            Expect.equal
+                (Codec.toString
+                    DeviceBegun.codec
+                    { DeviceBegun.UserCode = "WDJB-MJHT"; DeviceBegun.VerificationUri = "https://github.com/login/device"; DeviceBegun.Interval = 5 })
+                """{"userCode":"WDJB-MJHT","verificationUri":"https://github.com/login/device","interval":5}"""
+                "the names an older browser reads it by"
+
+        testCase "a device-flow begin is read back as the one that was sent" <| fun () ->
+            let begun : DeviceBegun = { DeviceBegun.UserCode = "WDJB-MJHT"; DeviceBegun.VerificationUri = "https://github.com/login/device"; DeviceBegun.Interval = 5 }
+            Expect.equal
+                (Codec.fromString DeviceBegun.codec (Codec.toString DeviceBegun.codec begun))
+                (Ok begun)
+                "the same begin"
+
+        testCase "a device-flow begin that names nowhere to approve is refused" <| fun () ->
+            Expect.isError
+                (Codec.fromString DeviceBegun.codec """{"userCode":"WDJB-MJHT","verificationUri":"","interval":5}""")
+                "a code with nowhere to type it is no flow"
+
+        testCase "a device-flow begin that asks for no wait between polls is refused" <| fun () ->
+            Expect.isError
+                (Codec.fromString DeviceBegun.codec """{"userCode":"WDJB-MJHT","verificationUri":"https://github.com/login/device","interval":0}""")
+                "a poll with no wait is a poll flat out"
+
+        // The shape a browser from an older build reads this by — `status`, and `interval` only
+        // when it is pending — so it is the one reply whose field names cannot move.
+        testCase "a pending poll says so, with the interval to ask at" <| fun () ->
+            Expect.equal
+                (Codec.toString DevicePoll.codec (DevicePoll.Pending 10))
+                """{"status":"pending","interval":10}"""
+                "status and interval, under the names an older browser reads them by"
+
+        testCase "a connected poll says so and nothing more" <| fun () ->
+            Expect.equal
+                (Codec.toString DevicePoll.codec DevicePoll.Connected)
+                """{"status":"connected"}"""
+                "the status alone"
+
+        testCase "a poll reply is read back as the one that was sent" <| fun () ->
+            for poll in [ DevicePoll.Pending 10; DevicePoll.Connected ] do
+                Expect.equal
+                    (Codec.fromString DevicePoll.codec (Codec.toString DevicePoll.codec poll))
+                    (Ok poll)
+                    "the same poll"
+
+        testCase "a device-poll reply that cannot be read is refused rather than read as pending" <| fun () ->
+            for body in
+                [ "not json"
+                  "{}"
+                  """{"status":"expired"}"""
+                  """{"status":"pending"}"""
+                  """{"interval":5}""" ] do
+                Expect.isError (Codec.fromString DevicePoll.codec body) (sprintf "'%s' is not a reply" body)
+
+        testCase "an accepted write says so" <| fun () ->
+            Expect.equal (Codec.toString WriteAccepted.codec WriteAccepted) """{"ok":true}""" "the one field"
+
+        testCase "an accepted write is read back as accepted" <| fun () ->
+            Expect.equal
+                (Codec.fromString WriteAccepted.codec (Codec.toString WriteAccepted.codec WriteAccepted))
+                (Ok WriteAccepted)
+                "accepted"
+
+        testCase "a disconnect says whether there was a credential to remove" <| fun () ->
+            Expect.equal
+                (Codec.toString DisconnectAnswered.codec { DisconnectAnswered.Existed = true })
+                """{"disconnected":true}"""
+                "under the name an older browser reads it by"
+
+        testCase "a disconnect is read back as the one that was sent" <| fun () ->
+            for existed in [ true; false ] do
+                Expect.equal
+                    (Codec.fromString DisconnectAnswered.codec (Codec.toString DisconnectAnswered.codec { DisconnectAnswered.Existed = existed }))
+                    (Ok { DisconnectAnswered.Existed = existed })
+                    "the same answer"
+    ]
+
 let tests =
-    testList "Routes" [ routeTests; mountTests; managerRouteTests; claudeBodyTests; githubBodyTests ]
+    testList "Routes" [ routeTests; mountTests; managerRouteTests; claudeBodyTests; githubBodyTests; replyTests ]

@@ -29,6 +29,7 @@ open Yession.Domain.Access
 open Yession.Manager
 open Yession.Session
 open Yession.App
+open Yession.App.Codecs
 open Yession.Host.Interop
 
 #if FABLE_COMPILER
@@ -518,8 +519,11 @@ let routes
                                                 | Ok grant ->
                                                     pending <- Map.add target grant pending
                                                     respondJson res 200
-                                                        (sprintf """{"userCode":%s,"verificationUri":%s,"interval":%d}"""
-                                                            (jsonString grant.UserCode) (jsonString grant.VerificationUri) grant.Interval)
+                                                        (Codec.toString
+                                                            DeviceBegun.codec
+                                                            { DeviceBegun.UserCode = grant.UserCode
+                                                              DeviceBegun.VerificationUri = grant.VerificationUri
+                                                              DeviceBegun.Interval = grant.Interval })
                                     | GitHubAction.Poll ->
                                         match Map.tryFind target pending, configuredClientId () with
                                         | None, _ -> respondText res 400 "no sign-in in progress for that scope — begin again"
@@ -541,13 +545,13 @@ let routes
                                             // and threw the pending code away on one dropped
                                             // packet.
                                             | Error _ ->
-                                                respondJson res 200 (sprintf """{"status":"pending","interval":%d}""" grant.Interval)
+                                                respondJson res 200 (Codec.toString DevicePoll.codec (DevicePoll.Pending grant.Interval))
                                             | Ok answer ->
                                                 match pollOutcome grant.Interval answer with
                                                 | PollPending interval ->
                                                     if interval <> grant.Interval then
                                                         pending <- Map.add target { grant with Interval = interval } pending
-                                                    respondJson res 200 (sprintf """{"status":"pending","interval":%d}""" interval)
+                                                    respondJson res 200 (Codec.toString DevicePoll.codec (DevicePoll.Pending interval))
                                                 | PollGranted granted ->
                                                     pending <- Map.remove target pending
                                                     // Over the grant leg, not the paste leg: this
@@ -555,7 +559,7 @@ let routes
                                                     // Manager is the only place a refresh token may
                                                     // live (Plan 08).
                                                     match! connections.PutGrant (grantRequest target granted) with
-                                                    | Ok () -> respondJson res 200 """{"status":"connected"}"""
+                                                    | Ok () -> respondJson res 200 (Codec.toString DevicePoll.codec DevicePoll.Connected)
                                                     | Error e -> respondText res 502 e
                                                 | PollFailed reason ->
                                                     pending <- Map.remove target pending
@@ -566,12 +570,12 @@ let routes
                                         | Some (Error e) -> respondText res 400 e
                                         | Some (Ok token) ->
                                             match! connections.Put target token with
-                                            | Ok () -> respondJson res 200 """{"ok":true}"""
+                                            | Ok () -> respondJson res 200 (Codec.toString WriteAccepted.codec WriteAccepted)
                                             | Error e -> respondText res 400 e
                                     | GitHubAction.Disconnect ->
                                         pending <- Map.remove target pending
                                         match! connections.Disconnect target with
-                                        | Ok existed -> respondJson res 200 (sprintf """{"disconnected":%b}""" existed)
+                                        | Ok existed -> respondJson res 200 (Codec.toString DisconnectAnswered.codec { DisconnectAnswered.Existed = existed })
                                         | Error e -> respondText res 400 e
                                 })
                     // Unreachable: this handler only runs for the two cases above.
