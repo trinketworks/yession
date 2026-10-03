@@ -1466,13 +1466,13 @@ let private restartTests =
         testCaseAsync "what people queued is answered before what the log owes" <|
             async {
                 let peerDoc = Y.Doc.Create ()
-                let registry = Yession.Domain.Collab.BodyRegistry peerDoc
+                let registry = Yession.App.Collab.BodyRegistry peerDoc
                 let bob = PeerId.create "bob" |> expect
                 let runner = Harness.run (Client.makeProgram Client.Ports.offline peerDoc (ClientModel.init (peer "bob" "Bob")))
                 Body.author registry runner bob "are you there?"
                 Body.send registry runner bob |> ignore
                 let processDoc = Y.Doc.Create ()
-                Yession.Domain.Collab.DocSync.applyRemote processDoc (Yession.Domain.Collab.DocSync.fullState peerDoc)
+                Yession.App.Collab.DocSync.applyRemote processDoc (Yession.App.Collab.DocSync.fullState peerDoc)
                 let scheduler, log =
                     armedSchedulerOver processDoc [ blockStarted "b1" true (Principal.Peer ada); blockCompleted "b1" ] ignore
                 do! scheduler.Boot ()

@@ -22,6 +22,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Content
 open Yession.Domain.Link
 open Yession.Domain.Collab
+open Yession.App.Collab
 open Yession.Domain.Chat
 open Yession.Session
 open Yession.App

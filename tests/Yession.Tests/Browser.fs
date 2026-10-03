@@ -31,6 +31,7 @@ open System.Threading
 open System.Threading.Tasks
 open Microsoft.Playwright
 open Yession.App.Codecs
+open Yession.App.Collab
 
 /// The URL out of a "launched at http://127.0.0.1:PORT/ …" line. Same shape the packaged
 /// composition test uses to learn both endpoints from stdout.

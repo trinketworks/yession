@@ -35,6 +35,9 @@
   <ItemGroup>
     <ProjectReference Include="..\Yession.Domain\Yession.Domain.fsproj" />
     <ProjectReference Include="..\Yession.Codecs\Yession.Codecs.fsproj" />
+    <!-- The collaborative document the App owns (Yession.App.Collab): the Session reads and
+         drains the same doc the App edits, through the App's own sync boundary. -->
+    <ProjectReference Include="..\Yession.App\Yession.App.fsproj" />
   </ItemGroup>
 
 </Project>

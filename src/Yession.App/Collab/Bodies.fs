@@ -1,4 +1,6 @@
-namespace Yession.Domain.Collab
+namespace Yession.App.Collab
+
+open Yession.Domain.Collab
 
 open Yession.Domain
 

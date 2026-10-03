@@ -4,6 +4,7 @@ open Fable.Core
 open Yjs
 open Yession.Domain
 open Yession.Domain.Collab
+open Yession.App.Collab
 
 /// The draft-slot publication rule: a peer's slot is in the synced state IFF that peer's body
 /// has content.
@@ -15,7 +16,7 @@ open Yession.Domain.Collab
 /// emptying the body retracts it.
 ///
 /// Nothing else has to change, because the body is NOT inside the slot: it is a top-level
-/// fragment root (RichText.fs) that exists independently, so the local composer still mounts and
+/// fragment root (Collab/Bodies.fs) that exists independently, so the local composer still mounts and
 /// types before any slot exists — and a send, which removes the slot, still carries the body over.
 module DraftSlot =
 

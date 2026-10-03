@@ -30,6 +30,7 @@ open Yession.Domain.Content
 open Yession.Domain.Artifacts
 open Yession.Domain.Files
 open Yession.Domain.Collab
+open Yession.App.Collab
 open Yession.Domain.Prs
 open Yession.Domain.Repos
 open Yession.Host

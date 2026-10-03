@@ -7,12 +7,12 @@ open Yession.Domain.Terminals
 
 /// Collaborative session state shapes shared by the Session and the App.
 /// These are the model shapes only; the Yjs/Ylmish encoding that keeps them in
-/// sync lives in Sync.fs. See docs/design.md §2.2 and Plan 01.
+/// sync lives in the App (`Yession.App.Collab`, Collab/Sync.fs). See docs/design.md §2.2 and Plan 01.
 
 /// A client's work-in-progress draft: the WIP tail, not yet queued. Keyed by its
 /// `Author` in `SyncedSessionState.Drafts`, so each client owns at most one — the cap is
 /// structural, not a runtime check. The body is a rich-text `Y.XmlFragment` (a ProseMirror
-/// doc) held as a top-level doc root keyed by `BodyKey.draft` (RichText.fs), NOT in the model
+/// doc) held as a top-level doc root keyed by `BodyKey.draft` (Collab/Bodies.fs), NOT in the model
 /// and NOT in the synced-state tree — so this record carries only the slot's identity. Concurrent
 /// edits merge in the fragment CRDT, so "collaborate" is co-editing someone's slot and "write
 /// your own" is yours.

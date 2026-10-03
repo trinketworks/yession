@@ -17,6 +17,7 @@ open Yjs
 open Yession.Domain
 open Yession.Domain.Agent
 open Yession.Domain.Collab
+open Yession.App.Collab
 open Yession.App
 open Yession.Host
 open Yession.Tests.Support

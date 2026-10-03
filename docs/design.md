@@ -410,7 +410,7 @@ Verification is automated end-to-end, not manual.
 
 `Ylmish is the encoding/sync boundary` has one deliberate exception, and it is narrow
 enough to name: message bodies and terminal command lines are top-level Yjs roots the app
-co-manages directly (`src/Yession.Domain/RichText.fs`), because Ylmish's structural decode
+co-manages directly (`src/Yession.App/Collab/Bodies.fs`), because Ylmish's structural decode
 cannot traverse a `Y.XmlFragment` — it recurses into the fragment's cyclic internals and
 crashes the decode. They are keyed by `BodyKey`, never nested in the encoded tree, and
 never read by a whole-doc structural decode. Everything else still crosses through the

@@ -362,6 +362,7 @@
       "yession.session": {
         "type": "Project",
         "dependencies": {
+          "Yession.App": "[1.0.0, )",
           "Yession.Codecs": "[1.0.0, )",
           "Yession.Domain": "[1.0.0, )"
         }

@@ -13,6 +13,7 @@ open Node.Api
 open Fable.NodeExtras
 open Yession.Domain
 open Yession.Domain.Collab
+open Yession.App.Collab
 
 // The plain reads/writes go through the maintained Fable.Node `fs` binding.
 let private existsSync (path: string) : bool = fs.existsSync (U2.Case1 path)

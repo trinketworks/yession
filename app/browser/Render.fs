@@ -29,6 +29,7 @@ open Yession.Codecs
 open Yession.Domain.Link
 open Yession.Domain.Terminals
 open Yession.Domain.Collab
+open Yession.App.Collab
 open Fable.ProseMirror
 open Yession.App
 open Yession.App.Codecs
