@@ -147,7 +147,7 @@ let private representativeModel : ClientModel =
           CatchUpIsSlow = true
           Feed = FeedLive
           MissingBefore = None }
-      Agent = { ActiveTurn = Some turnId; Quiet = None }
+      Agent = { ActiveTurn = Some turnId; Quiet = None; Interrupting = None }
       Presence =
         Map.ofList
             [ PeerRef bob,
@@ -329,7 +329,7 @@ let private silentTurnModel : ClientModel =
 /// Nothing running: the last turn finished and nobody has asked for another.
 let private restingModel : ClientModel =
     { representativeModel with
-        Agent = { ActiveTurn = None; Quiet = None }
+        Agent = { ActiveTurn = None; Quiet = None; Interrupting = None }
         Conversation =
             { representativeModel.Conversation with
                 Recent = representativeModel.Conversation.Recent |> List.map (fun item -> { item with Status = Complete })

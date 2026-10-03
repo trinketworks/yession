@@ -73,6 +73,17 @@ let private delta (offset: int64) (text: string) : ClientMsg =
 let private completed (offset: int64) (body: string) : ClientMsg =
     page [ envelope offset (AgentMessageCompleted { AgentTurnId = turn; MessageId = writing; Body = body }) ]
 
+let private interruptedBy = PeerId.create "ada" |> expect
+
+let private interrupted (offset: int64) (turnId: AgentTurnId) : ClientMsg =
+    page [ envelope offset (AgentTurnInterrupted { AgentTurnId = turnId; RequestedBy = interruptedBy }) ]
+
+let private failed (offset: int64) (turnId: AgentTurnId) : ClientMsg =
+    page [ envelope offset (AgentTurnFailed { AgentTurnId = turnId; Reason = "boom"; ProcessEnded = None }) ]
+
+let private startedAgain (offset: int64) (turnId: AgentTurnId) : ClientMsg =
+    page [ envelope offset (AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy asked }) ]
+
 let private fold (msgs: ClientMsg list) : ClientModel =
     msgs |> List.fold (fun model msg -> Support.step msg model) (ClientModel.init (peer "ada" "Ada"))
 
@@ -224,6 +235,33 @@ let tests =
             send (ArmQueueDeleteMsg (Some queueId))
             send (DeleteQueuedMsg queueId)
             Expect.isNone (model ()).QueueDeleteArmed "nothing left for the armed id to mean"
+
+        testCase "a click on interrupt marks that turn as stopping" <| fun () ->
+            let model = fold [ opened; InterruptTurnMsg turn ]
+            Expect.equal model.Agent.Interrupting (Some turn) "the press went somewhere, until the turn says it landed"
+
+        testCase "the turn actually ending clears stopping along with ActiveTurn" <| fun () ->
+            let model = fold [ opened; InterruptTurnMsg turn; interrupted 3L turn ]
+            Expect.isNone model.Agent.Interrupting "the stop it asked for happened"
+            Expect.isNone model.Agent.ActiveTurn "and the turn is over"
+
+        testCase "a turn failing clears stopping too, not only a clean interrupt" <| fun () ->
+            let model = fold [ opened; InterruptTurnMsg turn; failed 3L turn ]
+            Expect.isNone model.Agent.Interrupting "however the turn ended, the click it answered is done asking"
+
+        testCase "a turn finishing on its own clears a click that never caught up to it" <| fun () ->
+            let model = fold [ opened; InterruptTurnMsg turn; completed 3L "done before the stop arrived" ]
+            Expect.isNone model.Agent.Interrupting "the turn is over regardless of why"
+
+        // A stale flag from the PREVIOUS turn: nothing clears `Interrupting` between one
+        // turn's `AgentTurnStarted` for not-this-one until the stop lands. The scenario is a
+        // click right at an interrupt's boundary, won by the new turn arriving first — the new
+        // turn owes nothing to a click meant for the turn before it.
+        testCase "a new turn starting clears a stale click meant for the one before it" <| fun () ->
+            let nextTurn = AgentTurnId.create "turn-next" |> expect
+            let model = fold [ opened; InterruptTurnMsg turn; startedAgain 3L nextTurn ]
+            Expect.isNone model.Agent.Interrupting "the click named a turn that is already gone"
+            Expect.equal model.Agent.ActiveTurn (Some nextTurn) "the new turn is the one running now"
 
         testCase "a copy the clipboard took is confirmed on the box it came from" <| fun () ->
             let send, model = copying true

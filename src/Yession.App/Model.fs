@@ -92,7 +92,17 @@ type AgentViewState =
       /// `ClientModel.writingQuietMs` (`AgentQuietMsg`). A fact about one exact body: it
       /// holds while the message's stamp is still this one and means nothing once a word
       /// lands, so nothing ever has to clear it.
-      Quiet : WritingStamp option }
+      Quiet : WritingStamp option
+      /// The turn `InterruptTurnMsg` was last clicked for, until the stop it asked for
+      /// actually lands — `AgentTurnInterrupted`/`AgentTurnFailed`/`AgentMessageCompleted`
+      /// all clear it alongside `ActiveTurn`, and so does a fresh `AgentTurnStarted` (a stale
+      /// click from the turn before has nothing left to mean). Colocated with `ActiveTurn`
+      /// rather than kept as a top-level flag because it is a fact about THIS turn's
+      /// lifecycle and every place that ends a turn must already be the one place that
+      /// clears it. Round-trip-only: the click is idempotent server-side regardless, so
+      /// nothing is lost if this is ever wrong, and it exists purely so the button reads as
+      /// pressed rather than broken while the stop is in flight.
+      Interrupting : AgentTurnId option }
 
 /// Where the Claude sign-in flow is (Plan 08). `ClaudeAwaitingCode` = the authorize
 /// tab is open; completion may land at the Manager's callback (the panel polls status)
@@ -1357,7 +1367,7 @@ module ClientModel =
               Feed = FeedLive
               // Nothing has been looked at yet; the replay decides.
               MissingBefore = None }
-          Agent = { ActiveTurn = None; Quiet = None }
+          Agent = { ActiveTurn = None; Quiet = None; Interrupting = None }
           Presence = Map.empty
           Peers = Map.empty
           Attribution = Attribution.empty
@@ -2385,9 +2395,12 @@ module ClientModel =
                 |> List.fold
                     (fun (agent: AgentViewState) e ->
                         match e.Event with
-                        | AgentTurnStarted a -> { agent with ActiveTurn = Some a.AgentTurnId }
+                        // A fresh turn clears a stale `Interrupting`, too: that flag could
+                        // only have named the turn just gone, and a click against the one
+                        // before it has nothing left to mean.
+                        | AgentTurnStarted a -> { agent with ActiveTurn = Some a.AgentTurnId; Interrupting = None }
                         | AgentMessageCompleted _ | AgentTurnFailed _ | AgentTurnInterrupted _ ->
-                            { agent with ActiveTurn = None }
+                            { agent with ActiveTurn = None; Interrupting = None }
                         | _ -> agent)
                     model.Agent
             let environment =
@@ -3040,12 +3053,17 @@ module ClientModel =
             | None -> model
         // Requests of the session and nothing else: what they change arrives as events, which
         // every peer folds alike, so a local guess here would be a state only this peer had.
+        // Local-only: the request itself is the session's to grant, and its outcome arrives
+        // as events like every other fact here — but the click sets a flag nothing else would,
+        // so the button reads as pressed rather than silent for however long the round trip
+        // takes. The event fold above is what clears it; this never does.
+        | InterruptTurnMsg turn ->
+            { model with Agent = { model.Agent with Interrupting = Some turn } }
         | TakeTerminalMsg _
         | ReleaseTerminalMsg _
         | RearmTerminalMsg _
         | ReattachTerminalMsg _
         | CloseTerminalMsg _
-        | InterruptTurnMsg _
         | ApproveRepoCapabilitiesMsg _ -> model
         )
 

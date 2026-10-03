@@ -1264,11 +1264,16 @@ module View =
         match model.Agent.ActiveTurn with
         | None -> Lit.nothing
         | Some turn ->
+            // `Interrupting` only ever names THIS turn or none (the event fold clears it the
+            // moment the turn it named ends), so a plain equality is the whole check.
+            let stopping = model.Agent.Interrupting = Some turn
+            let label = if stopping then Dom.Text.interruptingLabel else Dom.Text.interruptLabel
+            let word = if stopping then "stopping…" else "interrupt"
             html $"""
                 <div class="{Style.interruptBand}">
-                  <button type="button" class="{Style.btnInterrupt}" aria-label="{Dom.Text.interruptLabel}"
-                          data-interrupt-turn="{AgentTurnId.value turn}"
-                          @click={Ev(fun _ -> dispatch (InterruptTurnMsg turn))}>interrupt</button>
+                  <button type="button" class="{Style.btnInterrupt}" aria-label="{label}" aria-busy="{if stopping then "true" else "false"}"
+                          data-interrupt-turn="{AgentTurnId.value turn}" ?disabled={stopping}
+                          @click={Ev(fun _ -> dispatch (InterruptTurnMsg turn))}>{Icon.stop}{word}</button>
                 </div>"""
 
     /// The composer: ONE draft open, everyone else's as a line you can open.

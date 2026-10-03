@@ -768,6 +768,11 @@ module Dom =
         /// DOES, and this one stops the turn that is running — which is also the only reason
         /// the control is on the band at all.
         let interruptLabel = "Interrupt the agent"
+        /// The same control's accessible name while its click is in flight (`AgentViewState.
+        /// Interrupting`) — between the press and the stop actually landing, so a screen
+        /// reader is told the request went somewhere rather than repeating the verb as if
+        /// nothing had happened.
+        let interruptingLabel = "Stopping the agent"
         /// What a screen reader is told while the agent writes, carried by the composer's
         /// live region. The only place this sentence still exists: what everyone else gets is
         /// the caret standing where the words are landing.

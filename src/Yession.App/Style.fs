@@ -2337,9 +2337,18 @@ module Style =
     /// A step brighter than the faint verbs that ride a listed row (`btnBare`), though, and
     /// that difference is the same rule read the other way: those are faint because the ROW is
     /// the subject and they are a thing you can do to it. Here the verb IS the subject.
+    /// `gap-1.5` pairs the stop glyph with the word (`Icon.stop`, the same mark the timeline's
+    /// stopped-turn item already wears at `stopSm` size, now costing nothing to repeat here
+    /// since the vocabulary existed before this button used it). `disabled:*` is new too: the
+    /// turn between a click and the stop actually landing (`AgentViewState.Interrupting`),
+    /// where without it the button would sit unchanged — inert in every way a person can
+    /// check except that the request, in fact, went. `pointer-events-none` rather than relying
+    /// on `hover:` losing a specificity fight, so the err hover-face this button is built
+    /// around never has a chance to paint while there is nothing left to hover for.
     let btnInterrupt =
-        cls [ "h-8 px-2 shrink-0 inline-flex items-center bg-transparent border-0 cursor-pointer font-ui"
-              capsLg; "text-ink-dim hover:text-err transition-colors"; focusRing ]
+        cls [ "h-8 px-2 shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer font-ui"
+              capsLg; "text-ink-dim hover:text-err transition-colors"
+              "disabled:text-ink-faint disabled:cursor-default disabled:pointer-events-none"; focusRing ]
 
     // --- Queue: editable until drained; the head's green count says so ------------------------
     // The queue is the composer's dock, not a list floating over the ground: its rows are
