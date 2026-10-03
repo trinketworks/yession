@@ -6,6 +6,7 @@ open Yession.Domain.Agent
 open Yession.Domain.Artifacts
 open Yession.Domain.Content
 open Yession.Domain.Prs
+open Yession.Domain.Sandboxes
 
 /// The conversation is a *projection* of the event log — never read from Yjs/draft state.
 /// The projection type and its fold live in the shared Domain library because both the
@@ -1026,6 +1027,40 @@ module ConversationProjection =
         // than to find one from an hour ago.
         |> List.sortByDescending fst
         |> List.map snd
+
+    /// Every sandbox this session has STARTED and not since stopped, in the order the starts
+    /// arrived — which is the order the repo's own file declared them in, because that is the
+    /// order they are brought up.
+    ///
+    /// Derived rather than kept, for `artifacts`' reason: the start is already an act in
+    /// `Items`, and a second copy would be a list that could disagree with the timeline it was
+    /// folded from. A reader asking "where could something run here" and a reader scrolling
+    /// past "started sandbox octo/hello:dev" are reading one log.
+    ///
+    /// `default` is NOT in it, and that is the distinction the name carries: every session has
+    /// `default` from boot, so nothing ever started it and no event says so. A surface that
+    /// offers somewhere to run offers `default` because the session exists, and offers these
+    /// because they came up.
+    ///
+    /// Only `SandboxStarted` admits one. A sandbox still coming up (`SandboxStarting`) has no
+    /// container yet, and one that failed resolves that same item to the failure — so a
+    /// started sandbox is one that reported being up, never one that was asked for.
+    let startedSandboxes (proj: ConversationProjection) : WorkSandboxStarted list =
+        proj.Items
+        |> List.choose (fun item ->
+            match item.Content with
+            | ItemContent.Act (Act.SandboxStarted s) -> Some (Choice1Of2 s)
+            | ItemContent.Act (Act.SandboxStopped s) -> Some (Choice2Of2 s)
+            | _ -> None)
+        // A stop takes the sandbox out and a later start puts it back, so the fold has to see
+        // both in log order: the last word about a sandbox is what it is.
+        |> List.fold
+            (fun running ->
+                function
+                | Choice1Of2 (s: WorkSandboxStarted) when SandboxRef.defaultRef = s.Sandbox -> running
+                | Choice1Of2 s -> (running |> List.filter (fun r -> r.Sandbox <> s.Sandbox)) @ [ s ]
+                | Choice2Of2 (s: WorkSandboxStopped) -> running |> List.filter (fun r -> r.Sandbox <> s.Sandbox))
+            []
 
 /// What a person in this session still has to decide about.
 ///

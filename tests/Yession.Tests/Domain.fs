@@ -3807,6 +3807,94 @@ let private artifactTests =
             Expect.equal (ConversationProjection.artifacts ConversationProjection.empty) [] "a session that has shared nothing offers no rows"
     ]
 
+/// Where this session can run something — derived from the starts on the timeline, so a
+/// surface that offers somewhere to run and a reader scrolling past "started sandbox
+/// octo/hello:dev" are reading one log.
+let private startedSandboxTests =
+    let at (offset: int64) (event: SessionEvent) : EventEnvelope<SessionEvent> =
+        { EventId = EventId.fresh ()
+          SessionId = SessionId.create "session-1" |> expect
+          Offset = EventOffset.create offset |> expect
+          Actor = ActorRef.Agent
+          Timestamp = DateTimeOffset (2026, 9, 24, 0, 0, 0, TimeSpan.Zero)
+          Event = event }
+    let hello = RepoRef.create "octo/hello" |> expect
+    let inHello (name: string) = SandboxRef.inScope hello (SandboxName.create name |> expect)
+    let mutable acts = 0
+    /// Each act is its own timeline item, so each needs its own id: two sharing one resolve
+    /// into a single item, which is the fold working and a fixture lying.
+    let nextId () =
+        acts <- acts + 1
+        MessageId.create (sprintf "sandbox-act-%d" acts) |> expect
+    let started (sandbox: SandboxRef) : SessionEvent =
+        SessionEvent.WorkSandboxStarted
+            { MessageId = nextId ()
+              Sandbox = sandbox
+              Backend = "docker"
+              Description = Some "the work sandbox"
+              Checkout = Some "/repos/hello"
+              Forwarded = []
+              Realisation = []
+              Actor = ActorRef.Agent
+              OnBehalfOf = None
+              CausedBy = None }
+    let stopped (sandbox: SandboxRef) : SessionEvent =
+        SessionEvent.WorkSandboxStopped { MessageId = nextId (); Sandbox = sandbox; Actor = ActorRef.Agent }
+    let starting (sandbox: SandboxRef) : SessionEvent =
+        SessionEvent.WorkSandboxStarting
+            { MessageId = nextId ()
+              Sandbox = sandbox
+              Backend = "docker"
+              Description = Some "the work sandbox"
+              Actor = ActorRef.Agent
+              OnBehalfOf = None
+              CausedBy = None }
+    let folded (events: SessionEvent list) =
+        let proj, _ =
+            ConversationProjection.applyEvents
+                None
+                (events |> List.mapi (fun i e -> at (int64 i + 1L) e))
+                ConversationProjection.empty
+        ConversationProjection.startedSandboxes proj |> List.map (fun s -> SandboxRef.render s.Sandbox)
+
+    testList "Where this session can run something" [
+        testCase "a sandbox that reported being up is one of them" <| fun () ->
+            Expect.equal (folded [ started (inHello "dev") ]) [ "octo/hello:dev" ] "the start admits it"
+
+        testCase "they come in the order the starts arrived" <| fun () ->
+            // Which is the order the repo's own file declared them in, because that is the
+            // order they are brought up. Alphabetising would overrule a choice somebody made.
+            Expect.equal
+                (folded [ started (inHello "gate"); started (inHello "dev") ])
+                [ "octo/hello:gate"; "octo/hello:dev" ]
+                "declared order, kept"
+
+        testCase "a sandbox that was stopped is not one of them" <| fun () ->
+            Expect.equal (folded [ started (inHello "dev"); stopped (inHello "dev") ]) [] "the stop takes it out"
+
+        testCase "a sandbox stopped and started again is one of them" <| fun () ->
+            // The last word about a sandbox is what it is — so the fold has to see both
+            // halves in log order rather than collecting the starts.
+            Expect.equal
+                (folded [ started (inHello "dev"); stopped (inHello "dev"); started (inHello "dev") ])
+                [ "octo/hello:dev" ]
+                "back again"
+
+        testCase "a sandbox still coming up is not yet one of them" <| fun () ->
+            // It has no container yet. Offering somewhere to run that is not running is an
+            // offer that fails.
+            Expect.equal (folded [ starting (inHello "dev") ]) [] "asked for is not up"
+
+        testCase "default is never one of them, however the log says it came up" <| fun () ->
+            // Every session has `default` from boot, so nothing started it and no event
+            // normally says so. A surface offers it because the session exists; listing it
+            // here too would offer the same place twice.
+            Expect.equal (folded [ started SandboxRef.defaultRef ]) [] "had, not started"
+
+        testCase "a session that started nothing offers no rows" <| fun () ->
+            Expect.equal (ConversationProjection.startedSandboxes ConversationProjection.empty) [] "nothing to offer"
+    ]
+
 let tests =
     testList "Domain" [
         identityTests
@@ -3833,5 +3921,6 @@ let tests =
         contentTests
         viewRefTests
         artifactTests
+        startedSandboxTests
         frameSerializationTests
     ]
