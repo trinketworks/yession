@@ -4,11 +4,15 @@
 # that names nothing lands in, and offers the GitHub connection it wants.
 version: 1
 resources:
-  # The gateway and the credential proxy. `default` runs under srt, which takes a connection by
-  # git alone (`CredentialProxy.forwardApi`) — so wanted there it is had by `git`, and a repo's
-  # container sandbox wanting it has `api` too, binding the proxy in its own declaration.
+  # What a repo's sandboxes want (yession.yaml's `wants: [ github ]`): the gateway, and the
+  # credential proxy — which a container reaches by binding `${proxy.https}` in its own
+  # declaration, or not at all.
   github:
     connection: { github: [ git, api ] }
+  # `default`'s: the same connection by git alone. `default` runs under srt, which is refused the
+  # api route (`CredentialProxy.forwardApi`) — so it asks for exactly what it is given.
+  github-git:
+    connection: { github: [ git ] }
 sandboxes:
   default:
-    wants: [ github ]
+    wants: [ github-git ]
