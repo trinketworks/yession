@@ -16,6 +16,16 @@ open FSharp.Data.Adaptive
 open Ylmish
 open Ylmish.Codec
 
+/// The collaborative-text hole the model is generic over, plugged with Ylmish's: the text
+/// whose splices this boundary carries.
+[<RequireQualifiedAccess>]
+module CollabText =
+
+    let ylmish : CollabText<Text> =
+        { Empty = Text.empty
+          OfString = Text.ofString
+          ToString = Text.toString }
+
 /// The adaptive companion of `SyncedSessionState`, hand-written in place of Adaptify
 /// codegen (the model is small and Adaptify would add a build step). Drafts and queue
 /// entries are keyed by their app-minted ids so concurrent — even offline — creation is
@@ -29,7 +39,7 @@ type AdaptiveSyncedState =
       TerminalDrafts : cmap<string, TerminalDraft>
       Pending : cmap<string, PendingAct>
       Model : cval<ModelId option>
-      Chapters : cmap<string, ChapterMark> }
+      Chapters : cmap<string, ChapterMark<Text>> }
 
 module SyncedStateSync =
 
@@ -50,26 +60,26 @@ module SyncedStateSync =
                 | Ok terminal, Ok author -> Some (terminal, author)
                 | _ -> None
 
-    let private draftsByKey (m: SyncedSessionState) : HashMap<string, DraftState> =
+    let private draftsByKey (m: SyncedSessionState<Text>) : HashMap<string, DraftState> =
         m.Drafts |> Map.toSeq |> Seq.map (fun (k, v) -> PeerId.value k, v) |> HashMap.ofSeq
 
-    let private queueByKey (m: SyncedSessionState) : HashMap<string, QueuedMessage> =
+    let private queueByKey (m: SyncedSessionState<Text>) : HashMap<string, QueuedMessage> =
         m.Queue |> Map.toSeq |> Seq.map (fun (k, v) -> QueueId.value k, v) |> HashMap.ofSeq
 
-    let private terminalDraftsByKey (m: SyncedSessionState) : HashMap<string, TerminalDraft> =
+    let private terminalDraftsByKey (m: SyncedSessionState<Text>) : HashMap<string, TerminalDraft> =
         m.TerminalDrafts
         |> Map.toSeq
         |> Seq.map (fun ((terminal, author), v) -> TerminalDraftKey.make terminal author, v)
         |> HashMap.ofSeq
 
-    let private pendingByKey (m: SyncedSessionState) : HashMap<string, PendingAct> =
+    let private pendingByKey (m: SyncedSessionState<Text>) : HashMap<string, PendingAct> =
         m.Pending |> Map.toSeq |> Seq.map (fun (k, v) -> QueueId.value k, v) |> HashMap.ofSeq
 
-    let private chaptersByKey (m: SyncedSessionState) : HashMap<string, ChapterMark> =
+    let private chaptersByKey (m: SyncedSessionState<Text>) : HashMap<string, ChapterMark<Text>> =
         m.Chapters |> Map.toSeq |> Seq.map (fun (k, v) -> MessageId.value k, v) |> HashMap.ofSeq
 
     /// `Create` for Ylmish's options: build the adaptive companion from a model.
-    let create (m: SyncedSessionState) : AdaptiveSyncedState =
+    let create (m: SyncedSessionState<Text>) : AdaptiveSyncedState =
         { Drafts = cmap (draftsByKey m)
           Queue = cmap (queueByKey m)
           Title = cval m.Title
@@ -81,7 +91,7 @@ module SyncedStateSync =
 
     /// `Update` for Ylmish's options: fold the next model into the companion. Setting
     /// `cmap.Value` yields keyed deltas, so only changed entries re-encode.
-    let update (a: AdaptiveSyncedState) (m: SyncedSessionState) : unit =
+    let update (a: AdaptiveSyncedState) (m: SyncedSessionState<Text>) : unit =
         a.Drafts.Value <- draftsByKey m
         a.Queue.Value <- queueByKey m
         a.Title.Value <- m.Title
@@ -189,7 +199,7 @@ module SyncedStateSync =
     /// re-flushed whole when any field of it changes, and `Binding.flush` carries an adopted
     /// `Y.Text` to its new content as SPLICES — so two people renaming one chapter interleave,
     /// exactly as they do in the title, rather than the later write clobbering the earlier.
-    let private encodeChapter (mark: ChapterMark) : Encoded =
+    let private encodeChapter (mark: ChapterMark<Text>) : Encoded =
         Encode.object
             [ "opens", Encode.string (AVal.constant (if mark.Opens then "yes" else "no"))
               "name", Encode.text (AVal.constant mark.Name) ]
@@ -402,7 +412,7 @@ module SyncedStateSync =
     /// "unmarked" would silently strip the mark off every notable act a garbled write touched.
     /// Same totality rule as every other entry here — the doc is shared with peers we don't
     /// control.
-    let private chaptersToDomain (h: HashMap<string, string option * Text>) : Map<MessageId, ChapterMark> =
+    let private chaptersToDomain (h: HashMap<string, string option * Text>) : Map<MessageId, ChapterMark<Text>> =
         (Map.empty, HashMap.toSeq h)
         ||> Seq.fold (fun acc (key, (opens, name)) ->
             match MessageId.create key, opens with
@@ -447,7 +457,7 @@ module SyncedStateSync =
     /// Total over a doc a peer garbled, too: every slot goes through `slot` and every keyed
     /// map through `entries`, so what does not decode is absent rather than fatal. That is
     /// the browser's binding and the Session's `ofDoc` alike — one reader, one answer.
-    let decode<'m> : Decoder<'m, SyncedSessionState> =
+    let decode<'m> : Decoder<'m, SyncedSessionState<Text>> =
         Decode.object {
             let! drafts = slot "drafts" (entries decodeDraft)
             let! queue = slot "queue" (entries decodeQueued)
@@ -525,7 +535,7 @@ module SyncedStateSync =
     /// turns what does not decode into absence. An `Error` here is Ylmish breaking that
     /// contract, not a peer garbling the doc — the "Sync boundary" cases pin that every
     /// garbled shape still reads — so it fails loudly rather than reading as empty.
-    let ofDoc (doc: Yjs.Y.Doc) : SyncedSessionState =
+    let ofDoc (doc: Yjs.Y.Doc) : SyncedSessionState<Text> =
         materializeRoots doc
         match Decode.run () decode doc with
         | Ok synced -> synced
@@ -553,7 +563,7 @@ module SyncedStateSync =
     /// every doc update. That saved walking roots the same process already walks on the same
     /// update — the title report runs `ofDoc` per update — and it was a second reader of the
     /// chapters with casts of its own, which is the thing that lets two readers disagree.
-    let chaptersOf (doc: Yjs.Y.Doc) : Map<MessageId, ChapterMark> = (ofDoc doc).Chapters
+    let chaptersOf (doc: Yjs.Y.Doc) : Map<MessageId, ChapterMark<Text>> = (ofDoc doc).Chapters
 
     /// The live text a naming subject is written in, when the doc has one.
     ///

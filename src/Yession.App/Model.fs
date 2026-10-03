@@ -676,7 +676,7 @@ type ClientModel =
       /// can act on. Starts FALSE, including on the server-rendered shell, because at first
       /// paint no client has looked.
       HistoryRead : bool
-      Synced        : SyncedSessionState
+      Synced        : SyncedSessionState<Ylmish.Text>
       Conversation  : ConversationProjection
       /// The terminal half of the chat (Plan 14, stage 1): block chips and lease-stretch
       /// items, with the offset each is anchored at. Merged with `Conversation` at render
@@ -1301,7 +1301,7 @@ module ClientModel =
           EphemeralStorage = false
           CanKeepHistory = true
           HistoryRead = false
-          Synced = SyncedSessionState.empty
+          Synced = (SyncedSessionState.empty CollabText.ylmish)
           Conversation = ConversationProjection.empty
           Approvals = RepoApprovals.empty
           Launch = Launch.empty
@@ -1362,7 +1362,7 @@ module ClientModel =
             IsCatchingUp = catchingUp
             CatchUpIsSlow = catchingUp && consumer.CatchUpIsSlow }
 
-    let private withSynced (synced: SyncedSessionState) (model: ClientModel) : ClientModel =
+    let private withSynced (synced: SyncedSessionState<Ylmish.Text>) (model: ClientModel) : ClientModel =
         { model with Synced = synced }
 
     /// A repo, or anything said - the fact that retires the launch surface for good; see
@@ -2090,7 +2090,7 @@ module ClientModel =
     /// on a message that has said nothing yet, and a control named by an empty string is a
     /// control a screen reader announces as "button".
     let chapterName (model: ClientModel) (item: ConversationItem) : string =
-        match Chapters.name model.Synced.Chapters item with
+        match Chapters.name CollabText.ylmish model.Synced.Chapters item with
         | "" -> Dom.Text.unnamedChapter
         | said -> said
 
@@ -2965,7 +2965,7 @@ module ClientModel =
             | Some item ->
                 model
                 |> withSynced
-                    { model.Synced with Chapters = Chapters.toggle item model.Synced.Chapters }
+                    { model.Synced with Chapters = Chapters.toggle CollabText.ylmish item model.Synced.Chapters }
             | None -> model
         // The item again, and for the reason the toggle needs it: a chapter nobody has touched
         // has no entry, so the rename has to record the verdict the item already carried.

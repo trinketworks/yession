@@ -1117,9 +1117,9 @@ let private chapterTests =
     /// written before chapters had names decodes to, and the one an auto-chapter keeps.
     let verdict (item: ConversationItem) (opens: bool) =
         Map.ofList [ item.MessageId, { Opens = opens; Name = Ylmish.Text.empty } ]
-    let opensOf (item: ConversationItem) (chapters: Map<MessageId, ChapterMark>) =
+    let opensOf (item: ConversationItem) (chapters: Map<MessageId, ChapterMark<Ylmish.Text>>) =
         chapters |> Map.tryFind item.MessageId |> Option.map (fun mark -> mark.Opens)
-    let nameIn (item: ConversationItem) (chapters: Map<MessageId, ChapterMark>) =
+    let nameIn (item: ConversationItem) (chapters: Map<MessageId, ChapterMark<Ylmish.Text>>) =
         chapters |> Map.tryFind item.MessageId |> Option.map (fun mark -> Ylmish.Text.toString mark.Name)
     testList "Chapters (where the session divides)" [
         // The default half. A watch is the reason somebody is waiting, so its news opens a
@@ -1142,13 +1142,13 @@ let private chapterTests =
         // `toggle` takes the ITEM, so the caller never has to know what it defaulted to —
         // which is the whole reason the default and the verdict are read in one place.
         testCase "toggling an act that is notable by nature records the no" <| fun () ->
-            Expect.equal (opensOf notable (Chapters.toggle notable Map.empty)) (Some false) "recorded, not merely absent"
+            Expect.equal (opensOf notable (Chapters.toggle Collab.CollabText.ylmish notable Map.empty)) (Some false) "recorded, not merely absent"
 
         // Absence and no are different answers, so coming back from a no is a yes rather
         // than a delete — and a later change to what is notable by nature cannot silently
         // reverse a decision somebody has already made.
         testCase "toggling it back records the yes, rather than forgetting the answer" <| fun () ->
-            let chapters = Map.empty |> Chapters.toggle notable |> Chapters.toggle notable
+            let chapters = Map.empty |> Chapters.toggle Collab.CollabText.ylmish notable |> Chapters.toggle Collab.CollabText.ylmish notable
             Expect.equal (opensOf notable chapters) (Some true) "an answer either way"
 
         testCase "the chapters keep the order the conversation holds them in" <| fun () ->
@@ -1190,28 +1190,28 @@ let private chapterTests =
         // change rather than an empty field.
         testCase "opening a chapter writes the guess down" <| fun () ->
             let message = itemSaying "m" (ItemContent.Message "Do both ends.")
-            Expect.equal (nameIn message (Chapters.toggle message Map.empty)) (Some "Do both ends.") "seeded, not left empty"
+            Expect.equal (nameIn message (Chapters.toggle Collab.CollabText.ylmish message Map.empty)) (Some "Do both ends.") "seeded, not left empty"
 
         // A mis-tap costs a chapter, never a sentence.
         testCase "closing a chapter keeps the name somebody wrote" <| fun () ->
             let chapters =
                 Map.empty
-                |> Chapters.toggle said
+                |> Chapters.toggle Collab.CollabText.ylmish said
                 |> Chapters.rename said (Ylmish.Text.ofString "Where it was settled")
-                |> Chapters.toggle said
+                |> Chapters.toggle Collab.CollabText.ylmish said
             Expect.equal (opensOf said chapters) (Some false) "the chapter is closed"
             Expect.equal (nameIn said chapters) (Some "Where it was settled") "and the words are still there"
 
         testCase "a name somebody wrote is what the chapter is called" <| fun () ->
             let chapters = Map.ofList [ said.MessageId, { Opens = true; Name = Ylmish.Text.ofString "The decision" } ]
-            Expect.equal (Chapters.name chapters said) "The decision" "theirs, not the guess"
+            Expect.equal (Chapters.name Collab.CollabText.ylmish chapters said) "The decision" "theirs, not the guess"
 
         // The case the fallback exists for: an act that opens a chapter by nature has no
         // entry at all until somebody touches it, and a decoded doc written before names
         // has an entry with nothing in it. Both read as the guess.
         testCase "a chapter nobody has named is called what the message says" <| fun () ->
-            Expect.equal (Chapters.name Map.empty said) "something happened" "no entry, still a name"
-            Expect.equal (Chapters.name (verdict said true) said) "something happened" "an empty name, still a name"
+            Expect.equal (Chapters.name Collab.CollabText.ylmish Map.empty said) "something happened" "no entry, still a name"
+            Expect.equal (Chapters.name Collab.CollabText.ylmish (verdict said true) said) "something happened" "an empty name, still a name"
 
         // Renaming is not a way to divide the session: what it writes down is the verdict the
         // item already carried, so naming a chapter that opened by itself leaves it open.
@@ -1226,17 +1226,17 @@ let private chapterTests =
         // standing behind it. `toggle` seeds the guess, so a chapter has words from the
         // moment it exists — "has it got a name yet" is not a question about emptiness.
         testCase "a chapter still wearing the guess is unwritten" <| fun () ->
-            Expect.isTrue (Chapters.unwritten (Chapters.toggle said Map.empty) said) "the guess is not a name"
+            Expect.isTrue (Chapters.unwritten Collab.CollabText.ylmish (Chapters.toggle Collab.CollabText.ylmish said Map.empty) said) "the guess is not a name"
 
         testCase "a chapter somebody named is not" <| fun () ->
             let chapters = Chapters.rename said (Ylmish.Text.ofString "Where it was settled") Map.empty
-            Expect.isFalse (Chapters.unwritten chapters said) "theirs, and nothing may type over it"
+            Expect.isFalse (Chapters.unwritten Collab.CollabText.ylmish chapters said) "theirs, and nothing may type over it"
 
         // An act that opens a chapter by nature has no entry at all until somebody touches
         // it. That is the commonest unwritten chapter there is, and a test of the map alone
         // would miss every one of them.
         testCase "a chapter nobody has touched is unwritten" <| fun () ->
-            Expect.isTrue (Chapters.unwritten Map.empty notable) "no entry, no name"
+            Expect.isTrue (Chapters.unwritten Collab.CollabText.ylmish Map.empty notable) "no entry, no name"
 
         // --- What a chapter covers --------------------------------------------------------
 
@@ -3331,7 +3331,7 @@ let private namingTests =
     /// breaks and not when the title rule does — the two are asked of the same fold, and a
     /// case that answered for both would name neither.
     let chaptersOwed settled chapters items =
-        Naming.owed settled titled chapters items
+        Naming.owed Collab.CollabText.ylmish settled titled chapters items
         |> List.filter (fun (job: Naming.Job) -> job.Subject <> NamingSubject.Title)
     /// What the session has settled, folded from the facts it recorded — the real path, so a
     /// case about what the fold DERIVES (whether a pass kept the name it was given) cannot be
@@ -3458,23 +3458,23 @@ let private namingTests =
         testCase "an untitled session with something said in it is owed a title" <| fun () ->
             let item = saying "m" "the auth middleware drops the refresh token"
             Expect.equal
-                (Naming.owed Map.empty "" Map.empty [ item ] |> List.map (fun job -> job.Subject))
+                (Naming.owed Collab.CollabText.ylmish Map.empty "" Map.empty [ item ] |> List.map (fun job -> job.Subject))
                 [ NamingSubject.Title ]
                 "empty is nobody's words, so it is the session's to write"
 
         testCase "a session nobody has said anything in is owed no title" <| fun () ->
-            Expect.equal (Naming.owed Map.empty "" Map.empty []) [] "there is nothing to name it after"
+            Expect.equal (Naming.owed Collab.CollabText.ylmish Map.empty "" Map.empty []) [] "there is nothing to name it after"
 
         testCase "a title somebody typed is owed nothing, ever" <| fun () ->
             let item = saying "m" "the auth middleware drops the refresh token"
-            Expect.equal (Naming.owed Map.empty "Friday deploy" Map.empty [ item ]) [] "their words end the question"
+            Expect.equal (Naming.owed Collab.CollabText.ylmish Map.empty "Friday deploy" Map.empty [ item ]) [] "their words end the question"
 
         // The same doubling rule as a chapter's, over the whole conversation rather than a
         // stretch — which is the "run tests" case at the session's own scale.
         testCase "a session whose material doubles is titled again" <| fun () ->
             let items = [ saying "a" "run tests"; saying "b" "the auth middleware drops the refresh token" ]
             let settled = settledFrom [ fact NamingSubject.Title "Running the tests" 1 ]
-            match Naming.owed settled "Running the tests" Map.empty items with
+            match Naming.owed Collab.CollabText.ylmish settled "Running the tests" Map.empty items with
             | [ job ] ->
                 Expect.equal job.Read 2 "and the fact will say it read both"
                 Expect.isTrue (job.Ask.Task.Contains "Running the tests") "with the name it has, so it can keep it"
@@ -3483,7 +3483,7 @@ let private namingTests =
         testCase "a session that has not doubled since its title is not asked again" <| fun () ->
             let items = [ saying "a" "one"; saying "b" "two"; saying "c" "three" ]
             let settled = settledFrom [ fact NamingSubject.Title "Two of them" 2 ]
-            Expect.equal (Naming.owed settled "Two of them" Map.empty items) [] "three is not six"
+            Expect.equal (Naming.owed Collab.CollabText.ylmish settled "Two of them" Map.empty items) [] "three is not six"
 
         // --- what the pass records ------------------------------------------------------
 
@@ -3516,7 +3516,7 @@ let private namingTests =
             let asked = saying "a" "fix the refresh token"
             let answered = { saying "b" "I have updated the middleware" with Author = ActorRef.Agent }
             Expect.equal
-                (Naming.owed Map.empty "" Map.empty [ asked; answered ] |> List.collect (fun job -> job.Ask.Lines))
+                (Naming.owed Collab.CollabText.ylmish Map.empty "" Map.empty [ asked; answered ] |> List.collect (fun job -> job.Ask.Lines))
                 [ "fix the refresh token" ]
                 "the agent's answer names the work, not the task"
 
@@ -3527,7 +3527,7 @@ let private namingTests =
                     Author = ActorRef.Session
                     Content = ItemContent.Act notableAct }
             Expect.equal
-                (Naming.owed Map.empty "" Map.empty [ asked; noted ] |> List.collect (fun job -> job.Ask.Lines))
+                (Naming.owed Collab.CollabText.ylmish Map.empty "" Map.empty [ asked; noted ] |> List.collect (fun job -> job.Ask.Lines))
                 [ "fix the refresh token" ]
                 "an act note is a sentence somebody already wrote short"
 
@@ -3539,11 +3539,11 @@ let private namingTests =
                   { saying "b" "cloned; here is what I found" with Author = ActorRef.Agent }
                   { saying "c" "and the tests pass" with Author = ActorRef.Agent } ]
             let settled = settledFrom [ fact NamingSubject.Title "Cloning z" 1 ]
-            Expect.equal (Naming.owed settled "Cloning z" Map.empty items) [] "one person's message is still one"
+            Expect.equal (Naming.owed Collab.CollabText.ylmish settled "Cloning z" Map.empty items) [] "one person's message is still one"
 
         testCase "a session nobody but the agent has spoken in is owed no title" <| fun () ->
             let items = [ { saying "a" "starting up" with Author = ActorRef.Agent } ]
-            Expect.equal (Naming.owed Map.empty "" Map.empty items) [] "there is nothing of anybody's to name it after"
+            Expect.equal (Naming.owed Collab.CollabText.ylmish Map.empty "" Map.empty items) [] "there is nothing of anybody's to name it after"
 
         // --- when the asking is over -----------------------------------------------------
 
@@ -3557,7 +3557,7 @@ let private namingTests =
                 [ saying "a" "clone z"; saying "b" "fix the refresh token"
                   saying "c" "and the tests"; saying "d" "and a changelog line" ]
             let settled = settledFrom [ fact NamingSubject.Title "Cloning z" 1; fact NamingSubject.Title "Cloning z" 2 ]
-            Expect.equal (Naming.owed settled "Cloning z" Map.empty items) [] "the model said this is the name"
+            Expect.equal (Naming.owed Collab.CollabText.ylmish settled "Cloning z" Map.empty items) [] "the model said this is the name"
 
         // The other half of that: a pass that CHANGED the name has not settled anything, which
         // is what keeps the session that opened with "clone z" nameable for the work.
@@ -3566,7 +3566,7 @@ let private namingTests =
             let settled =
                 settledFrom [ fact NamingSubject.Title "Cloning z" 1; fact NamingSubject.Title "Fixing the refresh token" 2 ]
             Expect.equal
-                (Naming.owed settled "Fixing the refresh token" Map.empty items |> List.map (fun job -> job.Subject))
+                (Naming.owed Collab.CollabText.ylmish settled "Fixing the refresh token" Map.empty items |> List.map (fun job -> job.Subject))
                 [ NamingSubject.Title ]
                 "nothing has been settled while the answer keeps moving"
 
@@ -3576,7 +3576,7 @@ let private namingTests =
         testCase "a session whose ask has run out of new material is not asked again" <| fun () ->
             let items = List.init (Titles.ReadItems * 4) (fun i -> saying (string i) (sprintf "message %d" i))
             let settled = settledFrom [ fact NamingSubject.Title "Something" Titles.ReadItems ]
-            Expect.equal (Naming.owed settled "Something" Map.empty items) [] "the next ask would be the last one again"
+            Expect.equal (Naming.owed Collab.CollabText.ylmish settled "Something" Map.empty items) [] "the next ask would be the last one again"
 
         testCase "a chapter whose ask has run out of new material is not asked again" <| fun () ->
             let items = List.init (Chapters.ReadItems * 4) (fun i -> saying (string i) (sprintf "message %d" i))

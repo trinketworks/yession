@@ -89,7 +89,7 @@ module Names =
         /// leaves both alone — somebody typing in a draft, a terminal record landing — cannot
         /// have made naming work, and does not read the log to discover that. `None` until
         /// the first pass, because a session that has looked at nothing has to look once.
-        let mutable lastSeen : (string * Map<MessageId, ChapterMark> * EventOffset option) option = None
+        let mutable lastSeen : (string * Map<MessageId, ChapterMark<Ylmish.Text>> * EventOffset option) option = None
 
         /// Everything a pass would answer against: the title, the doc's chapters and the
         /// offset the log is already keeping.
@@ -191,7 +191,7 @@ module Names =
                             ConversationProjection.applyEvents None envelopes ConversationProjection.empty
                             |> fst
                         let settled = Naming.ofEvents (envelopes |> List.map (fun e -> e.Event))
-                        for job in Naming.owed settled title chapters conversation.Items do
+                        for job in Naming.owed CollabText.ylmish settled title chapters conversation.Items do
                             do! nameOne write job
             }
 

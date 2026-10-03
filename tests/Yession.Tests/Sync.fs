@@ -58,21 +58,21 @@ let private entryIn (doc: Y.Doc) (root: string) (key: string) (fields: (string *
     (doc.getMap root : Y.Map<obj>).set (key, box entry) |> ignore
     fields |> List.iter (fun (field, value) -> entry.set (field, value) |> ignore)
 
-let private queueKeys (state: SyncedSessionState) : string list =
+let private queueKeys (state: SyncedSessionState<Ylmish.Text>) : string list =
     state.Queue |> Map.toList |> List.map (fst >> QueueId.value)
 
 /// Hand the synced state a whole new value. The client's own messages only ever build the
 /// entries a PERSON writes — a terminal act that is foreground and asks for no stdin — so the
 /// codec's encode direction for every other shape of entry is reachable only by putting one
 /// into the model directly, which is what this does.
-type private Replaced = Replaced of SyncedSessionState
+type private Replaced = Replaced of SyncedSessionState<Ylmish.Text>
 
 /// The synced-state codec bound to a doc with nothing of the client around it: the same
 /// `create`/`update`/`encode`/`decode` the client program binds, under the same
 /// `withYlmish`, over a model that is the synced state alone.
 let private codecProgram (doc: Y.Doc) =
     Elmish.Program.mkSimple
-        (fun () -> SyncedSessionState.empty)
+        (fun () -> (SyncedSessionState.empty CollabText.ylmish))
         (fun (Replaced next) _ -> next)
         (fun _ _ -> ())
     |> Ylmish.Program.withYlmish
@@ -136,7 +136,7 @@ let private codecTests =
 
         testCase "an empty doc decodes to the empty synced state (decode-empty = init)" <| fun () ->
             let decoded = SyncedStateSync.ofDoc (Y.Doc.Create ())
-            Expect.equal decoded SyncedSessionState.empty "no drafts, no shared brief"
+            Expect.equal decoded (SyncedSessionState.empty CollabText.ylmish) "no drafts, no shared brief"
 
         testCase "the doc contains drafts but never the conversation projection" <| fun () ->
             let doc = Y.Doc.Create ()
@@ -363,7 +363,7 @@ let private codecTests =
             let doc = Y.Doc.Create ()
             let p = codecProgram doc
             let act = agentsBackgroundAct (QueueId.create "q-bg" |> expect) (TerminalId.create "term-a" |> expect)
-            p.Dispatch (user (Replaced { SyncedSessionState.empty with Pending = Map.ofList [ act.QueueId, act ] }))
+            p.Dispatch (user (Replaced { (SyncedSessionState.empty CollabText.ylmish) with Pending = Map.ofList [ act.QueueId, act ] }))
 
             let decoded = SyncedStateSync.ofDoc doc
             Expect.equal (decoded.Pending |> Map.tryFind act.QueueId) (Some act) "the doc holds the act it was handed"
@@ -395,7 +395,7 @@ let private codecTests =
             let direct = Y.Doc.Create ()
             SyncedStateSync.enqueueTerminalCommand direct act.QueueId terminal act.Authority act.Order "make watch" act.Background act.Stdin
             let encoded = Y.Doc.Create ()
-            (codecProgram encoded).Dispatch (user (Replaced { SyncedSessionState.empty with Pending = Map.ofList [ act.QueueId, act ] }))
+            (codecProgram encoded).Dispatch (user (Replaced { (SyncedSessionState.empty CollabText.ylmish) with Pending = Map.ofList [ act.QueueId, act ] }))
 
             Expect.equal
                 (SyncedStateSync.ofDoc encoded).Pending

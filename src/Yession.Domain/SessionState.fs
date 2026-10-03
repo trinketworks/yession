@@ -119,7 +119,7 @@ type SharedBrief = { Body : string }
 
 /// Collaborative state synced via Ylmish.
 [<RequireQualifiedAccess>]
-type SyncedSessionState =
+type SyncedSessionState<'Text> =
     { /// Keyed by author, and that key is the invariant: one draft per client is
       /// unrepresentable-otherwise, and two peers drafting across a partition cannot collide
       /// because their keys differ. An ownerless "session draft", if one is ever wanted, is a
@@ -129,7 +129,7 @@ type SyncedSessionState =
       Queue       : Map<QueueId, QueuedMessage>
       /// The session's human-given title: collaborative text, so concurrent edits
       /// interleave and merge exactly like a draft body. Empty until first named.
-      Title       : Ylmish.Text
+      Title       : 'Text
       SharedBrief : SharedBrief option
       /// Terminal composer slots, keyed by (terminal, author) — one per person per
       /// terminal, structurally, exactly as `Drafts` caps a person at one message draft.
@@ -159,16 +159,16 @@ type SyncedSessionState =
       /// opens by nature (`Chapters`), which a set cannot say. Absent is "nobody has
       /// decided", which is not the same as "no" — and for a chapter nobody has touched, it
       /// is also how its name stays the heuristic's to answer rather than a copy of one.
-      Chapters   : Map<MessageId, ChapterMark> }
+      Chapters   : Map<MessageId, ChapterMark<'Text>> }
 
 module SyncedSessionState =
 
     /// Nothing synced yet: no drafts, an empty queue, an unnamed title, no shared brief,
     /// no terminal composers.
-    let empty : SyncedSessionState =
+    let empty (text: CollabText<'Text>) : SyncedSessionState<'Text> =
         { Drafts = Map.empty
           Queue = Map.empty
-          Title = Ylmish.Text.empty
+          Title = text.Empty
           SharedBrief = None
           TerminalDrafts = Map.empty
           Pending = Map.empty

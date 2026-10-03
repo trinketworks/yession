@@ -871,7 +871,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
         // to the middle of a scrollport it is already at the top of, so a rail measured
         // against it is only ever measured outside the zone where the placement is exact.
         Synced =
-            { SyncedSessionState.empty with
+            { (SyncedSessionState.empty CollabText.ylmish) with
                 // One chapter somebody has named and one nobody has, which is what a session
                 // holds: a name is written over the heuristic's guess, never instead of it.
                 Chapters =

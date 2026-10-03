@@ -2542,7 +2542,7 @@ module View =
                   <span class="{Style.sessionBreakLine}" aria-hidden="true"></span>
                 </div>"""
         let chapterRule (item: ConversationItem) =
-            let held = Chapters.written model.Synced.Chapters item
+            let held = Chapters.written CollabText.ylmish model.Synced.Chapters item
             let named = ClientModel.chapterName model item
             // Only peers whose caret is in THIS chapter's name get a marker here, the way the
             // header takes the title's. A name is a field like any other, and a marker in the
