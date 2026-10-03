@@ -691,7 +691,7 @@ RUNTIME partition (a Node suite on the .NET CLR and vice versa).
 Capabilities:
 - `Browser` — Chromium via the .NET Playwright driver. Pins the .NET CLR runtime.
 - `Ports` — binds TCP ports / spawns processes.
-- `Native` — the native `node-datachannel` WebRTC addon, loaded by the real Session Process.
+- `Native` — the native `node-datachannel` WebRTC addon, loaded by the real Session.
   Present under Nix (built from source, baked into the `nodeModules` derivation the dev shell
   symlinks in), so `Native`-tagged suites (all host-spawning ones, incl. the real WebRTC
   data-channel E2E) RUN here. Outside Nix the addon is absent and they skip cleanly.

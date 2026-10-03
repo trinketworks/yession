@@ -441,7 +441,7 @@ first's.
   (`NotificationHub<'n>` for this leg and the notification one; `KeyedRetainedHub` where a
   leg retains a value per session, as the MCP one does).
 - **Peer-to-peer is star-shaped through the Process.** Clients sync Yjs state via the
-  Session Process relay, not directly with each other; y-webrtc-style meshes are not
+  Session relay, not directly with each other; y-webrtc-style meshes are not
   used.
 
 ## Persistence & data
@@ -520,7 +520,7 @@ first's.
   `doc.transact`, copies a body root the app owns beside the synced model (a draft's
   `Y.XmlFragment`, a terminal slot's `Y.Text`) into the queued entry, and dispatches
   `SendDraftMsg` / `SendTerminalDraftMsg` from INSIDE that transaction. That one transaction
-  is the invariant: the Session Process drains on a queue entry's arrival, so an entry that
+  is the invariant: the Session drains on a queue entry's arrival, so an entry that
   lands without its body runs as an empty message, and a
   send split across updates lets a `withYlmish` `Set` from the drain's removal clobber the
   sender's own state (`Client.connect` says both at the verbs). It holds today only because a
@@ -1004,7 +1004,7 @@ first's.
 - **The live viewport is proven host-free, never against a real pty end to end** (Plan 14,
   stage 6 — which closed the older "no browser viewport" gap: the panel renders a live screen,
   the holder's copy takes keystrokes, and the client composes it with the same emulator the
-  Session Process uses). What no suite drives is the whole loop at once. Stage 6's own note
+  Session uses). What no suite drives is the whole loop at once. Stage 6's own note
   says so: the keystroke translation is answered host-free under `Browser`, because a
   `KeyboardEvent` is the part only a real browser can answer, and the Process half is pinned
   separately in the pty suite. Two peers sharing one real pty, one of them typing into it, is

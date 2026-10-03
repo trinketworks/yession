@@ -17,7 +17,7 @@ These are architectural constraints, not preferences.
 A session runs on a local node. The first implementation assumes one node. Central
 discovery, placement, and remote directories are deferred.
 
-Clients connect to the local Session Process over WebRTC. HTTP may be used for static
+Clients connect to the local Session over WebRTC. HTTP may be used for static
 app bootstrap and signalling, but **not** as the main session API.
 
 ### Reactive
@@ -51,7 +51,7 @@ Elmish Model / Msg / update
 ### Durable facts are events
 
 Collaborative editing state belongs in Yjs. Durable session history belongs in a
-Session Process-owned event log.
+Session-owned event log.
 
 ```text
 Yjs        = collaborative editable state
@@ -59,7 +59,7 @@ Event log  = durable facts
 Client offset = read progress through the event log
 ```
 
-The Session Process is the only event writer.
+The Session is the only event writer.
 
 ### Composition at the top
 
@@ -83,7 +83,7 @@ Writing them: [AGENTS.md](../AGENTS.md#writing-tests).
 ### 2.1 Runtime components
 
 ```text
-Session Process
+Session
   - owns one session
   - hosts the web app bootstrap
   - owns the append-only event log
@@ -91,17 +91,17 @@ Session Process
   - runs the Elmish model/update loop
   - runs the agent runtime
   - exposes a multiplexed WebRTC protocol to clients
-  - later receives delegated capabilities from the Session Manager
+  - later receives delegated capabilities from the Manager
 
-Browser Client
+App
   - runs the Elmish model/update loop
   - connects over WebRTC
   - edits collaborative state through Ylmish/Yjs
   - consumes read-only event pages by offset
   - renders projections from events and synced state
 
-Session Manager (Phase 2)
-  - launches Session Processes
+Manager (Phase 2)
+  - launches Sessions
   - owns launch, identity, and secret custody
   - declares what a session may reach; holds no environment authority itself
 ```
@@ -111,7 +111,7 @@ Session Manager (Phase 2)
 ```text
 Elmish model        Product state and transitions.
 Ylmish/Yjs          Encoding and synchronization of selected collaborative state.
-Event log           Append-only durable session facts owned by the Session Process.
+Event log           Append-only durable session facts owned by the Session.
 Client event offset Client-side read position through the event log.
 ```
 
@@ -187,13 +187,13 @@ without saying so — a backgrounded phone, a WiFi-to-cellular switch — leavin
 `open`, sends accepted into nothing, and no `close` event ever. So every channel that carries
 a session is wrapped in `Link.supervise` (`Yession.Domain/Link.fs`) before anything else holds
 it: any inbound frame is proof of life, a quiet link is probed once a second, and three quiet
-ticks make it dead. Supervision is symmetric — the Session Process holds every peer to the
+ticks make it dead. Supervision is symmetric — the Session holds every peer to the
 heartbeat it answers — which is also how a silently-dead peer stops holding a terminal lease.
 
 Death has exactly one expression: the channel CLOSES. Nothing above the wrapper learns about
 liveness through a second channel, so there is no second state to keep consistent with the
 first, and the two pumps needed no change — the client reconnects and re-pushes its full doc
-state, the Session Process runs the cleanup it already ran. `LinkPolicy` takes its clock as a
+state, the Session runs the cleanup it already ran. `LinkPolicy` takes its clock as a
 port exactly as `Resilience.Policy` does, so the whole quiet-tick sequence is asserted in the
 cheap tier in zero real time ([ADR](decisions/2026-08-20-session-link-liveness.md)).
 
@@ -202,7 +202,7 @@ cheap tier in zero real time ([ADR](decisions/2026-08-20-session-link-liveness.m
 ## 3. Authority model (Phase 2)
 
 The Manager owns launch, identity, and secret custody — not environment authority. A
-Session Process spawns its own sandboxes through the `CreateSandbox` seam and confines
+Session spawns its own sandboxes through the `CreateSandbox` seam and confines
 them with whichever `SandboxBackend` it was booted with (`Yession.Domain/Sandbox.fs`);
 secrets are the one thing it cannot mint, and they cross from the Manager only at sandbox
 spawn, over the authenticated control channel. The earlier design — Manager-issued,
@@ -210,8 +210,8 @@ session-scoped container handles — was replaced by the sandbox seam, which con
 agent's own CLI as well as the work it runs.
 
 ```text
-Session Manager   owns launch, identity, and secret custody.
-Session Process   owns orchestration; spawns and confines its own sandboxes.
+Manager               owns launch, identity, and secret custody.
+Session               owns orchestration; spawns and confines its own sandboxes.
 Session Environment   a sandbox associated with exactly one SessionId; started lazily.
 ```
 
@@ -228,7 +228,7 @@ Command-to-container encryption is designed for but not implemented yet.
 ```
 
 User access to a session is authorized through the Manager as an OIDC provider
-(authorization code + PKCE; each Session Process registers as a client with its
+(authorization code + PKCE; each Session registers as a client with its
 per-launch control secret). Three authentication strategies ship, selected by the
 `--auth` argument at Manager start: `none` (the default — nothing authenticates
 until the operator chooses a trust rule), `localhost` (any loopback request is the
@@ -390,13 +390,13 @@ Ylmish is the encoding/sync boundary.
 Yjs is not the domain model.
 WebRTC is the session transport.
 HTTP is bootstrap/signalling only.
-The Session Process is the only event writer.
+The Session is the only event writer.
 Clients consume events read-only by offset.
 Drafts are collaborative state.
 Sent messages are durable events.
 Conversation is a projection.
 Manager owns authority.
-Session Process owns orchestration.
+Session owns orchestration.
 Environment starts lazily.
 Capabilities are scoped, not ambient.
 Verification is automated end-to-end, not manual.
