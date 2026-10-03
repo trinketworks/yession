@@ -409,19 +409,23 @@ let private someOwnText (selector: string) (text: string) =
 /// function form `() => (async () => false)()` settles at once, while `() => false` correctly times
 /// out. `EvaluateAsync` awaits a returned Promise (confirmed: `(async () => false)()` -> false), so
 /// polling it is correct for both predicate shapes.
-/// Open a terminal the way a person does now (Plan 20, stage 1): the strip's `+` is a DOOR to
-/// the chooser, and a row in the chooser says where the terminal goes. Two presses, because the
-/// second one is the choice — it used to be one, and that one could only ever give you
-/// `default`.
+/// Open a terminal the way a person does (Plan 20, stage 1): press the strip's `+`, and take
+/// the choice if one is offered.
 ///
-/// The chooser is already showing when there is nothing else to show, and the strip (and so the
-/// door) is not in the document while it is — one surface at a time, which `role="tablist"`
-/// requires. So this asks for the chooser only when it is not already up.
+/// Whether one IS offered depends on the session — with one place to put a terminal the door
+/// makes one, and with a repo's sandbox up it opens a menu. So this reads the answer off the
+/// control rather than guessing or waiting to see: `aria-haspopup` is exactly the promise the
+/// door makes to a reader, which makes it the right thing for a test to believe too, and it is
+/// rendered before any press so there is no race to lose.
 let private openNewTerminal (page: IPage) : Async<unit> =
     async {
-        let! showing = await (page.EvaluateAsync<bool> "() => !!document.querySelector('[data-sandbox-new]')")
-        if not showing then do! awaitU (page.Locator("[data-pane-new]").First.ClickAsync ())
-        do! awaitU (page.Locator("[data-sandbox-new='default']").First.ClickAsync ())
+        let! asks =
+            await (page.EvaluateAsync<bool>
+                "() => document.querySelector('[data-pane-new]')?.getAttribute('aria-haspopup') === 'menu'")
+        do! awaitU (page.Locator("[data-pane-new]").First.ClickAsync ())
+        if asks then
+            let! _ = await (page.WaitForSelectorAsync "[data-sandbox-new='default']")
+            do! awaitU (page.Locator("[data-sandbox-new='default']").First.ClickAsync ())
     }
 
 let private waitTimeoutMs = 30000.0
@@ -4076,35 +4080,41 @@ let editorTests =
                 return ()
             }
 
-        // The chooser's door (Plan 20, stage 1). WHAT it offers is a fold the cheap tier
-        // pins; what only a browser can answer is that the control at the end of the strip
-        // leads somewhere — and that getting there takes the strip away, because
-        // `role="tablist"` promises a panel showing one of its tabs and a strip left standing
-        // over the chooser would promise a panel that is not in the document.
+        // The strip's door (Plan 20, stage 1), and the whole point of the shape: it opens a
+        // MENU over the pane, where the list toggle beside it opens a destination that
+        // replaces the strip. Two acts, two kinds of surface — which is what a heading word
+        // over identical rows could not say, and what a browser is needed to confirm, because
+        // in the markup a menu and a list are both elements with entries in them.
         //
-        // Driven from the KEYBOARD, because the door replaced a button that acted on the
-        // press: a control that now opens a surface has to be reachable and pressable without
-        // a pointer, and the surface it opens has to contain a real control too.
-        editorCase "the strip's door leads to somewhere a terminal can be opened" <| fun page ->
+        // Driven from the keyboard throughout. The door opens a surface rather than acting, so
+        // it owes a reader the Escape that shuts it and the cursor back on the control that
+        // opened it — the floor's rule about a DOM swap that removes what had focus.
+        editorCase "the strip's door opens a menu over the pane, and gives focus back when it shuts" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [role='tablist']")
 
                 do! awaitU (page.Locator("#shell [data-pane-new]").First.PressAsync "Enter")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-new-menu]")
 
-                // One surface at a time, both halves of it.
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [role='tablist']")""")
+                // OVER the pane, not instead of it: the tabs are still there and still a
+                // tablist, which is exactly how this differs from the list.
+                let! _ = await (page.WaitForSelectorAsync "#shell [role='tablist']")
+                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-content-list]")""")
 
-                // And somewhere to open one, as a control somebody can reach and press.
-                let! row = await (page.WaitForSelectorAsync "#shell [data-sandbox-new]")
-                let! named = await (row.GetAttributeAsync "aria-label")
-                Expect.isTrue
-                    (named.StartsWith "New terminal in ")
-                    (sprintf "a row says where the terminal would go, got '%s'" named)
+                // Its entries are real controls a keyboard can reach.
                 do! awaitU (page.Locator("#shell [data-sandbox-new]").First.FocusAsync ())
-                let! focused = await (page.EvaluateAsync<bool> "() => document.activeElement?.hasAttribute('data-sandbox-new') === true")
-                Expect.isTrue focused "the row takes focus without a pointer"
+                let! onEntry =
+                    await (page.EvaluateAsync<bool> "() => document.activeElement?.hasAttribute('data-sandbox-new') === true")
+                Expect.isTrue onEntry "a place takes focus without a pointer"
+
+                // Escape from inside the menu shuts it and hands the cursor back, rather than
+                // leaving it on `body` where the entry used to be.
+                do! awaitU (page.Keyboard.PressAsync "Escape")
+                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-pane-new-menu]")""")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """document.activeElement?.hasAttribute('data-pane-new') === true""")
                 return ()
             }
 

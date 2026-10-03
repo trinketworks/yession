@@ -3571,80 +3571,33 @@ module View =
                   </span>
                   <span class="{Style.artifactListSize}">{ContentSize.render a.Bytes}</span>
                 </div>"""
-        // Somewhere a terminal can be opened — a row in the same grid as the things that
-        // already exist, because "open the shell I left running" and "open a new one in dev"
-        // are one question with two answers, and a person asking it does not care which of
-        // the two their answer turns out to be.
-        //
-        // The name is the sandbox and the particulars sit beside it, which is what makes two
-        // repos both declaring `dev` tellable apart. `default` wears the word every session
-        // has used for it, because "default" is a word about configuration and nobody opening
-        // a shell is thinking about configuration.
-        let newTerminalRow (sandbox: SandboxRef) =
-            let own = sandbox = SandboxRef.defaultRef
-            let label = if own then "terminal" else SandboxName.value (SandboxRef.name sandbox)
-            let where =
-                match SandboxRef.scope sandbox with
-                | SessionOwned -> Lit.nothing
-                | RepoOwned repo ->
-                    html $"""<span class="{Style.listRowScope}">{RepoRef.value repo}</span>"""
-            // What the declaration said it is FOR, when it said anything — under the name, in
-            // the tone the closed terminals wear, so the row reads as one thing with a note
-            // rather than two facts of equal weight.
-            //
-            // INSIDE the button rather than under it. The focus ring is drawn round the
-            // control, so a note outside it sits immediately beneath the ring's edge and
-            // reads as a second thing the ring has cut off — photographed at 320px. It also
-            // makes the row's target the height a reader thinks it is: the name alone is 24px
-            // in a 41px row, and the two lines fill their row.
-            //
-            // The button keeps its `aria-label`, which names the whole act ("New terminal in
-            // octo/hello:dev") and overrides this text for a screen reader, so the note joins
-            // the control without lengthening what it is called.
-            let purpose =
-                match ClientModel.sandboxPurpose sandbox model with
-                | None -> Lit.nothing
-                | Some said -> html $"""<span class="{Style.listRowNote}">{said}</span>"""
-            // The sandbox NAMES the terminal: the only thing this press says is where, so
-            // where is what the tab will say. That rule is the session's
-            // (`TerminalTitle.inSandbox`), and an empty title is how a caller asks for it.
-            html $"""
-                <div class="{Style.terminalListRow}" role="listitem">
-                  <span class="{Style.listRowPrompt}" aria-hidden="true">$</span>
-                  <button type="button" class="{Style.listRowChoice}"
-                          data-sandbox-new="{SandboxRef.render sandbox}"
-                          aria-label="{Dom.Text.newTerminalIn (SandboxRef.render sandbox)}"
-                          @click={Ev(fun _ -> dispatch (OpenTerminalMsg ("", sandbox)))}>
-                    <span class="{Style.listRowChoiceName}">{label}</span>
-                    {purpose}
-                  </button>
-                  {where}
-                </div>"""
-        let places = ClientModel.sandboxRows model
         let terminals = ClientModel.terminalRows model
         let artifacts = ClientModel.artifactRows model
-        // Headings only when there are two kinds to tell apart: over one section alone the
-        // heading names the only thing on screen, which is a word that says nothing. `New` is
-        // always a section — every session can open a terminal somewhere — so what decides is
-        // whether anything ELSE has rows.
-        let sections = (if List.isEmpty terminals then 0 else 1) + (if List.isEmpty artifacts then 0 else 1)
+        // Headings only when there are two kinds to tell apart: over a list of terminals alone,
+        // "Terminals" names the only thing on screen, which is a word that says nothing.
         let heading (label: string) =
-            if sections = 0 then Lit.nothing
+            if List.isEmpty terminals || List.isEmpty artifacts then Lit.nothing
             else html $"""<div class="{Style.listSectionLabel}">{label}</div>"""
-        // No empty state of its own. A session with nothing open is this same surface with two
-        // of its three sections empty — which is what it was always going to look like, and
-        // two hand-made empty states saying "New terminal" were two more places for it to
-        // stop agreeing with the list it stood in front of.
-        html $"""
-            <div class="{Style.contentListBody}" data-content-list role="list"
-                 aria-label="Everything in this session">
-              {heading "New"}
-              {places |> List.map newTerminalRow}
-              {if List.isEmpty terminals then Lit.nothing else heading "Terminals"}
-              {terminals |> List.map row}
-              {if List.isEmpty artifacts then Lit.nothing else heading "Artifacts"}
-              {artifacts |> List.map artifactRow}
-            </div>"""
+        match terminals, artifacts with
+        // A census of nothing. It says so and offers NOTHING, which is what tells this surface
+        // from the pane's own empty state: that one is where a session with no terminal is
+        // SENT and it carries the way to make one, while this is a place somebody came to look
+        // at what exists. Answering "nothing, and here is a button" to a question about what
+        // exists is how a list and a chooser became one surface — the mistake this reverts.
+        | [], [] ->
+            html $"""
+                <div class="{Style.contentListEmpty}" data-content-list>
+                  <span class="{Style.contentListEmptyWord}">{Dom.Text.nothingOpenedYet}</span>
+                </div>"""
+        | rows, shared ->
+            html $"""
+                <div class="{Style.contentListBody}" data-content-list role="list"
+                     aria-label="Everything in this session">
+                  {if List.isEmpty rows then Lit.nothing else heading "Terminals"}
+                  {rows |> List.map row}
+                  {if List.isEmpty shared then Lit.nothing else heading "Artifacts"}
+                  {shared |> List.map artifactRow}
+                </div>"""
 
     /// The content pane: a tab strip over four kinds of thing — a terminal, a block's
     /// read-only view, a stretch's replay (Plan 14, stage 2), and a file shared into the
@@ -3659,6 +3612,22 @@ module View =
     let private contentPane (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let tabs = ClientModel.paneTabs model
         let selected = ClientModel.selectedPane model
+        // What pressing `+` does. One place to put a terminal and no other kind of new thing
+        // yet, so it MAKES one — a menu whose only entry is the thing you asked for is a tap
+        // for nothing, and that is the shape of every session with no repo. A choice, and it
+        // asks.
+        //
+        // The rule is "something new, and if there is more than one kind, which one", which is
+        // what a `+` means everywhere; the control says which it will do through
+        // `aria-haspopup` rather than leaving a reader to find out by pressing. When uploading
+        // an artifact joins the menu there is always a choice, and this collapses to always
+        // asking without the rule changing.
+        let places = ClientModel.sandboxRows model
+        let pressingNew () =
+            match places with
+            | [ only ] -> dispatch (OpenTerminalMsg ("", only))
+            | _ -> dispatch TogglePaneMenuMsg
+        let newAsks = List.length places > 1
         let isOn (tab: PaneTab) =
             match selected with
             | Some chosen -> PaneTab.key chosen = PaneTab.key tab
@@ -3946,11 +3915,26 @@ module View =
         // produce markup nothing mounts, on every keystroke and every arriving record.
         let body () =
             match selected with
-            // Unreachable, and stated: a pane with nothing to show IS the chooser
-            // (`ClientModel.showsList`), so this branch is not rendered. It used to be an
-            // idle prompt with one button under it — a third place saying "new terminal",
-            // and the only one of the three that could not offer a sandbox.
-            | None -> Lit.nothing
+            // The empty pane wears the terminal's own symbol — an idle prompt, display-sized —
+            // and the one press that fills it. It briefly WAS the list, on the reading that a
+            // session with nothing open is one list with its sections empty; but the list
+            // answers what EXISTS, and "nothing, and here is a button" is not an answer to
+            // that question. This is where a session with nothing is sent, so this is what
+            // carries the way to make something.
+            //
+            // The same press as the strip's `+`, and when that press asks rather than acts,
+            // focus goes to the control the menu hangs off — the menu is anchored there, and
+            // one that opens away from the thing you pressed must at least take the cursor
+            // with it.
+            | None ->
+                html $"""
+                    <div class="{Style.terminalEmpty}">
+                      <span class="font-terminal text-[28px] leading-8 text-ink-faint select-none" aria-hidden="true">$</span>
+                      <button type="button" class="{Style.btnPrimary}" data-terminal-new
+                              @click={Ev(fun _ ->
+                                            pressingNew ()
+                                            if newAsks then dispatch (MoveMsg DomMove.FocusPaneNew))}>{Dom.Text.aNewTerminal}</button>
+                    </div>"""
             | Some tab ->
                 let inner =
                     match tab with
@@ -4001,9 +3985,51 @@ module View =
         // requirement rather than a preference: `role="tablist"` promises a tabpanel showing
         // one of its tabs, and a strip left standing over the list would be promising a panel
         // that is not in the document. One surface at a time; the toggle is how you swap them.
+        // Somewhere new to put something — the menu the strip's `+` hangs. A MENU and not a
+        // section of the list, which is what this was and what made it unreadable: a row that
+        // MAKES a thing was drawn in the list's own row, same grid, same type, same divider,
+        // so it was pixel-identical to a row that SELECTS one and a heading word was carrying
+        // the whole difference.
+        //
+        // Two doors, because the intent is settled before the gesture. Somebody who wants a
+        // shell in `dev` has no use for a list of what is running, and somebody after an
+        // hour-old build has no use for a list of sandboxes. One surface answering both made
+        // each of them read the other's rows.
+        let newMenu =
+            let entry (sandbox: SandboxRef) =
+                let own = sandbox = SandboxRef.defaultRef
+                let label = if own then Dom.Text.aTerminal else SandboxName.value (SandboxRef.name sandbox)
+                // What tells two repos' `dev` apart, and what the file said either is for.
+                // Under the name, because a menu is read down its left edge.
+                let beneath =
+                    let said =
+                        [ (match SandboxRef.scope sandbox with
+                           | SessionOwned -> None
+                           | RepoOwned repo -> Some (RepoRef.value repo))
+                          ClientModel.sandboxPurpose sandbox model ]
+                        |> List.choose id
+                    if List.isEmpty said then Lit.nothing
+                    else html $"""<span class="{Style.menuEntryNote}">{String.concat " · " said}</span>"""
+                html $"""
+                    <button type="button" role="menuitem" class="{Style.menuEntryStacked}"
+                            data-sandbox-new="{SandboxRef.render sandbox}"
+                            aria-label="{Dom.Text.newTerminalIn (SandboxRef.render sandbox)}"
+                            @click={Ev(fun _ -> dispatch (OpenTerminalMsg ("", sandbox)))}>
+                      <span class="{Style.menuEntryName}">{label}</span>
+                      {beneath}
+                    </button>"""
+            html $"""
+                <button type="button" class="{Style.itemMenuBackdrop}" tabindex="-1"
+                        aria-label="{Dom.Text.dismissMenu}"
+                        @click={Ev(fun _ -> dispatch ClosePaneMenuMsg)}></button>
+                <div class="{Style.paneNewMenu}" role="menu" data-pane-new-menu
+                     aria-label="{Dom.Text.openSomethingNew}">
+                  {places |> List.map entry}
+                </div>"""
         let strip =
             html $"""
                 <div class="{Style.terminalTabs}">
+                  <div class="{Style.terminalTabScroller}">
                   <div class="{Style.terminalTabList}" role="tablist" aria-label="Open content"
                        @keydown={Ev(fun (e: Browser.Types.Event) ->
                                         let pressed = e :?> Browser.Types.KeyboardEvent
@@ -4028,14 +4054,25 @@ module View =
                                                 dispatch (CloseTabMsg tab)))}>
                     {tabs |> List.map tabButton}
                   </div>
-                  <!-- The door to the chooser, where the tabs run out — which is where "and
-                       what else?" is asked, and the answer is both something running and
-                       something new. It used to open a terminal in `default` on the press,
-                       which is one tap rather than two and could only ever give you one
-                       answer. -->
-                  <button type="button" class="{Style.terminalTabNew}" data-pane-new
-                          aria-label="{Dom.Text.openSomethingElse}"
-                          @click={Ev(fun _ -> dispatch ToggleContentListMsg)}>+</button>
+                  </div>
+                  <!-- Outside the scroller, so it is where it was last time whatever the strip
+                       holds, and inside a positioned cell of its own, because a menu hung
+                       inside an `overflow-x-auto` box is a menu clipped to that box. Escape on
+                       the wrapper, so it fires wherever focus is inside the menu, and on the
+                       control too, which is where focus goes back. -->
+                  <div class="{Style.terminalTabNewCell}"
+                       @keydown={Ev(fun (e: Browser.Types.Event) ->
+                                        let key = (e :?> Browser.Types.KeyboardEvent).key
+                                        if key = "Escape" && model.PaneMenu then
+                                            dispatch ClosePaneMenuMsg
+                                            dispatch (MoveMsg DomMove.FocusPaneNew))}>
+                    <button type="button" class="{Style.terminalTabNew}" data-pane-new
+                            aria-haspopup="{if newAsks then "menu" else "false"}"
+                            aria-expanded="{if model.PaneMenu then "true" else "false"}"
+                            aria-label="{if newAsks then Dom.Text.openSomethingNew else Dom.Text.aNewTerminal}"
+                            @click={Ev(fun _ -> pressingNew ())}>+</button>
+                    {if model.PaneMenu then newMenu else Lit.nothing}
+                  </div>
                 </div>"""
         // ONE control with two faces rather than a pair that swap places: it never leaves the
         // document, so pressing it can never strand the focus that is on it. Its value is the

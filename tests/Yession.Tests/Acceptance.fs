@@ -202,6 +202,7 @@ let private representativeModel : ClientModel =
       Pane = None
       TerminalsOpen = true
       ItemMenu = None
+      PaneMenu = false
       OpenFolds = Set.empty
       DatedBreaks = Set.empty
       Copied = None
@@ -2047,25 +2048,114 @@ let private contentListTests =
                 ((listed representativeModel).Contains Dom.Hooks.artifactListRow)
                 "a session that has shared nothing grows no rows"
 
-        // The headings exist to tell kinds apart. This used to read "terminals alone need no
-        // heading", which was the whole rule while the list held only what existed; `New` is
-        // a section every session has, so what decides now is whether anything ELSE has rows.
-        testCase "the sections are named when there is more than one of them" <| fun () ->
-            let html = listed (withShare "chart.png")
-            for named in [ ">New<"; ">Terminals<"; ">Artifacts<" ] do
-                Expect.isTrue (html.Contains named) (sprintf "three sections, so %s is named" named)
+        // The headings exist to tell two kinds apart. Over terminals alone, "Terminals" names
+        // the only thing on screen — a word that says nothing and costs a line.
+        testCase "the sections are named only when there are two kinds to tell apart" <| fun () ->
+            Expect.isTrue ((listed (withShare "chart.png")).Contains "Artifacts") "both kinds present, both named"
+            Expect.isFalse ((listed representativeModel).Contains ">Terminals<") "terminals alone need no heading"
 
-        testCase "somewhere to open one, alone, needs no heading over it" <| fun () ->
-            // A session that has opened nothing and shared nothing: the chooser is the only
-            // thing on screen, and "New" over it names it — a word that says nothing and
-            // costs a line.
+        // What the list is FOR, which is the question the `New` section it briefly carried was
+        // not an answer to. A census of nothing says there is nothing; the way to make
+        // something is the strip's door, and a button here would make this surface the chooser
+        // again by a shorter route.
+        testCase "a list with nothing in it says so, and offers nothing" <| fun () ->
             let bare =
                 { representativeModel with
                     Terminals = { representativeModel.Terminals with Terminals = [] }
                     Conversation = ConversationProjection.empty }
             let html = listed bare
-            Expect.isTrue (html.Contains Dom.Hooks.sandboxNew) "somewhere to open one is still offered"
-            Expect.isFalse (html.Contains ">New<") "and nothing names it"
+            Expect.isTrue (html.Contains Dom.Text.nothingOpenedYet) "it says there is nothing"
+            Expect.isFalse (html.Contains Dom.Hooks.sandboxNew) "and offers nowhere to open one"
+    ]
+
+/// The strip's door, which is NOT the list's. Making something and finding something are two
+/// settled intents: somebody who wants a shell in `dev` has no use for a list of what is
+/// running, and somebody after an hour-old build has no use for a list of sandboxes. One
+/// surface answering both made each of them read the other's rows.
+let private paneNewTests =
+    let withSandbox (name: string) =
+        let started : ConversationItem =
+            { MessageId = MessageId.create ("msg-" + name) |> expect
+              Author = ActorRef.Agent
+              Content =
+                ItemContent.Act (
+                    Act.SandboxStarted
+                        { MessageId = MessageId.create ("msg-" + name) |> expect
+                          Sandbox = SandboxRef.parse name |> expect
+                          Backend = "docker"
+                          Description = Some "day-to-day work"
+                          Checkout = None
+                          Forwarded = []
+                          Realisation = []
+                          Actor = ActorRef.Agent
+                          OnBehalfOf = None
+                          CausedBy = None })
+              Status = Complete
+              Offset = EventOffset.create 1L |> expect
+              Woke = None; CausedBy = None }
+        { representativeModel with
+            // `Recent` is the write order (newest first) and `Items` is the read view over
+            // it, so a fixture sets the field. One item, so the order says nothing here.
+            Conversation = { representativeModel.Conversation with Recent = [ started ] } }
+
+    /// The door's own tag and nothing else. A whole page carries every timeline item's
+    /// actions control, and each of those says `aria-haspopup="menu"` too — so an unscoped
+    /// `Contains` for it is answered by the conversation while the door says the opposite.
+    let doorIn (html: string) : string =
+        let hook = Dom.Hooks.paneNew
+        let rec find (from: int) =
+            match html.IndexOf (hook, from) with
+            | -1 -> failwith "the strip offers no door to something new"
+            // `data-pane-new-menu` carries `data-pane-new` as a prefix: skip the menu's.
+            | at when html.Substring(at).StartsWith (hook + "-") -> find (at + 1)
+            | at -> html.Substring (at, html.IndexOf (">", at) - at)
+        find 0
+
+    testList "The strip's door to something new" [
+        testCase "with one place to put a terminal the door makes one rather than asking" <| fun () ->
+            // A menu whose only entry is the thing you asked for is a tap for nothing, and
+            // that is the shape of every session with no repo.
+            let door = doorIn (Support.render representativeModel)
+            Expect.isTrue (door.Contains Dom.Text.aNewTerminal) "the door says it makes one"
+            Expect.isFalse (door.Contains "aria-haspopup=\"menu\"") "and does not promise a menu"
+
+        testCase "with a choice the door says it will ask" <| fun () ->
+            // Said through `aria-haspopup` rather than left for a reader to find out by
+            // pressing — which is the whole of what makes one control doing two things fair.
+            let door = doorIn (Support.render (withSandbox "octo/hello:dev"))
+            Expect.isTrue (door.Contains "aria-haspopup=\"menu\"") "it promises a menu"
+            Expect.isTrue (door.Contains Dom.Text.openSomethingNew) "and is named for the asking"
+
+        testCase "the menu is a menu, not a section of the list" <| fun () ->
+            // The shape IS the fix. A row that makes a thing used to be drawn in the list's
+            // own row — same grid, same type, same divider — so it was pixel-identical to a
+            // row that selects one, and a heading word carried the whole difference.
+            let html =
+                withSandbox "octo/hello:dev"
+                |> Support.step TogglePaneMenuMsg
+                |> Support.render
+            Expect.isTrue (html.Contains Dom.Hooks.paneNewMenu) "the menu is drawn"
+            Expect.isTrue (html.Contains "role=\"menuitem\"") "and its entries are menu items"
+
+        testCase "the menu names every place, scope and all" <| fun () ->
+            let html =
+                withSandbox "octo/hello:dev"
+                |> Support.step TogglePaneMenuMsg
+                |> Support.render
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.sandboxNew "default")) "this session's own"
+            Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.sandboxNew "octo/hello:dev")) "and the repo's"
+            Expect.isTrue (html.Contains "octo/hello") "which repo declared it, because two may declare one name"
+            // Named for what pressing it DOES, scope included. The visible label is the short
+            // name, so without this an entry is called "dev" and a second repo's is too.
+            Expect.isTrue
+                (html.Contains (Dom.Text.newTerminalIn "octo/hello:dev"))
+                "and every entry says the whole act it performs"
+
+        testCase "a menu nobody opened is not in the document" <| fun () ->
+            // `ItemMenu`'s rule, for the same reason: a menu kept and hidden is a menu in the
+            // accessibility tree of every session that never asked for one.
+            let html = Support.render (withSandbox "octo/hello:dev")
+            Expect.isFalse (html.Contains Dom.Hooks.paneNewMenu) "not until it is asked for"
     ]
 
 // The pane's action row: the acts about the thing on screen, in ONE place whatever kind it is.
@@ -3058,6 +3148,7 @@ let tests =
         agentTurnTests
         terminalListTests
         contentListTests
+        paneNewTests
         paneActionsTests
         presenceTests
         syncStatusTests
