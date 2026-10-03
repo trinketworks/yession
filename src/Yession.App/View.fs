@@ -1020,10 +1020,12 @@ module View =
         | _, (provider, reason) :: _ ->
             html $"""
                 <section class="{Style.signInPrompt}" data-signin-required="{provider}">
-                  <span class="{Style.statusErr}"><span class="{Style.statusDot}"></span>{provider}</span>
-                  <span class="{Style.small}">{Dom.Text.signInLost provider}</span>
-                  <span class="{Style.signInPromptReason}">{detailNote "signin" [ reason ]}</span>
-                  <button type="button" class="{Style.btnPrimary}"
+                  <span class="{Style.signInPromptStatus}"><span class="{Style.statusDot}"></span>{provider}</span>
+                  <span class="{Style.signInPromptBody}">
+                    <span class="{Style.small}">{Dom.Text.signInLost provider}</span>
+                    {detailNote "signin" [ reason ]}
+                  </span>
+                  <button type="button" class="{Style.signInPromptAction}"
                           data-signin-again data-settings-toggle="prompt"
                           @click={Ev(fun _ -> actions.RevealSettings ())}>{Dom.Text.signInAgain}</button>
                 </section>"""

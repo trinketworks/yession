@@ -27,6 +27,7 @@ open Yession.App.Collab
 open Yession.Domain.Chat
 open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
+open Yession.Domain.Access
 open Fable.BrowserExtras
 open Fable.ProseMirror
 open Yession.App
@@ -170,6 +171,10 @@ module private Published =
     /// for a penny (`SyncedStateSync.chapterNameText`), not restated here: a fixture that wrote
     /// the layout out by hand would be a second copy of it, and the wrong one the day it moved.
     let chapterCaret : PageGlobal<System.Action<string, int, int>> = PageGlobal.named "__chapterCaret"
+    /// Swap in the shell with Claude's credential needing a sign-in, so the prompt over the
+    /// timeline is on the page. Only a browser can say where that prompt's button lands as its
+    /// reason is opened and closed, and no session this harness talks to can spend a credential.
+    let signInLost : PageGlobal<unit -> unit> = PageGlobal.named "__signInLost"
 
 
 let private doc = Y.Doc.Create ()
@@ -1509,6 +1514,19 @@ do
         render ())
     PageGlobal.set Published.acts (fun () ->
         model <- actsModel
+        render ())
+    PageGlobal.set Published.signInLost (fun () ->
+        let needing = Some { Kind = OAuthConnection; SignInRequired = Some "the refresh token has expired" }
+        model <-
+            { shellModel with
+                Claude =
+                    { shellModel.Claude with
+                        Status =
+                            Some { SessionCredential = None
+                                   MineCredential = needing
+                                   Owner = OwnedByUser
+                                   AgentAvailable = true
+                                   Models = ModelsUnknown } } }
         render ())
     PageGlobal.set Published.chapterCaret (System.Action<_, _, _> (fun id anchor head ->
         match MessageId.create id, PeerId.create "brave-owl" with
