@@ -2820,9 +2820,9 @@ let private mcpTests =
 
         testCase "a server set round-trips, and carries no audience" <| fun () ->
             let original = { Servers = [ serialServer ] }
-            let json = ControlWire.toString Codec.mcpServerSet original
+            let json = ControlWire.toString McpWire.serverSet original
             Expect.equal
-                (ControlWire.fromString Codec.mcpServerSet json |> expect)
+                (ControlWire.fromString McpWire.serverSet json |> expect)
                 original
                 "decode∘encode is the identity"
             // Resolution already happened. A session that could read who ELSE reaches a

@@ -290,66 +290,9 @@ module Codec =
           Decode =
             Decode.object (fun get -> { McpToolList.Tools = get.Required.Field "tools" (Decode.list mcpTool.Decode) }) }
 
-    // Declaring an MCP server (Plan 17). One set of codecs for two consumers — the
-    // Manager's state file and the `/control/mcp` frame — because they carry the same
-    // value, and two codecs for one type is two chances to disagree about it.
-
     let mcpServerName : Codec<McpServerName> =
         { Encode = McpServerName.value >> Encode.string
           Decode = viaSmartCtor McpServerName.create Decode.string }
-
-    /// Tagged even with one case: a second transport changes who owns the PROCESS, and a
-    /// bare url on the wire would have to be re-tagged to admit one.
-    let mcpTransport : Codec<McpTransport> =
-        { Encode =
-            fun (transport: McpTransport) ->
-                match transport with
-                | McpHttp url -> Encode.object [ "type", Encode.string "http"; "url", Encode.string url ]
-          Decode =
-            Decode.field "type" Decode.string
-            |> Decode.andThen (fun t ->
-                match t with
-                | "http" -> Decode.field "url" Decode.string |> Decode.map McpHttp
-                | other -> Decode.fail (sprintf "Unknown MCP transport: %s" other)) }
-
-    let mcpServerRef : Codec<McpServerRef> =
-        { Encode =
-            fun (server: McpServerRef) ->
-                Encode.object
-                    [ "name", mcpServerName.Encode server.Name
-                      "transport", mcpTransport.Encode server.Transport
-                      "description", Encode.option Encode.string server.Description ]
-          Decode =
-            Decode.object (fun get ->
-                { McpServerRef.Name = get.Required.Field "name" mcpServerName.Decode
-                  McpServerRef.Transport = get.Required.Field "transport" mcpTransport.Decode
-                  McpServerRef.Description = get.Optional.Field "description" Decode.string }) }
-
-    let mcpAudience : Codec<McpAudience> =
-        { Encode =
-            fun (audience: McpAudience) ->
-                match audience with
-                | AnySession -> Encode.object [ "type", Encode.string "any" ]
-                | OneSession id ->
-                    Encode.object [ "type", Encode.string "session"; "sessionId", sessionId.Encode id ]
-          Decode =
-            Decode.field "type" Decode.string
-            |> Decode.andThen (fun t ->
-                match t with
-                | "any" -> Decode.succeed AnySession
-                | "session" -> Decode.field "sessionId" sessionId.Decode |> Decode.map OneSession
-                | other -> Decode.fail (sprintf "Unknown MCP audience: %s" other)) }
-
-    let mcpDeclaration : Codec<McpDeclaration> =
-        { Encode =
-            fun (declaration: McpDeclaration) ->
-                Encode.object
-                    [ "server", mcpServerRef.Encode declaration.Server
-                      "audience", mcpAudience.Encode declaration.Audience ]
-          Decode =
-            Decode.object (fun get ->
-                { McpDeclaration.Server = get.Required.Field "server" mcpServerRef.Decode
-                  McpDeclaration.Audience = get.Required.Field "audience" mcpAudience.Decode }) }
 
     // Talking to a server (Plan 17, step 3). JSON-RPC 2.0 as MCP profiles it, and the two
     // results we read. Codecs rather than string surgery in the Host, so the protocol is
@@ -517,17 +460,6 @@ module Codec =
         match Decode.fromString container meta with
         | Ok found -> found
         | Error _ -> None
-
-    /// One `/control/mcp` frame: the whole resolved set for THIS session, every time. The
-    /// AUDIENCE is deliberately absent — resolution already happened, and a session that
-    /// could read who else reaches a server would be reading the Manager's configuration.
-    let mcpServerSet : Codec<McpServerSet> =
-        { Encode =
-            fun (set: McpServerSet) ->
-                Encode.object [ "servers", set.Servers |> List.map mcpServerRef.Encode |> Encode.list ]
-          Decode =
-            Decode.object (fun get ->
-                { McpServerSet.Servers = get.Required.Field "servers" (Decode.list mcpServerRef.Decode) }) }
 
     /// The transcript bound a lease event carries (Plan 14, stage 1).
     ///
