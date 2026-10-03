@@ -12,6 +12,8 @@
     <Compile Include="Codecs/Events.fs" />
     <Compile Include="Codecs/Frames.fs" />
     <Compile Include="Codecs/Reads.fs" />
+    <Compile Include="Codecs/RepoPages.fs" />
+    <Compile Include="Codecs/MeProbe.fs" />
     <Compile Include="Routes.fs" />
     <Compile Include="Brand.fs" />
     <Compile Include="WebApp.fs" />

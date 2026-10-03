@@ -29,6 +29,7 @@ open Yession.Domain.Access
 open Yession.Domain.Chat
 open Yession.Domain.Tools
 open Yession.App
+open Yession.App.Codecs
 open Yession.Peer
 
 /// Every `set-cookie` the response carried, kept apart. `Headers.getSetCookie` is the only
