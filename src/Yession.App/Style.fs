@@ -2750,8 +2750,18 @@ module Style =
     /// One row: state, name, verbs. A grid rather than a flex row so the names line up down
     /// the list whatever their state marks are — a ragged left edge is what makes a list of
     /// twenty read as twenty unrelated things.
+    ///
+    /// The mark's track is a FIXED `1rem` and not `auto`, which is what that sentence needs
+    /// and what it did not have: every row is its own grid container, so an `auto` track is
+    /// sized by that row's own mark and coordinates with nothing. The marks are four
+    /// different widths — a 6px sync dot, an 8px prompt, a 12px status glyph, a 14px content
+    /// icon — so the names stood at four different offsets, measured 731/733/737. `1rem`
+    /// holds the widest with room, and each mark is centred in it rather than left in it, so
+    /// a dot and an icon read as one column rather than as a column with a wobble.
     let terminalListRow =
-        "grid grid-cols-[auto_1fr_auto] items-center gap-2 px-3 py-2 " + Stroke.dividerBottom
+        "grid grid-cols-[1rem_1fr_auto] items-center gap-2 px-3 py-2 "
+        + "[&>*:first-child]:justify-self-center "
+        + Stroke.dividerBottom
 
     /// The row's own control: its name, which opens it. Ink at rest so the list reads as a
     /// list of names, blue under the pointer because that is what interactive means here —
@@ -2799,6 +2809,24 @@ module Style =
     /// the note under it: with two repos both declaring `dev`, this is the whole of what tells
     /// their rows apart, so it is not the tone a size beside a filename gets.
     let listRowScope = "shrink-0 font-ui font-light text-small text-ink-dim"
+
+    /// A row that OFFERS something — the whole middle cell, name and note together, as one
+    /// control. The name's own class dresses the first line inside it, so a chooser row and a
+    /// terminal row set their names identically; what this adds is the box the focus ring is
+    /// drawn round, which has to hold everything the press is about.
+    /// A named group, so the NAME inside answers to the whole control rather than to itself:
+    /// the note and the empty space to the right of a short name are part of what you press,
+    /// and a row where only the word reacts tells a pointer the wrong thing about where it may
+    /// click. Named for `btnFace`'s reason — a control inside some other group must answer to
+    /// its own state.
+    let listRowChoice =
+        cls [ "group/choice bg-transparent cursor-pointer text-left w-full min-w-0 p-0 flex flex-col"; focusRing ]
+
+    /// The name on such a row: the terminal list's own type, reacting to the control around it
+    /// instead of to the pointer being on the word.
+    let listRowChoiceName =
+        cls [ "truncate font-ui text-body text-ink no-underline transition-colors"
+              "group-hover/choice:text-blue" ]
 
     /// A note under a row's name — what a repo's file said one of its sandboxes is FOR. In the
     /// tone a closed terminal's name wears, so the row reads as one thing with a note rather
