@@ -103,13 +103,29 @@ let private surfaceKey (el: Browser.Types.HTMLElement) : string =
 
 /// Whether the reader is at the end of a surface — within a few pixels of it, because a
 /// fractional scroll offset over sub-pixel line heights never lands on the bottom exactly.
+/// Narrow on purpose: this is "exactly at the edge", used only to skip a redundant
+/// `scrollTop` write in `restoreSurfaceScroll`. "Is the reader still following the tail" is
+/// a different, wider question — see `isPinned` below.
 let private atEnd (el: Browser.Types.HTMLElement) : bool =
     el.scrollTop + el.clientHeight >= el.scrollHeight - 4.0
+
+/// How far from the tail is far enough for "the reader has left it" to become true, rather
+/// than "scrolled past the last line by a pixel or two" — one slack for both the pin
+/// decision (`surfaceScroll`, `keepSurfacesPinned`) and the jump-to-latest toggle
+/// (`syncJumpToLatest`), because they are the same question asked twice and used to carry
+/// two different answers: landing a few px short of the exact edge hid the jump-to-latest
+/// button (looked caught up) while `atEnd`'s 4px said otherwise, pinning the reader to that
+/// pixel instead of riding the tail.
+let [<Literal>] private PinnedSlack = 200.0
+
+/// Whether the reader is still following the tail — within `PinnedSlack` of it.
+let private isPinned (el: Browser.Types.HTMLElement) : bool =
+    el.scrollTop + el.clientHeight >= el.scrollHeight - PinnedSlack
 
 /// Where each pinned surface has the reader, taken before the render moves them.
 let private surfaceScroll (selector: string) : Map<string, SurfacePosition> =
     surfaces selector
-    |> List.map (fun el -> surfaceKey el, (if atEnd el then AtEnd else ScrolledTo el.scrollTop))
+    |> List.map (fun el -> surfaceKey el, (if isPinned el then AtEnd else ScrolledTo el.scrollTop))
     |> Map.ofList
 
 /// Every pinned surface put back where the render left the reader.
@@ -140,14 +156,13 @@ let private restoreSurfaceScroll (selector: string) (positions: Map<string, Surf
         match Map.tryFind (surfaceKey el) positions with
         // At the end before the render, and not on the page at all before it, want the same
         // thing of it now — which is why the two are one case rather than one and a fallback.
-        | Some AtEnd | None -> if not (atEnd el) then el.scrollTop <- el.scrollHeight
+        // `isPinned`, not `atEnd`: `AtEnd` was recorded with `isPinned`'s wider slack, and
+        // checking the narrow one here reads a reader who has only just started scrolling
+        // away (inside 200px, past 4px) as having left — so this wrote `scrollHeight` back
+        // under them on the very next render, cancelling a scroll the reader was still
+        // inside the slack for. Same predicate both ends of the round trip.
+        | Some AtEnd | None -> if not (isPinned el) then el.scrollTop <- el.scrollHeight
         | Some (ScrolledTo position) -> if el.scrollTop <> position then el.scrollTop <- position
-
-/// How far from the tail is far enough for "you have scrolled away from the
-/// latest message" to become true, rather than "you just scrolled past the last line by a
-/// pixel or two" — the same slack `atEnd` reads at the OTHER end of the same question,
-/// widened because this is a whole control appearing, not a diff quietly staying pinned.
-let [<Literal>] private JumpToLatestSlack = 200.0
 
 /// Show or hide the chat's floating "jump to latest" against how far the reader actually is
 /// from the tail, in pixels — read straight off the surface rather than carried in the
@@ -164,8 +179,7 @@ let private syncJumpToLatest () : unit =
         | null -> ()
         | slot ->
             let slot = slot :?> Browser.Types.HTMLElement
-            let away = conversation.scrollHeight - conversation.clientHeight - conversation.scrollTop
-            if away < JumpToLatestSlack then slot.classList.add [| "hidden" |]
+            if isPinned conversation then slot.classList.add [| "hidden" |]
             else slot.classList.remove [| "hidden" |]
 
 /// A RENDER is not the only thing that moves the end of one of those surfaces away from the
@@ -190,7 +204,7 @@ let private keepSurfacesPinned (selector: string) : unit =
             // the event reached says whether it is an element before it is asked anything.
             match EventTargets.asHTMLElement event.target with
             | Some el ->
-                if el.matches selector then pinned.set (el, atEnd el) |> ignore
+                if el.matches selector then pinned.set (el, isPinned el) |> ignore
                 // The chat is one of the two surfaces this selector matches, and the float
                 // is its own: a reader scrolling a terminal's scrollback has no "jump to
                 // latest" to show or hide.
