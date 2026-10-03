@@ -365,10 +365,13 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
         // What a spec's selection forwards, provisioned: every route it NEEDS or refuse, then
         // each route it only WANTS that this session has a source offering and this backend can
         // be reached by — a want is silent where it cannot be had, as it is for every leaf.
+        // Silent, not forgotten: why a wanted `api` route was refused is kept, because a
+        // reference that needed it (`${proxy.…}`, a token) is refused later, and "select a
+        // resource granting one" is the wrong thing to tell somebody who did.
         let provisionConnections
             (name: SandboxRef)
             (spec: EnvironmentSpec)
-            : Async<Result<Map<ConnectionName, ConnectionRoute list> * Provision, string>> =
+            : Async<Result<Map<ConnectionName, ConnectionRoute list> * Provision * Map<ConnectionName, string>, string>> =
             async {
                 let routed (pairs: (string * ConnectionRoute) list) : Map<ConnectionName, ConnectionRoute list> =
                     pairs
@@ -384,6 +387,7 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                     | Ok provision ->
                         let mutable provision = provision
                         let mutable forwarded = needed
+                        let mutable refusedApi = Map.empty
                         for wanted, routes in Map.toList (routed connections.Wanted) do
                             match config.Credentials |> List.tryFind (fun source -> source.Name = wanted) with
                             | None -> ()
@@ -394,11 +398,12 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                                 for route in routes do
                                     if List.contains route source.Routes && not (List.contains route held) then
                                         match! source.Provision name [ route ] with
-                                        | CredentialForwarding.Unforwardable _ -> ()
+                                        | CredentialForwarding.Unforwardable reason ->
+                                            if route = ConnectionRoute.Api then refusedApi <- Map.add wanted reason refusedApi
                                         | CredentialForwarding.Forwarded given ->
                                             provision <- Provision.merge provision given
                                             forwarded <- ForwardedRoutes.merge forwarded (Map.ofList [ wanted, [ route ] ])
-                        return Ok (forwarded, provision)
+                        return Ok (forwarded, provision, refusedApi)
             }
 
         // What a spec asks the credential proxy for, provided INTO the spec — so the sandbox
@@ -410,6 +415,7 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
         let provideProxy
             (name: SandboxRef)
             (forwarded: Map<ConnectionName, ConnectionRoute list>)
+            (refusedApi: Map<ConnectionName, string>)
             (spec: EnvironmentSpec)
             : Result<EnvironmentSpec * Provision, string> =
             let asked =
@@ -426,11 +432,24 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
             match asked with
             | [] -> Ok (spec, Provision.empty)
             | asked when not byApi ->
-                Error (
-                    sprintf
-                        "this sandbox names %s, and forwards no connection by api — the credential proxy answers only what a connection's api route sends it; select a resource granting one"
-                        (asked |> List.map (fun value -> sprintf "'${proxy.%s}'" (ProxyValue.name value)) |> String.concat ", ")
-                )
+                let named = asked |> List.map (fun value -> sprintf "'${proxy.%s}'" (ProxyValue.name value)) |> String.concat ", "
+                match Map.toList refusedApi with
+                | [] ->
+                    Error (
+                        sprintf
+                            "this sandbox names %s, and forwards no connection by api — the credential proxy answers only what a connection's api route sends it; select a resource granting one"
+                            named
+                    )
+                // It asked for one, and was refused: what to select is not the question.
+                | refused ->
+                    Error (
+                        sprintf
+                            "this sandbox names %s, and forwards no connection by api — %s"
+                            named
+                            (refused
+                             |> List.map (fun (connection, reason) -> sprintf "'%s' was refused it: %s" (ConnectionName.value connection) reason)
+                             |> String.concat "; ")
+                    )
             | asked ->
                 match config.Proxy.Provide name asked with
                 | Error e -> Error e
@@ -492,7 +511,7 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
             async {
                 match! provisionConnections name spec with
                 | Error e -> return Error e
-                | Ok (forwarded, provision) ->
+                | Ok (forwarded, provision, refusedApi) ->
                     match withBound spec forwarded with
                     | Error e ->
                         revoke name forwarded
@@ -509,22 +528,23 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                         match missing with
                         | _ :: _ ->
                             revoke name forwarded
+                            // A connection whose api route was asked for and refused is told
+                            // why; selecting it again would be refused the same way.
                             let said =
                                 missing
                                 |> List.map (fun (connection, variables) ->
-                                    sprintf
-                                        "%s names '${%s.token}', and this sandbox does not forward '%s' by api"
-                                        (String.concat ", " variables)
-                                        (ConnectionName.value connection)
-                                        (ConnectionName.value connection))
-                            return
-                                Error (
-                                    sprintf
-                                        "%s — select a resource granting it under uses or wants, from a host that offers it"
-                                        (String.concat "; " said)
-                                )
+                                    let refused =
+                                        sprintf
+                                            "%s names '${%s.token}', and this sandbox does not forward '%s' by api"
+                                            (String.concat ", " variables)
+                                            (ConnectionName.value connection)
+                                            (ConnectionName.value connection)
+                                    match Map.tryFind connection refusedApi with
+                                    | Some reason -> sprintf "%s — it was refused it: %s" refused reason
+                                    | None -> sprintf "%s — select a resource granting it under uses or wants, from a host that offers it" refused)
+                            return Error (String.concat "; " said)
                         | [] ->
-                            match provideProxy name forwarded spec with
+                            match provideProxy name forwarded refusedApi spec with
                             | Error e ->
                                 revoke name forwarded
                                 return Error e
