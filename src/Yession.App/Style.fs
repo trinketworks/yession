@@ -663,8 +663,9 @@ module Style =
         pivotMarkBase + " group-hover:-translate-x-1 group-focus-visible:-translate-x-1 group-active:-translate-x-2"
 
     // --- Tiny square display pics (never round) -----------------------------------------
-    // Two-tone checkers stand in for people until real avatars exist; the variant is picked
-    // by hashing the peer id so identity is stable without name colours. The agent is not a
+    // Two-tone checkers stand in for people until real avatars exist; the variant is the
+    // person's seat, the order they joined the session in, so identity is stable and two
+    // people share one only when there are more people than checkers. The agent is not a
     // checker: it is a blue diamond (`agentAvatar`), and the palette below keeps it that way.
     // The checker hexes are deliberately NOT theme tokens: they are artwork constants, and
     // each class must appear as the same literal in the `@source inline` mirror in
@@ -722,9 +723,10 @@ module Style =
     /// palette the product is drawn from carries (orange, pink, magenta) and pale tints of
     /// the greens and warms. Never red either, which is `--color-err`.
     ///
-    /// A peer's checker is its id's hash modulo the length, so the length is the collision
-    /// rate: with five entries a three-person room shared a checker about half the time;
-    /// eleven brings that to about a quarter, and two people to one in eleven. Every entry is
+    /// A person's checker is their seat modulo the length, so the length is how many people
+    /// a room holds before two share one. It was their id's hash, which made the length a
+    /// collision RATE instead — even at eleven entries a three-person room shared a checker
+    /// about a quarter of the time. Every entry is
     /// one hue at two values (the light tone carries the shape at >= 3:1 on every surface;
     /// the dark tone is its shadow), and no two sit close enough in hue and value to be
     /// mistaken for each other at 14px. Adding one means checking it against its neighbours
@@ -745,15 +747,14 @@ module Style =
            "#e8469e", "#6e1349" // magenta
         |]
 
-    /// A person's two tones, picked by hashing the id that seeds them. Everything drawn for
-    /// a person — the checker, and the caret and selection they wear in a shared field —
-    /// is read from this one pair, so their mark and their cursor cannot disagree.
-    let humanTone (id: string) : string * string =
-        let hash = id |> Seq.fold (fun acc c -> acc * 31 + int c |> abs) 7
-        humanTones.[hash % humanTones.Length]
+    /// A person's two tones, picked by their seat (`Attribution.seatOf`). Everything drawn
+    /// for a person — the checker, and the caret and selection they wear in a shared field —
+    /// is read from this one pair, so their mark and their cursor cannot disagree. Past the
+    /// last tone the seats start again at the first.
+    let humanTone (seat: int) : string * string = humanTones.[seat % humanTones.Length]
 
-    /// A stable checker for a human peer id.
-    let humanAvatar (id: string) : string = humanTone id ||> checker
+    /// A person's checker, from their seat.
+    let humanAvatar (seat: int) : string = humanTone seat ||> checker
 
     /// The agent's mark: a dark square holding a small solid blue DIAMOND — the product's
     /// mark seen from above, its first frame, in the same blue the mark is drawn in. The

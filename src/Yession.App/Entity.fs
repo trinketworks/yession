@@ -50,8 +50,10 @@ module Entity =
         | ActorRef.Agent | ActorRef.Session | ActorRef.System | ActorRef.Configured _ ->
             actorToken actor
 
-    /// Who wears a mark: a person, seeded by their identity; the agent; or a thing that is
-    /// neither — the session, the system, a repo's file.
+    /// Who wears a mark: a person, by who they are; the agent; or a thing that is neither —
+    /// the session, the system, a repo's file. A person's colour is their seat
+    /// (`Attribution.seatOf`): the order they joined in, so no two share one until there are
+    /// more people than colours.
     ///
     /// A person's mark is seeded by the PERSON, not by the reference. A `UserRef` and a
     /// `PeerRef` are two ways an event can point at one human — the Session records
@@ -64,24 +66,21 @@ module Entity =
     /// the session seeded by a constant, a repo by its name — so a repo could wear exactly
     /// the colour of the person beside it. A colour is a person's; a thing has none.
     type private Wearer =
-        | Person of seed: string
+        | Person of Principal
         | Agent
         | Thing
 
     let private wearer (model: ClientModel) (actor: ActorRef) : Wearer =
         match actor with
-        | UserRef u -> Person (UserId.value u)
-        | PeerRef p ->
-            match Map.tryFind p model.Attribution.PeerUsers with
-            | Some user -> Person (UserId.value user)
-            | None -> Person (PeerId.value p)
+        | UserRef u -> Person (Principal.User u)
+        | PeerRef p -> Person (Attribution.principalFor model.Attribution.PeerUsers p)
         | ActorRef.Agent -> Agent
         | ActorRef.Session | ActorRef.System | ActorRef.Configured _ -> Thing
 
     /// The mark an actor wears: the class that draws it.
     let actorMark (model: ClientModel) (actor: ActorRef) : string =
         match wearer model actor with
-        | Person id -> Style.humanAvatar id
+        | Person who -> Style.humanAvatar (Attribution.seatOf model.Attribution who)
         | Agent -> Style.agentAvatar
         | Thing -> Style.thingAvatar
 
@@ -96,7 +95,7 @@ module Entity =
     /// and a thing the grey its mark is drawn in.
     let presenceColour (model: ClientModel) (actor: ActorRef) : string =
         match wearer model actor with
-        | Person id -> fst (Style.humanTone id)
+        | Person who -> fst (Style.humanTone (Attribution.seatOf model.Attribution who))
         | Agent -> "var(--color-blue)"
         | Thing -> "var(--color-ink-faint)"
 

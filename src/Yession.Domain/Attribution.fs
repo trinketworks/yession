@@ -41,9 +41,25 @@ module Attribution =
           /// Kept beside attribution because "who is this" has two halves, which user and
           /// what to call them, and a reader that is not a screen (the agent's transcript)
           /// needs both from the log alone: the client's live presence is not there to ask.
-          Names : Map<PeerId, string> }
+          Names : Map<PeerId, string>
+          /// Where each person sits: the order they first joined in, from 0.
+          ///
+          /// What a person's colour is read from. It was a hash of their id into the
+          /// palette, so two people shared a colour whenever their ids collided — a room of
+          /// three about one time in four. A seat is handed out once, in log order, so
+          /// every client folding the same log seats everybody the same way, and no two
+          /// people share one until there are more people than colours.
+          ///
+          /// Keyed by principal, so a user keeps one seat across every device and rejoin; a
+          /// peer nobody attributed is seated by the only identity it has.
+          Seats : Map<Principal, int> }
 
-    let empty : State = { PeerUsers = Map.empty; UserPeers = Map.empty; Creator = None; Names = Map.empty }
+    let empty : State =
+        { PeerUsers = Map.empty; UserPeers = Map.empty; Creator = None; Names = Map.empty; Seats = Map.empty }
+
+    /// A principal's seat, kept if they have one, or the next free one if not.
+    let private seat (principal: Principal) (seats: Map<Principal, int>) : Map<Principal, int> =
+        if Map.containsKey principal seats then seats else Map.add principal seats.Count seats
 
     /// The single-event step: fold one more event into an existing state, updating both
     /// directions from the one match arm. This is what a live process replays
@@ -63,8 +79,9 @@ module Attribution =
                   // and a rule that let the newest join take it would hand the session to
                   // whoever opened the tab last.
                   Creator = acc.Creator |> Option.orElse (Some user)
-                  Names = named }
-            | None -> { acc with Names = named }
+                  Names = named
+                  Seats = seat (Principal.User user) acc.Seats }
+            | None -> { acc with Names = named; Seats = seat (Principal.Peer joined.PeerId) acc.Seats }
         | _ -> acc
 
     /// A whole event log, folded from empty. Same result as replaying `applyEvent` one
@@ -104,3 +121,17 @@ module Attribution =
         | PeerRef peer -> Map.tryFind peer state.Names
         | UserRef user -> Map.tryFind user state.UserPeers |> Option.bind (fun peer -> Map.tryFind peer state.Names)
         | ActorRef.Agent | ActorRef.Session | ActorRef.System | ActorRef.Configured _ -> None
+
+    /// Where a principal sits: the seat the log gave them, or — for someone it has not
+    /// seated yet, such as this tab in the moment before its own join is folded back — a
+    /// seat their identity hashes to, so nobody is ever drawn without one. The hash is the
+    /// old rule and collides; it only stands in until the join arrives.
+    let seatOf (state: State) (principal: Principal) : int =
+        match Map.tryFind principal state.Seats with
+        | Some seat -> seat
+        | None ->
+            let id =
+                match principal with
+                | Principal.User user -> UserId.value user
+                | Principal.Peer peer -> PeerId.value peer
+            id |> Seq.fold (fun acc c -> (acc * 31 + int c) &&& 0x7fffffff) 7
