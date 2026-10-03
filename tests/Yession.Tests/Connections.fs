@@ -2176,6 +2176,24 @@ let private scriptedFetch (outcomes: PrWatches.PrFetchOutcome list) : ScriptedFe
 /// What a poll recorded, in the order it recorded it.
 type private RecordedTransitions = ResizeArray<Principal * PrRef * PrTransition list>
 
+/// What a poll recorded about whether a watch can be read, in order: `None` is readable again.
+type private RecordedReadability = ResizeArray<PrRef * string option>
+
+let private pollerRecording
+    (now: unit -> DateTimeOffset)
+    (fetch: PrWatches.FetchPr)
+    (recorded: RecordedTransitions)
+    (readability: RecordedReadability)
+    : PrWatches.PrWatchers =
+    PrWatches.create
+        GitHubPrs.provider
+        now
+        fetch
+        (fun _ -> async { return Some "token-abc" })
+        (fun _ -> async { return () })
+        (fun actor pr _ transitions -> async { recorded.Add (actor, pr, transitions) })
+        (fun _ pr unreadable -> async { readability.Add (pr, unreadable) })
+
 let private pollerOver
     (now: unit -> DateTimeOffset)
     (fetch: PrWatches.FetchPr)
@@ -2189,6 +2207,7 @@ let private pollerOver
         (fun _ -> async { return Some "token-abc" })
         (fun actor -> async { rejected.Add actor })
         (fun actor pr _ transitions -> async { recorded.Add (actor, pr, transitions) })
+        (fun _ _ _ -> async { return () })
 
 let private prPollTests =
     let ada = Principal.Peer (PeerId.create "ada" |> expect)
@@ -2400,7 +2419,7 @@ let private prPollTests =
                 let resetAt = int (clock.AddMinutes(10.0).ToUnixTimeSeconds ())
                 let script =
                     scriptedFetch
-                        [ PrWatches.PrFetchFailed (PrWatches.PrRateLimited (Some resetAt))
+                        [ PrWatches.PrFetchFailed (PrWatches.PrRateLimited (Some resetAt, "403, 0 left"))
                           PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
                 poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
@@ -2413,6 +2432,46 @@ let private prPollTests =
                 let! afterWindow = poller.Poll ()
                 Expect.equal script.Calls.Count (callsAfterLimit + 1) "past the reset it asks again"
                 Expect.isTrue afterWindow "and the answer moved the row"
+            }
+
+        // A watch went `unreachable` and nothing anywhere said why, or since when: the reason
+        // lived in the process and the query cell. It is recorded now — once when it stops
+        // being readable, however many looks fail the same way, and once when it can again.
+        testCaseAsync "a watch that cannot be read is recorded once, with why, and once when it can again" <|
+            async {
+                let mutable clock = DateTimeOffset (2026, 8, 27, 12, 0, 0, TimeSpan.Zero)
+                let secondary = PrWatches.PrFetchFailed (PrWatches.PrRateLimited (None, "403, a secondary limit, 4950 left"))
+                let script =
+                    scriptedFetch [ secondary; secondary; PrWatches.PrChanged (snapshotOf PrOpen ChecksGreen, PrWatches.PrEtags.none) ]
+                let readability = RecordedReadability ()
+                let poller = pollerRecording (fun () -> clock) script.Fetch (RecordedTransitions ()) readability
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
+                for _ in 1..3 do
+                    let! _ = poller.Poll ()
+                    clock <- clock.AddMinutes 16.0
+                Expect.equal
+                    (List.ofSeq readability)
+                    [ prOne, Some "rate limited by github (403, a secondary limit, 4950 left) — waiting for the window to reset"
+                      prOne, None ]
+                    "the refusal as github gave it, once, then the recovery"
+            }
+
+        // The ledger holding a look back and GitHub refusing one were one sentence, so a
+        // session's own reserve read as GitHub's limit — the question it left unanswerable.
+        testCaseAsync "a look this session held back is not recorded as github's refusal" <|
+            async {
+                let clock = DateTimeOffset (2026, 8, 27, 12, 0, 0, TimeSpan.Zero)
+                let script = scriptedFetch [ PrWatches.PrFetchFailed (PrWatches.PrHeld (clock.AddMinutes(30.0).ToUnixTimeSeconds ())) ]
+                let readability = RecordedReadability ()
+                let poller = pollerRecording (fun () -> clock) script.Fetch (RecordedTransitions ()) readability
+                poller.Apply [ watching { State = PrOpen; Checks = ChecksGreen; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
+                let! _ = poller.Poll ()
+                match List.ofSeq readability with
+                | [ _, Some said ] ->
+                    Expect.stringContains said "held back by this session" "says whose hold it is"
+                    Expect.stringContains said "until 12:30Z" "and until when"
+                    Expect.isFalse (said.Contains "rate limited by") "not github's"
+                | other -> failwithf "expected one record, got %A" other
             }
 
         testCaseAsync "a pushed delivery looks now, whatever the cadence said" <|
@@ -2440,7 +2499,7 @@ let private prPollTests =
                 // to be refused again — a push does not know better than the rate limiter.
                 let mutable clock = DateTimeOffset (2026, 8, 27, 12, 0, 0, TimeSpan.Zero)
                 let resetAt = int (clock.AddMinutes(10.0).ToUnixTimeSeconds ())
-                let script = scriptedFetch [ PrWatches.PrFetchFailed (PrWatches.PrRateLimited (Some resetAt)) ]
+                let script = scriptedFetch [ PrWatches.PrFetchFailed (PrWatches.PrRateLimited (Some resetAt, "403, 0 left")) ]
                 let poller = pollerOver (fun () -> clock) script.Fetch (RecordedTransitions ()) (ResizeArray ())
                 poller.Apply [ watching { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false } ]
                 let! _ = poller.Poll ()
@@ -2923,8 +2982,8 @@ let private prBudgetTests =
                 Resilience.Ledger.observed ledger (Resilience.Seen (10, resets))
                 let fetch = GitHubPrs.fetchOver stub.Url (spendingOver ledger now Resilience.Background)
                 match! fetch (Some "token-abc") prOne PrWatches.PrEtags.none None with
-                | PrWatches.PrFetchFailed (PrWatches.PrRateLimited (Some until)) ->
-                    Expect.equal (int64 until) (resets.ToUnixTimeSeconds ()) "the moment github named"
+                | PrWatches.PrFetchFailed (PrWatches.PrHeld until) ->
+                    Expect.equal until (resets.ToUnixTimeSeconds ()) "the moment github named, held here rather than refused there"
                 | other -> failwithf "expected the look to be held, got %A" other
                 Expect.equal stub.Requests.Count 0 "and nothing was asked of github to find out"
             }
@@ -4544,7 +4603,7 @@ let private watchEngineTests =
           Watches.Kind.Advance = fun _ change -> change
           Watches.Kind.DueIn = fun _ -> 60L
           Watches.Kind.NoCursor = ()
-          Watches.Kind.Describe = fun key -> sprintf "counter %d" key
+          Watches.Kind.Readability = fun _ _ _ -> async { return () }
           Watches.Kind.Record = fun _ key _ changes -> async { recorded.Add (key, changes) } }
     /// A source that answers "nothing has changed" — the conditional reply every settled
     /// watch gets — unless the case has set a refusal.

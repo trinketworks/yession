@@ -985,6 +985,8 @@ module ConversationProjection =
         // watch noticed is who the news is for, and whose name it should wear.
         | SessionEvent.PrTransitioned p ->
             proj |> noted p.MessageId (Principal.toActor p.Watcher) (noticed envelope (Act.PrTransitioned p)) envelope
+        // Kept for whoever diagnoses a watch; the `pull_requests` query says it live.
+        | SessionEvent.PrWatchReadability _ -> proj
         | AgentMessageStarted a ->
             // A message that follows another is that other one's close: the model has moved
             // on, so what the antecedent streamed is what it said. Only a streaming item

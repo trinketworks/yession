@@ -209,7 +209,13 @@ let failureAt (status: int) (reset: string) (remaining: string) (body: string) :
         // past `Int32.MaxValue` from January 2038, and an `Int32.TryParse` of one answers
         // `false` — so the window the provider named was dropped and the caller fell back
         // to a fixed wait, with nothing anywhere saying the reading had stopped working.
-        PrRateLimited (match Int64.TryParse reset with | true, epoch -> Some epoch | _ -> None)
+        let said =
+            [ string status
+              (if body.Contains "secondary rate limit" then "a secondary limit" else "")
+              (if remaining <> "" then sprintf "%s left" remaining else "") ]
+            |> List.filter (fun part -> part <> "")
+            |> String.concat ", "
+        PrRateLimited ((match Int64.TryParse reset with | true, epoch -> Some epoch | _ -> None), said)
     else PrUnreachable (sprintf "github answered %d" status)
 
 /// A reply that never arrived carries why in place of a body; everything else is a status.
@@ -399,7 +405,7 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
             // poller already schedules around exactly this value. The difference is that
             // this one costs no request to discover.
             | Resilience.Hold until ->
-                return PrFetchFailed (PrRateLimited (Some (until.ToUnixTimeSeconds ())))
+                return PrFetchFailed (PrHeld (until.ToUnixTimeSeconds ()))
             | Resilience.Go ->
                 let bearer = Option.toObj token
                 let repo = RepoRef.value pr.Repo
@@ -620,7 +626,7 @@ let openOver (apiBase: string) (spending: Spending) : OpenPr =
         async {
             match spending.Permit () with
             | Resilience.Hold until ->
-                return PrOpenFailed (PrRateLimited (Some (until.ToUnixTimeSeconds ())))
+                return PrOpenFailed (PrHeld (until.ToUnixTimeSeconds ()))
             | Resilience.Go ->
                 let bearer = Option.toObj token
                 let repo = RepoRef.value draft.Repo
@@ -763,7 +769,7 @@ let mergeOver (apiBase: string) (spending: Spending) : MergePr =
     fun token pr method ->
         async {
             match spending.Permit () with
-            | Resilience.Hold until -> return PrMergeFailed (PrRateLimited (Some (until.ToUnixTimeSeconds ())))
+            | Resilience.Hold until -> return PrMergeFailed (PrHeld (until.ToUnixTimeSeconds ()))
             | Resilience.Go ->
                 let bearer = Option.toObj token
                 let root = apiBase.TrimEnd '/'
@@ -815,7 +821,7 @@ let unmergeOver (apiBase: string) (spending: Spending) : UnmergePr =
     fun token pr ->
         async {
             match spending.Permit () with
-            | Resilience.Hold until -> return PrUnmergeFailed (PrRateLimited (Some (until.ToUnixTimeSeconds ())))
+            | Resilience.Hold until -> return PrUnmergeFailed (PrHeld (until.ToUnixTimeSeconds ()))
             | Resilience.Go ->
                 let bearer = Option.toObj token
                 let root = apiBase.TrimEnd '/'
@@ -902,7 +908,7 @@ let listOver (apiBase: string) (spending: Spending) : ListPrs =
     fun token repo query ->
         async {
             match spending.Permit () with
-            | Resilience.Hold until -> return Error (PrRateLimited (Some (until.ToUnixTimeSeconds ())))
+            | Resilience.Hold until -> return Error (PrHeld (until.ToUnixTimeSeconds ()))
             | Resilience.Go ->
                 let states =
                     match PrQuery.state query with
@@ -937,7 +943,7 @@ let draftOver (apiBase: string) (spending: Spending) : DraftPr =
     fun token pr ->
         async {
             match spending.Permit () with
-            | Resilience.Hold until -> return PrDraftFailed (PrRateLimited (Some (until.ToUnixTimeSeconds ())))
+            | Resilience.Hold until -> return PrDraftFailed (PrHeld (until.ToUnixTimeSeconds ()))
             | Resilience.Go ->
                 let bearer = Option.toObj token
                 let root = apiBase.TrimEnd '/'
@@ -970,7 +976,7 @@ let readyOver (apiBase: string) (spending: Spending) : ReadyPr =
     fun token pr ->
         async {
             match spending.Permit () with
-            | Resilience.Hold until -> return PrReadyFailed (PrRateLimited (Some (until.ToUnixTimeSeconds ())))
+            | Resilience.Hold until -> return PrReadyFailed (PrHeld (until.ToUnixTimeSeconds ()))
             | Resilience.Go ->
                 let bearer = Option.toObj token
                 let root = apiBase.TrimEnd '/'

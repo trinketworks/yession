@@ -183,6 +183,7 @@ type SessionEvent =
     | PrWatched of PrWatched
     | PrUnwatched of PrUnwatched
     | PrTransitioned of PrTransitioned
+    | PrWatchReadability of PrWatchReadability
 
 
 

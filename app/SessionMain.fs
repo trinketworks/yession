@@ -997,6 +997,20 @@ Async.StartImmediate (
         let githubLooking (spend: Resilience.Spend) =
             GitHubPrs.fetchOver githubApi (githubSpending spend)
         do
+            // A watch that stops being readable, and why — or can be again. `System` on
+            // the envelope for the transitions' reason: nobody in the session did it.
+            let recordPrReadability (watcher: Principal) (pr: PrRef) (unreadable: string option) : Async<unit> =
+                async {
+                    match MessageId.create (string (System.Guid.NewGuid ())) with
+                    | Error _ -> ()
+                    | Ok messageId ->
+                        let! _ =
+                            log.Append
+                                ActorRef.System
+                                (SessionEvent.PrWatchReadability
+                                    { MessageId = messageId; Pr = pr; Watcher = watcher; Unreadable = unreadable })
+                        return ()
+                }
             let recordPrTransitions
                 (watcher: Principal)
                 (pr: PrRef)
@@ -1036,6 +1050,7 @@ Async.StartImmediate (
                     resolveGitHubToken
                     (fun actor -> reportGitHubNetworkFailure actor "pull request poll")
                     recordPrTransitions
+                    recordPrReadability
             // The verbs over it. `watchesNow` re-reads the log rather than the poller,
             // so the projection stays the one answer to what is watched — and a watch
             // recorded by this verb comes back the same way a restart's would.

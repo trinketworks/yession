@@ -878,6 +878,21 @@ module Events =
                   // reads as not knowing it — never as having happened when it was written.
                   PrTransitioned.OccurredAt = get.Optional.Field "occurredAt" Codec.timestamp.Decode }) }
 
+    let private prWatchReadability : Codec<PrWatchReadability> =
+        { Encode =
+            fun (p: PrWatchReadability) ->
+                Encode.object
+                    [ "messageId", Codec.messageId.Encode p.MessageId
+                      "pr", Codec.prRef.Encode p.Pr
+                      "watcher", Codec.principal.Encode p.Watcher
+                      "unreadable", Encode.option Encode.string p.Unreadable ]
+          Decode =
+            Decode.object (fun get ->
+                { PrWatchReadability.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
+                  PrWatchReadability.Pr = get.Required.Field "pr" Codec.prRef.Decode
+                  PrWatchReadability.Watcher = get.Required.Field "watcher" Codec.principal.Decode
+                  PrWatchReadability.Unreadable = get.Optional.Field "unreadable" Decode.string }) }
+
     let private sandboxSetupQueued : Codec<SandboxSetupQueued> =
         { Encode =
             fun (p: SandboxSetupQueued) ->
@@ -1447,7 +1462,9 @@ module Events =
                 | SessionEvent.PrUnwatched p ->
                     Encode.object [ "type", Encode.string "prUnwatched"; "payload", prUnwatched.Encode p ]
                 | SessionEvent.PrTransitioned p ->
-                    Encode.object [ "type", Encode.string "prTransitioned"; "payload", prTransitioned.Encode p ])
+                    Encode.object [ "type", Encode.string "prTransitioned"; "payload", prTransitioned.Encode p ]
+                | SessionEvent.PrWatchReadability p ->
+                    Encode.object [ "type", Encode.string "prWatchReadability"; "payload", prWatchReadability.Encode p ])
           Decode =
             Decode.field "type" Decode.string
             |> Decode.andThen (fun t ->
@@ -1526,6 +1543,8 @@ module Events =
                     Decode.field "payload" prUnwatched.Decode |> Decode.map SessionEvent.PrUnwatched
                 | "prTransitioned" ->
                     Decode.field "payload" prTransitioned.Decode |> Decode.map SessionEvent.PrTransitioned
+                | "prWatchReadability" ->
+                    Decode.field "payload" prWatchReadability.Decode |> Decode.map SessionEvent.PrWatchReadability
                 | other -> Decode.fail (sprintf "Unknown session event type: %s" other)) }
 
     /// Wrap any event codec into a codec for its envelope.
