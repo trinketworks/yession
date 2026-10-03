@@ -1207,6 +1207,19 @@ let private peopleMarkTests =
                 for tone in people do
                     Expect.isFalse (mark.Contains tone) (sprintf "%A's mark is drawn in %s, a person's colour" thing tone)
 
+        // A colour is how a person is told apart at a glance, so a room must not hand two of
+        // them the same one. It did, routinely, while the colour was an id's hash.
+        testCase "six people in a room wear six colours" <| fun () ->
+            // `cy` and `gus` hash to the same checker, which is the room seats exist for.
+            let peers = [ for n in [ "ada"; "bob"; "cy"; "dee"; "eve"; "gus" ] -> PeerId.create n |> expect ]
+            let model =
+                { ClientModel.init { PeerId = List.head peers; DisplayName = "ada" } with
+                    Attribution =
+                        Attribution.ofEvents
+                            [ for p in peers -> PeerJoined { PeerJoined.PeerId = p; PeerJoined.DisplayName = "peer"; PeerJoined.User = None } ] }
+            let colours = [ for p in peers -> Entity.presenceColour model (PeerRef p) ]
+            Expect.equal (List.length (List.distinct colours)) 6 (sprintf "six people wore %A" colours)
+
         testCase "every person's checker is declared to Tailwind" <| fun () ->
             // The checkers are assembled at runtime, so the stylesheet generates only the ones
             // app/tailwind.css names inline; one it does not name paints nothing at all.

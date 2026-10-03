@@ -3320,6 +3320,45 @@ let private attributionTests =
             Expect.equal (Attribution.creator state) (Some (Principal.User carol)) "the first ATTRIBUTED join is the one that counts"
     ]
 
+// Where each person sits: the order they first joined in, which is what their colour is
+// read from. A fact about the log's ORDER, like the creator, so it is folded beside it.
+let private seatTests =
+    let peer (name: string) = PeerId.create name |> expect
+    let user (name: string) = UserId.create name |> expect
+    let joined (p: PeerId) (u: UserId option) =
+        PeerJoined { PeerJoined.PeerId = p; PeerJoined.DisplayName = "peer"; PeerJoined.User = u }
+    testList "Where each person sits" [
+
+        testCase "people are seated in the order they first joined" <| fun () ->
+            let names = [ "ada"; "bob"; "cy"; "dee"; "eve"; "flo" ]
+            let state = Attribution.ofEvents [ for n in names -> joined (peer n) (Some (user n)) ]
+            Expect.equal
+                [ for n in names -> Attribution.seatOf state (Principal.User (user n)) ]
+                [ 0 .. 5 ]
+                "six people, six seats, in arrival order"
+
+        testCase "a person who rejoins keeps their seat" <| fun () ->
+            // Every reconnect mints a new peer. The seat is the USER's, so a refresh neither
+            // moves them nor spends a seat somebody else would have had.
+            let state =
+                Attribution.ofEvents
+                    [ joined (peer "ada-1") (Some (user "ada"))
+                      joined (peer "bob-1") (Some (user "bob"))
+                      joined (peer "ada-2") (Some (user "ada"))
+                      joined (peer "cy-1") (Some (user "cy")) ]
+            Expect.equal
+                [ for n in [ "ada"; "bob"; "cy" ] -> Attribution.seatOf state (Principal.User (user n)) ]
+                [ 0; 1; 2 ]
+                "ada keeps the first seat, and the rejoin spends none"
+
+        testCase "a peer nobody attributed is seated as itself" <| fun () ->
+            let state = Attribution.ofEvents [ joined (peer "ada") None; joined (peer "bob") (Some (user "bob")) ]
+            Expect.equal
+                [ Attribution.seatOf state (Principal.Peer (peer "ada")); Attribution.seatOf state (Principal.User (user "bob")) ]
+                [ 0; 1 ]
+                "an unattributed connection is somebody, and sits where it arrived"
+    ]
+
 // What the session owes in the way of names (Plan 25). The rule that decides which subjects
 // want naming, and the guard that is the only thing between a model and a name somebody
 // typed themselves.
@@ -4009,6 +4048,7 @@ let tests =
         authorityTests
         foldCauseTests
         attributionTests
+        seatTests
         envelopeSerializationTests
         conversationProjectionTests
         repoTests
