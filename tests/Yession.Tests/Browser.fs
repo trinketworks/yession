@@ -5810,10 +5810,11 @@ let private withOpening (name: string) (prepare: IPage -> Async<unit>) (body: De
             manager.Stop ()
     }
 
-/// The Manager's readiness answer, faked: `ok` at once, or never.
+/// The Manager's readiness answer, faked: `ok` at once, or never. An `ok` carries where to go,
+/// as the real one does — a session's sign-in entry, on an address the cases answer themselves.
 let private readyAnswers (status: int) (page: IPage) : Async<unit> =
     awaitU (page.RouteAsync ("**/ready", fun route ->
-        route.FulfillAsync (RouteFulfillOptions (Status = status, ContentType = "application/json", Body = "{}")) |> ignore))
+        route.FulfillAsync (RouteFulfillOptions (Status = status, ContentType = "text/plain", Body = "http://127.0.0.1:1/login")) |> ignore))
 
 let private marksShown =
     """() => JSON.stringify({
@@ -5855,6 +5856,21 @@ let openingTests =
                 Expect.isTrue held "the page held until the intro had landed"
                 do! awaitU (page.Clock.RunForAsync 200L)
                 do! waitFor "the browser to have left for the session" page (sprintf "location.port !== '%d'" manager.Port)
+            })
+
+        // The screen is sent before the launch it covers, so a launch that fails can only reach
+        // whoever is looking through the screen's poll. Answered with the Manager's reason, the
+        // screen says it then — rather than waiting out a bound written for a different fault
+        // and reporting THAT one instead.
+        testCaseAsync "a launch the Manager says has failed is on the screen, with its reason" <|
+            withOpening "launch failed" (fun page ->
+                awaitU (page.RouteAsync ("**/ready", fun route ->
+                    route.FulfillAsync (
+                        RouteFulfillOptions (Status = 500, ContentType = "text/plain", Body = "session process exited before ready (code 3)"))
+                    |> ignore))) (fun _ page opening -> async {
+                let! _ = await (page.GotoAsync opening)
+                do! waitFor "the reason on the screen" page
+                        "document.getElementById('status')?.textContent.includes('exited before ready (code 3)')"
             })
 
         testCaseAsync "a reader who declined motion is shown the still mark, and only it" <|

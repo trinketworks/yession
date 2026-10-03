@@ -97,6 +97,10 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
             | None -> html $""""""
         html
             $"""<div class="{Style.small} truncate"><span data-status="{Dom.Manager.statusRunning}">running</span>{summary}</div>"""
+    | None, ProcessManager.Launching ->
+        html $"""<div class="{Style.small} truncate"><span data-status="{Dom.Manager.statusStarting}">starting</span></div>"""
+    | None, ProcessManager.LaunchFailed reason ->
+        html $"""<div class="{Style.smallErr} truncate" title="{reason}"><span data-status="{Dom.Manager.statusFailed}">failed to start</span> · {reason}</div>"""
     | None, ProcessManager.Exited code ->
         let reason = code |> Option.map string |> Option.defaultValue "signal"
         html $"""<div class="{Style.smallErr} truncate"><span data-status="{Dom.Manager.statusExited}">exited ({reason})</span></div>"""
@@ -119,6 +123,8 @@ let private nameText (view: ProcessManager.SessionView) : TemplateResult =
             match status with
             | ProcessManager.Running _ -> Style.recordLink
             | ProcessManager.NotRunning
+            | ProcessManager.Launching
+            | ProcessManager.LaunchFailed _
             | ProcessManager.Exited _ -> Style.recordLinkQuiet
         html
             $"""<span class="{face}">{view.Record.DisplayName}<span class="{Style.recordLinkMark}" aria-hidden="true">↗</span></span>"""
@@ -155,7 +161,11 @@ let private actions (view: ProcessManager.SessionView) : TemplateResult =
             match view.Status with
             | ProcessManager.Running _ ->
                 html $"""<button type="button" class="{Style.btnBareDanger}" data-stop="{id}" data-post="{posts SessionVerb.Stop}">Stop</button>"""
+            // Nothing to stop until there is a child: a launch in flight ends on its own
+            // bound, either way.
             | ProcessManager.NotRunning
+            | ProcessManager.Launching
+            | ProcessManager.LaunchFailed _
             | ProcessManager.Exited _ -> html $""""""
         // 10px apart rather than 8: the archive's hit area reaches 10px past its box
         // (`btnIconBareTouch`), and at 8 its first two pixels would sit over Stop.
@@ -766,6 +776,10 @@ let private problem (res: ServerResponse) (status: int) (title: string) (detail:
 /// from one that is about to work, which is the failure mode this whole feature is supposed
 /// to remove rather than add.
 ///
+/// Sent BEFORE the launch it covers has finished, or even got far: a page that waited for
+/// the spawn left the browser with no document to paint for as long as a boot takes. So it
+/// polls through the launch too, and the launch's failure is one of the answers it reads.
+///
 /// It hands the browser to the session's SIGN-IN entry (`/login`), not its shell. Every
 /// session this page can name was launched by this Manager, so every one of them gates its
 /// data behind the Manager's bounce — and a browser that landed on the shell first painted
@@ -802,10 +816,11 @@ let private screenPage (title: string) (body: string) : string =
 /// That is why this one page keeps a program in a string, against the rule that says not to.
 ///
 /// It is a constant: every value it needs is an attribute on the screen (`openingPage`, below),
-/// named here by the `Dom.Manager` hooks' values — `openingReady`, `openingTarget`,
-/// `openingWord`, `openingFailed`. Written out rather than spliced so the program is literal
-/// text; rename one of the first three without it and the screen never hands over, which the
-/// opening page's browser cases see.
+/// named here by the `Dom.Manager` hooks' values — `openingReady`, `openingWord`,
+/// `openingFailed` — or the readiness route's answer, which is where the session's address
+/// arrives: the page is sent before the launch has a port. Written out rather than spliced so
+/// the program is literal text; rename one of the first two without it and the screen never
+/// hands over, which the opening page's browser cases see.
 let private openingProgram =
     """
   // The intro is 2.4s and a beat after it lands is the least anyone is shown; under reduced
@@ -813,8 +828,11 @@ let private openingProgram =
   const DWELL = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 2800
   const shownAt = performance.now()
   const ready = document.querySelector('[data-opening-ready]').getAttribute('data-opening-ready')
-  const target = document.querySelector('[data-opening-target]').getAttribute('href')
   const status = document.getElementById('status')
+  const giveUp = (why) => {
+    status.className = status.getAttribute('data-opening-failed')
+    status.textContent = why
+  }
   let attempts = 0
   async function poll () {
     attempts++
@@ -823,20 +841,33 @@ let private openingProgram =
       // answers — with a 404, or a gateway error — and a fetch that only caught THROWN
       // requests reads that as the session answering, redirects into it, and leaves whoever
       // pressed Create looking at the front door's 404. The readiness route reports the
-      // difference.
+      // difference, and says where to go: the address only exists once the launch does.
       const answer = await fetch(ready, { cache: 'no-store' })
+      // Still launching: the Manager bounds that itself and says so if it fails, so it is
+      // not counted against the wait for the session's address below.
+      if (answer.status === 202) {
+        setTimeout(poll, 500)
+        return
+      }
       if (answer.ok) {
+        const target = await answer.text()
         status.querySelector('[data-word]').textContent = 'ready'
         setTimeout(() => location.replace(target), Math.max(0, DWELL - (performance.now() - shownAt)))
+        return
+      }
+      // 503 is "not yet", and so is a gateway between here and the Manager. Anything else
+      // is the Manager saying this launch will not come up, and why — shown now, rather
+      // than waited out to a bound that would then report the wrong reason.
+      if (answer.status < 502 || answer.status > 504) {
+        giveUp('The session could not start: ' + await answer.text())
         return
       }
     } catch (e) { /* the Manager itself is unreachable: the same wait, bounded the same way */ }
     // 40 at 500ms is the 20 seconds these words promise.
     if (attempts >= 40) {
-      status.className = status.getAttribute('data-opening-failed')
-      status.textContent =
+      giveUp(
         'The session started, but its address is not answering after 20 seconds. ' +
-        'If this deployment maps session ports through a proxy, that mapping has not appeared.'
+        'If this deployment maps session ports through a proxy, that mapping has not appeared.')
       return
     }
     setTimeout(poll, 500)
@@ -858,10 +889,12 @@ let private openingProgram =
 /// gave up.
 ///
 /// Everything the program needs is an attribute on the screen: the readiness route on `<main>`
-/// (`Dom.Manager.openingReady`), the session's address on the link that already goes there
-/// (`openingTarget`), the status word it changes (`openingWord`), and the classes the status
-/// line wears when the screen gives up (`openingFailed`). Nothing is spliced into the program,
-/// so there is nothing to escape but attributes.
+/// (`Dom.Manager.openingReady`), the status word it changes (`openingWord`), and the classes
+/// the status line wears when the screen gives up (`openingFailed`). Nothing is spliced into
+/// the program, so there is nothing to escape but attributes. The session's address is not on
+/// the screen at all: this page is sent before the launch it covers has a port, so the way out
+/// it offers is the open route itself (which redirects once the session runs), and the address
+/// the program goes to is the readiness route's answer.
 let private openingPage (sessionId: SessionId) (target: string) (readyUrl: string) : string =
     screenPage
         "Opening session…"
@@ -871,7 +904,7 @@ let private openingPage (sessionId: SessionId) (target: string) (readyUrl: strin
 <div class="%s" data-mark-static aria-hidden="true">%s</div>
 <p class="%s">yession</p>
 <p id="status" role="status" class="%s %s" %s="%s"><span class="%s"></span><span %s>starting</span><span class="%s">%s</span></p>
-<p class="%s"><a id="target" class="%s" href="%s" %s>Open it directly</a> · <a class="%s" href="%s">Back to the session manager</a></p>
+<p class="%s"><a id="target" class="%s" href="%s">Open it directly</a> · <a class="%s" href="%s">Back to the session manager</a></p>
 </main>
 <script>%s</script>"""
             Style.startScreen
@@ -893,7 +926,6 @@ let private openingPage (sessionId: SessionId) (target: string) (readyUrl: strin
             Style.startLinks
             Style.proseLink
             (Ssr.escapeAttr target)
-            Dom.Manager.openingTarget
             Style.proseLink
             (ManagerRoute.path ManagerRoute.Home)
             openingProgram)
@@ -929,6 +961,11 @@ let tryHandle
         match pm.TryFind sessionId with
         | Some view when view.Record.ArchivedAt.IsSome -> 409
         | _ -> 500
+    // Where a browser enters a running session: its sign-in route, so the Manager's bounce
+    // runs before the one paint (see `openingPage`).
+    let signIn (sessionId: SessionId) (port: int) =
+        let address = PublicAccess.sessionAddress sessionId port pm.Public
+        RelativeUrl.under address.Url (SessionRoute.relative Login)
     // An action's outcome is not discarded: a launch that fails leaves the session stopped,
     // and answering with an ordinary row said nothing about why. The row still comes back on
     // success (it is the swap unit); a failure answers with its reason.
@@ -1071,32 +1108,34 @@ let tryHandle
         // at once). A running session is answered with a redirect straight to the
         // address the screen would have sent the browser to.
         | ManagerRoute.OpenSession sessionId ->
-            let signIn port =
-                let address = PublicAccess.sessionAddress sessionId port pm.Public
-                RelativeUrl.under address.Url (SessionRoute.relative Login)
-            Async.StartImmediate (
-                async {
-                    match pm.TryFind sessionId with
-                    | None ->
-                        problem res 404 "No such session" (sprintf "This Manager has no session %s." (SessionId.value sessionId))
-                    | Some view ->
-                        match view.Status with
-                        // Already running is the common case once a client has
-                        // reconnected on its own; asking for the port it already
-                        // has is not a relaunch, and there is nothing to wait for.
-                        | ProcessManager.Running (port, _, _) -> seeOther res (signIn port)
-                        | ProcessManager.NotRunning
-                        | ProcessManager.Exited _ ->
-                            match! pm.Launch sessionId with
-                            | Error reason -> problem res (refusalStatus sessionId) "Cannot open this session" reason
-                            | Ok port ->
-                                html
-                                    res
-                                    (openingPage
-                                        sessionId
-                                        (signIn port)
-                                        (ManagerRoute.path (ManagerRoute.SessionReady sessionId)))
-                })
+            match pm.TryFind sessionId with
+            | None ->
+                problem res 404 "No such session" (sprintf "This Manager has no session %s." (SessionId.value sessionId))
+            | Some view ->
+                match view.Status with
+                // Already running is the common case once a client has
+                // reconnected on its own; asking for the port it already
+                // has is not a relaunch, and there is nothing to wait for.
+                | ProcessManager.Running (port, _, _) -> seeOther res (signIn sessionId port)
+                // Answered BEFORE the launch is: the screen goes out now and the spawn runs
+                // behind it. Awaiting the launch first held the browser on a navigation
+                // with no document for as long as a boot takes — which Chromium hides by
+                // keeping the last page painted, and an installed app on iOS shows as a
+                // white screen between two black ones. The launch's outcome is the
+                // session's status from here on, which is what the screen's poll reads.
+                | ProcessManager.NotRunning
+                | ProcessManager.Launching
+                | ProcessManager.LaunchFailed _
+                | ProcessManager.Exited _ ->
+                    match pm.Start sessionId with
+                    | Error reason -> problem res (refusalStatus sessionId) "Cannot open this session" reason
+                    | Ok () ->
+                        html
+                            res
+                            (openingPage
+                                sessionId
+                                (ManagerRoute.path (ManagerRoute.OpenSession sessionId))
+                                (ManagerRoute.path (ManagerRoute.SessionReady sessionId)))
         // Does this deployment's front door reach the session yet? The question the
         // opening page above is really asking, answered HERE because here is the only
         // place it CAN be answered: a browser can read the status of a same-origin
@@ -1106,6 +1145,12 @@ let tryHandle
         // guessed instead redirected whoever pressed Create straight into the front
         // door's 404, a few hundred milliseconds before the mapping appeared.
         //
+        // Four answers, and the page treats each differently: `200` with the address to go
+        // to (only known once the launch has a port, which is after the page was sent),
+        // `202` for "still launching", `503` for "running, and its address not answering
+        // yet", and anything else for "this will not come up, and here is why", which the
+        // page shows instead of waiting out its bound.
+        //
         // Read by a script, so `text/plain` — unlike `OpenSession` beside it, nothing
         // navigates here.
         | ManagerRoute.SessionReady sessionId ->
@@ -1113,6 +1158,11 @@ let tryHandle
             | None -> respond res 404 "text/plain" (sprintf "unknown session %s" (SessionId.value sessionId))
             | Some view ->
                 match view.Status with
+                // Accepted, not unavailable: the launch is bounded by the Manager's own
+                // timeout and ends in `Running` or `LaunchFailed`, so the page must not spend
+                // its wait for the ADDRESS on it.
+                | ProcessManager.Launching -> respond res 202 "text/plain" "the session is starting"
+                | ProcessManager.LaunchFailed reason -> respond res 500 "text/plain" reason
                 // Not running is not ready, and it is not an error either: `OpenSession`
                 // launches, and a session can exit under a reader who is watching.
                 | ProcessManager.NotRunning
@@ -1123,7 +1173,7 @@ let tryHandle
                     Async.StartImmediate (
                         async {
                             let! status = statusOf (sprintf "%s/" address.Url)
-                            if answeredFor status then respond res 200 "text/plain" "ready"
+                            if answeredFor status then respond res 200 "text/plain" (signIn sessionId port)
                             else
                                 respond
                                     res
