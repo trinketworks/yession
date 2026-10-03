@@ -325,7 +325,7 @@ module ManagerCodec =
               // field, and a Manager with no declarations is the ordinary starting
               // state rather than a migration.
               ManagerState.McpServers =
-                get.Optional.Field "mcpServers" (Decode.list Codec.mcpDeclaration.Decode)
+                get.Optional.Field "mcpServers" (Decode.list McpWire.declaration.Decode)
                 |> Option.defaultValue [] })
 
     let private decoderFor (version: int) : Decoder<ManagerState> option =
@@ -337,7 +337,7 @@ module ManagerCodec =
                 Encode.object
                     [ "version", Encode.int s.Version
                       "sessions", s.Sessions |> List.map sessionRecord.Encode |> Encode.list
-                      "mcpServers", s.McpServers |> List.map Codec.mcpDeclaration.Encode |> Encode.list ]
+                      "mcpServers", s.McpServers |> List.map McpWire.declaration.Encode |> Encode.list ]
           // Version-DISPATCHED, which is what the `Version` field was reserved for. Unknown
           // fields are still tolerated within a version (that is how an optional field like
           // `archivedAt` arrives without a break), but a file naming a version this build

@@ -25,7 +25,7 @@ module Yession.Host.Control
 //        of `ControlWire.sessionNotification` JSON — see NotificationHub / SessionNotification)
 //   GET  /control/mcp                               -> text/event-stream (a second reverse leg:
 //        THIS session's resolved MCP server set on subscribe, then a fresh whole set on
-//        every change, as SSE frames of `Codec.mcpServerSet` (Plan 17). The Manager says
+//        every change, as SSE frames of `McpWire.serverSet` (Plan 17). The Manager says
 //        WHERE the servers are; the session is the MCP client that talks to them.)
 //   POST /control/connections/begin      ConnectionBeginRequest -> { authorizeUrl, state }
 //   POST /control/connections/complete   { target, code }       -> "ok" (manual paste completion)
@@ -370,7 +370,7 @@ let tryHandle
                 // With no attach step this is the ONLY way a session learns a server exists.
                 // Reactivity is the feature, not a refinement of one.
                 Sse.stream req res
-                    (ControlWire.toString Codec.mcpServerSet)
+                    (ControlWire.toString McpWire.serverSet)
                     (subscribeMcp caller.SessionId launchSecret)
                 |> ignore
             | _ -> respond res 404 "not found"

@@ -72,7 +72,7 @@ let subscribeMcp (baseUrl: string) (secret: string) (onSet: Sink<McpServerSet>) 
     openEventStream
         (sprintf "%s/control/mcp" baseUrl)
         secret
-        (decoding "mcp server set" Codec.mcpServerSet onSet)
+        (decoding "mcp server set" McpWire.serverSet onSet)
 
 /// Subscribe to the Manager's session registry stream (`/sessions/stream`) — the
 /// management surface, not a control leg, so no secret rides the
