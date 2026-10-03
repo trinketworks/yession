@@ -84,6 +84,22 @@ let private routeTests =
             Expect.equal (Sandboxes.hostAddressFrom "box.local" Node.Base.Platform.Darwin SrtBackend) (Some "box.local") "srt on macOS: the box's name"
             Expect.equal (Sandboxes.hostAddressFrom "runner" Node.Base.Platform.Linux SrtBackend) (Some "127.0.0.2") "srt on Linux: a loopback address NO_PROXY does not name"
 
+        // srt's proxy re-judges an allowed NAME by what it resolves to, and refuses this
+        // host's own addresses unless that address is on the allowlist at the port. The
+        // macOS name is the box's own, so it travels with the box's addresses — at the
+        // gateway's port and no other, which is the whole of what the carve-out grants.
+        testCase "srt on macOS reaches the host by its name and its own addresses, at the one port" <| fun () ->
+            Expect.equal
+                (Sandboxes.hostRouteFrom [ "100.64.0.7"; "fd7a:115c::7" ] Node.Base.Platform.Darwin SrtBackend "box.local" 56077)
+                [ "box.local:56077"; "100.64.0.7:56077"; "[fd7a:115c::7]:56077" ]
+                "the name and each address, all at the listener's port, IPv6 bracketed"
+
+        testCase "a route that is already an address is given as it is" <| fun () ->
+            Expect.equal
+                (Sandboxes.hostRouteFrom [ "10.0.0.2" ] Node.Base.Platform.Linux SrtBackend "127.0.0.2" 56077)
+                [ "127.0.0.2" ]
+                "srt on Linux: a literal the proxy never re-judges"
+
         // The pkt-line header counts BYTES. A message with an em dash in it, counted in
         // characters, arrived at git one byte short and printed with its last letter gone.
         testCase "a pkt-line's length counts bytes, not characters" <| fun () ->
@@ -948,7 +964,11 @@ let private srtTests =
                         let policy : SandboxPolicy =
                             { ReadPaths = [ workspace ]
                               WritePaths = [ workspace ]
-                              AllowedDomains = Some [ host ]
+                              // The product's route, not one written here: on macOS the
+                              // name alone is refused by srt's proxy, and a test that named
+                              // its own allowlist went on passing on Linux while every
+                              // confined push on a Mac answered 403.
+                              AllowedDomains = Some (Sandboxes.hostRouteHere (Interop.ownAddresses ()) SrtBackend host gateway.Port)
                               Sockets = []
                               Binds = []
                               Volumes = []

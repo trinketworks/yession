@@ -1294,8 +1294,15 @@ Async.StartImmediate (
                                             { WorkSandboxes.Provision.empty with
                                                 GitConfig = GitGateway.gitConfig host gitGateway.Port cap
                                                 // The route's host, for a backend whose egress
-                                                // would otherwise refuse it (srt).
-                                                Domains = [ host ] }
+                                                // would otherwise refuse it (srt) — at the
+                                                // gateway's port, by name and by address
+                                                // where srt's proxy re-judges the name.
+                                                Domains =
+                                                    Sandboxes.hostRouteHere
+                                                        (Interop.ownAddresses ())
+                                                        (sandboxBackend sandbox)
+                                                        host
+                                                        gitGateway.Port }
                             // The API, where the proxy can be reached from.
                             let api =
                                 if List.contains ConnectionRoute.Api routes && CredentialProxy.reachable (sandboxBackend sandbox) then

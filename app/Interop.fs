@@ -176,6 +176,15 @@ let headerOf (req: IncomingMessage) (name: string) : string option =
 /// through srt's proxy on macOS (`Sandboxes.hostAddressFrom`).
 let hostname () : string = Node.Api.os.hostname ()
 
+/// The addresses assigned to this box's own interfaces — what that name resolves to, and so
+/// what srt's proxy must be told is this host at the one port it may reach
+/// (`Sandboxes.hostRouteFrom`). Link-local IPv6 is left out: it is only meaningful with a
+/// zone, which an allowlist entry cannot carry.
+let ownAddresses () : string list =
+    NetworkInterfaces.addresses ()
+    |> List.filter (fun address -> not (address.ToLowerInvariant().StartsWith "fe80:"))
+    |> List.distinct
+
 /// A cryptographically random identifier (per-launch control secrets).
 let randomSecret () : string = WebCrypto.randomUUID ()
 

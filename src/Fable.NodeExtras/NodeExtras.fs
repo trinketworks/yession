@@ -890,6 +890,28 @@ type Crypto =
     /// Fill the array with cryptographically strong random bytes IN PLACE, and return it.
     abstract getRandomValues : array: JS.Uint8Array -> JS.Uint8Array
 
+/// `node:os`'s `networkInterfaces()`, read for the one thing asked of it: which addresses are
+/// this box's. `Fable.Node` declares it as `obj`, with a reader (`NetworkInterfaceHelper`)
+/// that exists only on .NET — Fable has no JavaScript behind it, so a call compiles and then
+/// fails at run time naming a function that is not defined.
+module NetworkInterfaces =
+
+    /// One assigned address, as Node describes it.
+    type private Assigned =
+        abstract address : string
+
+    [<Import("networkInterfaces", "node:os")>]
+    let private byInterface () : obj = jsNative
+
+    /// The per-interface lists, as one.
+    [<Emit("Object.values($0).flat()")>]
+    let private flatten (byInterface: obj) : Assigned[] = jsNative
+
+    /// Every address assigned to one of this box's interfaces, loopback included, in Node's
+    /// own spelling (IPv6 link-local carries no zone here; `scopeid` is where Node keeps it).
+    let addresses () : string list =
+        flatten (byInterface ()) |> Array.map (fun assigned -> assigned.address) |> List.ofArray
+
 [<AutoOpen>]
 module WebCrypto =
 
