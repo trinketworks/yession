@@ -576,6 +576,14 @@ summary::-webkit-details-marker { display: none; }
 .agent-think-cube > i:nth-child(5)::after { animation-name: think-shade-w; }
 .agent-think-cube > i:nth-child(6) { transform-origin: 100% 50%; transform: rotateY(-90deg) rotateX(180deg); }
 .agent-think-cube > i:nth-child(6)::after { animation-name: think-shade-e; }
+/* The turn's opening (`Style.agentThinkingStart`): the same mark drawn 2.2x, about its left
+   point so that point stays on the reading edge where the first word lands. A scale, not a
+   size, so the line box is the one the first word's line will have and nothing below moves
+   when the words arrive; at 2.2x on the body's line the cube still fits inside that line. */
+.agent-think-start {
+  scale: 2.2;
+  transform-origin: 0 50%;
+}
 /* Without motion it holds the rest picture, dimmed, so thinking still differs from writing. */
 @media (prefers-reduced-motion: reduce) {
   .agent-think { opacity: 0.6; }

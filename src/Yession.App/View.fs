@@ -2268,11 +2268,16 @@ module View =
                     // while it thinks — nothing said yet, or what it said has gone quiet
                     // (`ClientModel.agentThinking`) — and still while the words are arriving.
                     // Each turn's cube starts on a move of its own, seeded by its message.
+                    // Before the first word it stands larger where the reply will begin, and
+                    // the first word's caret glides in from there (`Glide`).
+                    let turn = MessageId.value item.MessageId
                     let mark =
-                        if ClientModel.agentThinking model item then
-                            html $"""<span class="{Style.agentThinking}" style="{Style.thinkFrom (MessageId.value item.MessageId)}" data-agent-writing>{thinkingCube}</span>"""
+                        if not (ClientModel.agentThinking model item) then
+                            html $"""<span class="{Style.agentCaret}" data-agent-writing {Glide.into turn}></span>"""
+                        elif System.String.IsNullOrWhiteSpace body then
+                            html $"""<span class="{Style.agentThinkingStart}" style="{Style.thinkFrom turn}" data-agent-writing {Glide.from turn}>{thinkingCube}</span>"""
                         else
-                            html $"""<span class="{Style.agentCaret}" data-agent-writing></span>"""
+                            html $"""<span class="{Style.agentThinking}" style="{Style.thinkFrom turn}" data-agent-writing>{thinkingCube}</span>"""
                     Style.messageBodyStreaming, mark
                 | _ -> Style.messageBody, Lit.nothing
             let bodyClass = Style.cls [ bodyClass; Style.messageVoice isAgent ]

@@ -241,6 +241,19 @@ module Elements =
     [<Emit("$0.replaceChildren()")>]
     let clearChildren (element: Element) : unit = jsNative
 
+    /// Play an element in from somewhere else: from `transform` to where it is laid out, over
+    /// `duration` milliseconds on `easing`. The Web Animations `animate`, narrowed to the one
+    /// shape a FLIP needs — two keyframes of `transform`, the second none — so it runs on the
+    /// compositor and leaves nothing behind once it ends.
+    [<Emit("$0.animate([{ transform: $1 }, { transform: 'none' }], { duration: $2, easing: $3 })")>]
+    let playFrom (element: Element) (transform: string) (duration: float) (easing: string) : unit = jsNative
+
+    /// Run `work` once the current task has finished but before the browser paints: the
+    /// moment a renderer that builds its DOM off-document (Lit clones a template into a
+    /// fragment, and only then inserts it) has put it on the page, and nothing has been drawn.
+    [<Emit("queueMicrotask($0)")>]
+    let afterInsertion (work: unit -> unit) : unit = jsNative
+
 /// Resolving one address against another: what the `URL` constructor is for, and what string
 /// concatenation cannot be made to do. A reference may be absolute, rooted at the origin, or
 /// relative to the base's DIRECTORY, and which of those it is decides how much of the base
