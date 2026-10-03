@@ -28,6 +28,11 @@ type ConnectionState =
     | Connecting
     | Connected
     | Reconnecting
+    /// Not connected, and still trying: the last attempt to open the transport failed for
+    /// `reason`, and `failures` attempts have failed in a row. Distinct from `Disconnected`
+    /// because what a person should take from it differs — not "this is broken" but "this is
+    /// being worked on" — and from `Connecting` because it has news: why, and how long.
+    | Retrying of reason: string * failures: int
 
 type PeerState = { PeerId : PeerId; DisplayName : string }
 
@@ -915,10 +920,13 @@ type ClientMsg =
     | ConnectingMsg
     | ConnectedMsg of PeerAcceptedPayload
     | RejectedMsg of reason: string
-    /// The transport could not be opened at all — the session never answered, after the
-    /// connect policy spent its retries. Distinct from `RejectedMsg` (which is the session
-    /// refusing a peer it did hear from) because the remedy differs: wait, versus re-auth.
+    /// The session could not be reached to ask who this is (`/me`), so there is nothing to
+    /// connect with. Distinct from `RejectedMsg` (which is the session refusing a peer it did
+    /// hear from) because the remedy differs: wait, versus re-auth.
     | ConnectFailedMsg of reason: string
+    /// An attempt to open the transport failed, and the lifecycle will try again: `reason`
+    /// is why this one failed and `failures` how many have failed in a row.
+    | RetryingMsg of reason: string * failures: int
     | EventsAvailableMsg of latestOffset: EventOffset
     /// A read-only event page from the Session (Step 07): the conversation is
     /// built by folding pages through the shared projection; offsets track progress.
@@ -2370,6 +2378,8 @@ module ClientModel =
             { model with Connection = Disconnected (Some reason) }
         | ConnectFailedMsg reason ->
             { model with Connection = Disconnected (Some reason) }
+        | RetryingMsg (reason, failures) ->
+            { model with Connection = Retrying (reason, failures) }
         | EventsAvailableMsg latest ->
             { model with EventConsumer = withLatestKnown (Some latest) model.EventConsumer }
         // One fold, reached by two messages. The events are the same events and the

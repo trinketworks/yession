@@ -97,6 +97,7 @@ module View =
         | Connecting -> Dom.Text.connecting
         | Connected -> Dom.Text.connected
         | Reconnecting -> Dom.Text.reconnecting
+        | Retrying _ -> Dom.Text.retrying
 
     let private offsetText =
         function
@@ -184,7 +185,7 @@ module View =
     /// The navigation IS the mechanism, and a link performs it once.
     let private reopenAction (model: ClientModel) (extra: string) : TemplateResult option =
         match model.Connection, model.Manager, model.Session with
-        | Disconnected (Some _), Some origin, Some sessionId ->
+        | (Disconnected (Some _) | Retrying _), Some origin, Some sessionId ->
             let target = ManagerRoute.at origin (ManagerRoute.OpenSession sessionId)
             Some (
                 html $"""
@@ -194,8 +195,23 @@ module View =
         | _ -> None
 
     let private reconnectOffer (model: ClientModel) : TemplateResult option =
-        match model.Connection, reopenAction model Style.noAgentAction with
-        | Disconnected (Some reason), Some action ->
+        // What the card's status line says: a session that stopped answering for good, or one
+        // this client is still trying — the same offer either way, because reopening is the
+        // one thing a person can do about both, but the word should not say "stopped" over a
+        // loop that is still at work.
+        let settled =
+            match model.Connection with
+            | Disconnected (Some reason) ->
+                Some (
+                    reason,
+                    html $"""<span class="{Style.syncRow}"><span class="{Style.syncDot} bg-err"></span><span class="{Style.statusErr}">session stopped</span></span>""")
+            | Retrying (reason, failures) ->
+                Some (
+                    Dom.Text.retryingWhy reason failures,
+                    html $"""<span class="{Style.syncRow}"><span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>{Dom.Text.retryingStatus failures}</span></span>""")
+            | _ -> None
+        match settled, reopenAction model Style.noAgentAction with
+        | Some (reason, status), Some action ->
             // What reopening actually costs. Under a `{id}` template the session returns to
             // the same address, so the doc in this browser is still its doc and syncs on
             // reconnect. Addressed by port it returns somewhere new, and everything written
@@ -214,7 +230,7 @@ module View =
                 html
                     $"""
                     <div class="{Style.noAgentBlock}" data-session-gone>
-                      <span class="{Style.syncRow}"><span class="{Style.syncDot} bg-err"></span><span class="{Style.statusErr}">session stopped</span></span>
+                      {status}
                       <div class="{Style.noAgentPrompt}">
                         <span class="{Style.noAgentEdge}"></span>
                         <div class="{Style.noAgentBody}">
@@ -267,6 +283,11 @@ module View =
         | Disconnected reason, _ ->
             Some (Dom.Text.degradedOffline, stopped "not connected", promise :: (Option.toList reason @ why))
         | Reconnecting, _ -> Some (Dom.Text.degradedReconnecting, running "reconnecting", promise :: why)
+        | Retrying (reason, failures), _ ->
+            Some (
+                Dom.Text.degradedRetrying,
+                running (Dom.Text.retryingStatus failures),
+                promise :: Dom.Text.retryingWhy reason failures :: why)
         | _, FeedRetrying (attempt, reason) ->
             Some (Dom.Text.feedRetrying, running "history retrying", promise :: sprintf "%s · attempt %d" reason attempt :: why)
         | _, FeedStalled reason -> Some (Dom.Text.feedPaused, stopped "history paused", promise :: reason :: why)
@@ -282,7 +303,8 @@ module View =
     /// bar, so they cannot disagree about whether there is a catch-up to show.
     let private showsCatchUp (model: ClientModel) : bool =
         match model.Connection with
-        | Disconnected _ -> false
+        | Disconnected _
+        | Retrying _ -> false
         | _ -> model.EventConsumer.IsCatchingUp && model.EventConsumer.CatchUpIsSlow
 
     /// The catch-up as a bar along the header's bottom rule (`Style.catchUpBar`): how much of
@@ -314,7 +336,8 @@ module View =
         // until asked — and for anyone who would rather not wait out a backoff.
         let retry =
             match model.Connection with
-            | Disconnected _ ->
+            | Disconnected _
+            | Retrying _ ->
                 html $"""
                   <button type="button" class="{Style.btn}" data-retry-now
                           @click={Ev(fun _ -> dispatch RetryNowMsg)}>{Dom.Text.retryNow}</button>"""
@@ -1014,6 +1037,7 @@ module View =
     let private signInPrompt (actions: ViewActions) (model: ClientModel) : TemplateResult =
         match model.Connection, ClientModel.signInRequired model with
         | Disconnected _, _
+        | Retrying _, _
         | _, [] -> Lit.nothing
         // Whichever came first in the derivation's settled order. A second row would be the
         // same instruction twice, and the panel it opens shows every provider anyway.
@@ -2743,6 +2767,7 @@ module View =
             match model.EventConsumer.MissingBefore, model.Connection, model.EventConsumer.Feed with
             | None, _, _ -> None
             | Some _, Disconnected (Some _), _
+            | Some _, Retrying _, _
             | Some _, _, FeedStalled _ ->
                 Some (
                     html $"""
