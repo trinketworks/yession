@@ -1546,6 +1546,16 @@ let private signInButtonHoldsStill (width: int) (height: int) =
         async {
             do! awaitU (page.EvaluateAsync "() => window.__signInLost()")
             let! _ = await (page.WaitForSelectorAsync "#shell [data-signin-required] [data-signin-again]")
+            // Settled first: the side panes slide into place as the shell lays out, and the
+            // column between them — the prompt's width — is still changing until they land.
+            let settled () =
+                awaitU (
+                    page.EvaluateAsync
+                        """() => Promise.all(
+                             document.getAnimations()
+                               .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
+                               .map(a => a.finished.catch(() => null)))""")
+            do! settled ()
             let at =
                 """() => {
                      const prompt = document.querySelector('#shell [data-signin-required]')
@@ -1557,6 +1567,7 @@ let private signInButtonHoldsStill (width: int) (height: int) =
             let! closed = await (page.EvaluateAsync<string> at)
             do! awaitU (page.ClickAsync "#shell [data-signin-required] [data-detail] summary")
             let! _ = await (page.WaitForSelectorAsync "#shell [data-signin-required] [data-detail][open]")
+            do! settled ()
             let! opened = await (page.EvaluateAsync<string> at)
             Expect.equal opened closed "the button's offset and size in the prompt (left,top,width,height)"
         }

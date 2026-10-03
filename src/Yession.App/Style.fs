@@ -1146,7 +1146,7 @@ module Style =
     /// pinned to the top-right corner, and an opened reason grows DOWN from the sentence.
     /// `items-baseline` aligns on each cell's FIRST line, so that growth moves nothing else.
     let signInPrompt =
-        cls [ "shrink-0 grid grid-cols-[1fr_auto] md:grid-cols-[auto_1fr_auto] items-baseline"
+        cls [ "shrink-0 grid grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[auto_minmax(0,1fr)_auto] items-baseline"
               "gap-x-3 gap-y-1 px-8 py-2 bg-surface max-md:px-4"
               Stroke.dividerBottom ]
 
