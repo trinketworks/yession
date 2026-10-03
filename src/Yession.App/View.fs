@@ -2369,7 +2369,7 @@ module View =
             // write and therefore cannot trust to have marked its own secrets. Said so, in
             // the input's place, rather than shown as an empty input.
             let input =
-                match ToolUse.arguments use' with
+                match ToolUseText.arguments use' with
                 | Some recorded -> recorded
                 | None -> "(arguments not recorded)"
             // The answer, when this chip is the only place to read it (a non-block call of one
