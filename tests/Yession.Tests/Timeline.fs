@@ -1283,9 +1283,9 @@ let private toolTests =
             let use' : ToolUse =
                 { ToolUseId = toolUse "1"; AgentTurnId = turn "a"; Namespace = "yession"; Name = "read_file"
                   Arguments = Some """{"path":"a.fs","offset":2}"""; Outcome = None; Block = None; Result = None }
-            Expect.equal (ToolUse.arguments use') (Some "{\n  \"path\": \"a.fs\",\n  \"offset\": 2\n}") "one field per line"
-            Expect.equal (ToolUse.arguments { use' with Arguments = Some "not json" }) (Some "not json") "what is not JSON is shown as it is"
-            Expect.equal (ToolUse.arguments { use' with Arguments = None }) None "a foreign tool's arguments were never recorded"
+            Expect.equal (ToolUseText.arguments use') (Some "{\n  \"path\": \"a.fs\",\n  \"offset\": 2\n}") "one field per line"
+            Expect.equal (ToolUseText.arguments { use' with Arguments = Some "not json" }) (Some "not json") "what is not JSON is shown as it is"
+            Expect.equal (ToolUseText.arguments { use' with Arguments = None }) None "a foreign tool's arguments were never recorded"
 
         testCase "consecutive calls from one turn collapse into a single row" <| fun () ->
             // Tool use is the first item a SINGLE turn can emit a dozen of, so a chatty turn
