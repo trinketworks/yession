@@ -206,11 +206,7 @@
         }
       },
       "yession.domain": {
-        "type": "Project",
-        "dependencies": {
-          "Thoth.Json": "[10.5.1, )",
-          "Thoth.Json.Net": "[12.0.0, )"
-        }
+        "type": "Project"
       },
       "yession.host": {
         "type": "Project",

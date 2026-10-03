@@ -154,6 +154,8 @@ let all =
         // beside it — who may write the process env, and who may read a confinement switch —
         // are now `YES007` and `YES008`, read off the typed tree by `lint`.
         Tag.needs "Committed lock" [] (fun () -> LockSource.tests)
+        // That the domain depends on nothing, read from the lockfile locked mode holds it to.
+        Tag.needs "Domain references" [] (fun () -> DomainReferences.tests)
         Tag.needs "Declared setup" [] (fun () -> DeclaredSetup.tests)
         // What may publish a release. `release.yml` runs on master alone, so this is the only
         // reader of its gate that runs before a release has already gone out through a hole.
