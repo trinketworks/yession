@@ -15,6 +15,7 @@ open Yession.Domain.Artifacts
 open Yession.Domain.Content
 open Yession.Domain.Hooks
 open Yession.App.Codecs
+open Yession.Manager
 
 let private expect =
     function

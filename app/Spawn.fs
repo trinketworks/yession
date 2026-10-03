@@ -8,41 +8,13 @@ module Yession.Host.Spawn
 
 open Fable.Core
 open Fable.NodeExtras
+open Yession.Manager
 
 #if FABLE_COMPILER
 open Thoth.Json
 #else
 open Thoth.Json.Net
 #endif
-
-/// The readiness line, as the spawn contract states it: `{"yession":"ready","port":N}`, and
-/// `version` from a bundle new enough to carry one. That field is optional and stays
-/// optional — an older session must still launch — so it is the one thing here that a line
-/// may leave out and still be a readiness line.
-type ReadyLine = { Port : int; Version : string option }
-
-/// The line is whatever the child printed, so it is DECODED rather than probed: `null`, a
-/// number, and an object with none of these fields all have to arrive as "not this message".
-/// Three `typeof` macros used to ask that field by field, over two parses of the same line.
-let private readyLine : Decoder<ReadyLine> =
-    Decode.field "yession" Decode.string
-    |> Decode.andThen (fun said ->
-        if said <> "ready" then
-            Decode.fail "not a readiness line"
-        else
-            Decode.map2
-                (fun port version -> { Port = port; Version = version })
-                (Decode.field "port" Yession.Domain.Strict.int)
-                (Decode.optional "version" Decode.string))
-
-/// What a line the child printed says, or nothing. A log line, a half-line and anything that
-/// is not this message are the same nothing — a line that cannot be read is not an error
-/// here, it is a line the child printed for a person to read.
-///
-/// Public so that back-compat can be asserted directly: a bundle that states no version is
-/// still a launch.
-let parseReady (line: string) : ReadyLine option =
-    Decode.fromString readyLine line |> Result.toOption
 
 /// Refuse a session from a different MAJOR version — the one difference that says their
 /// control protocol may genuinely disagree.
@@ -179,7 +151,7 @@ let launch
             let parts = buffer.Split '\n'
             buffer <- parts.[parts.Length - 1]
             for line in parts.[0 .. parts.Length - 2] do
-                match parseReady line with
+                match ReadyLine.parse line with
                 | Some ready ->
                     JS.clearTimeout timer
                     // The version arrives on the readiness line, so this is the first
