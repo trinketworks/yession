@@ -409,19 +409,23 @@ let private someOwnText (selector: string) (text: string) =
 /// function form `() => (async () => false)()` settles at once, while `() => false` correctly times
 /// out. `EvaluateAsync` awaits a returned Promise (confirmed: `(async () => false)()` -> false), so
 /// polling it is correct for both predicate shapes.
-/// Open a terminal the way a person does now (Plan 20, stage 1): the strip's `+` is a DOOR to
-/// the chooser, and a row in the chooser says where the terminal goes. Two presses, because the
-/// second one is the choice — it used to be one, and that one could only ever give you
-/// `default`.
+/// Open a terminal the way a person does (Plan 20, stage 1): press the strip's `+`, and take
+/// the choice if one is offered.
 ///
-/// The chooser is already showing when there is nothing else to show, and the strip (and so the
-/// door) is not in the document while it is — one surface at a time, which `role="tablist"`
-/// requires. So this asks for the chooser only when it is not already up.
+/// Whether one IS offered depends on the session — with one place to put a terminal the door
+/// makes one, and with a repo's sandbox up it opens a menu. So this reads the answer off the
+/// control rather than guessing or waiting to see: `aria-haspopup` is exactly the promise the
+/// door makes to a reader, which makes it the right thing for a test to believe too, and it is
+/// rendered before any press so there is no race to lose.
 let private openNewTerminal (page: IPage) : Async<unit> =
     async {
-        let! showing = await (page.EvaluateAsync<bool> "() => !!document.querySelector('[data-sandbox-new]')")
-        if not showing then do! awaitU (page.Locator("[data-pane-new]").First.ClickAsync ())
-        do! awaitU (page.Locator("[data-sandbox-new='default']").First.ClickAsync ())
+        let! asks =
+            await (page.EvaluateAsync<bool>
+                "() => document.querySelector('[data-pane-new]')?.getAttribute('aria-haspopup') === 'menu'")
+        do! awaitU (page.Locator("[data-pane-new]").First.ClickAsync ())
+        if asks then
+            let! _ = await (page.WaitForSelectorAsync "[data-sandbox-new='default']")
+            do! awaitU (page.Locator("[data-sandbox-new='default']").First.ClickAsync ())
     }
 
 let private waitTimeoutMs = 30000.0
