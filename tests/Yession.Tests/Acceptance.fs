@@ -2893,6 +2893,66 @@ let private semanticsTests =
             let stop = html.IndexOf (Dom.Hooks.messageBody, start)
             html.Substring (start, stop - start)
 
+        /// What a reader SEES of a fragment: its text with every tag, and so every attribute,
+        /// taken out. An assertion about what is on screen that reads the markup is answered
+        /// by a `title` or an `aria-label` just as readily as by a word somebody can see.
+        let visibleTextOf (html: string) : string =
+            let out = System.Text.StringBuilder ()
+            let mutable inside = false
+            for c in html do
+                if c = '<' then inside <- true
+                elif c = '>' then inside <- false
+                elif not inside then out.Append c |> ignore
+            out.ToString().Trim ()
+
+        /// One terminal BLOCK's element, from its hook to the facts beneath it — so an
+        /// assertion that the line says who ran a command cannot be satisfied by the name
+        /// appearing in the disclosure under it, which is exactly where it already was.
+        let blockLineOf (block: string) (html: string) : string =
+            // From the `<` that OPENS the element, not from its hook attribute, which is in the
+            // middle of a tag — a fragment starting there reads as text to anything stripping
+            // tags, and the first attributes of the element come out as words.
+            let at = html.IndexOf (Dom.attr Dom.Hooks.terminalBlock block)
+            Expect.isTrue (at >= 0) "the block renders at all"
+            let start = html.LastIndexOf ('<', at)
+            let stop = html.IndexOf (Dom.Hooks.terminalBlockFacts, start)
+            Expect.isTrue (stop > start) "the block has its facts beneath it"
+            html.Substring (start, stop - start)
+
+        testCase "a command somebody else ran says WHO on its own line, not only in its facts" <| fun () ->
+            // It was a bare coloured square with a `title`: nothing on a phone, which has no
+            // hover, and nothing to a screen reader, because `title` on a non-interactive span
+            // is not an accessible name. A scrollback mixing a person's commands with the
+            // agent's told them apart by hue alone.
+            let agentRan =
+                { representativeModel with
+                    Terminals =
+                        { representativeModel.Terminals with
+                            Terminals =
+                                representativeModel.Terminals.Terminals
+                                |> List.map (fun t ->
+                                    { t with
+                                        Blocks =
+                                            t.Blocks
+                                            |> List.map (fun b ->
+                                                { b with Authority = Authority.agentFor (Principal.Peer ada) }) }) } }
+            let line = blockLineOf "block-ui" (Support.render agentRan)
+            Expect.isTrue (line.Contains Dom.Hooks.terminalBlockAuthor) "the line attributes the command"
+            // Read off the TEXT, with every tag's innards removed. The first version of this
+            // asserted on the markup and passed over the bare square it was written to
+            // forbid — because that square carried the name in a `title`, which is an
+            // attribute, which is exactly the hiding place in question.
+            Expect.isTrue
+                (visibleTextOf line |> fun text -> text.Contains "agent")
+                (sprintf "the name is on the line as words, not inside an attribute: %s" (visibleTextOf line))
+
+        testCase "your own commands are not attributed in your own terminal" <| fun () ->
+            // The other half, and what keeps the rule above from becoming a mark on every
+            // line: a scrollback of your own commands wearing your own name on each is a
+            // column that distinguishes nothing.
+            let line = blockLineOf "block-ui" (Support.render representativeModel)
+            Expect.isFalse (line.Contains Dom.Hooks.terminalBlockAuthor) "nothing to say"
+
         /// The same lookup, keyed by the author hook's raw TOKEN rather than a `PeerId` —
         /// what a `UserRef` author's message carries (`UserId.value`, per `authorLabel`).
         let messageMetaOfLabel (label: string) (html: string) : string =

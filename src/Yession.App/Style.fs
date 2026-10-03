@@ -2959,6 +2959,12 @@ module Style =
     let terminalBlockFacts = "flex flex-wrap items-baseline gap-x-4 gap-y-0.5 pl-4 py-1"
     let terminalBlockFact = caps + " text-ink-faint"
 
+    /// Who ran a command, on the command's own line — a reference, so it carries the mark AND
+    /// the name. `shrink-0` with a bounded name, because the command beside it is the longer
+    /// thing and the one that should give way; `min-w-0` lets the name itself give way before
+    /// the row does, on a phone where neither fits.
+    let terminalBlockAuthor = "shrink-0 min-w-0 max-w-[40%] inline-flex items-baseline"
+
     let terminalPrompt = "shrink-0 font-terminal text-code text-green select-none"
     let terminalCommandText = "font-terminal text-code text-ink break-all"
     /// Output: preformatted, wrapping, and horizontally scrollable for the lines that will

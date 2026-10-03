@@ -270,6 +270,11 @@ module Dom =
         let terminalScrollback = "data-terminal-scrollback"
         let terminalBlock = "data-terminal-block"
         let terminalBlockStatus = "data-terminal-block-status"
+        /// Who ran a command, on the command's own line — present only when that is not the
+        /// reader themselves.
+        let terminalBlockAuthor = "data-terminal-block-author"
+        /// The facts beneath a block, behind its disclosure.
+        let terminalBlockFacts = "data-terminal-block-facts"
         let terminalOutput = "data-terminal-output"
         let terminalTruncated = "data-terminal-truncated"
         let terminalInput = "data-terminal-input"
