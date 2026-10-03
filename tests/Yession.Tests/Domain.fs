@@ -264,7 +264,7 @@ let private frameSerializationTests =
 
     testList "Session frame serialization" [
         testCase "every session frame variant round-trips unchanged" <| fun () ->
-            let codec = Codec.sessionFrame Codec.string
+            let codec = Yession.App.Codecs.Frames.session Codec.string
             for frame in everyVariant do
                 let roundTripped = Codec.toString codec frame |> Codec.fromString codec |> expect
                 Expect.equal roundTripped frame "frame round-trip"

@@ -195,7 +195,7 @@ let private onPeerFinished (peer: Browser.Types.RTCPeerConnection) (onFinished: 
     peer.addEventListener ("iceconnectionstatechange", check)
     if peerFinished peer then onFinished ()
 
-let private frameCodec : Codec<SessionFrame<string>> = Codec.sessionFrame Codec.string
+let private frameCodec : Codec<SessionFrame<string>> = Frames.session Codec.string
 
 /// Bridge the push-based browser data channel into the pull-based `FrameChannel`, and hold the
 /// peer connection that carries it for as long as it lasts.

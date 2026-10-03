@@ -1733,7 +1733,7 @@ let private codecTests =
             Expect.equal (Codec.fromString Codec.sessionEvent encoded) (Ok added) "and read back whole"
 
         testCase "terminal frames round-trip over the session transport" <| fun () ->
-            let codec = Codec.sessionFrame Codec.string
+            let codec = Yession.App.Codecs.Frames.session Codec.string
             let frames =
                 [ Terminal (TerminalRecord (terminalA, 7, { At = 1.0; Kind = TranscriptOutput; Data = "hi" }))
                   Terminal (TerminalTranscriptAvailable (terminalA, 42))
@@ -1752,7 +1752,7 @@ let private codecTests =
             // served over a cache it may not have refreshed. A snapshot written without it
             // came from a Process that had resized nothing, so 80x24 is not a fallback guess
             // here — it is what that screen was painted at.
-            let codec = Codec.sessionFrame Codec.string
+            let codec = Yession.App.Codecs.Frames.session Codec.string
             let older =
                 """{"tag":"terminal","payload":{"kind":"snapshot","terminalId":"term-a",""" +
                 """"seq":42,"screen":"screen"}}"""
@@ -1764,7 +1764,7 @@ let private codecTests =
             | other -> failwithf "a snapshot written before the geometry must still read back, got %A" other
 
         testCase "the terminal commands and focus fields round-trip" <| fun () ->
-            let codec = Codec.sessionFrame Codec.string
+            let codec = Yession.App.Codecs.Frames.session Codec.string
             let frames =
                 [ Command (Request (RequestId.fresh (), OpenTerminal "build"))
                   // The launch surface's act, with and without a branch chosen.
