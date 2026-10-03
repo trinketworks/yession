@@ -482,6 +482,19 @@ let private gatheringNeverEnds =
          }
        })()"""
 
+// Says when a connection has taken its remote description, which is the moment a handshake's
+// deadline stops meaning "the session did not answer".
+let private answerApplied =
+    """(() => {
+         const Native = globalThis.RTCPeerConnection
+         globalThis.RTCPeerConnection = class extends Native {
+           async setRemoteDescription (...args) {
+             await super.setRemoteDescription(...args)
+             globalThis.__yessionAnswered = true
+           }
+         }
+       })()"""
+
 // The open draft is a ProseMirror editable (`.ProseMirror`) inside the editable
 // (`data-rich-readonly="false"`) body-mount host — and it is whichever draft this peer has open,
 // which may be someone else's: the composer joins the message already being written. Collapsed
@@ -1435,6 +1448,50 @@ let tests =
                 Expect.isTrue
                     offered.Task.IsCompleted
                     (sprintf "an offer posted inside %dms of page time, short of the %dms cap" spent cap)
+            }
+
+        // A session that answers but cannot be reached is not a session that said nothing. The
+        // route between the two is taken away on the wire: the offer reaches the session with
+        // none of the browser's candidates, so the session cannot find the browser either, and
+        // the answer comes back with every address of the session's moved into TEST-NET-1
+        // (RFC 5737), which routes nowhere. Signalling still succeeds, so the only fault left
+        // is the one the network has, and the handshake has to say THAT rather than that the
+        // session was silent: the remedy is an overlay or a relay, never the session.
+        //
+        // The deadline is the page's, so the case moves it rather than waiting it out — once
+        // the answer is in, which is the fact the verdict turns on. What is read is the
+        // handshake's own line: the person sees the same fault only after the transport's
+        // retries are spent, a minute of real time this case has no reason to spend.
+        sessionCase "a handshake whose session answered but could not be reached settles as unrouted" <|
+            fun page ->
+            async {
+                let signal = "**" + Yession.App.RelativeUrl.under "" (Yession.App.SessionRoute.relative Yession.App.SessionRoute.Signal)
+                let candidate = System.Text.RegularExpressions.Regex @"a=candidate:[^\\""]*\\r\\n"
+                let address = System.Text.RegularExpressions.Regex @"(a=candidate:\S+ \d+ \S+ \d+ )\S+"
+                let settled = TaskCompletionSource<string> (TaskCreationOptions.RunContinuationsAsynchronously)
+                page.Console.Add (fun message ->
+                    if message.Text.StartsWith "yession/link: handshake" then settled.TrySetResult message.Text |> ignore)
+                do! awaitU (page.RouteAsync (signal, fun route ->
+                        task {
+                            if route.Request.Method = "POST" then
+                                let offer = candidate.Replace (route.Request.PostData, "")
+                                let! response = route.FetchAsync (RouteFetchOptions (PostData = Text.Encoding.UTF8.GetBytes offer))
+                                let! answer = response.TextAsync ()
+                                do! route.FulfillAsync (
+                                        RouteFulfillOptions (
+                                            Response = response,
+                                            Body = address.Replace (answer, "${1}192.0.2.1")))
+                            else
+                                do! route.ContinueAsync ()
+                        } :> Task))
+                do! awaitU (page.AddInitScriptAsync answerApplied)
+                do! awaitU (page.Clock.InstallAsync ())
+                let! _ = await (page.ReloadAsync ())
+                do! waitFor "the session's answer to be applied" page "globalThis.__yessionAnswered === true"
+                do! awaitU (page.Clock.FastForwardAsync 10000L)
+                do! Async.AwaitTask (Task.WhenAny (settled.Task, Task.Delay 10000)) |> Async.Ignore
+                Expect.isTrue settled.Task.IsCompleted "the handshake settled"
+                Expect.stringContains settled.Task.Result "handshake unrouted" "an answered handshake that never opened is unrouted, not silent"
             }
     ]
 
