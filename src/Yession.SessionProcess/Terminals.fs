@@ -2587,10 +2587,7 @@ module SessionTerminals =
                                 held
                                 (SandboxRef.render sandbox))
                 else
-                    let title =
-                        if sandbox = SandboxRef.defaultRef then name
-                        else sprintf "[%s] %s" (SandboxRef.render sandbox) name
-                        |> TerminalTitle.fromProse
+                    let title = TerminalTitle.inSandbox sandbox name
                     match! openTerminal ActorRef.Agent (SandboxShell sandbox) title with
                     | Error reason -> return Error reason
                     | Ok id ->
@@ -2604,12 +2601,7 @@ module SessionTerminals =
                 match agentTerminals.TryGetValue key with
                 | true, id when isOpen id -> return Ok id
                 | _ ->
-                    // The sandbox is in the title when it is not the default one: several
-                    // terminals in a strip are navigable only if each says where it is.
-                    let title =
-                        if sandbox = SandboxRef.defaultRef then reason
-                        else sprintf "[%s] %s" (SandboxRef.render sandbox) reason
-                        |> TerminalTitle.fromProse
+                    let title = TerminalTitle.inSandbox sandbox reason
                     match! openTerminal ActorRef.Agent (SandboxShell sandbox) title with
                     | Error reason -> return Error reason
                     | Ok id ->
