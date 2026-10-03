@@ -47,6 +47,7 @@
          so the cheap tier settles the wrap-around without a strip to press keys on. Below
          the view, which is the only thing that holds the elements. -->
     <Compile Include="TabStrip.fs" />
+    <Compile Include="Glide.fs" />
     <Compile Include="View.fs" />
     <Compile Include="Client.fs" />
   </ItemGroup>

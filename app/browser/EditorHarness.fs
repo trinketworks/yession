@@ -138,6 +138,9 @@ module private Published =
     /// is thinking, which is the mark that MOVES, and this harness runs no timers to let a
     /// written turn go quiet, so the case that measures the moving mark starts here instead.
     let agentThinks : PageGlobal<unit -> unit> = PageGlobal.named "__agentThinks"
+    /// That turn's first word, after `__agentThinks`: the moment the mark leaves where the turn
+    /// began for the end of what has been said.
+    let agentSays : PageGlobal<unit -> unit> = PageGlobal.named "__agentSays"
     /// Hand a terminal's lease to this peer WITHOUT a press, as the alt-screen flip does: a block
     /// takes the screen and the Session gives its author the keyboard. Exposed for the
     /// same reason the snapshot is — it is the arrival of a fact from elsewhere, and a test that
@@ -1458,7 +1461,10 @@ do
                 terminal
                 { Seq = seq; Cols = defaultArg cols 80; Rows = defaultArg rows 24; Screen = screen }
         | Error _ -> ()))
-    let startTurn (said: string option) =
+    // The turn's events, by offset: begun, a message opened, a first word. Each hook below
+    // dispatches the stretch of them it stands for, so `__agentThinks` then `__agentSays` is
+    // the same turn as `__agentTurn`, arriving in two pages instead of one.
+    let liveTurn (offsets: int64 list) =
         let expect = function Ok v -> v | Error e -> failwith e
         let turn : AgentTurnId = AgentTurnId.create "turn-live" |> expect
         let messageId : MessageId = MessageId.create "msg-live" |> expect
@@ -1466,26 +1472,26 @@ do
         // agent's own message here instead makes the reply detached from itself, and the
         // timeline dutifully quotes the message above its own body.
         let asked : MessageId = MessageId.create "msg-harness" |> expect
-        let envelope (offset: int64) (event: SessionEvent) : EventEnvelope<SessionEvent> =
+        let event (offset: int64) : SessionEvent =
+            match offset with
+            | 40L -> SessionEvent.AgentTurnStarted { AgentTurnId = turn; Cause = TurnCause.TriggeredBy asked }
+            | 41L -> SessionEvent.AgentMessageStarted { AgentTurnId = turn; MessageId = messageId; Antecedent = None }
+            | _ -> SessionEvent.AgentMessageDelta { AgentTurnId = turn; MessageId = messageId; Delta = "Looking at it" }
+        let envelope (offset: int64) : EventEnvelope<SessionEvent> =
             { EventId = EventId.fresh ()
               SessionId = model.Session |> Option.defaultWith (fun () -> SessionId.create "harness" |> expect)
               Offset = EventOffset.create offset |> expect
               Actor = ActorRef.Agent
               Timestamp = System.DateTimeOffset.UtcNow
-              Event = event }
+              Event = event offset }
         dispatch (
             EventsPageMsg
-                { Events =
-                    [ envelope 40L (SessionEvent.AgentTurnStarted { AgentTurnId = turn; Cause = TurnCause.TriggeredBy asked })
-                      envelope 41L (SessionEvent.AgentMessageStarted { AgentTurnId = turn; MessageId = messageId; Antecedent = None })
-                      yield!
-                          said
-                          |> Option.map (fun delta -> envelope 42L (SessionEvent.AgentMessageDelta { AgentTurnId = turn; MessageId = messageId; Delta = delta }))
-                          |> Option.toList ]
-                  LastOffset = EventOffset.create (if said.IsSome then 42L else 41L) |> expect |> Some
+                { Events = offsets |> List.map envelope
+                  LastOffset = offsets |> List.tryLast |> Option.map (EventOffset.create >> expect)
                   IsEnd = true })
-    PageGlobal.set Published.agentTurn (fun () -> startTurn (Some "Looking at it"))
-    PageGlobal.set Published.agentThinks (fun () -> startTurn None)
+    PageGlobal.set Published.agentTurn (fun () -> liveTurn [ 40L; 41L; 42L ])
+    PageGlobal.set Published.agentThinks (fun () -> liveTurn [ 40L; 41L ])
+    PageGlobal.set Published.agentSays (fun () -> liveTurn [ 42L ])
     PageGlobal.set Published.take (fun id ->
         match TerminalId.create id with
         | Ok terminal -> takeRef terminal

@@ -1580,6 +1580,11 @@ module Style =
     /// body it stands on the content column, where the first word will. Without motion it is
     /// dimmed instead, so thinking and writing still differ.
     let agentThinking = "agent-think"
+    /// Before the first word: the same cube, larger, standing where the reply will begin — the
+    /// turn's opening, said a size up, until the first word's caret takes it to the end of
+    /// that word (`Glide`). Drawn larger, not laid out larger (`.agent-think-start`), so the
+    /// line it stands on is the line the first word will set and nothing moves when it does.
+    let agentThinkingStart = agentThinking + " agent-think-start"
     /// What it turns: the tip and the cube inside it, drawn by `View.thinkingCube`.
     let agentThinkingTip = "agent-think-tip"
     let agentThinkingCube = "agent-think-cube"

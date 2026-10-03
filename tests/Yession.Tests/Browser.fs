@@ -3636,13 +3636,13 @@ let editorTests =
                 return ()
             }
         // The thinking mark MOVES — a cube tipped, flipped and tumbled — and a cube turned
-        // toward its corner stands 1.2x taller than the diamond on top of it. So the promise
-        // the still caret keeps by its box, the moving one has to keep in every frame: what it
-        // paints stays within the lowercase it stands among, baseline to x-height, within the
-        // overshoot a point is carried past its line. Measured on what paints — the leaves of
-        // the mark, each a face whose projected box a browser reports through the perspective
-        // — at every 20ms of one whole cycle, its animations paused and stepped together.
-        editorCaseIn 390 844 "the agent's thinking mark stays within its letters through every move" <| fun page ->
+        // toward its corner stands 1.2x taller than the diamond on top of it. So the box the
+        // mark is placed by (held to its letters at rest, by the caret case above) has to hold
+        // what it paints in every frame, or a move pokes out of the lowercase it stands among.
+        // Measured on what paints — the leaves of the mark, each a face whose projected box a
+        // browser reports through the perspective — at every 20ms of one whole cycle, its
+        // animations paused and stepped together, against the mark's own box as drawn.
+        editorCaseIn 390 844 "the agent's thinking mark never paints outside its box through any move" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
                 do! awaitU (page.EvaluateAsync "() => window.__agentThinks()")
@@ -3651,11 +3651,7 @@ let editorTests =
                     await (page.EvaluateAsync<string>
                             """() => {
                                  const mark = document.querySelector('#shell [data-agent-writing]')
-                                 const probe = document.createElement('span')
-                                 probe.style.cssText = 'display:inline-block;width:0;height:1ex'
-                                 mark.before(probe)
-                                 const letters = probe.getBoundingClientRect()
-                                 probe.remove()
+                                 const box = mark.getBoundingClientRect()
                                  const em = parseFloat(getComputedStyle(mark).fontSize)
                                  const leaves = [...mark.querySelectorAll('*')].filter(e => !e.firstElementChild)
                                  const moves = mark.getAnimations({ subtree: true })
@@ -3665,13 +3661,58 @@ let editorTests =
                                  for (let t = 0; t < cycle; t += 20) {
                                    moves.forEach(a => { a.pause(); a.currentTime = t })
                                    const boxes = (leaves.length ? leaves : [mark]).map(e => e.getBoundingClientRect())
-                                   const top = Math.min(...boxes.map(b => b.top)), bottom = Math.max(...boxes.map(b => b.bottom))
-                                   const over = Math.max(letters.top - top, bottom - letters.bottom) - 0.05 * em
+                                   const over = Math.max(
+                                     box.top - Math.min(...boxes.map(b => b.top)),
+                                     Math.max(...boxes.map(b => b.bottom)) - box.bottom,
+                                     box.left - Math.min(...boxes.map(b => b.left)),
+                                     Math.max(...boxes.map(b => b.right)) - box.right) - 0.05 * em
                                    if (over > 0 && (!worst || over > worst.over)) worst = { over, t }
                                  }
-                                 return worst ? 'it paints ' + worst.over.toFixed(2) + 'px past its letters at ' + worst.t + 'ms' : ''
+                                 return worst ? 'it paints ' + worst.over.toFixed(2) + 'px outside its box at ' + worst.t + 'ms' : ''
                                }""")
-                Expect.equal outside "" "the thinking mark never stands taller than the letters"
+                Expect.equal outside "" "the thinking mark stays inside the box it is placed by"
+                return ()
+            }
+        // The turn opens with its mark stood larger where the reply will begin; the first word
+        // puts the caret down at the end of that word. The promise is that it is the SAME mark
+        // going there — it leaves from where it stood rather than vanishing in one place and
+        // appearing in another. So at the first frame of its arrival the caret paints where the
+        // opening mark stood, at that mark's size: centres and heights compared, each read from
+        // what the browser drew, with the arrival paused at its start.
+        editorCaseIn 390 844 "the first word takes the agent's mark from where the turn began" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
+                do! awaitU (page.EvaluateAsync "() => window.__agentThinks()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
+                let! _ =
+                    await (page.EvaluateAsync<bool>
+                            """() => { const r = document.querySelector('#shell [data-agent-writing]').getBoundingClientRect()
+                                       window.__opening = { x: r.left + r.width / 2, y: r.top + r.height / 2, h: r.height }
+                                       return true }""")
+                // Said and measured in one evaluation, so the arrival is caught at its start
+                // however slow the round trip to the page is.
+                let! apart =
+                    await (page.EvaluateAsync<string>
+                            """async () => {
+                                 window.__agentSays()
+                                 let caret = null
+                                 for (let i = 0; i < 60 && !caret; i++) {
+                                   const m = document.querySelector('#shell [data-agent-writing]')
+                                   if (m && !m.firstElementChild) caret = m
+                                   else await new Promise(r => requestAnimationFrame(r))
+                                 }
+                                 if (!caret) return 'the first word put down no caret'
+                                 await new Promise(r => requestAnimationFrame(r))
+                                 const arriving = caret.getAnimations()
+                                 if (arriving.length === 0) return 'the caret appears where it lands, from nowhere'
+                                 arriving.forEach(a => { a.pause(); a.currentTime = 0 })
+                                 const r = caret.getBoundingClientRect()
+                                 const at = { x: r.left + r.width / 2, y: r.top + r.height / 2, h: r.height }
+                                 const was = window.__opening
+                                 const off = Math.max(Math.abs(at.x - was.x), Math.abs(at.y - was.y), Math.abs(at.h - was.h))
+                                 return off > 1 ? 'it leaves ' + off.toFixed(2) + 'px from where the turn\'s mark stood' : ''
+                               }""")
+                Expect.equal apart "" "the caret starts from the opening mark"
                 return ()
             }
         // What the band it replaced could not take away, and what a control arriving in a band
