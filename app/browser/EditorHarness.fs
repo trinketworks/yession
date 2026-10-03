@@ -1284,8 +1284,8 @@ let private openFixture (items: int) (perAnswer: int) : OpenFixture =
     // The transcript's kept answers, ten lines to each, the header on line 0 of the first.
     let linesPerAnswer = 10
     let lines =
-        (Codec.toString Codec.transcriptLine (TranscriptHeaderLine { Width = 80; Height = 24; Timestamp = 0L }))
-        :: [ for r in records -> Codec.toString Codec.transcriptLine (TranscriptRecordLine r) ]
+        (Codec.toString Transcripts.line (TranscriptHeaderLine { Width = 80; Height = 24; Timestamp = 0L }))
+        :: [ for r in records -> Codec.toString Transcripts.line (TranscriptRecordLine r) ]
     let transcriptAnswers =
         [ for first in 0 .. linesPerAnswer .. List.length lines - 1 ->
             sprintf "transcript/%d" first,

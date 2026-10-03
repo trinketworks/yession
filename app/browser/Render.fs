@@ -30,6 +30,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Fable.ProseMirror
 open Yession.App
+open Yession.App.Codecs
 
 // --- What the page can do that a template cannot -------------------------------------------
 
@@ -707,7 +708,7 @@ let create (deps: Deps) : Renderer =
                             // again on every render would be a spin with nothing to gain.
                             | Error _ -> ()
                             | Ok answer ->
-                                match Codec.fromString Codec.transcriptKeyframe answer.Body with
+                                match Codec.fromString Transcripts.keyframe answer.Body with
                                 | Ok keyframe -> dispatch (TerminalKeyframeMsg (terminal, keyframe))
                                 | Error _ -> ()
                         })

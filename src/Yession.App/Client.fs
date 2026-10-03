@@ -468,7 +468,7 @@ module Client =
             let rec decode i acc header =
                 if i >= lines.Length then Ok (List.rev acc, header)
                 else
-                    match Codec.fromString Codec.transcriptLine lines.[i] with
+                    match Codec.fromString Transcripts.line lines.[i] with
                     | Ok (TranscriptRecordLine record) -> decode (i + 1) ((first + i, record) :: acc) header
                     // The header is line 0 and carries no output, so it is no record — but
                     // it is KEPT, because a replay needs it.

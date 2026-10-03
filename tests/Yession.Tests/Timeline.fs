@@ -16,6 +16,7 @@ open Yession.Domain.Sandboxes
 open Yession.Domain.Files
 open Yession.Domain.Content
 open Yession.App
+open Yession.App.Codecs
 
 let private expect =
     function
@@ -527,7 +528,7 @@ let private outputsOf (cast: string) : string list =
     |> Array.filter (fun l -> l.Trim().Length > 0)
     |> Array.toList
     |> List.choose (fun line ->
-        match Codec.fromString Codec.transcriptLine line with
+        match Codec.fromString Transcripts.line line with
         | Ok (TranscriptRecordLine r) when r.Kind = TranscriptOutput || r.Kind = TranscriptStderr -> Some r.Data
         | _ -> None)
 
@@ -536,12 +537,12 @@ let private timesOf (cast: string) : float list =
     |> Array.filter (fun l -> l.Trim().Length > 0)
     |> Array.toList
     |> List.choose (fun line ->
-        match Codec.fromString Codec.transcriptLine line with
+        match Codec.fromString Transcripts.line line with
         | Ok (TranscriptRecordLine r) -> Some r.At
         | _ -> None)
 
 let private headerOf (cast: string) : TranscriptHeader =
-    match Codec.fromString Codec.transcriptLine ((cast.Split '\n').[0]) with
+    match Codec.fromString Transcripts.line ((cast.Split '\n').[0]) with
     | Ok (TranscriptHeaderLine h) -> h
     | _ -> failwith "the first line of a cast is its header"
 

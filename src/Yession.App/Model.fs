@@ -12,6 +12,7 @@ open Yession.Domain.Chat
 open Yession.Domain.Content
 open Yession.Domain.Artifacts
 open Yession.Domain.Prs
+open Yession.App.Codecs
 
 /// The Browser Client Elmish model and update loop shell. It holds a single typed
 /// snapshot of what the client knows: the local peer, connection state, synced

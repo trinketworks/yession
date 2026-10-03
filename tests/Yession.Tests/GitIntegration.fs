@@ -29,6 +29,7 @@ open Yession.Host
 open Yession.SessionProcess
 open Yession.Tests.Support
 open Yession.Peer
+open Yession.App.Codecs
 
 let private expect =
     function
@@ -898,7 +899,7 @@ let private compositionTests =
                     [ "cookie", OidcHttp.cookieHeader opened.Jar ]
                     (fun data ->
                         // The stream carries every read model now; this one is about queries.
-                        match Codec.fromString Codec.readFrame data with
+                        match Codec.fromString Reads.readFrame data with
                         | Ok (Queried frame) -> frames.Add frame
                         | Ok (Panels _)
                         | Error _ -> ())

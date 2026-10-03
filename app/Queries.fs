@@ -17,6 +17,7 @@ module Yession.Host.Queries
 
 open Yession.Domain
 open Yession.Domain.Tools
+open Yession.App.Codecs
 
 /// One query, wired: what it declares, and how to answer it. `Read` is called on demand —
 /// nothing is cached, because every value here is somebody else's truth (the filesystem's
@@ -205,7 +206,7 @@ let routes
             | Some identity ->
                 // Two read models, one stream, one sink: `Sse.stream` opens the response and
                 // hands back the sink both subscriptions write into.
-                let sink = Sse.stream req res (Codec.toString Codec.readFrame) (fun sink ->
+                let sink = Sse.stream req res (Codec.toString Reads.readFrame) (fun sink ->
                     let queries = registry.Subscribe (Queried >> sink)
                     let panels = feed.Subscribe identity (Panels >> sink)
                     Subscription.ofStop (fun () ->

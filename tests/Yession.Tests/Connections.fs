@@ -19,6 +19,7 @@ open Yession.Domain.Tools
 open Yession.Domain.Agent
 open Yession.Manager
 open Yession.Peer
+open Yession.App.Codecs
 
 #if FABLE_COMPILER
 open Thoth.Json
@@ -1512,7 +1513,7 @@ let private awaitClaudePanel
                 (sessionUrl + "/queries")
                 [ "cookie", cookie ]
                 (fun data ->
-                    match Codec.fromString Codec.readFrame data with
+                    match Codec.fromString Reads.readFrame data with
                     | Ok (Panels (claude, _)) -> seen.Add claude
                     | Ok (Queried _)
                     | Error _ -> ())
@@ -4173,7 +4174,7 @@ let private panelWireTests =
                   AgentAvailable = true
                   Models = ModelsLoaded offered }
             Expect.equal
-                (Codec.toString Codec.claudePanel panel)
+                (Codec.toString Reads.claudePanel panel)
                 ("""{"session":null,"mine":{"kind":"oauth","signInRequired":"expired"},"owner":"user","""
                  + """"agent":true,"models":{"models":[{"id":"example-large","name":"Example Large"}]},"""
                  + """"modelsUnavailable":null}""")
@@ -4187,7 +4188,7 @@ let private panelWireTests =
                   AgentAvailable = false
                   Models = ModelsUnavailable "no account connected" }
             Expect.equal
-                (Codec.toString Codec.claudePanel panel |> Codec.fromString Codec.claudePanel |> expect)
+                (Codec.toString Reads.claudePanel panel |> Codec.fromString Reads.claudePanel |> expect)
                 panel
                 "identical"
 
@@ -4197,20 +4198,20 @@ let private panelWireTests =
                   MineCredential = Some { Kind = StaticConnection; SignInRequired = None }
                   Owner = OwnedByDeployment }
             Expect.equal
-                (Codec.toString Codec.githubPanel panel |> Codec.fromString Codec.githubPanel |> expect)
+                (Codec.toString Reads.githubPanel panel |> Codec.fromString Reads.githubPanel |> expect)
                 panel
                 "identical"
 
         testCase "a reply that mentions no models is a picker that has not been told" <| fun () ->
             let panel =
-                Codec.fromString Codec.claudePanel """{"session":null,"mine":null,"owner":"user","agent":true}"""
+                Codec.fromString Reads.claudePanel """{"session":null,"mine":null,"owner":"user","agent":true}"""
                 |> expect
             Expect.equal panel.Models ModelsUnknown "not an empty menu — `keeping` is what does not blank it"
 
         testCase "a catalogue of the wrong shape does not take the rows with it" <| fun () ->
             let panel =
                 Codec.fromString
-                    Codec.claudePanel
+                    Reads.claudePanel
                     """{"session":null,"mine":{"kind":"static","signInRequired":null},"owner":"user","agent":true,"models":{"models":"not a list"}}"""
                 |> expect
             Expect.equal
@@ -4226,13 +4227,13 @@ let private panelWireTests =
             // field's builder a null and runs it anyway, so `AgentModel.create` read the id
             // back out and threw `Cannot read properties of null (reading 'fields')`.
             Expect.isTrue
-                (Result.isError (Codec.fromString Codec.modelCatalogue """{"models":[{"nope":1}]}"""))
+                (Result.isError (Codec.fromString Reads.modelCatalogue """{"models":[{"nope":1}]}"""))
                 "an entry this build cannot read is a refusal, and a refusal is a value"
 
         testCase "a catalogue with an unreadable entry does not take the rows with it" <| fun () ->
             let panel =
                 Codec.fromString
-                    Codec.claudePanel
+                    Reads.claudePanel
                     """{"session":null,"mine":{"kind":"static","signInRequired":null},"owner":"user","agent":true,"models":{"models":[{"nope":1}]}}"""
                 |> expect
             Expect.equal
@@ -4255,7 +4256,7 @@ let private panelWireTests =
 
         testCase "a kind this build does not know reads as static" <| fun () ->
             let panel =
-                Codec.fromString Codec.claudePanel """{"mine":{"kind":"passkey","signInRequired":null},"owner":"user","agent":true}""" |> expect
+                Codec.fromString Reads.claudePanel """{"mine":{"kind":"passkey","signInRequired":null},"owner":"user","agent":true}""" |> expect
             Expect.equal
                 (panel.MineCredential |> Option.map (fun row -> row.Kind))
                 (Some StaticConnection)

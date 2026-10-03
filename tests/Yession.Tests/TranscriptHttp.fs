@@ -17,6 +17,7 @@ open Yession.Domain.Terminals
 open Yession.App
 open Yession.Host
 open Yession.Tests.Support
+open Yession.App.Codecs
 
 let private terminal = TerminalId.create "term-http" |> expect
 let private token = "minted-for-this-test"
@@ -221,10 +222,10 @@ let private storeOf (entries: (TerminalId * (string * int * string) list) list) 
 let private answerOf (first: int) (count: int) =
     let line (seq: int) =
         if seq = 0 then
-            Codec.toString Codec.transcriptLine (TranscriptHeaderLine { Width = 80; Height = 24; Timestamp = 0L })
+            Codec.toString Transcripts.line (TranscriptHeaderLine { Width = 80; Height = 24; Timestamp = 0L })
         else
             Codec.toString
-                Codec.transcriptLine
+                Transcripts.line
                 (TranscriptRecordLine { At = 0.0; Kind = TranscriptOutput; Data = sprintf "line %d" seq })
     let last = first + count - 1
     sprintf "terminals/%s/%d-%d" (TerminalId.value terminal) first last,

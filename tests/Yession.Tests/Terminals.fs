@@ -1506,10 +1506,10 @@ let private transcriptTests =
             Expect.isNone (reopened.ReadKeyframe terminalB 2) "as does a terminal with no sidecar at all"
 
         testCase "records encode as asciicast v2, so any player can read a transcript" <| fun () ->
-            let header = Codec.toString Codec.transcriptLine (TranscriptHeaderLine { Width = 80; Height = 24; Timestamp = 1754092800L })
+            let header = Codec.toString Transcripts.line (TranscriptHeaderLine { Width = 80; Height = 24; Timestamp = 1754092800L })
             Expect.isTrue (header.Contains "\"version\":2") "the header declares version 2"
             let record =
-                Codec.toString Codec.transcriptLine (TranscriptRecordLine { At = 1.5; Kind = TranscriptOutput; Data = "hi" })
+                Codec.toString Transcripts.line (TranscriptRecordLine { At = 1.5; Kind = TranscriptOutput; Data = "hi" })
             // A bare three-element array: `[time, code, data]`. Asserted on the TEXT because
             // the format is asciinema's, and matching it is the whole point of using it.
             Expect.equal record "[1.5,\"o\",\"hi\"]" "a record is a bare [time, code, data] array"
@@ -1522,8 +1522,8 @@ let private transcriptTests =
                   TranscriptRecordLine { At = 0.5; Kind = TranscriptInput; Data = "ls\n" }
                   TranscriptRecordLine { At = 0.75; Kind = TranscriptResize; Data = "100x30" } ]
             for line in lines do
-                let encoded = Codec.toString Codec.transcriptLine line
-                Expect.equal (Codec.fromString Codec.transcriptLine encoded) (Ok line) ("round-trips: " + encoded)
+                let encoded = Codec.toString Transcripts.line line
+                Expect.equal (Codec.fromString Transcripts.line encoded) (Ok line) ("round-trips: " + encoded)
 
         // The replay (stage 3e) is built from what the client already fetched rather than
         // from a new whole-file route, and that is only sound if the reassembly is the FILE.
@@ -1549,7 +1549,7 @@ let private transcriptTests =
                 |> Option.defaultWith (fun () -> failwith "the bounds named lines the store would not read")
             let decoded =
                 lines
-                |> List.mapi (fun i line -> first + i, Codec.fromString Codec.transcriptLine line)
+                |> List.mapi (fun i line -> first + i, Codec.fromString Transcripts.line line)
                 |> List.choose (fun (seq, line) ->
                     match line with
                     | Ok (TranscriptRecordLine record) -> Some (seq, record)
@@ -1573,7 +1573,7 @@ let private transcriptTests =
             let lines = cast.Split '\n' |> Array.filter (fun l -> l.Trim().Length > 0)
             Expect.equal lines.Length 1 "the header, and nothing else"
             Expect.equal
-                (Codec.fromString Codec.transcriptLine lines.[0])
+                (Codec.fromString Transcripts.line lines.[0])
                 (Ok (TranscriptHeaderLine { Width = 80; Height = 24; Timestamp = 0L }))
                 "and it is the header"
     ]
