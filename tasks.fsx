@@ -628,6 +628,9 @@ type Target =
     /// The page the browser suites drive, `tests/browser/out`: the editor harness bundled, with an
     /// unminified asset set beside it.
     | Harness
+    /// The suite compiled for the .NET CLR, `tests/Yession.Tests/bin/Debug`: where the browser
+    /// suites run, since Playwright is a .NET driver and Fable never sees them.
+    | ClrSuite
 
 module private Target =
 
@@ -643,6 +646,7 @@ module private Target =
         | Target.Assets
         | Target.Harness -> [ Target.Client ]
         | Target.Package _ -> [ Target.Server; Target.Assets ]
+        | Target.ClrSuite -> [ Target.Packages ]
 
     let describe (target: Target) : string =
         match target with
@@ -654,6 +658,7 @@ module private Target =
         | Target.Package version -> sprintf "the npm package (%s)" version
         | Target.Suite -> "the test suite"
         | Target.Harness -> "the browser harness"
+        | Target.ClrSuite -> "the test suite (.NET CLR)"
 
     /// How a target is made, given that everything it `needs` already has been.
     let produce (target: Target) =
@@ -675,6 +680,15 @@ module private Target =
             // without it every Tailwind class is inert, and any layout the browser tier measures
             // there — a phone viewport most of all — is a layout nobody will ever get.
             buildAssets "tests/browser/out" false
+        // A target rather than the build `dotnet run` does on its way in, because that build was
+        // the browser tier's longest step and nothing ran beside it: ninety seconds on a runner,
+        // after the Fable compiles had finished and before the first case. Here it overlaps them.
+        //
+        // Beside Fable is safe where `build`'s solution build is not, for two reasons, both in
+        // the arguments. `--no-restore`: the restore is `Packages`, so this writes nothing Fable
+        // reads. And Debug: Fable cracks every project in Release (its default outside watch
+        // mode), so the two write disjoint `obj/<configuration>` directories.
+        | Target.ClrSuite -> run "dotnet" [ "build"; "tests/Yession.Tests/Yession.Tests.fsproj"; "--no-restore"; "-c"; "Debug" ] |> ignore
 
 /// What this process has made, or is making. Once per PROCESS rather than per `make`, because a
 /// verb that makes the tools before it probes the box and then makes what its suites need is
@@ -1301,8 +1315,9 @@ let private runsClr (caps: Set<string>) (runtime: Runtime option) =
 let private suiteEntry = "tests/Yession.Tests/out/Main.js"
 
 /// What a run of these capabilities must have made before its first suite starts. Asked of the
-/// graph in ONE `make`, which is the point: the suite, the product the suites drive and the
-/// browser harness stand on nothing of each other's, so they compile side by side.
+/// graph in ONE `make`, which is the point: the suite (for whichever runtime will run it), the
+/// product the suites drive and the browser harness stand on nothing of each other's, so they
+/// compile side by side.
 ///
 /// The product is the assembled npm package because the host-spawning Node suites drive it: a
 /// session spawned from `app/SessionMain.js`, the composition case from `dist/npm`. `test` names
@@ -1318,7 +1333,9 @@ let private preparing (caps: Set<string>) (runtime: Runtime option) : Target lis
     [ if runsNode runtime then Target.Suite
       if runtime <> Some Runtime.Neither && hasAny caps [ "Ports"; "Native"; "Docker"; "LiveAgent"; "Nix" ] then
           Target.Package "test"
-      if runsClr caps runtime then Target.Harness ]
+      if runsClr caps runtime then
+          Target.Harness
+          Target.ClrSuite ]
 
 let private runCheckOnce (requested: string list) (runtime: Runtime option) =
     let caps = requested
@@ -1382,7 +1399,9 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
             |> Array.map (fun dir -> Path.Combine (dir, "node"))
             |> Array.tryFind File.Exists
             |> Option.iter (fun node -> Environment.SetEnvironmentVariable ("PLAYWRIGHT_NODEJS_PATH", node))
-        exec "dotnet" [ "run"; "--project"; "tests/Yession.Tests/Yession.Tests.fsproj" ]
+        // `Target.ClrSuite` built it beside the Fable compiles; without `--no-build` this would
+        // build it again, alone, ahead of the first case.
+        exec "dotnet" [ "run"; "--project"; "tests/Yession.Tests/Yession.Tests.fsproj"; "--no-build"; "-c"; "Debug" ]
 
     // Last, because it is the long pole (a cold NuGet fetch plus the whole compile again,
     // offline, inside the sandbox) and because the suites are the sharper signal. `Nix` asserts
