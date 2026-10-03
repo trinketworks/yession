@@ -116,6 +116,25 @@ let private optionTests =
             Expect.equal thinking.display "summarized" "a summary rather than a signed empty block"
     ]
 
+// --- starting a query ---------------------------------------------------------------------
+
+let private queryTests =
+    testList "starting a query" [
+        // The SDK picks its CLI binary with a synchronous `process.report.getReport()`, and a
+        // report that reads the network reverse-resolves every open socket on the event loop:
+        // behind a resolver that never answers a PTR, a Session Process froze for ten seconds
+        // at the start of every turn. The spawner refuses, so nothing is run — and the SDK has
+        // already chosen its binary by the time it asks for a process.
+        testCase "a started query leaves this process's diagnostic reports off the network" <| fun () ->
+            let refusing = Spawner (fun _ -> failwith "this case spawns nothing")
+            try
+                query "hello" (jsOptions<Options> (fun o -> o.spawnClaudeCodeProcess <- refusing)) |> ignore
+            with _ -> ()
+            Expect.isFalse
+                (Fable.NodeExtras.Processes.reportsReadTheNetwork ())
+                "a report taken now would not reverse-resolve this process's sockets"
+    ]
+
 // --- narrowing what the query yields ------------------------------------------------------
 
 let private messageOf (tag: string) : Message = jsOptions<Message> (fun m -> m.``type`` <- tag)
@@ -193,6 +212,7 @@ let tests =
         inputTests
         answerTests
         optionTests
+        queryTests
         classificationTests
     ]
 

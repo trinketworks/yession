@@ -443,6 +443,26 @@ module Processes =
     [<Emit("process.on($0, $1)")>]
     let onEnding (event: string) (listener: unit -> unit) : unit = jsNative
 
+    /// Keep the network out of every diagnostic report this process takes from now on —
+    /// `process.report.excludeNetwork`, for the life of the process.
+    ///
+    /// `process.report.getReport()` is SYNCHRONOUS, and with the network included it walks
+    /// every libuv handle and reverse-resolves each socket's endpoints — a blocking
+    /// `getnameinfo` per address, on the event loop. Where the resolver answers a PTR query
+    /// promptly that costs milliseconds; where it does not answer at all (a CI runner, a
+    /// locked-down host) each lookup waits out the resolver's timeout, and nothing else in
+    /// the process runs meanwhile. Measured against a resolver that swallows queries: a
+    /// report over one TCP listener and one UDP socket took 20 seconds, and 2ms excluded.
+    [<Emit("process.report.excludeNetwork = true")>]
+    let excludeNetworkFromReports () : unit = jsNative
+
+    /// Whether a diagnostic report taken now would read the network — the machine's
+    /// interfaces, and the reverse lookups that come with them. One switch governs both
+    /// (`excludeNetworkFromReports`), so asking about the cheap half answers for the
+    /// expensive one without paying for it.
+    [<Emit("process.report.getReport().header.networkInterfaces !== undefined")>]
+    let reportsReadTheNetwork () : bool = jsNative
+
 // --- Child processes ------------------------------------------------------------------------
 
 /// What ONE of a child's standard streams is wired to. `spawnWithEnv` at the end of this file
