@@ -152,6 +152,13 @@ module Scrolling =
     [<Emit("$0.scrollIntoView({ block: 'center' })")>]
     let scrollIntoMiddle (element: Browser.Types.HTMLElement) : unit = jsNative
 
+    /// Scroll an element to its own bottom, animated. The caller decides WHETHER to animate
+    /// (`mediaMatches "(prefers-reduced-motion: reduce)"`, in `Media` above) — this only
+    /// knows how to ask for the moving form, same as `scrollIntoMiddle` only knows the
+    /// centred one.
+    [<Emit("$0.scrollTo({ top: $0.scrollHeight, behavior: 'smooth' })")>]
+    let scrollToBottomSmooth (element: Browser.Types.HTMLElement) : unit = jsNative
+
 /// What a key event is, beyond the keystroke: whether an IME was mid-composition when it
 /// arrived.
 ///
