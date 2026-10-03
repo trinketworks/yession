@@ -10,6 +10,7 @@
          domain's declarations. -->
     <Compile Include="ConfigFile.fs" />
     <Compile Include="OperatorProfile.fs" />
+    <Compile Include="ToolJson.fs" />
     <!-- The `yession` namespace's registry, built from a turn's capabilities, and the
          argument decoding every one of its tools does for itself. -->
     <Compile Include="AgentTools.fs" />

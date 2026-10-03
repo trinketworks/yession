@@ -157,9 +157,4 @@
     <Compile Include="Auth.fs" />
   </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Thoth.Json" />
-    <PackageReference Include="Thoth.Json.Net" />
-  </ItemGroup>
-
 </Project>
