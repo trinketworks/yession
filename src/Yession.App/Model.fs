@@ -1352,10 +1352,16 @@ module ClientModel =
             | None -> true
             | Some processed -> EventOffset.value latest > EventOffset.value processed
 
-    /// The model for a freshly loaded client: disconnected, nothing consumed, idle.
+    /// The model for a freshly loaded client: connecting, nothing consumed, idle. The
+    /// optimistic start is deliberate and is what `connectionReport` already assumes ("Connecting
+    /// is the state every client starts in"): a client that has just loaded IS about to connect,
+    /// so the first paint says `Connecting` — which the report keeps silent — rather than wearing
+    /// the "not connected" strip for the ~75ms until the transport is asked and then reflowing the
+    /// panes under it up by the strip's height. A genuine failure replaces this with
+    /// `Disconnected reason` and earns the strip.
     let init (peer: PeerState) : ClientModel =
         { Peer = peer
-          Connection = Disconnected None
+          Connection = Connecting
           Session = None
           Manager = None
           EphemeralStorage = false
