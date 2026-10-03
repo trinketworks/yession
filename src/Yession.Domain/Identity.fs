@@ -323,7 +323,7 @@ type ActorRef =
 
 module ActorRef =
 
-    /// An actor as ONE string. The events' wire format is a tagged object (Serialization.fs)
+    /// An actor as ONE string. The events' wire format is a tagged object (Yession.Codecs)
     /// and stays that way; this exists for the places that need a value a CRDT register can
     /// hold — a terminal queue entry's author, which may be the agent and so cannot be the
     /// bare `PeerId` the message queue gets away with.

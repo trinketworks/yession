@@ -15,6 +15,7 @@ open Fable.Core
 open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Tools
 open Yession.Host
 open Yession.Session

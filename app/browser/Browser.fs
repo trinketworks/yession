@@ -14,6 +14,7 @@ open Fable.Core.JsInterop
 open Fable.BrowserExtras
 open Yjs
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Link
 open Yession.Domain.Repos
 open Yession.Domain.Terminals

@@ -1,6 +1,7 @@
 namespace Yession.Manager
 
 open Yession.Domain
+open Yession.Codecs
 
 #if FABLE_COMPILER
 open Thoth.Json
@@ -135,7 +136,7 @@ module ReadyLine =
             else
                 Decode.map2
                     (fun port version -> { Port = port; Version = version })
-                    (Decode.field "port" Yession.Domain.Strict.int)
+                    (Decode.field "port" Strict.int)
                     (Decode.optional "version" Decode.string))
 
     /// What a line the child printed says, or nothing. A log line, a half-line and anything that

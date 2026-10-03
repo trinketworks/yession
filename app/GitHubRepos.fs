@@ -19,6 +19,7 @@ open Fable.NodeExtras
 open Node.Api
 open Node.Buffer
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Repos
 open Yession.Session
 open Yession.Host.Interop

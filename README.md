@@ -57,7 +57,7 @@ use, in the project of the component that owns it:
   slowest — it changes only when no Session is running — so the contract lives on the side
   that holds it still, whichever way a message travels.
 - **Shared by every surface** (identities: ids, actors, timestamps): cross-cutting, in
-  `Yession.Domain`'s `Codec`.
+  `Yession.Codecs`, beside the model rather than in it.
 
 ## Getting started
 

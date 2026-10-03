@@ -67,6 +67,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Yession.Domain\Yession.Domain.fsproj" />
+    <ProjectReference Include="..\Yession.Codecs\Yession.Codecs.fsproj" />
   </ItemGroup>
 
 </Project>

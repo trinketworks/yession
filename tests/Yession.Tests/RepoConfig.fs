@@ -11,6 +11,7 @@ module Yession.Tests.RepoConfig
 open Fable.Core
 open Fable.Pyxpecto
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Agent
 open Yession.Domain.Repos
 open Yession.Domain.Chat

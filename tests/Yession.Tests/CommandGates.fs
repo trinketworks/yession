@@ -14,6 +14,7 @@ module Yession.Tests.CommandGates
 open System
 open Fable.Pyxpecto
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Agent
 open Yession.Session
 open Yession.Tests.Support

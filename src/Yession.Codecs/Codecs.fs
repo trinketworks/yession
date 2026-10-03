@@ -1,5 +1,6 @@
-namespace Yession.Domain
+namespace Yession.Codecs
 
+open Yession.Domain
 open Yession.Domain.Chat
 open Yession.Domain.Sandboxes
 open Yession.Domain.Files

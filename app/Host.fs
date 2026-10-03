@@ -8,6 +8,7 @@ open System
 open Yjs
 open Fable.NodeExtras
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
 open Yession.Domain.Link

@@ -13,7 +13,7 @@ open Yession.Domain.Repos
 open Yession.Domain.Prs
 
 /// The generic envelope wrapping every persisted event. The wire format is a boundary
-/// concern handled in Serialization.fs; this is the in-memory domain shape.
+/// concern handled by the codecs (Yession.Codecs); this is the in-memory domain shape.
 /// See docs/design.md §6.
 type EventEnvelope<'event> =
     { EventId   : EventId

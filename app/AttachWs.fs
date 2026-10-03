@@ -38,6 +38,7 @@ open Fable.NodeExtras
 open Node.Api
 open Node.Buffer
 open Yession.Domain
+open Yession.Codecs
 open Yession.Domain.Sandboxes
 open Yession.Domain.Terminals
 

@@ -158,7 +158,6 @@
     <Compile Include="Launch.fs" />
     <Compile Include="PublicAccess.fs" />
     <Compile Include="Auth.fs" />
-    <Compile Include="Serialization.fs" />
     <Compile Include="Sync.fs" />
   </ItemGroup>
 

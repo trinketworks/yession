@@ -68,6 +68,7 @@
     <ProjectReference Include="..\..\src\Fable.Xterm\Fable.Xterm.fsproj" />
     <ProjectReference Include="..\..\src\Fable.AsciinemaPlayer\Fable.AsciinemaPlayer.fsproj" />
     <ProjectReference Include="..\..\src\Yession.Domain\Yession.Domain.fsproj" />
+    <ProjectReference Include="..\..\src\Yession.Codecs\Yession.Codecs.fsproj" />
     <ProjectReference Include="..\..\src\Yession.Session\Yession.Session.fsproj" />
     <ProjectReference Include="..\..\src\Yession.App\Yession.App.fsproj" />
   </ItemGroup>

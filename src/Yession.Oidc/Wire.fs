@@ -1,6 +1,7 @@
 namespace Yession.Oidc
 
 open Yession.Domain
+open Yession.Codecs
 
 #if FABLE_COMPILER
 open Thoth.Json
