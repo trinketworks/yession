@@ -1047,8 +1047,8 @@ module Client =
     /// phone opening a long session wore it for seconds (measured: three, on 97 items) and
     /// then watched the banner leave. The interval the client is about to connect in starts
     /// at the first paint, not at the probe, and `Connecting` is its truth throughout: it is
-    /// what the channel's own retries wear (`SessionChannel.policy`), and the probe's
-    /// deadline is what bounds it.
+    /// what the first attempt at the channel wears, and the probe's deadline is what bounds
+    /// it.
     module LocalOpen =
 
         let replay (history: HistoryCache) (transcripts: TranscriptCaches) (dispatch: ClientMsg -> unit) : Async<unit> =
@@ -1122,33 +1122,6 @@ module Client =
         /// the probe reports unreachable with the timeout as its reason, and the reopen offer
         /// and the retry are on the screen — the two things that can change the answer.
         let deadline = System.TimeSpan.FromSeconds 10.0
-
-    module SessionChannel =
-
-        /// The shipped policy for opening the transport: four retries, exponentially backed
-        /// off from 500ms to a 15s ceiling, jittered. EVERY fault is retryable here, and that
-        /// is not laziness — the only faults this port can produce mean "the session is not
-        /// there yet", and a Session that is restarting comes back. Authorization is
-        /// settled before this point (`/me`) and peer admission after it (the hello
-        /// handshake), so neither is in scope for a retry decision.
-        ///
-        /// Nothing observes the attempts: while they run the model is `Connecting`, which is
-        /// the whole truth. Interim reporting earns its place on the feed, where the
-        /// alternative is a timeline that silently stops filling; here it would be noise.
-        let policy
-            (sleep: System.TimeSpan -> Async<unit>)
-            (random: unit -> float)
-            : Resilience.Policy<ChannelFault> =
-            { Schedule =
-                Resilience.Schedule.exponential
-                    (System.TimeSpan.FromMilliseconds 500.0)
-                    2.0
-                    (System.TimeSpan.FromSeconds 15.0)
-                    4
-                |> Resilience.Schedule.jittered 0.5 random
-              Classify = fun _ -> Resilience.Retry
-              Sleep = sleep
-              Observe = ignore }
 
     /// Wire a connected channel to the client's doc and the event log: locally-originated
     /// doc updates (the Ylmish binding's writes) are sent as `State` frames, inbound
@@ -1514,8 +1487,8 @@ module Client =
               /// The lifecycle's own reporting.
               Dispatch : ClientMsg -> unit }
 
-        /// How long to wait before trying to open a transport again, once the policy at the
-        /// composition site has spent its own budget on the attempt that just failed.
+        /// How long to wait before trying to open a transport again, after the attempt that
+        /// just failed.
         ///
         /// It never runs out, and that is the point: a session that is not there YET may still
         /// come back — a laptop closed on a train, a Process restarting, a tunnel dropping —
@@ -1540,11 +1513,13 @@ module Client =
         /// * **Accepted, then the channel closed** — an ended session (a Process restart, a
         ///   sleeping laptop, a network blip). Come straight back, resuming consumption from
         ///   where the read position got to.
-        /// * **Never opened** — the session is not reachable. Keep trying on `supervision`,
-        ///   which never runs out. The policy at the composition site has already spent its
-        ///   budget on the attempt that just failed; this is the slower outer loop, and it is
-        ///   not a retry loop wrapped around a retry loop — it is the difference between "this
-        ///   attempt failed" and "give up on the session", which are not the same claim.
+        /// * **Never opened** — the session is not reachable. Say so at once, as `Retrying`
+        ///   with the reason and how many attempts have failed, and keep trying on
+        ///   `supervision`, which never runs out. One loop: there used to be a second, inner
+        ///   one at the composition site that spent five attempts before this one heard of
+        ///   any, so a session that was not there wore "connecting", saying nothing, for the
+        ///   best part of a minute. A failure is news the moment it happens, and the person
+        ///   watching should see that the client is still at it rather than that it broke.
         /// * **Opened but refused** — a stale token. No schedule can help, because the same
         ///   token would be refused again, so PARK: wait to be asked, and let a person supply
         ///   the one thing that can change the answer.
@@ -1554,18 +1529,18 @@ module Client =
         let run (supervision: Resilience.Schedule) (ports: Ports<'channel>) : Async<unit> =
             let rec attempt (announce: bool) (failures: int) (resumeAfter: EventOffset option) =
                 async {
-                    // Announce an attempt that follows a wait: until a channel exists the model
-                    // would read `Disconnected`, and opening one costs a handshake plus whatever
-                    // retries the policy spends. A reconnect after an ACCEPTED session needs no
-                    // announcement — `Reconnecting` is already the truer word, and the driver
-                    // says `Connecting` itself the moment a channel is up.
+                    // Announce an attempt that follows a park: until a channel exists the model
+                    // would read `Disconnected`, and opening one costs a handshake. Neither a
+                    // reconnect after an ACCEPTED session nor a retry after a failure is
+                    // announced — `Reconnecting` and `Retrying` are already the truer words, and
+                    // the driver says `Connecting` itself the moment a channel is up.
                     if announce then ports.Dispatch ConnectingMsg
                     match! ports.Open () with
                     | Error fault ->
-                        ports.Dispatch (ConnectFailedMsg (ChannelFault.describe fault))
                         let attempts = failures + 1
+                        ports.Dispatch (RetryingMsg (ChannelFault.describe fault, attempts))
                         match! ports.WaitBeforeRetry (supervision attempts) with
-                        | true -> return! attempt true attempts resumeAfter
+                        | true -> return! attempt false attempts resumeAfter
                         | false -> return ()
                     | Ok channel ->
                         // Acceptance is learned from the message that carries it, as it passes.

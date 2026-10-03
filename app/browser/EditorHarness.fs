@@ -1752,6 +1752,7 @@ do
                              | Connected -> "Connected"
                              | Connecting -> "Connecting"
                              | Reconnecting -> "Reconnecting"
+                             | Retrying _ -> "Retrying"
                              | Disconnected _ -> "Disconnected")
                             replaced)
                 else onFrame frame

@@ -1451,10 +1451,7 @@ let private start () =
                             |> Map.tryFind terminal
                             |> Option.map (fun feed -> feed.ReadThrough)
                             |> Option.defaultValue 0) }
-            let openChannel =
-                Resilience.Policy.guard
-                    (Client.SessionChannel.policy Resilience.Policy.sleep jsRandom)
-                    (fun () -> connectChannel (absolute (Page.href Signal)))
+            let openChannel () = connectChannel (absolute (Page.href Signal))
 
             // The session leg. The RULES — announce, open, serve, and come back only for a
             // session that was accepted — are `Client.SessionLifecycle`; this supplies the

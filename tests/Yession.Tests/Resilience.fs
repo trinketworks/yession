@@ -775,46 +775,14 @@ let private feedFailureTests =
 
 let private channelTests =
     testList "Opening the transport" [
-        testCaseAsync "a session that never answers is a reported failure, not an eternal wait" <|
-            async {
-                // The browser's handshake used to settle ONLY on success, so this case had no
-                // representation at all: the promise stayed pending and the shell stayed on
-                // "connecting" with nothing to say. Now it is a fault, and the policy bounds
-                // how long the client spends hoping.
-                let attempts = ref 0
-                let policy = Client.SessionChannel.policy (recordingSleep (ResizeArray ())) noJitter
-                let! result =
-                    Resilience.Policy.guard policy (fun () ->
-                        async {
-                            attempts.Value <- attempts.Value + 1
-                            return Error Client.ChannelTimedOut
-                        })
-                    <| ()
-                Expect.equal result (Error Client.ChannelTimedOut) "the attempt settles as a failure"
-                Expect.equal attempts.Value 5 "one attempt plus the policy's four retries"
-                Expect.equal
-                    (Client.ChannelFault.describe Client.ChannelTimedOut)
-                    "the session did not answer"
-                    "and it says something a person can act on"
-            }
-
-        testCaseAsync "a session that comes back mid-retry is connected to" <|
-            async {
-                // A restarting Session is the ordinary case, and every fault this port
-                // produces means "not there YET" — which is why the policy retries all of them.
-                let attempts = ref 0
-                let policy = Client.SessionChannel.policy (recordingSleep (ResizeArray ())) noJitter
-                let! result =
-                    Resilience.Policy.guard policy (fun () ->
-                        async {
-                            attempts.Value <- attempts.Value + 1
-                            if attempts.Value < 3 then return Error (Client.ChannelUnreachable "signalling refused: 502")
-                            else return Ok "channel"
-                        })
-                    <| ()
-                Expect.equal result (Ok "channel") "the third attempt got a channel"
-                Expect.equal attempts.Value 3 "and it stopped there"
-            }
+        testCase "a handshake that runs out of time says the session did not answer" <| fun () ->
+            // The browser's handshake used to settle ONLY on success, so this case had no
+            // representation at all: the promise stayed pending and the shell stayed on
+            // "connecting" with nothing to say. Now it is a fault with words a person can use.
+            Expect.equal
+                (Client.ChannelFault.describe Client.ChannelTimedOut)
+                "the session did not answer"
+                "it says something a person can act on"
 
         testCase "a settled disconnection carries its reason into the model and the page" <| fun () ->
             let init = ClientModel.init (peer "ada" "Ada")
@@ -1209,11 +1177,12 @@ let private lifecycleTests =
 
         testCaseAsync "a transport that cannot be opened keeps being tried, and says so each time" <|
             async {
-                // The policy at the composition site spends its budget on ONE attempt; this is
-                // the slower outer loop, and the difference it draws is between "this attempt
-                // failed" and "give up on the session" — which are not the same claim. A client
-                // that made them the same claim left "reload the tab" as the only cure for a
-                // laptop that had been closed for a minute.
+                // "This attempt failed" and "give up on the session" are not the same claim. A
+                // client that made them the same claim left "reload the tab" as the only cure
+                // for a laptop that had been closed for a minute. And the first failure is
+                // reported as it happens: there used to be a second, inner loop that spent five
+                // attempts before this one heard of any, and a session that was not there wore
+                // a silent "connecting" for the best part of a minute.
                 //
                 // The wait is a port, so this drives the rule with no clock in it at all.
                 let opens = ref 0
@@ -1247,12 +1216,10 @@ let private lifecycleTests =
                 Expect.equal
                     (List.ofSeq dispatched)
                     [ ConnectingMsg
-                      ConnectFailedMsg "the session did not answer"
-                      ConnectingMsg
-                      ConnectFailedMsg "the session did not answer"
-                      ConnectingMsg
-                      ConnectFailedMsg "the session did not answer" ]
-                    "each attempt is announced and each failure reported with its reason"
+                      RetryingMsg ("the session did not answer", 1)
+                      RetryingMsg ("the session did not answer", 2)
+                      RetryingMsg ("the session did not answer", 3) ]
+                    "the first attempt is announced, and every failure is reported at once, with its reason and its count"
                 Expect.isTrue
                     (waits |> Seq.forall Option.isSome)
                     "an unreachable session is a scheduled wait, never the indefinite park"
@@ -1261,8 +1228,8 @@ let private lifecycleTests =
                     "and the backoff is capped, so a session that never returns is not polled less and less for ever"
                 Expect.equal
                     model.Value.Connection
-                    (Disconnected (Some "the session did not answer"))
-                    "and the model holds why, instead of an eternal 'connecting'"
+                    (Retrying ("the session did not answer", 3))
+                    "and the model holds that it is still trying, why, and how far it has got"
             }
 
         testCaseAsync "an accepted session earns exactly one more attempt; the announcement is not repeated" <|
@@ -1444,6 +1411,27 @@ let private surfaceTests =
             Expect.isFalse
                 (connected.Contains "data-retry-now")
                 "a working session offers nothing to retry"
+
+        testCase "a client still trying to reach its session says it is trying, and how far it has got" <| fun () ->
+            // Positive feedback, not a fault: what a person should take from a session that is
+            // not there yet is that the client is at work on it. The status is the running
+            // kind and its count moves with every failure; the fault goes behind it.
+            let model = ClientModel.init (peer "ada" "Ada")
+            let retrying failures =
+                Support.render { model with Connection = Retrying ("the session did not answer", failures) }
+            let second = retrying 1
+            Expect.isTrue
+                (second.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedRetrying))
+                "the strip reports a session leg that is retrying"
+            Expect.isTrue (second.Contains (Dom.Text.retryingStatus 1)) "the attempt under way is on the status"
+            Expect.isFalse (second.Contains "not connected") "and it does not read as broken"
+            Expect.isTrue
+                ((retrying 2).Contains (Dom.Text.retryingStatus 2))
+                "the count moves when another attempt fails"
+            Expect.isTrue
+                (second.Contains (Dom.Text.retryingWhy "the session did not answer" 1))
+                "why it is still trying is there for whoever asks"
+            Expect.isTrue (second.Contains "data-retry-now") "and a person can ask for the next attempt now"
 
         testCase "a stalled feed shows history paused with its reason, and the composer stays live" <| fun () ->
             let model = ClientModel.init (peer "ada" "Ada")

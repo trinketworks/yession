@@ -475,6 +475,7 @@ module Dom =
         let connecting = "Connecting"
         let connected = "Connected"
         let reconnecting = "Reconnecting"
+        let retrying = "Retrying"
         // Catch-up. Said in ONE place — the header — because "everything is fine" is the
         // least actionable thing a screen can carry and it used to be on screen twice at
         // once (the header's status and the sidebar's sync row).
@@ -561,6 +562,15 @@ module Dom =
         // Session-leg tokens for the same strip: the transport itself, not its history feed.
         let degradedOffline = "offline"
         let degradedReconnecting = "reconnecting"
+        let degradedRetrying = "session-retrying"
+        /// What a client that cannot reach its session says while it keeps trying: the work
+        /// going on, and how far it has got, rather than the fault. The count is the attempt
+        /// under way or next, so it moves every time one fails — which is what tells a person
+        /// it is being worked on and not stuck.
+        let retryingStatus (failures: int) = sprintf "reconnecting · attempt %d" (failures + 1)
+        /// Why it is still trying, behind the disclosure: the last attempt's fault and how many
+        /// have failed, in the shape the history feed's retries already use.
+        let retryingWhy (reason: string) (failures: int) = sprintf "%s · attempt %d" reason failures
         // The reconnect offer's button (Plan 11).
         let reopenSession = "Reopen session"
         /// What reopening costs, on that offer's card. Two, because a deployment that
