@@ -3076,6 +3076,12 @@ module ClientModel =
             | ShowInTerminalMsg (terminal, block) ->
                 [ ClientEffect.Move (DomMove.RevealBlock (terminal, block)); ClientEffect.Move DomMove.FocusPane ]
             | MoveMsg move -> [ ClientEffect.Move move ]
+            // A deliberate send settles the view on what was just sent, whether or not the
+            // sender had scrolled away while composing — the pin machinery
+            // (`keepSurfacesPinned`/`restoreSurfaceScroll`, `Render.fs`) only restores a
+            // reader who was ALREADY at the end before this render, which is a different
+            // question. Reuses the jump-to-latest float's own move rather than a new one.
+            | SendDraftMsg _ -> [ ClientEffect.Move DomMove.ScrollToLatest ]
             | CopyMsg (box, text) -> [ ClientEffect.Copy (box, text) ]
             | RetryNowMsg -> [ ClientEffect.RetryNow ]
             | GitHubPollDueMsg round ->

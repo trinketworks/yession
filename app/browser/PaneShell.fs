@@ -216,15 +216,27 @@ let revealMessage (messageId: string) : unit =
             // all — focusable on purpose, never a Tab stop.
             item.focus ()))
 
-/// Scroll the conversation to its own tail, for the "jump to latest" float's press. Plain
-/// `scrollTop`, not `scrollIntoView`: there is no element AT the end to scroll one of into
-/// view (a caret still blinking, a message mid-stream), and this is the same position
-/// `restoreSurfaceScroll` (Render.fs) already treats as "the end" — landing there is what
+/// Scroll the conversation to its own tail — for the "jump to latest" float's press, and for
+/// a sent message settling into view (`SendDraftMsg`, `Model.fs`). Not `scrollIntoView`:
+/// there is no element AT the end to scroll one of into view (a caret still blinking, a
+/// message mid-stream), and the final `scrollTop` either way is the same position
+/// `restoreSurfaceScroll` (`Render.fs`) already treats as "the end" — landing there is what
 /// lets that render-time restore see the reader as still pinned, rather than fight the jump
 /// the moment the next message arrives.
+///
+/// Animated unless `prefers-reduced-motion` says otherwise. Safe to animate across a render:
+/// this runs as a `ClientEffect`, which fires synchronously right after the `setState` that
+/// triggered it — so by the time the glide starts, the layout it rides over (the composer
+/// collapsed, the message landed) is already final. Nothing between here and the next
+/// message re-renders, which is the only thing that would fight it (an unconditional
+/// `scrollTop` write ends an in-flight smooth scroll — see `restoreSurfaceScroll`'s comment).
 let scrollToLatest () : unit =
     find "[data-conversation]"
-    |> Option.iter (fun conversation -> conversation.scrollTop <- conversation.scrollHeight)
+    |> Option.iter (fun conversation ->
+        if mediaMatches "(prefers-reduced-motion: reduce)" then
+            conversation.scrollTop <- conversation.scrollHeight
+        else
+            scrollToBottomSmooth conversation)
 
 /// Put focus back on one item's actions control, once the menu it opened has gone.
 ///
