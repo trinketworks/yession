@@ -114,6 +114,9 @@
     <Compile Include="ArtifactHttp.fs" />
     <Compile Include="Resilience.fs" />
     <Compile Include="Oidc.fs" />
+    <!-- What the Manager page's MCP forms mean, decoded from a body. Before Phase4.fs, whose
+         rendering cases are the other half of the same page; cheap, no Manager. -->
+    <Compile Include="ManagerForms.fs" />
     <Compile Include="Phase4.fs" />
     <Compile Include="ProxyMap.fs" />
     <Compile Include="Hedgehog.fs" />
