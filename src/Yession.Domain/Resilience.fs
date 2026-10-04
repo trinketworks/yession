@@ -334,6 +334,36 @@ module Resilience =
         /// What it is holding, for whoever reports rather than decides.
         let reading (ledger: Ledger) : Allowance = ledger.Read ()
 
+    /// A ledger per credential, made the first time each is spent.
+    ///
+    /// A budget belongs to a credential, so a process spending more than one must keep more
+    /// than one reading — and a session does: each person's connection, and NO credential,
+    /// which GitHub meters per address at sixty an hour. One shared cell let an anonymous
+    /// look at boot write that sixty-an-hour reading over a connected user's five thousand,
+    /// and every look after it was held, without asking, until the anonymous window turned
+    /// over. A hold sends nothing, so nothing could correct it.
+    ///
+    /// Keyed by the credential itself, the empty string for none. A refreshed token is a new
+    /// key and starts unknown, which allows; the one it replaced stays behind, a cell per
+    /// refresh, which is the whole of the growth.
+    type Ledgers = private { For : string -> Ledger }
+
+    module Ledgers =
+
+        let create () : Ledgers =
+            let held = System.Collections.Generic.Dictionary<string, Ledger> ()
+            { For =
+                fun credential ->
+                    match held.TryGetValue credential with
+                    | true, ledger -> ledger
+                    | _ ->
+                        let ledger = Ledger.create ()
+                        held.[credential] <- ledger
+                        ledger }
+
+        /// The ledger for this credential; the empty string is the one for none.
+        let forCredential (ledgers: Ledgers) (credential: string) : Ledger = ledgers.For credential
+
     // --- The circuit ----------------------------------------------------------------------
 
     /// What a breaker did, for whoever is watching a resource rather than a call. A refusal

@@ -381,6 +381,18 @@ let private quotaTests =
                 (Resilience.Ledger.permit ledger noon (reserving 100) Resilience.Background)
                 (Resilience.Hold (atMinute 30.0))
                 "the next caller reads what that reply said"
+
+        testCase "and a reading for one credential is never another's" <| fun () ->
+            let ledgers = Resilience.Ledgers.create ()
+            Resilience.Ledger.observed (Resilience.Ledgers.forCredential ledgers "") (Resilience.Seen (50, atMinute 30.0))
+            Expect.equal
+                (Resilience.Ledger.permit (Resilience.Ledgers.forCredential ledgers "someone") noon (reserving 100) Resilience.Background)
+                Resilience.Go
+                "someone's budget is not what no credential was told"
+            Expect.equal
+                (Resilience.Ledger.permit (Resilience.Ledgers.forCredential ledgers "") noon (reserving 100) Resilience.Background)
+                (Resilience.Hold (atMinute 30.0))
+                "and the same credential finds its own reading again"
     ]
 
 // --- Breakers -----------------------------------------------------------------------------

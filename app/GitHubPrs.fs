@@ -229,11 +229,15 @@ let private failureOf (reply: FetchReply) : PrFetchFailure =
 /// several callers with different rights: the poller asks as `Background` and a verb a
 /// person is waiting on asks as `Foreground`, over the same reading. Partially applying the
 /// class at the composition root is what lets a look hold no notion of either.
+///
+/// Both take the bearer the request goes out with (null or empty for none), because a
+/// budget is a credential's: a reply teaches the ledger of the credential that sent it,
+/// and a look is held only by its own.
 type Spending =
-    { /// May a look go now, or is the budget down to what is held back?
-      Permit : unit -> Resilience.Permit
-      /// What a reply said, folded into whatever the ledger holds.
-      Learned : Resilience.Allowance -> unit }
+    { /// May a look on this credential go now, or is its budget down to what is held back?
+      Permit : string -> Resilience.Permit
+      /// What a reply to this credential said, folded into its ledger.
+      Learned : string -> Resilience.Allowance -> unit }
 
 /// What background work leaves behind for everything else.
 ///
@@ -249,14 +253,15 @@ module Spending =
 
     /// Never refuses and remembers nothing. What a suite takes, and the only honest shape
     /// for a caller with no ledger behind it.
-    let unmetered : Spending = { Permit = (fun () -> Resilience.Go); Learned = ignore }
+    let unmetered : Spending = { Permit = (fun _ -> Resilience.Go); Learned = fun _ _ -> () }
 
-    /// One class of spend against one ledger. This is the partial application the design
-    /// rests on: the LEDGER is made once at the composition root and the CLASS is fixed
-    /// here, so what reaches a look is two functions and no state it could get wrong.
-    let over (ledger: Resilience.Ledger) (now: unit -> DateTimeOffset) (spend: Resilience.Spend) : Spending =
-        { Permit = fun () -> Resilience.Ledger.permit ledger (now ()) budget spend
-          Learned = Resilience.Ledger.observed ledger }
+    /// One class of spend against a ledger per credential. This is the partial application
+    /// the design rests on: the LEDGERS are made once at the composition root and the CLASS
+    /// is fixed here, so what reaches a look is two functions and no state it could get wrong.
+    let over (ledgers: Resilience.Ledgers) (now: unit -> DateTimeOffset) (spend: Resilience.Spend) : Spending =
+        let ledgerOf (bearer: string) = Resilience.Ledgers.forCredential ledgers (if isNull bearer then "" else bearer)
+        { Permit = fun bearer -> Resilience.Ledger.permit (ledgerOf bearer) (now ()) budget spend
+          Learned = fun bearer reading -> Resilience.Ledger.observed (ledgerOf bearer) reading }
 
 // --- asking GraphQL ----------------------------------------------------------------------
 // Where GitHub keeps what REST does not have: auto merge and the merge queue, which a look
@@ -314,7 +319,7 @@ let private askGraphql
                   Http.headers (("content-type", "application/json") :: graphqlHeaders token)
                   Fetch.Types.RequestProperties.Body (U3.Case3 payload) ]
         let reply = replyOf attempt (fun _ -> "")
-        spending.Learned (allowanceIn reply)
+        spending.Learned token (allowanceIn reply)
         if not (reply.Reachable && reply.Status >= 200 && reply.Status < 300) then
             return Error (Failed (failureOf reply))
         else
@@ -399,7 +404,7 @@ let private readinessDecoder : Decoder<Readiness> =
 let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
     fun token pr etags last ->
         async {
-            match spending.Permit () with
+            match spending.Permit (Option.toObj token) with
             // Held back rather than refused, and reported as the hold it is: the watcher's
             // answer to both is the same — wait for the window the provider named — and the
             // poller already schedules around exactly this value. The difference is that
@@ -413,7 +418,7 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                 let notModified (reply: FetchReply) = reply.Reachable && reply.Status = 304
                 let prUrl = sprintf "%s/repos/%s/pulls/%d" (apiBase.TrimEnd '/') repo pr.Number
                 let! prReply = getConditional prUrl bearer etags.Pr
-                spending.Learned (allowanceIn prReply)
+                spending.Learned bearer (allowanceIn prReply)
                 // The pull request's own fields, decoded when it answered with a body and
                 // carried over from the last look when it answered 304.
                 //
@@ -455,7 +460,7 @@ let fetchOver (apiBase: string) (spending: Spending) : FetchPr =
                             repo
                             fields.HeadSha
                     let! checksReply = getConditional checksUrl bearer etags.Checks
-                    spending.Learned (allowanceIn checksReply)
+                    spending.Learned bearer (allowanceIn checksReply)
                     // The third half, and the one that is not free: GraphQL has no
                     // conditional request, so each look at an OPEN pull request spends a
                     // point of the separate GraphQL budget. Only an open one is asked — a
@@ -624,7 +629,7 @@ let refusalOf : Decoder<string option> =
 let openOver (apiBase: string) (spending: Spending) : OpenPr =
     fun token draft ->
         async {
-            match spending.Permit () with
+            match spending.Permit (Option.toObj token) with
             | Resilience.Hold until ->
                 return PrOpenFailed (PrHeld (until.ToUnixTimeSeconds ()))
             | Resilience.Go ->
@@ -640,7 +645,7 @@ let openOver (apiBase: string) (spending: Spending) : OpenPr =
                         (Http.urlPart (headRef draft))
                         (Http.urlPart draft.Base)
                 let! listing = getConditional listUrl bearer ""
-                spending.Learned (allowanceIn listing)
+                spending.Learned bearer (allowanceIn listing)
                 if not (succeeded listing) then return PrOpenFailed (failureOf listing)
                 else
                     match Decode.fromString openNumbersDecoder listing.Body with
@@ -652,7 +657,7 @@ let openOver (apiBase: string) (spending: Spending) : OpenPr =
                     | Ok [] ->
                         let! created =
                             postJson (sprintf "%s/repos/%s/pulls" root repo) bearer (createBody draft)
-                        spending.Learned (allowanceIn created)
+                        spending.Learned bearer (allowanceIn created)
                         // A refusal is not a failure: GitHub read the draft and said no, which
                         // is an answer somebody can act on. Every other non-2xx is the same
                         // four facts a look classifies.
@@ -768,7 +773,7 @@ let private mergeNow =
 let mergeOver (apiBase: string) (spending: Spending) : MergePr =
     fun token pr method ->
         async {
-            match spending.Permit () with
+            match spending.Permit (Option.toObj token) with
             | Resilience.Hold until -> return PrMergeFailed (PrHeld (until.ToUnixTimeSeconds ()))
             | Resilience.Go ->
                 let bearer = Option.toObj token
@@ -820,7 +825,7 @@ let private dequeue = "mutation($id:ID!){dequeuePullRequest(input:{pullRequestId
 let unmergeOver (apiBase: string) (spending: Spending) : UnmergePr =
     fun token pr ->
         async {
-            match spending.Permit () with
+            match spending.Permit (Option.toObj token) with
             | Resilience.Hold until -> return PrUnmergeFailed (PrHeld (until.ToUnixTimeSeconds ()))
             | Resilience.Go ->
                 let bearer = Option.toObj token
@@ -907,7 +912,7 @@ let private listedDecoder (repo: RepoRef) : Decoder<PrListed option> =
 let listOver (apiBase: string) (spending: Spending) : ListPrs =
     fun token repo query ->
         async {
-            match spending.Permit () with
+            match spending.Permit (Option.toObj token) with
             | Resilience.Hold until -> return Error (PrHeld (until.ToUnixTimeSeconds ()))
             | Resilience.Go ->
                 let states =
@@ -942,7 +947,7 @@ let private convertToDraft =
 let draftOver (apiBase: string) (spending: Spending) : DraftPr =
     fun token pr ->
         async {
-            match spending.Permit () with
+            match spending.Permit (Option.toObj token) with
             | Resilience.Hold until -> return PrDraftFailed (PrHeld (until.ToUnixTimeSeconds ()))
             | Resilience.Go ->
                 let bearer = Option.toObj token
@@ -975,7 +980,7 @@ let private markReady =
 let readyOver (apiBase: string) (spending: Spending) : ReadyPr =
     fun token pr ->
         async {
-            match spending.Permit () with
+            match spending.Permit (Option.toObj token) with
             | Resilience.Hold until -> return PrReadyFailed (PrHeld (until.ToUnixTimeSeconds ()))
             | Resilience.Go ->
                 let bearer = Option.toObj token
