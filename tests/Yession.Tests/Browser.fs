@@ -1693,6 +1693,14 @@ let private editorCaseOn
 /// A case at the browser's own window size.
 let private editorCase = editorCaseOn None
 
+/// Wait for the focus move a chip's click asks for. Opening from the chat hands focus to the
+/// pane (`DomMove.FocusPane`), a frame AFTER the render — so a case that goes on to put focus
+/// somewhere itself, before that frame, has its focus taken back from under it by the move
+/// it did not wait for. Which of the two lands last is timing, and a slower runner lost it.
+let private focusReachedPane (page: IPage) : Async<unit> =
+    waitFor "focus to follow the chip into the pane" page
+        "document.activeElement?.hasAttribute('data-pane-panel') === true"
+
 /// Every block chip the harness's chat holds, opened as a tab each: the one at the top level,
 /// then the three inside the task card, which has to be unfolded first. With the harness's two
 /// terminal tabs that is six, which is more than the strip has room for at the pane's default
@@ -1713,6 +1721,7 @@ let private openEveryChip (page: IPage) : Async<unit> =
                            && document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=true]')
                                 ?.getAttribute('data-pane-tab')?.endsWith(':' + document.querySelectorAll('#shell [data-chat-block]')[%d].getAttribute('data-chat-block')) === true"""
                         (3 + i) i)
+            do! focusReachedPane page
     }
 
 /// Whether the strip holds more tabs than it shows — the precondition every scrolling case
@@ -2615,10 +2624,14 @@ let editorTests =
                         "document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=true]')?.getAttribute('data-pane-tab')?.startsWith('block:') === true"
                 let! faults =
                     await (page.EvaluateAsync<string>
-                        """() => {
+                        """async () => {
                              const strip = document.querySelector('#shell [data-pane-strip]')
                              const s = strip.getBoundingClientRect()
                              const on = strip.querySelector('[role=tab][aria-selected=true]')
+                             // A tab's colours TRANSITION, so the rule read in the frame the
+                             // selection landed is the colour it started from — transparent,
+                             // exactly an unselected tab's. Read it where it settles.
+                             await Promise.all(strip.getAnimations({ subtree: true }).map(a => a.finished))
                              const off = strip.querySelector('[role=tab][aria-selected=false]')
                              const t = on.getBoundingClientRect()
                              const faults = []
@@ -2640,6 +2653,7 @@ let editorTests =
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
+                do! focusReachedPane page
                 do! awaitU (page.FocusAsync "#shell [data-pane-strip] [role=tab][aria-selected=true]")
                 do! awaitU (page.Keyboard.PressAsync "ArrowLeft")
                 do! waitFor "the walk to land on another tab, keyboard-focused" page
