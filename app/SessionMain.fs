@@ -957,13 +957,14 @@ Async.StartImmediate (
                       // container's view of its own checkout is a different fact,
                       // answered by `Sandboxes.workCheckoutAt` where a declaration is
                       // resolved.
-                      VisibleAt =
-                        SandboxPath.reachedFrom
-                            (workspaceFor SandboxRef.defaultRef)
-                            // The DEFAULT sandbox's view, where its backend puts the repos.
-                            // A `repos:` the operator declared on it is not read here
-                            // (docs/GAPS.md).
-                            (Sandboxes.reposVisibleAt None workBackend reposDir)
+                      // The DEFAULT sandbox's view, where its backend puts the repos. A
+                      // `repos:` the operator declared on it is not read here (docs/GAPS.md).
+                      VisibleAt = Sandboxes.reposVisibleAt None workBackend reposDir
+                      StartsAt =
+                        fun () ->
+                            SandboxPath.resolvedFrom
+                                (workspaceFor SandboxRef.defaultRef)
+                                (ShellProfileProjection.workingDirectory SandboxRef.defaultRef (terminals.Profiles ()))
                       ExtraReadPaths = []
                       Git = Repos.gitExecutable (Sandboxes.ambientEnv ())
                       AllowedDomains = [ "github.com" ]

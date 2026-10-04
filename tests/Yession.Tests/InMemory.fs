@@ -989,6 +989,43 @@ let tests =
                 do! host.Stop ()
             }
 
+        // `execute_command` tells an agent to write scratch under $TMPDIR; `read_file` then
+        // handed `$TMPDIR/…` to `cat` as an argument, unexpanded, and answered "no such file"
+        // (session NR5KB8B5). The variable is asked of the sandbox, by name, and the file
+        // read is the one it names there.
+        testCaseAsync "a path that starts with a variable reads the file the sandbox's variable names" <|
+            async {
+                let environment : SessionEnvironment.SessionEnvironment =
+                    { Ensure = fun _ _ -> async { return EnvironmentAvailable }
+                      Spawn =
+                        fun exec onChunk ->
+                            async {
+                                let script = exec.Arguments |> List.tryFind (fun a -> a.Contains "printenv" || a.Contains "cat")
+                                let last = List.last exec.Arguments
+                                let code =
+                                    match script with
+                                    | Some s when s.Contains "printenv" ->
+                                        if last = "TMPDIR" then onChunk (Stdout, "/scratch/t\n"); 0 else 1
+                                    // `cat` answers with the path it was handed, which is what this pins.
+                                    | _ -> onChunk (Stdout, last); 0
+                                return
+                                    Ok
+                                        { WriteStdin = ignore
+                                          CloseStdin = ignore
+                                          Kill = ignore
+                                          Exited = async { return SandboxExited code } }
+                            }
+                      SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
+                      Stop = fun () -> async { return () }
+                      CurrentRef = fun () -> Some "scripted"
+                      Shell = fun () -> None
+                      Realisation = fun () -> [] }
+                let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
+                let! read = host.Files.Read SandboxRef.defaultRef "$TMPDIR/manager.log"
+                Expect.equal read (Ok (FileContent.Text "/scratch/t/manager.log")) "the sandbox's own $TMPDIR, then the rest of the path"
+                do! host.Stop ()
+            }
+
         testCaseAsync "the agent's command runs in the same call, visible to every peer" <|
             async {
                 // Under the bypass classifier (Plan 23) the agent's call answers with the

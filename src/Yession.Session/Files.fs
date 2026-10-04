@@ -258,8 +258,39 @@ module SessionFiles =
                 | Ok said -> return Error (complaint "find" sandbox said)
             }
 
-        { SessionFiles.Read = readContent
-          SessionFiles.Edit = edit
-          SessionFiles.Write = write
-          SessionFiles.Search = search
-          SessionFiles.Find = find }
+        /// A path that starts with a variable (`$TMPDIR/x`, `~/x` — `SandboxPath.leadingVariable`),
+        /// with the variable's value AS THAT SANDBOX HAS IT: asked of the sandbox by name, with
+        /// `printenv`, so nothing is evaluated and the value is the one its terminals see —
+        /// `/tmp` in a container, a per-session directory under srt. A variable the sandbox does
+        /// not set is a refusal that says so, never a path that quietly starts with `/`.
+        let resolve (sandbox: SandboxRef) (path: string) : Async<Result<string, string>> =
+            async {
+                match SandboxPath.leadingVariable path with
+                | None -> return Ok path
+                | Some (name, rest) ->
+                    match! run sandbox "a path was resolved" "printenv -- \"$1\"" [ name ] None with
+                    | Error reason -> return Error reason
+                    | Ok said when said.Code = 0 && said.Out.Trim () <> "" -> return Ok (said.Out.TrimEnd ('\n', '\r') + rest)
+                    | Ok _ -> return Error (sprintf "%s is not set in the %s sandbox, so %s is not a path there" name (SandboxRef.render sandbox) path)
+            }
+
+        /// Every verb takes its path through `resolve` first — one place, so a variable means
+        /// the same thing to a read, an edit and a search.
+        let resolving (sandbox: SandboxRef) (path: string) (verb: string -> Async<Result<'a, string>>) : Async<Result<'a, string>> =
+            async {
+                match! resolve sandbox path with
+                | Error reason -> return Error reason
+                | Ok path -> return! verb path
+            }
+
+        let resolvingOptional (sandbox: SandboxRef) (path: string option) (verb: string option -> Async<Result<'a, string>>) =
+            match path with
+            | None -> verb None
+            | Some path -> resolving sandbox path (Some >> verb)
+
+        { SessionFiles.Read = fun sandbox path -> resolving sandbox path (readContent sandbox)
+          SessionFiles.Edit =
+            fun actor request -> resolving request.Sandbox request.Path (fun path -> edit actor { request with Path = path })
+          SessionFiles.Write = fun actor sandbox path content -> resolving sandbox path (fun path -> write actor sandbox path content)
+          SessionFiles.Search = fun sandbox pattern path glob -> resolvingOptional sandbox path (fun path -> search sandbox pattern path glob)
+          SessionFiles.Find = fun sandbox glob path -> resolvingOptional sandbox path (fun path -> find sandbox glob path) }

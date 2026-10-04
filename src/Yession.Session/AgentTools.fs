@@ -921,7 +921,7 @@ module AgentTools =
               tool
                   "read_file"
                   "Read a file, or a window of it, numbered by line. Prefer this over cat/sed/head/tail in execute_command: it's on the record as a read of THIS file, and the people here see what you looked at. Paths are as a terminal in that sandbox would take them — relative to where its terminals start (the checkout, once add_repo and set_shell_profile have run), or absolute. Every answer says which lines it covers of how many; a long file comes back a page at a time, and the answer says which `offset` reads on. Lines longer than 2000 characters are cut. A picture (.png, .jpg, .gif, .webp) comes back as the picture itself, for you to look at — so look before you describe one."
-                  [ ToolField.required "path" "string" "the file, e.g. \"src/Program.fs\" or \"repos/octocat/hello-world/README.md\""
+                  [ ToolField.required "path" "string" "the file, e.g. \"src/Program.fs\", \"$TMPDIR/out.log\" — a checkout's path is the one the repos query gives"
                     ToolField.optional "offset" "integer" "the first line to read, 1-based; omit for the top"
                     ToolField.optional "limit" "integer" "how many lines; omit for 2000"
                     ToolField.optional "sandbox" "string" "the work sandbox whose files these are; omit for the default one" ]
