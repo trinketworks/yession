@@ -1730,7 +1730,13 @@ module View =
                       <button type="button" class="{Style.btnPrimary}" data-repo-picker-connect @click={Ev(fun _ -> actions.RevealSettings ())}>{Dom.Text.repoPickerConnect}</button>
                     </div>"""
             | ListingUnavailable (reason, false) ->
-                note (html $"""<span class="{Style.statusErr}" role="status">{reason}</span>""")
+                note (html $"""<span class="{Style.statusErr}" role="status" data-repo-picker-failed>{reason}</span>""")
+            // Nobody asked yet, so nothing failed that is theirs: one quiet line saying what
+            // still works, and the provider's reason under it as the detail (`ListingWithheld`).
+            | ListingWithheld reason ->
+                note (html $"""
+                    <p class="{Style.small}" data-repo-picker-unlisted>{Dom.Text.repoPickerUnlisted}</p>
+                    <p class="{Style.small}">{reason}</p>""")
             | ListingLoaded page when List.isEmpty page.Candidates ->
                 note (html $"""<span class="{Style.small}">{Dom.Text.repoPickerNothing}</span>""")
             | ListingLoaded page ->
@@ -1807,11 +1813,13 @@ module View =
                 </div>"""
         let dismiss =
             html $"""
-                <button type="button" class="{Style.askWay}" data-repo-picker-dismiss aria-label="{Dom.Text.repoPickerDismiss}"
-                        @click={Ev(fun _ -> dispatch (LaunchMsg LaunchDismissed))}>{Icon.close}</button>"""
+                <button type="button" class="{Style.askWay}" data-repo-picker-dismiss
+                        aria-label="{Dom.Text.repoPickerDismiss}" title="{Dom.Text.repoPickerDismiss}"
+                        @click={Ev(fun _ -> dispatch DismissLaunchMsg)}>{Icon.close}</button>"""
         let back =
             html $"""
-                <button type="button" class="{Style.askWay}" data-repo-picker-back aria-label="{Dom.Text.repoPickerBack}"
+                <button type="button" class="{Style.askWay}" data-repo-picker-back
+                        aria-label="{Dom.Text.repoPickerBack}" title="{Dom.Text.repoPickerBack}"
                         @click={Ev(fun _ -> dispatch (LaunchMsg LaunchBranchPaneClosed))}>{Icon.left}</button>"""
         let onBranchPane =
             match launch.Pane with

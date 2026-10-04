@@ -117,7 +117,8 @@ let private representativeModel : ClientModel =
                     // An agent command, so no viewport and no claim about width.
                     Size = None } ]
           Model = Some pickedModel
-          Chapters = Map.empty }
+          Chapters = Map.empty
+          LaunchDismissed = false }
       Conversation =
         ConversationProjection.ofItems
             [ { MessageId = MessageId.create "msg-1" |> expect

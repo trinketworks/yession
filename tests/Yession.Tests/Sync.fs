@@ -135,6 +135,17 @@ let private codecTests =
             let decoded = SyncedStateSync.ofDoc doc
             Expect.equal decoded.Model None "the register is gone, which IS the default"
 
+        // The launch question, once dismissed, is the session's answer — which is only true if
+        // it rides the doc, the one thing a reopened client holds before it has read anything:
+        // from its own IndexedDB copy, or from the session's full state on connect.
+        testCase "a dismissed launch question crosses the sync boundary" <| fun () ->
+            let doc = Y.Doc.Create ()
+            let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+            p.Dispatch (user DismissLaunchMsg)
+            let reopened = Y.Doc.Create ()
+            Y.applyUpdate (reopened, Y.encodeStateAsUpdate doc)
+            Expect.isTrue (SyncedStateSync.ofDoc reopened).LaunchDismissed "a doc that never saw the press reads it"
+
         testCase "an empty doc decodes to the empty synced state (decode-empty = init)" <| fun () ->
             let decoded = SyncedStateSync.ofDoc (Y.Doc.Create ())
             Expect.equal decoded (SyncedSessionState.empty CollabText.ylmish) "no drafts, no shared brief"

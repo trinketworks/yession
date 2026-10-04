@@ -162,7 +162,7 @@ module Client =
                 match effect with
                 | LaunchEffect.Search query ->
                     let! listing = reads.Listing query
-                    answer (LaunchListingArrived listing)
+                    answer (LaunchListingArrived (query, listing))
                 | LaunchEffect.More cursor ->
                     match! reads.Page cursor with
                     | Ok page -> answer (LaunchMoreArrived page)

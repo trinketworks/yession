@@ -16,7 +16,10 @@ open Yession.Domain.Repos
 /// View state, local to this client and never synced — choosing is one person's act on one
 /// screen, and what it produces is the `AddRepo` command, whose outcome everybody reads off
 /// the log (`RepoAdded`, or `GatedCommandFailed`). The one thing folded back in from the
-/// log is that failure, so the screen that asked can say why rather than sit there.
+/// log is that failure, so the screen that asked can say why rather than sit there. The one
+/// answer that is not local is "none": a dismissal is the session's, held in its synced state
+/// (`SyncedSessionState.LaunchDismissed`), because the other answers retire the card for
+/// everybody too and a person who said no should not be asked again on their next open.
 ///
 /// Pure: what the browser does — fetch a listing, resolve a link, send the command — is in
 /// `Browser.fs`, and what it learns comes back through `LaunchMsg`.
@@ -31,6 +34,12 @@ type LaunchListing =
     /// answer was "connect GitHub" — a 401 either way — which is the one failure with a
     /// button rather than a retry.
     | ListingUnavailable of reason: string * signIn: bool
+    /// The person's OWN repositories could not be listed — the look the card takes when it
+    /// opens, before anybody has typed a thing — for a reason that is not a sign-in. Not a
+    /// failure of anything the person did: nobody asked a question for this to be the answer
+    /// to, so it is said quietly, and the search and a pasted link still work beside it.
+    /// Decided where the answer lands (`update`), from what it answered.
+    | ListingWithheld of reason: string
 
 /// Where the NEXT page stands. Its own state rather than a flag on the listing, because it
 /// is about an attempt and not about what is on screen: the rows already read stay read
@@ -101,21 +110,19 @@ type LaunchViewState =
       /// The last thing that went wrong with a launch — a link that could not be resolved,
       /// a rejection at the door, or a clone that failed — shown until the next attempt.
       Problem : string option
-      /// The card was dismissed: it steps aside for this client. The ordinary empty
-      /// timeline and the composer are what is left, which is how a session that is not
-      /// about a repository begins.
-      Dismissed : bool
       /// Decided ONCE and held: the client was connected, caught up, and the session was
       /// unstarted. `offered` reads this instead of asking the live connection on every
       /// render (`Launch.anchor` sets it, `Launch.eligible` is the live question it asks) --
       /// a reconnect catching up on what arrived while it was gone must not take the card
-      /// away and bring it back. What still retires it live is `begun`, `Dismissed`, or a
+      /// away and bring it back. What still retires it live is `begun`, a dismissal, or a
       /// launch under way.
       Anchored : bool }
 
 type LaunchMsg =
     | LaunchQueryTyped of string
-    | LaunchListingArrived of LaunchListing
+    /// A listing landed, with the query it answers — empty is "my repos", the look nobody
+    /// asked for — because what a failure MEANS depends on which question it answered.
+    | LaunchListingArrived of query: string * LaunchListing
     /// Enter on the field: a link copied from the forge is resolved to a row, anything else
     /// is a search (`linkOf`). Nothing while an attempt is under way.
     | LaunchSubmitted
@@ -159,7 +166,6 @@ type LaunchMsg =
     /// An attempt failed — a link the provider could not resolve, or the log saying the
     /// clone did (`GatedCommandFailed` for `add_repo`). Choosing is open again.
     | LaunchFailed of reason: string
-    | LaunchDismissed
 
 /// What the launch surface asks of the session, as values the reducer returns beside the
 /// state (`Launch.update`), so the rule deciding WHEN to ask sits with the state it reads —
@@ -196,7 +202,6 @@ module Launch =
           Named = Map.empty
           Stage = Choosing
           Problem = None
-          Dismissed = false
           Anchored = false }
 
     /// Whether the add has been SENT and the card is now waiting on events, not on the
@@ -253,16 +258,19 @@ module Launch =
     /// reason a person watching it could name. `begun` alone still closes it, live, in
     /// `offered` below - this only ever LATCHES true, never false, and never at all once the
     /// session has already begun (a cold open of an old session must not anchor a card
-    /// nobody will see offered).
+    /// nobody will see offered). Nor once it was dismissed: anchoring is what asks the
+    /// provider for a listing, and a question somebody already put away is not one to go
+    /// and look up the answers to on every open.
     let anchor
         (connected: bool)
         (historyRead: bool)
         (latestKnown: EventOffset option)
         (catchingUp: bool)
         (begun: bool)
+        (dismissed: bool)
         (launch: LaunchViewState)
         : LaunchViewState =
-        if launch.Anchored || begun then launch
+        if launch.Anchored || begun || dismissed then launch
         elif eligible connected historyRead latestKnown catchingUp begun then
             { launch with Anchored = true }
         else launch
@@ -270,9 +278,11 @@ module Launch =
     /// Whether the card is OFFERED. Reads the ANCHOR (`Launch.anchor`), not the live
     /// connection - that is the point of anchoring it - alongside what is still read live:
     /// `begun`, because a message or a repo landing while the card stands is what retires it
-    /// for real; `Dismissed`, this client's own way out; and `committed`, once under way.
-    let offered (begun: bool) (launch: LaunchViewState) : bool =
-        launch.Anchored && not begun && not launch.Dismissed && not (committed launch)
+    /// for real; `dismissed`, the way out — the SESSION's, read from its synced state
+    /// (`SyncedSessionState.LaunchDismissed`), so it holds for everybody and across a reload;
+    /// and `committed`, once under way.
+    let offered (begun: bool) (dismissed: bool) (launch: LaunchViewState) : bool =
+        launch.Anchored && not begun && not dismissed && not (committed launch)
 
     /// Whether the card is busy with an attempt: rows are not for holding while one is
     /// under way, because two clones of two repos is not what anyone meant.
@@ -284,7 +294,7 @@ module Launch =
     let candidates (launch: LaunchViewState) : RepoCandidate list =
         match launch.Listing with
         | ListingLoaded page -> page.Candidates
-        | ListingUnknown | ListingUnavailable _ -> []
+        | ListingUnknown | ListingUnavailable _ | ListingWithheld _ -> []
 
     /// The cursor the listing on screen would ask with next, whatever else is happening to
     /// it — so a row put at the head by a pasted link does not throw away the rest of the
@@ -292,7 +302,7 @@ module Launch =
     let private nextOf (launch: LaunchViewState) : string option =
         match launch.Listing with
         | ListingLoaded page -> page.Next
-        | ListingUnknown | ListingUnavailable _ -> None
+        | ListingUnknown | ListingUnavailable _ | ListingWithheld _ -> None
 
     /// The cursor the foot would ask with, if it should ask at all: a page to come, nothing
     /// already in flight, and no attempt under way. ONE rule, here, rather than a condition
@@ -409,7 +419,10 @@ module Launch =
                     Stage = Choosing
                     Problem = Some (sprintf "github does not show %s to this credential" (RepoRef.value repo)) },
                 []
-            | ListingUnavailable (reason, _) -> { launch with Stage = Choosing; Problem = Some reason }, []
+            // A pasted link IS a question somebody asked, so its refusal is theirs to read,
+            // whatever shape it arrived in.
+            | ListingUnavailable (reason, _)
+            | ListingWithheld reason -> { launch with Stage = Choosing; Problem = Some reason }, []
             | ListingUnknown -> launch, []
         | LaunchMoreAsked ->
             match wanting launch with
@@ -440,7 +453,14 @@ module Launch =
         // A listing ARRIVING is the start of a new list, so whatever the foot was doing for
         // the old one is over: a page in flight for a search two keystrokes ago must not
         // append itself to what is on screen now.
-        | LaunchListingArrived listing -> { launch with Listing = listing; More = MoreIdle }, []
+        //
+        // The look the card takes on opening ("my repos", an empty query) is the one nobody
+        // asked for, so a failure of it is not shown as a failure: a red line under an empty
+        // field reads as the person having done something wrong before they have done anything.
+        // A sign-in keeps its own case, because that one comes with the button that fixes it.
+        | LaunchListingArrived (query, ListingUnavailable (reason, false)) when query.Trim () = "" ->
+            { launch with Listing = ListingWithheld reason; More = MoreIdle }, []
+        | LaunchListingArrived (_, listing) -> { launch with Listing = listing; More = MoreIdle }, []
         | LaunchMoreArrived page ->
             match launch.Listing with
             // Only onto the list the page was asked for. A page that lands after the list
@@ -483,4 +503,3 @@ module Launch =
                 | CommandRejected reason -> { launch with Stage = Choosing; Problem = Some reason }, []
             | _ -> launch, []
         | LaunchFailed reason -> { launch with Stage = Choosing; Problem = Some reason }, []
-        | LaunchDismissed -> { launch with Dismissed = true }, []

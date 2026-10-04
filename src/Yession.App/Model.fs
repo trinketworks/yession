@@ -1291,8 +1291,12 @@ type ClientMsg =
     /// the model declares for each wait (`ClientModel.timers`), carrying the moment it fell
     /// due.
     | PendingWaitedMsg of now: int64
-    /// The launch surface moved (typed, listed, chose, sent, answered, failed, dismissed).
+    /// The launch surface moved (typed, listed, chose, sent, answered, failed).
     | LaunchMsg of LaunchMsg
+    /// The session's opening question put away: no repository, for now. A synced register
+    /// like `SetModelMsg`'s, not launch view state, because it is the session's answer and
+    /// not one client's (`SyncedSessionState.LaunchDismissed`).
+    | DismissLaunchMsg
     /// This client sent the session a command, under this request id. Dispatched by the one
     /// verb that sends commands (`Client.Connection.Ask`), BEFORE the command leaves, so no
     /// answer can arrive ahead of the record of what it answers.
@@ -1743,7 +1747,7 @@ module ClientModel =
     /// `reconcileLaunch` keeps decided, not the live connection - `Launch.offered`'s doc,
     /// and `Launch.anchor`'s beside it, say why a live read is the wrong read for this.
     let launchOffered (model: ClientModel) : bool =
-        Launch.offered (launchBegun model) model.Launch
+        Launch.offered (launchBegun model) model.Synced.LaunchDismissed model.Launch
 
     /// Keeps `model.Launch.Anchored` decided. Run after every message (`update`, below,
     /// pipes its whole result through this), so whichever one first carries the client past
@@ -1761,6 +1765,7 @@ module ClientModel =
                     model.EventConsumer.LatestKnownOffset
                     model.EventConsumer.IsCatchingUp
                     (launchBegun model)
+                    model.Synced.LaunchDismissed
                     model.Launch }
 
     /// Whose draft the composer is showing — the resolved answer to `ComposerChoice`, and the
@@ -3631,6 +3636,7 @@ module ClientModel =
         | RefusalFocusMsg mount ->
             { model with Refused = model.Refused |> Option.map (fun refusal -> { refusal with FocusedIn = mount }) }
         | SetModelMsg choice -> model |> withSynced { model.Synced with Model = choice }
+        | DismissLaunchMsg -> model |> withSynced { model.Synced with LaunchDismissed = true }
         // An id this client's window does not hold is a page boundary, not a bug — and
         // there is nothing to toggle, because what the verdict would default to is on the item.
         | ToggleChapterMsg messageId ->
