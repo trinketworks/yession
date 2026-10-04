@@ -2751,6 +2751,9 @@ module Style =
     /// Which terminal this is. The one thing in the bar that is neither a fact you can change
     /// nor an act — so it is the only thing in ink.
     let terminalHeadName = "flex-1 min-w-0 truncate font-ui text-small text-ink"
+    /// What the named terminal is doing, after its name and fainter than it: a fact about the
+    /// terminal rather than the terminal, so it gives way first when the bar is narrow.
+    let terminalHeadSubtitle = "font-terminal text-code-sm text-ink-faint"
 
     /// A property of the terminal, stated as a fact and changed by touching the fact.
     ///
@@ -2977,6 +2980,11 @@ module Style =
     /// A closed row's "not kept", beside its name: one line, never squeezed, so a row that
     /// says it is the height of one that does not.
     let terminalListGone = statusErr + " shrink-0 whitespace-nowrap ml-2"
+
+    /// What a terminal row's terminal is doing or last ran, under its name: the command, in
+    /// the terminal's own face, one line and faint — it tells nine `term N` rows apart, and
+    /// it is not the thing the row opens.
+    let terminalListSubtitle = "block min-w-0 truncate font-terminal text-code-sm text-ink-faint"
 
     /// The row's verbs, kept on one baseline at its right edge.
     let terminalListVerbs = "flex items-center gap-1 shrink-0"

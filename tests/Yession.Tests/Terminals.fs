@@ -308,6 +308,94 @@ let private projectionTests =
             Expect.equal (Projection.tryFind terminalA proj |> Option.get).DroppedBytes 512 "the loss is counted"
     ]
 
+// --- What a terminal is called ------------------------------------------------------------
+
+let private openedIn (id: TerminalId) (sandbox: SandboxRef) (title: TerminalTitle) =
+    SessionEvent.TerminalOpened { TerminalId = id; OpenedBy = PeerRef ada; Title = title; Sandbox = Some sandbox; Renewable = false }
+
+/// A terminal opened by somebody who named nothing, where `TerminalTitle.inSandbox` puts it.
+let private untitledIn (id: TerminalId) (sandbox: SandboxRef) = openedIn id sandbox (TerminalTitle.inSandbox sandbox "")
+
+let private termN (n: int) = TerminalId.create (sprintf "term-%d" n) |> expect
+
+let private devSandbox = SandboxRef.create SessionOwned (SandboxName.create "dev" |> expect)
+
+let private nameIn (proj: Projection) (id: TerminalId) =
+    TerminalName.display proj (Projection.tryFind id proj |> Option.get)
+
+let private terminalNameTests =
+    testList "What a terminal is called" [
+        testCase "two terminals in the same sandbox are numbered in creation order" <| fun () ->
+            let proj = fold [ untitledIn (termN 1) SandboxRef.defaultRef; untitledIn (termN 2) SandboxRef.defaultRef ]
+            Expect.equal
+                [ nameIn proj (termN 1); nameIn proj (termN 2) ]
+                [ "term 1"; "term 2" ]
+                "eight terminals are not eight identical words"
+
+        testCase "a closed terminal keeps its number, and the next one does not reuse it" <| fun () ->
+            // Numbered over the whole projection in open order, never over what is open now:
+            // a name that changed under a close would rename somebody else's terminal.
+            let proj =
+                fold
+                    [ untitledIn (termN 1) SandboxRef.defaultRef
+                      untitledIn (termN 2) SandboxRef.defaultRef
+                      SessionEvent.TerminalClosed { TerminalId = termN 1; Reason = "done"; By = None }
+                      untitledIn (termN 3) SandboxRef.defaultRef ]
+            Expect.equal
+                [ nameIn proj (termN 1); nameIn proj (termN 2); nameIn proj (termN 3) ]
+                [ "term 1"; "term 2"; "term 3" ]
+                "every name is the one it was given"
+
+        testCase "a terminal somebody titled keeps the title" <| fun () ->
+            let proj = fold [ openedIn (termN 1) SandboxRef.defaultRef (TerminalTitle.create "build" |> expect) ]
+            Expect.equal (nameIn proj (termN 1)) "build" "theirs, as written"
+
+        testCase "a titled terminal takes no number from the untitled beside it" <| fun () ->
+            // Only the untitled are counted, so the first unnamed terminal after a `build` is
+            // the first, not the second of a pair whose other half is called something else.
+            let proj =
+                fold
+                    [ openedIn (termN 1) SandboxRef.defaultRef (TerminalTitle.create "build" |> expect)
+                      untitledIn (termN 2) SandboxRef.defaultRef ]
+            Expect.equal (nameIn proj (termN 2)) "term 1" "the first untitled one"
+
+        testCase "a title that only says the fallback word is numbered" <| fun () ->
+            // Typing `terminal` into the name field said nothing a blank one did not.
+            let proj = fold [ openedIn (termN 1) SandboxRef.defaultRef (TerminalTitle.create "terminal" |> expect) ]
+            Expect.equal (nameIn proj (termN 1)) "term 1" "numbered like any other untitled terminal"
+
+        testCase "a named sandbox's terminal is named after the sandbox" <| fun () ->
+            // Numbered among its own sandbox's: a `default` terminal before it is no reason
+            // for it to be the second of anything.
+            let proj = fold [ untitledIn (termN 1) SandboxRef.defaultRef; untitledIn (termN 2) devSandbox ]
+            Expect.equal (nameIn proj (termN 2)) "dev 1" "the sandbox, and its place there"
+
+        testCase "a terminal's subtitle is the command it is running" <| fun () ->
+            let proj =
+                fold
+                    [ untitledIn (termN 1) SandboxRef.defaultRef
+                      started (termN 1) "1" "make" 0
+                      completed (termN 1) "1" (CommandSucceeded 0) 3
+                      started (termN 1) "2" "npm test" 3 ]
+            Expect.equal
+                (TerminalName.subtitle (Projection.tryFind (termN 1) proj |> Option.get))
+                "npm test"
+                "what it is doing now"
+
+        testCase "with nothing running, a terminal's subtitle is the last command it ran" <| fun () ->
+            let proj =
+                fold
+                    [ untitledIn (termN 1) SandboxRef.defaultRef
+                      started (termN 1) "1" "make" 0
+                      completed (termN 1) "1" (CommandSucceeded 0) 3
+                      started (termN 1) "2" "npm test" 3
+                      completed (termN 1) "2" (CommandFailed 1) 9 ]
+            Expect.equal
+                (TerminalName.subtitle (Projection.tryFind (termN 1) proj |> Option.get))
+                "npm test"
+                "what it did last"
+    ]
+
 // --- OSC 133 marks and their integrity (Plan 13, stage 2d) -------------------------------
 
 let private nonce = "n0nce"
@@ -4973,6 +5061,7 @@ let tests =
         sourceTests
         drainTests
         projectionTests
+        terminalNameTests
         blockStdinTests
         typingTests
         markTests

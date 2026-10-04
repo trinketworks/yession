@@ -377,6 +377,69 @@ module Projection =
     let runningBlock (view: TerminalView) : Block option =
         view.Blocks |> List.tryFind (fun b -> b.Status = BlockRunning)
 
+/// What a terminal is CALLED on a screen, and the line that says what it is doing.
+///
+/// Every terminal a person opens without naming one is titled `terminal`
+/// (`TerminalTitle.fallback`), so a strip of eight was eight identical words, the list was
+/// that many identical rows, every kill button shared one accessible name, and a chat chip
+/// could not say where its command ran. The title is what the Session RECORDS and stays so;
+/// this is a projection over it, which is why it takes the whole `Projection` — an ordinal
+/// is a fact about the others, not about the one.
+///
+/// A client derivation: the agent's tools still say a terminal's title or id, because the
+/// Session does not count. Teaching it the same ordinal is a separate change.
+module TerminalName =
+
+    /// Who an untitled terminal is numbered among, and what its name starts with — or `None`
+    /// when somebody gave it a title, which is then its name as written.
+    ///
+    /// Untitled is the two titles a terminal gets for saying nothing (`TerminalTitle.inSandbox`
+    /// with no name): the fallback word, and a named sandbox's own name. A typed title that
+    /// merely equals one of them said nothing either, so it is numbered too. A terminal in
+    /// `default` — and one attached to a stream, which runs in no sandbox — is a `term`; one
+    /// in a named sandbox wears the sandbox, spelled as its title would have been.
+    let private numberedAs (view: TerminalView) : string option =
+        let untitled =
+            view.Title = TerminalTitle.fallback
+            || (match view.Sandbox with
+                | Some sandbox -> view.Title = TerminalTitle.inSandbox sandbox ""
+                | None -> false)
+        if not untitled then None
+        else
+            match view.Sandbox with
+            | Some sandbox when sandbox <> SandboxRef.defaultRef -> Some (SandboxRef.render sandbox)
+            | Some _
+            | None -> Some "term"
+
+    /// The name: the title when somebody gave one, else the sandbox and an ordinal — `term 1`,
+    /// `dev 2`.
+    ///
+    /// The ordinal is the terminal's place among the untitled terminals numbered the same way,
+    /// in the order they OPENED, closed ones included — so a name never changes once given:
+    /// closing `term 1` does not make `term 2` the first, and the next one is `term 3`. Only
+    /// the untitled are counted, so the first unnamed terminal beside a `build` is `term 1`
+    /// rather than leaving a reader looking for the one before it.
+    let display (proj: Projection) (view: TerminalView) : string =
+        match numberedAs view with
+        | None -> TerminalTitle.value view.Title
+        | Some prefix ->
+            let before =
+                proj.Terminals
+                |> List.takeWhile (fun t -> t.TerminalId <> view.TerminalId)
+                |> List.filter (fun t -> numberedAs t = Some prefix)
+                |> List.length
+            sprintf "%s %d" prefix (before + 1)
+
+    /// What the terminal is doing, or last did: the command running, else the last one it
+    /// ran, else nothing — a terminal that has run nothing has nothing to add to its name.
+    let subtitle (view: TerminalView) : string =
+        match Projection.runningBlock view with
+        | Some running -> running.Command
+        | None ->
+            match List.tryLast view.Blocks with
+            | Some last -> last.Command
+            | None -> ""
+
 /// What the emulator's alt-screen state proposes doing about the lease (Plan 13, stage 2e).
 ///
 /// "The flip is detected, not configured": a TUI taking the screen is the universal signal
