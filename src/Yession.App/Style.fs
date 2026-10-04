@@ -2074,18 +2074,10 @@ module Style =
               "text-small leading-5 text-ink-dim hover:text-ink hover:bg-surface"
               "transition-colors duration-150 ease-out"
               focusRing ]
-    /// The composer's @ picker: who a message can be addressed to, offered while an address is
-    /// typed. Fixed, because it hangs off a caret inside a scrolling composer and must not be
-    /// clipped by it; `itemMenu`'s chrome, because it is the same kind of surface.
-    let mentionPicker =
-        cls [ "fixed z-40 min-w-[10rem] py-1 m-0 list-none select-none"
-              "bg-panel"
-              Stroke.ring
-              Stroke.hair ]
-    /// One offer. The highlighted one is the keyboard's place in the list — ProseMirror keeps
-    /// the focus in the editor, so this is the visible focus state, and it is the hover's.
-    let mentionOption = "px-3 py-1.5 cursor-pointer text-small leading-5 text-ink-dim"
-    let mentionOptionActive = cls [ mentionOption; "text-ink bg-surface" ]
+    /// The rest of a name an @ is completing, greyed in after the caret. `ink-faint`, the
+    /// placeholder's ink: words that are offered, not written, and the dimmest the floor
+    /// admits on the composer.
+    let addressHint = "text-ink-faint cursor-pointer"
     /// What a press ANYWHERE else lands on. A real button rather than a document listener:
     /// the listener would have to be added, removed and reasoned about against a view that
     /// re-renders, while this exists exactly as long as the menu does. Transparent and over

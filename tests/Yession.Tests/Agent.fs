@@ -2230,6 +2230,12 @@ let private addressTests =
         testCase "only names that start with what was typed are offered" <| fun () ->
             Expect.equal (Addressed.offer [ "swift-heron"; "brave-owl" ] "SW") [ "swift-heron" ] "case is not spelling"
 
+        testCase "the hint is the rest of the first name on offer" <| fun () ->
+            Expect.equal (Addressed.hint [ "swift-heron" ] "sw") (Some "ift-heron") "what is greyed in after the caret"
+
+        testCase "a name typed whole has no hint" <| fun () ->
+            Expect.isNone (Addressed.hint [ "swift-heron" ] "agent") "nothing left to grey in"
+
         testCase "a name no address can spell is not offered" <| fun () ->
             Expect.equal (Addressed.offer [ "Ada Lovelace" ] "") [ "agent" ] "a space would end the address before the name did"
 
