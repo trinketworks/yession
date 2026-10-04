@@ -899,6 +899,57 @@ let tests =
                     (sprintf "and the chip is one tab beside it; the strip holds: %s" said)
             })
 
+        // A reload brings a person back to what they had (P0-4). Before, only the split's width
+        // survived one: the column came back shut, every tab opened from the chat was gone,
+        // the selection fell back to the first terminal and the pins were forgotten. What is
+        // asserted is what a person sees on coming back, read through the hooks the strip
+        // carries — the same tabs, the one on top, the one kept, and a column with width.
+        Tag.needs "a command that really runs" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        sessionCase "a reload brings back the tabs, the selection and the open pane" <|
+            fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "[data-repo-picker-dismiss]")
+                do! awaitU (page.ClickAsync "[data-repo-picker-dismiss]")
+                let! _ = await (page.WaitForFunctionAsync "!document.querySelector('[data-repo-picker]')")
+                do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
+                do! openNewTerminal page
+                let composerInput = "[data-terminal-input^='term-draft:']:not([readonly])"
+                let! _ = await (page.WaitForSelectorAsync composerInput)
+                do! awaitU (page.ClickAsync composerInput)
+                do! awaitU (page.Keyboard.TypeAsync "echo kept")
+                do! awaitU (page.ClickAsync "[data-terminal-send]")
+                let! _ = await (page.WaitForSelectorAsync "[data-chat-block]")
+                do! awaitU (page.ClickAsync "[data-chat-block]")
+                let terminalTab = "[data-pane-tab^='terminal:']"
+                let blockTab = "[data-pane-tab^='block:']"
+                let! _ = await (page.WaitForSelectorAsync blockTab)
+                // Kept: the terminal's tab, activated while it is the one on top.
+                do! awaitU (page.ClickAsync terminalTab)
+                do! waitFor "the terminal's tab to be on top" page (sprintf "document.querySelector(\"%s\")?.getAttribute('aria-selected') === 'true'" terminalTab)
+                do! awaitU (page.ClickAsync terminalTab)
+                let terminalKept = sprintf "document.querySelector(\"%s\")?.getAttribute('data-pane-tab-pinned') === 'true'" terminalTab
+                do! waitFor "the terminal's tab to be kept" page terminalKept
+                // And the block's tab put back on top, so what comes back on top is a choice
+                // and not the default a fresh client would land on.
+                do! awaitU (page.ClickAsync blockTab)
+                let blockOnTop = sprintf "document.querySelector(\"%s\")?.getAttribute('aria-selected') === 'true'" blockTab
+                do! waitFor "the block's tab to be on top" page blockOnTop
+
+                let! _ = await (page.ReloadAsync ())
+                do! waitFor "the reloaded page to connect" page connected
+                do! waitFor "both tabs to be back in the strip" page (sprintf "!!document.querySelector(\"%s\") && !!document.querySelector(\"%s\")" terminalTab blockTab)
+                do! waitFor "the block's tab to be on top again" page blockOnTop
+                do! waitFor "the terminal's tab to be kept again" page terminalKept
+                do! waitFor
+                        "the pane to be open"
+                        page
+                        "(document.querySelector('[data-content-panel]')?.getBoundingClientRect().width ?? 0) > 1"
+                let! strip =
+                    await (page.EvaluateAsync<string[]> (
+                            """() => [...document.querySelectorAll('[data-pane-tab]')].map(t => t.getAttribute('data-pane-tab'))"""))
+                Expect.equal strip.Length 2 (sprintf "the strip holds what it held, and nothing else: %s" (String.Join (", ", strip)))
+            })
+
         // --- Reopening a session, and what it costs -------------------------------------
         //
         // Reopening a tab on a session with a long terminal behind it is the slowest thing
@@ -5621,10 +5672,9 @@ let mountedTests =
                 })
             (fun page ->
                 async {
-                    // The column starts shut on a fresh load, so this also says the replayed
-                    // records are there to be shown BEFORE anyone opens it — which is what a
-                    // store read before the network buys.
-                    do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
+                    // The column comes back as this browser left it — open (P0-4) — so nothing
+                    // is pressed here: the replayed records are on screen with no network
+                    // behind them, which is what a store read before the network buys.
                     do! waitFor "the terminal output to come back offline" page terminalPrinted
                 }))
     ]

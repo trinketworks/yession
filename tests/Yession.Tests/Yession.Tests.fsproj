@@ -79,6 +79,8 @@
     <Compile Include="TabStrips.fs" />
     <Compile Include="Attach.fs" />
     <Compile Include="NodeExtras.fs" />
+    <!-- Before the first suite with a property in it (Timeline's tab keys). -->
+    <Compile Include="Hedgehog.fs" />
     <Compile Include="Timeline.fs" />
     <!-- The waits the client model declares, on a hand-turned clock. -->
     <Compile Include="Timers.fs" />
@@ -120,7 +122,6 @@
     <Compile Include="ManagerForms.fs" />
     <Compile Include="Phase4.fs" />
     <Compile Include="ProxyMap.fs" />
-    <Compile Include="Hedgehog.fs" />
     <Compile Include="Resources.fs" />
     <Compile Include="VolumeLeases.fs" />
     <Compile Include="SeededFiles.fs" />

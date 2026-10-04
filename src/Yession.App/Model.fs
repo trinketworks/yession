@@ -434,6 +434,35 @@ module PaneTab =
         | StretchTab stretch -> "stretch:" + TerminalStretch.key stretch
         | ContentTab ref -> "content:" + ContentRef.value ref
 
+    /// The tab a key names, for the kinds a key alone can name — `key`'s inverse, which is
+    /// what lets a strip be written down and read back (P0-4, `PaneMemory`).
+    ///
+    /// Not a stretch. A stretch tab carries the stretch itself — its title, its holder, how
+    /// it ended — and its key is only the terminal and the offset it ended at, so the rest
+    /// can come from nowhere but the timeline it was drawn from. `ClientModel.tabOfKey` is
+    /// where a stretch key is looked up; this answers `None` for one, as it does for a key
+    /// it cannot read at all, and a reader of a stored strip treats both as a tab that is
+    /// no longer there.
+    ///
+    /// A block key splits at the FIRST colon after its prefix: a terminal id is
+    /// `[A-Za-z0-9-]`, so the colon that ends it is the one `key` wrote, and whatever
+    /// follows is the block's id however it is spelled.
+    let ofKey (key: string) : PaneTab option =
+        let after (prefix: string) =
+            if key.StartsWith prefix then Some (key.Substring prefix.Length) else None
+        let terminal raw = TerminalId.create raw |> Result.toOption
+        match after "terminal:", after "block:", after "content:" with
+        | Some id, _, _ -> terminal id |> Option.map TerminalTab
+        | _, Some rest, _ ->
+            match rest.IndexOf ':' with
+            | -1 -> None
+            | colon ->
+                match terminal (rest.Substring (0, colon)), BlockId.create (rest.Substring (colon + 1)) with
+                | Some id, Ok blockId -> Some (BlockTab (id, blockId))
+                | _ -> None
+        | _, _, Some path -> ContentRef.create path |> Result.toOption |> Option.map ContentTab
+        | None, None, None -> None
+
     /// Which terminal this tab is about — what the strip groups by and what a replay reads.
     /// `None` for a tab that is not a terminal's: a content tab has no feed, no header and
     /// nothing to rewind, and every caller that assumed otherwise is a site the compiler
@@ -836,6 +865,24 @@ type ClientModel =
       /// Whether the terminals panel is open. View state, never synced: two people in one
       /// session may reasonably want different columns on screen.
       TerminalsOpen : bool
+      /// What this browser remembered of the pane for this session, HELD until the log has
+      /// been read through (P0-4) — then applied once (`recall`) and cleared.
+      ///
+      /// Held rather than applied at boot, because a tab is only worth restoring onto a
+      /// terminal the session still has, and only the log can say which those are: the
+      /// events fold drops every unkept terminal tab the projection lacks, on every page, so a
+      /// strip seeded before its `TerminalOpened` arrived would empty itself on the first
+      /// page. Only the open bit is applied at boot (`remembered`), because it needs nothing
+      /// checked and is the one part a person would see jump.
+      ///
+      /// While this is held, nothing writes the memory back: what the model holds then is the
+      /// strip the log rebuilt, not the one this person had, and writing it would forget the
+      /// very thing waiting to be restored.
+      PaneMemory    : PaneMemory option
+      /// Whether there WAS a memory for this session when the page loaded — so "restored shut"
+      /// can be told from "never remembered", which `TerminalsOpen = false` alone cannot say.
+      /// Set at boot, never changed.
+      PaneRemembered : bool
       /// Which timeline item has its actions menu open, if any. View state for the same
       /// reason the column above is: a menu one person opened is not a thing anybody else
       /// is looking at.
@@ -1465,6 +1512,8 @@ module ClientModel =
           Pinned = Set.empty
           Pane = None
           TerminalsOpen = false
+          PaneMemory = None
+          PaneRemembered = false
           ItemMenu = None
           PaneMenu = false
           Refused = None
@@ -1636,6 +1685,99 @@ module ClientModel =
                 | TerminalTab id as tab when
                     Projection.tryFind id model.Terminals |> Option.exists (fun t -> t.IsOpen) -> Some tab
                 | _ -> None)
+
+    /// What this browser should remember of the pane — the four things a reload must give
+    /// back (P0-4). The CHOICE rather than `selectedPane`'s resolution of it: with nothing
+    /// chosen the default is worked out again on the way back, from the same strip.
+    let paneMemory (model: ClientModel) : PaneMemory =
+        let inStrip (key: string) = model.Tabs |> List.exists (fun tab -> PaneTab.key tab = key)
+        { PaneMemory.Tabs = model.Tabs |> List.map PaneTab.key
+          PaneMemory.Pinned = model.Pinned |> Set.toList |> List.filter inStrip
+          PaneMemory.Selected = model.Pane |> Option.bind PaneMode.subject |> Option.map (TabMode.tab >> PaneTab.key)
+          PaneMemory.Open = model.TerminalsOpen }
+
+    /// A freshly loaded client, given what this browser remembered of the pane for this
+    /// session. The column's open bit is applied now, because it needs nothing checked and is
+    /// the part a person sees move; the strip waits for the log (`PaneMemory`'s doc, and
+    /// `recall` below).
+    ///
+    /// `None` — a session this browser has never seen, or storage that would not answer — is
+    /// the client exactly as `init` made it.
+    let remembered (memory: PaneMemory option) (model: ClientModel) : ClientModel =
+        match memory with
+        | None -> model
+        | Some memory ->
+            { model with
+                TerminalsOpen = memory.Open
+                PaneMemory = Some memory
+                PaneRemembered = true }
+
+    /// The tab a stored key names in THIS session, or `None` when the session has nothing
+    /// there for it to open onto.
+    ///
+    /// The other half of `PaneTab.ofKey`: a stretch is found on the timeline by its key,
+    /// because a key is all of a stretch a strip can write down. A terminal tab needs its
+    /// terminal, open or ended (an ended one is a recording somebody was reading); a block tab
+    /// needs its block. A content tab is taken as named — the session's files are not folded
+    /// here, and its own panel says so if the file has gone.
+    let tabOfKey (model: ClientModel) (key: string) : PaneTab option =
+        match PaneTab.ofKey key with
+        | Some (TerminalTab id as tab) ->
+            Projection.tryFind id model.Terminals |> Option.map (fun _ -> tab)
+        | Some (BlockTab (id, blockId) as tab) ->
+            Projection.tryFind id model.Terminals
+            |> Option.filter (fun terminal -> terminal.Blocks |> List.exists (fun b -> b.BlockId = blockId))
+            |> Option.map (fun _ -> tab)
+        | Some (ContentTab _ as tab) -> Some tab
+        | Some (StretchTab _) | None ->
+            model.Timeline.TerminalItems
+            |> List.tryPick (function
+                | TimelineStretch stretch when PaneTab.key (StretchTab stretch) = key -> Some (StretchTab stretch)
+                | _ -> None)
+
+    /// Whether this client has read the log through to where the session says it ends — the
+    /// moment a remembered strip can be checked against what the session has. Connected,
+    /// because only the session knows where its log ends; the local store read, because it
+    /// is read first and holds most of it; and caught up.
+    let private readThrough (model: ClientModel) : bool =
+        model.Connection = Connected && model.HistoryRead && not model.EventConsumer.IsCatchingUp
+
+    /// Put back what this browser remembered of the pane, once the log has been read through
+    /// (P0-4). Run after every message, like `reconcileLaunch`, so whichever message carries
+    /// the client past the line is the one that restores — the last page of catch-up, or the
+    /// connection itself when the local store already held everything. Idempotent: with no
+    /// memory held it returns the model it was given.
+    ///
+    /// The remembered strip REPLACES the one history rebuilt. Replaying the log reopens every
+    /// terminal this person ever opened, including the ones they had since closed, and the
+    /// strip they had is the answer to which of those they wanted. Each tab is checked against
+    /// the session (`tabOfKey`) and one that is no longer there is dropped.
+    ///
+    /// What this person has done SINCE loading wins over what they had: a tab chosen before
+    /// the log had arrived stays chosen, and stays in the strip.
+    let private recall (model: ClientModel) : ClientModel =
+        match model.PaneMemory with
+        | Some memory when readThrough model ->
+            let restored = memory.Tabs |> List.choose (tabOfKey model) |> List.distinctBy PaneTab.key
+            let chosen = model.Pane |> Option.bind PaneMode.subject |> Option.map TabMode.tab
+            let tabs =
+                match chosen with
+                | Some tab -> opened tab restored
+                | None -> restored
+            let present (key: string) = tabs |> List.exists (fun tab -> PaneTab.key tab = key)
+            let pane =
+                match model.Pane with
+                | Some _ -> model.Pane
+                | None ->
+                    memory.Selected
+                    |> Option.bind (fun key -> tabs |> List.tryFind (fun tab -> PaneTab.key tab = key))
+                    |> Option.map (fun tab -> OnTab (Reading tab))
+            { model with
+                Tabs = tabs
+                Pinned = Set.union model.Pinned (Set.ofList memory.Pinned) |> Set.filter present
+                Pane = pane
+                PaneMemory = None }
+        | Some _ | None -> model
 
     /// Whether the pane is showing the census rather than a tab (Plan 20, stage 0; Plan 25,
     /// stage 2). A face the pane is IN, not a flag over the one it is in — which is why
@@ -2485,9 +2627,10 @@ module ClientModel =
     /// Fold a message into the model — the state half of `update`, its only caller.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
     /// after every message, rather than being read live from whatever the connection
-    /// happens to be doing at render time.
+    /// happens to be doing at render time — and through `recall`, for the same reason, so a
+    /// remembered pane comes back on whichever message finishes reading the log.
     let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
-        reconcileLaunch (
+        reconcileLaunch (recall (
         match msg with
         | ConnectingMsg ->
             { model with Connection = Connecting }
@@ -3273,7 +3416,7 @@ module ClientModel =
         // The armed slot is spent by the press that confirms it.
         | CloseTerminalMsg terminal -> { model with KillPending = Some terminal; KillArmed = None }
         | ArmKillMsg next -> { model with KillArmed = next }
-        )
+        ))
 
     /// A message's consequences: the next model, and what it asks of the world outside it.
     let update (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =

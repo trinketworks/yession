@@ -16,6 +16,8 @@
     <Compile Include="Codecs/MeProbe.fs" />
     <!-- What the connection panels' writes answer: both ends' reading of one reply. -->
     <Compile Include="Codecs/Panels.fs" />
+    <!-- What one browser had open in one session's pane, across a reload. -->
+    <Compile Include="Codecs/PaneMemory.fs" />
     <!-- The collaborative document both ends hold: the Ylmish sync boundary over the model's
          synced state, the rich and plain text roots beside it, and markdown at its edges. The
          App owns it as it owns every App <-> Session contract; the Session references this
