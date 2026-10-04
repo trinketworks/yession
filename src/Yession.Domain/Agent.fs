@@ -202,6 +202,11 @@ type TerminalCommandStatus =
     /// Still going when the deadline fell. A yield, not a cancellation: the block runs on and
     /// the handle resumes it.
     | TerminalCommandRunning
+    /// Queued with `background: true`, so nobody waited (Plan 20, stage 2). Its own case
+    /// rather than `TerminalCommandRunning` because the advice differs: told "still running —
+    /// pass background: true" about a command that already had, an agent concluded the flag
+    /// had been ignored and polled it instead (session NR5KB8B5).
+    | TerminalCommandStarted
     /// It took the whole screen and is waiting for a keystroke, and the terminal is yours
     /// (Plan 20, stage 6). Its own case because it is the one running block that will never
     /// finish on its own: burning the process deadline on it and then reporting
@@ -257,7 +262,11 @@ type TerminalCommandOutcome =
       /// beginning is. This does, in the one vocabulary that can fetch it — `read_terminal`'s
       /// `from`. Measured: told only that 48,707 characters were gone, an agent narrowed
       /// `sed -n` ranges ten times and never reached the part it wanted.
-      From : int option }
+      From : int option
+      /// How the block has been doing — how long it has run, how long since it printed —
+      /// while it is still running. `None` for every other status, and before there is a
+      /// block to measure.
+      Activity : BlockActivity option }
 
 module TerminalCommandOutcome =
 

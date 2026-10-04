@@ -269,8 +269,18 @@ module AgentTools =
         | TerminalCommandRan (CommandExecutionFailed reason) ->
             sprintf "EXECUTION FAILED in %s: %s%s" where reason output
         | TerminalCommandRunning ->
+            // How it has been doing, when there is a block to measure: the clause that tells a
+            // build halfway through from a wait loop whose server died at launch.
+            let activity =
+                match outcome.Activity with
+                | Some activity -> sprintf " (%s)" (BlockActivity.describe activity)
+                | None -> ""
             sprintf
-                "STILL RUNNING in %s. Not finished; nothing cancelled. For long commands pass background: true and end your turn — you're woken when they finish; otherwise check_pending '%s' for the outcome. Stuck or waiting on input? write_terminal can type in — \"\\u0003\" interrupts.%s"
+                "STILL RUNNING in %s%s. Not finished; nothing cancelled. For long commands pass background: true and end your turn — you're woken when they finish; otherwise check_pending '%s' for the outcome. Stuck or waiting on input? write_terminal can type in — \"\\u0003\" interrupts.%s"
+                where activity handle output
+        | TerminalCommandStarted ->
+            sprintf
+                "STARTED in %s, in the background. Carry on, or end your turn — you're woken when it finishes; check_pending '%s' picks it up sooner.%s"
                 where handle output
         | TerminalCommandInteractive ->
             sprintf

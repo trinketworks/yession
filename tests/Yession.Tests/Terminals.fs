@@ -1162,6 +1162,7 @@ let private waitTests =
                 [ TerminalCommandRan (CommandSucceeded 0)
                   TerminalCommandRan (CommandFailed 1)
                   TerminalCommandRunning
+                  TerminalCommandStarted
                   TerminalCommandInteractive
                   TerminalCommandAwaitingTerminal BehindBlock
                   TerminalCommandAwaitingTerminal BehindQueue
@@ -1169,6 +1170,23 @@ let private waitTests =
                   TerminalCommandAwaitingTerminal UnmarkedShell
                   TerminalCommandRefused (PeerRef bob, None) ]
             Expect.equal (List.distinct statuses |> List.length) (List.length statuses) "no two are the same value"
+
+        // A wait loop polling for a server that died at launch and a build halfway through
+        // are both "still running"; what tells them apart is how long since either printed.
+        // Input is not printing — the command line a block opens with is its own record — so
+        // a block that has said nothing since it was typed is quiet for its whole life.
+        testCase "a running block's quiet is measured from what it last printed, not from its command line" <| fun () ->
+            let record (at: float) (kind: TranscriptKind) = { At = at; Kind = kind; Data = "x" }
+            let activity =
+                BlockActivity.ofRecords
+                    400.0
+                    [ record 100.0 TranscriptInput
+                      record 101.0 TranscriptOutput
+                      record 102.0 TranscriptInput ]
+            Expect.equal
+                (activity |> Option.map (fun a -> a.Running, a.Quiet))
+                (Some (System.TimeSpan.FromSeconds 300.0, System.TimeSpan.FromSeconds 299.0))
+                "running since its first record, quiet since its last OUTPUT"
     ]
 
 let private leaseCommandTests =

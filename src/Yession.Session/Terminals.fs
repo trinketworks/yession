@@ -783,6 +783,11 @@ module SessionTerminals =
           /// finish on its own is waiting on that author's keystrokes. Read by the command
           /// wait, which is what turns it into the answer `execute_command` gives back.
           Interactive : TerminalId -> bool
+          /// How the block that starts at this line has been doing (`BlockActivity`): here,
+          /// because the clock its records are on is the live terminal's — `At` counts from
+          /// when it OPENED — and that is held nowhere else. `None` for a terminal that is
+          /// not open, whose blocks are not running.
+          Activity : TerminalId -> int -> BlockActivity option
           /// Type the instrumentation into the shell that is there now. Refused when the
           /// terminal is not lost, or has no persistent shell to type into.
           Rearm : TerminalId -> Async<Result<unit, string>>
@@ -859,6 +864,7 @@ module SessionTerminals =
           Leased = fun () -> Set.empty
           Lost = fun () -> Set.empty
           Interactive = fun _ -> false
+          Activity = fun _ _ -> None
           Rearm = fun _ -> async { return Error "this session has no terminals" }
           SetProfile = fun _ _ _ -> async { return Error "this session has no terminals" }
           ClearProfilesUnder = fun _ _ -> async { return [] }
@@ -2809,6 +2815,14 @@ module SessionTerminals =
           Leased = fun () -> TerminalLeases.held leases
           Lost = fun () -> lost
           Interactive = fun id -> TerminalLeases.autoHeld id leases
+          Activity =
+            fun id fromSeq ->
+                match live.TryGetValue (TerminalId.value id) with
+                | true, terminal ->
+                    BlockActivity.ofRecords
+                        (clock.Now () - terminal.OpenedAt).TotalSeconds
+                        (readTranscript id fromSeq None)
+                | _ -> None
           Rearm = rearm
           SetProfile = setProfile
           ClearProfilesUnder = clearProfilesUnder
@@ -3105,7 +3119,11 @@ module TerminalCommands =
               Output = kept
               Kept = whichEnd
               Elided = elided
-              From = block |> Option.map (fun b -> b.FromSeq) }
+              From = block |> Option.map (fun b -> b.FromSeq)
+              Activity =
+                match status, block with
+                | TerminalCommandRunning, Some b -> terminals.Activity terminal b.FromSeq
+                | _ -> None }
 
         /// Wait the work out, then answer. The deadline is measured from the moment the block
         /// STARTED, when one has, so a command that spent time queued behind another still
@@ -3183,7 +3201,7 @@ module TerminalCommands =
                                 match TerminalCommandWait.step false observation with
                                 | TerminalCommandWait.Return status -> status
                                 | TerminalCommandWait.Gone | TerminalCommandWait.KeepWaiting ->
-                                    TerminalCommandRunning
+                                    TerminalCommandStarted
                             return Ok (outcomeOf terminal handle status)
             }
 
