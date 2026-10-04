@@ -273,8 +273,9 @@ let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> un
         fun model ->
             // The keyboard follows the lease. Both ways into live mode — pressing `take`, and
             // the alt-screen flip handing a block's author the terminal it just took over —
-            // remove the focused element in the render they arrive on, so without this the
-            // person who now owns the keyboard is typing into `body`.
+            // leave focus where the keys no longer belong (`body`, or the command line the
+            // flipped command was run from), so without this the person who now owns the
+            // keyboard is typing into nothing, or into the queue.
             //
             // Here rather than on the `take` press because the flip has no press to hang it
             // on: it is the Session saying the mode changed, which reaches this client
@@ -290,7 +291,7 @@ let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> un
                 // not looking at has no screen in the document to focus, and the selector
                 // would otherwise find whichever live screen happened to be on it instead.
                 if isMine && not was && showing = Some terminal.TerminalId then
-                    PaneShell.toTerminalScreen ()
+                    PaneShell.toTerminalScreen terminal.TerminalId
             for terminal in Projection.openTerminals model.Terminals do
                 let key = TerminalId.value terminal.TerminalId
                 match live.TryGetValue key with

@@ -363,8 +363,8 @@ module Dom =
         let terminalQueued = "data-terminal-queued"
         let terminalQueuedStatus = "data-terminal-queued-status"
         let terminalQueueDelete = "data-terminal-queue-delete"
-        /// The lease bar shown instead of the composer in live mode (Plan 13, stage 2e); its
-        /// value is the holder's label, so a test can assert WHO without scraping prose.
+        /// The lease bar shown above the composer in live mode (Plan 13, stage 2e); its value
+        /// is the holder's label, so a test can assert WHO without scraping prose.
         let terminalLease = "data-terminal-lease"
         /// Enter live mode, or steal it. One control, because it is one act.
         let terminalTake = "data-terminal-take"
@@ -900,6 +900,20 @@ module Dom =
         let paneItems = "Open in this pane"
         /// The way out of the pane, back to the conversation.
         let backToChat = "Back to the chat"
+        /// A command line's send control, named for what pressing it does NOW: it runs the
+        /// line, or — while somebody holds the terminal's keyboard, when the session holds the
+        /// queue rather than refusing it — it queues the line for the hand-back.
+        let run = "Run"
+        let queue = "Queue"
+        /// When a queued line will run, said on the control that queues it. `None` is this
+        /// peer holding the keyboard: the hand-back is theirs to make.
+        let runsOnHandBack (holder: string option) =
+            match holder with
+            | Some name -> sprintf "Runs when %s hands the terminal back" name
+            | None -> "Runs when you hand the terminal back"
+        /// A command line under a recording: what runs, runs on the live terminal now, and is
+        /// seen by going back to it.
+        let runsBehindLive = "Runs now, on the live terminal"
         /// A queued command that will run as soon as the terminal is free.
         let queuedReady = "ready"
         /// A queued command held because a peer is typing in its terminal (Plan 13, stage
