@@ -403,163 +403,122 @@ module TerminalFeed =
         |> List.map (fun r -> r.Data)
         |> String.concat ""
 
-/// One thing the side pane can show (Plan 14, stage 2).
+/// Something opened from the chat to READ, laid over the terminal it belongs to (P2-1): one
+/// command and what it printed, one stretch of somebody holding a terminal's keyboard, or one
+/// file from the session's content root.
 ///
-/// The pane stops being "the terminal panel" and becomes a tab strip over three kinds of
-/// thing. That is a genuine model change rather than a rename: the selection used to be a
-/// `TerminalId option`, and a block's read-only view is not a terminal — one terminal can
-/// contribute a hundred tabs.
-type PaneTab =
-    /// A terminal itself: its composer while it is open, its recording once it is closed.
-    | TerminalTab of TerminalId
-    /// One block, read-only: the command and what it printed. Opened by tapping its chip in
-    /// the chat.
-    | BlockTab of TerminalId * BlockId
+/// Not a tab. These used to be tabs beside the terminals, with a pin to keep the ones worth
+/// keeping, and a reader could not tell which tab was a terminal and which a glance at one
+/// command: a block opened from the chat looked like the terminal it came from, and six chips
+/// tapped left six tabs and no terminal. The strip is terminals now (`ClientModel.Tabs`), and
+/// one of these is shown at a time, OVER the strip's selected terminal, with its own way back.
+[<RequireQualifiedAccess>]
+type PreviewSubject =
+    /// One block, read-only: the command and what it printed. Opened by tapping its chip.
+    | Block of TerminalId * BlockId
     /// One stretch of live mode. Opened from its chat item.
-    | StretchTab of TerminalStretch
-    /// One file from the session's content root — an artifact today, a repo file later.
-    /// Opened by tapping its chip in the chat, or from the list. Not a terminal at all,
-    /// which is why `terminal` below stopped being total.
-    | ContentTab of ContentRef
+    | Stretch of TerminalStretch
+    /// One file from the session's content root — an artifact today. Belongs to no terminal,
+    /// which is why `terminal` below is not total.
+    | Content of ContentRef
 
-module PaneTab =
+module PreviewSubject =
 
-    /// A tab's identity, and the value its DOM hook carries. Prefixed per kind because a
-    /// block id and a terminal id are drawn from the same alphabet and a collision would
-    /// silently select the wrong tab.
+    /// Its identity, and the value its DOM hooks carry. Prefixed per kind because a block id
+    /// and a content path are drawn from overlapping alphabets, and a collision would
+    /// silently answer for the wrong thing. The same spelling the chat chip's own hooks are
+    /// found by (`PaneShell.toChatItem`), which is what lets "back" return to the chip.
     let key =
         function
-        | TerminalTab id -> "terminal:" + TerminalId.value id
-        | BlockTab (id, blockId) -> "block:" + TerminalId.value id + ":" + BlockId.value blockId
-        | StretchTab stretch -> "stretch:" + TerminalStretch.key stretch
-        | ContentTab ref -> "content:" + ContentRef.value ref
+        | PreviewSubject.Block (id, blockId) -> "block:" + TerminalId.value id + ":" + BlockId.value blockId
+        | PreviewSubject.Stretch stretch -> "stretch:" + TerminalStretch.key stretch
+        | PreviewSubject.Content ref -> "content:" + ContentRef.value ref
 
-    /// The tab a key names, for the kinds a key alone can name — `key`'s inverse, which is
-    /// what lets a strip be written down and read back (P0-4, `PaneMemory`).
-    ///
-    /// Not a stretch. A stretch tab carries the stretch itself — its title, its holder, how
-    /// it ended — and its key is only the terminal and the offset it ended at, so the rest
-    /// can come from nowhere but the timeline it was drawn from. `ClientModel.tabOfKey` is
-    /// where a stretch key is looked up; this answers `None` for one, as it does for a key
-    /// it cannot read at all, and a reader of a stored strip treats both as a tab that is
-    /// no longer there.
-    ///
-    /// A block key splits at the FIRST colon after its prefix: a terminal id is
-    /// `[A-Za-z0-9-]`, so the colon that ends it is the one `key` wrote, and whatever
-    /// follows is the block's id however it is spelled.
-    let ofKey (key: string) : PaneTab option =
-        let after (prefix: string) =
-            if key.StartsWith prefix then Some (key.Substring prefix.Length) else None
-        let terminal raw = TerminalId.create raw |> Result.toOption
-        match after "terminal:", after "block:", after "content:" with
-        | Some id, _, _ -> terminal id |> Option.map TerminalTab
-        | _, Some rest, _ ->
-            match rest.IndexOf ':' with
-            | -1 -> None
-            | colon ->
-                match terminal (rest.Substring (0, colon)), BlockId.create (rest.Substring (colon + 1)) with
-                | Some id, Ok blockId -> Some (BlockTab (id, blockId))
-                | _ -> None
-        | _, _, Some path -> ContentRef.create path |> Result.toOption |> Option.map ContentTab
-        | None, None, None -> None
+    /// The chat chip that opens this, as the hook it carries and that hook's value — what
+    /// "back" returns focus to (`PaneShell.toChatItem`). A file's chips are found by the file
+    /// they name; several may, and each opens the same preview.
+    let chip =
+        function
+        | PreviewSubject.Block (_, blockId) -> Dom.Hooks.chatBlock, BlockId.value blockId
+        | PreviewSubject.Stretch stretch -> Dom.Hooks.chatStretch, TerminalStretch.key stretch
+        | PreviewSubject.Content ref -> Dom.Hooks.content, ContentRef.value ref
 
-    /// Which terminal this tab is about — what the strip groups by and what a replay reads.
-    /// `None` for a tab that is not a terminal's: a content tab has no feed, no header and
-    /// nothing to rewind, and every caller that assumed otherwise is a site the compiler
-    /// named when this stopped being total.
+    /// Which terminal this is about — the terminal it is laid over, and the feed a replay of
+    /// it reads. `None` for a file, which has no feed, no header and nothing to rewind.
     let terminal =
         function
-        | TerminalTab id -> Some id
-        | BlockTab (id, _) -> Some id
-        | StretchTab stretch -> Some stretch.TerminalId
-        | ContentTab _ -> None
+        | PreviewSubject.Block (id, _) -> Some id
+        | PreviewSubject.Stretch stretch -> Some stretch.TerminalId
+        | PreviewSubject.Content _ -> None
 
-    /// The tab a `ViewRef` names — what an act recorded in the log becomes in a strip.
-    ///
-    /// Not an inverse of `view` and cannot be: `view` answers `ViewingTerminal` for a block
-    /// and a stretch as well as for the terminal itself, because what a reader is AT is the
-    /// terminal. So a terminal named from outside opens the terminal's own tab, which is the
-    /// only one of the three that something outside this browser could have meant.
-    let ofView (view: ViewRef) : PaneTab =
-        match view with
-        | ViewingFile ref -> ContentTab ref
-        | ViewingTerminal id -> TerminalTab id
-
-    /// Whether this tab names a terminal this session does not have at all — a tab onto
-    /// nothing, which no strip should hold.
-    ///
-    /// Not "has ENDED", which it once was, asked of every tab on every page. Ending is a
-    /// MOMENT the events fold reads off the page it happens in; a tab opened onto a terminal
-    /// that had already ended is a recording somebody asked to read, and asking the state
-    /// rather than the moment took it back off the strip at the next unrelated event.
-    let missing (terminals: Projection) =
-        function
-        | TerminalTab id -> Projection.tryFind id terminals |> Option.isNone
-        | BlockTab _ | StretchTab _ | ContentTab _ -> false
-
-    /// What having this tab up says to everyone else (`ViewRef`) — the one place a tab becomes
-    /// a thing to be present AT. Every terminal-shaped tab reports the terminal, because a
-    /// reader who wants to know who else is here is asking about the terminal and not about
-    /// which of its blocks each of them has scrolled to.
+    /// What having this up says to everyone else (`ViewRef`). A block and a stretch report
+    /// their terminal, because somebody asking who else is here is asking about the terminal
+    /// and not about which of its commands each of them is reading.
     let view =
         function
-        | TerminalTab id -> ViewingTerminal id
-        | BlockTab (id, _) -> ViewingTerminal id
-        | StretchTab stretch -> ViewingTerminal stretch.TerminalId
-        | ContentTab ref -> ViewingFile ref
+        | PreviewSubject.Block (id, _) -> ViewingTerminal id
+        | PreviewSubject.Stretch stretch -> ViewingTerminal stretch.TerminalId
+        | PreviewSubject.Content ref -> ViewingFile ref
+
+/// One preview, and which read of it is up: its text, or its recording because the reader
+/// asked (`Plays`). A stretch plays without being asked and a file never does — both rules
+/// about the subject, asked where they are decided (`ClientModel.previewPlays`).
+[<RequireQualifiedAccess>]
+type Preview =
+    { Subject : PreviewSubject
+      Plays : bool }
+
+module Preview =
+
+    /// A subject as a chip opens it: its text, where it has one.
+    let ofSubject (subject: PreviewSubject) : Preview =
+        { Preview.Subject = subject; Preview.Plays = false }
 
 
-/// Which read of a tab the pane is showing (Plan 25, stage 2): the reader's POSITION — which
-/// tab, and for a terminal where in its history — and their FIDELITY — the text of it, or the
+/// Which read of a TERMINAL the pane is showing (Plan 25, stage 2): the reader's POSITION —
+/// which terminal, and where in its history — and their FIDELITY — the text of it, or the
 /// recording — as ONE fact.
 ///
 /// They were four fields that had to agree (`PaneChoice`, `PanePlaying`, `PaneRewound`,
-/// `TerminalList`), and every message cleared the subset its author had in mind. That is how a
-/// chip tapped over the terminal list retitled the pane and showed nothing (the list flag
-/// survived a choice that meant to replace it), and how the list's own rewind verb undid
-/// itself (two messages whose clear-sets cancelled). Here every transition states the whole
-/// next mode, so a half-cleared state is not a bug to find, it is a value that cannot be
-/// written.
+/// `TerminalList`), and every message cleared the subset its author had in mind. Here every
+/// transition states the whole next mode, so a half-cleared state is not a bug to find, it is
+/// a value that cannot be written.
 ///
-/// What is NOT here is what the reader did not choose. A stretch is always its recording and a
-/// closed terminal with nothing but a recording plays without being asked — both are rules
-/// about the terminal, folded where the terminal is, and `playsRecording` is the one place the
-/// reader's choice and those rules meet.
-type TabMode =
-    /// A tab's text read: a terminal's scrollback, a block's output, a stretch's facts.
-    | Reading of PaneTab
-    /// A tab's recording, because the reader asked for it.
-    | Watching of PaneTab
+/// What is NOT here is what the reader did not choose. A closed terminal with nothing but a
+/// recording plays without being asked — a rule about the terminal, folded where the terminal
+/// is, and `terminalPlays` is the one place the reader's choice and that rule meet.
+type TerminalMode =
+    /// A terminal's text read: its scrollback, or its live screen.
+    | Reading of TerminalId
+    /// A terminal's recording, because the reader asked for it.
+    | Watching of TerminalId
     /// A terminal's recording, entered FROM one of its blocks, and starting at that command.
     ///
     /// The block's IDENTITY rather than the transcript line it starts at: the line, and the
     /// time the player needs, are derived from the projection when the recording is assembled
-    /// (`paneReplay`), so a hint cannot go stale against blocks that arrived after it.
+    /// (`terminalReplay`), so a hint cannot go stale against blocks that arrived after it.
     | WatchingFrom of TerminalId * BlockId
     /// A LIVE terminal watched from behind its edge — the DVR — carrying the transcript length
     /// the rewind pinned. A pin exists only in this case, which is what makes "pinned to a
     /// block's recording" unwritable rather than merely unwritten.
     | WatchingBehind of TerminalId * pin: int
     /// A terminal's TEXT, positioned at one of its commands — "show in terminal" (Plan 25,
-    /// stage 3). The answer to "what was going on around this", which is a question about
-    /// POSITION and wants more text, not a player: the same scrollback, scrolled to the
-    /// command and marking it.
+    /// stage 3). The same scrollback, scrolled to the command and marking it.
     | ReadingAt of TerminalId * BlockId
 
-module TabMode =
+module TerminalMode =
 
-    /// Which tab this mode is about. The three terminal-shaped cases are all that terminal's
-    /// own tab; they differ in what is shown there, which is the point of the split.
-    let tab =
+    /// Which terminal this mode is about.
+    let terminal =
         function
-        | Reading tab
-        | Watching tab -> tab
+        | Reading terminal
+        | Watching terminal
         | WatchingFrom (terminal, _)
         | WatchingBehind (terminal, _)
-        | ReadingAt (terminal, _) -> TerminalTab terminal
+        | ReadingAt (terminal, _) -> terminal
 
     /// Whether this mode is a recording rather than a text read — the reader's half of
-    /// `ClientModel.playsRecording`.
+    /// `ClientModel.terminalPlays`.
     let watches =
         function
         | Reading _ | ReadingAt _ -> false
@@ -576,54 +535,70 @@ module TabMode =
     ///
     /// Position is navigation and fidelity is a mode, so flipping the mode never moves the
     /// reader: a watch entered at a command comes back to that command's text, and the way
-    /// back out is the same control in the same slot. That is what makes the toggle keep its
-    /// focus, and what retired the four differently-named exits that used to leave the
-    /// document behind them.
+    /// back out is the same control in the same slot.
     ///
-    /// Total, because a mode with only one read never renders the toggle: a stretch IS its
-    /// recording, and so is a closed terminal that ran nothing (`ReplayIsTheRead`). Those
-    /// rows are unreachable and still stated, because a partial function here would be a
-    /// crash waiting for the surface to change its mind.
+    /// Total, because a terminal with only one read never renders the toggle (a closed
+    /// terminal that ran nothing, `ReplayIsTheRead`). That row is unreachable and still
+    /// stated, because a partial function here would be a crash waiting for the surface to
+    /// change its mind.
     let toggled =
         function
-        | Reading tab -> Watching tab
-        | Watching tab -> Reading tab
-        // The anchor survives the flip, in both directions. This pair IS the step-out the
-        // old "play whole terminal" reached for: the position was already the command, so
-        // watching from it needs no hint riding a message, and coming back lands where the
-        // reader was rather than at the top of a scrollback.
+        | Reading terminal -> Watching terminal
+        | Watching terminal -> Reading terminal
+        // The anchor survives the flip, in both directions: watching from a command comes
+        // back to that command's text rather than to the top of a scrollback.
         | ReadingAt (terminal, blockId) -> WatchingFrom (terminal, blockId)
         | WatchingFrom (terminal, blockId) -> ReadingAt (terminal, blockId)
         // "Live". A pin is a fact about watching from behind an edge, so it dies with the
         // watch rather than being carried into a read that has no use for it.
-        | WatchingBehind (terminal, _) -> Reading (TerminalTab terminal)
+        | WatchingBehind (terminal, _) -> Reading terminal
 
-/// The pane's one face (Plan 25, stage 2): a tab, or the census of every terminal.
+/// The pane's one face (Plan 25, stage 2; P2-1): a terminal, a preview over one, or the
+/// census of every terminal.
 type PaneMode =
-    | OnTab of TabMode
+    | OnTerminal of TerminalMode
+    /// Something opened from the chat, laid over the terminal it belongs to (`under`, the read
+    /// of that terminal that "back" returns to — positioned where it was).
+    ///
+    /// This is a preview again, and the last one was removed for a fault worth naming: it sat
+    /// outside `Tabs` LOOKING like every other tab, so a terminal reached from the chat had a
+    /// tab with no close and nothing on screen saying why. The difference is not a slot in the
+    /// model but a surface. A preview is never drawn in the strip: it has its own head, with
+    /// the way back and a close, and Escape takes it down. So the invariant the old one lacked
+    /// is this one: a preview is on screen exactly while `Pane` is `Previewing`, and `Tabs`
+    /// never holds one — it cannot, being a list of terminals.
+    | Previewing of Preview * under: TerminalMode option
     /// The terminal list. A DESTINATION rather than a mask over one — which is what it was as
     /// a boolean, and why a chip could open a tab nobody could see.
     ///
-    /// It remembers the mode it covered so that glancing at the list and coming back resumes
-    /// the read, a DVR pin included. That is the one thing masking did right, and the only
-    /// reason this carries anything at all.
-    | OnList of resume: TabMode option
+    /// It remembers the face it covered so that glancing at the list and coming back resumes
+    /// it, a DVR pin or a preview included. Never another list: the one way here
+    /// (`ToggleContentListMsg`) leaves the list rather than nesting it.
+    | OnList of resume: PaneMode option
 
 module PaneMode =
 
-    /// The tab-mode showing, if one is: `None` while the list is up.
-    let onTab =
+    /// The terminal read this face is ABOUT — the one showing, the one a preview is laid
+    /// over, or the one the list is covering. What the pane's furniture (the strip, the
+    /// composer, presence) reads, because those answer "which terminal am I working with"
+    /// rather than "what is on screen".
+    let rec subject =
         function
-        | OnTab mode -> Some mode
-        | OnList _ -> None
+        | OnTerminal mode -> Some mode
+        | Previewing (_, under) -> under
+        | OnList resume -> resume |> Option.bind subject
 
-    /// The tab-mode this face is ABOUT — the one showing, or the one the list is covering.
-    /// What the pane's furniture (the strip, the header, the composer) reads, because those
-    /// answer "which terminal am I working with" rather than "what is on screen".
-    let subject =
+    /// The terminal read on screen, if one is: `None` under a preview and behind the list.
+    let showing =
         function
-        | OnTab mode -> Some mode
-        | OnList resume -> resume
+        | OnTerminal mode -> Some mode
+        | Previewing _ | OnList _ -> None
+
+    /// The preview on screen, if one is: `None` behind the list, which covers it.
+    let preview =
+        function
+        | Previewing (preview, _) -> Some preview
+        | OnTerminal _ | OnList _ -> None
 
 /// What a pane tab's player should be handed (Plan 14, stage 4) — a whole recording, or a
 /// range of one, plus the things the stock player already knows how to do with it.
@@ -790,20 +765,29 @@ type ClientModel =
       /// measurement of nothing: the width this reader last had is the truer answer, and the
       /// only one they could have meant.
       TerminalViewports : Map<TerminalId, Size>
-      /// The tabs this client has OPEN, in the order they opened (Plan 20, stage 1).
+      /// The terminals in this client's strip, in the order they opened (Plan 20, stage 1;
+      /// P2-1).
       ///
       /// The strip used to be a census — every terminal the session ever had, for ever,
       /// because it was the only door to a recording. The list is that door now, so the
-      /// strip can be what a person is actually working with.
+      /// strip can be what a person is actually working with: the terminals THIS client
+      /// opened — pressed for, chose from the list, reached through a chip — or was handed by
+      /// `open_tab`/`focus_tab`. Not every live terminal: the agent's own are reached through
+      /// the list, because nothing a session DOES puts a tab in somebody's strip.
+      ///
+      /// Terminals and nothing else, by type. A block, a stretch or a file opened from the
+      /// chat is a PREVIEW over the selected terminal (`PaneMode.Previewing`), never a tab,
+      /// and there are no pins: a terminal here is always kept, and a preview never needs to
+      /// be.
       ///
       /// A LIST rather than a set, because the order tabs sit in is the order they arrived
       /// and a set would re-order them on any change. LOCAL to this client, never synced:
       /// what one person has open is not what another is working on.
       ///
-      /// What opens one: a terminal you asked for, and a tab you kept. What closes one: your
-      /// own press, or the terminal in it ending — unless you kept it, which is the whole of
-      /// what keeping means here.
-      Tabs          : PaneTab list
+      /// What closes one is its terminal CLOSING — at once if it is not the one selected, and
+      /// when the reader selects another if it is (`settle`), so a tab never vanishes at the
+      /// moment the thing in it finishes. Or `close_tab`, for one not on screen.
+      Tabs          : TerminalId list
       /// How many terminals this client has ASKED for and not yet been shown.
       ///
       /// Pressing "new terminal" is a REQUEST, and the only record of it. `OpenTerminal`
@@ -840,27 +824,14 @@ type ClientModel =
       /// (`ClientModel.timers`), by Escape, by focus leaving the control, and by the terminal
       /// closing under it.
       KillArmed     : TerminalId option
-      /// Which of them this client KEPT, by tab key.
-      ///
-      /// A mark on an open tab rather than a list of its own, because "in my strip" and
-      /// "kept" were two memberships free to disagree: the fold wrote pins for terminals a
-      /// person never kept and dropped pins for terminals they had, so neither question
-      /// could be answered off either list. One list of tabs, one mark saying which of them
-      /// somebody decided to hold on to.
-      ///
-      /// Written by ONE message (`TogglePinMsg`) and by nothing else. No event writes it: a
-      /// pin is an act, and a person who typed one command into somebody else's terminal had
-      /// it kept for the rest of the session with nothing on screen saying who decided so.
-      Pinned        : Set<string>
-      /// What the pane is SHOWING: which tab, which read of it, or the census (Plan 25,
-      /// stage 2). `None` = nothing chosen yet, resolved to a default by `selectedPane`.
+      /// What the pane is SHOWING: which terminal and which read of it, a preview over one,
+      /// or the census (Plan 25, stage 2; P2-1). `None` = nothing chosen yet, resolved to a
+      /// default by `selectedTerminal`.
       ///
       /// One field rather than the four this replaces, because the four had to agree and
-      /// nothing made them: see `PaneMode`. What it names is always a tab in `Tabs` — showing
-      /// something opens it — so this says which of them is on top and never what the strip
-      /// holds. It did once: a tab shown and not kept was a PREVIEW, outside the strip's list
-      /// and replaced by the next thing looked at, which is how a terminal reached from the
-      /// chat came to sit among the tabs offering no way to close it.
+      /// nothing made them: see `PaneMode`. The terminal it names is always one in `Tabs` —
+      /// showing a terminal opens it — so this says which of them is on top and never what the
+      /// strip holds.
       Pane          : PaneMode option
       /// Whether the terminals panel is open. View state, never synced: two people in one
       /// session may reasonably want different columns on screen.
@@ -983,12 +954,12 @@ type ClientModel =
 /// out after the render that put their target on screen.
 [<RequireQualifiedAccess>]
 type DomMove =
-    /// Into the side pane, after something opened a tab there. A chip that opened a pane and
-    /// left focus behind it is the failure the WCAG floor names.
+    /// Into the side pane, after something opened there. A chip that opened a pane and left
+    /// focus behind it is the failure the WCAG floor names.
     | FocusPane
-    /// Back to the chat item a tab was opened from — the tab's key is the only thing the
-    /// chip and the tab share — once that tab is going.
-    | FocusChat of tabKey: string
+    /// Back to the chat item a preview was opened from, once the preview is going — the
+    /// subject is the one thing the chip and the preview share (`PreviewSubject.key`).
+    | FocusChat of PreviewSubject
     /// Back to one item's actions control, after the menu it opened has gone. Without it,
     /// dismissing a menu strands focus on `body`.
     | FocusItemActions of MessageId
@@ -1216,24 +1187,35 @@ type ClientMsg =
     /// and it measures on the edges a render loop cannot see, a splitter dragged or a window
     /// turned, because those change the box without changing anything the model holds.
     | TerminalViewportMsg of TerminalId * Size
-    /// Show something in the pane, in a stated read of it (Plan 25, stage 2).
+    /// Show a terminal in the pane, in a stated read of it (Plan 25, stage 2).
     ///
-    /// ONE message for every way in — a chat chip, a tab in the strip, a row in the list, the
+    /// ONE message for every way to a terminal — a tab in the strip, a row in the list, the
     /// watch toggle, catching back up to live — because each of them is the same act: name
     /// the mode the pane is in next. The six messages this replaces each cleared a different
     /// subset of four fields, which is what let a chip open a tab the list was still covering
     /// and let the list's rewind cancel itself.
     ///
-    /// Showing something OPENS it (Plan 20, stage 1): it is in the strip afterwards, and
-    /// closes from there like anything else somebody opened. Reading twenty chips therefore
-    /// leaves twenty tabs — each with a close on it, which is the part that was missing when
-    /// one transient slot was the answer to that instead.
-    | ShowInPaneMsg of TabMode
-    /// Show this in the pane and take the reader there: what a chip in the chat does. One
-    /// message for both, so no chip can open a pane and leave focus behind it.
-    | OpenInPaneMsg of TabMode
+    /// Showing a terminal OPENS it (Plan 20, stage 1): it is in the strip afterwards. Showing
+    /// one also takes down any preview over the strip, because the reader has moved to a
+    /// terminal and a preview is about the one they were on.
+    | ShowInPaneMsg of TerminalMode
+    /// Show this terminal and take the reader there: a queued command's chip, a row of the
+    /// list. One message for both, so nothing can open a pane and leave focus behind it.
+    | OpenInPaneMsg of TerminalMode
+    /// Lay this preview over the pane's terminal, in place (P2-1) — the preview's own watch
+    /// toggle, which keeps its focus because it never leaves the document.
+    | ShowPreviewMsg of Preview
+    /// Lay this preview over the pane's terminal and take the reader there: what a chip in
+    /// the chat does. ONE preview at a time, so a second chip REPLACES the first rather than
+    /// adding to anything — six chips read leave one preview and the strip as it was.
+    | OpenPreviewMsg of Preview
+    /// Take the preview down, back to the read of the terminal it was laid over — positioned
+    /// where it was — with focus back on the chip that opened it. Back, its close and Escape
+    /// are all this one act.
+    | ClosePreviewMsg
     /// Show a terminal's history at one of its commands, scrolled to it, with focus in the
-    /// pane — the block tab's "show in terminal".
+    /// pane — a block preview's "show in terminal". Takes the preview down on the way, since
+    /// the reader has asked for the terminal instead.
     | ShowInTerminalMsg of TerminalId * BlockId
     /// A move only the document can make, asked for by a control that changes nothing in the
     /// model (`DomMove`).
@@ -1257,14 +1239,6 @@ type ClientMsg =
     /// can tell the terminal THIS press asked for from one that merely belongs to the same
     /// person.
     | OpenTerminalMsg of title: string * sandbox: SandboxRef
-    /// Keep this tab, or stop keeping it (Plan 20, stage 1). Unpinning is not closing:
-    /// unpinning a terminal leaves it running and leaves its row in the list, and the one
-    /// verb that ends a terminal lives on that row.
-    | TogglePinMsg of PaneTab
-    /// Take this tab out of the strip. Not the same verb as ending what is in it: closing a
-    /// terminal's tab leaves the terminal running, and its row in the list — where the one
-    /// verb that ends a terminal lives — is untouched.
-    | CloseTabMsg of PaneTab
     /// Rewind a LIVE terminal (Plan 14, stage 7): watch what it has recorded so far, from a
     /// transcript length pinned NOW while the terminal keeps running.
     ///
@@ -1519,7 +1493,6 @@ module ClientModel =
           Opening = 0
           KillPending = None
           KillArmed = None
-          Pinned = Set.empty
           Pane = None
           TerminalsOpen = false
           PaneMemory = None
@@ -1646,65 +1619,84 @@ module ClientModel =
         |> List.filter (fun (_, presence) -> presence.Focus |> Option.exists (fun f -> f.Field = DraftBody peer))
         |> List.map (fun (editor, presence) -> editor, presence.DisplayName)
 
-    /// The strip with this tab in it, appended if it is not already there.
+    /// The strip with this terminal in it, appended if it is not already there.
     ///
     /// Appended rather than moved to the front: a strip that re-orders under a reader is the
-    /// thing the order was a list for in the first place. ONE adder, because every way a tab
-    /// gets into the strip — showing it, keeping it — has to agree about what "already there"
-    /// means, and `PaneTab.key` is that answer.
-    let opened (tab: PaneTab) (tabs: PaneTab list) : PaneTab list =
-        if tabs |> List.exists (fun open' -> PaneTab.key open' = PaneTab.key tab) then tabs
-        else tabs @ [ tab ]
+    /// thing the order was a list for in the first place. ONE adder, because every way a
+    /// terminal gets into the strip has to agree about what "already there" means.
+    let opened (terminal: TerminalId) (tabs: TerminalId list) : TerminalId list =
+        if List.contains terminal tabs then tabs else tabs @ [ terminal ]
 
-    /// Whether this client is keeping a tab.
-    let isPinned (tab: PaneTab) (model: ClientModel) : bool =
-        Set.contains (PaneTab.key tab) model.Pinned
+    /// A terminal's tab, as its DOM hooks carry it — the terminal's prose spelling
+    /// (`ViewRef.said`), which is also how a remembered strip writes it down (`PaneMemory`).
+    let tabKey (terminal: TerminalId) : string = ViewRef.said (ViewingTerminal terminal)
 
-    /// Which tab the pane shows: the stored choice while it is still in the strip, else the
-    /// first OPEN terminal in the strip. Resolved rather than stored, for the same reason
-    /// `composerTarget` is: a choice that outlives what it pointed at is a blank pane nobody
-    /// asked for. The default lands somewhere you can type.
+    /// Which terminal the pane is about: the stored choice while it is still in the strip,
+    /// else the first OPEN terminal in the strip. Resolved rather than stored, for the same
+    /// reason `composerTarget` is: a choice that outlives what it pointed at is a blank pane
+    /// nobody asked for. The default lands somewhere you can type.
     ///
     /// Only ever a member of `Tabs`, and that is the rule the strip stands on: the strip IS
-    /// `Tabs`, so whatever the pane shows has a tab there, closable like any other. It used
-    /// to resolve a third way — the session's first open terminal, whoever's it was — and the
-    /// strip drew that default as a tab it was not: a client that had opened nothing was
-    /// shown a terminal with a close on it, and the first chip it tapped took the terminal
-    /// away, because showing the chip ended the default the terminal had been drawn under.
-    /// A client with nothing open sees the empty pane and its New terminal, and reaches
-    /// everybody else's terminals through the list — a default that OPENED a tab instead
-    /// would put an agent's terminal in a strip that holds only what this reader opened.
+    /// `Tabs`, so whatever terminal the pane is about has a tab there. It used to resolve a
+    /// third way — the session's first open terminal, whoever's it was — and the strip drew
+    /// that default as a tab it was not. A client with nothing open sees the empty pane and its
+    /// New terminal, and reaches everybody else's terminals through the list.
     ///
-    /// A choice naming a CLOSED terminal survives while its tab does, and that is not an
-    /// oversight: it is how the list opens a recording.
-    let selectedPane (model: ClientModel) : PaneTab option =
-        let exists (tab: PaneTab) =
-            match tab with
-            | TerminalTab id -> Projection.tryFind id model.Terminals |> Option.isSome
-            | BlockTab _ | StretchTab _ | ContentTab _ -> true
-        let inStrip (tab: PaneTab) = model.Tabs |> List.exists (fun open' -> PaneTab.key open' = PaneTab.key tab)
-        // The mode's SUBJECT rather than only what is on screen: while the list is up it is
-        // the read the list covers, so the strip, the header and the composer keep answering
-        // "which terminal am I working with" instead of going blank behind the census.
-        match model.Pane |> Option.bind PaneMode.subject |> Option.map TabMode.tab with
-        | Some chosen when exists chosen && inStrip chosen -> Some chosen
+    /// The choice is the read SHOWING, the one a preview is laid over, or the one the list
+    /// covers (`PaneMode.subject`): the strip, the head and presence answer "which terminal am
+    /// I working with", which a preview or the census does not change. A choice naming a
+    /// CLOSED terminal survives while its tab does — it is how the list opens a recording.
+    let selectedTerminal (model: ClientModel) : TerminalId option =
+        let exists (terminal: TerminalId) = Projection.tryFind terminal model.Terminals |> Option.isSome
+        match model.Pane |> Option.bind PaneMode.subject |> Option.map TerminalMode.terminal with
+        | Some chosen when exists chosen && List.contains chosen model.Tabs -> Some chosen
         | _ ->
             // Open, because this default exists to land somewhere a person can TYPE. A
-            // recording is a fine tab and a poor place to arrive with nothing selected.
+            // recording is a fine thing to read and a poor place to arrive with nothing chosen.
             model.Tabs
-            |> List.tryPick (function
-                | TerminalTab id as tab when
-                    Projection.tryFind id model.Terminals |> Option.exists (fun t -> t.IsOpen) -> Some tab
-                | _ -> None)
+            |> List.tryFind (fun terminal ->
+                Projection.tryFind terminal model.Terminals |> Option.exists (fun view -> view.IsOpen))
 
-    /// What this browser should remember of the pane — the four things a reload must give
-    /// back (P0-4). The CHOICE rather than `selectedPane`'s resolution of it: with nothing
-    /// chosen the default is worked out again on the way back, from the same strip.
+    /// The preview laid over the pane, if one is on screen (P2-1).
+    let preview (model: ClientModel) : Preview option =
+        model.Pane |> Option.bind PaneMode.preview
+
+    /// What a preview is laid OVER, given the terminal read the pane is about now: the
+    /// terminal the subject belongs to — that same read, positioned where it was, when it is
+    /// the one already up — and for a file, which belongs to no terminal, whatever is up.
+    let private underFor (subject: PreviewSubject) (current: TerminalMode option) : TerminalMode option =
+        match PreviewSubject.terminal subject with
+        | Some terminal ->
+            match current with
+            | Some mode when TerminalMode.terminal mode = terminal -> Some mode
+            | Some _ | None -> Some (Reading terminal)
+        | None -> current
+
+    /// The strip held to what it is (P2-1): terminals the session has, that are still open —
+    /// and the one the pane is about, even once it has closed.
+    ///
+    /// Run after every message, like `recall`, because the rule is about the STATE and not
+    /// about which message changed it: a terminal closing, the reader choosing another, a
+    /// remembered strip coming back are each a way for a closed terminal to stop being the one
+    /// on screen, and a rule each of them had to remember is a rule one of them forgets. So a
+    /// tab never vanishes at the moment the thing in it finishes — the reader is looking at it
+    /// — and it leaves as soon as they look elsewhere. The list is the door to every recording.
+    let private settle (model: ClientModel) : ClientModel =
+        let selected = selectedTerminal model
+        let keeps (terminal: TerminalId) =
+            match Projection.tryFind terminal model.Terminals with
+            | Some view -> view.IsOpen || selected = Some terminal
+            | None -> false
+        if List.forall keeps model.Tabs then model
+        else { model with Tabs = model.Tabs |> List.filter keeps }
+
+    /// What this browser should remember of the pane — what a reload must give back (P0-4).
+    /// The CHOICE rather than `selectedTerminal`'s resolution of it: with nothing chosen the
+    /// default is worked out again on the way back, from the same strip. A preview is not
+    /// remembered: it was a glance, and a reload comes back to the terminal it was over.
     let paneMemory (model: ClientModel) : PaneMemory =
-        let inStrip (key: string) = model.Tabs |> List.exists (fun tab -> PaneTab.key tab = key)
-        { PaneMemory.Tabs = model.Tabs |> List.map PaneTab.key
-          PaneMemory.Pinned = model.Pinned |> Set.toList |> List.filter inStrip
-          PaneMemory.Selected = model.Pane |> Option.bind PaneMode.subject |> Option.map (TabMode.tab >> PaneTab.key)
+        { PaneMemory.Tabs = model.Tabs
+          PaneMemory.Selected = model.Pane |> Option.bind PaneMode.subject |> Option.map TerminalMode.terminal
           PaneMemory.Open = model.TerminalsOpen }
 
     /// A freshly loaded client, given what this browser remembered of the pane for this
@@ -1723,29 +1715,6 @@ module ClientModel =
                 PaneMemory = Some memory
                 PaneRemembered = true }
 
-    /// The tab a stored key names in THIS session, or `None` when the session has nothing
-    /// there for it to open onto.
-    ///
-    /// The other half of `PaneTab.ofKey`: a stretch is found on the timeline by its key,
-    /// because a key is all of a stretch a strip can write down. A terminal tab needs its
-    /// terminal, open or ended (an ended one is a recording somebody was reading); a block tab
-    /// needs its block. A content tab is taken as named — the session's files are not folded
-    /// here, and its own panel says so if the file has gone.
-    let tabOfKey (model: ClientModel) (key: string) : PaneTab option =
-        match PaneTab.ofKey key with
-        | Some (TerminalTab id as tab) ->
-            Projection.tryFind id model.Terminals |> Option.map (fun _ -> tab)
-        | Some (BlockTab (id, blockId) as tab) ->
-            Projection.tryFind id model.Terminals
-            |> Option.filter (fun terminal -> terminal.Blocks |> List.exists (fun b -> b.BlockId = blockId))
-            |> Option.map (fun _ -> tab)
-        | Some (ContentTab _ as tab) -> Some tab
-        | Some (StretchTab _) | None ->
-            model.Timeline.TerminalItems
-            |> List.tryPick (function
-                | TimelineStretch stretch when PaneTab.key (StretchTab stretch) = key -> Some (StretchTab stretch)
-                | _ -> None)
-
     /// Whether this client has read the log through to where the session says it ends — the
     /// moment a remembered strip can be checked against what the session has. Connected,
     /// because only the session knows where its log ends; the local store read, because it
@@ -1761,31 +1730,31 @@ module ClientModel =
     ///
     /// The remembered strip REPLACES the one history rebuilt. Replaying the log reopens every
     /// terminal this person ever opened, including the ones they had since closed, and the
-    /// strip they had is the answer to which of those they wanted. Each tab is checked against
-    /// the session (`tabOfKey`) and one that is no longer there is dropped.
+    /// strip they had is the answer to which of those they wanted. A terminal the session no
+    /// longer has is dropped here, and a closed one that is not the selection by `settle`.
     ///
-    /// What this person has done SINCE loading wins over what they had: a tab chosen before
-    /// the log had arrived stays chosen, and stays in the strip.
+    /// What this person has done SINCE loading wins over what they had: a terminal chosen
+    /// before the log had arrived stays chosen, and stays in the strip.
     let private recall (model: ClientModel) : ClientModel =
         match model.PaneMemory with
         | Some memory when readThrough model ->
-            let restored = memory.Tabs |> List.choose (tabOfKey model) |> List.distinctBy PaneTab.key
-            let chosen = model.Pane |> Option.bind PaneMode.subject |> Option.map TabMode.tab
+            let restored =
+                memory.Tabs
+                |> List.filter (fun terminal -> Projection.tryFind terminal model.Terminals |> Option.isSome)
+                |> List.distinct
             let tabs =
-                match chosen with
-                | Some tab -> opened tab restored
+                match model.Pane |> Option.bind PaneMode.subject |> Option.map TerminalMode.terminal with
+                | Some chosen -> opened chosen restored
                 | None -> restored
-            let present (key: string) = tabs |> List.exists (fun tab -> PaneTab.key tab = key)
             let pane =
                 match model.Pane with
                 | Some _ -> model.Pane
                 | None ->
                     memory.Selected
-                    |> Option.bind (fun key -> tabs |> List.tryFind (fun tab -> PaneTab.key tab = key))
-                    |> Option.map (fun tab -> OnTab (Reading tab))
+                    |> Option.filter (fun terminal -> List.contains terminal tabs)
+                    |> Option.map (Reading >> OnTerminal)
             { model with
                 Tabs = tabs
-                Pinned = Set.union model.Pinned (Set.ofList memory.Pinned) |> Set.filter present
                 Pane = pane
                 PaneMemory = None }
         | Some _ | None -> model
@@ -1804,7 +1773,7 @@ module ClientModel =
     ///
     /// Opens, and never shuts: a session with nothing open leaves the column as the page found
     /// it. What it opens ONTO is the reader's own tab where the strip offers one
-    /// (`selectedPane`), and otherwise the list — the strip holds only what this reader opened,
+    /// (`selectedTerminal`), and otherwise the list — the strip holds only what this reader opened,
     /// so a fresh browser on a session whose terminals are the agent's or a colleague's has an
     /// empty strip, and an empty pane saying "New terminal" over a running build is the one
     /// thing this must not show. The list is what answers "what is here".
@@ -1819,60 +1788,57 @@ module ClientModel =
                 PaneOpensItself = false
                 TerminalsOpen = true
                 Pane =
-                    match model.Pane, selectedPane model with
+                    match model.Pane, selectedTerminal model with
                     | Some (OnList _), _ | _, Some _ -> model.Pane
                     | _ -> Some (OnList None) }
 
-    /// Whether the pane is showing the census rather than a tab (Plan 20, stage 0; Plan 25,
-    /// stage 2). A face the pane is IN, not a flag over the one it is in — which is why
-    /// nothing else has to remember to clear it.
+    /// Whether the pane is showing the census rather than a terminal or a preview (Plan 20,
+    /// stage 0; Plan 25, stage 2). A face the pane is IN, not a flag over the one it is in —
+    /// which is why nothing else has to remember to clear it.
     let showsList (model: ClientModel) : bool =
         match model.Pane with
         | Some (OnList _) -> true
-        | Some (OnTab _) | None -> false
+        | Some (OnTerminal _ | Previewing _) | None -> false
 
     /// Where focus lands when the pane comes on screen showing what this model shows.
     ///
     /// ONE answer for every way the pane is shown — the reopen control, a chip, a row of the
     /// list, a terminal arriving that somebody here pressed for — because each of them is the
     /// same promise: the keyboard follows the reader into the column. A terminal is a thing you
-    /// type into, so it lands on its command line; anything else on its panel; nothing on the
+    /// type into, so it lands on its command line; a preview on its panel; nothing on the
     /// press that makes something. The list is its own face and carries no panel, and
     /// `FocusPane` answers for it (`PaneShell.toPane`).
     let paneLanding (model: ClientModel) : DomMove =
         if showsList model then DomMove.FocusPane
         else
-            match selectedPane model with
-            | None -> DomMove.FocusPaneEmpty
-            | Some (TerminalTab id) -> DomMove.FocusCommandLine id
-            | Some (BlockTab _ | StretchTab _ | ContentTab _) -> DomMove.FocusPane
+            match preview model, selectedTerminal model with
+            | Some _, _ -> DomMove.FocusPane
+            | None, Some terminal -> DomMove.FocusCommandLine terminal
+            | None, None -> DomMove.FocusPaneEmpty
 
     /// The command the pane's text read is positioned at (Plan 25, stage 3) — what the
-    /// browser scrolls into view once the render that put it on screen has happened.
+    /// browser scrolls into view once the render that put it on screen has happened. Not
+    /// under a preview, which covers the history the reveal would scroll.
     let paneAnchor (model: ClientModel) : (TerminalId * BlockId) option =
-        model.Pane |> Option.bind PaneMode.onTab |> Option.bind TabMode.anchor
-
-    /// Which terminal the pane is about — the selected tab's, when the selected tab is a
-    /// terminal's at all. A block tab and a stretch tab still belong to a terminal, which is
-    /// what the composer, the presence marks and the transcript reads are keyed by; a content
-    /// tab belongs to none, and answers `None` so those surfaces stand down rather than
-    /// addressing a terminal nobody selected.
-    let selectedTerminal (model: ClientModel) : TerminalId option =
-        selectedPane model |> Option.bind PaneTab.terminal
+        model.Pane |> Option.bind PaneMode.showing |> Option.bind TerminalMode.anchor
 
     /// What this peer has open, as presence names it — what the browser reports to everyone
     /// else. A DERIVATION rather than a field, so what collaborators are told and what is on
     /// this screen cannot drift: there is one answer and the render and the report read it.
     ///
+    /// A preview reports what it is OF (`PreviewSubject.view`): a command or a stretch is its
+    /// terminal, which is the terminal it is laid over, and a file is the file.
+    ///
     /// `None` while the list covers the pane, and that is the honest answer rather than an
-    /// oversight — the census is up, the tab is not on screen, and telling someone you are
+    /// oversight — the census is up, nothing else is on screen, and telling someone you are
     /// reading their image while you are looking at a list of terminals is a claim this cannot
-    /// support. The subject survives everywhere else (`selectedPane`) because the composer and
-    /// the strip are about what you are working WITH; this is about what you can SEE.
+    /// support. The subject survives everywhere else (`selectedTerminal`) because the strip is
+    /// about what you are working WITH; this is about what you can SEE.
     let viewing (model: ClientModel) : ViewRef option =
         match model.Pane with
         | None | Some (OnList _) -> None
-        | Some (OnTab _) -> selectedPane model |> Option.map PaneTab.view
+        | Some (Previewing (preview, _)) -> Some (PreviewSubject.view preview.Subject)
+        | Some (OnTerminal _) -> selectedTerminal model |> Option.map ViewingTerminal
 
     /// Who else has this open right now, by their live presence — never the local peer, who is
     /// not their own audience. Ordered by name, so a row of faces does not reshuffle when a
@@ -1890,8 +1856,8 @@ module ClientModel =
         |> List.sortBy (fun (who, name) -> name, ActorRef.token who)
 
     /// The transcript length this client's rewind pinned, while the terminal is still LIVE
-    /// (Plan 14, stage 7). Resolved rather than read raw, for the same reason `selectedPane`
-    /// is: a pin that outlives its live edge — the terminal closed while somebody sat behind
+    /// (Plan 14, stage 7). Resolved rather than read raw, for the same reason
+    /// `selectedTerminal` is: a pin that outlives its live edge — the terminal closed while somebody sat behind
     /// it — is not a rewind any more, it is simply the recording, and the closed-terminal
     /// replay already shows that in full.
     let rewoundTo (terminal: TerminalId) (model: ClientModel) : int option =
@@ -1942,8 +1908,8 @@ module ClientModel =
     /// build; a refused command never ran at all. Both are cases the surface reports rather
     /// than plays.
     ///
-    /// One rule, two callers: what a player is handed (`paneReplay`) and whether a player is
-    /// OFFERED (`playable`) are the same question asked at two moments, and a surface that
+    /// One rule, two callers: what a player is handed (`previewReplay`) and whether a player is
+    /// OFFERED (`previewPlayable`) are the same question asked at two moments, and a surface that
     /// offered a control the builder then refused would be a button that does nothing.
     let private blockRange (terminal: TerminalId) (blockId: BlockId) (model: ClientModel) : (int * int) option =
         Projection.tryFind terminal model.Terminals
@@ -1960,14 +1926,15 @@ module ClientModel =
     /// reach into the next record.
     let private posterNudge = 0.001
 
-    /// What a tab's player should be handed (Plan 14, stage 4).
+    /// What a preview's player should be handed (Plan 14, stage 4) — a block's range of its
+    /// terminal's recording, or a stretch's. `None` for a file, which is drawn, not played.
     ///
     /// Assembled here rather than in the browser entry because every part of it is a
     /// function of the model, and a value the cheap tier can assert on is worth more than
     /// one only a real player can.
-    let paneReplay (tab: PaneTab) (model: ClientModel) : PaneReplay option =
+    let previewReplay (subject: PreviewSubject) (model: ClientModel) : PaneReplay option =
         let feed =
-            PaneTab.terminal tab
+            PreviewSubject.terminal subject
             |> Option.bind (fun terminal -> model.TerminalFeeds |> Map.tryFind terminal)
             |> Option.defaultValue TerminalFeed.empty
         /// The recording's own clock at a transcript line — what a marker, a poster and a
@@ -1978,18 +1945,18 @@ module ClientModel =
         // recording replayed under the wrong one rewraps every line in it.
         | None -> None
         | Some header ->
-            match tab with
+            match subject with
             // A file is not a recording: there is nothing to play, and the empty feed above
             // means this arm is only ever reached by way of exhaustiveness.
-            | ContentTab _ -> None
-            | BlockTab (terminal, blockId) ->
+            | PreviewSubject.Content _ -> None
+            | PreviewSubject.Block (terminal, blockId) ->
                 blockRange terminal blockId model
                 |> Option.map (fun (fromSeq, toSeq) ->
                     { Cast = rangedCastFrom header feed model terminal fromSeq toSeq
                       StartAt = None
                       Poster = None
                       BehindLive = None })
-            | StretchTab stretch ->
+            | PreviewSubject.Stretch stretch ->
                 match stretch.Range with
                 // Nothing to replay, and the surface says so rather than mounting a player
                 // over an empty recording — which is indistinguishable from a quiet session.
@@ -2004,74 +1971,94 @@ module ClientModel =
                           // replaying internally to that time.
                           Poster = timeOf (toSeq - 1) |> Option.map (fun at -> at - origin + posterNudge)
                           BehindLive = None }
-            | TerminalTab terminal ->
-                // A REWOUND live terminal plays what it has recorded so far, up to the
-                // length pinned when the rewind began. Everything else about it is the
-                // whole-terminal recording, which is the point: rewinding live TV and
-                // replaying a finished session are the same mechanism with a moving end.
-                let pin = rewoundTo terminal model
-                let markers =
-                    Projection.tryFind terminal model.Terminals
-                    |> Option.map (fun view ->
-                        view.Blocks
-                        |> List.choose (fun block ->
-                            // A block whose first line this client has not read has no time
-                            // to mark, and a marker at a guessed one would point at the
-                            // wrong command.
-                            timeOf block.FromSeq |> Option.map (fun at -> at, block.Command)))
-                    |> Option.defaultValue []
-                let records =
-                    match pin with
-                    | Some length -> feed.Records |> Map.toList |> List.filter (fun (seq, _) -> seq < length)
-                    | None -> feed.Records |> Map.toList
-                // A rewind lands AT the pinned edge, not at the recording's start: "rewind"
-                // on an hour-old terminal must not mean "restart from the beginning". The
-                // still is the screen as it stood at the pin — visually the live screen the
-                // reader just left — and the scrub bar is how they go back from there.
-                let pinnedEdge =
-                    pin |> Option.bind (fun _ -> records |> List.tryLast |> Option.map (fun (_, r) -> r.At))
-                Some
-                    { Cast = TranscriptReplay.castWithMarkers header records markers
-                      StartAt =
-                        match pinnedEdge with
-                        | Some at -> Some at
-                        | None ->
-                            // A watch entered from one of this terminal's blocks starts at
-                            // that command. The block's line is looked up HERE rather than
-                            // carried in the mode, so a hint cannot disagree with the blocks
-                            // the projection actually has.
-                            model.Pane
-                            |> Option.bind PaneMode.subject
-                            |> Option.bind (function
-                                | WatchingFrom (id, blockId) when id = terminal -> Some blockId
-                                | _ -> None)
-                            |> Option.bind (fun blockId ->
-                                Projection.tryFind terminal model.Terminals
-                                |> Option.bind (fun view -> view.Blocks |> List.tryFind (fun b -> b.BlockId = blockId)))
-                            |> Option.bind (fun block -> timeOf block.FromSeq)
-                      Poster = pinnedEdge |> Option.map (fun at -> at + posterNudge)
-                      BehindLive = pin |> Option.map (fun _ -> terminal) }
 
-    /// The keyframe a tab's replay needs and this client does not have (Plan 14, stage 4).
+    /// What a terminal's player should be handed: the whole recording, chaptered by its
+    /// commands — or, rewound, what it had recorded at the pin.
+    let terminalReplay (terminal: TerminalId) (model: ClientModel) : PaneReplay option =
+        let feed = model.TerminalFeeds |> Map.tryFind terminal |> Option.defaultValue TerminalFeed.empty
+        let timeOf (seq: int) = feed.Records |> Map.tryFind seq |> Option.map (fun r -> r.At)
+        match feed.Header with
+        | None -> None
+        | Some header ->
+            // A REWOUND live terminal plays what it has recorded so far, up to the
+            // length pinned when the rewind began. Everything else about it is the
+            // whole-terminal recording, which is the point: rewinding live TV and
+            // replaying a finished session are the same mechanism with a moving end.
+            let pin = rewoundTo terminal model
+            let markers =
+                Projection.tryFind terminal model.Terminals
+                |> Option.map (fun view ->
+                    view.Blocks
+                    |> List.choose (fun block ->
+                        // A block whose first line this client has not read has no time
+                        // to mark, and a marker at a guessed one would point at the
+                        // wrong command.
+                        timeOf block.FromSeq |> Option.map (fun at -> at, block.Command)))
+                |> Option.defaultValue []
+            let records =
+                match pin with
+                | Some length -> feed.Records |> Map.toList |> List.filter (fun (seq, _) -> seq < length)
+                | None -> feed.Records |> Map.toList
+            // A rewind lands AT the pinned edge, not at the recording's start: "rewind"
+            // on an hour-old terminal must not mean "restart from the beginning". The
+            // still is the screen as it stood at the pin — visually the live screen the
+            // reader just left — and the scrub bar is how they go back from there.
+            let pinnedEdge =
+                pin |> Option.bind (fun _ -> records |> List.tryLast |> Option.map (fun (_, r) -> r.At))
+            Some
+                { Cast = TranscriptReplay.castWithMarkers header records markers
+                  StartAt =
+                    match pinnedEdge with
+                    | Some at -> Some at
+                    | None ->
+                        // A watch entered from one of this terminal's blocks starts at
+                        // that command. The block's line is looked up HERE rather than
+                        // carried in the mode, so a hint cannot disagree with the blocks
+                        // the projection actually has.
+                        model.Pane
+                        |> Option.bind PaneMode.subject
+                        |> Option.bind (function
+                            | WatchingFrom (id, blockId) when id = terminal -> Some blockId
+                            | _ -> None)
+                        |> Option.bind (fun blockId ->
+                            Projection.tryFind terminal model.Terminals
+                            |> Option.bind (fun view -> view.Blocks |> List.tryFind (fun b -> b.BlockId = blockId)))
+                        |> Option.bind (fun block -> timeOf block.FromSeq)
+                  Poster = pinnedEdge |> Option.map (fun at -> at + posterNudge)
+                  BehindLive = pin |> Option.map (fun _ -> terminal) }
+
+    /// The player a mount in the pane is keyed to — the hook a mount carries, read back
+    /// (`PaneReplays`): the preview on screen by its subject's key, or a terminal in the strip
+    /// by its tab's. Nothing else can have a mount, so nothing else is looked for.
+    let replayFor (key: string) (model: ClientModel) : PaneReplay option =
+        match preview model with
+        | Some preview when PreviewSubject.key preview.Subject = key -> previewReplay preview.Subject model
+        | Some _ | None ->
+            model.Tabs
+            |> List.tryFind (fun terminal -> tabKey terminal = key)
+            |> Option.bind (fun terminal -> terminalReplay terminal model)
+
+    /// The keyframe the preview on screen needs and this client does not have (Plan 14,
+    /// stage 4). A terminal's whole recording starts at the start, and its header is its
+    /// keyframe; only a range — a block's, a stretch's — starts somewhere a screen has to be
+    /// fetched for.
     ///
     /// Fetched on demand rather than streamed: a keyframe is read by somebody opening a
     /// recording, not by everybody watching one grow, and there is one per block in a
     /// session that may have run thousands.
-    let missingKeyframe (tab: PaneTab) (model: ClientModel) : (TerminalId * int) option =
+    let missingKeyframe (model: ClientModel) : (TerminalId * int) option =
         let wanted =
-            match tab with
-            | BlockTab (terminal, blockId) ->
+            match preview model |> Option.map (fun preview -> preview.Subject) with
+            | Some (PreviewSubject.Block (terminal, blockId)) ->
                 Projection.tryFind terminal model.Terminals
                 |> Option.bind (fun view -> view.Blocks |> List.tryFind (fun b -> b.BlockId = blockId))
                 // A refused command has an empty range and never ran, so there is no screen
                 // it started from and nothing to fetch.
                 |> Option.filter (fun block -> block.Status <> BlockRunning && (match block.Status with BlockRejected _ -> false | _ -> true))
                 |> Option.map (fun block -> terminal, block.FromSeq)
-            | StretchTab stretch -> stretch.Range |> Option.map (fun (fromSeq, _) -> stretch.TerminalId, fromSeq)
-            // A whole recording starts at the start; the header is its keyframe.
-            | TerminalTab _ -> None
+            | Some (PreviewSubject.Stretch stretch) -> stretch.Range |> Option.map (fun (fromSeq, _) -> stretch.TerminalId, fromSeq)
             // A file is not a replay: it has no screen to start from.
-            | ContentTab _ -> None
+            | Some (PreviewSubject.Content _) | None -> None
         wanted |> Option.filter (fun key -> not (Map.containsKey key model.TerminalKeyframes))
 
     /// Whether this client is watching a terminal behind its live edge (Plan 14, stage 7).
@@ -2113,28 +2100,30 @@ module ClientModel =
     let affordances (view: TerminalView) (model: ClientModel) : Affordances =
         Affordances.ofView (hasRecording view.TerminalId model) view
 
-    /// Whether this tab has a recording to play at all — what decides whether a surface
-    /// OFFERS one. Cheap on purpose: map lookups and a list find, no cast built, so a view
-    /// can ask it on every render without assembling a recording nobody watches.
+    /// Whether a terminal has a recording to play at all — what decides whether a surface
+    /// OFFERS one. Cheap on purpose: a map lookup, no cast built, so a view can ask it on
+    /// every render without assembling a recording nobody watches.
     ///
-    /// The header gates every case because it is transcript line 0: without it the geometry
-    /// is a guess, and a recording replayed under the wrong one rewraps every line in it.
-    let playable (tab: PaneTab) (model: ClientModel) : bool =
-        PaneTab.terminal tab
-        |> Option.exists (fun terminal -> (terminalFeed terminal model).Header |> Option.isSome)
-        && match tab with
-           // A whole terminal's recording starts at the start, and the header is its
-           // keyframe: there is nothing else to resolve.
-           | TerminalTab _ -> true
-           | BlockTab (terminal, blockId) -> blockRange terminal blockId model |> Option.isSome
-           // A stretch with no recorded bounds is a gap in the record, which the surface
-           // states rather than playing an empty player over.
-           | StretchTab stretch -> Option.isSome stretch.Range
-           // A file is not a recording: the surface offers the file, and nothing to press
-           // play on.
-           | ContentTab _ -> false
+    /// The header is the whole question for a terminal: it is transcript line 0, the whole
+    /// recording starts there, and without it the geometry is a guess and a recording
+    /// replayed under the wrong one rewraps every line in it.
+    let terminalPlayable (terminal: TerminalId) (model: ClientModel) : bool =
+        (terminalFeed terminal model).Header |> Option.isSome
 
-    /// Whether the pane shows this tab as its RECORDING rather than as its text.
+    /// Whether a preview's subject has a recording to play at all — `terminalPlayable`'s
+    /// question for a range of one.
+    let previewPlayable (subject: PreviewSubject) (model: ClientModel) : bool =
+        match subject with
+        | PreviewSubject.Block (terminal, blockId) ->
+            terminalPlayable terminal model && blockRange terminal blockId model |> Option.isSome
+        // A stretch with no recorded bounds is a gap in the record, which the surface
+        // states rather than playing an empty player over.
+        | PreviewSubject.Stretch stretch -> terminalPlayable stretch.TerminalId model && Option.isSome stretch.Range
+        // A file is not a recording: the surface offers the file, and nothing to press
+        // play on.
+        | PreviewSubject.Content _ -> false
+
+    /// Whether the pane shows this terminal as its RECORDING rather than as its text.
     ///
     /// The two reads of one history: what a terminal PRINTED, which the client can render as
     /// text from the same transcript bytes, and how it BEHAVED, which only a player can show.
@@ -2146,35 +2135,38 @@ module ClientModel =
     /// destination, it is the surface. That rule is a fact about the terminal, so it lives
     /// with the terminal (`ReplayIsTheRead`) and this only asks it.
     ///
-    /// Every player in the pane is here, the DVR included: rewinding a live terminal is this
-    /// same swap with a moving end (`RewindTerminalMsg` asks for the recording like any other
-    /// way in), and a second condition beside this one is how two surfaces that mount the
-    /// same player start disagreeing about when.
+    /// Every terminal player in the pane is here, the DVR included: rewinding a live terminal
+    /// is this same swap with a moving end (`RewindTerminalMsg` asks for the recording like
+    /// any other way in), and a second condition beside this one is how two surfaces that
+    /// mount the same player start disagreeing about when.
     ///
-    /// Not gated on `playable`: the mode is what the READER asked for, and a recording whose
-    /// header has not arrived yet is a mount that fills in on the render after it does. The
-    /// two questions are separate on purpose — `playable` decides what to OFFER, this decides
+    /// Not gated on `terminalPlayable`: the mode is what the READER asked for, and a recording
+    /// whose header has not arrived yet is a mount that fills in on the render after it does.
+    /// The two questions are separate on purpose — the one decides what to OFFER, this decides
     /// what is SHOWN, and a control is only ever offered where the first says yes.
-    let playsRecording (tab: PaneTab) (model: ClientModel) : bool =
+    let terminalPlays (terminal: TerminalId) (model: ClientModel) : bool =
         let chosen =
             model.Pane
             |> Option.bind PaneMode.subject
-            |> Option.exists (fun mode -> TabMode.watches mode && PaneTab.key (TabMode.tab mode) = PaneTab.key tab)
-        match tab with
+            |> Option.exists (fun mode -> TerminalMode.watches mode && TerminalMode.terminal mode = terminal)
+        chosen
+        || (Projection.tryFind terminal model.Terminals
+            |> Option.exists (fun view -> (affordances view model).ReplayIsTheRead))
+
+    /// Whether a preview shows its RECORDING rather than its text — `terminalPlays`' question
+    /// for a preview.
+    let previewPlays (preview: Preview) (model: ClientModel) : bool =
+        match preview.Subject with
         // A stretch IS a stretch of recording: somebody held the keyboard, and what they did
         // is bytes rather than commands. There are no blocks to read instead, so it plays
         // wherever there is anything to play — and where there is not, the surface says so in
         // words rather than mounting a player over a gap.
-        | StretchTab _ -> playable tab model
+        | PreviewSubject.Stretch _ -> previewPlayable preview.Subject model
         // A block's output is the cheaper read of the same bytes, so a block plays only
         // where its reader said so.
-        | BlockTab _ -> chosen
-        | TerminalTab id ->
-            chosen
-            || (Projection.tryFind id model.Terminals
-                |> Option.exists (fun view -> (affordances view model).ReplayIsTheRead))
+        | PreviewSubject.Block _ -> preview.Plays
         // Nothing to play: a file is drawn, not replayed.
-        | ContentTab _ -> false
+        | PreviewSubject.Content _ -> false
 
     /// The terminal list, in the order it renders (Plan 20, stage 0): every terminal in the
     /// order it was OPENED, closed ones where they stood.
@@ -2673,10 +2665,11 @@ module ClientModel =
     /// after every message, rather than being read live from whatever the connection
     /// happens to be doing at render time — and through `recall`, for the same reason, so a
     /// remembered pane comes back on whichever message finishes reading the log; and through
-    /// `openOfItself`, which waits for the same line and needs the model from before the
-    /// message to tell whether something else moved the column first.
+    /// `settle`, after it, so the strip holds only what it may whichever message moved it;
+    /// and through `openOfItself`, which waits for the same line as `recall` and needs the
+    /// model from before the message to tell whether something else moved the column first.
     let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
-        reconcileLaunch (openOfItself model (recall (
+        reconcileLaunch (openOfItself model (settle (recall (
         match msg with
         | ConnectingMsg ->
             { model with Connection = Connecting }
@@ -2771,11 +2764,9 @@ module ClientModel =
                     page.Events
                     model.Timeline
             // The tabs follow the terminals, which is what a tab is FOR: a terminal I asked
-            // for opens one, and a terminal that ends takes its own away again — unless
-            // somebody kept it, which is the whole of what keeping means. No pin is computed
-            // here and none ever will be: this fold used to write them, so a pin meant both
-            // "recently mine" and "I decided to hold on to this" and neither could be read
-            // off it.
+            // for opens one. One that ends takes its tab away again once nobody is looking at
+            // it, which is `settle`'s rule and not this page's: it holds whichever message
+            // moved the reader off it.
             //
             // "I asked for it" is `ClientModel.me`'s rule — `Attribution.actorFor`, the same
             // one the Session stamped the open with — asked of the attribution this
@@ -2788,58 +2779,39 @@ module ClientModel =
                 freshEvents
                 |> List.choose (fun e ->
                     match e.Event with
-                    | SessionEvent.TerminalOpened t when t.OpenedBy = mine -> Some (TerminalTab t.TerminalId)
-                    // A tab somebody put in front of the people here (`open_tab`). Not only
-                    // the ones I asked for: that rule is about terminals a session starts on
-                    // its own business, and this is an act whose entire point is that it is
-                    // for whoever is reading.
-                    | SessionEvent.TabOpened t -> Some (PaneTab.ofView t.Ref)
+                    | SessionEvent.TerminalOpened t when t.OpenedBy = mine -> Some t.TerminalId
+                    // A terminal somebody put in front of the people here (`open_tab`). Not
+                    // only the ones I asked for: that rule is about terminals a session starts
+                    // on its own business, and this is an act whose entire point is that it is
+                    // for whoever is reading. A FILE opened that way is not a tab — the strip
+                    // holds terminals — and is shown only when it was asked to be (below).
+                    | SessionEvent.TabOpened t ->
+                        match t.Ref with
+                        | ViewingTerminal terminal -> Some terminal
+                        | ViewingFile _ -> None
                     | _ -> None)
             // Taken back (`close_tab`), in the same pass and after the opening, so a thing
             // opened and closed in one page ends closed rather than depending on which list
             // was built first.
-            //
-            // A tab this reader KEPT is left alone, and that is the whole of what a pin is
-            // worth against somebody else's act. It is decided here rather than refused at
-            // the tool, because a pin lives in one browser and the session that ran the tool
-            // cannot see one — so the honest place to honour it is the only place that knows.
             let closed =
                 freshEvents
                 |> List.choose (fun e ->
                     match e.Event with
-                    | SessionEvent.TabClosed t -> Some (PaneTab.key (PaneTab.ofView t.Ref))
+                    | SessionEvent.TabClosed t -> Some t.Ref
                     | _ -> None)
                 |> Set.ofList
-            // Nor is the tab the reader is LOOKING AT taken from under them: the pin protects
-            // what is off screen, and what is on screen stays until they move off it or close
-            // it themselves. That held before by accident — the pane kept its choice and the
-            // strip drew it back as a tab it no longer was — and is said here now that the
-            // strip draws only `Tabs`.
-            let showing =
-                model.Pane
-                |> Option.bind PaneMode.subject
-                |> Option.map (TabMode.tab >> PaneTab.key)
-            // A terminal ENDING in this page — the moment, not the state. A tab opened onto a
-            // terminal that had already ended is a recording somebody asked to read (the list
-            // is the door to one), and an unrelated event arriving later is no reason to take
-            // it back off a strip whose every tab has a close.
-            let endedHere =
-                freshEvents
-                |> List.choose (fun e ->
-                    match e.Event with
-                    | SessionEvent.TerminalClosed t -> Some (PaneTab.key (TerminalTab t.TerminalId))
-                    | _ -> None)
-                |> Set.ofList
+            // Nor is the terminal the reader is LOOKING AT taken from under them: what is on
+            // screen stays until they move off it. That held once by accident — the pane kept
+            // its choice and the strip drew it back as a tab it no longer was — and is said
+            // here now that the strip draws only `Tabs`.
+            let showing = model.Pane |> Option.bind PaneMode.subject |> Option.map TerminalMode.terminal
             let tabs =
                 (model.Tabs @ opened)
-                |> List.distinctBy PaneTab.key
-                |> List.filter (fun tab ->
-                    let key = PaneTab.key tab
-                    Set.contains key model.Pinned
-                    || showing = Some key
-                    || (not (Set.contains key closed) && not (Set.contains key endedHere) && not (PaneTab.missing terminals tab)))
+                |> List.distinct
+                |> List.filter (fun terminal ->
+                    showing = Some terminal || not (Set.contains (ViewingTerminal terminal) closed))
             // Being SHOWN the terminal you pressed for, which is the whole of what the press
-            // promised. A tab in the strip is not that: `selectedPane` keeps the stored
+            // promised. A tab in the strip is not that: `selectedTerminal` keeps the stored
             // choice while what it names still exists, and the terminal you were on still
             // exists — so the press added a word to the strip and moved nothing, which on a
             // phone, where the strip scrolls, is a control that does nothing at all.
@@ -2852,11 +2824,12 @@ module ClientModel =
                 match model.Opening, List.tryLast opened with
                 | 0, _ | _, None -> model.Pane, model.Opening
                 | asked, Some arrived ->
-                    Some (OnTab (Reading arrived)), max 0 (asked - List.length opened)
+                    Some (OnTerminal (Reading arrived)), max 0 (asked - List.length opened)
             // The other thing that may move the pane: somebody having been ASKED to show this
             // (`focus_tab`). The last one in the page wins, for the same reason the press
             // above takes the last terminal to arrive — two of them in one page is one answer
-            // arriving late, not two answers.
+            // arriving late, not two answers. A terminal is shown; a file is laid over
+            // whatever terminal is up, as a preview, exactly as its chip would lay it.
             //
             // Never on this client's FIRST page. A focus is a thing somebody asked for at a
             // moment, and the log keeps it for ever: replayed on a reload it would land a
@@ -2869,6 +2842,10 @@ module ClientModel =
             // that window would be dropped for a reason having nothing to do with it. Having
             // folded nothing yet is the one fact that distinguishes a page of history from a
             // page of news.
+            //
+            // A file opened WITHOUT focus opens nothing. It has no tab to land in, and a
+            // preview nobody asked to see is the screen taken by somebody else's act; the list
+            // is where it is in reach.
             let pane =
                 if model.EventConsumer.LastProcessedOffset.IsNone then pane
                 else
@@ -2876,9 +2853,24 @@ module ClientModel =
                     |> List.rev
                     |> List.tryPick (fun e ->
                         match e.Event with
-                        | SessionEvent.TabOpened t when t.Focus -> Some (Some (OnTab (Reading (PaneTab.ofView t.Ref))))
+                        | SessionEvent.TabOpened t when t.Focus ->
+                            match t.Ref with
+                            | ViewingTerminal terminal -> Some (Some (OnTerminal (Reading terminal)))
+                            | ViewingFile ref ->
+                                let subject = PreviewSubject.Content ref
+                                let under = underFor subject (pane |> Option.bind PaneMode.subject)
+                                Some (Some (Previewing (Preview.ofSubject subject, under)))
                         | _ -> None)
                     |> Option.defaultValue pane
+            // A file taken back (`close_tab`) takes down its preview, if that is what is up —
+            // back to the terminal it was laid over, as the reader's own back would.
+            let pane =
+                match pane with
+                | Some (Previewing (preview, under)) when Set.contains (PreviewSubject.view preview.Subject) closed ->
+                    match preview.Subject with
+                    | PreviewSubject.Content _ -> under |> Option.map OnTerminal
+                    | PreviewSubject.Block _ | PreviewSubject.Stretch _ -> pane
+                | other -> other
             let latestKnown = EventOffset.maxOption model.EventConsumer.LatestKnownOffset highWater
             { model with
                 Conversation = conversation
@@ -3194,19 +3186,40 @@ module ClientModel =
         | ShowInPaneMsg mode ->
             // The WHOLE next face, stated by every way in. Nothing here clears a subset and
             // hopes the rest was already right: the list cannot survive a choice that
-            // replaces it, and a pin or a start hint cannot outlive the mode that carried it.
+            // replaces it, a preview cannot outlive the reader moving to a terminal, and a
+            // pin or a start hint cannot outlive the mode that carried it.
             //
-            // And showing something OPENS it. There used to be a preview slot — whatever was
-            // being looked at, held outside `Tabs` so that reading one chip after another left
-            // one tab rather than twenty — and the distinction had no expression on screen: a
-            // terminal reached from the chat sat in the strip looking like every other tab and
-            // offered no close, because the model knew it was a preview and nobody else could.
-            // Opening is opening; a strip of things you opened is a strip you can close.
+            // And showing a terminal OPENS it: the strip is the list of terminals the pane
+            // can be about, so a terminal shown with no tab would be a pane showing something
+            // the strip has no name for.
             { model with
-                Tabs = opened (TabMode.tab mode) model.Tabs
-                Pane = Some (OnTab mode)
+                Tabs = opened (TerminalMode.terminal mode) model.Tabs
+                Pane = Some (OnTerminal mode)
                 TerminalsOpen = true }
         | OpenInPaneMsg mode -> fold (ShowInPaneMsg mode) model
+        | ShowPreviewMsg preview
+        | OpenPreviewMsg preview ->
+            // Laid over the terminal the subject belongs to, which is shown in the strip as
+            // the selected tab — so the strip never empties under a preview, and "back" has
+            // somewhere to go. That terminal is opened if it was not: tapping a command's chip
+            // is asking about that terminal, the same as choosing it from the list.
+            //
+            // ONE preview: this replaces whatever preview was up, and what it was laid over
+            // carries across, so six chips tapped are one preview over the terminal the
+            // reader was on, and back returns to that terminal where they left it.
+            let current = model.Pane |> Option.bind PaneMode.subject
+            let under = underFor preview.Subject current
+            { model with
+                Tabs =
+                    match under with
+                    | Some mode -> opened (TerminalMode.terminal mode) model.Tabs
+                    | None -> model.Tabs
+                Pane = Some (Previewing (preview, under))
+                TerminalsOpen = true }
+        | ClosePreviewMsg ->
+            match model.Pane with
+            | Some (Previewing (_, under)) -> { model with Pane = under |> Option.map OnTerminal }
+            | Some (OnTerminal _ | OnList _) | None -> model
         | ShowInTerminalMsg (terminal, block) -> fold (ShowInPaneMsg (ReadingAt (terminal, block))) model
         | MoveMsg _
         | CopyMsg _
@@ -3231,66 +3244,11 @@ module ClientModel =
             // following-while-behind is ever wanted, that custom source is where it goes; it is
             // not something this reducer can grow.
             //
-            // And watching opens the tab, as every way into the pane does: the strip is the
-            // list of what the pane can show, so a rewind with no tab would be a pane showing
-            // something the strip has no name for.
+            // And watching opens the tab, as every way to a terminal does.
             { model with
-                Tabs = opened (TerminalTab terminal) model.Tabs
-                Pane = Some (OnTab (WatchingBehind (terminal, length)))
+                Tabs = opened terminal model.Tabs
+                Pane = Some (OnTerminal (WatchingBehind (terminal, length)))
                 TerminalsOpen = true }
-        | TogglePinMsg tab ->
-            let key = PaneTab.key tab
-            if isPinned tab model then
-                // Unpinning leaves the tab OPEN and where it was: it stays on screen, now
-                // closable. Pressing unpin should say "stop keeping this", never "take it
-                // away from me while I am looking at it".
-                { model with Pinned = Set.remove key model.Pinned }
-            else
-                // Keeping something OPENS it, for the days when something reaches the strip
-                // without having been shown: a mark on a tab that is not in the strip is a
-                // mark on nothing.
-                { model with Tabs = opened tab model.Tabs; Pinned = Set.add key model.Pinned }
-        | CloseTabMsg tab ->
-            // Closing is total — the tab goes, and a tab that was kept is no longer kept,
-            // because somebody asking for it gone has said so more recently than they said to
-            // keep it. WHICH tabs offer a close is the view's question, and its answer is
-            // "the ones nobody kept": a stray tap in a strip that scrolls sideways must not
-            // take away something a person is holding on to, while Delete on a focused tab is
-            // deliberate enough to.
-            //
-            // The pane lets go of it too, and only when it was the tab that was showing. A
-            // choice left naming it would be a choice in waiting: `selectedPane` passes over a
-            // tab that is not in the strip, but the next thing to put that tab back — the
-            // agent opening it, a pin — would land the pane on it with nobody asking.
-            //
-            // What it shows instead is the NEIGHBOUR: the tab that slides into the closed
-            // one's place, or the one before it at the end of the row — `TabStrip.neighbour`,
-            // the same answer the keyboard's Delete moves focus to, so focus and the pane
-            // cannot end up on two different tabs of a strip that scrolls.
-            let key = PaneTab.key tab
-            let letGo (mode: TabMode) = PaneTab.key (TabMode.tab mode) = key
-            let strip = model.Tabs
-            let neighbour =
-                strip
-                |> List.tryFindIndex (fun shown -> PaneTab.key shown = key)
-                |> Option.bind (fun here -> TabStrip.neighbour here strip.Length)
-                |> Option.bind (fun next ->
-                    strip |> List.filter (fun shown -> PaneTab.key shown <> key) |> List.tryItem next)
-            let pane =
-                match model.Pane with
-                | Some (OnTab mode) when letGo mode -> neighbour |> Option.map (fun next -> OnTab (Reading next))
-                | Some (OnList (Some mode)) when letGo mode -> Some (OnList None)
-                | other -> other
-            let tabs = model.Tabs |> List.filter (fun open' -> PaneTab.key open' <> key)
-            { model with
-                Tabs = tabs
-                Pinned = Set.remove key model.Pinned
-                Pane = pane
-                // Closing the LAST tab shuts the column. A pane with nothing open in it has
-                // nothing to show, and the one thing it must not do is re-propose whatever the
-                // session happens to be running — which is the tab the person just asked to be
-                // rid of, back under their hand as if nothing had happened.
-                TerminalsOpen = model.TerminalsOpen && not (List.isEmpty tabs) }
         | ToggleContentMsg ->
             { model with TerminalsOpen = not model.TerminalsOpen }
         | ToggleItemMenuMsg messageId ->
@@ -3325,18 +3283,13 @@ module ClientModel =
             // person is looking for a terminal they cannot see.
             let next =
                 match model.Pane with
-                | Some (OnList resume) -> resume |> Option.map OnTab
-                | Some (OnTab mode) -> Some (OnList (Some mode))
+                | Some (OnList resume) -> resume
+                | Some (OnTerminal _ | Previewing _ as face) -> Some (OnList (Some face))
                 | None -> Some (OnList None)
             { model with Pane = next; TerminalsOpen = true }
         | EnsureTerminalDraftMsg (terminal, author, queueId) ->
-            // Typing does NOT pin. It used to — "watching one and joining one are a keystroke
-            // apart" — and the reasoning was sound about terminals while the strip was also
-            // the working set. It is not sound about a pin: a person who typed one command
-            // into somebody else's terminal had it kept for the rest of the session, and
-            // nothing they did said so. Keeping is one gesture, on the tab, and this is not
-            // it. A terminal being typed in is on screen already, which is the whole of what
-            // it needs.
+            // Typing changes nothing about the strip: a terminal being typed in is on screen
+            // already, which is the whole of what it needs.
             //
             // Idempotent, and the queue key of an existing slot is never re-minted: every
             // co-editor's send depends on it staying the one the slot was published with.
@@ -3462,7 +3415,7 @@ module ClientModel =
         // The armed slot is spent by the press that confirms it.
         | CloseTerminalMsg terminal -> { model with KillPending = Some terminal; KillArmed = None }
         | ArmKillMsg next -> { model with KillArmed = next }
-        )))
+        ))))
 
     /// A message's consequences: the next model, and what it asks of the world outside it.
     let update (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =
@@ -3490,19 +3443,27 @@ module ClientModel =
             // Into the pane, and onto what the pane is FOR when it is a terminal: the reader
             // was moved, so their keyboard is too (`paneLanding`).
             | OpenInPaneMsg _ -> [ ClientEffect.Move (paneLanding next) ]
-            // Showing the pane is the same promise as a chip opening a tab in it. Hiding it
-            // sends focus back where the reader came from — the chip that opened what was
-            // showing — or, with nothing showing, to the way back in: every control in a pane
-            // that has gone is out of reach, so focus cannot stay where it was.
+            // Showing the pane is the same promise as a chip opening something in it. Hiding it
+            // sends focus back where the reader came from — the chip that opened the preview
+            // that was up — or, with none, to the way back in: every control in a pane that
+            // has gone is out of reach, so focus cannot stay where it was.
             | ToggleContentMsg ->
                 if next.TerminalsOpen then [ ClientEffect.Move (paneLanding next) ]
                 else
-                    match selectedPane model with
-                    | Some tab -> [ ClientEffect.Move (DomMove.FocusChat (PaneTab.key tab)) ]
+                    match preview model with
+                    | Some preview -> [ ClientEffect.Move (DomMove.FocusChat preview.Subject) ]
                     | None -> [ ClientEffect.Move DomMove.FocusPaneReopen ]
-            // Closing the last tab shuts the column with focus inside it.
-            | CloseTabMsg _ when model.TerminalsOpen && not next.TerminalsOpen ->
-                [ ClientEffect.Move DomMove.FocusPaneReopen ]
+            // A chip opening a preview is the same promise: the reader was moved, so their
+            // keyboard is too.
+            | OpenPreviewMsg _ -> [ ClientEffect.Move (paneLanding next) ]
+            // The preview's way back, its close and Escape all hand focus back to the chip that
+            // opened it: the preview is leaving the document with focus inside it, and the
+            // chip is where the reader came from (`PaneShell.toChatItem` falls back to the pane
+            // when the chip is covered, as it is on a phone).
+            | ClosePreviewMsg ->
+                match preview model with
+                | Some preview -> [ ClientEffect.Move (DomMove.FocusChat preview.Subject) ]
+                | None -> []
             | ShowInTerminalMsg (terminal, block) ->
                 [ ClientEffect.Move (DomMove.RevealBlock (terminal, block)); ClientEffect.Move DomMove.FocusPane ]
             | MoveMsg move -> [ ClientEffect.Move move ]

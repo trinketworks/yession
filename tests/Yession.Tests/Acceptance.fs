@@ -197,12 +197,11 @@ let private representativeModel : ClientModel =
       TerminalViewports = Map.empty
       // The terminal this client opened, as the events fold leaves it: the strip is `Tabs`
       // and nothing else, so a terminal with no tab here would be one this client cannot see.
-      Tabs = [ TerminalTab terminalId ]
+      Tabs = [ terminalId ]
       // Nothing pressed for and still owed: this client is looking, not mid-request.
       Opening = 0
       KillPending = None
       KillArmed = None
-      Pinned = Set.empty
       Pane = None
       TerminalsOpen = true
       PaneMemory = None
@@ -429,7 +428,7 @@ let private closedTerminalModel : ClientModel =
             { Terminals =
                 representativeModel.Terminals.Terminals
                 |> List.map (fun t -> { t with IsOpen = false; ClosedReason = Some "closed by a peer" }) }
-        Pane = Some (OnTab (Reading (TerminalTab terminalId))) }
+        Pane = Some (OnTerminal (Reading terminalId)) }
 
 /// A closed terminal whose bytes came from a provider that said its stream can be asked for
 /// again (Plan 19, step 4) — the one case where a closed terminal has a way back.
@@ -1146,7 +1145,7 @@ let private uiChecklistTests =
                 (html.Contains (Dom.attr Dom.Hooks.terminalReplayGone (TerminalId.value terminalId)))
                 "the gap is named"
             Expect.isFalse
-                (html.Contains (Dom.attr Dom.Hooks.paneReplay (PaneTab.key (TerminalTab terminalId))))
+                (html.Contains (Dom.attr Dom.Hooks.paneReplay (ClientModel.tabKey terminalId)))
                 "and no player is mounted over nothing"
 
         testCase "the random peer display name is human-readable" <| fun () ->
@@ -2064,7 +2063,7 @@ let private uiChecklistTests =
 // next improvement while saying the design was wrong.
 let private terminalListTests =
     testList "The terminal list" [
-        let listed (model: ClientModel) = Support.render { model with Pane = Some (OnList (model.Pane |> Option.bind PaneMode.onTab)) }
+        let listed (model: ClientModel) = Support.render { model with Pane = Some (OnList model.Pane) }
         let id = TerminalId.value terminalId
 
         // Every case below is the same shape deliberately: the verb where it works, and its
@@ -2156,7 +2155,7 @@ let private terminalListTests =
 // of the conversation would be addressable and unreachable at once.
 let private contentListTests =
     testList "The list panel's artifacts" [
-        let listed (model: ClientModel) = Support.render { model with Pane = Some (OnList (model.Pane |> Option.bind PaneMode.onTab)) }
+        let listed (model: ClientModel) = Support.render { model with Pane = Some (OnList model.Pane) }
         let stamp = ArtifactStamp.ofActor ActorRef.Agent
         let shareOf (name: string) : ConversationItem =
             { MessageId = MessageId.create ("msg-" + name) |> expect
@@ -2313,7 +2312,7 @@ let private paneActionsTests =
         testCase "a file's way to have it is in the row, not inside the picture" <| fun () ->
             let html =
                 representativeModel
-                |> Support.step (ShowInPaneMsg (Reading (ContentTab picture)))
+                |> Support.step (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Content picture)))
                 |> Support.render
             let row = rowFor "content:artifacts/chart.png/0000-e7f1a6" html
             Expect.isTrue
@@ -2327,27 +2326,9 @@ let private paneActionsTests =
                 (html.IndexOf Dom.Hooks.contentImage < html.IndexOf Dom.Hooks.contentDownload)
                 "and under the picture rather than inside it"
 
-        // The strip is intermingled on purpose — kind is a mark on the tab, not a mode you pick
-        // before you pick a thing. That only works if the mark is there, and is the same mark
-        // the file wears everywhere else it is named.
-        testCase "a content tab in the strip says which kind it is" <| fun () ->
-            let html =
-                representativeModel
-                |> Support.step (ShowInPaneMsg (Reading (ContentTab picture)))
-                |> Support.render
-            let tab =
-                let at = html.IndexOf (Dom.attr Dom.Hooks.paneTab "content:artifacts/chart.png/0000-e7f1a6")
-                Expect.isTrue (at >= 0) "the artifact is a tab in the strip while it is open"
-                html.Substring (at, html.IndexOf ("</button>", at) + "</button>".Length - at)
-            let picturePath = Support.renderTemplate Icon.imageSm
-            let markAt = tab.IndexOf picturePath
-            Expect.isTrue (markAt >= 0) "wearing the picture mark, as its chip and its row do"
-            // Looked for AFTER the mark on purpose: the tab's own hook spells the version, so
-            // the file's name appears in an attribute before any mark could be drawn. What is
-            // claimed is that the mark leads the LABEL, not that nothing else mentions the file.
-            Expect.isTrue
-                (tab.IndexOf ("chart.png", markAt) >= 0)
-                "before the name: the mark says what this is, so it leads it"
+        // "A content tab in the strip says which kind it is" was here. A file is not a tab
+        // (P2-1): it opens as a preview over the terminal, whose head says it is a file, and
+        // the strip holds terminals only — so there is no kind left for a tab to mark.
 
         testCase "a terminal nobody holds offers its keyboard there; a held one does not" <| fun () ->
             let free = Support.render representativeModel
@@ -2367,7 +2348,7 @@ let private paneActionsTests =
                 (held.Contains (Dom.attr Dom.Hooks.terminalLease (PeerId.value bob)))
                 "the steal is the lease bar's, and it is still there"
 
-        testCase "a tab that affords nothing draws no row at all" <| fun () ->
+        testCase "a preview that affords nothing draws no row at all" <| fun () ->
             // A bordered strip with no controls in it is a control bar saying there are none.
             // A stretch is always its recording and plays without being asked: there is no other
             // read of it to offer and nothing to step out to.
@@ -2382,7 +2363,7 @@ let private paneActionsTests =
                   EndedAt = DateTimeOffset (2026, 8, 8, 0, 2, 0, TimeSpan.Zero) }
             let html =
                 representativeModel
-                |> Support.step (ShowInPaneMsg (Reading (StretchTab stretch)))
+                |> Support.step (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Stretch stretch)))
                 |> Support.render
             Expect.isFalse (html.Contains Dom.Hooks.paneActions) "no row"
     ]

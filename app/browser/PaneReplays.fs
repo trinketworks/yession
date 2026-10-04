@@ -6,7 +6,8 @@ module Yession.Browser.PaneReplays
 // each, because a `.cast` is a whole artefact rather than a value to bind and the player owns
 // its own DOM once mounted. ONE mount path for all three kinds of recording — a whole
 // terminal, a block's range, a stretch's — because they differ in what they play rather than
-// in how they are mounted; the model turns the tab's key back into what to play.
+// in how they are mounted; the model turns the mount's key back into what to play
+// (`ClientModel.replayFor`).
 //
 // Its own module because two entry points drive it: the app (`Browser.fs`) and the host-free
 // shell harness the `Browser`-tier E2E runs. A second copy would be a second thing to keep
@@ -36,20 +37,18 @@ let create (dispatch: ClientMsg -> unit) : Syncer =
     let players = System.Collections.Generic.Dictionary<string, Replay.Mounted * string> ()
 
     let mount (model: ClientModel) (el: Browser.Types.Element) (key: string) =
-        match model.Tabs |> List.tryFind (fun t -> PaneTab.key t = key) with
+        // `None` means the recording is not ready to play — chunk 0 has not arrived, or the
+        // range has no end yet — or that nothing on screen answers to the key. The next
+        // render runs this again.
+        match ClientModel.replayFor key model with
         | None -> ()
-        | Some tab ->
-            // `None` means the recording is not ready to play — chunk 0 has not arrived, or
-            // the range has no end yet. The next render runs this again.
-            match ClientModel.paneReplay tab model with
-            | None -> ()
-            | Some replay ->
-                let caughtUp =
-                    replay.BehindLive
-                    |> Option.map (fun terminal () ->
-                        dispatch (ShowInPaneMsg (Reading (TerminalTab terminal)))
-                        PaneShell.toWatchToggle ())
-                players.[key] <- (Replay.mount el replay caughtUp, replay.Cast)
+        | Some replay ->
+            let caughtUp =
+                replay.BehindLive
+                |> Option.map (fun terminal () ->
+                    dispatch (ShowInPaneMsg (Reading terminal))
+                    PaneShell.toWatchToggle ())
+            players.[key] <- (Replay.mount el replay caughtUp, replay.Cast)
 
     { Sync =
         fun model ->
@@ -75,22 +74,19 @@ let create (dispatch: ClientMsg -> unit) : Syncer =
             // mount down on the way — but a control that moved the position within a mounted tab
             // would need this loop to compare more than the text.
             for KeyValue (key, (_, cast)) in players |> Seq.toList do
-                match model.Tabs |> List.tryFind (fun t -> PaneTab.key t = key) with
-                | Some tab ->
-                    match ClientModel.paneReplay tab model with
-                    | Some replay when replay.Cast <> cast ->
-                        match mounts () |> List.tryFind (fun el -> mountKey el = key) with
-                        | Some el ->
-                            (fst players.[key]).Dispose ()
-                            players.Remove key |> ignore
-                            // Everything the mount is holding, taken out of it — so what
-                            // is put back is the whole of what the player mounts over,
-                            // never a second player beside the first.
-                            Elements.clearChildren el
-                            mount model el key
-                        | None -> ()
-                    | _ -> ()
-                | None -> ()
+                match ClientModel.replayFor key model with
+                | Some replay when replay.Cast <> cast ->
+                    match mounts () |> List.tryFind (fun el -> mountKey el = key) with
+                    | Some el ->
+                        (fst players.[key]).Dispose ()
+                        players.Remove key |> ignore
+                        // Everything the mount is holding, taken out of it — so what is put
+                        // back is the whole of what the player mounts over, never a second
+                        // player beside the first.
+                        Elements.clearChildren el
+                        mount model el key
+                    | None -> ()
+                | _ -> ()
             // A player whose mount is gone keeps a worker alive; take it down with the node.
             for stale in players.Keys |> Seq.filter (fun k -> not (live.Contains k)) |> Seq.toList do
                 (fst players.[stale]).Dispose ()

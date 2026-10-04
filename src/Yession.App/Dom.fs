@@ -55,7 +55,7 @@ module Dom =
     /// technology which tab the region under the strip belongs to.
     let panePanelId = "pane-panel"
 
-    /// A tab's `id`, from its key (`PaneTab.key`). Keys carry `:` and `/`, which an id may
+    /// A tab's `id`, from its key (`ClientModel.tabKey`). Keys carry `:` and `/`, which an id may
     /// hold but a selector has to escape, so everything outside `[A-Za-z0-9-]` is spelled as
     /// `_` and its code in four hex digits — `_` included, and the width fixed, so two keys
     /// can never come out as one id.
@@ -384,27 +384,9 @@ module Dom =
         /// Which hold it is under, in the same tokens the terminal's own card uses
         /// (`terminalQueuedStatus`): one vocabulary for one fact on two surfaces.
         let chatPendingStatus = "data-chat-pending-status"
-        /// The pane's tab strip (Plan 14, stage 2). One hook for every tab whatever it shows
-        /// — a terminal, a block's read-only view, a stretch's replay — because they are one
-        /// tablist and a test asserting keyboard order should not have to know which is which.
-        /// Its value is `PaneTab.key`.
+        /// The pane's tab strip (Plan 14, stage 2). Every tab in it is a terminal's (P2-1),
+        /// and its value is the terminal's tab key (`ClientModel.tabKey`, `terminal:<id>`).
         let paneTab = "data-pane-tab"
-        /// Whether a tab is KEPT — `"true"` or `"false"`. State rather than a control: the pin
-        /// stopped being a second button beside every tab and became a mark on the one that
-        /// has it, toggled by activating the tab you are already on.
-        ///
-        /// Releasing a tab never ends anything, which is the point the pin inherited from the
-        /// close control it replaced: the strip cannot destroy. Killing a terminal is
-        /// `terminalClose`, on its row in the list.
-        let paneTabPinned = "data-pane-tab-pinned"
-        /// The control that takes a tab off the strip, carrying that tab's key. Offered on
-        /// the SELECTED tab and only while nobody has kept it — the pin is what says "not
-        /// this one", and Delete on a focused tab is the path that can close a kept one.
-        ///
-        /// It closes a TAB. Ending a terminal is `terminalClose`, on its row in the list, and
-        /// the two must not be mistaken for each other: a `close` in this strip once did the
-        /// destructive one, which is why it was taken out of it.
-        let paneTabClose = "data-pane-tab-close"
         /// The strip's scroll box — what moves when there are more tabs than room. The browser
         /// scrolls it to keep the selected tab and the focused one in view (`PaneShell`).
         let paneStrip = "data-pane-strip"
@@ -414,6 +396,16 @@ module Dom =
         let paneStripHidden = "data-pane-strip-hidden"
         /// The pane's body, carrying the key of whatever it is showing.
         let panePanel = "data-pane-panel"
+        /// A preview laid over the selected terminal (P2-1) — a block, a stretch or a file
+        /// opened from the chat — carrying its subject's key (`PreviewSubject.key`). Present
+        /// exactly while one is up, and never inside the strip.
+        let panePreview = "data-pane-preview"
+        /// The preview's way back to the terminal it is laid over.
+        let panePreviewBack = "data-pane-preview-back"
+        /// The preview's close — the same act as its back.
+        let panePreviewClose = "data-pane-preview-close"
+        /// What the preview is, and which terminal it belongs to.
+        let panePreviewMeta = "data-pane-preview-meta"
         /// A block's read-only view: its command line and everything it printed.
         let paneBlock = "data-pane-block"
         /// The pane's action row: the acts about the thing on screen, in ONE place at the
@@ -734,8 +726,6 @@ module Dom =
         let stretchStolen = "stolen"
         let stretchGone = "holder-gone"
         let stretchIdle = "idle"
-        /// What the pin mark is called, for anything that cannot see a blue glyph.
-        let pinned = "pinned"
         /// The way to HAVE a file the pane is showing — beside a picture, and instead of one
         /// for a kind this build cannot draw.
         let download = "Download"
@@ -743,14 +733,19 @@ module Dom =
         /// — is the lease bar's `Take over`, which names who it would be taken from; this one
         /// takes nothing from anyone, and the two are not the same act.
         let takeControl = "Take control"
-        /// What a second activation of the tab you are on will do. A gesture has no control
-        /// of its own to be labelled, so it says so from the tab it acts on.
-        let pinHint = "Select again to pin this tab"
-        let unpinHint = "Select again to unpin this tab"
-        /// The close control's accessible name. It says TAB, because the word on its own is
-        /// the one this product uses for ending a terminal, and it names which tab so that a
-        /// reader who arrives on the control knows what it is about.
-        let closeTab (what: string) = sprintf "Close tab %s" what
+        /// A preview's way back, naming the terminal it returns to (P2-1) — and with no
+        /// terminal under it, just the way back.
+        let backTo (terminal: string) = sprintf "back to %s" terminal
+        let back = "back"
+        /// A preview's close, naming what it closes. It says PREVIEW, because "close" on its
+        /// own is the word this product uses for ending a terminal.
+        let closePreview (what: string) = sprintf "Close preview %s" what
+        /// What kind of thing a preview is, at the head of it.
+        let aCommand = "command"
+        let aStretch = "session"
+        let aFile = "file"
+        /// From a command's preview to that command in its terminal, named.
+        let showIn (terminal: string) = sprintf "Show in %s" terminal
         /// A command chip's accessible name: what ran, how it went, and WHERE — the part the
         /// chip's look leaves to its terminal name, and the part a screen reader walking a
         /// chat of forty commands across three terminals has no other way to hear. Status
