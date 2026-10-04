@@ -55,10 +55,46 @@ module RichText =
         | "s" | "strike" | "strikethrough" | "del" -> html $"""<s>{inner}</s>"""
         | _ -> inner
 
+    /// A text run, with every bare `file:///artifacts/…` address in it drawn as the chip.
+    ///
+    /// CommonMark makes a link only of `[words](url)` or `<url>`, so an address written
+    /// straight into a sentence parsed as plain text — and that is exactly how agents write
+    /// one, because `share_artifact` answers with the address and says to put it in a message.
+    /// Every artifact an agent pointed at in prose drew as a raw URL, while the act of sharing
+    /// it beside the message drew as the chip (session S2AJDBFB). How a reference is spelled is
+    /// the writer's choice; what it IS is not, so the renderer recognises all three spellings.
+    ///
+    /// An address ends at whitespace, less the punctuation a sentence puts after it; one this
+    /// session does not serve stays the words it was.
+    let private withBareReferences (chip: ContentRef -> TemplateResult) (text: string) : TemplateResult list =
+        let trailing = set [ '.'; ','; ';'; ':'; '!'; '?'; ')'; ']'; '\''; '"' ]
+        let rec go (rest: string) (said: TemplateResult list) =
+            match rest.IndexOf ContentRef.urlPrefix with
+            | -1 -> List.rev (html $"{rest}" :: said)
+            | at ->
+                let before = rest.Substring (0, at)
+                let from = rest.Substring at
+                let length = from |> Seq.takeWhile (fun c -> not (System.Char.IsWhiteSpace c)) |> Seq.length
+                let candidate = from.Substring(0, length).TrimEnd (Seq.toArray trailing)
+                let after = from.Substring candidate.Length
+                match contentLink candidate with
+                | Some ref -> go after (chip ref :: html $"{before}" :: said)
+                // Not ours: keep it as text, and look on past it.
+                | None -> go after (html $"{candidate}" :: html $"{before}" :: said)
+        go text []
+
     /// One inline node — a text run under its marks, or a hard break.
     let private inlineNode (chip: ContentRef -> TemplateResult) (node: Node) : TemplateResult =
         if nodeIsText node then
-            Array.foldBack (wrapMark chip) (nodeMarks node) (html $"{nodeText node}")
+            let marks = nodeMarks node
+            // Inside a link the LINK decides what this is; inside code the writer asked for the
+            // characters, not the thing they name.
+            let literal = marks |> Array.exists (fun m -> m.``type``.name = "link" || m.``type``.name = "code")
+            let text = nodeText node
+            let run =
+                if literal || not (text.Contains ContentRef.urlPrefix) then html $"{text}"
+                else html $"{withBareReferences chip text}"
+            Array.foldBack (wrapMark chip) marks run
         elif nodeTypeName node = "hard_break" then html $"<br>"
         else html $"{nodeTextContent node}"
 

@@ -3247,6 +3247,29 @@ let private contentChipTests =
             // prose at the moment it was typed.
             Expect.isTrue (rendered.Contains "see ") "the words around it are still the sentence"
 
+        // How agents actually write one: `share_artifact` answers with the address and says to
+        // put it in a message, and they paste it straight into a sentence — which CommonMark
+        // parses as plain text, so every artifact named in prose drew as a raw URL (S2AJDBFB).
+        testCase "an address written bare in a sentence becomes the same reference" <| fun () ->
+            let rendered =
+                Support.renderTemplate (RichText.render markerChip "- file:///artifacts/chart.png/0000-e7f1a6 — the empty draft")
+            Expect.isTrue
+                (rendered.Contains (Dom.attr Dom.Hooks.content "artifacts/chart.png/0000-e7f1a6"))
+                "the bare address is drawn as a reference"
+
+        testCase "the punctuation after a bare address stays the sentence's" <| fun () ->
+            let rendered = Support.renderTemplate (RichText.render markerChip "see file:///artifacts/chart.png.")
+            Expect.isTrue (rendered.Contains (Dom.attr Dom.Hooks.content "artifacts/chart.png")) "the address without its full stop"
+
+        test "an address in code is the characters the writer asked for" {
+            let rendered = Support.renderTemplate (RichText.render markerChip "run `file:///artifacts/chart.png`")
+            Expect.isFalse (rendered.Contains (Dom.attr Dom.Hooks.content "artifacts/chart.png")) "code is literal"
+        }
+
+        testCase "a bare file: address to nothing this session serves is words" <| fun () ->
+            let rendered = Support.renderTemplate (RichText.render markerChip "see file:///etc/passwd")
+            Expect.isTrue (rendered.Contains "file:///etc/passwd") "what was written still reads, and leads nowhere"
+
         testCase "a file: link to nothing this session serves is words, not a link" <| fun () ->
             let rendered = Support.renderTemplate (RichText.render markerChip "[passwords](file:///etc/passwd)")
             Expect.isFalse (rendered.Contains "href") "a path on somebody's disk is nowhere this page can send a reader"
