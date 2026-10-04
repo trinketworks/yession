@@ -1885,6 +1885,9 @@ module View =
         html $"""<span class="{Style.agentThinkingTip}"><span class="{Style.agentThinkingCube}"><i></i><i></i><i></i><i></i><i></i><i></i></span></span>"""
 
     let private chat (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+        // Where chapters open, asked once for the whole transcript: every row and every
+        // item's menu below looks itself up here rather than asking again.
+        let chapterOpenings = ClientModel.chapterOpenings model
         // A file an agent linked to in a message, drawn as the reference it is — the SAME chip
         // the fold below it draws for the act of sharing one (`Entity.render`), because a body
         // saying "see file:///artifacts/chart.png" and a note saying "shared artifact
@@ -1906,7 +1909,7 @@ module View =
         // to work out from the item, so this control never holds a second copy of what an act
         // defaults to (see `Chapters`).
         let itemActions (item: ConversationItem) =
-            let isChapter = Chapters.opens model.Synced.Chapters item
+            let isChapter = Set.contains item.MessageId chapterOpenings
             let opened = model.ItemMenu = Some item.MessageId
             let dress =
                 if opened then Style.cls [ Style.itemActions; Style.itemActionsOpen ] else Style.itemActions
@@ -2733,7 +2736,7 @@ module View =
              |> List.collect (fun row ->
                  let rule =
                      match row with
-                     | RowItem (TimelineMessage item) when Chapters.opens model.Synced.Chapters item ->
+                     | RowItem (TimelineMessage item) when Set.contains item.MessageId chapterOpenings ->
                          [ None, chapterRule item ]
                      | _ -> []
                  rule @ Option.toList (entryOf row)))

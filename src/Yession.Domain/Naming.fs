@@ -110,8 +110,8 @@ module Naming =
     /// not there is a credential to spend on it, and a session that connects one an hour in
     /// then owes exactly this and names all of it at once.
     ///
-    /// A chapter an act opens by NATURE has no entry in the doc until somebody touches it, so
-    /// it is not a subject here and is never named. That is the right line rather than an
+    /// A chapter the policy opens by NATURE (`AutoChapters`) has no entry in the doc until
+    /// somebody touches it, so it is not a subject here and is never named. That is the right line rather than an
     /// oversight — an act note is a sentence somebody already wrote short ("PR octo/hello#12
     /// merged"), and what this names is where a person divided the session and left the guess
     /// standing. The same line runs through what a subject is READ from: a name is made from
@@ -160,7 +160,7 @@ module Naming =
                 if not (Chapters.unwritten text chapters item || ours last held) then None
                 elif finished last Chapters.ReadItems then None
                 else
-                    let covered = Chapters.reading chapters items item
+                    let covered = Chapters.reading AutoChapters.policy chapters items item
                     if not (worthAsking last (List.length covered)) then None
                     else
                         Some

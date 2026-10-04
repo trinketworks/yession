@@ -104,6 +104,10 @@
          items carry one. -->
     <Compile Include="Acts.fs" />
     <Compile Include="Conversation.fs" />
+    <!-- The chapters' mechanism, handed a policy rather than holding one; then the policy
+         this product runs, after it so the mechanism cannot reach past what it is handed. -->
+    <Compile Include="Chapters.fs" />
+    <Compile Include="AutoChapters.fs" />
     <!-- Whether a batch of messages starts a turn: who they address, and the policy the
          scheduler is handed. After Attribution.fs, whose names an address resolves against. -->
     <Compile Include="TurnPolicy.fs" />

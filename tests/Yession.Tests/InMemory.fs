@@ -533,7 +533,7 @@ let tests =
                 do! a.Runner.WaitFor (fun m -> m.Conversation.Items |> List.exists (fun i -> (Yession.Domain.Chat.ConversationItem.said i) = "ship it"))
                 let item = itemSaying "ship it" (a.Runner.Model ())
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
-                do! a.Runner.WaitFor (fun m -> Chat.Chapters.opens m.Synced.Chapters item)
+                do! a.Runner.WaitFor (fun m -> Chat.Chapters.opens Chat.AutoChapters.policy m.Synced.Chapters m.Conversation.Items item)
                 Expect.equal (Chat.Chapters.name CollabText.ylmish (a.Runner.Model ()).Synced.Chapters item) "ship it" "the guess, as before"
                 do! host.Stop ()
             }
