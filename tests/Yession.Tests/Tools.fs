@@ -471,6 +471,22 @@ let private sessionTests =
                 | Error e -> failwithf "expected an answer, got %s" e
             }
 
+        // A tool's arguments are declared once, and the schema and the reader are both read
+        // off that one declaration — so the key the model is told and the key the body
+        // decodes cannot disagree, which they did when they were two lists.
+        test "an argument is offered and read under the one key it was declared with" {
+            let args =
+                toolArgs {
+                    let! alpha = ToolArgs.text "alpha" "a string"
+                    and! beta = ToolArgs.flag "beta" "a flag"
+                    return alpha, beta
+                }
+            Expect.equal
+                (writeOnly (ToolArgs.schema args) |> List.map fst, ToolArgs.read args """{"alpha":"a","beta":true}""")
+                ([ "alpha"; "beta" ], Ok ("a", true))
+                "the schema offers the keys the reader reads"
+        }
+
         // The mechanism the tool-use record will rely on: secrecy is a property of the
         // FIELD, declared in the schema, so renaming an argument cannot leave the
         // declaration pointing at nothing.

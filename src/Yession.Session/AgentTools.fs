@@ -27,191 +27,6 @@ open Thoth.Json
 open Thoth.Json.Net
 #endif
 
-/// Reading a call's arguments. Every body does this for itself: the generic path carries
-/// JSON precisely so that recording and redaction can be schema-driven, and a decode that
-/// lived out there would have to know every tool's shape to do the same job.
-module private ToolArgs =
-
-    let private read (decoder: Decoder<'a>) (json: string) : Result<'a, string> =
-        let json = if String.IsNullOrWhiteSpace json then "{}" else json
-        match Decode.fromString decoder json with
-        | Ok value -> Ok value
-        | Error e -> Error (sprintf "could not read the arguments: %s" e)
-
-    let string (key: string) (json: string) : Result<string, string> =
-        read (Decode.object (fun get -> get.Required.Field key Decode.string)) json
-
-    /// `execute_command`'s three: the line, which named sandbox to run it in, and whether the
-    /// caller intends to wait for it (Plan 20, stage 2). An absent or empty `sandbox` is the
-    /// default one, which is what the optional parameter degrades to.
-    /// `execute_command`'s arguments: the line, where to run it (a terminal by id, or a
-    /// sandbox's own), and whether to wait.
-    let commandWhere (json: string) : Result<string * string option * string option * bool * bool, string> =
-        read
-            (Decode.object (fun get ->
-                get.Required.Field "command" Decode.string,
-                get.Optional.Field "terminal" Decode.string |> Option.filter (fun s -> s <> ""),
-                get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> ""),
-                get.Optional.Field "background" Decode.bool |> Option.defaultValue false,
-                get.Optional.Field "stdin" Decode.bool |> Option.defaultValue false))
-            json
-
-    /// `open_terminal`'s pair: what the terminal is for, and which sandbox to open it in.
-    let nameSandbox (json: string) : Result<string * string option, string> =
-        read
-            (Decode.object (fun get ->
-                get.Required.Field "name" Decode.string,
-                get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> "")))
-            json
-
-    /// `set_shell_profile`'s pair, both optional: where shells opened from now on start,
-    /// and whose sandbox. An absent `cwd` is the CLEAR, and an absent `sandbox` is the
-    /// default one — so a bare call means "put the default sandbox back the way it was".
-    let cwdSandbox (json: string) : Result<string option * string option, string> =
-        read
-            (Decode.object (fun get ->
-                get.Optional.Field "cwd" Decode.string,
-                get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> "")))
-            json
-
-    /// `read_file`'s four: the path, the window (`offset` a 1-based first line, `limit` a
-    /// count), and which sandbox. An absent or empty `sandbox` is the default one.
-    let fileRead (json: string) : Result<string * int option * int option * string option, string> =
-        read
-            (Decode.object (fun get ->
-                get.Required.Field "path" Decode.string,
-                get.Optional.Field "offset" Decode.int,
-                get.Optional.Field "limit" Decode.int,
-                get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> "")))
-            json
-
-    /// `edit_file`'s five: the path, the text to find, the text to put there, whether every
-    /// occurrence, and which sandbox.
-    let fileEdit (json: string) : Result<string * string * string * bool * string option, string> =
-        read
-            (Decode.object (fun get ->
-                get.Required.Field "path" Decode.string,
-                get.Required.Field "old_string" Decode.string,
-                get.Required.Field "new_string" Decode.string,
-                get.Optional.Field "replace_all" Decode.bool |> Option.defaultValue false,
-                get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> "")))
-            json
-
-    /// `write_file`'s three: the path, the whole content, and which sandbox.
-    let fileWrite (json: string) : Result<string * string * string option, string> =
-        read
-            (Decode.object (fun get ->
-                get.Required.Field "path" Decode.string,
-                get.Required.Field "content" Decode.string,
-                get.Optional.Field "sandbox" Decode.string |> Option.filter (fun s -> s <> "")))
-            json
-
-    /// `share_artifact`'s three: the file to share, what to call it here, and which sandbox
-    /// it is in. The name is optional because the file already has one, and carrying it over
-    /// keeps the extension the media type is read from.
-    let artifactShare (json: string) : Result<string * string option * string option, string> =
-        let some (key: string) (get: Decode.IGetters) =
-            get.Optional.Field key Decode.string |> Option.filter (fun s -> s <> "")
-        read (Decode.object (fun get -> get.Required.Field "path" Decode.string, some "name" get, some "sandbox" get)) json
-
-    /// `search_files`'s four: the pattern, where, which names, which sandbox.
-    let fileSearch (json: string) : Result<string * string option * string option * string option, string> =
-        let some (key: string) (get: Decode.IGetters) =
-            get.Optional.Field key Decode.string |> Option.filter (fun s -> s <> "")
-        read
-            (Decode.object (fun get ->
-                get.Required.Field "pattern" Decode.string, some "path" get, some "glob" get, some "sandbox" get))
-            json
-
-    /// `find_files`'s three: the glob, where, which sandbox.
-    let fileFind (json: string) : Result<string * string option * string option, string> =
-        let some (key: string) (get: Decode.IGetters) =
-            get.Optional.Field key Decode.string |> Option.filter (fun s -> s <> "")
-        read (Decode.object (fun get -> get.Required.Field "glob" Decode.string, some "path" get, some "sandbox" get)) json
-
-    let two (first: string) (second: string) (json: string) : Result<string * string, string> =
-        read
-            (Decode.object (fun get ->
-                get.Required.Field first Decode.string, get.Required.Field second Decode.string))
-            json
-
-    /// What a call is waiting FOR, from the three fields every waiting tool takes alike
-    /// (`read_terminal`, `check_pending`). Absent `wait_for` is a call that does not wait. A
-    /// `timeout_seconds` without one is nothing to bound, so the wait is only assembled when
-    /// there is something to wait FOR.
-    let private waitIn (json: string) (defaultTimeout: float) : Result<TerminalWait option, string> =
-        let decoded =
-            read
-                (Decode.object (fun get ->
-                    get.Optional.Field "wait_for" Decode.string |> Option.filter (fun s -> s <> ""),
-                    get.Optional.Field "wait_for_pattern" Decode.string |> Option.filter (fun s -> s <> ""),
-                    get.Optional.Field "timeout_seconds" Decode.float |> Option.defaultValue defaultTimeout))
-                json
-        match decoded with
-        | Error e -> Error e
-        | Ok (literal, pattern, timeout) ->
-            // Two fields rather than one and a mode flag, because a flag makes the meaning of
-            // `wait_for` depend on another argument: a caller that sets one and forgets the
-            // other gets a LITERAL match on a regex string, which is wrong, silent, and looks
-            // exactly like a device that never answered. Two fields make that a refusal.
-            match literal, pattern with
-            | Some _, Some _ ->
-                Error "wait_for and wait_for_pattern are two ways to say the same thing — give one"
-            | None, None -> Ok None
-            | Some literal, None -> Ok (Some { Until = MatchLiteral literal; TimeoutSeconds = timeout })
-            | None, Some source ->
-                // Compiled HERE, so a pattern outside the subset is an answer to this call
-                // rather than something discovered part-way through a wait that then has to
-                // explain itself.
-                Pattern.compile source
-                |> Result.map (fun compiled -> Some { Until = MatchPattern (compiled, source); TimeoutSeconds = timeout })
-
-    /// `read_terminal`'s three: which terminal, where to read from, and what to wait for. An
-    /// absent `from` is the tail, which is what the optional parameters degrade to.
-    let terminalRead (json: string) : Result<string * int option * TerminalWait option, string> =
-        read
-            (Decode.object (fun get -> get.Required.Field "terminal" Decode.string, get.Optional.Field "from" Decode.int))
-            json
-        |> Result.bind (fun (terminal, from) -> waitIn json 10.0 |> Result.map (fun wait -> terminal, from, wait))
-
-    /// `check_pending`'s two: which handle, and what it is waiting for. The default timeout
-    /// is the turn's own bound — a caller naming a ready line wants it as long as a command
-    /// may take, not a device's ten seconds.
-    let pending (json: string) : Result<string * TerminalWait option, string> =
-        read (Decode.object (fun get -> get.Required.Field "handle" Decode.string)) json
-        |> Result.bind (fun handle -> waitIn json 120.0 |> Result.map (fun wait -> handle, wait))
-
-    /// `write_terminal`'s: which terminal, and what to type — `data` as text, then `keys` by
-    /// name (`TerminalKeys`). At least one; both is text followed by keys, which is how a line
-    /// and its enter are said.
-    let terminalWrite (json: string) : Result<string * string, string> =
-        read
-            (Decode.object (fun get ->
-                get.Required.Field "terminal" Decode.string,
-                get.Optional.Field "data" Decode.string,
-                get.Optional.Field "keys" (Decode.list Decode.string) |> Option.defaultValue []))
-            json
-        |> Result.bind (fun (terminal, data, keys) ->
-            match data, keys with
-            | (None | Some ""), [] -> Error "nothing to type — give data, keys, or both"
-            | _ -> TerminalKeys.bytesOf keys |> Result.map (fun bytes -> terminal, String.concat "" (Option.toList data @ [ bytes ])))
-
-    /// `remove_repo`'s pair: which repo, and whether uncommitted changes may go with it.
-    let repoForce (json: string) : Result<string * bool, string> =
-        read
-            (Decode.object (fun get ->
-                get.Required.Field "repo" Decode.string,
-                get.Optional.Field "force" Decode.bool |> Option.defaultValue false))
-            json
-
-    let repoBranchCreate (json: string) : Result<string * string * bool, string> =
-        read
-            (Decode.object (fun get ->
-                get.Required.Field "repo" Decode.string,
-                get.Required.Field "branch" Decode.string,
-                get.Optional.Field "create" Decode.bool |> Option.defaultValue false))
-            json
-
 module AgentTools =
 
     /// The namespace the session's own tools live in. One string, referenced everywhere,
@@ -366,6 +181,34 @@ module AgentTools =
         async {
             let! answer = body
             return Ok answer
+        }
+
+    /// What a call is waiting FOR, from the three fields every waiting tool takes alike
+    /// (`read_terminal`, `check_pending`). Absent `wait_for` is a call that does not wait. A
+    /// `timeout_seconds` without one is nothing to bound, so the wait is only assembled when
+    /// there is something to wait FOR.
+    let private waitFor (literal: string) (pattern: string) (timeout: string) (otherwise: float) : ToolArgs<Result<TerminalWait option, string>> =
+        toolArgs {
+            let! literal = ToolArgs.textOption "wait_for" literal
+            and! pattern = ToolArgs.textOption "wait_for_pattern" pattern
+            and! timeout = ToolArgs.number "timeout_seconds" timeout otherwise
+            return
+                // Two fields rather than one and a mode flag, because a flag makes the meaning
+                // of `wait_for` depend on another argument: a caller that sets one and forgets
+                // the other gets a LITERAL match on a regex string, which is wrong, silent, and
+                // looks exactly like a device that never answered. Two fields make that a
+                // refusal.
+                match literal, pattern with
+                | Some _, Some _ ->
+                    Error "wait_for and wait_for_pattern are two ways to say the same thing — give one"
+                | None, None -> Ok None
+                | Some literal, None -> Ok (Some { Until = MatchLiteral literal; TimeoutSeconds = timeout })
+                | None, Some source ->
+                    // Compiled HERE, so a pattern outside the subset is an answer to this call
+                    // rather than something discovered part-way through a wait that then has
+                    // to explain itself.
+                    Pattern.compile source
+                    |> Result.map (fun compiled -> Some { Until = MatchPattern (compiled, source); TimeoutSeconds = timeout })
         }
 
     let private withRepo (raw: string) (inner: RepoRef -> Async<string>) : Async<string> =
@@ -775,40 +618,49 @@ module AgentTools =
     // without being callable, and cannot be callable without being declared.
     // ---------------------------------------------------------------------------------
 
-    let private repoArg = [ ToolField.required "repo" "string" "owner/name" ]
+    let private repo (description: string) : ToolArgs<string> = ToolArgs.text "repo" description
 
     /// The verbs: everything that is written out rather than generated.
     let private verbs (capabilities: AgentCapabilities) : (ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>)) list =
-        let tool name description fields body : ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>) =
-            ToolDescriptor.create Namespace name description (ToolSchema.ofFields fields), body
-        let ofRepo (run: string -> Async<string>) =
-            fun args ->
+        // A body is handed its arguments already read: a call whose arguments do not fit
+        // the schema is an `Error` here, before any body runs.
+        let tool
+            name
+            description
+            (args: ToolArgs<'a>)
+            (body: 'a -> Async<Result<ToolAnswer, string>>)
+            : ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>) =
+            ToolDescriptor.create Namespace name description (ToolArgs.schema args),
+            fun json ->
                 async {
-                    match ToolArgs.string "repo" args with
+                    match ToolArgs.read args json with
                     | Error e -> return Error e
-                    | Ok raw -> return! ok (run raw)
+                    | Ok read -> return! body read
                 }
+        // For the arguments that can be refused once read: a body only runs on what passed.
+        let whenValid (body: 'a -> Async<Result<ToolAnswer, string>>) (read: Result<'a, string>) =
+            match read with
+            | Error e -> async { return Error e }
+            | Ok read -> body read
         [ tool
             "execute_command"
             "Run a shell command in a session terminal — the only way to run anything, seen by everyone and on the record. Not for reading or editing files: use read_file and edit_file, which record WHICH file, unless a dedicated tool genuinely cannot do it — avoid cat, sed, awk, head, tail, grep -n and heredocs here. `sandbox`: a named work sandbox (start_work_sandbox); omit for the default one. `terminal`: a terminal from open_terminal, to run beside something long (each terminal runs one command at a time). For anything long-running pass background: true — it returns a handle at once, you end your turn, and you're woken when it finishes; otherwise it waits and hands back a check_pending handle if the command outlasts the wait. No stdin unless stdin: true (readers get EOF), so pass flags, not prompts. Scratch under $TMPDIR; /tmp is denied. Rewriting a file, write the new content before deleting the old — a delete-then-write can be refused halfway. Read the answer: it says which happened."
-            [ ToolField.required "command" "string" "the shell command line to run, e.g. \"npm test -- --watch=false\""
-              ToolField.optional "terminal" "string" "the id of a terminal to run in, as open_terminal or list_terminals gave it; omit for your own terminal in the sandbox"
-              ToolField.optional "sandbox" "string" "the work sandbox to run in — the session's own by name (\"test\"), a repo's as \"owner/repo:name\" (its bare name also finds it when only one repo declares that name); omit for the default one"
-              ToolField.optional
-                  "background"
-                  "boolean"
-                  "true to start it and carry on without waiting — use it for long work, and for work that can run alongside other work. You will be told when it finishes."
-              ToolField.optional
-                  "stdin"
-                  "boolean"
-                  "true to let the command read the terminal's input, for the rare command that has to prompt; omit it and anything that reads stdin gets end-of-file at once" ]
-            (fun args ->
-                async {
-                    match ToolArgs.commandWhere args with
-                    | Error e -> return Error e
-                    | Ok (command, terminal, sandbox, background, stdin) ->
-                        return! answered (executeCommand capabilities command terminal sandbox background stdin)
-                })
+            (toolArgs {
+                let! command = ToolArgs.text "command" "the shell command line to run, e.g. \"npm test -- --watch=false\""
+                and! terminal = ToolArgs.textOption "terminal" "the id of a terminal to run in, as open_terminal or list_terminals gave it; omit for your own terminal in the sandbox"
+                and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox to run in — the session's own by name (\"test\"), a repo's as \"owner/repo:name\" (its bare name also finds it when only one repo declares that name); omit for the default one"
+                and! background =
+                    ToolArgs.flag
+                        "background"
+                        "true to start it and carry on without waiting — use it for long work, and for work that can run alongside other work. You will be told when it finishes."
+                and! stdin =
+                    ToolArgs.flag
+                        "stdin"
+                        "true to let the command read the terminal's input, for the rare command that has to prompt; omit it and anything that reads stdin gets end-of-file at once"
+                return command, terminal, sandbox, background, stdin
+             })
+            (fun (command, terminal, sandbox, background, stdin) ->
+                answered (executeCommand capabilities command terminal sandbox background stdin))
 
           // The terminal verbs a person already has (Plan 20, stage 3). Deliberately the same
           // three a human uses from the list — open, close, see what there is — because the
@@ -818,49 +670,46 @@ module AgentTools =
           tool
               "open_terminal"
               "Open your own terminal and name it for the job (\"tests\", \"docs build\") — everyone reads the name. Use it to run several things at once, since each terminal runs one command at a time. Returns a terminal id; pass it to execute_command as `terminal`. There's a per-sandbox limit — if you've hit it, this says so, and close_terminal makes room."
-              [ ToolField.required "name" "string" "what this terminal is for, e.g. \"tests\""
-                ToolField.optional "sandbox" "string" "the work sandbox to open it in — \"owner/repo:name\" for a repo's, or its bare name when only one repo declares it; omit for the default one" ]
-              (fun args ->
+              (toolArgs {
+                  let! name = ToolArgs.text "name" "what this terminal is for, e.g. \"tests\""
+                  and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox to open it in — \"owner/repo:name\" for a repo's, or its bare name when only one repo declares it; omit for the default one"
+                  return name, sandbox
+               })
+              (fun (name, sandbox) ->
                   async {
-                      match ToolArgs.nameSandbox args with
-                      | Error e -> return Error e
-                      | Ok (name, sandbox) ->
-                          let resolved =
-                              match sandbox with
-                              | None -> Ok None
-                              | Some s -> SandboxRef.parse s |> Result.map Some
-                          match resolved with
-                          | Error e -> return ToolAnswer.text (sprintf "not a sandbox: %s" e) |> Ok
-                          | Ok target ->
-                              match! capabilities.Terminals.Open name target with
-                              | Ok id ->
-                                  return
-                                      Ok (ToolAnswer.text (sprintf "opened terminal %s for %s" (TerminalId.value id) name))
-                              | Error reason -> return Ok (ToolAnswer.text reason)
+                      let resolved =
+                          match sandbox with
+                          | None -> Ok None
+                          | Some s -> SandboxRef.parse s |> Result.map Some
+                      match resolved with
+                      | Error e -> return ToolAnswer.text (sprintf "not a sandbox: %s" e) |> Ok
+                      | Ok target ->
+                          match! capabilities.Terminals.Open name target with
+                          | Ok id ->
+                              return
+                                  Ok (ToolAnswer.text (sprintf "opened terminal %s for %s" (TerminalId.value id) name))
+                          | Error reason -> return Ok (ToolAnswer.text reason)
                   })
 
           tool
               "close_terminal"
               "Close a terminal you opened, when you're done with it. Its recording stays for anyone to read; only the shell ends. You can close only your own; the people here can close any, including yours."
-              [ ToolField.required "terminal" "string" "the terminal id from open_terminal" ]
-              (fun args ->
+              (ToolArgs.text "terminal" "the terminal id from open_terminal")
+              (fun raw ->
                   async {
-                      match ToolArgs.string "terminal" args with
-                      | Error e -> return Error e
-                      | Ok raw ->
-                          match TerminalId.create raw with
-                          | Error e -> return Ok (ToolAnswer.text (sprintf "not a terminal id: %s" e))
-                          | Ok id ->
-                              match! capabilities.Terminals.Close id with
-                              | Ok () -> return Ok (ToolAnswer.text (sprintf "closed terminal %s" raw))
-                              | Error reason -> return Ok (ToolAnswer.text reason)
+                      match TerminalId.create raw with
+                      | Error e -> return Ok (ToolAnswer.text (sprintf "not a terminal id: %s" e))
+                      | Ok id ->
+                          match! capabilities.Terminals.Close id with
+                          | Ok () -> return Ok (ToolAnswer.text (sprintf "closed terminal %s" raw))
+                          | Error reason -> return Ok (ToolAnswer.text reason)
                   })
 
           tool
               "list_terminals"
               "See every terminal open in this session — yours and the people's — what each is for, and whether something is running. Use it to see what you have before opening another, and to pick one to run in."
-              []
-              (fun _ ->
+              ToolArgs.none
+              (fun () ->
                   async {
                       match! capabilities.Terminals.List () with
                       | Error reason -> return Ok (ToolAnswer.text reason)
@@ -882,76 +731,65 @@ module AgentTools =
           tool
               "check_pending"
               "Pick up whatever a handle named — a long build, a command queued behind a busy terminal, a program waiting on a keystroke. Works for execute_command and anything that said it was still going; returns what the original call would have. A background command needs no polling: end your turn and you're woken when it finishes. To carry on once a running command has SAID something — a server's ready line, a prompt — give `wait_for`: it answers when the output says it, when the command ends (with its exit code and what it printed — a server that died before it was ready says so), or at `timeout_seconds`, whichever is first. Never write a shell loop that waits for a port or a line."
-              [ ToolField.required "handle" "string" "the handle from execute_command, or from a command that said it was still going"
-                ToolField.optional
-                    "wait_for"
-                    "string"
-                    "answer once the command's output contains this exact text, e.g. \"listening on\". Literal text — for a pattern use wait_for_pattern"
-                ToolField.optional
-                    "wait_for_pattern"
-                    "string"
-                    "answer once the command's output matches this pattern — the same subset read_terminal takes"
-                ToolField.optional
-                    "timeout_seconds"
-                    "number"
-                    "how long to wait for it before answering with what the command has said so far; default and most 120" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.pending args with
-                      | Error e -> return Error e
-                      | Ok (handle, until) -> return! answered (checkPending capabilities handle until)
-                  })
+              (toolArgs {
+                  let! handle = ToolArgs.text "handle" "the handle from execute_command, or from a command that said it was still going"
+                  // The default timeout is the turn's own bound: a caller naming a ready line
+                  // wants it as long as a command may take, not a device's ten seconds.
+                  and! until =
+                      waitFor
+                          "answer once the command's output contains this exact text, e.g. \"listening on\". Literal text — for a pattern use wait_for_pattern"
+                          "answer once the command's output matches this pattern — the same subset read_terminal takes"
+                          "how long to wait for it before answering with what the command has said so far; default and most 120"
+                          120.0
+                  return until |> Result.map (fun until -> handle, until)
+               })
+              (whenValid (fun (handle, until) -> answered (checkPending capabilities handle until)))
 
           tool
               "write_terminal"
               "Type into a terminal you hold the keyboard for: one streaming something live (a device or console — bytes from outside this session), or one running a command of yours (a full-screen program waiting on a key, a stdin: true prompt, or something stuck — keys: [\"ctrl-c\"] interrupts, [\"ctrl-d\"] is end-of-input). Text goes in `data`; keys go BY NAME in `keys`, after the text — never written out as escapes, which arrive as the characters they spell. The answer says what was typed. On a live stream, typing takes the terminal — everyone sees it and can take it back. On a shell terminal it works only while a command of yours runs there; otherwise use execute_command."
-              [ ToolField.required "terminal" "string" "the terminal id, from the terminal that was opened for the stream"
-                ToolField.optional "data" "string" "text to type, e.g. \"AT\""
-                ToolField.optionalList
-                    "keys"
-                    "string"
-                    (sprintf
-                        "keys to press after the text, by name: %s, ctrl-a … ctrl-z — e.g. [\"enter\"], [\"ctrl-c\"]"
-                        (TerminalKeys.named |> List.map fst |> List.filter (fun n -> not (n.StartsWith "ctrl-")) |> String.concat ", ")) ]
-              (fun args ->
-                  async {
-                      match ToolArgs.terminalWrite args with
-                      | Error e -> return Error e
-                      | Ok (terminal, data) ->
-                          match TerminalId.create terminal with
-                          | Error e -> return Error (sprintf "not a terminal id: %s" e)
-                          | Ok id -> return! ok (writeTerminal capabilities id data)
-                  })
+              (toolArgs {
+                  let! terminal = ToolArgs.text "terminal" "the terminal id, from the terminal that was opened for the stream"
+                  and! data = ToolArgs.textOption "data" "text to type, e.g. \"AT\""
+                  and! keys =
+                      ToolArgs.textList
+                          "keys"
+                          (sprintf
+                              "keys to press after the text, by name: %s, ctrl-a … ctrl-z — e.g. [\"enter\"], [\"ctrl-c\"]"
+                              (TerminalKeys.named |> List.map fst |> List.filter (fun n -> not (n.StartsWith "ctrl-")) |> String.concat ", "))
+                  // At least one; both is text followed by keys, which is how a line and its
+                  // enter are said.
+                  return
+                      match data, keys with
+                      | None, [] -> Error "nothing to type — give data, keys, or both"
+                      | _ ->
+                          TerminalKeys.bytesOf keys
+                          |> Result.map (fun bytes -> terminal, String.concat "" (Option.toList data @ [ bytes ]))
+               })
+              (whenValid (fun (terminal, data) ->
+                  match TerminalId.create terminal with
+                  | Error e -> async { return Error (sprintf "not a terminal id: %s" e) }
+                  | Ok id -> ok (writeTerminal capabilities id data)))
 
           tool
               "read_terminal"
               "Read what a terminal has said, optionally waiting for it to say something. Use it when the answer doesn't come back as a command's output — a live stream, or a shell terminal where a full-screen program waits on a key. `wait_for` holds the read until that text appears (on timeout it answers with what was said, usually the reason it didn't). No `from`: the tail now, capped, saying what it left out. `from`: a page from that line, plus the line to carry into the next call — how you read what was said before you arrived. Every answer says which lines it covers of how many. Reading takes nothing — whoever's typing keeps the terminal. On a shell terminal the tail is yours while a command of yours runs, and `wait_for_pattern` waits for a line of output without polling. Between commands the tail is refused (that output comes back from execute_command), but `from` still pages it."
-              [ ToolField.required "terminal" "string" "the terminal id, from the terminal that was opened for the stream"
-                ToolField.optional
-                    "from"
-                    "integer"
-                    "the line to read forward from, as reported by a previous read; omit for the tail"
-                ToolField.optional
-                    "wait_for"
-                    "string"
-                    "hold the read until this exact text appears, e.g. \"login: \". Literal text — for a pattern use wait_for_pattern"
-                ToolField.optional
-                    "wait_for_pattern"
-                    "string"
-                    "hold the read until output matches this pattern, e.g. \"[#$>] $\" for a shell prompt. Takes literal text, `.`, `[classes]`, `*`, `+`, `?`, `|`, groups, and `^`/`$` anchored to a LINE. No backreferences, lookaround or non-greedy quantifiers"
-                ToolField.optional
-                    "timeout_seconds"
-                    "number"
-                    "how long to hold before answering with what was said instead; default 10" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.terminalRead args with
-                      | Error e -> return Error e
-                      | Ok (terminal, from, waitFor) ->
-                          match TerminalId.create terminal with
-                          | Error e -> return Error (sprintf "not a terminal id: %s" e)
-                          | Ok id -> return! ok (readTerminal capabilities id from waitFor)
-                  })
+              (toolArgs {
+                  let! terminal = ToolArgs.text "terminal" "the terminal id, from the terminal that was opened for the stream"
+                  // Absent is the tail, which is what the optional parameters degrade to.
+                  and! from = ToolArgs.integerOption "from" "the line to read forward from, as reported by a previous read; omit for the tail"
+                  and! until =
+                      waitFor
+                          "hold the read until this exact text appears, e.g. \"login: \". Literal text — for a pattern use wait_for_pattern"
+                          "hold the read until output matches this pattern, e.g. \"[#$>] $\" for a shell prompt. Takes literal text, `.`, `[classes]`, `*`, `+`, `?`, `|`, groups, and `^`/`$` anchored to a LINE. No backreferences, lookaround or non-greedy quantifiers"
+                          "how long to hold before answering with what was said instead; default 10"
+                          10.0
+                  return until |> Result.map (fun until -> terminal, from, until)
+               })
+              (whenValid (fun (terminal, from, until) ->
+                  match TerminalId.create terminal with
+                  | Error e -> async { return Error (sprintf "not a terminal id: %s" e) }
+                  | Ok id -> ok (readTerminal capabilities id from until)))
 
           // Read-only, and says so in the descriptor: the one tool here that touches a file
           // and is not an act. Its call is still on the record — the tool-use chip says which
@@ -960,236 +798,190 @@ module AgentTools =
               tool
                   "read_file"
                   "Read a file, or a window of it, numbered by line. Prefer this over cat/sed/head/tail in execute_command: it's on the record as a read of THIS file, and the people here see what you looked at. Paths are as a terminal in that sandbox would take them — relative to where its terminals start (the checkout, once add_repo and set_shell_profile have run), or absolute. Every answer says which lines it covers of how many; a long file comes back a page at a time, and the answer says which `offset` reads on. Lines longer than 2000 characters are cut. A picture (.png, .jpg, .gif, .webp) comes back as the picture itself, for you to look at — so look before you describe one."
-                  [ ToolField.required "path" "string" "the file, e.g. \"src/Program.fs\", \"$TMPDIR/out.log\" — a checkout's path is the one the repos query gives"
-                    ToolField.optional "offset" "integer" "the first line to read, 1-based; omit for the top"
-                    ToolField.optional "limit" "integer" "how many lines; omit for 2000"
-                    ToolField.optional "sandbox" "string" "the work sandbox whose files these are; omit for the default one" ]
-                  (fun args ->
-                      async {
-                          match ToolArgs.fileRead args with
-                          | Error e -> return Error e
-                          | Ok (path, offset, limit, sandbox) -> return! answered (readFile capabilities path offset limit sandbox)
-                      })
+                  (toolArgs {
+                      let! path = ToolArgs.text "path" "the file, e.g. \"src/Program.fs\", \"$TMPDIR/out.log\" — a checkout's path is the one the repos query gives"
+                      and! offset = ToolArgs.integerOption "offset" "the first line to read, 1-based; omit for the top"
+                      and! limit = ToolArgs.integerOption "limit" "how many lines; omit for 2000"
+                      and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox whose files these are; omit for the default one"
+                      return path, offset, limit, sandbox
+                   })
+                  (fun (path, offset, limit, sandbox) -> answered (readFile capabilities path offset limit sandbox))
            { descriptor with ReadOnly = true }, body)
 
           (let descriptor, body =
               tool
                   "search_files"
                   "Search file contents for a pattern, recursively — `grep -rn` behind a typed door: the record says what you searched for and where. Prefer it over grep in execute_command. Answers `path:line:text` lines, at most 200, saying when more were cut. Extended regular expression (grep -E); `.git` is skipped, and binary files. Paths as read_file takes them."
-                  [ ToolField.required "pattern" "string" "an extended regular expression, e.g. \"let (private )?readFile\""
-                    ToolField.optional "path" "string" "the directory or file to search; omit for where terminals start"
-                    ToolField.optional "glob" "string" "only files whose NAME matches this glob, e.g. \"*.fs\""
-                    ToolField.optional "sandbox" "string" "the work sandbox to search in; omit for the default one" ]
-                  (fun args ->
-                      async {
-                          match ToolArgs.fileSearch args with
-                          | Error e -> return Error e
-                          | Ok (pattern, path, glob, sandbox) -> return! ok (searchFiles capabilities pattern path glob sandbox)
-                      })
+                  (toolArgs {
+                      let! pattern = ToolArgs.text "pattern" "an extended regular expression, e.g. \"let (private )?readFile\""
+                      and! path = ToolArgs.textOption "path" "the directory or file to search; omit for where terminals start"
+                      and! glob = ToolArgs.textOption "glob" "only files whose NAME matches this glob, e.g. \"*.fs\""
+                      and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox to search in; omit for the default one"
+                      return pattern, path, glob, sandbox
+                   })
+                  (fun (pattern, path, glob, sandbox) -> ok (searchFiles capabilities pattern path glob sandbox))
            { descriptor with ReadOnly = true }, body)
 
           (let descriptor, body =
               tool
                   "find_files"
                   "List the files whose names match a glob, recursively — `find` behind a typed door. Prefer it over find/ls in execute_command. One path per line, at most 200; `.git` is skipped. A glob without a slash matches file names anywhere below `path` (\"*.fsproj\"); one with a slash matches the path's tail (\"src/*/View.fs\"). Paths as read_file takes them."
-                  [ ToolField.required "glob" "string" "the name pattern, e.g. \"*.fs\" or \"tests/*/Main.fs\""
-                    ToolField.optional "path" "string" "the directory to look under; omit for where terminals start"
-                    ToolField.optional "sandbox" "string" "the work sandbox to look in; omit for the default one" ]
-                  (fun args ->
-                      async {
-                          match ToolArgs.fileFind args with
-                          | Error e -> return Error e
-                          | Ok (glob, path, sandbox) -> return! ok (findFiles capabilities glob path sandbox)
-                      })
+                  (toolArgs {
+                      let! glob = ToolArgs.text "glob" "the name pattern, e.g. \"*.fs\" or \"tests/*/Main.fs\""
+                      and! path = ToolArgs.textOption "path" "the directory to look under; omit for where terminals start"
+                      and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox to look in; omit for the default one"
+                      return glob, path, sandbox
+                   })
+                  (fun (glob, path, sandbox) -> ok (findFiles capabilities glob path sandbox))
            { descriptor with ReadOnly = true }, body)
 
           tool
               "edit_file"
               "Replace one exact piece of text in a file with another. Prefer this over sed/awk/heredocs in execute_command: the change is on the record as an edit of THIS file, and the people here see what changed. Read the file first (read_file) and quote `old_string` exactly as it appears — whitespace and indentation included, without the line numbers. It must match ONCE: if it matches more, add surrounding lines until it is unique, or pass replace_all: true to change every occurrence. Answers with what changed, or why nothing did. Paths as read_file takes them."
-              [ ToolField.required "path" "string" "the file to edit, as read_file names it"
-                ToolField.required "old_string" "string" "the exact text to replace, as it appears in the file"
-                ToolField.required "new_string" "string" "the text to put in its place"
-                ToolField.optional "replace_all" "boolean" "true to replace every occurrence; default false, which requires exactly one"
-                ToolField.optional "sandbox" "string" "the work sandbox whose file this is; omit for the default one" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.fileEdit args with
-                      | Error e -> return Error e
-                      | Ok (path, oldText, newText, replaceAll, sandbox) ->
-                          return! ok (editFile capabilities path oldText newText replaceAll sandbox)
-                  })
+              (toolArgs {
+                  let! path = ToolArgs.text "path" "the file to edit, as read_file names it"
+                  and! oldText = ToolArgs.text "old_string" "the exact text to replace, as it appears in the file"
+                  and! newText = ToolArgs.text "new_string" "the text to put in its place"
+                  and! replaceAll = ToolArgs.flag "replace_all" "true to replace every occurrence; default false, which requires exactly one"
+                  and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox whose file this is; omit for the default one"
+                  return path, oldText, newText, replaceAll, sandbox
+               })
+              (fun (path, oldText, newText, replaceAll, sandbox) ->
+                  ok (editFile capabilities path oldText newText replaceAll sandbox))
 
           tool
               "write_file"
               "Write a whole file: create it, or replace everything in it. For a change inside an existing file use edit_file, which records what changed; this records that the file was written. Directories on the way are created. Paths as read_file takes them."
-              [ ToolField.required "path" "string" "the file to write, as read_file names it"
-                ToolField.required "content" "string" "the entire new content of the file"
-                ToolField.optional "sandbox" "string" "the work sandbox whose file this is; omit for the default one" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.fileWrite args with
-                      | Error e -> return Error e
-                      | Ok (path, content, sandbox) -> return! ok (writeFile capabilities path content sandbox)
-                  })
+              (toolArgs {
+                  let! path = ToolArgs.text "path" "the file to write, as read_file names it"
+                  and! content = ToolArgs.text "content" "the entire new content of the file"
+                  and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox whose file this is; omit for the default one"
+                  return path, content, sandbox
+               })
+              (fun (path, content, sandbox) -> ok (writeFile capabilities path content sandbox))
 
           tool
               "share_artifact"
               "Share a file with the people here — an image you plotted, a screenshot, a report. Takes a path in a sandbox (as read_file takes them) and copies it into the session's artifacts, which everyone can see and nobody has to have a sandbox to read. Answers with the address the copy got, `file:///artifacts/<name>/<version>`: write it in a message, as it is, and the people here see it as the file — a chip that opens it — rather than as a URL. Sharing the same name again does NOT overwrite it — it adds a version, and the older ones stay where they are, so an address you have already written keeps showing what it showed. At most 100 MB a file; the refusal says how big yours is. The `artifacts` query lists what has been shared."
-              [ ToolField.required "path" "string" "the file to share, e.g. \"out/chart.png\" — a literal path, as read_file takes one: it is not a shell word, so an environment variable in it is not expanded"
-                ToolField.optional "name" "string" "what to call it here, e.g. \"coverage.png\"; omit to keep the file's own name (which is where the file type is read from)"
-                ToolField.optional "sandbox" "string" "the work sandbox the file is in; omit for the default one" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.artifactShare args with
-                      | Error e -> return Error e
-                      | Ok (path, name, sandbox) -> return! ok (shareArtifact capabilities path name sandbox)
-                  })
+              (toolArgs {
+                  let! path = ToolArgs.text "path" "the file to share, e.g. \"out/chart.png\" — a literal path, as read_file takes one: it is not a shell word, so an environment variable in it is not expanded"
+                  // Optional because the file already has one, and carrying it over keeps the
+                  // extension the media type is read from.
+                  and! name = ToolArgs.textOption "name" "what to call it here, e.g. \"coverage.png\"; omit to keep the file's own name (which is where the file type is read from)"
+                  and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox the file is in; omit for the default one"
+                  return path, name, sandbox
+               })
+              (fun (path, name, sandbox) -> ok (shareArtifact capabilities path name sandbox))
 
           tool
               "open_tab"
               "Put a terminal within reach of the people here: it opens as a tab in their side pane's strip, ready to choose. Takes an address — a terminal as \"terminal:<id>\", or a file as \"file:///artifacts/<name>\" (what share_artifact answers with; name a version to pin one). The strip holds terminals only: a file is never a tab, and the pane already lists every file the session has shared, so opening one this way changes nothing on anyone's screen — to put a file in front of somebody, use focus_tab. It does NOT take anyone's screen: everybody stays on what they were reading, and the tab waits to be chosen — to show somebody something because they asked to see it, use focus_tab. Opening the same address twice is the same one tab. Say in your message what you opened; the tab is how they find it again, not how they learn it exists."
-              [ ToolField.required "address" "string" "what to open, e.g. \"file:///artifacts/chart.png\" or \"terminal:01HQ...\"" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.string "address" args with
-                      | Error e -> return Error e
-                      | Ok address -> return! ok (openTab capabilities address false)
-                  })
+              (ToolArgs.text "address" "what to open, e.g. \"file:///artifacts/chart.png\" or \"terminal:01HQ...\"")
+              (fun address -> ok (openTab capabilities address false))
 
           tool
               "focus_tab"
               "Show the people here something, taking their side pane: a terminal opens as a tab if it is not one already and becomes the tab their pane is showing; a file is laid over their pane as a preview, which they close to get back to the terminal they were on. Either way it REPLACES whatever they were reading. Do this when they have asked to be shown something (\"show me the chart\", \"put it up\"), and not otherwise. If you merely think they will want a terminal next, open_tab puts it in their strip without taking their screen, and that is almost always the right one. Addresses as open_tab takes them."
-              [ ToolField.required "address" "string" "what to show, as open_tab names it" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.string "address" args with
-                      | Error e -> return Error e
-                      | Ok address -> return! ok (openTab capabilities address true)
-                  })
+              (ToolArgs.text "address" "what to show, as open_tab names it")
+              (fun address -> ok (openTab capabilities address true))
 
           tool
               "close_tab"
               "Take back an open_tab or a focus_tab: a terminal's tab goes from the side pane's strip, and a file shown with focus_tab is taken down if it is still up. Use it when what you opened has stopped being useful, rather than leaving it there. Asking is all this does — a terminal somebody is looking at stays on their screen until they move off it. Closing something that is not open is not an error. Addresses as open_tab takes them."
-              [ ToolField.required "address" "string" "what to close, as open_tab names it" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.string "address" args with
-                      | Error e -> return Error e
-                      | Ok address -> return! ok (closeTab capabilities address)
-                  })
+              (ToolArgs.text "address" "what to close, as open_tab names it")
+              (fun address -> ok (closeTab capabilities address))
 
           tool
               "set_secret"
               "Store a named secret for this session (WRITE-ONLY: no tool reads it back). To USE it, reference its name as an environment-variable secret ref when an environment starts — the value is injected there and never appears in the conversation."
-              [ ToolField.required "name" "string" "the secret name, e.g. DEPLOY_TOKEN"
-                // The one argument in the repo that must never be recorded, and it says so
-                // in the schema rather than in a list somebody has to remember to update.
-                ToolField.secret "value" "the secret value to store" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.two "name" "value" args with
-                      | Error e -> return Error e
-                      | Ok (name, value) -> return! ok (setSecret capabilities name value)
-                  })
+              (toolArgs {
+                  let! name = ToolArgs.text "name" "the secret name, e.g. DEPLOY_TOKEN"
+                  // The one argument in the repo that must never be recorded, and it says so
+                  // in the schema rather than in a list somebody has to remember to update.
+                  and! value = ToolArgs.secret "value" "the secret value to store"
+                  return name, value
+               })
+              (fun (name, value) -> ok (setSecret capabilities name value))
 
           tool
               "list_secrets"
               "List this session's stored secret names and timestamps. Never values."
-              []
-              (fun _ -> ok (listSecrets capabilities ()))
+              ToolArgs.none
+              (fun () -> ok (listSecrets capabilities ()))
 
           tool
               "delete_secret"
               "Delete one of this session's stored secrets by name."
-              [ ToolField.required "name" "string" "the secret name to delete" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.string "name" args with
-                      | Error e -> return Error e
-                      | Ok name -> return! ok (deleteSecret capabilities name)
-                  })
+              (ToolArgs.text "name" "the secret name to delete")
+              (fun name -> ok (deleteSecret capabilities name))
 
           tool
               "add_repo"
               "Clone a GitHub repo into this session's shared repos directory (visible to everyone here and inside the work environment). Takes owner/repo, never a URL, and only repos the session's GitHub credential can reach — GitHub says \"not found\" for one it won't show you, so not-found on a repo that exists means nobody has connected GitHub here; say that rather than retrying. Answers with the checkout path as a terminal here reaches it (usually relative to where a terminal starts): use it as given for cd and set_shell_profile, don't rebuild it. Read-only bootstrap — commit or push with execute_command. An already-added repo just reports its state."
-              [ ToolField.required "repo" "string" "the repo as owner/name, e.g. \"octocat/hello-world\"" ]
-              (ofRepo (addRepo capabilities))
+              (repo "the repo as owner/name, e.g. \"octocat/hello-world\"")
+              (addRepo capabilities >> ok)
 
           tool
               "remove_repo"
               "Delete a repo's checkout from this session — everyone here sees it leave the repos list. Use it when add_repo says a checkout is unreadable, or when the session is done with a repo. A checkout with uncommitted changes is REFUSED unless you pass `force`: removing deletes that work, and re-adding brings back the commits and nothing else — read the refusal and decide, don't force by reflex. Terminals set to start in the checkout go back to the sandbox default, and the answer says so. add_repo is the way back."
-              [ ToolField.required "repo" "string" "the repo as owner/name, e.g. \"octocat/hello-world\""
-                ToolField.optional "force" "boolean" "true to delete uncommitted changes along with the checkout" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.repoForce args with
-                      | Error e -> return Error e
-                      | Ok (repo, force) -> return! ok (removeRepo capabilities repo force)
-                  })
+              (toolArgs {
+                  let! repo = repo "the repo as owner/name, e.g. \"octocat/hello-world\""
+                  and! force = ToolArgs.flag "force" "true to delete uncommitted changes along with the checkout"
+                  return repo, force
+               })
+              (fun (repo, force) -> ok (removeRepo capabilities repo force))
 
           tool
               "switch_branch"
               "Switch a repo's checkout to a branch (optionally creating it). Local only — never touches the remote. Everyone in the session sees the switch in the timeline."
-              [ ToolField.required "repo" "string" "owner/name"
-                ToolField.required "branch" "string" "the branch to switch to"
-                ToolField.optional "create" "boolean" "create the branch (like switch -c)" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.repoBranchCreate args with
-                      | Error e -> return Error e
-                      | Ok (repo, branch, create) -> return! ok (switchBranch capabilities repo branch create)
-                  })
+              (toolArgs {
+                  let! repo = repo "owner/name"
+                  and! branch = ToolArgs.text "branch" "the branch to switch to"
+                  and! create = ToolArgs.flag "create" "create the branch (like switch -c)"
+                  return repo, branch, create
+               })
+              (fun (repo, branch, create) -> ok (switchBranch capabilities repo branch create))
           tool
               "fetch_repo"
               "Fetch a repo's remote refs (prune, no submodules). Use before switching to a branch that only exists on the remote."
-              repoArg
-              (ofRepo (fetchRepo capabilities))
+              (repo "owner/name")
+              (fetchRepo capabilities >> ok)
 
-          tool "repo_status" "A repo checkout's git status (porcelain, with branch header)." repoArg
-              (ofRepo (inspectRepo capabilities.Repos.Status))
+          tool "repo_status" "A repo checkout's git status (porcelain, with branch header)." (repo "owner/name")
+              (inspectRepo capabilities.Repos.Status >> ok)
 
-          tool "repo_log" "The last 30 commits of a repo checkout, one line each." repoArg
-              (ofRepo (inspectRepo capabilities.Repos.Log))
+          tool "repo_log" "The last 30 commits of a repo checkout, one line each." (repo "owner/name")
+              (inspectRepo capabilities.Repos.Log >> ok)
 
-          tool "repo_diff" "The uncommitted diff of a repo checkout (capped; use a terminal for the full thing)." repoArg
-              (ofRepo (inspectRepo capabilities.Repos.Diff))
+          tool "repo_diff" "The uncommitted diff of a repo checkout (capped; use a terminal for the full thing)." (repo "owner/name")
+              (inspectRepo capabilities.Repos.Diff >> ok)
 
           tool
               "start_work_sandbox"
               "Ensure a named work sandbox exists for this session, and return it. Returns the running one unchanged when there is one — safe to call every time. What a sandbox is, and which connections (\"github\" lets git push from a terminal) it forwards, is what its repo's yession.yaml or the operator declared for it; each command run there spends the credentials of whoever's turn it is."
-              [ ToolField.required "name" "string" "the sandbox name, e.g. \"default\" or \"test\"; a repo's is \"owner/repo:name\"" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.string "name" args with
-                      | Error e -> return Error e
-                      | Ok name -> return! ok (startWorkSandbox capabilities name)
-                  })
+              (ToolArgs.text "name" "the sandbox name, e.g. \"default\" or \"test\"; a repo's is \"owner/repo:name\"")
+              (fun name -> ok (startWorkSandbox capabilities name))
 
           tool
               "stop_work_sandbox"
               "Stop a named work sandbox, killing anything running in it."
-              [ ToolField.required "name" "string" "the sandbox name" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.string "name" args with
-                      | Error e -> return Error e
-                      | Ok name -> return! ok (stopWorkSandbox capabilities name)
-                  })
+              (ToolArgs.text "name" "the sandbox name")
+              (fun name -> ok (stopWorkSandbox capabilities name))
 
           tool
               "set_shell_profile"
               "Say where terminals opened from now on start. Use it once after add_repo, with the path add_repo gave you, so you stop putting `cd` in front of every command — every terminal opened afterwards starts there, yours and the people's, and it survives a restart. It takes a DIRECTORY, not a script (execute_command is still the only way to run anything), and the directory must already exist in that sandbox — this checks and says so rather than opening a terminal nowhere. A path from add_repo or the repos query goes in as given. Omit `cwd` to clear it. Terminals already open keep their directory, except the one your plain execute_command uses, which is reopened for you."
-              [ ToolField.optional
-                    "cwd"
-                    "string"
-                    "a directory the sandbox has, said the way add_repo and the repos query say it, e.g. \"repos/octocat/hello-world\"; omit it to clear the profile"
-                ToolField.optional "sandbox" "string" "the work sandbox this is about; omit for the default one" ]
-              (fun args ->
-                  async {
-                      match ToolArgs.cwdSandbox args with
-                      | Error e -> return Error e
-                      | Ok (cwd, sandbox) -> return! ok (setShellProfile capabilities sandbox cwd)
-                  }) ]
+              (toolArgs {
+                  // Both optional: an absent `cwd` is the CLEAR, and an absent `sandbox` the
+                  // default one — so a bare call puts the default sandbox back as it was.
+                  let! cwd =
+                      ToolArgs.textOption
+                          "cwd"
+                          "a directory the sandbox has, said the way add_repo and the repos query say it, e.g. \"repos/octocat/hello-world\"; omit it to clear the profile"
+                  and! sandbox = ToolArgs.textOption "sandbox" "the work sandbox this is about; omit for the default one"
+                  return cwd, sandbox
+               })
+              (fun (cwd, sandbox) -> ok (setShellProfile capabilities sandbox cwd)) ]
 
     /// The session's QUERIES (Plan 15), generated from the registry rather than written out
     /// one by one: declaring a query is what puts it in front of the agent, and in front of

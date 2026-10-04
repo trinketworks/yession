@@ -39,6 +39,86 @@ module ToolSchema =
     /// No arguments at all — what a query takes, and what `list_secrets` takes.
     let none : string = ofFields []
 
+/// A tool's arguments, declared ONCE. The schema field the model reads and the getter the
+/// body decodes with are built by the same call, so a key cannot be spelled one way in one
+/// and another way in the other. They used to be two lists kept in step by hand — a
+/// `ToolField` per argument beside the descriptor, a decoder per tool somewhere above it —
+/// and `terminal` was once missing from both at once with nothing to say so.
+[<RequireQualifiedAccess>]
+type ToolArgs<'a> = { Fields : ToolField list; Read : Decode.IGetters -> 'a }
+
+[<RequireQualifiedAccess>]
+module ToolArgs =
+
+    let map (f: 'a -> 'b) (input: ToolArgs<'a>) : ToolArgs<'b> =
+        { ToolArgs.Fields = input.Fields; ToolArgs.Read = input.Read >> f }
+
+    let zip (first: ToolArgs<'a>) (second: ToolArgs<'b>) : ToolArgs<'a * 'b> =
+        { ToolArgs.Fields = first.Fields @ second.Fields
+          ToolArgs.Read = fun get -> first.Read get, second.Read get }
+
+    /// No arguments at all — what a query takes, and what `list_secrets` takes.
+    let none : ToolArgs<unit> = { ToolArgs.Fields = []; ToolArgs.Read = ignore }
+
+    /// A required string.
+    let text (key: string) (description: string) : ToolArgs<string> =
+        { ToolArgs.Fields = [ ToolField.required key "string" description ]
+          ToolArgs.Read = fun get -> get.Required.Field key Decode.string }
+
+    /// A required string whose value is never recorded: `writeOnly`, which is what
+    /// `ToolArguments` redacts by.
+    let secret (key: string) (description: string) : ToolArgs<string> =
+        { ToolArgs.Fields = [ ToolField.secret key description ]
+          ToolArgs.Read = fun get -> get.Required.Field key Decode.string }
+
+    /// An optional string. An empty one is absent: a model that computed a value and got
+    /// nothing has not asked for "", and a tool handed "" would refuse it later and less
+    /// clearly.
+    let textOption (key: string) (description: string) : ToolArgs<string option> =
+        { ToolArgs.Fields = [ ToolField.optional key "string" description ]
+          ToolArgs.Read = fun get -> get.Optional.Field key Decode.string |> Option.filter (fun s -> s <> "") }
+
+    /// An optional integer.
+    let integerOption (key: string) (description: string) : ToolArgs<int option> =
+        { ToolArgs.Fields = [ ToolField.optional key "integer" description ]
+          ToolArgs.Read = fun get -> get.Optional.Field key Decode.int }
+
+    /// An optional number, and what an absent one means.
+    let number (key: string) (description: string) (otherwise: float) : ToolArgs<float> =
+        { ToolArgs.Fields = [ ToolField.optional key "number" description ]
+          ToolArgs.Read = fun get -> get.Optional.Field key Decode.float |> Option.defaultValue otherwise }
+
+    /// An optional boolean, false when absent: every flag a tool takes is an opt-in.
+    let flag (key: string) (description: string) : ToolArgs<bool> =
+        { ToolArgs.Fields = [ ToolField.optional key "boolean" description ]
+          ToolArgs.Read = fun get -> get.Optional.Field key Decode.bool |> Option.defaultValue false }
+
+    /// An optional list of strings, empty when absent.
+    let textList (key: string) (description: string) : ToolArgs<string list> =
+        { ToolArgs.Fields = [ ToolField.optionalList key "string" description ]
+          ToolArgs.Read = fun get -> get.Optional.Field key (Decode.list Decode.string) |> Option.defaultValue [] }
+
+    /// The JSON Schema a descriptor carries.
+    let schema (input: ToolArgs<'a>) : string = ToolSchema.ofFields input.Fields
+
+    /// One call's arguments. Blank is the empty object: a client calling a tool that has no
+    /// required arguments may send nothing at all.
+    let read (input: ToolArgs<'a>) (json: string) : Result<'a, string> =
+        let json = if System.String.IsNullOrWhiteSpace json then "{}" else json
+        Decode.fromString (Decode.object input.Read) json
+        |> Result.mapError (sprintf "could not read the arguments: %s")
+
+/// `toolArgs { let! a = … and! b = … return … }`. Applicative only — there is no `Bind` —
+/// so no argument can depend on another's value, which is what lets every one of them be
+/// in the schema before any call has been read.
+type ToolArgsBuilder () =
+    member _.BindReturn (input: ToolArgs<'a>, f: 'a -> 'b) : ToolArgs<'b> = ToolArgs.map f input
+    member _.MergeSources (first: ToolArgs<'a>, second: ToolArgs<'b>) : ToolArgs<'a * 'b> = ToolArgs.zip first second
+
+[<AutoOpen>]
+module ToolArgsSyntax =
+    let toolArgs = ToolArgsBuilder ()
+
 module ToolArguments =
 
     /// The fields a schema marks `writeOnly: true`. JSON Schema's own keyword, chosen over
