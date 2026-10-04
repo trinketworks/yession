@@ -1416,8 +1416,8 @@ let private sandboxStarted (sandbox: SandboxRef) (description: string option) =
 let private listTests =
     testList "The terminal list (Plan 20, stage 0)" [
 
-        testCase "the open terminals lead, in the order the strip shows them" <| fun () ->
-            // The list's open half and the strip are the same terminals, and two surfaces
+        testCase "the list reads in open order, as the strip does" <| fun () ->
+            // The list and the strip hold the same running terminals, and two surfaces
             // listing them in two orders is a difference a reader has to hold in their head.
             let model = clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
             Expect.equal
@@ -1425,20 +1425,36 @@ let private listTests =
                 [ "term-a"; "term-b" ]
                 "open order, exactly as the strip"
 
-        testCase "closed terminals follow the open ones, most recently opened first" <| fun () ->
-            // The closed half is history, and history reads newest first — the one place the
-            // list deliberately disagrees with the strip's order, because it is answering a
-            // different question.
-            let model =
-                clientOf
-                    [ at 1L 0.0 (opened terminalA "build")
-                      at 2L 1.0 (opened terminalB "logs")
-                      at 3L 2.0 (closedNow terminalA)
-                      at 4L 3.0 (closedNow terminalB) ]
-            Expect.equal
-                (ClientModel.terminalRows model |> List.map (fun t -> TerminalId.value t.TerminalId))
-                [ "term-b"; "term-a" ]
-                "the newest recording first"
+        // This replaced "closed terminals follow the open ones, most recently opened first".
+        // That order made every close a reorder: the killed row dropped to the bottom and the
+        // next live terminal's kill slid up under the pointer that had just pressed one, so a
+        // double-click ended two terminals. A list somebody is pressing in holds still; a
+        // closed row says it is closed by its mark, not by where it went.
+        testCase "a terminal that closes keeps its place in the list" <| fun () ->
+            let rows (model: ClientModel) = ClientModel.terminalRows model |> List.map (fun t -> TerminalId.value t.TerminalId)
+            let before = clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
+            let after = before |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
+            Expect.equal (rows after) (rows before) "the same rows in the same places"
+
+        testCase "arming a kill asks nothing of the session" <| fun () ->
+            // The first press is a question to the person, not a request: nothing leaves.
+            let _, effects =
+                ClientModel.update (ArmKillMsg (Some terminalA)) (clientOf [ at 1L 0.0 (opened terminalA "build") ])
+            Expect.equal effects [] "no kill sent on the first press"
+
+        testCase "confirming an armed kill ends the terminal" <| fun () ->
+            let armed =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ArmKillMsg (Some terminalA))
+            let _, effects = ClientModel.update (CloseTerminalMsg terminalA) armed
+            Expect.isTrue (List.contains (ClientEffect.CloseTerminal terminalA) effects) "the second press is the kill"
+
+        testCase "a kill armed over a terminal that closes is taken back" <| fun () ->
+            // Somebody else ended it, or it exited: the armed control has nothing left to end,
+            // and must not stand primed over the recording.
+            let armed =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ArmKillMsg (Some terminalA))
+            let closed = armed |> thenFolded [ at 2L 1.0 (closedNow terminalA) ]
+            Expect.isNone closed.KillArmed "nothing armed over a closed terminal"
 
         testCase "a terminal is recorded for this reader whichever way its transcript arrived" <| fun () ->
             // A LIVE terminal's length arrives as a catch-up hint before any chunk is

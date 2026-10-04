@@ -216,7 +216,7 @@ let tests =
             let clock, send, model = program ()
             let queueId = QueueId.create "q-armed" |> expect
             send (ArmQueueDeleteMsg (Some queueId))
-            clock.Advance ClientModel.queueDeleteArmedMs
+            clock.Advance ClientModel.armedMs
             Expect.isNone (model ()).QueueDeleteArmed "an unconfirmed press does not stay armed forever"
 
         // Same one-slot rule `ItemMenu` uses: a second entry armed is the first disarmed, so
@@ -235,6 +235,21 @@ let tests =
             send (ArmQueueDeleteMsg (Some queueId))
             send (DeleteQueuedMsg queueId)
             Expect.isNone (model ()).QueueDeleteArmed "nothing left for the armed id to mean"
+
+        // A kill is the same two-press gesture on the same clock, and a primed kill left
+        // standing over a terminal is worse than a primed delete: it ends work for everybody.
+        testCase "a kill armed by one press is taken back if nobody confirms it" <| fun () ->
+            let clock, send, model = program ()
+            send (ArmKillMsg (Some (TerminalId.create "term-armed" |> expect)))
+            clock.Advance ClientModel.armedMs
+            Expect.isNone (model ()).KillArmed "an unconfirmed press does not stay armed forever"
+
+        testCase "arming one terminal's kill disarms another's" <| fun () ->
+            let _, send, model = program ()
+            let second = TerminalId.create "term-second" |> expect
+            send (ArmKillMsg (Some (TerminalId.create "term-first" |> expect)))
+            send (ArmKillMsg (Some second))
+            Expect.equal (model ()).KillArmed (Some second) "one slot: at most one terminal is a press from gone"
 
         testCase "a click on interrupt marks that turn as stopping" <| fun () ->
             let model = fold [ opened; InterruptTurnMsg turn ]

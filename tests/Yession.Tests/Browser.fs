@@ -1252,6 +1252,12 @@ let tests =
                 do! awaitU (page.ClickAsync "[data-content-list-toggle='list']")
                 let kill = sprintf "[data-terminal-close='%s']" one
                 do! awaitU (page.FocusAsync kill)
+                // Two presses: the first arms the kill, the second, on the same control,
+                // performs it (`KillArmed`).
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do!
+                    await (page.WaitForSelectorAsync (sprintf "%s[data-terminal-close-armed='true']" kill))
+                    |> Async.Ignore
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 do!
                     await (page.WaitForFunctionAsync ("sel => !document.querySelector(sel)", box kill))
@@ -4574,6 +4580,123 @@ let editorTests =
                     await (page.WaitForFunctionAsync
                         """document.activeElement?.getAttribute('data-terminal-screen') === 'term-live'""")
                 return ()
+            }
+
+        // A kill is two presses in one place (`KillArmed`). What only a browser can answer is
+        // WHERE the second press lands: the armed face is wider than the glyph that armed it,
+        // and the confirm is only a confirm if the spot that was pressed is now the confirming
+        // control — not the row's name, not the next row's kill.
+        editorCase "one press on kill asks, and the asking control is where the press was" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-list-toggle='list']")
+                let! rect = await (page.Locator("#shell [data-terminal-close='term-harness']").BoundingBoxAsync ())
+                let x, y = rect.X + rect.Width / 2.0f, rect.Y + rect.Height / 2.0f
+                do! awaitU (page.Mouse.ClickAsync (x, y))
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-close='term-harness'][data-terminal-close-armed='true']")
+                // Hit-tested, not compared by rectangle: what matters is what a press at that
+                // point would reach, which is whatever is painted there.
+                let! under =
+                    await (page.EvaluateAsync<string> (
+                            sprintf
+                                "() => document.elementFromPoint(%.1f, %.1f)?.closest('[data-terminal-close]')?.getAttribute('data-terminal-close-armed') ?? 'nothing'"
+                                (float x) (float y)))
+                Expect.equal under "true" "the spot that was pressed is the armed kill"
+                let! sent = await (page.EvaluateAsync<int> "() => (window.__closed || []).length")
+                Expect.equal sent 0 "the first press asked; it sent no kill"
+            }
+
+        // The fault this replaced: a double-click on a kill ended two terminals, the second
+        // press landing on whatever slid under the pointer. Now the second press of the pair
+        // is the confirm, so a double-click ends exactly the terminal it was made on.
+        editorCase "a double-click on a kill ends that terminal and no other" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-list-toggle='list']")
+                do! awaitU (page.Locator("#shell [data-terminal-close='term-harness']").DblClickAsync ())
+                let! sent = await (page.EvaluateAsync<string> "() => JSON.stringify(window.__closed || [])")
+                Expect.equal sent "[\"term-harness\"]" "one kill, of the terminal the double-click was on"
+            }
+
+        // The keyboard half of the same control (UI baseline: a swap must never strand
+        // focus). Escape takes the arming back and the control it was on keeps focus, so the
+        // next Enter asks again rather than landing somewhere else.
+        editorCase "Escape takes an armed kill back and leaves focus where it was" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-list-toggle='list']")
+                let kill = "#shell [data-terminal-close='term-harness']"
+                do! awaitU (page.FocusAsync kill)
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                let! _ = await (page.WaitForSelectorAsync (kill + "[data-terminal-close-armed='true']"))
+                do! awaitU (page.Keyboard.PressAsync "Escape")
+                let! _ = await (page.WaitForSelectorAsync (kill + "[data-terminal-close-armed='false']"))
+                let! focused =
+                    await (page.EvaluateAsync<string> "() => document.activeElement?.getAttribute('data-terminal-close') ?? 'nothing'")
+                Expect.equal focused "term-harness" "focus stays on the kill"
+                let! sent = await (page.EvaluateAsync<int> "() => (window.__closed || []).length")
+                Expect.equal sent 0 "and nothing was killed"
+            }
+
+        // A list somebody is pressing in holds still. It used to put the open terminals first,
+        // so a terminal dying dropped its row to the bottom and slid the next one up under the
+        // pointer. Measured as each row's top AND height before and after the closes land, by
+        // row: a closed row that grows — its "not kept" wrapping in the mark's narrow track did
+        // exactly that — moves every row under it as surely as a reorder does.
+        //
+        // Two deaths, because there are two closed faces: the harness's first terminal has a
+        // recording, and one opened here has none, so it closes into "not kept".
+        editorCase "the rows of the list do not move when a terminal dies" <| fun page ->
+            async {
+                let expect r = Result.defaultWith failwith r
+                let fold (offset: int64) (event: Yession.Domain.SessionEvent) =
+                    let envelope : Yession.Domain.EventEnvelope<Yession.Domain.SessionEvent> =
+                        { EventId = Yession.Domain.EventId.fresh ()
+                          SessionId = Yession.Domain.SessionId.create "harness" |> expect
+                          Offset = Yession.Domain.EventOffset.create offset |> expect
+                          Actor = Yession.Domain.ActorRef.Session
+                          Timestamp = DateTimeOffset.UtcNow
+                          Event = event }
+                    let line = Yession.Codecs.Codec.toString Events.sessionEventEnvelope envelope
+                    awaitU (page.EvaluateAsync ("line => window.__fold(line)", box line))
+                let terminal (id: string) = Yession.Domain.TerminalId.create id |> expect
+                let closed (id: string) =
+                    Yession.Domain.SessionEvent.TerminalClosed
+                        { Yession.Domain.Terminals.TerminalClosed.TerminalId = terminal id
+                          Yession.Domain.Terminals.TerminalClosed.Reason = "closed by a peer"
+                          Yession.Domain.Terminals.TerminalClosed.By = None }
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-content-list-toggle='list']")
+                // Opened from elsewhere, so the newest and last: what its close must not change
+                // is its own height.
+                do!
+                    fold 90L (
+                        Yession.Domain.SessionEvent.TerminalOpened
+                            { Yession.Domain.Terminals.TerminalOpened.TerminalId = terminal "term-bare"
+                              Yession.Domain.Terminals.TerminalOpened.OpenedBy = Yession.Domain.ActorRef.Session
+                              Yession.Domain.Terminals.TerminalOpened.Title = Yession.Domain.Terminals.TerminalTitle.fromProse "bare"
+                              Yession.Domain.Terminals.TerminalOpened.Sandbox = None
+                              Yession.Domain.Terminals.TerminalOpened.Renewable = false })
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-close='term-bare']")
+                let rows =
+                    """() => JSON.stringify([...document.querySelectorAll('#shell [data-content-list] [role=listitem]')]
+                        .filter(r => r.querySelector('[data-terminal-list-row]'))
+                        .map(r => {
+                            const b = r.getBoundingClientRect();
+                            return [r.querySelector('[data-terminal-list-row]').getAttribute('data-terminal-list-row'),
+                                    Math.round(b.top), Math.round(b.height)];
+                        })
+                        .sort())"""
+                let! before = await (page.EvaluateAsync<string> rows)
+                do! fold 91L (closed "term-harness")
+                do! fold 92L (closed "term-bare")
+                // Landed: a closed terminal offers no kill, and one with nothing kept says so.
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                            """!document.querySelector("#shell [data-terminal-close='term-harness'], #shell [data-terminal-close='term-bare']")""")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-list-gone='term-bare']")
+                let! after = await (page.EvaluateAsync<string> rows)
+                Expect.equal after before "every row where it was, the size it was"
             }
 
         // Task cards (Plan 20, stage 4). WHICH commands group, in what order, and what the
