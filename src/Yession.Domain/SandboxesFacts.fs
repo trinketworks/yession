@@ -246,12 +246,16 @@ module WorkSandboxStopped =
 
 module ShellProfileSet =
 
+    /// Verb + noun, like every other headline: what happened, not where it takes effect —
+    /// that is the particular, because "set shell profile for X" is already one clause and
+    /// where terminals start is the second fact a reader asks about separately.
     let phrase (p: ShellProfileSet) : Phrase =
-        let where =
-            match p.WorkingDirectory with
-            | Some cwd -> sprintf " start in %s" cwd
-            | None -> " start where the sandbox puts them"
-        [ Segment.Text "new terminals in "; Segment.Ref (EntityRef.Sandbox p.Sandbox); Segment.Text where ]
+        [ Segment.Text "set shell profile for "; Segment.Ref (EntityRef.Sandbox p.Sandbox) ]
+
+    let particulars (p: ShellProfileSet) : Phrase list =
+        match p.WorkingDirectory with
+        | Some cwd -> [ Phrase.text (sprintf "terminals start in %s" cwd) ]
+        | None -> [ Phrase.text "terminals start where the sandbox puts them" ]
 
 module SandboxSetupQueued =
 
