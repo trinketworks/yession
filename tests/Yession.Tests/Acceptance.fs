@@ -167,7 +167,7 @@ let private representativeModel : ClientModel =
                 Sandbox = Some SandboxRef.defaultRef
                 Renewable = false
                 IsOpen = true
-                ClosedReason = None
+                Closed = None
                 Lease = None
                 IntegrationLost = false
                 Blocks =
@@ -429,7 +429,7 @@ let private closedTerminalModel : ClientModel =
         Terminals =
             { Terminals =
                 representativeModel.Terminals.Terminals
-                |> List.map (fun t -> { t with IsOpen = false; ClosedReason = Some "closed by a peer" }) }
+                |> List.map (fun t -> { t with IsOpen = false; Closed = Some { TerminalId = t.TerminalId; Reason = "closed by a peer"; By = Some (PeerRef bob) } }) }
         Pane = Some (OnTerminal (Reading terminalId)) }
 
 /// A closed terminal whose bytes came from a provider that said its stream can be asked for
@@ -2886,6 +2886,46 @@ let private chromeTests =
                     Expect.isFalse
                         (classes.Split ' ' |> Array.contains "outline-none")
                         (sprintf "a control declares a focus ring and then disables outlines: %s" classes)
+
+        // Hover is how a desktop reader learns an icon: a control that shows only a glyph
+        // carries its name twice, once for a screen reader (`aria-label`) and once for a
+        // pointer (`title`). Enumerated by HOOK, because a string render cannot tell an
+        // icon-only control from a worded one — and each hook must be FOUND, or a control
+        // that stopped rendering here would pass this by never being looked at.
+        testCase "every icon-only control in the pane carries a name and a title" <| fun () ->
+            let shut = Support.render { representativeModel with TerminalsOpen = false }
+            let reattachable = Support.render { renewableTerminalModel with Switcher = true }
+            let overflowing = Support.render { representativeModel with StripHidden = 2 }
+            let previewing =
+                Support.render
+                    (Support.step (ShowPreviewMsg (Preview.ofSubject (PreviewSubject.Block (terminalId, blockId)))) representativeModel)
+            let html = shell + listShell + shut + reattachable + overflowing + previewing
+            // The opening tag of every element carrying `hook`, valued or bare — and only that
+            // attribute, not one it is a prefix of (`data-terminal-close-armed`).
+            let tagsWith (hook: string) =
+                let rec from (i: int) (acc: string list) =
+                    match html.IndexOf (hook, i) with
+                    | -1 -> List.rev acc
+                    | at ->
+                        let next = html.[at + hook.Length]
+                        if next = '=' || next = '>' || System.Char.IsWhiteSpace next then
+                            let opens = html.LastIndexOf ('<', at)
+                            from (at + 1) (html.Substring (opens, html.IndexOf ('>', at) - opens) :: acc)
+                        else from (at + 1) acc
+                from 0 []
+            for hook in
+                [ Dom.Hooks.contentToggle
+                  Dom.Hooks.paneNew
+                  Dom.Hooks.paneStripOverflow
+                  Dom.Hooks.panePreviewClose
+                  Dom.Hooks.terminalListRewind
+                  Dom.Hooks.terminalReattach
+                  Dom.Hooks.terminalClose ] do
+                let tags = tagsWith hook
+                Expect.isNonEmpty tags (sprintf "%s is rendered somewhere this case looks" hook)
+                for tag in tags do
+                    Expect.isTrue (tag.Contains "aria-label=\"") (sprintf "%s has no accessible name: %s" hook tag)
+                    Expect.isTrue (tag.Contains " title=\"") (sprintf "%s has no title to hover: %s" hook tag)
 
         // Deliberately no "focus is blue, everywhere" here. That focus is BLUE rather than
         // green is house style, not a floor — a design that moved it would fail such a test

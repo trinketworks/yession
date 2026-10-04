@@ -362,6 +362,8 @@ module Dom =
         /// when retention has deleted the recording.
         let terminalClosedTab = "data-terminal-closed-tab"
         let terminalReplayGone = "data-terminal-replay-gone"
+        /// A closed terminal's band — what closed it and who — carrying the terminal's id.
+        let terminalClosedBand = "data-terminal-closed-band"
         /// Terminal work in the CHAT (Plan 14, stage 1). A chip per block, anchored where the
         /// command started; an item per lease stretch, anchored where it concluded. Both are
         /// buttons — tapping one opens the terminal read-only — so both are keyboard-operable
@@ -765,8 +767,35 @@ module Dom =
         let download = "Download"
         /// Taking the keyboard of a terminal nobody holds. The STEAL — taking it from somebody
         /// — is the lease bar's `Take over`, which names who it would be taken from; this one
-        /// takes nothing from anyone, and the two are not the same act.
-        let takeControl = "Take control"
+        /// takes nothing from anyone, and the two are not the same act. Said as what it LETS
+        /// you do rather than as a grab: "control" is the model's word for a lease, and what a
+        /// person wants from the press is to type.
+        let typeHere = "Type here"
+        /// The one control between a terminal's two reads (`terminalWatch`): its recording,
+        /// the text it ran, and the live edge. Named after what the reader gets.
+        let replay = "Replay"
+        let output = "Output"
+        let live = "Live"
+        /// The list's rewind, named for its terminal: watching it from a moment ago.
+        let rewindTerminal (title: string) = "Rewind " + title
+        /// A rewound reader, told how far behind the live edge they are — when there is any
+        /// distance yet to tell.
+        let behindLive (distance: string option) =
+            match distance with
+            | Some d -> sprintf "%s behind live" d
+            | None -> "behind live"
+        /// A closed terminal whose recording the output cap ate: a gap in the audit trail,
+        /// said as what it is to a reader rather than as a retention policy.
+        let recordingLost = "recording lost"
+        /// Who closed a terminal, when it was somebody — the band draws them after this.
+        let killedBy = "killed by"
+        /// How many lines a stretch's recording holds.
+        let linesRecorded (n: int) = if n = 1 then "1 line recorded" else sprintf "%d lines recorded" n
+        /// What the pane's head says when nothing is selected: the column of terminals.
+        let terminals = "terminals"
+        /// The way out of the content column. A title as well as a name: hover is how a
+        /// desktop reader learns an icon.
+        let backToChat = "Back to the chat"
         /// A preview's way back, naming the terminal it returns to (P2-1) — and with no
         /// terminal under it, just the way back.
         let backTo (terminal: string) = sprintf "back to %s" terminal
@@ -826,7 +855,7 @@ module Dom =
         let refused = "refused"
         let dismissRefusal = "Dismiss"
         /// What the switcher says when nothing has been opened, above its way to make one.
-        let nothingOpenedYet = "Nothing opened here yet"
+        let nothingOpenedYet = "No terminals yet"
         /// The switcher's door, named for what it does and the key that does it too.
         let switchTerminal = "Switch terminal (Ctrl+` or ⌘`)"
         /// The strip's overflow count, for anybody not reading the number.

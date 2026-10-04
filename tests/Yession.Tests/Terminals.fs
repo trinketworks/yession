@@ -285,7 +285,7 @@ let private projectionTests =
                       SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "session restarted"; By = None } ]
             let a = Projection.tryFind terminalA proj |> Option.get
             Expect.isFalse a.IsOpen "it is closed"
-            Expect.equal a.ClosedReason (Some "session restarted") "with the reason recorded"
+            Expect.equal (a.Closed |> Option.map (fun c -> c.Reason)) (Some "session restarted") "with the reason recorded"
             Expect.equal (List.length a.Blocks) 1 "and its history intact"
             Expect.isEmpty (Projection.openTerminals proj) "it is not in the open list"
 
@@ -3785,7 +3785,7 @@ let private viewOf (isOpen: bool) (renewable: bool) : TerminalView =
       Sandbox = Some SandboxRef.defaultRef
       Renewable = renewable
       IsOpen = isOpen
-      ClosedReason = (if isOpen then None else Some "closed by nick")
+      Closed = (if isOpen then None else Some { TerminalId = terminalA; Reason = "closed by a peer"; By = Some (PeerRef ada) })
       Lease = None
       IntegrationLost = false
       Blocks = []

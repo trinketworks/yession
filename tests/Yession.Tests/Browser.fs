@@ -5119,11 +5119,11 @@ let editorTests =
         // A list somebody is pressing in holds still. It used to put the open terminals first,
         // so a terminal dying dropped its row to the bottom and slid the next one up under the
         // pointer. Measured as each row's top AND height before and after the closes land, by
-        // row: a closed row that grows — its "not kept" wrapping in the mark's narrow track did
-        // exactly that — moves every row under it as surely as a reorder does.
+        // row: a closed row that grows — its "recording lost" wrapping in the mark's narrow
+        // track did exactly that — moves every row under it as surely as a reorder does.
         //
         // Two deaths, because there are two closed faces: the harness's first terminal has a
-        // recording, and one opened here has none, so it closes into "not kept".
+        // recording, and one opened here has none, so it closes into "recording lost".
         editorCase "the rows of the switcher do not move when a terminal dies" <| fun page ->
             async {
                 let expect r = Result.defaultWith failwith r

@@ -3065,7 +3065,7 @@ module Style =
         cls [ "bg-transparent cursor-pointer text-left w-full truncate p-0 phone:min-h-11 font-ui text-body text-ink-dim"
               "no-underline hover:text-blue transition-colors"; focusRing ]
 
-    /// A closed row's "not kept", beside its name: one line, never squeezed, so a row that
+    /// A closed row's "recording lost", beside its name: one line, never squeezed, so a row that
     /// says it is the height of one that does not.
     let terminalListGone = statusErr + " shrink-0 whitespace-nowrap ml-2"
 
@@ -3202,9 +3202,12 @@ module Style =
     /// Coming back is TRANSIENT — it exists only while you are behind the live edge — and it
     /// is about where you are in the scroll, so it floats over the scroller. The same slot
     /// every chat client puts "jump to latest" in, for the same reason.
+    ///
+    /// A status line, not a box: what floats here is a fact (how far behind live), and a
+    /// bordered box around a fact reads as a control nobody can press. The surface ground
+    /// stays, so it reads over whatever is playing under it.
     let terminalLiveFloat =
-        cls [ "absolute right-3 bottom-3 z-10 flex items-center gap-3 px-3 py-2 bg-surface"
-              Stroke.ring; Stroke.rim ]
+        "absolute right-3 bottom-3 z-10 flex items-center gap-3 px-3 py-2 bg-surface"
     /// The rewound read is a player, not a scroller, so it has no scroll box of its own to
     /// float over — this is the positioned region the way back hangs in.
     let terminalReplayRegion = "relative flex-1 min-h-0 flex flex-col"

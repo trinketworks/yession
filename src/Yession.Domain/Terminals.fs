@@ -144,8 +144,10 @@ type TerminalView =
       Renewable : bool
       /// A closed terminal keeps its blocks: the audit outlives the process.
       IsOpen : bool
-      /// Why it closed, when it has.
-      ClosedReason : string option
+      /// What closed it, when something has: the reason, and the party (`TerminalClosed.By`)
+      /// — so a band can say WHO killed a terminal from the fact rather than from a sentence
+      /// that would have to have frozen a name into the log to say so.
+      Closed : TerminalClosed option
       /// Who holds the terminal's stdin, when anyone does (Plan 13, stage 2e). `Some` IS
       /// live mode: there is no separate mode flag, because a mode nobody holds and a lease
       /// nobody holds would be two names for one fact, free to disagree.
@@ -274,7 +276,7 @@ module Projection =
                           Sandbox = e.Sandbox
                           Renewable = e.Renewable
                           IsOpen = true
-                          ClosedReason = None
+                          Closed = None
                           Lease = None
                           IntegrationLost = false
                           Blocks = []
@@ -294,7 +296,7 @@ module Projection =
             |> updateTerminal e.TerminalId (fun t ->
                 { t with
                     IsOpen = false
-                    ClosedReason = Some e.Reason
+                    Closed = Some e
                     Lease = None
                     Blocks =
                         t.Blocks
