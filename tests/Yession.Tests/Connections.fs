@@ -2963,8 +2963,8 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
     }
 
 /// A `Spending` over a real ledger, so a case can watch what a reply taught it.
-let private spendingOver (ledger: Resilience.Ledger) (now: DateTimeOffset) (spend: Resilience.Spend) =
-    GitHubPrs.Spending.over ledger (fun () -> now) spend
+let private spendingOver (ledgers: Resilience.Ledgers) (now: DateTimeOffset) (spend: Resilience.Spend) =
+    GitHubPrs.Spending.over ledgers (fun () -> now) spend
 
 let private prBudgetTests =
     testList "what a look spends" [
@@ -2976,8 +2976,9 @@ let private prBudgetTests =
                 let! stub = startStubGitHubApi ()
                 let resets = DateTimeOffset (2026, 1, 1, 1, 0, 0, TimeSpan.Zero)
                 stub.SetAllowance (Some (4321, resets.ToUnixTimeSeconds (), "core"))
-                let ledger = Resilience.Ledger.create ()
-                let fetch = GitHubPrs.fetchOver stub.Url (spendingOver ledger resets Resilience.Background)
+                let ledgers = Resilience.Ledgers.create ()
+                let ledger = Resilience.Ledgers.forCredential ledgers "token-abc"
+                let fetch = GitHubPrs.fetchOver stub.Url (spendingOver ledgers resets Resilience.Background)
                 let! _ = fetch (Some "token-abc") prOne PrWatches.PrEtags.none None
                 Expect.equal
                     (Resilience.Ledger.reading ledger)
@@ -2993,8 +2994,9 @@ let private prBudgetTests =
                 let! stub = startStubGitHubApi ()
                 let resets = DateTimeOffset (2026, 1, 1, 1, 0, 0, TimeSpan.Zero)
                 stub.SetAllowance (Some (7, resets.ToUnixTimeSeconds (), "search"))
-                let ledger = Resilience.Ledger.create ()
-                let fetch = GitHubPrs.fetchOver stub.Url (spendingOver ledger resets Resilience.Background)
+                let ledgers = Resilience.Ledgers.create ()
+                let ledger = Resilience.Ledgers.forCredential ledgers "token-abc"
+                let fetch = GitHubPrs.fetchOver stub.Url (spendingOver ledgers resets Resilience.Background)
                 let! _ = fetch (Some "token-abc") prOne PrWatches.PrEtags.none None
                 Expect.equal (Resilience.Ledger.reading ledger) Resilience.Unknown "not this budget"
             }
@@ -3006,9 +3008,10 @@ let private prBudgetTests =
                 let! stub = startStubGitHubApi ()
                 let now = DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
                 let resets = now.AddMinutes 30.0
-                let ledger = Resilience.Ledger.create ()
+                let ledgers = Resilience.Ledgers.create ()
+                let ledger = Resilience.Ledgers.forCredential ledgers "token-abc"
                 Resilience.Ledger.observed ledger (Resilience.Seen (10, resets))
-                let fetch = GitHubPrs.fetchOver stub.Url (spendingOver ledger now Resilience.Background)
+                let fetch = GitHubPrs.fetchOver stub.Url (spendingOver ledgers now Resilience.Background)
                 match! fetch (Some "token-abc") prOne PrWatches.PrEtags.none None with
                 | PrWatches.PrFetchFailed (PrWatches.PrHeld until) ->
                     Expect.equal until (resets.ToUnixTimeSeconds ()) "the moment github named, held here rather than refused there"
@@ -3020,12 +3023,39 @@ let private prBudgetTests =
             async {
                 let! stub = startStubGitHubApi ()
                 let now = DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
-                let ledger = Resilience.Ledger.create ()
+                let ledgers = Resilience.Ledgers.create ()
+                let ledger = Resilience.Ledgers.forCredential ledgers "token-abc"
                 Resilience.Ledger.observed ledger (Resilience.Seen (10, now.AddMinutes 30.0))
-                let fetch = GitHubPrs.fetchOver stub.Url (spendingOver ledger now Resilience.Foreground)
+                let fetch = GitHubPrs.fetchOver stub.Url (spendingOver ledgers now Resilience.Foreground)
                 match! fetch (Some "token-abc") prOne PrWatches.PrEtags.none None with
                 | PrWatches.PrChanged _ -> Expect.isTrue (stub.Requests.Count > 0) "the reserve is what this is for"
                 | other -> failwithf "expected the look to go through, got %A" other
+            }
+
+        testCaseAsync "what no credential was told holds back no credential but none" <|
+            async {
+                // GitHub meters no credential per address, at sixty an hour — always under
+                // the reserve. One shared reading let an anonymous look at boot hold every
+                // connected watch until that window turned over, sending nothing that could
+                // have said otherwise.
+                let! stub = startStubGitHubApi ()
+                let now = DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
+                let resets = now.AddMinutes 30.0
+                stub.SetAllowance (Some (41, resets.ToUnixTimeSeconds (), "core"))
+                let ledgers = Resilience.Ledgers.create ()
+                let fetch = GitHubPrs.fetchOver stub.Url (spendingOver ledgers now Resilience.Background)
+                let! _ = fetch None prOne PrWatches.PrEtags.none None
+                Expect.equal
+                    (Resilience.Ledger.reading (Resilience.Ledgers.forCredential ledgers ""))
+                    (Resilience.Seen (41, resets))
+                    "the anonymous reading, kept as the anonymous one"
+                match! fetch (Some "token-abc") prOne PrWatches.PrEtags.none None with
+                | PrWatches.PrFetchFailed (PrWatches.PrHeld _) -> failwith "a connected look was held by what no credential was told"
+                | _ -> ()
+                match! fetch None prOne PrWatches.PrEtags.none None with
+                | PrWatches.PrFetchFailed (PrWatches.PrHeld until) ->
+                    Expect.equal until (resets.ToUnixTimeSeconds ()) "while no credential is still held by its own"
+                | other -> failwithf "expected the anonymous look to be held, got %A" other
             }
     ]
 

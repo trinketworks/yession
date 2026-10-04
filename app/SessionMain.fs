@@ -987,14 +987,15 @@ Async.StartImmediate (
         // the baseline it compares against is only durable because what advanced it was
         // recorded, so a driver that could forget the append must not exist.
         //
-        // ONE ledger for github.com's budget, made here and handed to both callers below.
-        // A GitHub allowance belongs to a credential rather than to a process, so what a
-        // reply reports includes what every other session holding it has spent — which is
-        // why reading the provider's own counter needs no coordination and a count of our
-        // own would need all of it.
-        let githubLedger = Resilience.Ledger.create ()
+        // ONE ledger per credential for github.com's budget, made here and handed to both
+        // callers below. A GitHub allowance belongs to a credential rather than to a
+        // process, so what a reply reports includes what every other session holding it has
+        // spent — which is why reading the provider's own counter needs no coordination and
+        // a count of our own would need all of it. Per credential, not one, because a
+        // session spends several: each person's connection, and none at all.
+        let githubLedgers = Resilience.Ledgers.create ()
         let githubSpending (spend: Resilience.Spend) =
-            GitHubPrs.Spending.over githubLedger clock.Now spend
+            GitHubPrs.Spending.over githubLedgers clock.Now spend
         let githubLooking (spend: Resilience.Spend) =
             GitHubPrs.fetchOver githubApi (githubSpending spend)
         do
