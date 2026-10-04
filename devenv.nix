@@ -58,10 +58,14 @@ in
   # lends it a stand-in token and the credential proxy. It belongs in the CONTAINER: on
   # macOS gh verifies TLS through the Security framework and ignores SSL_CERT_FILE, so
   # under srt it can trust neither the proxy's authority nor anything else.
+  #
+  # procps (`ps`, `pkill`) on Linux only: the work sandboxes' nixos/nix image has none, and
+  # an agent stopping a scratch Manager there fell back to walking /proc by hand (session
+  # NR5KB8B5). macOS has its own, which the store's would shadow for no gain.
   packages =
     [ pkgs.git pkgs.gh pkgs.actionlint pkgs.uv pkgs.python312 pkgs.caddy pkgs.zsh ]
     ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux
-         [ pkgs.dbus pkgs.gnome-keyring pkgs.bubblewrap pkgs.socat pkgs.ripgrep pkgs.eudev ];
+         [ pkgs.dbus pkgs.gnome-keyring pkgs.bubblewrap pkgs.socat pkgs.ripgrep pkgs.eudev pkgs.procps ];
 
   # Name the confinement tools for the srt backend exactly as the installable's wrappers do
   # (nix/packages.nix), so a dev-shell run and an installed run confine through the same
