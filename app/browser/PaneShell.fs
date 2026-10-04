@@ -443,6 +443,15 @@ let toPaneNew () : unit =
     nextFrame (fun () ->
         find "[data-pane-new]" |> Option.orElseWith (fun () -> find "[data-terminal-new]") |> focusOn)
 
+/// Onto the message composer's field — this peer's own, the one that is not read-only — or,
+/// where no composer is on offer, the session's title: the first control of the column a
+/// notice in it sat over (`DomMove.FocusComposer`).
+let toComposer () : unit =
+    nextFrame (fun () ->
+        find "[data-draft-input][data-rich-readonly=\"false\"] [contenteditable=\"true\"]"
+        |> Option.orElseWith (fun () -> find "input[data-session-title]")
+        |> focusOn)
+
 /// Carry out a move the model asked for (`Yession.App.DomMove`) — the one place a move is
 /// turned into the document call that makes it, for the page and the harness alike.
 let rec move (asked: Yession.App.DomMove) : unit =
@@ -466,6 +475,7 @@ let rec move (asked: Yession.App.DomMove) : unit =
         revealBlock (Yession.Domain.TerminalId.value terminalId) (Yession.Domain.BlockId.value blockId)
     | Yession.App.DomMove.RevealMessage messageId -> revealMessage (Yession.Domain.MessageId.value messageId)
     | Yession.App.DomMove.ScrollToLatest -> scrollToLatest ()
+    | Yession.App.DomMove.FocusComposer -> toComposer ()
 
 /// The pane's open state, as a class on the shell root — the same mechanism the sidebar uses,
 /// so a Lit re-render never fights the CSS transition. A `set` rather than a toggle, because

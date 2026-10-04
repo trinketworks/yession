@@ -318,6 +318,60 @@ type QueriesViewState =
 /// off the screen.
 [<RequireQualifiedAccess>]
 type Copy = { Box : string; Nth : int }
+
+/// Where the refusal notice is drawn (`ClientModel.refusalMount`). Two mounts and ONE notice:
+/// which of them draws it is a decision over the model, made once, so the same refusal cannot
+/// be on the screen twice.
+[<RequireQualifiedAccess>]
+type RefusalMount =
+    /// The content pane, under its strip: where every terminal verb is pressed.
+    | Pane
+    /// The conversation column, under its header: where everything else is pressed, and
+    /// where a terminal verb's refusal goes when the pane is shut.
+    | Chat
+
+/// What the session last REFUSED (`ClientModel.Refused`): its own sentence, and the two
+/// things the client needs to say it well.
+///
+/// The REASON rather than the command it answered: a rejection carries a sentence written to
+/// be read ("there is no sandbox named 'octo/hello:dev' in this session — there is …"), and the
+/// surface that shows it has nothing to add. What the command was is used, not shown — to put
+/// the sentence where the press was (`FromPane`).
+[<RequireQualifiedAccess>]
+type Refusal =
+    { Reason : string
+      /// Whether what was refused was one of the content pane's own verbs, which are pressed
+      /// there and so are answered there while the pane is open. `false` for an answer to a
+      /// request this client has no record of sending.
+      FromPane : bool
+      /// Which mount had the keyboard inside it, as the notice itself last said
+      /// (`RefusalFocusMsg`). Per mount rather than a flag, because the notice can change
+      /// mounts under a reader (the pane shut or opened), and a flag set by the old mount's
+      /// element would claim focus the new one never had.
+      FocusedIn : RefusalMount option }
+
+module Refusal =
+
+    /// Whether `command` is pressed in the content pane — a terminal verb, every one of which
+    /// lives there (the strip, its menu, the switcher, the lease bar, a lost terminal's band).
+    let fromPane (command: SessionCommand) : bool =
+        match command with
+        | OpenTerminal _
+        | CloseTerminal _
+        | TakeTerminalLease _
+        | ReleaseTerminalLease _
+        | RearmTerminal _
+        | ReattachTerminal _ -> true
+        | InterruptAgentTurn _
+        | ApproveRepoCapabilities _
+        | AddRepo _ -> false
+
+    /// Where `refusal` is drawn: in the pane while the pane is open and the refusal is one
+    /// of its verbs' — that is where the press was — and in the conversation otherwise,
+    /// including a pane verb whose pane has since been shut, because a notice behind a shut
+    /// column is a notice nobody reads.
+    let mount (terminalsOpen: bool) (refusal: Refusal) : RefusalMount =
+        if refusal.FromPane && terminalsOpen then RefusalMount.Pane else RefusalMount.Chat
 /// Which draft the composer has open. `Unchosen` is the state a fresh client is in, and the only
 /// one where the DEFAULT applies (join the draft already in flight rather than start a rival) —
 /// once someone picks, the pick stands, so "new message" is not undone by a peer starting to type.
@@ -798,7 +852,8 @@ type ClientModel =
       /// A COUNT rather than a flag, because two presses are owed two terminals and a flag
       /// would land the second press on the first terminal. Spent on arrival: a press buys
       /// exactly the terminal that answers it, and the next one to arrive finds nothing
-      /// owed.
+      /// owed. Spent too by the session REFUSING it (`CommandAnsweredMsg`), which is the
+      /// other answer a press can get, and the one after which no terminal is coming.
       Opening       : int
       /// The terminal this client last asked to END, until the close arrives.
       ///
@@ -904,10 +959,15 @@ type ClientModel =
       /// cost an afternoon to find that terminals could not open on one machine, because the
       /// refusal that said why was discarded by the client that asked for it.
       ///
-      /// The REASON rather than the command it answered: a rejection carries a sentence
-      /// written to be read ("there is no sandbox named 'octo/hello:dev' in this session —
-      /// there is …"), and the surface that shows it has nothing to add.
-      Refused       : string option
+      /// The REASON rather than the command it answered (`Refusal`). Drawn once, where the
+      /// press was (`refusalMount`); never for the launch's own add, whose card says its own
+      /// refusal under the row it was sent from.
+      Refused       : Refusal option
+      /// The commands this client has sent and not yet heard back about, by request id, with
+      /// what each asked for. Written where a command is SENT (`CommandSentMsg`, from the one
+      /// verb that sends one, `Client.Connection.Ask`) and spent by its answer — which comes
+      /// back as a bare id, so this is the only thing that can say what a refusal refused.
+      Asked         : Map<RequestId, SessionCommand>
       /// Which folds are UNFOLDED — an act's particulars, a turn's tool calls, one call's
       /// input and output. View state like the menu above — what one person opened to read
       /// is nobody else's — but a set rather than one slot: two folds open at once are two
@@ -1017,6 +1077,10 @@ type DomMove =
     | RevealMessage of MessageId
     /// Scroll the conversation to its own tail.
     | ScrollToLatest
+    /// Onto the message composer's field — or the session's title, where there is no
+    /// composer to offer. Where a notice in the conversation column hands the keyboard when
+    /// it goes from under it.
+    | FocusComposer
 
 /// Messages that drive the client model. Connection-lifecycle messages are produced by
 /// the connection driver (Connection.fs); the suffix avoids clashing with the
@@ -1155,8 +1219,12 @@ type ClientMsg =
     | PendingWaitedMsg of now: int64
     /// The launch surface moved (typed, listed, chose, sent, answered, failed, dismissed).
     | LaunchMsg of LaunchMsg
-    /// The session answered a command this client sent. Uncorrelated for every command but
-    /// the launch's, which is the one whose rejection has a screen waiting to say it.
+    /// This client sent the session a command, under this request id. Dispatched by the one
+    /// verb that sends commands (`Client.Connection.Ask`), BEFORE the command leaves, so no
+    /// answer can arrive ahead of the record of what it answers.
+    | CommandSentMsg of RequestId * SessionCommand
+    /// The session answered a command this client sent. The launch's add is the launch
+    /// card's to answer; any other refusal is the notice (`ClientModel.Refused`).
     | CommandAnsweredMsg of RequestId * SessionCommandResult
     /// Pick the model this session's turns run on — `None` hands the choice back to the
     /// provider. One register, written like a gate: the reducer sets it and the Ylmish
@@ -1299,6 +1367,10 @@ type ClientMsg =
     /// Put away the notice saying what the session last refused. A refusal is news, not a
     /// state: once it has been read there is nothing left for it to do.
     | DismissRefusalMsg
+    /// The keyboard went into the refusal notice drawn at this mount (`Some`), or left it
+    /// (`None`). Told by the notice itself, so that whatever takes it away — its dismiss, or
+    /// an acceptance — can hand focus on rather than strand it on `body`.
+    | RefusalFocusMsg of RefusalMount option
     /// Open or shut the strip's menu of things to open (Plan 20, stage 1). Opening is a
     /// toggle rather than a pair, so the control that opened it is the control that shuts it
     /// and focus never has to go looking for a replacement.
@@ -1543,6 +1615,7 @@ module ClientModel =
           Switcher = false
           StripHidden = 0
           Refused = None
+          Asked = Map.empty
           OpenFolds = Set.empty
           DatedBreaks = Set.empty
           QueueDeleteArmed = None
@@ -1843,6 +1916,11 @@ module ClientModel =
         | Some _, _ -> DomMove.FocusPane
         | None, Some terminal -> DomMove.FocusCommandLine terminal
         | None, None -> DomMove.FocusPaneEmpty
+
+    /// Where the refusal notice is drawn, if there is one (`Refusal.mount`). The decision
+    /// for BOTH mounts, made once, so the view asks it rather than deciding twice.
+    let refusalMount (model: ClientModel) : RefusalMount option =
+        model.Refused |> Option.map (Refusal.mount model.TerminalsOpen)
 
     /// The command the pane's text read is positioned at (Plan 25, stage 3) — what the
     /// browser scrolls into view once the render that put it on screen has happened. Not
@@ -2998,7 +3076,9 @@ module ClientModel =
                         CatchUpIsSlow = slow && model.EventConsumer.IsCatchingUp } }
         | AgentQuietMsg stamp -> { model with Agent = { model.Agent with Quiet = Some stamp } }
         | DisconnectedMsg ->
-            { model with Connection = Reconnecting }
+            // What was asked over the channel that just died will never be answered over it:
+            // a response belongs to the connection that carried its request.
+            { model with Connection = Reconnecting; Asked = Map.empty }
         | EditTitleMsg title ->
             model |> withSynced { model.Synced with Title = title }
         | RemotePresenceMsg payload ->
@@ -3415,22 +3495,50 @@ module ClientModel =
                         Pending = Map.add queueId { entry with Order = order } model.Synced.Pending }
             | None -> model
         | LaunchMsg msg -> { model with Launch = Launch.update msg model.Launch |> fst }
+        | CommandSentMsg (request, command) -> { model with Asked = Map.add request command model.Asked }
         | CommandAnsweredMsg (request, result) ->
             // The launch surface still reads every answer, because it tracks the request it
-            // sent and has its own place to show the outcome. What is new is that a REFUSAL
-            // is kept whoever asked: a command the session would not honour used to arrive
-            // here and go no further.
-            let refused =
-                match result with
-                | CommandRejected reason -> Some reason
-                // An acceptance clears whatever the last refusal was. The reader has just
-                // been told something worked, and a notice about something that did not,
-                // left standing beside it, is a screen arguing with itself.
-                | CommandAccepted -> None
-            { model with
-                Launch = Launch.update (LaunchAnswered (request, result)) model.Launch |> fst
-                Refused = refused }
+            // sent and has its own place to show the outcome. Every OTHER refusal is kept,
+            // whoever asked: a command the session would not honour used to arrive here and
+            // go no further.
+            let asked = Map.tryFind request model.Asked
+            let launchOwns = Launch.awaits request model.Launch
+            let model =
+                { model with
+                    Launch = Launch.update (LaunchAnswered (request, result)) model.Launch |> fst
+                    Asked = Map.remove request model.Asked }
+            match result with
+            // The launch card says its own refusal, under the row it was sent from. The
+            // notice saying it again over the same card was one refusal on the screen twice.
+            | CommandRejected _ when launchOwns -> model
+            | CommandRejected reason ->
+                // A refused New terminal is still an ANSWER to the press that asked for it,
+                // and spends it. Left owed, the next terminal this person opened anywhere —
+                // from another tab, or one of their own the log cannot tell from this one —
+                // would be taken for the one this press asked for and pull the pane over to
+                // it, long after the press had been told no.
+                let opening =
+                    match asked with
+                    | Some (OpenTerminal _) -> max 0 (model.Opening - 1)
+                    | _ -> model.Opening
+                let refusal =
+                    { Refusal.Reason = reason
+                      Refusal.FromPane = asked |> Option.exists Refusal.fromPane
+                      Refusal.FocusedIn = None }
+                // A refusal replacing another in the same mount is drawn into the same
+                // element, so a keyboard that was in the old one is in the new one.
+                let focusedIn =
+                    model.Refused
+                    |> Option.bind (fun was -> was.FocusedIn)
+                    |> Option.filter (fun was -> was = Refusal.mount model.TerminalsOpen refusal)
+                { model with Opening = opening; Refused = Some { refusal with FocusedIn = focusedIn } }
+            // An acceptance clears whatever the last refusal was. The reader has just been
+            // told something worked, and a notice about something that did not, left standing
+            // beside it, is a screen arguing with itself.
+            | CommandAccepted -> { model with Refused = None }
         | DismissRefusalMsg -> { model with Refused = None }
+        | RefusalFocusMsg mount ->
+            { model with Refused = model.Refused |> Option.map (fun refusal -> { refusal with FocusedIn = mount }) }
         | SetModelMsg choice -> model |> withSynced { model.Synced with Model = choice }
         // An id this client's window does not hold is a page boundary, not a bug — and
         // there is nothing to toggle, because what the verdict would default to is on the item.
@@ -3552,7 +3660,9 @@ module ClientModel =
         // fold SPENT rather than off which message carried it, so whatever folds an arrival
         // answers for it. Both are `OnArrival`: the hand may have gone elsewhere since.
         //
-        // A terminal pressed for lands where the pane now shows it. A kill lands where
+        // A terminal pressed for lands where the pane now shows it — and so does one the
+        // session REFUSED, which spends the press too: the pane has not moved, so that is
+        // back where the press was made rather than on `body`. A kill lands where
         // `killLanding` says, measured against the pane the press was made on.
         let answered =
             [ if next.Opening < model.Opening then
@@ -3560,4 +3670,16 @@ module ClientModel =
               match model.KillPending, next.KillPending with
               | Some killed, None -> ClientEffect.Move (DomMove.OnArrival (killLanding model killed))
               | _ -> () ]
-        next, effects @ answered @ offering
+        // The refusal notice going while the keyboard is in it — its dismiss pressed, or an
+        // acceptance clearing it — takes the focused element out of the document, so focus
+        // goes on to the surface the notice sat over: what the pane is showing, or the
+        // message composer. Only when it WAS in there: an acceptance can arrive under
+        // somebody typing elsewhere, and must not pull them out of it.
+        let unnoticed =
+            match model.Refused, refusalMount model, next.Refused with
+            | Some was, Some mount, None when was.FocusedIn = Some mount ->
+                match mount with
+                | RefusalMount.Pane -> [ ClientEffect.Move (paneLanding next) ]
+                | RefusalMount.Chat -> [ ClientEffect.Move DomMove.FocusComposer ]
+            | _ -> []
+        next, effects @ answered @ unnoticed @ offering

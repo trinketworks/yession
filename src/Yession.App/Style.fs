@@ -1208,6 +1208,26 @@ module Style =
     /// than a primary button, because dismissing news is not the action the notice is FOR.
     let refusalDismiss = cls [ btnIcon; "row-start-1 col-start-2 md:col-start-3 justify-self-end" ]
 
+    /// The refusal notice's four cells, per mount (`RefusalMount`). In the conversation it is
+    /// the sign-in prompt's row exactly. In the content pane it keeps that vocabulary at the
+    /// pane's own gutter, and stays in the narrow shape — status and dismiss over the
+    /// sentence — at every viewport: the `md:` steps above are the WINDOW's width, and the
+    /// pane is a column a few hundred pixels wide inside a wide window.
+    [<RequireQualifiedAccess>]
+    type RefusalShape = { Row : string; Status : string; Body : string; Dismiss : string }
+
+    let refusalIn (mount: RefusalMount) : RefusalShape =
+        match mount with
+        | RefusalMount.Chat ->
+            { Row = signInPrompt; Status = signInPromptStatus; Body = signInPromptBody; Dismiss = refusalDismiss }
+        | RefusalMount.Pane ->
+            { Row =
+                cls [ "shrink-0 grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-1 px-3 py-2 bg-surface"
+                      Stroke.dividerBottom ]
+              Status = cls [ statusErr; "row-start-1 col-start-1" ]
+              Body = "min-w-0 col-span-2"
+              Dismiss = cls [ btnIcon; "row-start-1 col-start-2 justify-self-end" ] }
+
     /// The mechanism behind a notice, folded away (the degradation strip, the sign-in
     /// prompt, the reconnect card, a credential's fault, the history-store note, a terminal
     /// that stopped marking). What every one of those surfaces has to say FIRST is what it

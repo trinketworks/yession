@@ -315,6 +315,12 @@ let private answerTests =
             Expect.equal rejected.Launch.Problem (Some "this session already has octo/other") "with the reason"
             Expect.stringContains (render rejected) "data-repo-picker-problem" "on the surface"
 
+        // The card says its own refusal, under the row it was sent from. The general notice
+        // (`ClientModel.Refused`) used to say the same sentence again over the same card.
+        testCase "a rejection at the door is said once, by the card" <| fun () ->
+            let rejected = Support.step (CommandAnsweredMsg (request, CommandRejected "this session already has octo/other")) waiting
+            Expect.isFalse ((render rejected).Contains "data-command-refused") "not by the notice as well"
+
         testCase "another command's answer is not this surface's" <| fun () ->
             let other = Support.step (CommandAnsweredMsg (RequestId.fresh (), CommandRejected "no")) waiting
             Expect.equal other.Launch.Stage (Sent (request, target)) "still waiting on its own"

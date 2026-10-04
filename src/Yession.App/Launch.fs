@@ -212,6 +212,15 @@ module Launch =
         | Choosing | Resolving _ -> false
         | Sent _ | Cloning _ -> true
 
+    /// Whether `request` is the add this surface sent and is still waiting on. Its answer —
+    /// a refusal above all — is this card's to say, under the row it was sent from, and no
+    /// other surface's: the general refusal notice (`ClientModel.Refused`) standing over the
+    /// same sentence would be one refusal on the screen twice.
+    let awaits (request: RequestId) (launch: LaunchViewState) : bool =
+        match launch.Stage with
+        | Sent (sent, _) -> sent = request
+        | Choosing | Resolving _ | Cloning _ -> false
+
     /// The live question `anchor` asks, once, on the way to deciding: this client is
     /// connected, has read the log through to where the session says it ends, and the
     /// session has not BEGUN - no repo in it and nothing said. A session that has begun is

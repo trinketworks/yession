@@ -768,7 +768,7 @@ let tests =
 
                 // Opening is a COMMAND — the terminal's id is the Process's to mint — and it
                 // arrives at every peer as an event, which is why B learns about it too.
-                a.Connection.OpenTerminal "build" SandboxRef.defaultRef
+                a.Connection.Ask (OpenTerminal ("build", SandboxRef.defaultRef)) |> ignore
                 let hasOpenTerminal (m: ClientModel) = not (List.isEmpty (Projection.openTerminals m.Terminals))
                 do! a.Runner.WaitFor hasOpenTerminal
                 do! b.Runner.WaitFor hasOpenTerminal
@@ -1119,7 +1119,7 @@ let tests =
                       Realisation = fun () -> [] }
                 let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
                 let! a = connectInMemoryClient host "ada" "Ada"
-                a.Connection.OpenTerminal "build" SandboxRef.defaultRef
+                a.Connection.Ask (OpenTerminal ("build", SandboxRef.defaultRef)) |> ignore
                 do! a.Runner.WaitFor (fun m -> not (List.isEmpty (Projection.openTerminals m.Terminals)))
                 let terminal =
                     (Projection.openTerminals (a.Runner.Model ()).Terminals |> List.head).TerminalId

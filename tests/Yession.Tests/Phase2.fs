@@ -1823,7 +1823,7 @@ let private lazyLifecycleTests =
                 // while an environment is already running must reuse it rather than start a
                 // second one — and it is a stronger case than the agent's own second command,
                 // which reuses a terminal it already has and is therefore no need at all.
-                a.Connection.OpenTerminal "ada's" SandboxRef.defaultRef
+                a.Connection.Ask (OpenTerminal ("ada's", SandboxRef.defaultRef)) |> ignore
                 do! a.Runner.WaitFor (fun model ->
                         (Projection.openTerminals model.Terminals |> List.length) = 2)
 
