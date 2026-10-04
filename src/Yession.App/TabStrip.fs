@@ -70,7 +70,7 @@ module TabStrip =
           Holds: float }
 
     /// How far inside an edge a revealed tab is kept. The width of the strip's fade
-    /// (`Style.terminalTabScroller`, `1.5rem`): a tab "in view" under the fade is a tab half
+    /// (`Style.panePivotScroller`, `1.5rem`): a tab "in view" under the fade is a tab half
     /// painted out, so revealing one brings it clear of it. Two spellings of one length, one
     /// in CSS and one here, because a Tailwind class has to be a literal to be generated.
     let edge = 24.0
@@ -123,18 +123,7 @@ module TabStrip =
         | false, true -> Hidden.After
         | true, true -> Hidden.Both
 
-    /// How many tabs are not wholly in the strip's window, given each tab's span in the
-    /// scroller's own content coordinates — what the strip's overflow count says (P2-2).
-    ///
-    /// A tab half under an edge counts: its name is cut, and a reader who cannot read it
-    /// cannot choose it. A pixel of slack at each edge, for `hidden`'s reason.
-    let hiddenCount (port: Scrollport) (spans: (float * float) list) : int =
-        spans
-        |> List.filter (fun (start, stop) ->
-            start < port.Scrolled - 1.0 || stop > port.Scrolled + port.Shown + 1.0)
-        |> List.length
-
-    /// The arrow walk DOWN a list of rows (the switcher's, P2-2): `walk`'s rule on the other
+    /// The arrow walk DOWN a list of rows (the `all` page's, P2-2): `walk`'s rule on the other
     /// axis — Up and Down wrap, Home and End go to the ends, and from nowhere either arrow
     /// lands on the first row.
     let walkRows (key: string) (here: int) (count: int) : int option =

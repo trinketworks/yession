@@ -1860,6 +1860,15 @@ let private openManyTerminals (page: IPage) : Async<unit> =
                 (sprintf "document.activeElement?.matches(%s) === true" (System.Text.Json.JsonSerializer.Serialize (commandLine "term-harness")))
         do! foldHarness page [ for i in 0 .. 3 -> 80L + int64 i, opened (sprintf "term-more-%d" i) ]
         do! waitFor "six tabs in the strip" page "document.querySelectorAll('#shell [data-pane-strip] [role=tab]').length === 6"
+        // The column OPENS by animating its width, and a case that measures what is on screen
+        // in it measures a narrower pane until that has finished — its right-hand controls
+        // clipped away by the column's own edge for the length of the transition.
+        do! awaitU (
+                page.EvaluateAsync
+                    """() => Promise.all(
+                         document.getAnimations()
+                           .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
+                           .map(a => a.finished.catch(() => null)))""")
     }
 
 /// Whether the strip holds more tabs than it shows — the precondition every scrolling case
@@ -2922,42 +2931,36 @@ let editorTests =
                 Expect.equal (String.concat "; " faults) "" "every tab focus lands on is shown clear of the strip's edges"
             }
 
-        // The selection's mark is a one-pixel rule under the tab, and the strip is a scroll
-        // box, which clips at its own edge whichever axis it scrolls: a rule drawn a pixel
-        // below that edge was drawn into nothing, and "selected" read only as brighter text.
-        // Measured, not sampled — a tab whose border box reaches past the box is the clip, and
-        // a box that scrolls vertically is what an overhang looks like from outside.
-        editorCase "the selected tab's underline paints" <| fun page ->
+        // Which item is selected is said by INK (the pivot, P2-2's successor): full ink for
+        // the one, the faintest admitted ink for the rest. This replaced a case about the
+        // strip's underline, which the pivot does not draw; the promise is the same one —
+        // the selection is visible, and drawn inside the pivot rather than clipped by it.
+        // Read where the colours settle: an item's colour TRANSITIONS, so the frame the
+        // selection landed in shows the colour it started from.
+        editorCase "the selected pivot item is told apart from the others, inside the pivot" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! waitFor "a tab to be selected beside one that is not" page
+                do! waitFor "an item to be selected beside one that is not" page
                         "!!document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=true]') && !!document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=false]')"
                 let! faults =
                     await (page.EvaluateAsync<string>
                         """async () => {
                              const strip = document.querySelector('#shell [data-pane-strip]')
-                             const s = strip.getBoundingClientRect()
-                             const on = strip.querySelector('[role=tab][aria-selected=true]')
-                             // A tab's colours TRANSITION, so the rule read in the frame the
-                             // selection landed is the colour it started from — transparent,
-                             // exactly an unselected tab's. Read it where it settles — the
-                             // FINITE ones: a tab running a command wears a pulse that never
-                             // finishes, and waiting on it waits for ever.
                              await Promise.all(
                                strip.getAnimations({ subtree: true })
                                  .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
                                  .map(a => a.finished.catch(() => null)))
+                             const s = strip.getBoundingClientRect()
+                             const on = strip.querySelector('[role=tab][aria-selected=true]')
                              const off = strip.querySelector('[role=tab][aria-selected=false]')
                              const t = on.getBoundingClientRect()
                              const faults = []
-                             if (t.bottom > s.bottom + 0.5) faults.push(`the tab reaches ${t.bottom - s.bottom}px below the strip`)
-                             if (strip.scrollHeight !== strip.clientHeight) faults.push(`the strip overflows ${strip.scrollHeight - strip.clientHeight}px vertically`)
-                             const mark = getComputedStyle(on)
-                             if (parseFloat(mark.borderBottomWidth) === 0) faults.push('the selected tab has no bottom border')
-                             if (mark.borderBottomColor === getComputedStyle(off).borderBottomColor) faults.push('its rule is the same colour as an unselected tab\'s')
+                             if (t.top < s.top - 0.5 || t.bottom > s.bottom + 0.5) faults.push('the selected item is cut off vertically')
+                             if (strip.scrollHeight !== strip.clientHeight) faults.push(`the pivot overflows ${strip.scrollHeight - strip.clientHeight}px vertically`)
+                             if (getComputedStyle(on).color === getComputedStyle(off).color) faults.push('the selected item is the same colour as the others')
                              return faults.join('; ')
                            }""")
-                Expect.equal faults "" "the selected tab's rule is drawn inside the strip and unlike the others'"
+                Expect.equal faults "" "the selected item is drawn whole and unlike the others"
             }
 
         // The focus ring is drawn outside a control's edge by default, and the strip clips at
@@ -2995,6 +2998,109 @@ let editorTests =
                              return faults.join('; ')
                            }""")
                 Expect.equal faults "" "the ring is drawn wholly inside the strip's box"
+            }
+
+        // One door per state. The pane used to offer a `+` on its strip, "+ New terminal" at
+        // the foot of its switcher, and an empty pane's own button — two of them on one screen
+        // at once, a reader left to work out they were one act. At most one control that
+        // makes a terminal is ON SCREEN in the pane, whatever it shows: more tabs than fit,
+        // the `all` page, an empty pane, and `all` over an empty pane. Counted by what is
+        // painted at each control's centre, so one present but covered is not a door, and one
+        // a reader can see is — which is the only count that means anything to them.
+        //
+        // The empty pane is reached the way a reader reaches it: every terminal ends, the one
+        // on screen stays (`settle`), and its × puts it away.
+        editorCase "at most one way to make a terminal is on screen in the pane, in every state" <| fun page ->
+            async {
+                let doors (state: string) =
+                    async {
+                        let! n =
+                            await (page.EvaluateAsync<int> """() => [...document.querySelectorAll(
+                                '#shell [data-content-panel] [data-pane-new], #shell [data-content-panel] [data-terminal-new]')]
+                                .filter(e => {
+                                    const r = e.getBoundingClientRect()
+                                    if (!r.width || !r.height) return false
+                                    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+                                    return hit !== null && e.contains(hit) }).length""")
+                        return sprintf "%s: %d" state n
+                    }
+                let closed (id: string) =
+                    Yession.Domain.SessionEvent.TerminalClosed
+                        { Yession.Domain.Terminals.TerminalClosed.TerminalId = harnessTerminal id
+                          Yession.Domain.Terminals.TerminalClosed.Reason = "closed by a peer"
+                          Yession.Domain.Terminals.TerminalClosed.By = None }
+                do! openManyTerminals page
+                let! many = doors "more tabs than fit"
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                let! listing = doors "the all page"
+                do! awaitU (page.Keyboard.PressAsync "Escape")
+                let! _ = await (page.WaitForFunctionAsync """!document.querySelector('#shell [data-content-list]')""")
+                // Chosen, so it is the one the reader is looking at when it ends, and it stays.
+                do! awaitU (page.EvaluateAsync "() => document.querySelector(\"#shell [data-pane-tab='terminal:term-live']\").click()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab='terminal:term-live'][aria-selected=true]")
+                do! foldHarness page
+                        [ for i, id in List.indexed [ "term-harness"; "term-live"; "term-more-0"; "term-more-1"; "term-more-2"; "term-more-3" ] ->
+                              95L + int64 i, closed id ]
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab-dismiss]")
+                do! awaitU (page.ClickAsync "#shell [data-pane-tab-dismiss]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-new]")
+                let! empty = doors "an empty pane"
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                let! emptyListing = doors "the all page over an empty pane"
+                let seen = [ many; listing; empty; emptyListing ]
+                Expect.equal seen (seen |> List.map (fun said -> said.Substring (0, said.LastIndexOf ':') + ": 1")) "one door in each"
+            }
+
+        // A closed tab stays while it is the one on screen (`settle`), and had no way to be put
+        // away (desktop journey, finding 16): its × does that now. Pressed from the keyboard,
+        // because the × leaves the document with its tab, and the floor says focus goes to what
+        // replaced it — the tab beside it — rather than to `body`.
+        editorCase "putting a closed tab away lands focus on the tab beside it" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                // Chosen, so it is the one the reader is looking at when it ends, and it stays.
+                do! awaitU (page.ClickAsync "#shell [data-pane-tab='terminal:term-harness']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab='terminal:term-harness'][aria-selected=true]")
+                do! foldHarness page
+                        [ 95L,
+                          Yession.Domain.SessionEvent.TerminalClosed
+                              { Yession.Domain.Terminals.TerminalClosed.TerminalId = harnessTerminal "term-harness"
+                                Yession.Domain.Terminals.TerminalClosed.Reason = "closed by a peer"
+                                Yession.Domain.Terminals.TerminalClosed.By = None } ]
+                let dismiss = "#shell [data-pane-tab-dismiss='term-harness']"
+                let! _ = await (page.WaitForSelectorAsync dismiss)
+                do! awaitU (page.FocusAsync dismiss)
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do! waitFor "the closed tab to be gone" page "!document.querySelector(\"#shell [data-pane-tab='terminal:term-harness']\")"
+                do! waitFor "focus to be on the tab beside it" page
+                        "document.activeElement?.getAttribute('data-pane-tab') === 'terminal:term-live'"
+            }
+
+        // The narrowest pane the splitter allows (desktop journey, finding 8): with the strip's
+        // old `+N` beside it, the selected tab was cut off under the count, and tabs were lost
+        // past the left edge. Whichever end the reader chooses from, the item they chose is
+        // shown whole, inside the part of the pivot that scrolls.
+        editorCaseIn 1440 900 "at the narrowest pane the selected item is shown whole, chosen from either end" <| fun page ->
+            async {
+                do! openManyTerminals page
+                do! awaitU (page.EvaluateAsync "() => document.documentElement.style.setProperty('--term-w', '320px')")
+                do! waitFor "the pane to be 320px wide" page
+                        "Math.round(document.querySelector('#shell [data-content-panel]').getBoundingClientRect().width) === 320"
+                let faults = ResizeArray<string> ()
+                for which in [ "last-child"; "first-child"; "nth-child(3)"; "last-child" ] do
+                    // The DOM's own click, which scrolls nothing into view on its way.
+                    do! awaitU (page.EvaluateAsync (sprintf "() => document.querySelector('#shell [data-pane-strip] [role=tab]:%s').click()" which))
+                    do! waitFor (sprintf "the %s item to be selected" which) page
+                            (sprintf "document.querySelector('#shell [data-pane-strip] [role=tab]:%s')?.getAttribute('aria-selected') === 'true'" which)
+                    // A frame for the reveal, which runs after the render.
+                    do! awaitU (page.EvaluateAsync "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+                    let! inView =
+                        await (page.EvaluateAsync<bool>
+                            (insideStrip "document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=true]')"))
+                    if not inView then faults.Add which
+                Expect.isEmpty faults (sprintf "chosen and not shown whole: %s" (String.Join (", ", faults)))
             }
 
         // Terminal work in the chat, and the pane (Plan 14, stages 1-2; P2-1). Host-free, like
@@ -5264,12 +5370,15 @@ let editorTests =
                 do! waitFor "focus to be back on the chip" page "document.activeElement?.hasAttribute('data-chat-block') === true"
             }
 
-        editorCase "a preview's way back returns focus to the chip" <| fun page ->
+        // The preview's way back used to be a "‹ back to term 1" row of its own under the
+        // head; the pivot puts the terminal's own item beside the preview's, and the preview's
+        // close on its item is what hands focus back to where it was opened from.
+        editorCase "a preview's close returns focus to the chip" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview-back]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview-close]")
                 do! focusReachedPane page
-                do! awaitU (page.Locator("#shell [data-pane-preview-back]").First.PressAsync "Enter")
+                do! awaitU (page.Locator("#shell [data-pane-preview-close]").First.PressAsync "Enter")
                 do! waitFor "the preview to be gone" page "!document.querySelector('#shell [data-pane-preview]')"
                 do! waitFor "focus to be back on the chip" page "document.activeElement?.hasAttribute('data-chat-block') === true"
             }
@@ -5383,16 +5492,15 @@ let editorTests =
                 return ()
             }
 
-        // One column of names, whatever marks the rows wear. The switcher puts several
-        // different marks in its first cell — a 6px sync dot, a 12px status glyph, a 14px
-        // content icon — and a ragged left edge is what makes a list of twenty read as twenty
-        // unrelated things.
+        // One column of names, whatever marks the rows wear. A ragged left edge is what makes
+        // a list of twenty read as twenty unrelated things, and the old list's had one: a
+        // leading column of marks four different widths wide. The marks sit after the names
+        // now; what is asserted is still only that the names AGREE, over rows that wear
+        // different marks — so a mark moved back in front of its name goes red here.
         //
-        // Only a browser can answer it, and the markup looks right either way: every row is
-        // its own grid container, so the `auto` track this started with was sized by that
-        // row's own mark and coordinated with nothing. Measured, not pixel-matched — the
-        // offset itself is the design and may move; that they AGREE is the promise.
-        editorCase "the switcher's names stand in one column, whatever mark each row wears" <| fun page ->
+        // Only a browser can answer it, and the markup looks right either way. Measured, not
+        // pixel-matched — the offset itself is the design and may move.
+        editorCase "the all page's names stand in one column, whatever mark each row wears" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
@@ -5400,9 +5508,9 @@ let editorTests =
 
                 let! kinds =
                     await (page.EvaluateAsync<int> """() => new Set([...document.querySelectorAll(
-                        "#shell [data-content-list] [role='listitem'] > :first-child")]
-                        .map(m => Math.round(m.getBoundingClientRect().width))).size""")
-                Expect.isTrue (kinds > 1) (sprintf "the rows wear marks of different widths, got %d width(s)" kinds)
+                        "#shell [data-content-list] [role='listitem']")]
+                        .map(r => r.querySelector('[data-pane-mark]')?.getAttribute('data-pane-mark') ?? 'none')).size""")
+                Expect.isTrue (kinds > 1) (sprintf "the rows wear different marks, got %d kind(s)" kinds)
 
                 // The NAMES, by the hooks that make them names — not every button in a row,
                 // which would drag the verbs at the far edge into the count.
@@ -5454,10 +5562,10 @@ let editorTests =
                 return ()
             }
 
-        // The switcher's door gives focus back when it shuts. Escape from inside it removes the
-        // element focus was on; the head's name is the control it hung from, and the only
-        // place a reader who pressed Escape expects to be.
-        editorCase "Escape closes the switcher and returns focus to the head" <| fun page ->
+        // Escape steps back off the `all` page. It removes the element focus was on, and the
+        // pivot item the reader is back on — the terminal the page was laid over — is where
+        // they are.
+        editorCase "Escape leaves the all page and returns focus to the item it was laid over" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.Locator("#shell [data-pane-switcher]").PressAsync "Enter")
@@ -5469,7 +5577,7 @@ let editorTests =
                 let! _ = await (page.WaitForFunctionAsync """!document.querySelector('#shell [data-content-list]')""")
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        """document.activeElement?.hasAttribute('data-pane-switcher') === true""")
+                        """document.activeElement?.matches('#shell [data-pane-pivot] [role=tab][aria-selected=true][data-pane-tab]') === true""")
                 return ()
             }
 
@@ -5482,16 +5590,16 @@ let editorTests =
                 return ()
             }
 
-        // The overflow door (P2-2). With more tabs than the strip's window shows, the strip
-        // says how many it is hiding, and that count opens the switcher, which lists every
-        // terminal — the hidden ones included. Only a browser can answer it: the count is a
-        // measurement of a laid-out strip, which no render of the markup has.
-        editorCase "the overflow count opens the switcher and names the hidden terminals" <| fun page ->
+        // `all` replaced the strip's `+N` (P2-2), which said how many tabs the strip hid and
+        // opened the switcher. What that door promised still has to hold with more tabs than
+        // the pivot shows: the way to every terminal is ON SCREEN — not scrolled away with the
+        // tabs — and what it opens lists the ones the pivot is hiding. Only a browser can
+        // answer it: which tabs are hidden is a measurement of a laid-out row.
+        editorCase "with more tabs than the pivot shows, all stays on screen and lists the hidden ones" <| fun page ->
             async {
                 do! openManyTerminals page
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-strip-overflow]")
-                // The tabs a reader cannot see, measured: whatever is not wholly inside the
-                // strip's window.
+                let! overflows = await (page.EvaluateAsync<bool> stripOverflows)
+                Expect.isTrue overflows "the pivot holds more tabs than it shows, or this proves nothing"
                 let! hidden =
                     await (page.EvaluateAsync<string> """() => {
                         const strip = document.querySelector('#shell [data-pane-strip]').getBoundingClientRect();
@@ -5500,17 +5608,25 @@ let editorTests =
                             .map(t => t.getAttribute('data-pane-tab').replace('terminal:', '')));
                     }""")
                 let hidden = System.Text.Json.JsonSerializer.Deserialize<string array> hidden
-                Expect.isNonEmpty hidden "the strip is hiding some of its tabs"
-                let! count = await (page.GetAttributeAsync ("#shell [data-pane-strip-overflow]", "data-pane-strip-overflow"))
-                Expect.equal count (string hidden.Length) "and the count says how many"
-                do! awaitU (page.ClickAsync "#shell [data-pane-strip-overflow]")
+                Expect.isNonEmpty hidden "the pivot is hiding some of its tabs"
+                // On screen, by what is painted at its centre — not by its box, which a clipping
+                // scroller leaves non-zero for something cut to nothing.
+                let! shown =
+                    await (page.EvaluateAsync<bool> """() => {
+                        const all = document.querySelector('#shell [data-pane-switcher]');
+                        const r = all.getBoundingClientRect();
+                        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+                        return hit !== null && all.contains(hit);
+                    }""")
+                Expect.isTrue shown "all is on screen, whatever the tabs beside it"
+                do! awaitU (page.EvaluateAsync "() => document.querySelector('#shell [data-pane-switcher]').click()")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
                 let! listed =
                     await (page.EvaluateAsync<string> """() => JSON.stringify([...document.querySelectorAll(
                         '#shell [data-content-list] [data-terminal-list-row]')].map(r => r.getAttribute('data-terminal-list-row')))""")
                 let listed = System.Text.Json.JsonSerializer.Deserialize<string array> listed |> Set.ofArray
                 for id in hidden do
-                    Expect.isTrue (listed.Contains id) (sprintf "%s, hidden by the strip, is in the switcher" id)
+                    Expect.isTrue (listed.Contains id) (sprintf "%s, hidden by the pivot, is on the all page" id)
             }
 
         // A kill is two presses in one place (`KillArmed`). What only a browser can answer is

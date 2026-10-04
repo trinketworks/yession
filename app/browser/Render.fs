@@ -738,25 +738,7 @@ let create (deps: Deps) : Renderer =
         watchFoot Dom.Hooks.repoPickerBody Dom.Hooks.repoPickerFoot (fun () -> dispatch (LaunchMsg LaunchMoreAsked))
         watchFoot Dom.Hooks.repoBranchBody Dom.Hooks.repoBranchFoot (fun () -> dispatch (LaunchMsg LaunchBranchMoreAsked))
 
-    // The strip's overflow count (P2-2): how many tabs its window does not show is a
-    // MEASUREMENT, and a render cannot read one, so it is measured after the render and sent to
-    // the model, which renders the count from it. Only on a change from what the model holds,
-    // so the render that draws the count measures what it drew and sends nothing.
-    let syncStripCount () =
-        match PaneShell.stripHidden (), latest with
-        | Some hidden, Some model when hidden <> model.StripHidden -> dispatch (StripOverflowMsg hidden)
-        | _ -> ()
-    // What moves the window without a render: scrolling the strip, and the window changing
-    // size. Scroll does not bubble, so captured; the strip is Lit's to replace, so delegated.
-    Browser.Dom.document.addEventListener (
-        "scroll",
-        (fun event ->
-            match EventTargets.asHTMLElement event.target with
-            | Some scrolled when scrolled.hasAttribute Dom.Hooks.paneStrip -> syncStripCount ()
-            | _ -> ()),
-        true)
-    Browser.Dom.window.addEventListener ("resize", fun _ -> syncStripCount ())
-    // The switcher's shortcut (P2-2), from anywhere on the page — which is the point of a
+    // The `all` page's shortcut (P2-2), from anywhere on the page — which is the point of a
     // shortcut, and why it is the document's rather than the pane's.
     Browser.Dom.document.addEventListener (
         "keydown",
@@ -813,7 +795,6 @@ let create (deps: Deps) : Renderer =
         // than the model, so a tab a collaborator's `TabOpened` selected is covered too — and
         // its fade on whichever ends have tabs past them.
         PaneShell.syncStrip ()
-        syncStripCount ()
         // The column and its strip, remembered for this browser's next load of this
         // session (P0-4). Written here, after every render, rather than by the messages that
         // change it: the four fields have a dozen writers between them, and a write per

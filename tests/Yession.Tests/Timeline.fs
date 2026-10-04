@@ -542,7 +542,9 @@ let private paneTests =
             let html = Support.render model
             let required =
                 [ "the preview", Dom.attr Dom.Hooks.panePreview "block:term-a:b-1"
-                  "its way back", Dom.Hooks.panePreviewBack
+                  // Its close rides its pivot item; the way back to the terminal is that
+                  // terminal's own item, beside it.
+                  "its close", Dom.Hooks.panePreviewClose
                   "the block's read-only view", Dom.attr Dom.Hooks.paneBlock "b-1"
                   "the command", "ls -la"
                   // What it printed, as TEXT — the cheap read of the same bytes, through the
@@ -559,7 +561,9 @@ let private paneTests =
                 (html.Contains (Dom.attr Dom.Hooks.terminalInput (BodyKey.terminalDraft terminalA ada)))
                 "no composer under a preview"
 
-        testCase "a preview is never drawn in the strip" <| fun () ->
+        // A preview has a pivot item, slanted and with its own close — but of its OWN kind,
+        // never a terminal's tab, which is the fault the last preview was removed for.
+        testCase "a preview is never one of the terminals' tabs" <| fun () ->
             let html = Support.render (clientOf oneBlock |> Support.step (chip terminalA "1"))
             Expect.equal
                 (Text.RegularExpressions.Regex.Matches (html, Dom.Hooks.paneTab + "=\"([^\"]*)\"")
@@ -645,15 +649,16 @@ let private showingAll (model: ClientModel) =
 
 let private namingTests =
     testList "A terminal's name, on every surface" [
-        testCase "the strip, the head and the switcher agree on a terminal's name" <| fun () ->
+        // The head that also named the selected terminal is gone with the pivot: the pivot's
+        // selected item is where the pane says what is on screen.
+        testCase "the pivot and the all page agree on a terminal's name" <| fun () ->
             let model = clientOf threeUntitled |> showingAll
             let strip = Support.render model
             let list = Support.render (Support.step ToggleSwitcherMsg model)
             Expect.equal
                 [ textAt Dom.Hooks.terminalTabName (markupAt (Dom.attr Dom.Hooks.terminalTab "term-b") strip)
-                  textAt Dom.Hooks.paneHeadName strip
                   textAt (Dom.attr Dom.Hooks.terminalListRow "term-b") list ]
-                [ "term 2"; "term 2"; "term 2" ]
+                [ "term 2"; "term 2" ]
                 "one terminal, one name, wherever it is named"
 
         testCase "a chat chip names the terminal its command ran in" <| fun () ->
@@ -975,6 +980,28 @@ let private statusTests =
                      (markupAt (Dom.attr Dom.Hooks.terminalTab (TerminalId.value id)) strip).Contains Dom.Hooks.terminalTabRunning))
                 [ false; true; false ]
                 "only term-b has a command running"
+
+        // A command that failed in a terminal nobody was looking at used to leave no trace on
+        // its tab once it finished — a running pulse, then nothing (desktop journey, finding
+        // 7). Its state outlives the run, on the pivot and on the all page alike.
+        testCase "a terminal whose last command failed says so on its tab and its row" <| fun () ->
+            let model =
+                clientOf (threeUntitled @ [ at 5L 4.0 (completed terminalB "1" (CommandFailed 2) 3) ])
+                |> showingAll
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let failedMark = Dom.attr Dom.Hooks.paneMark "failed"
+            // The row's mark sits beside its name button, not in it: what follows term-b's
+            // name up to the next row is term-b's.
+            let rowOf (html: string) =
+                let list = markupAt Dom.Hooks.contentList html
+                let from = list.IndexOf (Dom.attr Dom.Hooks.terminalListRow "term-b")
+                let upto = list.IndexOf ("role=\"listitem\"", from)
+                list.Substring (from, (if upto < 0 then list.Length else upto) - from)
+            Expect.equal
+                ((markupAt (Dom.attr Dom.Hooks.terminalTab "term-b") (Support.render model)).Contains failedMark,
+                 (rowOf (Support.render (Support.step ToggleSwitcherMsg model))).Contains failedMark)
+                (true, true)
+                "failed, on both"
     ]
 
 // --- What just ran is never folded away ------------------------------------------------------
@@ -2088,26 +2115,29 @@ let private listTests =
             let _, effects = ClientModel.update (OpenInPaneMsg (Reading terminalB)) switching
             Expect.equal effects [ ClientEffect.Move (DomMove.FocusCommandLine terminalB) ] "onto what a terminal is for"
 
-        testCase "Escape shuts the switcher and hands focus back to the head" <| fun () ->
-            // Escape is `CloseSwitcherMsg` (the head's keydown): the switcher leaves the
-            // document with focus inside it, and the head name it hung from is where it goes.
+        testCase "Escape leaves the all page for the item it was laid over" <| fun () ->
+            // Escape is `CloseSwitcherMsg` (the pane's keydown): the page leaves the document
+            // with focus inside it, and the pivot item the reader is back on is where it goes.
             let switching = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step ToggleSwitcherMsg
             let model, effects = ClientModel.update CloseSwitcherMsg switching
-            Expect.isFalse model.Switcher "shut"
-            Expect.equal effects [ ClientEffect.Move DomMove.FocusPaneSwitcher ] "onto the head's name"
+            Expect.isFalse model.Switcher "left"
+            Expect.equal effects [ ClientEffect.Move DomMove.FocusPivot ] "onto the pivot's selected item"
 
         testCase "opening the switcher takes focus into it" <| fun () ->
             let _, effects = ClientModel.update ToggleSwitcherMsg (clientOf [ at 1L 0.0 (opened terminalA "build") ])
             Expect.equal effects [ ClientEffect.Move DomMove.FocusSwitcher ] "into the switcher"
 
-        testCase "opening the switcher shuts the strip's menu" <| fun () ->
-            // One popover over the pane at a time, with one Escape between them.
+        testCase "going to the all page shuts the menu of new things" <| fun () ->
+            // A popover does not outlive the page it hung over.
             let model = clientOf [] |> Support.step TogglePaneMenuMsg |> Support.step ToggleSwitcherMsg
             Expect.isFalse model.PaneMenu "the menu went"
 
-        testCase "opening the strip's menu shuts the switcher" <| fun () ->
+        // This replaced "opening the strip's menu shuts the switcher", from when the two were
+        // popovers over one pane: `all` is a page now, the `+` is on screen over it, and its
+        // menu opens over the page the way it opens over a terminal.
+        testCase "the menu of new things opens over the all page and leaves it up" <| fun () ->
             let model = clientOf [] |> Support.step ToggleSwitcherMsg |> Support.step TogglePaneMenuMsg
-            Expect.isFalse model.Switcher "the switcher went"
+            Expect.isTrue model.Switcher "the page stayed"
 
         // These are the tombstones of the states four agreeing fields allowed (Plan 25, stage
         // 2). Each was a real defect, watched happening in a browser; each is now unwritable
@@ -2165,8 +2195,8 @@ let private listTests =
             let switching = Support.step ToggleSwitcherMsg model
             Expect.isTrue switching.TerminalsOpen "and the pane came with it"
 
-        testCase "hiding the pane shuts the switcher" <| fun () ->
-            // A popover does not outlive what it hangs in.
+        testCase "hiding the pane leaves the all page" <| fun () ->
+            // Shown again, the pane is on what it holds rather than on the list of it.
             let model = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step ToggleSwitcherMsg
             Expect.isFalse (Support.step ToggleContentMsg model).Switcher "shut with the pane"
 
@@ -2194,6 +2224,37 @@ let private listTests =
             let model = clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (closedNow terminalA) ]
             Expect.isNone (ClientModel.killPress terminalA model) "nothing left to end"
 
+        // A closed tab stays while it is the one on screen (`settle`), and had no way to be
+        // put away short of choosing another (desktop journey, finding 16). Its × does that.
+        testCase "a closed terminal's tab can be put away, and the pane moves to the tab beside it" <| fun () ->
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalB))
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+                |> fun model -> withPage [ at 3L 2.0 (closedNow terminalA) ] model
+                |> Support.step (DismissTabMsg terminalA)
+            Expect.equal (model.Tabs, ClientModel.selectedTerminal model) ([ terminalB ], Some terminalB) "gone, and on its neighbour"
+
+        testCase "a running terminal's tab cannot be put away" <| fun () ->
+            // Only a kill ends a tab that holds something running (P2-2); the refusal is the
+            // reducer's, so no control can get round it.
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
+            Expect.equal (Support.step (DismissTabMsg terminalA) model).Tabs [ terminalA ] "still there"
+
+        testCase "the selected closed tab wears a way to put it away, and no kill" <| fun () ->
+            let html =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+                |> fun model -> withPage [ at 2L 1.0 (closedNow terminalA) ] model
+                |> Support.render
+            let pivot = markupAt Dom.Hooks.panePivot html
+            Expect.equal
+                (pivot.Contains (Dom.attr Dom.Hooks.paneTabDismiss (TerminalId.value terminalA)),
+                 pivot.Contains (Dom.attr Dom.Hooks.terminalClose (TerminalId.value terminalA)))
+                (true, false)
+                "put away, not killed"
+
         testCase "the selected tab wears its terminal's kill" <| fun () ->
             // The acceptance: there is no control that drops a tab and leaves its terminal
             // running. The tab's one destructive control IS the kill.
@@ -2205,13 +2266,27 @@ let private listTests =
 
         // --- The switcher's doors (P2-2) -------------------------------------------------------
 
-        testCase "the strip's overflow count is offered only while tabs are hidden" <| fun () ->
+        // These replaced the strip's `+N` overflow count, which opened the switcher only while
+        // tabs were scrolled past the strip's edge, and the head's name, which opened it
+        // always: `all` is both doors, as the pivot's last item — outside the part of the
+        // pivot that scrolls, so no number of tabs can carry it off the edge.
+        testCase "the pivot ends with all, outside the part that scrolls" <| fun () ->
             let model = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
-            Expect.isFalse ((Support.render model).Contains Dom.Hooks.paneStripOverflow) "nothing hidden, no count"
-            Expect.stringContains
-                (Support.render (Support.step (StripOverflowMsg 3) model))
-                (Dom.attr Dom.Hooks.paneStripOverflow "3")
-                "three hidden, and it says three"
+            let pivot = markupAt Dom.Hooks.panePivot (Support.render model)
+            Expect.isTrue (pivot.Contains Dom.Hooks.paneSwitcher) "all is a pivot item"
+            Expect.isFalse ((markupAt Dom.Hooks.paneStrip pivot).Contains Dom.Hooks.paneSwitcher) "and does not scroll"
+
+        testCase "on the all page, all is the one selected pivot item" <| fun () ->
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+                |> Support.step ToggleSwitcherMsg
+            let pivot = markupAt Dom.Hooks.panePivot (Support.render model)
+            Expect.equal
+                (attributeOf "role=\"tab\"" "aria-selected" pivot |> List.filter ((=) "true") |> List.length,
+                 attributeOf Dom.Hooks.paneSwitcher "aria-selected" pivot)
+                (1, [ "true" ])
+                "one item selected, and it is all"
 
         testCase "the switcher's shortcut is Ctrl or Cmd with the backquote key" <| fun () ->
             Expect.equal

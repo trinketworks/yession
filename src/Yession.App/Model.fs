@@ -610,8 +610,9 @@ module TerminalMode =
 /// The pane's one face (Plan 25, stage 2; P2-1): a terminal, or a preview over one.
 ///
 /// The census of every terminal used to be a third face here (`OnList`), a destination the
-/// pane went to and came back from. It is the SWITCHER now (P2-2), a popover over whichever
-/// face is up (`ClientModel.Switcher`), so it covers nothing and there is nothing to resume.
+/// pane went to and came back from. It is the SWITCHER now (P2-2), the pivot's `all` page,
+/// laid over whichever face is up (`ClientModel.Switcher`) rather than replacing it — so the
+/// face under it is still there to return to, exactly as it was left.
 type PaneMode =
     | OnTerminal of TerminalMode
     /// Something opened from the chat, laid over the terminal it belongs to (`under`, the read
@@ -1005,24 +1006,18 @@ type ClientModel =
       /// was asked. Model state rather than the DOM's own, for `ItemMenu`'s reason — a menu
       /// rendered only while open cannot be asked whether it is open.
       PaneMenu      : bool
-      /// Whether the switcher is open (P2-2): every terminal this session has had, live and
-      /// closed, and every file shared into it, hung under the pane's head name.
+      /// Whether the pane is on its "all" page: every terminal this session has had, live and
+      /// closed, and every file shared into it.
       ///
-      /// `PaneMenu`'s shape, for its reason — one popover hangs off one control — and the two
-      /// share a slot in effect: opening either shuts the other, so there is never a second
-      /// popover over the pane with one Escape between them. It is the list that used to
-      /// REPLACE the pane (`PaneMode.OnList`); laid over it instead, it covers no read and so
-      /// has nothing to resume, and choosing from it is choosing a tab.
+      /// The SWITCHER (P2-2), now a page rather than a popover. It hung under the head's name
+      /// over whatever the pane showed, which put a boxed list, a strip of tabs and a head
+      /// that named one of them in three stacked layers — and "which of these do I press to
+      /// get somewhere" had three answers. It is the pivot's last item now, `all`, and the
+      /// pane's body while it is up. It is still OVER the pane's face rather than a face of its
+      /// own (`PaneMode`): the terminal or preview the reader was on stays selected under it,
+      /// so leaving it — Escape, or the item it was opened from — returns to exactly that, and
+      /// choosing from it is choosing a tab.
       Switcher      : bool
-      /// How many of the strip's tabs are scrolled out of its window, as the browser last
-      /// measured it (`StripOverflowMsg`). The strip's overflow count says it, and opens the
-      /// switcher, because a strip of eight in a pane that shows four and a half used to give
-      /// no sign that there was anything past its edge.
-      ///
-      /// The model's rather than the DOM's because the count is RENDERED, and a render cannot
-      /// read a measurement: the shell measures after each render and sends the number only
-      /// when it changes.
-      StripHidden   : int
       /// The last thing the session REFUSED, in its own words.
       ///
       /// A command answers `CommandAccepted` or `CommandRejected`, and until now only the
@@ -1158,9 +1153,11 @@ type DomMove =
     /// Into the switcher, once it has opened: onto the row of the terminal the pane is about,
     /// else its first row — the place a reader who opened it to change terminals starts from.
     | FocusSwitcher
-    /// Onto the control the switcher hangs from (the pane's head name), once the switcher has
-    /// gone — `FocusPaneNew`'s reason, for the other popover this pane has.
-    | FocusPaneSwitcher
+    /// Onto the pivot's selected item, once the switcher has gone — the terminal or preview
+    /// it was laid over, which is what the pane shows again — and onto the empty pane's press
+    /// when there was nothing under it. The page that had focus left the document; the item
+    /// the reader is back on is where they are.
+    | FocusPivot
     /// Onto this terminal's tab in the strip — where a kill pressed on the strip lands.
     | FocusTab of TerminalId
     /// The same move, made only while focus is in the pane or nowhere at all.
@@ -1488,17 +1485,15 @@ type ClientMsg =
     /// and focus never has to go looking for a replacement.
     | TogglePaneMenuMsg
     | ClosePaneMenuMsg
-    /// Open or shut the switcher (P2-2). A toggle for `TogglePaneMenuMsg`'s reason: the head
-    /// name that opens it is the control that shuts it. Opening it brings the pane with it —
-    /// reaching for a terminal you cannot see is exactly the case where the pane is shut.
+    /// Go to the pivot's `all` page, or back from it (P2-2). A toggle because its shortcut is
+    /// one key for both; the pivot item itself only ever opens it, as a selected tab pressed
+    /// again does nothing. Opening it brings the pane with it — reaching for a terminal you
+    /// cannot see is exactly the case where the pane is shut.
     | ToggleSwitcherMsg
-    /// Shut the switcher: Escape, and a press outside it. Choosing from it shuts it too, as
-    /// part of the choice (`ShowInPaneMsg`), and lands focus where the choice put the reader.
+    /// Leave the `all` page for the item it was laid over: Escape. Choosing from it leaves it
+    /// too, as part of the choice (`ShowInPaneMsg`), and lands focus where the choice put the
+    /// reader.
     | CloseSwitcherMsg
-    /// How many tabs the strip hides past its edges, as the shell measured it after a render
-    /// (`StripHidden`). Sent only on a change, so a render that measures what the model
-    /// already holds sends nothing and the loop it would make ends there.
-    | StripOverflowMsg of hidden: int
     /// Something was copied to the clipboard (`Some` the hook of the box it came from), or
     /// the moment for saying so has passed (`None`).
     ///
@@ -1542,6 +1537,15 @@ type ClientMsg =
     /// whatever was armed before it; `None` is sent by the wait (`armedMs`), by Escape on the
     /// armed control, and by focus leaving it.
     | ArmKillMsg of TerminalId option
+    /// Put a CLOSED terminal's tab away: the × a closed item wears in place of its kill.
+    ///
+    /// A closed tab stays while it is the one on screen (`settle`), so the thing a reader was
+    /// looking at does not vanish as it finishes — which left it there with no way to say
+    /// "done with this" short of choosing another. This is that, and only for a terminal that
+    /// has closed: the refusal is HERE rather than in the control, so no route can drop the
+    /// tab of a terminal still running somewhere (P2-2). The pane moves on to the tab beside
+    /// it, or to nothing.
+    | DismissTabMsg of TerminalId
     /// Ask the session to cancel the running agent turn (Step 17). The outcome arrives as
     /// events: `AgentTurnInterrupted` on success, or nothing if the turn already finished.
     | InterruptTurnMsg of AgentTurnId
@@ -1725,7 +1729,6 @@ module ClientModel =
           ItemMenu = None
           PaneMenu = false
           Switcher = false
-          StripHidden = 0
           Refused = None
           Asked = Map.empty
           OpenFolds = Set.empty
@@ -2026,6 +2029,8 @@ module ClientModel =
     /// press that makes something.
     let paneLanding (model: ClientModel) : DomMove =
         match preview model, selectedTerminal model with
+        // The `all` page is the body while it is up, whatever is under it.
+        | _ when model.Switcher -> DomMove.FocusSwitcher
         | Some _, _ -> DomMove.FocusPane
         | None, Some terminal -> DomMove.FocusCommandLine terminal
         | None, None -> DomMove.FocusPaneEmpty
@@ -2046,8 +2051,9 @@ module ClientModel =
     /// this screen cannot drift: there is one answer and the render and the report read it.
     ///
     /// A preview reports what it is OF (`PreviewSubject.view`): a command or a stretch is its
-    /// terminal, which is the terminal it is laid over, and a file is the file. The switcher
-    /// changes nothing here: it is a popover over what is on screen, which is still on screen.
+    /// terminal, which is the terminal it is laid over, and a file is the file. The `all` page
+    /// changes nothing here: what it is laid over is still the pane's selection, and is what
+    /// the reader goes back to.
     let viewing (model: ClientModel) : ViewRef option =
         match model.Pane with
         | None -> None
@@ -2406,6 +2412,10 @@ module ClientModel =
         |> List.tryFindIndex (fun id -> id = gone)
         |> Option.bind (fun here -> TabStrip.neighbour here (List.length items))
         |> Option.bind (fun index -> List.tryItem index others)
+
+    /// The tab that takes a dismissed one's place: `successor`'s rule, over the strip.
+    let dismissLanding (model: ClientModel) (gone: TerminalId) : TerminalId option =
+        successor model.Tabs gone
 
     /// Where focus lands after a kill this client asked for, given the pane as it stood when
     /// the kill was pressed (`model` is the fold's BEFORE).
@@ -3523,8 +3533,9 @@ module ClientModel =
             let next = if model.ItemMenu = Some messageId then None else Some messageId
             { model with ItemMenu = next }
         | CloseItemMenuMsg -> { model with ItemMenu = None }
-        // Opening either popover shuts the other (`Switcher`): one over the pane at a time.
-        | TogglePaneMenuMsg -> { model with PaneMenu = not model.PaneMenu; Switcher = false }
+        // The menu hangs from the pivot's `+`, which the `all` page keeps on screen: it opens
+        // over whatever the pane shows, that page included, and leaves it where it was.
+        | TogglePaneMenuMsg -> { model with PaneMenu = not model.PaneMenu }
         | ClosePaneMenuMsg -> { model with PaneMenu = false }
         | ToggleFoldMsg key ->
             let next =
@@ -3547,11 +3558,12 @@ module ClientModel =
         | CopiedMsg None -> { model with Copied = None }
         | ToggleSwitcherMsg ->
             // Opening brings the pane: reaching for a terminal you cannot see is exactly the
-            // case where the pane is shut. Shutting leaves the pane as it is.
+            // case where the pane is shut. Leaving it leaves the pane as it is. Going to it
+            // shuts the menu, as moving to any other pivot item would: a popover does not
+            // outlive the page it hung over.
             if model.Switcher then { model with Switcher = false }
             else { model with Switcher = true; PaneMenu = false; TerminalsOpen = true }
         | CloseSwitcherMsg -> { model with Switcher = false }
-        | StripOverflowMsg hidden -> { model with StripHidden = max 0 hidden }
         | EnsureTerminalDraftMsg (terminal, author, queueId) ->
             // Typing changes nothing about the strip: a terminal being typed in is on screen
             // already, which is the whole of what it needs.
@@ -3709,6 +3721,17 @@ module ClientModel =
         // The armed slot is spent by the press that confirms it.
         | CloseTerminalMsg terminal -> { model with KillPending = Some terminal; KillArmed = None }
         | ArmKillMsg next -> { model with KillArmed = next }
+        | DismissTabMsg terminal ->
+            match Projection.tryFind terminal model.Terminals with
+            | Some view when view.IsOpen -> model
+            | Some _
+            | None ->
+                let next = dismissLanding model terminal
+                { model with
+                    Tabs = model.Tabs |> List.filter (fun tab -> tab <> terminal)
+                    Pane =
+                        if selectedTerminal model = Some terminal then next |> Option.map (Reading >> OnTerminal)
+                        else model.Pane }
         ))))
 
     /// A message's consequences: the next model, and what it asks of the world outside it.
@@ -3764,13 +3787,19 @@ module ClientModel =
                 | None -> []
             | ShowInTerminalMsg (terminal, block) ->
                 [ ClientEffect.Move (DomMove.RevealBlock (terminal, block)); ClientEffect.Move DomMove.FocusPane ]
-            // Into the switcher as it opens, and back to the head name it hangs from as it
-            // shuts: either way the control under the hand is about to change, and the
-            // keyboard has to go with the reader rather than be left on `body`.
+            // Into the list as the page opens, and back onto the item it was laid over as it
+            // goes: either way the control under the hand is about to leave the document, and
+            // the keyboard has to go with the reader rather than be left on `body`.
             | ToggleSwitcherMsg ->
                 if next.Switcher then [ ClientEffect.Move DomMove.FocusSwitcher ]
-                else [ ClientEffect.Move DomMove.FocusPaneSwitcher ]
-            | CloseSwitcherMsg when model.Switcher -> [ ClientEffect.Move DomMove.FocusPaneSwitcher ]
+                else [ ClientEffect.Move DomMove.FocusPivot ]
+            | CloseSwitcherMsg when model.Switcher -> [ ClientEffect.Move DomMove.FocusPivot ]
+            // The × that was pressed leaves with its tab: onto the tab that took its place, or
+            // the pane's empty press when there is none.
+            | DismissTabMsg terminal when model.Tabs <> next.Tabs ->
+                match dismissLanding model terminal with
+                | Some tab -> [ ClientEffect.Move (DomMove.FocusTab tab) ]
+                | None -> [ ClientEffect.Move DomMove.FocusPivot ]
             | MoveMsg move -> [ ClientEffect.Move move ]
             // A deliberate send settles the view on what was just sent, whether or not the
             // sender had scrolled away while composing — the tail rule (`Tail`, in the
