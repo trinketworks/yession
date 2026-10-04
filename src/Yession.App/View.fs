@@ -1953,11 +1953,11 @@ module View =
         // Where chapters open, asked once for the whole transcript: every row and every
         // item's menu below looks itself up here rather than asking again.
         let chapterOpenings = ClientModel.chapterOpenings model
-        // A file an agent linked to in a message, drawn as the reference it is — the SAME chip
-        // the fold below it draws for the act of sharing one (`Entity.render`), because a body
-        // saying "see file:///artifacts/chart.png" and a note saying "shared artifact
-        // chart.png" are pointing at one thing and a reader should not have to notice that
-        // twice.
+        // A file an agent pointed at in a message — linked, in angle brackets, or written bare —
+        // drawn as the reference it is (`RichText`): the SAME chip the fold below it draws for
+        // the act of sharing one (`Entity.render`), because a body saying "see
+        // file:///artifacts/chart.png" and a note saying "shared artifact chart.png" are
+        // pointing at one thing and a reader should not have to notice that twice.
         let contentChip (by: ActorRef) (ref: ContentRef) = Entity.render model by (EntityRef.Content ref)
         // What can be done to one item, behind an ellipsis at its top-right. It goes on
         // every item that HAS an id — a message and an act alike — because "divide it
