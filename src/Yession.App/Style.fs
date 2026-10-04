@@ -1364,10 +1364,15 @@ module Style =
     /// child's own margin goes to zero so nothing stacks on top of that gap (a chapter rule
     /// opening the conversation brings a margin of its own); on a phone the gap is 20 and the
     /// leading gap 16, hence the `-mb-1`.
+    ///
+    /// The ring is drawn INSIDE: focus lands on the column itself when the "jump to latest"
+    /// that brought a keyboard reader here goes, and a ring outside a box that fills its
+    /// region would be clipped to nothing.
     let timeline =
         "flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-8 pb-6 flex flex-col gap-6 "
         + "before:grow [&>*:first-child]:mt-0 "
-        + "max-md:px-4 max-md:pb-4 max-md:gap-5 max-md:before:-mb-1 break-words"
+        + "max-md:px-4 max-md:pb-4 max-md:gap-5 max-md:before:-mb-1 break-words "
+        + focusRingInset
 
     /// The box `timeline` floats its "jump to latest" over — mirrors `terminalReplayRegion`'s
     /// reason for existing: `timeline` IS the scroller, so an `absolute` child of it would
@@ -2036,7 +2041,7 @@ module Style =
     /// One agent burst (Plan 20, stage 4). The same fold every other row on the timeline
     /// wears (`View.foldArrow`/`foldBody`), not a `<details>` of its own: a native
     /// disclosure keeps its open state on the DOM node rather than the model, so nothing
-    /// that drives a re-render — `syncJumpToLatest` among them — has anything to read it
+    /// that drives a re-render — `Tail`'s "jump to latest" among them — has anything to read it
     /// from. Same ground and rail as a turn's tool run (`chatToolRun`), because it IS the
     /// same thing: a line that reads as one until somebody wants the several it groups.
     let chatTaskCard = cls [ itemGround; readingColumn; foldRow; "max-md:pl-4" ]
@@ -3133,8 +3138,8 @@ module Style =
     ///
     /// A terminal grows DOWNWARD from the top and the viewport rides the tail. Those are two
     /// different statements and only the second one is about the bottom: with a long history
-    /// the newest line does sit at the bottom edge, because the scroller is pinned there
-    /// (`keepSurfacesPinned`), not because the content is.
+    /// the newest line does sit at the bottom edge, because the scroller is kept there
+    /// (`Tail`), not because the content is.
     ///
     /// `mt-auto` on the stream said the first statement as if it were the second, and with a
     /// short history it showed: two lines pinned to the floor under 500px of void, measured on
@@ -3237,6 +3242,22 @@ module Style =
     /// The rewound read is a player, not a scroller, so it has no scroll box of its own to
     /// float over — this is the positioned region the way back hangs in.
     let terminalReplayRegion = "relative flex-1 min-h-0 flex flex-col"
+
+    /// The region a terminal's text — its blocks, or its live screen — scrolls in, and its
+    /// "jump to latest" floats over: `chatRegion`'s reason, since the scroller cannot be the
+    /// positioned ancestor of something that must not scroll away with it.
+    let terminalTailRegion = "relative flex-1 min-h-0 flex flex-col"
+
+    /// That float's slot: placed where `terminalLiveFloat` stands, the corner every chat
+    /// client puts the way back in, and hidden until `Tail` says the reader has left the end.
+    let terminalJumpToLatestSlot = "hidden absolute right-3 bottom-3 z-10"
+
+    /// The button in it: `chatJumpToLatest`'s square, without the rail that places that one
+    /// beside a reading column — a terminal has no column to stand beside.
+    let terminalJumpToLatest =
+        cls [ "w-8 h-8 flex items-center justify-center bg-surface"
+              "text-ink-dim hover:text-ink cursor-pointer transition-colors"
+              Stroke.ring; Stroke.rim; focusRing ]
 
     /// The command band beneath the blocks: the command line, whatever is queued against this
     /// terminal, and nothing else. The approval control that used to head it is a property of

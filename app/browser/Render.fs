@@ -39,13 +39,13 @@ open Yession.App.Codecs
 // How many times the whole view has been rendered since this document loaded.
 //
 // A render is the unit of cost on this page. Elmish calls `setState` once per message, and
-// each call re-renders the entire view and reads two scroll positions back out of layout
-// (`surfaceScroll`) — so the question "is reopening a session expensive?" is really "how many
+// each call re-renders the entire view and reads the scroll positions back out of layout
+// (`Tail.before`) — so the question "is reopening a session expensive?" is really "how many
 // renders does it take?", and that is a COUNT: the same number on a laptop and on a phone,
 // unlike every millisecond a test could measure instead.
 //
 // Published rather than inferred. A test can already see the cost indirectly — hook
-// `document.querySelectorAll`, watch `surfaceScroll` go past, count the calls — and that
+// `document.querySelectorAll`, watch `Tail.before` go past, count the calls — and that
 // reads a private detail of the render below, so it goes quietly VACUOUS the day the scroll
 // is preserved some other way: no calls, count zero, budget met, nothing to see. This is the
 // render saying what it did, and it is wrong only if it is removed.
@@ -70,155 +70,6 @@ let renders () : int =
     match PageGlobal.tryGet rendersPublished with
     | Some n -> n
     | None -> 0
-
-// The two surfaces that are read from their END — the chat, and a terminal's scrollback.
-// Both are pinned to the bottom while the reader is at (or within a few px of) it, and both
-// keep their place when they have scrolled up to read. Lit preserves focus/caret across its
-// diff, but scroll is ours to manage.
-//
-// One selector list, taken once and put back once: the terminal used to have neither half,
-// so a command whose output arrived after the render left the newest line below the fold
-// with nothing to say it was there.
-let [<Literal>] private PinnedSurfaces = "[data-conversation],[data-terminal-scrollback]"
-
-/// Where one pinned surface stood when the render started. `AtEnd` is a POSITION TO RESTORE
-/// rather than a number to remember: the surface grows under the reader, so the offset that
-/// was its end before the render is somewhere in the middle of it afterwards.
-type private SurfacePosition =
-    | AtEnd
-    | ScrolledTo of float
-
-/// The surfaces a selector names. `querySelectorAll` answers a list indexed by number and
-/// every caller here wants to walk it.
-let private surfaces (selector: string) : Browser.Types.HTMLElement list =
-    let found = Browser.Dom.document.querySelectorAll selector
-    [ for i in 0 .. found.length - 1 -> found.[i] :?> Browser.Types.HTMLElement ]
-
-/// What a surface IS, never where it sits in the list: a terminal that took its lease between
-/// two renders removes its scrollback from the document, and an index would then put its
-/// scroll position into the chat.
-let private surfaceKey (el: Browser.Types.HTMLElement) : string =
-    let terminal = el.getAttribute "data-terminal-id"
-    if isNull (box terminal) || terminal = "" then "chat" else terminal
-
-/// Whether the reader is at the end of a surface — within a few pixels of it, because a
-/// fractional scroll offset over sub-pixel line heights never lands on the bottom exactly.
-/// Narrow on purpose: this is "exactly at the edge", used only to skip a redundant
-/// `scrollTop` write in `restoreSurfaceScroll`. "Is the reader still following the tail" is
-/// a different, wider question — see `isPinned` below.
-let private atEnd (el: Browser.Types.HTMLElement) : bool =
-    el.scrollTop + el.clientHeight >= el.scrollHeight - 4.0
-
-/// How far from the tail is far enough for "the reader has left it" to become true, rather
-/// than "scrolled past the last line by a pixel or two" — one slack for both the pin
-/// decision (`surfaceScroll`, `keepSurfacesPinned`) and the jump-to-latest toggle
-/// (`syncJumpToLatest`), because they are the same question asked twice and used to carry
-/// two different answers: landing a few px short of the exact edge hid the jump-to-latest
-/// button (looked caught up) while `atEnd`'s 4px said otherwise, pinning the reader to that
-/// pixel instead of riding the tail.
-let [<Literal>] private PinnedSlack = 200.0
-
-/// Whether the reader is still following the tail — within `PinnedSlack` of it.
-let private isPinned (el: Browser.Types.HTMLElement) : bool =
-    el.scrollTop + el.clientHeight >= el.scrollHeight - PinnedSlack
-
-/// Where each pinned surface has the reader, taken before the render moves them.
-let private surfaceScroll (selector: string) : Map<string, SurfacePosition> =
-    surfaces selector
-    |> List.map (fun el -> surfaceKey el, (if isPinned el then AtEnd else ScrolledTo el.scrollTop))
-    |> Map.ofList
-
-/// Every pinned surface put back where the render left the reader.
-///
-/// A surface that was NOT on screen before this render starts at its end, which is the other
-/// half of "content grows from the top and the viewport rides the tail": opening a terminal
-/// with a history behind it, or switching to one, should show the newest lines and not the
-/// oldest. It used to fall through to `scrollTop = 0` — invisible while the stream hugged the
-/// bottom of a short box with `mt-auto`, and plainly wrong the moment the history was longer
-/// than the box, which is exactly when the anchoring stopped applying.
-///
-/// Written ONLY when the render left the reader somewhere else. A write to `scrollTop` — to
-/// the value it already holds included — ends whatever scroll the browser has in flight, in
-/// Chromium and WebKit alike (measured in the shell harness: a smooth scroll from the end of
-/// two hundred items, with a record landing every frame, stayed at the end for sixty frames
-/// under the unconditional write, and reached the top under this one). A record arriving is
-/// a render, so while a sandbox ran its setup — a dozen renders a second, none of them
-/// touching the timeline — every fling back through the conversation was taken away within a
-/// frame and, having started at the end, put back there. Which is what "it keeps jumping to
-/// the bottom, no matter where I scroll" was, on a phone.
-///
-/// Both reads happen in the one task the render is, and the browser moves a scroll only
-/// between tasks — so a pinned reader who is not at the end AFTER the render is one the
-/// render moved: the surface grew past them (they follow the tail), or Lit replaced it and
-/// the new one starts at zero. A reader who had scrolled up is put back on the same terms.
-let private restoreSurfaceScroll (selector: string) (positions: Map<string, SurfacePosition>) : unit =
-    for el in surfaces selector do
-        match Map.tryFind (surfaceKey el) positions with
-        // At the end before the render, and not on the page at all before it, want the same
-        // thing of it now — which is why the two are one case rather than one and a fallback.
-        // `isPinned`, not `atEnd`: `AtEnd` was recorded with `isPinned`'s wider slack, and
-        // checking the narrow one here reads a reader who has only just started scrolling
-        // away (inside 200px, past 4px) as having left — so this wrote `scrollHeight` back
-        // under them on the very next render, cancelling a scroll the reader was still
-        // inside the slack for. Same predicate both ends of the round trip.
-        | Some AtEnd | None -> if not (isPinned el) then el.scrollTop <- el.scrollHeight
-        | Some (ScrolledTo position) -> if el.scrollTop <> position then el.scrollTop <- position
-
-/// Show or hide the chat's floating "jump to latest" against how far the reader actually is
-/// from the tail, in pixels — read straight off the surface rather than carried in the
-/// model, because it is a fact about ONE scroll position and the model has no business
-/// re-rendering the whole page every time somebody nudges a wheel. Run after every render
-/// (a message can grow the surface out from under a reader who was not at the end) and on
-/// every scroll of the surface itself (a reader moving with nothing new arriving) — see
-/// `keepSurfacesPinned` and `render` below.
-let private syncJumpToLatest () : unit =
-    match surfaces "[data-conversation]" with
-    | [] -> ()
-    | conversation :: _ ->
-        match Browser.Dom.document.querySelector "[data-jump-to-latest]" with
-        | null -> ()
-        | slot ->
-            let slot = slot :?> Browser.Types.HTMLElement
-            if isPinned conversation then slot.classList.add [| "hidden" |]
-            else slot.classList.remove [| "hidden" |]
-
-/// A RENDER is not the only thing that moves the end of one of those surfaces away from the
-/// reader — a RESIZE does it too, and on a phone the viewport is not a constant: the
-/// browser's toolbars come and go, the device turns. The shell is the visible viewport's
-/// height (`Style.app`), so each of those shortens the timeline's box while its `scrollTop`
-/// stays exactly where it was, and somebody who was at the end of the conversation is left a
-/// line and a half short of it — the last thing said, cut in half, just above the composer.
-///
-/// Whether they were at the end has to be sampled BEFORE the box changes (by the time the
-/// resize handler runs the measurement would always say "no"), so it rides the scroll event —
-/// captured, because scroll does not bubble, and the element is Lit's to replace.
-let private keepSurfacesPinned (selector: string) : unit =
-    // Keyed by the ELEMENT rather than by what the surface is, because Lit replaces it: a
-    // weak key lets the element it was taken from be collected with the render that dropped it.
-    let pinned = JS.Constructors.WeakMap.Create<Browser.Types.HTMLElement, bool> ()
-    Browser.Dom.document.addEventListener (
-        "scroll",
-        (fun event ->
-            // A capture listener on the document hears the DOCUMENT's own scroll as well as
-            // the surfaces inside it, and a document has no `matches` to be asked — so what
-            // the event reached says whether it is an element before it is asked anything.
-            match EventTargets.asHTMLElement event.target with
-            | Some el ->
-                if el.matches selector then pinned.set (el, isPinned el) |> ignore
-                // The chat is one of the two surfaces this selector matches, and the float
-                // is its own: a reader scrolling a terminal's scrollback has no "jump to
-                // latest" to show or hide.
-                if el.matches "[data-conversation]" then syncJumpToLatest ()
-            | None -> ()),
-        true)
-    Browser.Dom.window.addEventListener (
-        "resize",
-        fun _ ->
-            for el in surfaces selector do
-                // A surface nobody has scrolled has no entry, and a surface nobody has
-                // scrolled is at its end — so no entry counts as pinned, exactly as a
-                // sampled `true` does.
-                if not (pinned.has el) || pinned.get el then el.scrollTop <- el.scrollHeight)
 
 /// Watch the foot of a paged listing inside the card's own scroller, so the next page arrives
 /// as the reader reaches it rather than on a press. The caller stops the observer when the
@@ -426,7 +277,7 @@ let private setInputValue (el: Browser.Types.HTMLInputElement) (value: string) :
         el.setSelectionRange (first, last)
 
 /// The inputs `bindTerminalInput` has already attached its listeners to. Keyed by the ELEMENT,
-/// weakly, for the same reason `keepSurfacesPinned`'s map is: Lit replaces elements, and one a
+/// weakly, because Lit replaces elements, and one a
 /// render dropped must be collectable rather than held here for the life of the page.
 let private boundTerminalInputs = JS.Constructors.WeakSet.Create<Browser.Types.HTMLInputElement> ()
 
@@ -937,14 +788,11 @@ let create (deps: Deps) : Renderer =
         renderedAt <- now ()
         countRender ()
         latest <- Some model
-        let scroll = surfaceScroll PinnedSurfaces
+        // Where each reader of a surface read from its end stands, before anything moves
+        // them; put back at the END of this render (`Tail`), after every sync below has
+        // finished changing heights.
+        let tails = Tail.before ()
         Lit.render deps.Root (View.view deps.Actions model dispatch)
-        restoreSurfaceScroll PinnedSurfaces scroll
-        // A message can arrive below a reader who is not pinned to the tail (that is the
-        // whole reason `restoreSurfaceScroll` above leaves them where they were), which is
-        // exactly the moment the float has to appear, so this runs on every render, not
-        // only on a scroll of the chat itself.
-        syncJumpToLatest ()
         // Mount/dispose the rich editors on their body hosts (bound to live fragments), then
         // overlay collaborators' cursors: remote carets in each body editor, and title carets
         // measured against the just-rendered input.
@@ -984,6 +832,11 @@ let create (deps: Deps) : Renderer =
         // write the browser need not be asked to make.
         let tab = ClientModel.tabTitle model
         if Browser.Dom.document.title <> tab then Browser.Dom.document.title <- tab
+        // Last, because everything above can move an end: an editor mounted into a message,
+        // the pane opened beside the chat, a screen folded forward. A reader put back at the
+        // end before those ran was put back at an end that had moved by the time anybody
+        // looked.
+        Tail.restore tails
 
     { SetState = setState
       SyncTerminalInputs = syncTerminalInputs
@@ -994,6 +847,6 @@ let create (deps: Deps) : Renderer =
 /// viewport that changed size under a laid-out surface; and the split between the two columns
 /// is the reader's to set, not the theme's.
 let attach () : unit =
-    keepSurfacesPinned PinnedSurfaces
+    Tail.attach ()
     PaneShell.installPaneResize ()
     PaneShell.installStrip ()

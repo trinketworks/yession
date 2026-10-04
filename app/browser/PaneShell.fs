@@ -220,10 +220,10 @@ let toTerminalScreen () : unit =
 /// the moment a record arrived.
 ///
 /// It runs a frame late for the reason everything else here does (the element has to exist),
-/// and that frame is also what puts it after `restoreSurfaceScroll`, which returns a freshly
-/// rendered scrollback to its end. Landing after it is the whole trick: the reveal wins once,
-/// and every render afterwards samples the position the reader was left at, so the two never
-/// fight.
+/// and that frame is also what puts it after `Tail.restore`, which returns a freshly rendered
+/// scrollback to its end. Landing after it is the whole trick: the reveal wins once — a scroll
+/// UP, which `Tail` reads as the reader leaving the end — and every render afterwards puts
+/// back the position the reader was left at, so the two never fight.
 ///
 /// The mark is an animation that ends. A block scrolled to in a wall of identical mono is
 /// still a block nobody can pick out; a permanent highlight would still be pointing at it
@@ -412,27 +412,19 @@ let revealMessage (messageId: string) : unit =
             // all — focusable on purpose, never a Tab stop.
             item.focus ()))
 
-/// Scroll the conversation to its own tail — for the "jump to latest" float's press, and for
-/// a sent message settling into view (`SendDraftMsg`, `Model.fs`). Not `scrollIntoView`:
-/// there is no element AT the end to scroll one of into view (a caret still blinking, a
-/// message mid-stream), and the final `scrollTop` either way is the same position
-/// `restoreSurfaceScroll` (`Render.fs`) already treats as "the end" — landing there is what
-/// lets that render-time restore see the reader as still pinned, rather than fight the jump
-/// the moment the next message arrives.
-///
-/// Animated unless `prefers-reduced-motion` says otherwise. Safe to animate across a render:
-/// this runs as a `ClientEffect`, which fires synchronously right after the `setState` that
-/// triggered it — so by the time the glide starts, the layout it rides over (the composer
-/// collapsed, the message landed) is already final. Nothing between here and the next
-/// message re-renders, which is the only thing that would fight it (an unconditional
-/// `scrollTop` write ends an in-flight smooth scroll — see `restoreSurfaceScroll`'s comment).
-let scrollToLatest () : unit =
-    find "[data-conversation]"
-    |> Option.iter (fun conversation ->
-        if mediaMatches "(prefers-reduced-motion: reduce)" then
-            conversation.scrollTop <- conversation.scrollHeight
-        else
-            scrollToBottomSmooth conversation)
+/// The "jump to latest" press: the surface followed from its end (`Tail.follow`), and the
+/// keyboard put where the reader now is. The press takes its own control away — a surface at
+/// its end has no way back to offer — so focus has to land somewhere or it lands on `body`:
+/// on the surface itself when it can hold focus (the chat, a screen whose keyboard this peer
+/// has), else on the nearest box around it that can (the pane's panel, around a terminal's
+/// blocks). Never a Tab stop of its own making — every one of those is `tabindex` already.
+let jumpToLatest (surface: Yession.App.TailSurface) : unit =
+    Tail.follow surface
+    |> Option.bind (fun el ->
+        match el.closest "[tabindex]" with
+        | Some holder -> Some (holder :?> HTMLElement)
+        | None -> None)
+    |> focusOn
 
 /// Put focus back on one item's actions control, once the menu it opened has gone.
 ///
@@ -482,7 +474,8 @@ let rec move (asked: Yession.App.DomMove) : unit =
     | Yession.App.DomMove.RevealBlock (terminalId, blockId) ->
         revealBlock (Yession.Domain.TerminalId.value terminalId) (Yession.Domain.BlockId.value blockId)
     | Yession.App.DomMove.RevealMessage messageId -> revealMessage (Yession.Domain.MessageId.value messageId)
-    | Yession.App.DomMove.ScrollToLatest -> scrollToLatest ()
+    | Yession.App.DomMove.ScrollToLatest surface -> Tail.follow surface |> ignore
+    | Yession.App.DomMove.JumpToLatest surface -> jumpToLatest surface
     | Yession.App.DomMove.FocusComposer -> toComposer ()
 
 /// The pane's open state, as a class on the shell root — the same mechanism the sidebar uses,

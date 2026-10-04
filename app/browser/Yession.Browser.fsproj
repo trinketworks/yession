@@ -16,6 +16,9 @@
          a second browser-only renderer would quietly break. Pure JS, no Node API. -->
     <Compile Include="..\Emulator.fs" Link="Emulator.fs" />
     <Compile Include="Replay.fs" />
+    <!-- The surfaces read from their end, and the one rule they keep a reader at it by.
+         Before PaneShell, whose "jump to latest" is this rule's to carry out. -->
+    <Compile Include="Tail.fs" />
     <!-- Presentation the model drives but a Lit render cannot do — focus moves, and the
          column's open state as a root class. Shared by the app entry and the host-free
          shell harness, so there is one implementation rather than two. -->
