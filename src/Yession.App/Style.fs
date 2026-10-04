@@ -451,18 +451,22 @@ module Style =
     /// Un-arms itself back to `btnIconBareDanger` on its own (`armedMs`), so a
     /// press nobody confirms cannot leave a row looking primed for ever.
     let btnIconBareDangerArmed = cls [ btnIconBareBase; "bg-err text-bg" ]
-    /// A terminal's kill, ARMED (`View.contentListView`): the err fill worn at rest, as
-    /// `btnIconBareDangerArmed` wears it, but a WORD rather than a glyph — a 24px square cannot
-    /// say what it will end or what is running there, and a kill is the one press in the list
-    /// nobody can take back. The glyph's height, so the row does not move; wider, growing
-    /// leftwards from the glyph's right edge, so the second press lands where the first did.
+    /// A terminal's kill, ARMED (`View.killControl`): a second press away from ending it, which
+    /// it says by being in the error red AT REST — a touch has no hover to hold the warning up —
+    /// and by saying what it will end: `kill`, then what is running there. A sentence in the
+    /// pane's light lowercase rather than a red slab of capitals: the red alone is the alarm,
+    /// and it is the one red word on screen because it is the one press nobody can take back.
+    /// The command after it is what tells it from the unarmed word reddening under the
+    /// pointer, in the weight a step up from it. The row verb's height, so the row does not move;
+    /// wider, growing leftwards from its right edge, so the second press lands where the
+    /// first did.
     let btnKillArmed =
-        cls [ "h-6 shrink-0 inline-flex items-center gap-1.5 px-2 border-0 cursor-pointer"
-              "bg-err text-bg font-ui"; caps; "transition-colors"; focusRing ]
-    /// What the armed kill says is running, inside it: the command as typed — case kept, so
-    /// not caps — cut short rather than allowed to push the row's name out of its column.
+        cls [ "h-6 shrink-0 inline-flex items-center gap-1.5 px-1 bg-transparent border-0 cursor-pointer"
+              "font-ui font-normal text-body lowercase whitespace-nowrap text-err transition-colors"; focusRing ]
+    /// What the armed kill says is running, inside it: the command as typed — case kept — cut
+    /// short rather than allowed to push the row's name out of its column.
     let killArmedRunning =
-        "font-terminal text-code-sm normal-case tracking-normal font-normal truncate max-w-[6rem]"
+        "font-terminal text-code normal-case tracking-normal truncate max-w-[7rem]"
     /// The same verb where it is the only control a row offers a thumb — the Manager's
     /// archive, which on a phone is the one per-row target there is. 24px is WCAG 2.5.8's
     /// minimum exactly and far under a comfortable touch target, so the HIT area is 44px
@@ -2940,22 +2944,43 @@ module Style =
     /// A command inside it, in the terminal's own face, cut short rather than wrapped.
     let panePivotSubtitleCommand = "min-w-0 truncate font-terminal text-code-sm text-ink-dim"
 
-    /// A property of the terminal, stated as a fact and changed by touching the fact.
+    /// The pane's verbs, as WORDS in the shell's own type — `settings ›`'s voice rather than a
+    /// button's. Lowercase and light, no rectangle: the pivot over them is names in light type
+    /// with nothing boxed, and a row of bordered, tracked capitals under it was the one part of
+    /// the column still speaking the older design. What says a word is pressable is the
+    /// RESPONSE — it brightens under the hand — and the ring the keyboard gets, held off the
+    /// glyphs (`focusRingFar`) because type with no box of its own wears a ring on its edge as
+    /// an underline.
     ///
-    /// An act that is about THIS TERMINAL rather than about the command you are writing:
-    /// closing it, stepping back through its recording. In the bar's voice — quiet text — not
-    /// as another bordered rectangle in a strip already full of them.
-    let private terminalBarActBase =
-        cls [ caps; "bg-transparent cursor-pointer shrink-0 px-1.5 py-1 transition-colors"
-              Stroke.clear; focusRing ]
-    let terminalBarAct = cls [ terminalBarActBase; "text-ink-faint hover:text-ink" ]
-    /// The acts, grouped and set apart from the facts beside them. Same tone, same voice —
-    /// what separates them is the gap, because a bar of eight evenly spaced words reads as one
-    /// run-on and a reader has to parse it to find the verb.
-    let terminalBarActs = "flex items-center gap-1 ml-3"
-    /// Closing a terminal kills what is running in it. It reddens under the hand — the same
-    /// promise the danger button makes, kept without the rectangle.
-    let terminalBarDanger = cls [ terminalBarActBase; "text-ink-faint hover:text-err" ]
+    /// The rest tone is `ink-dim`, a step up from the pivot's unchosen names: those are places,
+    /// these are acts, and an act should not read as the quietest thing on screen. Both inks
+    /// and the blue clear 4.5:1 on every surface (app/tailwind.css, Phase4). A thumb's 44 is the
+    /// ROW's to give where the row holds the act directly (`paneActions`, `terminalEmpty`); an
+    /// act inside a band line sits in a group of its own there, so it says so itself.
+    let private paneActBase =
+        cls [ "shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer p-0 no-underline"
+              "font-ui font-light lowercase whitespace-nowrap"
+              "transition-colors duration-150 ease-out motion-reduce:transition-none"; focusRingFar ]
+    /// An act at the foot of the column (`paneActions`), in the pivot's size.
+    let paneAct = cls [ paneActBase; "text-pivot leading-6 text-ink-dim hover:text-ink" ]
+    /// The one act a surface is FOR — the empty pane's way to make a terminal: blue, which is
+    /// what interactive means here, and nothing louder than that.
+    let paneActPrimary = cls [ paneActBase; "text-pivot leading-6 text-blue hover:text-blue-up-1" ]
+    /// An act inside a line of the command band (the lease bar, "not marking"): the same word
+    /// at the size of the line it sits in, so it reads as part of the sentence it ends.
+    let bandAct = cls [ paneActBase; "text-body text-ink-dim hover:text-ink phone:min-h-11" ]
+    /// The band act the line is asking for: handing the keyboard back, re-arming marking.
+    let bandActPrimary = cls [ paneActBase; "text-body text-blue hover:text-blue-up-1 phone:min-h-11" ]
+
+    /// A state said in words, in the pane: lowercase as written, small and light — a caption,
+    /// never a label. What it says is in `ink-dim`; nothing here is in the error red unless a
+    /// person has to do something about it (`smallErr`), because a red word repeated down a
+    /// column is an alarm nobody can answer.
+    let paneSays = "min-w-0 font-ui font-light text-small text-ink-dim"
+    /// Who a fact is about, at the head of its line: the caption's size in full ink.
+    let paneWho = "shrink-0 font-ui font-normal text-small text-ink"
+    /// Somebody holds the keyboard: the running pulse and the word, in the live blue.
+    let paneLive = "shrink-0 inline-flex items-center font-ui font-light text-small text-blue"
 
     /// The pane's body — whatever the selected tab shows. It takes the column's remaining
     /// height so the thing inside it scrolls rather than the column.
@@ -2984,7 +3009,11 @@ module Style =
     ///
     /// On a phone every verb in it is a thumb's height (`[&>*]`), whatever face it wears — a
     /// button, or a download link.
-    let paneActions = "shrink-0 flex items-center gap-2 px-3 py-3 phone:[&>*]:min-h-11 " + Stroke.dividerTop
+    ///
+    /// Words (`paneAct`) with air between them, and no rule over them: the band above ends on
+    /// its own ground, and a hairline between it and a row of light type was a box's edge with
+    /// the rest of the box taken away.
+    let paneActions = "shrink-0 flex flex-wrap items-center gap-x-7 gap-y-1 px-3 pt-2.5 pb-3 phone:py-1 phone:[&>*]:min-h-11"
 
     // --- Content: a file the pane shows rather than a terminal ---------------------------
 
@@ -3031,14 +3060,30 @@ module Style =
     /// A row's name line: the name, then its marks, on one line that gives way in the name.
     let terminalListNameLine = "min-w-0 flex items-center gap-2"
 
-    /// A closed row's "recording lost", beside its name: one line, never squeezed, so a row that
-    /// says it is the height of one that does not.
-    let terminalListGone = statusErr + " shrink-0 whitespace-nowrap"
+    /// A closed terminal's "recording lost": said once where it is about the one terminal on
+    /// screen (its closed band) and once per row on the `all` page — so in the quietest voice
+    /// that is still read, never squeezed, lowercase as written. It was the error red in
+    /// tracked capitals, and nine closed rows made a column of alarms about something nobody
+    /// can do anything about; the hollow mark beside the name already says the terminal is
+    /// closed, and the missing rewind says there is nothing to play.
+    let terminalGone = "shrink-0 whitespace-nowrap font-ui font-light text-small text-ink-faint"
 
     /// What a terminal row's terminal is doing or last ran, under its name: the command, in
     /// the terminal's own face, small and faint — it tells nine `term N` rows apart, and it is
     /// not the thing the row opens. An artifact's size sits in the same slot.
     let terminalListSubtitle = "block min-w-0 truncate font-terminal text-code-sm text-ink-faint"
+
+    /// A row's verb, as a WORD: `rewind`, `kill`. They were glyphs, and the kill's was a
+    /// square — which is what stop looks like, beside a command that now has a real Stop. A
+    /// word cannot be read as anything else, costs a row nothing it has not got (the space is
+    /// at the row's right edge, empty but for these), and is what the rest of this column
+    /// says its acts with. Faint at rest because the ROW is the subject, ink under the hand —
+    /// or the error red, for the one that ends something.
+    let private terminalListActBase =
+        cls [ "h-6 px-1 shrink-0 inline-flex items-center justify-center bg-transparent border-0 cursor-pointer"
+              "font-ui font-light text-body lowercase whitespace-nowrap transition-colors"; focusRing ]
+    let terminalListAct = cls [ terminalListActBase; "text-ink-faint hover:text-ink" ]
+    let terminalListKill = cls [ terminalListActBase; "text-ink-faint hover:text-err" ]
 
     /// The row's verbs, at its right edge — quiet until they are wanted. On a desktop they
     /// come up under the pointer or the keyboard anywhere in the row (`group/row`, and
@@ -3047,11 +3092,11 @@ module Style =
     /// `hidden`, so they never leave the tab order, and an ARMED kill is worn whatever the
     /// pointer does — a confirm that faded out would be a confirm nobody could see.
     ///
-    /// On a phone each is a 44px box with its glyph centred (`[&>*]`): the 24px glyph is
-    /// WCAG 2.5.8's floor for the MARK, never for the target, and a kill 4px from a rewind is
-    /// a kill pressed by a thumb aiming at the rewind.
+    /// On a phone each is at least a 44px box with its word centred (`[&>*]`): the 24px line
+    /// is WCAG 2.5.8's floor for the MARK, never for the target, and a kill 4px from a rewind
+    /// is a kill pressed by a thumb aiming at the rewind.
     let terminalListVerbs =
-        cls [ "ml-auto flex items-center gap-1 shrink-0 phone:[&>*]:min-w-11 phone:[&>*]:min-h-11"
+        cls [ "ml-auto flex items-center gap-4 shrink-0 phone:gap-2 phone:[&>*]:min-w-11 phone:[&>*]:min-h-11"
               "opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100"
               "has-[[data-terminal-close-armed=true]]:opacity-100"
               "[@media(hover:none)]:opacity-100 phone:opacity-100"
@@ -3129,7 +3174,9 @@ module Style =
     /// The facts under a command, on the output's column so they read as an aside to the
     /// command rather than as more output.
     let terminalBlockFacts = "flex flex-wrap items-baseline gap-x-4 gap-y-0.5 pl-4 py-1"
-    let terminalBlockFact = caps + " text-ink-faint"
+    /// One fact: a sentence as the session wrote it (why a command did not exit), so small
+    /// and light and in its own case — tracked capitals made an aside shout over the output.
+    let terminalBlockFact = "font-ui font-light text-small text-ink-faint"
     /// The ✓/✗ tally beside "ran N commands" on a `terminalBlockRun` — the same
     /// shape the chat's task card counts wear (`chatTaskCounts`), kept as its own name
     /// because this one sits on the pane's own fold rather than the chat's.
@@ -3152,9 +3199,11 @@ module Style =
     /// The lines a block leaves to its recording (`TerminalFeed.shownLines`), said above the
     /// ones it shows — quiet, because nothing is missing: the recording holds every one.
     let terminalOutputElided = small
-    /// The truncation notice: a stated gap in the record, in the error voice because a
-    /// missing audit trail is not a neutral fact.
-    let terminalTruncated = caps + " shrink-0 px-3 py-2 text-err"
+    /// The truncation notice: a stated gap in the record. Stated, because a missing audit
+    /// trail is not a neutral fact — but in the pane's caption voice, in `ink-dim` rather
+    /// than the error red: nobody can do anything about bytes the cap already dropped, and
+    /// the red is kept for what a person has to act on.
+    let terminalTruncated = "shrink-0 px-3 py-2 font-ui font-light text-small text-ink-dim"
 
     /// The live screen (Plan 14, stage 6). Monospaced, preformatted, and scrollable in both
     /// axes — a terminal's lines are as wide as the program made them, and wrapping them
@@ -3185,7 +3234,9 @@ module Style =
     /// bordered box around a fact reads as a control nobody can press. The surface ground
     /// stays, so it reads over whatever is playing under it.
     let terminalLiveFloat =
-        "absolute right-3 bottom-3 z-10 flex items-center gap-3 px-3 py-2 bg-surface"
+        "absolute right-3 bottom-3 z-10 flex items-center gap-3 px-3 py-1.5 bg-surface"
+    /// What it says: how far behind, as a caption (`paneSays`'s voice).
+    let terminalBehind = "font-ui font-light text-small text-ink-dim"
     /// The rewound read is a player, not a scroller, so it has no scroll box of its own to
     /// float over — this is the positioned region the way back hangs in.
     let terminalReplayRegion = "relative flex-1 min-h-0 flex flex-col"

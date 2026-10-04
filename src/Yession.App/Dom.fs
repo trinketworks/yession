@@ -813,6 +813,11 @@ module Dom =
         let live = "Live"
         /// The list's rewind, named for its terminal: watching it from a moment ago.
         let rewindTerminal (title: string) = "Rewind " + title
+        /// The `all` page's row verbs, as the words they are drawn as — the accessible names
+        /// above say which terminal each is about.
+        let rewind = "rewind"
+        let kill = "kill"
+        let reattach = "attach"
         /// A rewound reader, told how far behind the live edge they are — when there is any
         /// distance yet to tell.
         let behindLive (distance: string option) =

@@ -52,22 +52,14 @@ module Icon =
     let private checkPath = "M3.5 8.25 L6.5 11.25 L12.5 5.25"
     let private crossPath = closePath
     let private sendPath = "M2.5 8 L12.5 8 M8.75 4.25 L12.5 8 L8.75 11.75"
-    // The terminal list's verbs (Plan 20, stage 0), drawn to the same rule as everything
-    // above: straight segments only. A power ring or a refresh loop would be the obvious
-    // glyph for two of these and would be the first curve in the set — so each says its
-    // meaning in the geometry this vocabulary actually has.
+    // Transport and container marks, drawn to the same rule as everything above: straight
+    // segments only, each saying its meaning in the geometry this vocabulary actually has.
     //
-    /// Step back to what is behind: the transport bar a playhead runs into. The triangle is
-    /// CLOSED — open, its two strokes read as a letter K at 14px rather than as a playhead,
-    /// which is the whole difference between a glyph and a decoration.
-    let private rewindPath = "M12 3.5 L5.5 8 L12 12.5 Z M3.5 4 L3.5 12"
     /// Play, as an outline — a closed terminal is a recording, and this is the mark that
     /// says so. Never filled, because nothing in this set is.
     let private playPath = "M5.75 3.5 L12 8 L5.75 12.5 Z"
-    /// Stop. What killing a terminal does, in the one shape that has always meant it.
+    /// Stop, in the one shape that has always meant it.
     let private stopPath = "M4 4 L12 4 L12 12 L4 12 Z"
-    /// Go back INTO something: an arrow meeting the wall it reconnects to.
-    let private attachPath = "M2.5 8 L10 8 M6.75 4.75 L10 8 L6.75 11.25 M12.5 3.5 L12.5 12.5"
     /// A caret pointing down: this opens something beneath it (the pane head's switcher).
     let private caretPath = "M4 6.25 L8 10.25 L12 6.25"
     /// An archive box: a lid across the top, the body under it, and a notch in the middle of
@@ -152,17 +144,15 @@ module Icon =
     let pivotLeft = strokedAt "1.1" "w-4 h-4" pivotLeftPath
     let pivotRight = strokedAt "1.1" "w-4 h-4" pivotRightPath
 
-    /// The terminal list's row verbs. Each is rendered only where the terminal's state
-    /// affords it (`Affordances`), so the icon a row wears is itself the statement
-    /// of what that terminal can do — which is why none of them needs a word beside it.
-    let rewind = stroked "w-3.5 h-3.5" rewindPath
+    /// Stop: the interrupt beside a running turn. It was also the terminal list's kill, and
+    /// a square beside a command reads as stopping the command, not ending the terminal —
+    /// the list says its verbs as words now (`Dom.Text.rewind`, `kill`, `reattach`).
     let stop = stroked "w-3.5 h-3.5" stopPath
-    let attach = stroked "w-3.5 h-3.5" attachPath
     /// The switcher's door, before the head's name (P2-2).
     let caret = stroked "w-3 h-3 shrink-0" caretPath
-    /// Retire this session from the working list. A row-riding verb like the three above, and
-    /// it needs no word for the same reason: it is rendered only on a row that can be
-    /// archived, and an archived row wears the word `Unarchive` instead.
+    /// Retire this session from the working list. A row-riding verb that needs no word: it is
+    /// rendered only on a row that can be archived, and an archived row wears the word
+    /// `Unarchive` instead.
     let archive = stroked "w-3.5 h-3.5" archivePath
 
     /// Inline with a status word: smaller, and nudged onto the caps baseline. `-3px`, not
