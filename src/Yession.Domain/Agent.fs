@@ -439,6 +439,73 @@ type CheckPending = QueueId -> Async<Result<PendingOutcome, string>>
 /// `execute_command` and the classifier that gates it.
 type WriteTerminal = TerminalId -> string -> Async<Result<string, string>>
 
+/// Keys by NAME, for the bytes nobody can type into a JSON string reliably.
+///
+/// `write_terminal` used to say `"\u0003" interrupts`, which is a spelling: whether a model's
+/// tool call carries the byte or the six characters backslash-u-0-0-0-3 depends on how it
+/// escapes JSON, and in session NR5KB8B5 it sent the six characters, twice, into a stuck wait
+/// loop that printed them back and went on waiting. A name has one spelling. The table is the
+/// whole mechanism: every hint that names a key is written from it, so no sentence can teach a
+/// spelling again.
+module TerminalKeys =
+
+    let private control (letter: char) : string = string (char (int (System.Char.ToLowerInvariant letter) - int 'a' + 1))
+
+    /// Every key a caller may name, and the bytes it sends.
+    let named : (string * string) list =
+        [ "enter", "\r"
+          "tab", "\t"
+          "esc", "\u001b"
+          "backspace", "\u007f"
+          "up", "\u001b[A"
+          "down", "\u001b[B"
+          "right", "\u001b[C"
+          "left", "\u001b[D"
+          "home", "\u001b[H"
+          "end", "\u001b[F" ]
+        @ ([ 'a' .. 'z' ] |> List.map (fun c -> sprintf "ctrl-%c" c, control c))
+
+    /// The bytes for these names, in order; or the sentence naming the first unknown one and
+    /// what there is.
+    let bytesOf (names: string list) : Result<string, string> =
+        let table = Map.ofList named
+        names
+        |> List.fold
+            (fun acc name ->
+                acc
+                |> Result.bind (fun (typed: string) ->
+                    match Map.tryFind ((name: string).Trim().ToLowerInvariant ()) table with
+                    | Some bytes -> Ok (typed + bytes)
+                    | None ->
+                        Error (
+                            sprintf
+                                "no key named %s — the names are %s, and ctrl-a to ctrl-z"
+                                name
+                                (named |> List.map fst |> List.filter (fun n -> not (n.StartsWith "ctrl-")) |> String.concat ", "))))
+            (Ok "")
+
+    /// What was typed, the way a person would say it: control bytes by their key name, text
+    /// as text. The answer to a write says this, so a caller that sent `\u0003` as six
+    /// characters reads "typed the text \u0003" and not "typed into the terminal".
+    let describe (typed: string) : string =
+        let byBytes = named |> List.map (fun (name, bytes) -> bytes, name) |> List.sortByDescending (fun (b, _) -> b.Length)
+        let rec go (rest: string) (said: string list) =
+            if rest = "" then List.rev said
+            else
+                match byBytes |> List.tryFind (fun (bytes, _) -> rest.StartsWith bytes) with
+                | Some (bytes, name) -> go (rest.Substring bytes.Length) (name :: said)
+                | None ->
+                    let text = rest |> Seq.takeWhile (fun c -> not (System.Char.IsControl c)) |> System.String.Concat
+                    if text = "" then go (rest.Substring 1) (sprintf "byte 0x%02x" (int rest.[0]) :: said)
+                    else go (rest.Substring text.Length) (sprintf "the text \"%s\"" text :: said)
+        go typed [] |> String.concat ", "
+
+    /// Text that LOOKS like a key written out — `\u0003`, `\x03`, `^C` — which a terminal
+    /// takes as the characters they are. Said back to the caller, because the terminal will
+    /// print them and carry on, and nothing else will say what went wrong.
+    let spelledOut (typed: string) : bool =
+        System.Text.RegularExpressions.Regex.IsMatch (typed, @"\\u00[0-1][0-9a-fA-F]|\\x[0-1][0-9a-fA-F]|\^[A-Z@\[\]\\]")
+
 /// Holding a read open until the device says a particular thing.
 ///
 /// The missing half of `write_terminal`. A device is request/response with no framing: you

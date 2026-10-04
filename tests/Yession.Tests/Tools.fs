@@ -258,6 +258,38 @@ let private sessionTests =
             Expect.isFalse (said.Contains "pass background: true") "advice it has already taken"
         }
 
+        // A key has one spelling, its name. In session NR5KB8B5 an agent sent the six
+        // characters `\u0003` twice into a stuck loop that printed them back and went on.
+        testCaseAsync "a key pressed by name arrives as the key" <|
+            async {
+                let typed = ResizeArray<string> ()
+                let registry =
+                    AgentTools.registry
+                        { AgentCapabilities.none with
+                            Terminals =
+                                { AgentCapabilities.none.Terminals with
+                                    Write = fun _ data -> async { typed.Add data; return Ok "typed into terminal t1" } } }
+                let! _ = registry.Invoke (call "yession" "write_terminal" """{"terminal":"t1","keys":["ctrl-c"]}""")
+                Expect.equal (List.ofSeq typed) [ "\u0003" ] "the interrupt byte, not its spelling"
+            }
+
+        testCaseAsync "text that spells a key is said back as text, with the way to press one" <|
+            async {
+                let registry =
+                    AgentTools.registry
+                        { AgentCapabilities.none with
+                            Terminals =
+                                { AgentCapabilities.none.Terminals with
+                                    Write = fun _ _ -> async { return Ok "typed into terminal t1" } } }
+                match! registry.Invoke (call "yession" "write_terminal" """{"terminal":"t1","data":"\\u0003"}""") with
+                | Error e -> failwith e
+                | Ok answer -> Expect.stringContains answer.Text "keys: [\"ctrl-c\"]" "the caller learns it typed text, and what to send"
+            }
+
+        test "an unknown key is refused by name, with what there is" {
+            Expect.isError (TerminalKeys.bytesOf [ "ctrl-break" ]) "no guess at what was meant"
+        }
+
         test "a wait on a person does not offer to end them" {
             let said = AgentTools.renderOutcome { elided None with Status = TerminalCommandAwaitingTerminal HeldByPerson; Output = "" }
             Expect.isFalse (said.Contains "close_terminal") "a person's hold is not the agent's to end"

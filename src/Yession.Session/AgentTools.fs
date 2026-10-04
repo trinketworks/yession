@@ -170,6 +170,21 @@ module private ToolArgs =
                 |> Result.map (fun compiled ->
                     terminal, from, Some { Until = MatchPattern (compiled, source); TimeoutSeconds = timeout })
 
+    /// `write_terminal`'s: which terminal, and what to type — `data` as text, then `keys` by
+    /// name (`TerminalKeys`). At least one; both is text followed by keys, which is how a line
+    /// and its enter are said.
+    let terminalWrite (json: string) : Result<string * string, string> =
+        read
+            (Decode.object (fun get ->
+                get.Required.Field "terminal" Decode.string,
+                get.Optional.Field "data" Decode.string,
+                get.Optional.Field "keys" (Decode.list Decode.string) |> Option.defaultValue []))
+            json
+        |> Result.bind (fun (terminal, data, keys) ->
+            match data, keys with
+            | (None | Some ""), [] -> Error "nothing to type — give data, keys, or both"
+            | _ -> TerminalKeys.bytesOf keys |> Result.map (fun bytes -> terminal, String.concat "" (Option.toList data @ [ bytes ])))
+
     /// `remove_repo`'s pair: which repo, and whether uncommitted changes may go with it.
     let repoForce (json: string) : Result<string * bool, string> =
         read
@@ -276,7 +291,7 @@ module AgentTools =
                 | Some activity -> sprintf " (%s)" (BlockActivity.describe activity)
                 | None -> ""
             sprintf
-                "STILL RUNNING in %s%s. Not finished; nothing cancelled. For long commands pass background: true and end your turn — you're woken when they finish; otherwise check_pending '%s' for the outcome. Stuck or waiting on input? write_terminal can type in — \"\\u0003\" interrupts.%s"
+                "STILL RUNNING in %s%s. Not finished; nothing cancelled. For long commands pass background: true and end your turn — you're woken when they finish; otherwise check_pending '%s' for the outcome. Stuck or waiting on input? write_terminal can type in — keys: [\"ctrl-c\"] interrupts.%s"
                 where activity handle output
         | TerminalCommandStarted ->
             sprintf
@@ -292,7 +307,7 @@ module AgentTools =
         // ended the wait was one it had not been pointed at.
         | TerminalCommandAwaitingTerminal BehindBlock ->
             sprintf
-                "WAITING FOR %s — another command runs there and this one is queued behind it; it has NOT run. To run it now beside that: open_terminal, then execute_command with that `terminal`. To end the running one: if it's yours, write_terminal \"\\u0003\" into that terminal; if the terminal is yours, close_terminal ends everything in it. Otherwise check_pending '%s' later."
+                "WAITING FOR %s — another command runs there and this one is queued behind it; it has NOT run. To run it now beside that: open_terminal, then execute_command with that `terminal`. To end the running one: if it's yours, write_terminal keys: [\"ctrl-c\"] into that terminal; if the terminal is yours, close_terminal ends everything in it. Otherwise check_pending '%s' later."
                 where handle
         | TerminalCommandAwaitingTerminal BehindQueue ->
             sprintf
@@ -425,7 +440,14 @@ module AgentTools =
     let private writeTerminal (capabilities: AgentCapabilities) (id: TerminalId) (data: string) : Async<string> =
         async {
             match! capabilities.Terminals.Write id data with
-            | Ok answer -> return answer
+            // What went in, said back by key name — so six characters that spell a key read as
+            // six characters, at the one moment the caller can still do something about it.
+            | Ok answer ->
+                let spelled =
+                    if TerminalKeys.spelledOut data then
+                        " — that is text that SPELLS a key, and the terminal took it as text; to press one, pass it by name in keys, e.g. keys: [\"ctrl-c\"]"
+                    else ""
+                return sprintf "%s; typed %s%s" answer (TerminalKeys.describe data) spelled
             | Error reason -> return sprintf "could not type into terminal %s: %s" (TerminalId.value id) reason
         }
 
@@ -843,12 +865,18 @@ module AgentTools =
 
           tool
               "write_terminal"
-              "Type into a terminal you hold the keyboard for: one streaming something live (a device or console — bytes from outside this session), or one running a command of yours (a full-screen program waiting on a key, a stdin: true prompt, or something stuck — \"\\u0003\" interrupts, \"\\u0004\" is EOF). Send exactly the bytes you mean, including \"\\r\" for a newline. On a live stream, typing takes the terminal — everyone sees it and can take it back. On a shell terminal it works only while a command of yours runs there; otherwise use execute_command."
+              "Type into a terminal you hold the keyboard for: one streaming something live (a device or console — bytes from outside this session), or one running a command of yours (a full-screen program waiting on a key, a stdin: true prompt, or something stuck — keys: [\"ctrl-c\"] interrupts, [\"ctrl-d\"] is end-of-input). Text goes in `data`; keys go BY NAME in `keys`, after the text — never written out as escapes, which arrive as the characters they spell. The answer says what was typed. On a live stream, typing takes the terminal — everyone sees it and can take it back. On a shell terminal it works only while a command of yours runs there; otherwise use execute_command."
               [ ToolField.required "terminal" "string" "the terminal id, from the terminal that was opened for the stream"
-                ToolField.required "data" "string" "the bytes to type, e.g. \"AT\\r\"" ]
+                ToolField.optional "data" "string" "text to type, e.g. \"AT\""
+                ToolField.optionalList
+                    "keys"
+                    "string"
+                    (sprintf
+                        "keys to press after the text, by name: %s, ctrl-a … ctrl-z — e.g. [\"enter\"], [\"ctrl-c\"]"
+                        (TerminalKeys.named |> List.map fst |> List.filter (fun n -> not (n.StartsWith "ctrl-")) |> String.concat ", ")) ]
               (fun args ->
                   async {
-                      match ToolArgs.two "terminal" "data" args with
+                      match ToolArgs.terminalWrite args with
                       | Error e -> return Error e
                       | Ok (terminal, data) ->
                           match TerminalId.create terminal with
