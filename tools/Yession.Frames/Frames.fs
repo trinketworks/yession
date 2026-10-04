@@ -66,11 +66,16 @@ module Yession.Frames
 // (silent) rather than `Disconnected`. The picker's jump was answered with an overlay that
 // covered the conversation's lower edge, and then given back: an overlay hid whatever the chat
 // held under it, unscrollably, and a session whose first acts were commands had its newest ones
-// there. The picker takes its own room again (`Style.ask`), capped at a share of the column,
-// and the conversation, pinned to its end, rides the change. What a clean run looks like NOW:
-// the `/open` page, one shell document with the pane off-canvas from its first frame, the
-// connection silent on first paint, then the picker appearing at connect and the chat above it
-// giving it room — the one jump left, and a deliberate one.
+// there. The picker takes its own room again (`Style.ask`) — a FIXED share of the column,
+// reserved the instant the card is offered, so a listing loading in fills a list that already
+// has its height rather than growing the card off its pinned foot. That was the SECOND picker
+// jump (the list arriving and the card growing), and it is gone. What a clean run looks like
+// NOW: the `/open` page, one shell document with the pane off-canvas from its first frame, the
+// connection silent on first paint, then the picker appearing at connect — already at its full
+// height — and the chat above it giving it that room once. The one jump left is the picker
+// APPEARING at all: it is not in the first paint (`Launch.anchor` waits for the connection), so
+// it arrives at connect rather than with the shell. Reserving its room from the first frame
+// would want the shell to know, before it connects, that this session will offer a card.
 //
 // How to read what it makes. Start at the sheets: a jump is two adjacent frames that differ
 // by a lot, and the red box says where. Read the stamps. Same stamp on both frames — the

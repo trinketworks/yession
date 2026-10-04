@@ -171,6 +171,12 @@ module private Published =
     /// every item in the column can still be scrolled to and reached, which the empty first
     /// screen `__launch` draws cannot ask.
     let launchOver : PageGlobal<unit -> unit> = PageGlobal.named "__launchOver"
+    /// The card the instant before its repositories arrive — the same first screen `__launch`
+    /// draws, still LOOKING. Its own hook because the question it raises is about the step
+    /// between looking and loaded: the card reserves the room its list will want, so that
+    /// repositories filling in do not change its height and shove the conversation. Measured
+    /// no other way — the loaded card and the looking card are one mount apart.
+    let launchLooking : PageGlobal<unit -> unit> = PageGlobal.named "__launchLooking"
     /// Swap in the shell with one ACT on its timeline — a sandbox start whose sentence
     /// points at a sandbox and a connection — for the case that measures where a reference
     /// sits on its line. Its own hook rather than an item in the shared fixture, because
@@ -1267,6 +1273,12 @@ let private launchModel : ClientModel =
                           for n in 1 .. 23 -> candidateRow (sprintf "octo/repo-%d" n) ]
                       Repos.RepoPage.Next = Some "harness-next" })))
 
+/// The same card an instant earlier: offered and anchored exactly as `launchModel`, but with
+/// its listing still UNKNOWN — the looking line where the rows will be. The two differ only in
+/// the listing, so the step between them is the one a reserved-height card must not move under.
+let private launchLookingModel : ClientModel =
+    { launchModel with Launch = { launchModel.Launch with Listing = ListingUnknown; More = MoreIdle } }
+
 /// `launchModel` over a column of acts: enough sandbox notes, none of which begins the
 /// session, that the conversation scrolls behind the card. Acts rather than messages because
 /// a message is what takes the card away; terminal chips, which is where this was first seen,
@@ -1613,6 +1625,9 @@ do
         render ())
     PageGlobal.set Published.launchOver (fun () ->
         model <- launchOverModel
+        render ())
+    PageGlobal.set Published.launchLooking (fun () ->
+        model <- launchLookingModel
         render ())
     PageGlobal.set Published.acts (fun () ->
         model <- actsModel

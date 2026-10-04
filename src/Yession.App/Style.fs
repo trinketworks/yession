@@ -1764,15 +1764,23 @@ module Style =
     let launchArea = "flex-1 min-h-0 flex flex-col"
 
     /// Docked at the foot of `launchArea`, under the conversation and above the composer, so
-    /// START and the composer stay where the hand expects them. CAPPED at a share of the
-    /// column rather than of the screen, because what it is capped against is the
-    /// conversation's room: a cap in `vh` ignored the header and the composer, and on a phone
-    /// a full listing left the chat a strip. Everything inside down to the list is a
-    /// shrinkable flex column (`askBody`, `askTrack`, the pane), so the cap lands on the LIST,
-    /// which scrolls — never on the question or the button. Opaque (`bg-surface`) for the
-    /// band it draws across the column.
+    /// START and the composer stay where the hand expects them. A FIXED share of the column
+    /// rather than of the screen, because what it is sized against is the conversation's room:
+    /// a size in `vh` ignored the header and the composer, and on a phone a full listing left
+    /// the chat a strip. Everything inside down to the list is a shrinkable flex column
+    /// (`askBody`, `askTrack`, the pane), so the size lands on the LIST, which scrolls — never
+    /// on the question or the button. Opaque (`bg-surface`) for the band it draws across the
+    /// column.
+    ///
+    /// FIXED and not a cap (`max-h`): the card claims this room the instant it is offered, so
+    /// repositories arriving fill a list that already has its height rather than growing it.
+    /// Capped, the card stood only as tall as what was in it — a looking line, then a page of
+    /// repositories — and so it LEAPT upward off its pinned foot the moment they loaded, taking
+    /// the conversation above it up with it. The cost is a card taller than a short list needs,
+    /// with room to spare under it; the list scrolls into that room as it grows, and nothing
+    /// moves when it does.
     let ask =
-        cls [ "relative shrink-0 max-h-[60%] flex flex-col pt-6 pb-6 bg-surface"; Stroke.dividerTop ]
+        cls [ "relative shrink-0 h-[60%] flex flex-col pt-6 pb-6 bg-surface"; Stroke.dividerTop ]
 
     /// The blue lead, DRAWN rather than bordered — and it has to be, because a `border-l-2`
     /// sits inside the band's padding box and would push every line in the card two pixels
@@ -1805,24 +1813,28 @@ module Style =
     /// down this column is a RAMP, not a rhythm (the question stands alone at the top, the
     /// ways to answer stand apart from it, and the button apart from all of it), so each block
     /// states its own.
-    let askBody = "min-h-0 flex flex-col overflow-x-hidden"
+    let askBody = "flex-1 min-h-0 flex flex-col overflow-x-hidden"
 
     /// Two panes, one box. The card asks one thing at a time and the second thing is to the
     /// RIGHT of the first, because that is where a thing you went INTO is — the Zune move,
     /// and the reason the way back is a chevron pointing the way the surface will go.
     ///
-    /// The pane on screen is IN FLOW, so the card is exactly as tall as what is showing; the
-    /// other sits absolute in the same box, pushed a full width aside — there to slide in,
-    /// and contributing no height while it is not. Without that the card stands at the height
-    /// of its TALLER pane always, with a grey void under whichever is shorter.
+    /// The pane on screen is IN FLOW and fills the card (`askPaneHere`'s `flex-1`); the other
+    /// sits absolute in the same box (`inset-0`), pushed a full width aside — there to slide in
+    /// at the height it will land at, and contributing no height while it is not. The card's own
+    /// height is fixed (`ask`), so a short pane no longer shrinks it — the list owns the spare
+    /// room and scrolls in it.
     ///
-    /// The track is a shrinkable flex column, and so is the pane in it, down to the list:
-    /// the card's cap (`ask`) has to land on the LIST, which scrolls. A track that could not
-    /// shrink (`shrink-0`, which it once was, under a pane capped by its own `max-h`) would
-    /// be cut by its `overflow-hidden` instead — the rows below the cut no longer exist to be
-    /// scrolled to, and the foot that pages is never reached. The clip is for the pane that is
-    /// off to the side, and only that.
-    let askTrack = "relative min-h-0 flex flex-col overflow-hidden"
+    /// The track GROWS to fill the card and shrinks within it, and so does the pane in it, down
+    /// to the list: the card's fixed height (`ask`) has to land on the LIST, which fills the
+    /// room and scrolls. `flex-1` is the growing half — without it the track is only as tall as
+    /// what is in it and the fixed card has a void under START, which floats up mid-card instead
+    /// of sitting at the foot. `min-h-0` is the shrinking half — a track that could not shrink
+    /// (`shrink-0`, which it once was, under a pane capped by its own `max-h`) would be cut by
+    /// its `overflow-hidden` instead, the rows below the cut no longer existing to be scrolled
+    /// to and the foot that pages never reached. The clip is for the pane that is off to the
+    /// side, and only that.
+    let askTrack = "relative flex-1 min-h-0 flex flex-col overflow-hidden"
     /// A pane is a COLUMN with two parts: what it asks, and what there is to answer with.
     /// Only the list scrolls - the question stays legible while a long one is read. START is
     /// not a third part of the pane: it is the one thing both panes mean the same way, so it
@@ -1841,7 +1853,11 @@ module Style =
     let askScroll = "flex-1 min-h-0 overflow-y-auto"
     /// On screen. `min-w-0` so a long repo name in the subtitle truncates rather than widening
     /// the pane.
-    let askPaneHere = askPaneBase + " translate-x-0"
+    /// `flex-1` so the in-flow pane fills the track, which fills the fixed card — the way the
+    /// off-stage panes fill it through `inset-0`. The list inside (`askScroll`) then has the
+    /// card's room to scroll in whether it holds a looking line or a page of repositories, so
+    /// neither moves START off the foot.
+    let askPaneHere = askPaneBase + " translate-x-0 flex-1"
     /// Off stage, over the track's own box (`inset-0`), so a pane slides in at the height it
     /// will have when it lands, its list already scrolling inside it.
     let askPaneLeft = askPaneBase + " absolute inset-0 -translate-x-full"
