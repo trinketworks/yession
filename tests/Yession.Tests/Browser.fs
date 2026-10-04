@@ -1862,8 +1862,8 @@ let private signInButtonHoldsStill (width: int) (height: int) =
 
 /// A side column shutting and opening again, with reduced motion asked for, starts no
 /// transition. The column is toggled by the class on `<html>` that the real client sets
-/// (`nav-alt` for the sidebar, `term-closed` for the terminals), since this harness wires no
-/// handler to the buttons that ask for it; `getAnimations()` flushes style, so a transition
+/// (`nav-alt` for the sidebar, `term-closed` for the terminals), so what is counted is the
+/// column's own transition and nothing a handler does around it; `getAnimations()` flushes style, so a transition
 /// the toggle started is in its answer at once, with no waiting on a clock.
 let private columnHoldsStill (width: int) (height: int) (column: string) (rootClass: string) =
     editorCaseIn width height (sprintf "with reduced motion the %s column does not move at %dpx" column width) <| fun page ->
@@ -3780,8 +3780,8 @@ let editorTests =
         // markup says whether a drawer is over the words — the message scrolls, flashes and
         // takes the cursor either way.
         //
-        // The drawer is opened by the class the shell itself uses for it, because the harness
-        // wires no nav toggle; what is under test is the jump, not the chevron. The case reads
+        // The drawer is opened by the class the shell itself uses for it: what is under test
+        // is the jump, not the chevron. The case reads
         // the cover BEFORE the tap as well as after, so an arrangement that stopped covering
         // anything would fail here rather than pass by vacuity.
         editorCaseIn 390 844 "a chapter reached from the phone's contents is not left behind the drawer" <| fun page ->
@@ -5155,12 +5155,9 @@ let editorTests =
                 // both off-canvas on a phone until `nav-alt`/`settings-open` land on <html>
                 // (Style.fs: "Two presentation bits live on the root <html> element, outside
                 // `#app`... toggled by `[data-nav-toggle]`"/`[data-settings-toggle]`").
-                // This harness mounts `View.view` over a fixed model with no Session behind
-                // it (`ToggleNav`/`ToggleSettings` are `ignore` here, deliberately — see
-                // `EditorHarness.fs`), so the buttons that ask for those classes in the real
-                // client do nothing here. Setting them directly is asking the same question
-                // `Browser.fs`'s handlers answer by setting them: whether the settings face,
-                // once ON screen, holds a field under 16px.
+                // Setting them directly is asking the same question `PaneShell`'s handlers
+                // answer by setting them: whether the settings face, once ON screen, holds a
+                // field under 16px.
                 do! awaitU (page.EvaluateAsync "() => document.documentElement.classList.add('nav-alt', 'settings-open')")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-claude-panel]")
 
@@ -5185,6 +5182,144 @@ let editorTests =
                 Expect.isEmpty undersized
                     (sprintf "these focusable fields render under 16px on a phone and will zoom iOS in on focus: %s"
                         (String.Join (", ", undersized)))
+            }
+
+        // The other half of the phone's floor: a thumb is not a pointer. 24px is WCAG 2.5.8's
+        // minimum and 44 is the target this product holds (UI baseline), and the pane used to
+        // offer a 24px kill glyph 4px from a 24px rewind. Asserted ONCE, here, over every
+        // control a person can press in the surfaces held to it — never per surface, so the
+        // next control in any of them is held without anybody remembering to.
+        //
+        // Held: the header, the nav drawer's workspace face, the pane, and the chat's terminal
+        // chips. NOT yet the rest of the chat — a message's actions, a fold's toggle, a
+        // chapter's name, a reply's ref — nor the settings face, whose fields and buttons are
+        // the 32px control height: each is under 44 on a phone today. They join by widening
+        // `held` (or, for settings, by adding its face below), and the case says what is
+        // short the day they do.
+        //
+        // What counts is what a thumb can REACH: a control is measured when the point at its
+        // centre, once scrolled into view, is the control — so a control under a sheet, off
+        // the canvas or clipped away is not a target, and nothing has to be exempted by name.
+        // `inert` is the model's own word for "not reachable"; `aria-hidden` is the one other
+        // exemption, and it is WCAG's own: a duplicate whose act an equivalent control on the
+        // same screen offers at full size (the pane's grab edge, beside its `›`). A text field
+        // is held to the height only — its width is its line's.
+        //
+        // The faces are the ones a phone moves between: the chat with its header, the pane
+        // on a terminal, its switcher, a preview opened from a chip, and the nav drawer.
+        let thumbSized (width: int) (height: int) =
+            editorCaseIn width height (sprintf "no control a phone can press is smaller than a thumb at %dx%d" width height) <| fun page ->
+                async {
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='show']")
+                    let undersized (face: string) =
+                        async {
+                            let! small =
+                                await (page.EvaluateAsync<string[]>
+                                            """() => {
+                                                 const small = []
+                                                 const held = "#shell header, #shell aside, " +
+                                                   "#shell [data-chat-block], #shell [data-chat-pending], #shell [data-chat-stretch]"
+                                                 const pressable = "button, [role=tab], a[href], select, input:not([type=hidden])"
+                                                 const controls = new Set()
+                                                 for (const region of document.querySelectorAll(held)) {
+                                                   if (region.matches(pressable)) controls.add(region)
+                                                   for (const el of region.querySelectorAll(pressable)) controls.add(el)
+                                                 }
+                                                 for (const el of controls) {
+                                                   if (el.closest('[inert], [aria-hidden=true]')) continue
+                                                   el.scrollIntoView({ block: 'center', inline: 'nearest' })
+                                                   const box = el.getBoundingClientRect()
+                                                   if (box.width === 0 || box.height === 0) continue
+                                                   const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+                                                   if (!hit || !el.contains(hit)) continue
+                                                   const field = el.matches('select, input:not([type=checkbox]):not([type=radio])')
+                                                   if (box.height < 43.5 || (!field && box.width < 43.5)) {
+                                                     const name = Object.values(el.attributes).map(a => a.name)
+                                                       .find(n => n.startsWith('data-') && n !== 'data-pane-tab')
+                                                       || el.getAttribute('aria-label') || el.tagName
+                                                     small.push(name + ' ' + Math.round(box.width) + 'x' + Math.round(box.height))
+                                                   }
+                                                 }
+                                                 return small
+                                               }""")
+                            return small |> Array.map (fun s -> face + ": " + s)
+                        }
+                    let settle () =
+                        awaitU (
+                            page.EvaluateAsync
+                                """() => Promise.all(
+                                     document.getAnimations()
+                                       .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
+                                       .map(a => a.finished.catch(() => null)))""")
+                    let onFace (face: string) (press: string) =
+                        async {
+                            do! awaitU (page.Locator(press).First.ClickAsync ())
+                            do! settle ()
+                            return! undersized face
+                        }
+                    do! settle ()
+                    let! chat = undersized "the chat"
+                    let! pane = onFace "the pane" "#shell [data-content-toggle='show']"
+                    let! list = onFace "the switcher" "#shell [data-pane-switcher]"
+                    do! awaitU (page.Keyboard.PressAsync "Escape")
+                    do! waitFor "the switcher to shut" page "document.querySelector('#shell [data-content-list]') === null"
+                    let! _ = onFace "" "#shell [data-content-toggle='hide']"
+                    let! preview = onFace "a preview" "#shell [data-chat-block]"
+                    let! _ = onFace "" "#shell [data-content-toggle='hide']"
+                    let! nav = onFace "the nav" "#shell [data-nav-toggle='show']"
+                    let all = Array.concat [ chat; pane; list; preview; nav ]
+                    Expect.isEmpty all
+                        (sprintf "these controls are under 44px on a phone: %s" (String.Join (", ", all)))
+                }
+
+        thumbSized 390 844
+        // A phone on its side is still a phone (`phone:` in app/tailwind.css): the same
+        // controls, the same floor.
+        thumbSized 844 390
+
+        // Opening the nav on a phone shows the nav. The drawer and the pane are both sheets
+        // over the chat there, at one layer, and the pane is later in the document — so the
+        // drawer opened while the pane was up opened UNDER it: open, holding focus, and not on
+        // the screen. Opening the drawer closes the pane first (`PaneShell.bringColumnOn`).
+        //
+        // Pressed from the keyboard, because that is how it is reached with the pane up: the
+        // pane covers the header on a phone, and the header's chevron is still a Tab stop. What
+        // is asserted is what a person sees — the point at the drawer's centre is the drawer.
+        let navOverPane (width: int) (height: int) =
+            editorCaseIn width height (sprintf "opening the nav over the pane shows the nav at %dx%d" width height) <| fun page ->
+                async {
+                    do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                    do! waitFor "the pane to cover the screen" page
+                            """(() => {
+                                 const r = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
+                                 return r.left <= 1 && r.right >= window.innerWidth - 1
+                               })()"""
+                    do! awaitU (page.FocusAsync "#shell [data-nav-toggle='show']")
+                    do! awaitU (page.Keyboard.PressAsync "Enter")
+                    do! waitFor "the nav to be what is on screen at its centre" page
+                            """(() => {
+                                 const nav = document.querySelector('#shell aside:not([data-content-panel])')
+                                 const r = nav.getBoundingClientRect()
+                                 if (r.right <= 0) return false
+                                 const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+                                 return hit !== null && nav.contains(hit)
+                               })()"""
+                }
+        navOverPane 390 844
+        navOverPane 844 390
+
+        // 844x390 is wider than the desktop breakpoint, and used to get its three columns: nav
+        // 280, pane 360 and a chat of 204, one word to a line. A screen that short is a phone
+        // (`phone:` in app/tailwind.css), so the chat is the screen and the columns are
+        // sheets. Measured as the chat's width rather than as which classes applied: what a
+        // person reading it gets is the room, whatever drew it.
+        editorCaseIn 844 390 "a phone on its side keeps the chat the width of the screen" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation]")
+                let! width =
+                    await (page.EvaluateAsync<float>
+                        "() => document.querySelector('#shell [data-conversation]').getBoundingClientRect().width")
+                Expect.isTrue (width >= 600.0) (sprintf "the chat is not squeezed between two columns: %.0fpx of 844" width)
             }
     ]
 

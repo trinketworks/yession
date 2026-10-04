@@ -4373,6 +4373,11 @@ module View =
               <div class="{Style.terminalResize}" data-term-resize role="separator" tabindex="0"
                    aria-orientation="vertical" aria-label="Resize the content column"
                    aria-valuemin="320" aria-valuenow="420" aria-valuemax="1080"></div>
+              <!-- A phone's grab edge: the head's `›` again, for a thumb at the edge. A
+                   duplicate, so out of the tree and the Tab order (`Style.paneGrabEdge`). -->
+              <button type="button" class="{Style.paneGrabEdge}" tabindex="-1" aria-hidden="true"
+                      aria-label="Back to the chat" data-pane-grab-edge
+                      @click={Ev(fun _ -> dispatch ToggleContentMsg)}><span class="{Style.paneGrabMark}"></span></button>
               <!-- Escape anywhere in the pane takes a preview down, as its back and its close
                    do — but not while a popover is open over it, whose own Escape is about the
                    popover and runs first, on the element it hangs from. -->
