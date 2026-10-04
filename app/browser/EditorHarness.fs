@@ -164,6 +164,13 @@ module private Published =
     /// where nothing has been said and a message body only where something has, so the one column
     /// they are both supposed to start on can be measured no other way on one page.
     let launch : PageGlobal<bool -> unit> = PageGlobal.named "__launch"
+    /// The session's first screen with the card standing over a conversation that is NOT
+    /// empty — what a session looks like whose first acts were commands or a sandbox coming
+    /// up, which do not begin it (`ClientModel.launchOffered`). Its own hook because the
+    /// question it raises is where the card stands relative to what is already said: whether
+    /// every item in the column can still be scrolled to and reached, which the empty first
+    /// screen `__launch` draws cannot ask.
+    let launchOver : PageGlobal<unit -> unit> = PageGlobal.named "__launchOver"
     /// Swap in the shell with one ACT on its timeline — a sandbox start whose sentence
     /// points at a sandbox and a connection — for the case that measures where a reference
     /// sits on its line. Its own hook rather than an item in the shared fixture, because
@@ -1239,7 +1246,8 @@ let private launchModel : ClientModel =
     |> folded
         (LaunchMsg
             (LaunchListingArrived
-                (ListingLoaded
+                ("",
+                 ListingLoaded
                     // Long enough that the foot starts outside the watch's own reach — the
                     // page is asked for while the foot is still a screenful below (see
                     // `Render.watchListingFoot`), which is the whole point of it and also what
@@ -1250,6 +1258,32 @@ let private launchModel : ClientModel =
                                     Description = Some "a lightweight sandboxing runner for agents" }
                           for n in 1 .. 23 -> candidateRow (sprintf "octo/repo-%d" n) ]
                       Repos.RepoPage.Next = Some "harness-next" })))
+
+/// `launchModel` over a column of acts: enough sandbox notes, none of which begins the
+/// session, that the conversation scrolls behind the card. Acts rather than messages because
+/// a message is what takes the card away; terminal chips, which is where this was first seen,
+/// are acts of the same kind as far as the card is concerned.
+let private launchOverModel : ClientModel =
+    let act (n: int) : ConversationItem =
+        let id = MessageId.create (sprintf "msg-launch-act-%d" n) |> expect
+        { MessageId = id
+          Author = ActorRef.Session
+          Content =
+            ItemContent.Act (
+                Act.SandboxStarted
+                    { MessageId = id
+                      Sandbox = SandboxRef.defaultRef
+                      Backend = "srt"
+                      Description = None
+                      Checkout = None
+                      Forwarded = []
+                      Realisation = []
+                      Actor = ActorRef.Session; OnBehalfOf = None; CausedBy = None })
+          Status = Complete
+          Offset = EventOffset.create (int64 (100 + n)) |> expect
+          Woke = None; CausedBy = None }
+    { launchModel with
+        Conversation = { launchModel.Conversation with Recent = List.rev [ for n in 1 .. 14 -> act n ] } }
 
 /// What a client that has been to this session before holds when it opens it again: the
 /// event log as the kept answers of its own history store, and the one terminal's transcript
@@ -1567,6 +1601,9 @@ do
                           Repos.RepoPage.Next = None }))
     PageGlobal.set Published.launch (fun asking ->
         model <- (if asking then launchModel else shellModel)
+        render ())
+    PageGlobal.set Published.launchOver (fun () ->
+        model <- launchOverModel
         render ())
     PageGlobal.set Published.acts (fun () ->
         model <- actsModel

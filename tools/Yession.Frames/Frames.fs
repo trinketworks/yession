@@ -63,11 +63,14 @@ module Yession.Frames
 // when it appeared and again as the list loaded into it and it grew. All fixed — the shell
 // carries `term-closed` from the model (`Ssr.page`), the Manager's `/open` page enters a
 // session through `/login` so the shell is painted once, `ClientModel.init` starts `Connecting`
-// (silent) rather than `Disconnected`, and the picker is an OVERLAY (`Style.ask`) that covers
-// the conversation's lower edge instead of taking height from it. What a clean run looks like
-// NOW: the `/open` page, one shell document with the pane off-canvas from its first frame, the
-// connection silent on first paint, then the picker appearing and growing at connect over a
-// conversation that does not move. No jump left.
+// (silent) rather than `Disconnected`. The picker's jump was answered with an overlay that
+// covered the conversation's lower edge, and then given back: an overlay hid whatever the chat
+// held under it, unscrollably, and a session whose first acts were commands had its newest ones
+// there. The picker takes its own room again (`Style.ask`), capped at a share of the column,
+// and the conversation, pinned to its end, rides the change. What a clean run looks like NOW:
+// the `/open` page, one shell document with the pane off-canvas from its first frame, the
+// connection silent on first paint, then the picker appearing at connect and the chat above it
+// giving it room — the one jump left, and a deliberate one.
 //
 // How to read what it makes. Start at the sheets: a jump is two adjacent frames that differ
 // by a lot, and the red box says where. Read the stamps. Same stamp on both frames — the

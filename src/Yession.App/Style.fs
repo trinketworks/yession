@@ -1742,22 +1742,26 @@ module Style =
     // to edge — the queue's rows are bands for the same reason, and a highlight that stopped
     // at a measure would read as a box drawn round the name rather than as the row itself.
 
-    /// The chat and the launch card share ONE positioning context, so the card can be an
-    /// OVERLAY at its foot (above the composer) rather than a flow block between them. A flow
-    /// card is `shrink-0`, so the conversation above it gave up exactly the card's height — and
-    /// did it twice on a cold open, once when the card arrived and again as the repo list loaded
-    /// into it and it grew. An overlay covers the chat's lower edge instead, so nothing above or
-    /// below the card moves when it appears or changes size.
-    let launchArea = "relative flex-1 min-h-0 flex flex-col"
+    /// The chat and the launch card share ONE column, and the card takes its own room in it:
+    /// the conversation's scrollport ends where the card begins, so everything said can be
+    /// scrolled into view above it. It used to be an OVERLAY (`absolute bottom-0` over the
+    /// chat's lower edge), to keep the chat from reflowing when the card arrived and grew —
+    /// and on a session whose first acts were commands, the newest of them sat under the card
+    /// for as long as it stood: hidden, unscrollable, and still reached by Tab. A reflow the
+    /// pinned conversation rides (`Render.restoreSurfaceScroll` keeps a reader at the end at
+    /// the end) is a price; content nobody can reach is a fault.
+    let launchArea = "flex-1 min-h-0 flex flex-col"
 
-    /// Docked at the foot of `launchArea`, over the conversation's lower edge. `bottom-0` keeps
-    /// the START button (and the composer just beneath) pinned where the hand expects them while
-    /// the card grows UPWARD over the chat as its list loads — never downward off the screen and
-    /// never pushing the chat. The panes cap at `60vh` (`askPaneBase`) and scroll inside, so the
-    /// card has a bounded, screen-relative height however long the listing is. Opaque
-    /// (`bg-surface`) so the chat it covers does not read through it.
+    /// Docked at the foot of `launchArea`, under the conversation and above the composer, so
+    /// START and the composer stay where the hand expects them. CAPPED at a share of the
+    /// column rather than of the screen, because what it is capped against is the
+    /// conversation's room: a cap in `vh` ignored the header and the composer, and on a phone
+    /// a full listing left the chat a strip. Everything inside down to the list is a
+    /// shrinkable flex column (`askBody`, `askTrack`, the pane), so the cap lands on the LIST,
+    /// which scrolls — never on the question or the button. Opaque (`bg-surface`) for the
+    /// band it draws across the column.
     let ask =
-        cls [ "absolute inset-x-0 bottom-0 z-20 pt-6 pb-6 bg-surface"; Stroke.dividerTop ]
+        cls [ "relative shrink-0 max-h-[60%] flex flex-col pt-6 pb-6 bg-surface"; Stroke.dividerTop ]
 
     /// The blue lead, DRAWN rather than bordered — and it has to be, because a `border-l-2`
     /// sits inside the band's padding box and would push every line in the card two pixels
@@ -1790,7 +1794,7 @@ module Style =
     /// down this column is a RAMP, not a rhythm (the question stands alone at the top, the
     /// ways to answer stand apart from it, and the button apart from all of it), so each block
     /// states its own.
-    let askBody = "flex flex-col overflow-x-hidden"
+    let askBody = "min-h-0 flex flex-col overflow-x-hidden"
 
     /// Two panes, one box. The card asks one thing at a time and the second thing is to the
     /// RIGHT of the first, because that is where a thing you went INTO is — the Zune move,
@@ -1800,12 +1804,14 @@ module Style =
     /// other sits absolute in the same box, pushed a full width aside — there to slide in,
     /// and contributing no height while it is not. Without that the card stands at the height
     /// of its TALLER pane always, with a grey void under whichever is shorter.
-    /// `shrink-0` is load bearing: this is a flex child of a `max-h` scroller, so without it
-    /// the track is COMPRESSED to the card's height and its `overflow-hidden` clips the rest
-    /// of the list away — the rows below the fold stop existing rather than being scrolled
-    /// to, and the foot that pages is never reachable. The clip is for the pane that is off
-    /// to the side, and only that.
-    let askTrack = "relative shrink-0 overflow-hidden"
+    ///
+    /// The track is a shrinkable flex column, and so is the pane in it, down to the list:
+    /// the card's cap (`ask`) has to land on the LIST, which scrolls. A track that could not
+    /// shrink (`shrink-0`, which it once was, under a pane capped by its own `max-h`) would
+    /// be cut by its `overflow-hidden` instead — the rows below the cut no longer exist to be
+    /// scrolled to, and the foot that pages is never reached. The clip is for the pane that is
+    /// off to the side, and only that.
+    let askTrack = "relative min-h-0 flex flex-col overflow-hidden"
     /// A pane is a COLUMN with two parts: what it asks, and what there is to answer with.
     /// Only the list scrolls - the question stays legible while a long one is read. START is
     /// not a third part of the pane: it is the one thing both panes mean the same way, so it
@@ -1813,17 +1819,22 @@ module Style =
     /// the pane would slide off with the one you just left and a second copy would slide in
     /// with the one you land on - two buttons where there is one, the same seam `Launch.anchor`
     /// closed for the card itself.
+    ///
+    /// No cap of its own: the card's is the one, and a second in different units would be a
+    /// second answer to how tall the card may be.
     let private askPaneBase =
-        cls [ "min-w-0 flex flex-col max-h-[60vh] transition-transform"; Motion.paceLong ]
+        cls [ "min-w-0 min-h-0 flex flex-col transition-transform"; Motion.paceLong ]
     /// The list, and the only thing in a pane that scrolls. `min-h-0` is what lets it: a flex
-    /// child's floor is its content, so without it the column grows past its own `max-h` and
-    /// the pane scrolls instead of the list inside it.
+    /// child's floor is its content, so without it the column grows past the card's cap and
+    /// the rows are cut rather than scrolled.
     let askScroll = "flex-1 min-h-0 overflow-y-auto"
     /// On screen. `min-w-0` so a long repo name in the subtitle truncates rather than widening
     /// the pane.
     let askPaneHere = askPaneBase + " translate-x-0"
-    let askPaneLeft = askPaneBase + " absolute inset-x-0 top-0 -translate-x-full"
-    let askPaneRight = askPaneBase + " absolute inset-x-0 top-0 translate-x-full"
+    /// Off stage, over the track's own box (`inset-0`), so a pane slides in at the height it
+    /// will have when it lands, its list already scrolling inside it.
+    let askPaneLeft = askPaneBase + " absolute inset-0 -translate-x-full"
+    let askPaneRight = askPaneBase + " absolute inset-0 translate-x-full"
 
     /// The card's own edge margin — what a block spends when what is in it is not a line of
     /// reading. `askInset` is the rail, and the rail is for WORDS; a block that has no word to
@@ -1853,8 +1864,14 @@ module Style =
     ///
     /// ONE face for both, and grey: blue is what this card spends on the thing you are being
     /// asked to do, and leaving is not it. A blue back chevron read as the answer.
+    ///
+    /// On a phone the BOX is 44px, the target this product holds a thumb to (UI baseline), and
+    /// the negative margins pay the growth back to the head, so the glyph and the words beside
+    /// it stand where they do on a desktop. It was a 20px box, the one way out of a card that
+    /// stood over half the screen.
     let askWay =
         cls [ "w-5 h-5 shrink-0 mt-1 grid place-items-center bg-transparent border-0 cursor-pointer transition-colors"
+              "phone:w-11 phone:h-11 phone:-mx-3 phone:-mt-2 phone:-mb-3"
               "text-ink-faint hover:text-ink"; focusRing ]
 
     /// The navigation voice: the wordmark's family, lowercased, at the heading step. Not

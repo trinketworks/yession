@@ -237,6 +237,12 @@ module Dom =
         let repoPickerDismiss = "data-repo-picker-dismiss"
         /// What went wrong with the last launch, in the session's words.
         let repoPickerProblem = "data-repo-picker-problem"
+        /// A listing that failed, said AS a failure: a question the person asked (a search)
+        /// that the provider would not answer.
+        let repoPickerFailed = "data-repo-picker-failed"
+        /// The look the card took on opening, before anybody asked anything, that could not
+        /// list the person's own repositories — said quietly, never as a failure.
+        let repoPickerUnlisted = "data-repo-picker-unlisted"
         /// The listing's own way out when there is no credential: the settings face.
         let repoPickerConnect = "data-repo-picker-connect"
         /// The disclosure a notice folds its mechanism into, valued by which notice it
@@ -736,7 +742,14 @@ module Dom =
         let repoPickerBranchSearchPlaceholder = "search branches, or name a new one"
         let repoPickerBack = "back to the repositories"
         let repoPickerStart = "Start"
-        let repoPickerDismiss = "dismiss"
+        /// The way out's accessible name and its tooltip, one string for both. Says what the
+        /// press DOES rather than only that it closes something: the question is put away for
+        /// the whole session, and the session goes on without a repository.
+        let repoPickerDismiss = "dismiss: start without a repository"
+        /// What the card says when it could not list the person's own repositories before they
+        /// asked for anything. Quiet, and pointing at what still works, because nobody did
+        /// anything wrong; the provider's own reason follows it, as the detail.
+        let repoPickerUnlisted = "could not list your repositories here; search github, or paste a link"
         let repoPickerConnect = "Connect GitHub"
         let repoPickerCloning = "cloning…"
         /// What stands where history this device does not hold would be (Plan 20). Said only

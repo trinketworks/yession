@@ -41,7 +41,8 @@ type AdaptiveSyncedState =
       TerminalDrafts : cmap<string, TerminalDraft>
       Pending : cmap<string, PendingAct>
       Model : cval<ModelId option>
-      Chapters : cmap<string, ChapterMark<Text>> }
+      Chapters : cmap<string, ChapterMark<Text>>
+      LaunchDismissed : cval<unit option> }
 
 module SyncedStateSync =
 
@@ -80,6 +81,11 @@ module SyncedStateSync =
     let private chaptersByKey (m: SyncedSessionState<Text>) : HashMap<string, ChapterMark<Text>> =
         m.Chapters |> Map.toSeq |> Seq.map (fun (k, v) -> MessageId.value k, v) |> HashMap.ofSeq
 
+    /// The dismissed launch question as a register that is either there or not — the shape
+    /// `model` has, for its reason: presence is one key, so there is no half-written slot.
+    let private launchDismissedOf (m: SyncedSessionState<Text>) : unit option =
+        if m.LaunchDismissed then Some () else None
+
     /// `Create` for Ylmish's options: build the adaptive companion from a model.
     let create (m: SyncedSessionState<Text>) : AdaptiveSyncedState =
         { Drafts = cmap (draftsByKey m)
@@ -89,7 +95,8 @@ module SyncedStateSync =
           TerminalDrafts = cmap (terminalDraftsByKey m)
           Pending = cmap (pendingByKey m)
           Model = cval m.Model
-          Chapters = cmap (chaptersByKey m) }
+          Chapters = cmap (chaptersByKey m)
+          LaunchDismissed = cval (launchDismissedOf m) }
 
     /// `Update` for Ylmish's options: fold the next model into the companion. Setting
     /// `cmap.Value` yields keyed deltas, so only changed entries re-encode.
@@ -102,6 +109,7 @@ module SyncedStateSync =
         a.Pending.Value <- pendingByKey m
         a.Model.Value <- m.Model
         a.Chapters.Value <- chaptersByKey m
+        a.LaunchDismissed.Value <- launchDismissedOf m
 
     /// Per-draft encoding: the map key *is* the author (one draft per client), so `author` is
     /// re-stated only because an empty object would write no Yjs key at all (Ylmish creates a
@@ -232,7 +240,10 @@ module SyncedStateSync =
               // be the only one (Plan 15, stage 3).
               "pending", Encode.map encodePendingAct (a.Pending :> amap<_, _>)
               "model", Encode.option encodeModel a.Model
-              "chapters", Encode.map encodeChapter (a.Chapters :> amap<_, _>) ]
+              "chapters", Encode.map encodeChapter (a.Chapters :> amap<_, _>)
+              // A flat register like `model`: the word says what happened to the question,
+              // so a later answer of another kind is another word rather than another key.
+              "launch", Encode.option (fun (_: aval<unit>) -> Encode.string (AVal.constant "dismissed")) a.LaunchDismissed ]
 
     /// Every entry of a keyed map that decodes, and none that does not. An entry that fails is
     /// SKIPPED rather than failing the map around it, which is what plain `Decode.map` does: the
@@ -469,6 +480,7 @@ module SyncedStateSync =
             let! pending = slot "pending" (entries decodePendingAct)
             let! model = slot "model" Decode.string
             let! chapters = slot "chapters" (entries decodeChapter)
+            let! launch = slot "launch" Decode.string
             return
                 { Drafts = drafts |> Option.map draftsToDomain |> Option.defaultValue Map.empty
                   Queue = queue |> Option.map queueToDomain |> Option.defaultValue Map.empty
@@ -478,7 +490,11 @@ module SyncedStateSync =
                     terminalDrafts |> Option.map terminalDraftsToDomain |> Option.defaultValue Map.empty
                   Pending = pending |> Option.map pendingToDomain |> Option.defaultValue Map.empty
                   Model = modelToDomain model
-                  Chapters = chapters |> Option.map chaptersToDomain |> Option.defaultValue Map.empty }
+                  Chapters = chapters |> Option.map chaptersToDomain |> Option.defaultValue Map.empty
+                  // Only the one word this codec writes counts: anything else in the slot is
+                  // a question still open, which is the answer that asks a person again
+                  // rather than the one that hides the card from them for good.
+                  LaunchDismissed = (launch = Some "dismissed") }
         }
 
     open Fable.Core

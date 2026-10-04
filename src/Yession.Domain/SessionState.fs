@@ -164,7 +164,14 @@ type SyncedSessionState<'Text> =
       /// opens by nature (`Chapters`), which a set cannot say. Absent is "nobody has
       /// decided", which is not the same as "no" — and for a chapter nobody has touched, it
       /// is also how its name stays the heuristic's to answer rather than a copy of one.
-      Chapters   : Map<MessageId, ChapterMark<'Text>> }
+      Chapters   : Map<MessageId, ChapterMark<'Text>>
+      /// Somebody dismissed the session's opening question — which repository is this
+      /// session for? — and the session goes on without one. A property of the SESSION, not
+      /// of whoever pressed it, for the reason the other two answers to that question are:
+      /// a repo added and a message sent each retire the card for everybody, so "none" does
+      /// too, and it stays answered across a reload rather than being asked again of a
+      /// person who already said no. Only ever set; the agent can still add a repo later.
+      LaunchDismissed : bool }
 
 module SyncedSessionState =
 
@@ -178,7 +185,8 @@ module SyncedSessionState =
           TerminalDrafts = Map.empty
           Pending = Map.empty
           Model = None
-          Chapters = Map.empty }
+          Chapters = Map.empty
+          LaunchDismissed = false }
 
 /// The queue's total order. `Order` is a float register; ties (possible when two peers
 /// mint concurrently) are broken by `QueueId`, so the order is always a total,

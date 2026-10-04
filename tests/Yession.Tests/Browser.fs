@@ -944,9 +944,8 @@ let tests =
         sessionCase "the first chip tapped opens a preview, and the live terminal stays the strip" <|
             fun page ->
             async {
-                // A fresh session offers its launch card, which overlays the conversation's
-                // lower edge — exactly where the chip this case taps lands. Put it away the way
-                // a person who is not choosing a repo would; it stays away for this client.
+                // A fresh session offers its launch card. Put it away the way a person who is
+                // not choosing a repo would; it stays away for the session.
                 let! _ = await (page.WaitForSelectorAsync "[data-repo-picker-dismiss]")
                 do! awaitU (page.ClickAsync "[data-repo-picker-dismiss]")
                 let! _ = await (page.WaitForFunctionAsync "!document.querySelector('[data-repo-picker]')")
@@ -3410,28 +3409,75 @@ let editorTests =
                 }
         askCardColumnCase 390 844
         askCardColumnCase 1440 900
-        // The card is an OVERLAY, not a flow block: it covers the conversation's lower edge
-        // rather than taking height from it. Only a browser settles this — the markup is the
-        // same either way — and it is the whole point of the card's position. The regression it
-        // guards is what it replaced: a flow card docked between the chat and the composer, so
-        // the conversation jumped UP by the card's height the moment it was offered, and again as
-        // the repo list loaded into it and it grew. Measured as the conversation's own box before
-        // the card and after: an overlay leaves it where it was.
-        editorCaseIn 390 844 "the launch card overlays the conversation rather than displacing it" <| fun page ->
+        // Nothing in the conversation is ever under the card. It used to be an overlay at the
+        // chat's foot, so that the chat would not reflow when the card arrived and grew — and
+        // on a session whose first acts were commands, the newest of them sat beneath it for as
+        // long as it stood: drawn, focusable by Tab, and impossible to scroll into view, because
+        // the scrollport ran on behind the card. So the promise is about the ITEMS, each one: it
+        // can be brought into view, and when it is, a press in its middle lands on it rather
+        // than on the card. Only a browser settles it — the markup is the same either way.
+        //
+        // Every item rather than the last, because what is covered is a band at the foot, and
+        // which items fall in it depends on the column's height; walking them all means the
+        // case does not have to know.
+        let launchCardCoversNothingCase width height =
+            editorCaseIn width height
+                (sprintf "at %dpx every item in the conversation can be scrolled clear of the launch card" width) <| fun page ->
+                async {
+                    do! awaitU (page.EvaluateAsync "() => window.__launchOver()")
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
+                    // Ground truth: the column has more than it can show, so some items start
+                    // out of view and bringing them in is something the case has to do.
+                    let! overflows =
+                        await (page.EvaluateAsync<bool>
+                                """() => {
+                                     const c = document.querySelector('#shell [data-conversation]')
+                                     return c.scrollHeight > c.clientHeight + 1
+                                   }""")
+                    Expect.isTrue overflows "the conversation scrolls, so where it ends is a question"
+                    let! hidden =
+                        await (page.EvaluateAsync<string[]>
+                                """() => {
+                                     const items = [...document.querySelectorAll('#shell [data-conversation] [data-message-id]')]
+                                     return items.flatMap(item => {
+                                       // To the middle, as far as the scroll allows: the column
+                                       // pins its author line at the top, and an item scrolled
+                                       // only to the nearest edge stops under that instead.
+                                       item.scrollIntoView({ block: 'center' })
+                                       const box = item.getBoundingClientRect()
+                                       const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+                                       return hit && item.contains(hit)
+                                         ? []
+                                         : [`${item.getAttribute('data-message-id')} (a press on it lands on ${hit ? hit.outerHTML.slice(0, 60) : 'nothing'})`]
+                                     })
+                                   }""")
+                    Expect.isEmpty
+                        hidden
+                        (sprintf "every item, scrolled into view, is the thing under a press in its middle; these were not: %s"
+                            (String.Join (" | ", hidden)))
+                }
+        launchCardCoversNothingCase 390 844
+        launchCardCoversNothingCase 1440 900
+        // The way out is a thumb's size on a phone, and says what it does to a screen reader
+        // and a pointer alike. Measured as the BOX a press lands on, not the glyph in it.
+        editorCaseIn 390 844 "on a phone the launch card's way out is a 44px target with a name" <| fun page ->
             async {
-                let conversationBox =
-                    """() => {
-                         const c = document.querySelector('#shell [data-conversation]').getBoundingClientRect()
-                         return [Math.round(c.top), Math.round(c.height)]
-                       }"""
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
-                let! before = await (page.EvaluateAsync<int[]> conversationBox)
                 do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
-                let! after = await (page.EvaluateAsync<int[]> conversationBox)
-                Expect.equal after before
-                    (sprintf "the card left the conversation's box alone: was top=%d h=%d, now top=%d h=%d"
-                        before.[0] before.[1] after.[0] after.[1])
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker-dismiss]")
+                let! size =
+                    await (page.EvaluateAsync<int[]>
+                            """() => {
+                                 const b = document.querySelector('#shell [data-repo-picker-dismiss]').getBoundingClientRect()
+                                 return [Math.round(b.width), Math.round(b.height)]
+                               }""")
+                Expect.isTrue (size.[0] >= 44 && size.[1] >= 44) (sprintf "44px each way, got %dx%d" size.[0] size.[1])
+                let! named =
+                    await (page.EvaluateAsync<bool>
+                            """() => {
+                                 const b = document.querySelector('#shell [data-repo-picker-dismiss]')
+                                 return !!b.getAttribute('aria-label') && !!b.getAttribute('title')
+                               }""")
+                Expect.isTrue named "an accessible name, and a title for a pointer"
             }
         // What a control owes the card's edges, where every line owes the reading rail.
         //
