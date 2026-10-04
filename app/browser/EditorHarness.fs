@@ -198,6 +198,8 @@ do
             // The harness IS the composer, so it wears the composer's prompt: the browser
             // tier can then read the placeholder where the editor really draws it.
             Dom.Text.composerPlaceholder
+            // One other person in the room, so the browser tier can address them.
+            (fun () -> [ "swift-heron" ])
     PageGlobal.set Published.md (fun () -> Markdown.ofFragment fragment)
     PageGlobal.set Published.pushRemote (fun name ->
         match lastSelection with
@@ -555,8 +557,8 @@ do
     // and proves less — it was the first thing this surface tried, and it converged happily.
     let mutable selectionA : (string * string) option = None
     let mutable selectionB : (string * string) option = None
-    Editor.mountEditor peerAHost fragmentA false (fun sel -> selectionA <- sel) None "" |> ignore
-    let mirror = Editor.mountEditor peerBHost fragmentB false (fun sel -> selectionB <- sel) None ""
+    Editor.mountEditor peerAHost fragmentA false (fun sel -> selectionA <- sel) None "" (fun () -> []) |> ignore
+    let mirror = Editor.mountEditor peerBHost fragmentB false (fun sel -> selectionB <- sel) None "" (fun () -> [])
 
     let mutable storming = false
     let mutable pushes = 0

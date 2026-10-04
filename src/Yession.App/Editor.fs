@@ -4,6 +4,7 @@ open Fable.Core.JsInterop
 open Yjs
 open Fable.ProseMirror.ProseMirror
 open Fable.BrowserExtras
+open Yession.Domain.Chat
 
 /// The Linear-style rich-text editor: type or paste Markdown, rendered live as formatted
 /// rich text. Pure F# over the `ProseMirror` bindings (no authored JS). The document lives
@@ -267,17 +268,174 @@ module Editor =
                     if docIsEmpty doc then decoSetCreate doc [| decoNode 0 (docContentSize doc) attrs |]
                     else decoSetEmpty))))
 
+    // --- Addressing: the @ picker ----------------------------------------------------------
+
+    /// An address being typed: what follows its `@`, where the `@` sits, which offer the
+    /// keyboard is on, and whether Escape put it away. What COUNTS as an address is
+    /// `Addressed.typing`, the same module that reads one off a sent message — so the picker
+    /// can only ever offer to complete something the turn policy will read.
+    type private Picking =
+        { Partial : string
+          At : int
+          Highlight : int
+          Dismissed : bool }
+
+    [<RequireQualifiedAccess>]
+    type private PickerMove =
+        | By of int
+        | Dismiss
+
+    let private pickerKey : PluginKey<Picking option, PickerMove> = pluginKey "yession-mention-picker"
+
+    let private pickerIds = ref 0
+
+    /// The picker over `addressable`, read at every keystroke so a person who joins mid-word is
+    /// offered. A listbox the editor points at with `aria-activedescendant`: the focus never
+    /// leaves the text, the arrows move through the offers, Enter or Tab takes one, Escape puts
+    /// the list away until the address is started again. A press on an offer takes it too,
+    /// without taking the focus.
+    let private mentionPlugin (addressable: unit -> string list) : Plugin =
+        pickerIds.Value <- pickerIds.Value + 1
+        let listId = sprintf "mention-picker-%d" pickerIds.Value
+        let offersOf (picking: Picking) = Addressed.offer (addressable ()) picking.Partial
+        let wrap (n: int) (i: int) = ((i % n) + n) % n
+        let showing (state: EditorState) : (Picking * string list) option =
+            match pluginKeyGetState pickerKey state with
+            | Some picking when not picking.Dismissed ->
+                match offersOf picking with
+                | [] -> None
+                | offers -> Some (picking, offers)
+            | _ -> None
+        let take (view: EditorView) (picking: Picking) (name: string) =
+            let head = selHead (selection view.state)
+            view.dispatch ((view.state.tr).insertText ("@" + name + " ", picking.At, head))
+        let list : Browser.Types.HTMLElement = Browser.Dom.document.createElement "ul"
+        list.id <- listId
+        list.setAttribute ("role", "listbox")
+        list.setAttribute ("aria-label", Dom.Text.mentionPickerLabel)
+        list.className <- Style.mentionPicker
+        // Where the list hangs: off the caret, re-measured every frame while it is open. Once
+        // is not enough — the composer moves after the keystroke that opened the list (its
+        // draft slot is published, the band re-renders), and a list placed against where the
+        // caret WAS covers the words it is completing.
+        let mutable placing : (EditorView * int * int) option = None
+        let place () =
+            match placing with
+            | Some (view, at, count) ->
+                let caret = view.coordsAtPos at
+                let height = Browser.Dom.window.innerHeight
+                // Above the caret where there is room: the composer sits at the foot of the
+                // screen, and a list hung below it would open off the bottom. Below it where
+                // there is not — a message edited in place near the top of the timeline.
+                let room = float count * 32.0 + 16.0
+                let at =
+                    if caret.top > room then sprintf "left:%.0fpx;bottom:%.0fpx" caret.left (height - caret.top + 4.0)
+                    else sprintf "left:%.0fpx;top:%.0fpx" caret.left (caret.bottom + 4.0)
+                // Written only when it moved: this runs every frame the list is open.
+                if list.getAttribute "style" <> at then list.setAttribute ("style", at)
+            | None -> ()
+        let mutable following = false
+        let rec follow () =
+            if not following then
+                following <- true
+                Browser.Dom.window.requestAnimationFrame (fun _ ->
+                    following <- false
+                    if Option.isSome placing then
+                        place ()
+                        follow ())
+                |> ignore
+        let hide (view: EditorView) =
+            placing <- None
+            list.remove ()
+            view.dom.removeAttribute "aria-activedescendant"
+            view.dom.setAttribute ("aria-expanded", "false")
+        let draw (view: EditorView) =
+            match showing view.state with
+            | Some (picking, offers) when viewHasFocus view ->
+                list.innerHTML <- ""
+                let current = wrap offers.Length picking.Highlight
+                offers
+                |> List.iteri (fun i name ->
+                    let option = Browser.Dom.document.createElement "li"
+                    option.id <- sprintf "%s-%d" listId i
+                    option.setAttribute ("role", "option")
+                    option.setAttribute ("aria-selected", (if i = current then "true" else "false"))
+                    option.className <- (if i = current then Style.mentionOptionActive else Style.mentionOption)
+                    option.textContent <- "@" + name
+                    option.addEventListener ("mousedown", fun event ->
+                        event.preventDefault ()
+                        take view picking name)
+                    list.appendChild option |> ignore)
+                placing <- Some (view, picking.At, offers.Length)
+                place ()
+                follow ()
+                if isNull list.parentElement then Browser.Dom.document.body.appendChild list |> ignore
+                view.dom.setAttribute ("aria-expanded", "true")
+                view.dom.setAttribute ("aria-activedescendant", sprintf "%s-%d" listId current)
+            | _ -> hide view
+        makePlugin (jsOptions<PluginSpec<Picking option, PickerMove>> (fun spec ->
+            spec.key <- pickerKey
+            spec.state <- jsOptions<StateField<Picking option>> (fun field ->
+                field.init <- System.Func<EditorStateConfig, EditorState, Picking option>(fun _ _ -> None)
+                field.apply <- System.Func<Transaction, Picking option, EditorState, EditorState, Picking option>(fun tr old _ next ->
+                    match trGetMeta tr pickerKey, old with
+                    | Some (PickerMove.By step), Some picking -> Some { picking with Highlight = picking.Highlight + step }
+                    | Some PickerMove.Dismiss, Some picking -> Some { picking with Dismissed = true }
+                    | _ ->
+                        let sel = selection next
+                        if not (selEmpty sel) then None
+                        else
+                            match Addressed.typing (textBeforeCaret next) with
+                            | None -> None
+                            | Some partial ->
+                                let at = selHead sel - partial.Length - 1
+                                match old with
+                                // The same address, one more letter: keep the place in the
+                                // list, and keep it put away if it was.
+                                | Some picking when picking.At = at -> Some { picking with Partial = partial }
+                                | _ -> Some { Partial = partial; At = at; Highlight = 0; Dismissed = false }))
+            spec.props <- jsOptions<PluginProps> (fun props ->
+                props.handleKeyDown <- System.Func<EditorView, Browser.Types.KeyboardEvent, bool>(fun view event ->
+                    let plain = not (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)
+                    match showing view.state with
+                    | Some (picking, offers) when plain ->
+                        let move m = view.dispatch (trSetMeta view.state.tr pickerKey m); true
+                        match event.key with
+                        | "ArrowDown" -> move (PickerMove.By 1)
+                        | "ArrowUp" -> move (PickerMove.By -1)
+                        | "Enter" | "Tab" ->
+                            take view picking offers.[wrap offers.Length picking.Highlight]
+                            true
+                        | "Escape" -> move PickerMove.Dismiss
+                        | _ -> false
+                    | _ -> false)
+                props.handleDOMEvents <- jsOptions<DomEventHandlers> (fun events ->
+                    events.blur <- System.Func<EditorView, Browser.Types.FocusEvent, bool>(fun view _ -> hide view; false)))
+            spec.view <- System.Func<EditorView, PluginView>(fun view ->
+                view.dom.setAttribute ("aria-autocomplete", "list")
+                view.dom.setAttribute ("aria-controls", listId)
+                view.dom.setAttribute ("aria-expanded", "false")
+                jsOptions<PluginView> (fun pluginView ->
+                    pluginView.update <- System.Func<EditorView, EditorState, unit>(fun v _ -> draw v)
+                    pluginView.destroy <- System.Func<unit, unit>(fun () -> list.remove ())))))
+
     let private plugins
         (fragment: Y.XmlFragment)
         (report: ((string * string) option -> unit) option)
         (onSubmit: (unit -> unit) option)
         (placeholder: string)
+        (addressable: (unit -> string list) option)
         : Plugin[] =
         let ps =
             ResizeArray<Plugin> [
                 ySyncPlugin fragment
                 yUndoPlugin ()
                 markdownInputRules ()
+                // Ahead of the keymaps, so Enter takes an offer while the list is open rather
+                // than opening a paragraph under it.
+                match addressable with
+                | Some names -> mentionPlugin names
+                | None -> ()
                 keymap (editorKeymap onSubmit)
                 keymap baseKeymap
                 presenceDecorationsPlugin () ]
@@ -370,13 +528,17 @@ module Editor =
         (reportFocus: (string * string) option -> unit)
         (onSubmit: (unit -> unit) option)
         (placeholder: string)
+        // Who an @ can name here, read at each keystroke; the agent is always offered.
+        (addressable: unit -> string list)
         : EditorHandle =
         let report = if readOnly then None else Some reportFocus
         let submit = if readOnly then None else onSubmit
+        // Nobody is addressed from a body you cannot type in.
+        let addressing = if readOnly then None else Some addressable
         // Nothing to prompt in a body you cannot type in, on the same rule that drops the
         // send binding there: a read-only editor is a rendering, not an invitation.
         let prompt = if readOnly then "" else placeholder
-        let state = createState schema (plugins fragment report submit prompt)
+        let state = createState schema (plugins fragment report submit prompt addressing)
         let view =
             createView host (jsOptions<EditorProps> (fun props ->
                 props.state <- state

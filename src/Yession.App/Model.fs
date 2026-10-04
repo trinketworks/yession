@@ -2128,6 +2128,21 @@ module ClientModel =
                 | Some presence when presence.DisplayName <> "" -> presence.DisplayName
                 | _ -> PeerId.value peer
 
+    /// Everybody here a message can address by name: each peer by the name it is seen under,
+    /// those connected now as well as those the log remembers, and never this client itself —
+    /// nobody addresses themselves. The agent is the picker's to add (`Addressed.offer`).
+    let addressable (model: ClientModel) : string list =
+        let here =
+            model.Presence
+            |> Map.toList
+            |> List.choose (fun (who, presence) ->
+                match who with
+                | ActorRef.PeerRef _ when presence.DisplayName <> "" -> Some presence.DisplayName
+                | _ -> None)
+        (Map.toList model.Peers |> List.filter (fun (peer, _) -> peer <> model.Peer.PeerId) |> List.map snd) @ here
+        |> List.filter (fun name -> name <> model.Peer.DisplayName)
+        |> List.distinct
+
     /// A `UserRef` author's real name, resolved through the SAME rule the Session
     /// used to decide the author was a `UserRef` in the first place
     /// (`Yession.Domain.Attribution`) rather than a client-side guess that could disagree

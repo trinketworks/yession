@@ -2215,6 +2215,24 @@ let private addressTests =
                 (Some asked)
                 "the aside after it is not what the turn answers"
 
+        testCase "an @ starting a word is an address being typed" <| fun () ->
+            Expect.equal (Addressed.typing "thanks @sw") (Some "sw") "what follows it is the partial name"
+
+        testCase "an @ inside a word is not an address being typed" <| fun () ->
+            Expect.isNone (Addressed.typing "mail ada@exa") "an email is not an address"
+
+        testCase "a finished address is no longer being typed" <| fun () ->
+            Expect.isNone (Addressed.typing "@agent ") "the space ended it"
+
+        testCase "the agent is offered first, and everybody here who matches" <| fun () ->
+            Expect.equal (Addressed.offer [ "swift-heron"; "brave-owl" ] "") [ "agent"; "swift-heron"; "brave-owl" ] "a bare @ offers the room"
+
+        testCase "only names that start with what was typed are offered" <| fun () ->
+            Expect.equal (Addressed.offer [ "swift-heron"; "brave-owl" ] "SW") [ "swift-heron" ] "case is not spelling"
+
+        testCase "a name no address can spell is not offered" <| fun () ->
+            Expect.equal (Addressed.offer [ "Ada Lovelace" ] "") [ "agent" ] "a space would end the address before the name did"
+
         testCaseAsync "a drained message addressed to someone else is recorded and starts no turn" <|
             async {
                 let! events, turns = drained "@swift-heron can you look"
