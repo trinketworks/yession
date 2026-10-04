@@ -70,15 +70,6 @@ module Icon =
     let private attachPath = "M2.5 8 L10 8 M6.75 4.75 L10 8 L6.75 11.25 M12.5 3.5 L12.5 12.5"
     /// A list. What the terminal list's toggle shows, and it needs no other reading.
     let private listPath = "M3.5 4.5 L12.5 4.5 M3.5 8 L12.5 8 M3.5 11.5 L12.5 11.5"
-    /// A tack: a diamond head on a needle. ONE glyph for both states of the control — this
-    /// set has no fills, so a "filled pin" would be its first, and state here is carried the
-    /// way every other state in this design is: by colour, with `aria-pressed` saying it to
-    /// anything that cannot see colour.
-    ///
-    /// Drawn as a head and a needle rather than the side-on pin's head/shaft/shoulder/point,
-    /// which was four strokes in a 14px box: looked at on a real screen, its two bars merged
-    /// and the whole thing read as a ⊤.
-    let private pinPath = "M8 2.5 L11.5 6 L8 9.5 L4.5 6 Z M8 9.5 L8 13.5"
     /// An archive box: a lid across the top, the body under it, and a notch in the middle of
     /// the lid for the hand. Deliberately NOT a downward arrow or a tray with one — this set
     /// already spends arrows on direction, and an arrow here would read as "download".
@@ -172,13 +163,6 @@ module Icon =
     /// it needs no word for the same reason: it is rendered only on a row that can be
     /// archived, and an archived row wears the word `Unarchive` instead.
     let archive = stroked "w-3.5 h-3.5" archivePath
-    /// Keep this tab, or stop keeping it. Never an `✕`: on a tab strip that glyph means
-    /// "gone", and this control's whole point is that what it releases keeps running.
-    let pin = stroked "w-3.5 h-3.5" pinPath
-    /// The pin at the size a tab wears it: 14px of glyph beside 11px caps sat four pixels
-    /// proud of the line it was marking. Same shape, sized and aligned to the text it
-    /// follows, exactly as `checkSm` is.
-    let pinSm = stroked "w-3 h-3 inline-block align-[-1px]" pinPath
 
     /// Inline with a status word: smaller, and nudged onto the caps baseline. `-3px`, not
     /// `-1px`: the strokes sit inside the 12px box with ~3px of clear space under them (the

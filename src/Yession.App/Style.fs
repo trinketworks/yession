@@ -2852,18 +2852,6 @@ module Style =
               Stroke.underline; focusRingInset ]
     /// A tab's NAME: as much of it as fits, and an ellipsis for the rest.
     let paneTabLabel = "max-w-40 truncate"
-    /// Taking a tab off the strip — on the selected tab only, which is where a gesture with
-    /// no control of its own already says what a second activation would do.
-    ///
-    /// Deliberately NOT the danger face (`btnIconBareDanger`, `hover:text-err`): that
-    /// vocabulary belongs to the control that ENDS a terminal, which lives on its row in the
-    /// list, and a strip that borrowed it would be making the two acts look alike one pixel
-    /// apart — which is the exact mistake that took `close` out of this strip in the first
-    /// place. This one only stops showing something.
-    /// `btnIconBare` itself, which is this vocabulary's borderless icon verb riding a row it
-    /// acts on — 24px, which the rule at that declaration keeps as WCAG 2.5.8's floor and is
-    /// not a thing a strip gets to shave.
-    let paneTabClose = cls [ btnIconBare; "ml-1.5" ]
     let terminalTab = cls [ tabBase; Stroke.clear; "text-ink-faint hover:text-ink" ]
     let terminalTabActive = cls [ tabBase; Stroke.blue; "text-ink" ]
     /// Adds a terminal. The one action in the strip that is not a selection — so it wears the
@@ -2889,27 +2877,6 @@ module Style =
     /// the strip rather than only from inside it.
     let terminalTabPeers = "inline-flex items-center gap-0.5 ml-1.5 align-[1px]"
 
-    /// The pin is a MARK now, not a control (Plan 20, stage 1 revised).
-    ///
-    /// It used to be a second button beside every keepable tab, wearing one of two faces so
-    /// that a glance could tell pinned from not. But a strip of tabs each trailing its own
-    /// button is a strip of two controls per terminal, and on a touch screen the quiet one
-    /// was a 24px target beside a 30px one. The gesture replaced it: activating the tab you
-    /// are ALREADY on is the toggle, which every pointer, finger and keyboard already has.
-    ///
-    /// So this says one thing — that the tab is kept — and only when it is true. Blue,
-    /// exactly as the selected tab's rule is blue, because both mean "this is mine and it
-    /// stays". Nothing here destroys anything, so nothing here wears the danger tone.
-    let paneTabPinMark = "ml-1.5 text-blue"
-
-    /// The mark saying which KIND a tab is, worn by the kinds that are not the strip's usual
-    /// occupant. It leads the label rather than trailing it, where the pin sits: one says what
-    /// this tab IS and belongs before its name, the other says what has been done to it.
-    ///
-    /// Inherits the tab's own colour rather than taking one, so it dims and brightens with the
-    /// tab's selected state instead of making a second claim about which tab is live.
-    let paneTabKindMark = "mr-1.5 inline-flex items-center align-middle"
-
     /// The pane's body — whatever the selected tab shows. It takes the column's remaining
     /// height so the thing inside it scrolls rather than the column.
     let paneBody = "flex-1 min-h-0 flex flex-col"
@@ -2929,7 +2896,20 @@ module Style =
     /// One name for one box. It had two, and the second was reached for by whichever surface
     /// its author happened to be reading.
     let paneReadonly = "flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 px-3 py-3"
-    /// A stretch tab's facts, above whatever renders its recording.
+    /// A preview's head (P2-1): the way back to the terminal it is laid over, and its close.
+    /// A row of its own over the preview rather than a tab in the strip, which is the whole
+    /// difference between this preview and the one that was removed for looking like a tab.
+    let panePreviewHead = "shrink-0 flex items-center gap-2 pl-3 pr-2 pt-2"
+    /// "‹ back to term 2" — the pivot this design navigates by (`navPivot`), the settings
+    /// column's own way back, so going back reads the same wherever it is offered.
+    let panePreviewBack = cls [ navPivot; "min-w-0" ]
+    /// The terminal's name in the way back gives way first when the column is narrow.
+    let panePreviewBackLabel = "min-w-0 truncate"
+    /// The preview's close: the same act as back, in the place a close is looked for.
+    let panePreviewClose = cls [ btnIconBare; "ml-auto shrink-0" ]
+    /// What the preview is · which terminal it belongs to, in the metadata voice.
+    let panePreviewMeta = cls [ caps; "shrink-0 px-3 pb-2 text-ink-faint truncate " + Stroke.dividerBottom ]
+    /// A stretch's facts, above whatever renders its recording.
     let paneFacts = "shrink-0 flex flex-col gap-1 px-3 py-3 " + Stroke.dividerBottom
     /// A read-only tab's verbs, under whatever it is showing: the way to the recording, and
     /// the way back. A row rather than a column, because they are alternatives to each other

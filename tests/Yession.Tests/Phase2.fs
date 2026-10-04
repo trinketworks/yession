@@ -2151,7 +2151,7 @@ let private commandTests =
                 let watching =
                     let model = b.Runner.Model ()
                     match model.Terminals.Terminals with
-                    | [ agents ] -> Support.step (ShowInPaneMsg (Reading (TerminalTab agents.TerminalId))) model
+                    | [ agents ] -> Support.step (ShowInPaneMsg (Reading agents.TerminalId)) model
                     | other -> failwithf "expected the agent's one terminal, B knows %d" (List.length other)
                 let html = Support.render watching
                 Expect.isTrue (html.Contains Dom.Hooks.terminalBlock) "the block renders"

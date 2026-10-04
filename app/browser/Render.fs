@@ -704,32 +704,31 @@ let create (deps: Deps) : Renderer =
             let key = el.getAttribute "data-terminal-text"
             if not (isNull (box key)) && key <> "" then setTextContent el (TerminalText.read texts key)
 
-    /// Fetch the keyframes the open tabs need, once each (Plan 14, stage 4). A keyframe
+    /// Fetch the keyframe the preview on screen needs, once (Plan 14, stage 4). A keyframe
     /// is immutable at a position that never moves, so the browser cache serves the
     /// second read — this set only stops a burst of identical in-flight requests while
     /// the first one is still out.
     let keyframesAsked = System.Collections.Generic.HashSet<string> ()
 
     let syncKeyframes (model: ClientModel) =
-        for tab in model.Tabs do
-            match ClientModel.missingKeyframe tab model with
-            | None -> ()
-            | Some (terminal, seq) ->
-                let key = sprintf "%s@%d" (TerminalId.value terminal) seq
-                if keyframesAsked.Add key then
-                    Async.StartImmediate (
-                        async {
-                            let url = Page.href (TerminalKeyframe (TerminalId.value terminal, seq))
-                            match! deps.Links.Http url with
-                            // A keyframe that does not answer is not a failure: the range
-                            // still rebases and still plays, as the naive slice. Asking
-                            // again on every render would be a spin with nothing to gain.
+        match ClientModel.missingKeyframe model with
+        | None -> ()
+        | Some (terminal, seq) ->
+            let key = sprintf "%s@%d" (TerminalId.value terminal) seq
+            if keyframesAsked.Add key then
+                Async.StartImmediate (
+                    async {
+                        let url = Page.href (TerminalKeyframe (TerminalId.value terminal, seq))
+                        match! deps.Links.Http url with
+                        // A keyframe that does not answer is not a failure: the range
+                        // still rebases and still plays, as the naive slice. Asking
+                        // again on every render would be a spin with nothing to gain.
+                        | Error _ -> ()
+                        | Ok answer ->
+                            match Codec.fromString Transcripts.keyframe answer.Body with
+                            | Ok keyframe -> dispatch (TerminalKeyframeMsg (terminal, keyframe))
                             | Error _ -> ()
-                            | Ok answer ->
-                                match Codec.fromString Transcripts.keyframe answer.Body with
-                                | Ok keyframe -> dispatch (TerminalKeyframeMsg (terminal, keyframe))
-                                | Error _ -> ()
-                        })
+                    })
 
     let replays = PaneReplays.create dispatch
 

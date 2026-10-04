@@ -866,10 +866,10 @@ let tests =
 
         // Reported from a live session: `+`, a command, then the command's chip in the chat —
         // and the strip went from `[TERMINAL]` to `[ECHO ONE]`, the live terminal gone from it
-        // and reachable again only through the list. Whatever the pane shows is a tab, so a
-        // chip opened next lands BESIDE the terminal and never in its place.
+        // and reachable again only through the list. A chip opens a PREVIEW over the terminal
+        // its command ran in (P2-1): the strip is terminals, and it does not change.
         Tag.needs "a command that really runs" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
-        sessionCase "the first chip tapped keeps the live terminal in the strip" <|
+        sessionCase "the first chip tapped opens a preview, and the live terminal stays the strip" <|
             fun page ->
             async {
                 // A fresh session offers its launch card, which overlays the conversation's
@@ -887,28 +887,21 @@ let tests =
                 do! awaitU (page.ClickAsync "[data-terminal-send]")
                 let! _ = await (page.WaitForSelectorAsync "[data-chat-block]")
                 do! awaitU (page.ClickAsync "[data-chat-block]")
-                let! _ = await (page.WaitForSelectorAsync "[data-pane-tab^='block:']")
+                let! _ = await (page.WaitForSelectorAsync "[data-pane-preview^='block:']")
                 let! strip =
                     await (page.EvaluateAsync<string[]> (
                             """() => [...document.querySelectorAll('[data-pane-tab]')].map(t => t.getAttribute('data-pane-tab'))"""))
-                let said = String.Join (", ", strip)
                 Expect.equal
-                    (strip |> Array.filter (fun key -> key.StartsWith "terminal:") |> Array.length)
-                    1
-                    (sprintf "the terminal the press opened is still a tab; the strip holds: %s" said)
-                Expect.equal
-                    (strip |> Array.filter (fun key -> key.StartsWith "block:") |> Array.length)
-                    1
-                    (sprintf "and the chip is one tab beside it; the strip holds: %s" said)
+                    (strip |> Array.toList |> List.map (fun key -> key.Split(':').[0]))
+                    [ "terminal" ]
+                    (sprintf "the terminal the press opened, and nothing beside it; the strip holds: %s" (String.Join (", ", strip)))
             })
 
-        // A reload brings a person back to what they had (P0-4). Before, only the split's width
-        // survived one: the column came back shut, every tab opened from the chat was gone,
-        // the selection fell back to the first terminal and the pins were forgotten. What is
-        // asserted is what a person sees on coming back, read through the hooks the strip
-        // carries — the same tabs, the one on top, the one kept, and a column with width.
+        // A reload brings a person back to what they had (P0-4): the same terminals in the
+        // strip, the one on top, and a column with width. A preview is NOT brought back: it
+        // was a glance, and the terminal it was laid over is what comes back on top.
         Tag.needs "a command that really runs" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
-        sessionCase "a reload brings back the tabs, the selection and the open pane" <|
+        sessionCase "a reload brings back the strip, the selection and the open pane" <|
             fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "[data-repo-picker-dismiss]")
@@ -922,35 +915,26 @@ let tests =
                 do! awaitU (page.Keyboard.TypeAsync "echo kept")
                 do! awaitU (page.ClickAsync "[data-terminal-send]")
                 let! _ = await (page.WaitForSelectorAsync "[data-chat-block]")
+                // A second terminal, so that which one is on top is a choice rather than the
+                // only answer — then the first chosen again, and its command previewed over it.
+                do! openNewTerminal page
+                do! waitFor "a second terminal in the strip" page "document.querySelectorAll('[data-pane-tab]').length === 2"
+                let first = "[data-pane-tab]:first-child"
+                do! awaitU (page.ClickAsync first)
+                let firstOnTop = sprintf "document.querySelector(\"%s\")?.getAttribute('aria-selected') === 'true'" first
+                do! waitFor "the first terminal to be on top" page firstOnTop
                 do! awaitU (page.ClickAsync "[data-chat-block]")
-                let terminalTab = "[data-pane-tab^='terminal:']"
-                let blockTab = "[data-pane-tab^='block:']"
-                let! _ = await (page.WaitForSelectorAsync blockTab)
-                // Kept: the terminal's tab, activated while it is the one on top.
-                do! awaitU (page.ClickAsync terminalTab)
-                do! waitFor "the terminal's tab to be on top" page (sprintf "document.querySelector(\"%s\")?.getAttribute('aria-selected') === 'true'" terminalTab)
-                do! awaitU (page.ClickAsync terminalTab)
-                let terminalKept = sprintf "document.querySelector(\"%s\")?.getAttribute('data-pane-tab-pinned') === 'true'" terminalTab
-                do! waitFor "the terminal's tab to be kept" page terminalKept
-                // And the block's tab put back on top, so what comes back on top is a choice
-                // and not the default a fresh client would land on.
-                do! awaitU (page.ClickAsync blockTab)
-                let blockOnTop = sprintf "document.querySelector(\"%s\")?.getAttribute('aria-selected') === 'true'" blockTab
-                do! waitFor "the block's tab to be on top" page blockOnTop
+                let! _ = await (page.WaitForSelectorAsync "[data-pane-preview]")
 
                 let! _ = await (page.ReloadAsync ())
                 do! waitFor "the reloaded page to connect" page connected
-                do! waitFor "both tabs to be back in the strip" page (sprintf "!!document.querySelector(\"%s\") && !!document.querySelector(\"%s\")" terminalTab blockTab)
-                do! waitFor "the block's tab to be on top again" page blockOnTop
-                do! waitFor "the terminal's tab to be kept again" page terminalKept
+                do! waitFor "both terminals to be back in the strip" page "document.querySelectorAll('[data-pane-tab]').length === 2"
+                do! waitFor "the first terminal to be on top again" page firstOnTop
+                do! waitFor "no preview, which was a glance" page "!document.querySelector('[data-pane-preview]')"
                 do! waitFor
                         "the pane to be open"
                         page
                         "(document.querySelector('[data-content-panel]')?.getBoundingClientRect().width ?? 0) > 1"
-                let! strip =
-                    await (page.EvaluateAsync<string[]> (
-                            """() => [...document.querySelectorAll('[data-pane-tab]')].map(t => t.getAttribute('data-pane-tab'))"""))
-                Expect.equal strip.Length 2 (sprintf "the strip holds what it held, and nothing else: %s" (String.Join (", ", strip)))
             })
 
         // --- Reopening a session, and what it costs -------------------------------------
@@ -1761,27 +1745,50 @@ let private focusReachedPane (page: IPage) : Async<unit> =
     waitFor "focus to follow the chip into the pane" page
         "document.activeElement?.hasAttribute('data-pane-panel') === true"
 
-/// Every block chip the harness's chat holds, opened as a tab each: the one at the top level,
-/// then the three inside the task card, which has to be unfolded first. With the harness's two
-/// terminal tabs that is six, which is more than the strip has room for at the pane's default
-/// width — the cases that need an overflowing strip assert that before anything else.
-let private openEveryChip (page: IPage) : Async<unit> =
+/// Events folded into the harness as one page, as the session would send them
+/// (`window.__fold`), at the offsets given.
+let private foldHarness (page: IPage) (events: (int64 * Yession.Domain.SessionEvent) list) : Async<unit> =
     async {
-        let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card] [data-fold]")
-        do! awaitU (page.ClickAsync "#shell [data-chat-task-card] [data-fold]")
-        do! waitFor "the task card to unfold" page
-                """document.querySelector('#shell [data-chat-task-card] [data-fold-body]')?.getAttribute('data-fold-open') === 'yes'"""
-        let chips = page.Locator "#shell [data-chat-block]"
-        let! count = await (chips.CountAsync ())
-        for i in 0 .. count - 1 do
-            do! awaitU (chips.Nth(i).ClickAsync ())
-            do! waitFor (sprintf "chip %d to open its tab and select it" i) page
-                    (sprintf
-                        """document.querySelectorAll('#shell [data-pane-strip] [role=tab]').length >= %d
-                           && document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=true]')
-                                ?.getAttribute('data-pane-tab')?.endsWith(':' + document.querySelectorAll('#shell [data-chat-block]')[%d].getAttribute('data-chat-block')) === true"""
-                        (3 + i) i)
-            do! focusReachedPane page
+        let expect r = Result.defaultWith failwith r
+        let line (offset: int64, event: Yession.Domain.SessionEvent) =
+            let envelope : Yession.Domain.EventEnvelope<Yession.Domain.SessionEvent> =
+                { EventId = Yession.Domain.EventId.fresh ()
+                  SessionId = Yession.Domain.SessionId.create "harness" |> expect
+                  Offset = Yession.Domain.EventOffset.create offset |> expect
+                  Actor = Yession.Domain.ActorRef.Session
+                  Timestamp = DateTimeOffset.UtcNow
+                  Event = event }
+            Yession.Codecs.Codec.toString Events.sessionEventEnvelope envelope
+        let body = events |> List.map line |> String.concat "\n"
+        do! awaitU (page.EvaluateAsync ("body => window.__fold(body)", box body))
+    }
+
+let private harnessTerminal (id: string) : Yession.Domain.TerminalId =
+    Yession.Domain.TerminalId.create id |> Result.defaultWith failwith
+
+/// More terminals in the harness's strip: four opened by its own peer, folded in as the
+/// session would send them, each becoming a tab as a terminal this reader pressed for does.
+/// With the harness's two that is six, which is more than the strip has room for at the pane's
+/// default width — the cases that need an overflowing strip assert that before anything else.
+/// (These used to be chips, one tab each; a chip opens a preview now, never a tab.)
+let private openManyTerminals (page: IPage) : Async<unit> =
+    async {
+        let opened (id: string) =
+            Yession.Domain.SessionEvent.TerminalOpened
+                { Yession.Domain.Terminals.TerminalOpened.TerminalId = harnessTerminal id
+                  Yession.Domain.Terminals.TerminalOpened.OpenedBy =
+                    Yession.Domain.ActorRef.PeerRef (Yession.Domain.PeerId.create "ada" |> Result.defaultWith failwith)
+                  Yession.Domain.Terminals.TerminalOpened.Title = Yession.Domain.Terminals.TerminalTitle.fromProse id
+                  Yession.Domain.Terminals.TerminalOpened.Sandbox = None
+                  Yession.Domain.Terminals.TerminalOpened.Renewable = false }
+        do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+        // Showing the pane puts focus on the command line a frame later; the cases after this
+        // put focus somewhere themselves, and must not have it taken back by a move they did
+        // not wait for.
+        do! waitFor "focus to land on the command line" page
+                (sprintf "document.activeElement?.matches(%s) === true" (System.Text.Json.JsonSerializer.Serialize (commandLine "term-harness")))
+        do! foldHarness page [ for i in 0 .. 3 -> 80L + int64 i, opened (sprintf "term-more-%d" i) ]
+        do! waitFor "six tabs in the strip" page "document.querySelectorAll('#shell [data-pane-strip] [role=tab]').length === 6"
     }
 
 /// Whether the strip holds more tabs than it shows — the precondition every scrolling case
@@ -2627,9 +2634,14 @@ let editorTests =
         // screen: the newest tab — the one just selected — opened past the right-hand edge.
         editorCase "a newly selected tab is scrolled into view" <| fun page ->
             async {
-                do! openEveryChip page
+                do! openManyTerminals page
                 let! overflows = await (page.EvaluateAsync<bool> stripOverflows)
                 Expect.isTrue overflows "the strip holds more tabs than it shows, or this proves nothing"
+                // Chosen by the DOM's own click rather than Playwright's, which scrolls what it
+                // clicks into view first and would prove nothing about the strip.
+                do! awaitU (page.EvaluateAsync "() => document.querySelector('#shell [data-pane-strip] [role=tab]:last-child').click()")
+                do! waitFor "the last tab to be selected" page
+                        "document.querySelector('#shell [data-pane-strip] [role=tab]:last-child')?.getAttribute('aria-selected') === 'true'"
                 let! inView =
                     await (page.EvaluateAsync<bool>
                         (insideStrip "document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=true]')"))
@@ -2642,7 +2654,7 @@ let editorTests =
         // brings a tab in from either side is asked.
         editorCase "keyboard focus never rests past the strip's edge or under its fade" <| fun page ->
             async {
-                do! openEveryChip page
+                do! openManyTerminals page
                 let! overflows = await (page.EvaluateAsync<bool> stripOverflows)
                 Expect.isTrue overflows "the strip holds more tabs than it shows, or this proves nothing"
                 let! count = await (page.EvaluateAsync<int> "() => document.querySelectorAll('#shell [data-pane-strip] [role=tab]').length")
@@ -2678,10 +2690,9 @@ let editorTests =
         // a box that scrolls vertically is what an overhang looks like from outside.
         editorCase "the selected tab's underline paints" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
-                do! awaitU (page.ClickAsync "#shell [data-chat-block]")
-                do! waitFor "the chip's tab to be selected" page
-                        "document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=true]')?.getAttribute('data-pane-tab')?.startsWith('block:') === true"
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! waitFor "a tab to be selected beside one that is not" page
+                        "!!document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=true]') && !!document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=false]')"
                 let! faults =
                     await (page.EvaluateAsync<string>
                         """async () => {
@@ -2711,11 +2722,15 @@ let editorTests =
         // it, and a programmatic `focus()` alone does not fire it.
         editorCase "a focused tab's ring is inside the strip" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
-                do! awaitU (page.ClickAsync "#shell [data-chat-block]")
-                do! focusReachedPane page
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                // Showing the pane moves focus to the command line a frame later; wait for it,
+                // or it lands after the focus this case puts on the tab and takes it away.
+                let! _ =
+                    await (page.WaitForFunctionAsync (
+                            "sel => document.activeElement?.matches(sel) === true",
+                            box (commandLine "term-harness")))
                 do! awaitU (page.FocusAsync "#shell [data-pane-strip] [role=tab][aria-selected=true]")
-                do! awaitU (page.Keyboard.PressAsync "ArrowLeft")
+                do! awaitU (page.Keyboard.PressAsync "ArrowRight")
                 do! waitFor "the walk to land on another tab, keyboard-focused" page
                         "document.activeElement?.matches('#shell [data-pane-strip] [role=tab][aria-selected=false]:focus-visible') === true"
                 let! faults =
@@ -2738,40 +2753,29 @@ let editorTests =
                 Expect.equal faults "" "the ring is drawn wholly inside the strip's box"
             }
 
-        // Terminal work in the chat, and the pane's tabs (Plan 14, stages 1-2). Host-free,
-        // like the editor and the replay beside it: what needs a real browser here is not the
-        // Session but the DOM swaps — where FOCUS goes when a chip in the chat opens
-        // a tab in the pane, and whether the tab strip is a tablist the arrow keys walk.
-        // Neither is visible to a rendered string, and both are the WCAG floor rather than a
-        // nicety: a chip that opens a pane and leaves focus behind, or a close that strands
-        // focus on a control it just removed, is exactly the failure the floor names.
-        editorCase "a chat chip opens a pane tab that plays, and the strip walks" <| fun page ->
+        // Terminal work in the chat, and the pane (Plan 14, stages 1-2; P2-1). Host-free, like
+        // the editor and the replay beside it: what needs a real browser here is not the
+        // Session but the DOM swaps — where FOCUS goes when a chip in the chat opens a preview
+        // in the pane. Not visible to a rendered string, and the WCAG floor rather than a
+        // nicety: a chip that opens a pane and leaves focus behind is exactly the failure the
+        // floor names. (The strip's arrow walk, which this case used to finish with, is the
+        // keyboard-focus case's: a chip no longer adds a tab to walk to.)
+        editorCase "a chat chip opens a preview that plays" <| fun page ->
             async {
                 // The chip the harness model's one block puts in the chat.
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
 
-                // A tab opened, showing that block.
-                let showingBlock =
-                    """document.querySelector('#shell [data-pane-panel]')?.getAttribute('data-pane-panel')?.startsWith('block:') === true"""
-                let! _ = await (page.WaitForFunctionAsync showingBlock)
+                // A preview opened, showing that block.
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview^='block:']")
 
                 // Focus followed it into the pane. Asserted BEFORE anything is played,
                 // because pressing play is itself a focus move.
                 let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-pane-panel') === true""")
 
-                // The strip is a real tablist: an arrow key walks it. MANUAL activation, so
-                // walking does not swap the panel under the reader per keypress.
-                do! awaitU (page.FocusAsync "#shell [data-pane-tab^='block:']")
-                do! awaitU (page.Keyboard.PressAsync "ArrowLeft")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.getAttribute('data-pane-tab')?.startsWith('terminal:') === true""")
-                let! _ = await (page.WaitForFunctionAsync showingBlock)
-
                 // The block reads as TEXT, and its recording is one press away — the two reads
                 // of one history, with the cheap one first. Pressing play mounts the real
-                // player over the ranged cast the model built, inside the tab the chip
+                // player over the ranged cast the model built, inside the preview the chip
                 // opened: a stream renderer would show a cursor-moving program as garbage,
                 // which is the whole reason the transcript was written as asciicast.
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-block] [data-terminal-output]")
@@ -4669,89 +4673,37 @@ let editorTests =
                 return ()
             }
 
-        // Pins (Plan 20, stage 1). The pin's STATE is a rendered attribute the cheap tier can
-        // read; what needs a browser is the keyboard close — Delete on a focused tab removes
-        // that tab from the document, and focus has to land on what took its place rather
-        // than on `body`. Same floor the DVR's control swap answers, in the surface a
-        // keyboard user actually walks.
-        editorCase "a tab is kept by its pin and closed from the keyboard, without stranding focus" <| fun page ->
+        // A preview (P2-1): what a chip opens is laid over the terminal, never a tab beside it,
+        // and its way back hands focus to the chip — the UI floor's rule about a DOM swap that
+        // removes what had focus, asked of the one surface that removes itself on Escape. These
+        // replace two cases about pins, which no longer exist.
+        editorCase "a chip opens a preview and Escape returns focus to the chip" <| fun page ->
             async {
-                // A chip's tab arrives previewed — kept by nothing — and selected, since
-                // tapping the chip is what put it there.
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                let! _ =
+                    await (page.WaitForFunctionAsync (
+                            "sel => document.activeElement?.matches(sel) === true",
+                            box (commandLine "term-harness")))
+                let countTabs = "() => document.querySelectorAll('#shell [data-terminal-tab], #shell [data-terminal-closed-tab]').length"
+                let! before = await (page.EvaluateAsync<int> countTabs)
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab^='block:']")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector("#shell [data-pane-tab^='block:']")?.getAttribute('data-pane-tab-pinned') === 'false'""")
-
-                // Activating the tab you are already on is the pin. There is no second
-                // control to hit — which is the point on a touch screen, where the second
-                // control was a 24px target beside a 30px one.
-                do! awaitU (page.ClickAsync "#shell [data-pane-tab^='block:']")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector("#shell [data-pane-tab^='block:']")?.getAttribute('data-pane-tab-pinned') === 'true'""")
-                // And it says so where anything that cannot see a blue glyph can read it.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector("#shell [data-pane-tab^='block:'] [role='img']")?.getAttribute('aria-label') === 'pinned'""")
-
-                // Move on to something else. The pinned tab stays, which is what a pin is
-                // for — a preview would have been replaced here.
-                do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-harness']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab^='block:']")
-
-                // Delete on the focused tab closes it — a kept tab included, which the close
-                // control itself will not do. The tab leaves the strip, and focus lands on
-                // whatever took its position — never nowhere.
-                do! awaitU (page.FocusAsync "#shell [data-pane-tab^='block:']")
-                do! awaitU (page.Keyboard.PressAsync "Delete")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelectorAll("#shell [data-pane-tab^='block:']").length === 0""")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.closest('[role="tab"]') !== null""")
-                return ()
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview]")
+                let! during = await (page.EvaluateAsync<int> countTabs)
+                Expect.equal during before "the strip holds the same terminals, and no tab for the preview"
+                do! focusReachedPane page
+                do! awaitU (page.Keyboard.PressAsync "Escape")
+                do! waitFor "the preview to be gone" page "!document.querySelector('#shell [data-pane-preview]')"
+                do! waitFor "focus to be back on the chip" page "document.activeElement?.hasAttribute('data-chat-block') === true"
             }
 
-        // A tab is a `div role="tab"` now, because it HOLDS the close control — a control
-        // outside the tab would be a child of the tablist that is not a tab, and a `button`
-        // cannot contain one. What a real button gave for free was Enter and Space, so the
-        // tab says them itself, and nothing but a browser can report whether they arrived.
-        //
-        // Driven against the strip the harness already renders rather than a tab opened from
-        // the chat: every step this case does not take is a step that cannot time out under
-        // a loaded runner, and what is under test is the tab, not the way it got there.
-        editorCase "a tab is kept from the keyboard, and the close control follows" <| fun page ->
+        editorCase "a preview's way back returns focus to the chip" <| fun page ->
             async {
-                // The column the strip lives in starts shut at this window size.
-                do! awaitU (page.Locator("#shell [data-content-toggle='show']").First.ClickAsync ())
-
-                // An open tab nobody kept offers a close.
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab-close^='terminal:']")
-
-                // Enter keeps it, exactly as a second click would — and a kept tab offers no
-                // close, which is what keeping BUYS: a stray tap in a strip that scrolls
-                // sideways must not take away something somebody is holding on to.
-                do! awaitU (page.Locator("#shell [data-pane-tab][aria-selected='true']").First.PressAsync "Enter")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector("#shell [data-pane-tab][aria-selected='true']")
-                               ?.getAttribute('data-pane-tab-pinned') === 'true'""")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-pane-tab-close]")""")
-
-                // Space releases it, and the control comes back.
-                do! awaitU (page.Locator("#shell [data-pane-tab][aria-selected='true']").First.PressAsync "Space")
-                let! closer = await (page.WaitForSelectorAsync "#shell [data-pane-tab-close]")
-
-                // And it takes that tab off the strip.
-                let! key = await (closer.GetAttributeAsync "data-pane-tab-close")
-                do! awaitU (closer.ClickAsync ())
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        (sprintf """!document.querySelector("#shell [data-pane-tab='%s']")""" key))
-                return ()
+                do! awaitU (page.ClickAsync "#shell [data-chat-block]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview-back]")
+                do! focusReachedPane page
+                do! awaitU (page.Locator("#shell [data-pane-preview-back]").First.PressAsync "Enter")
+                do! waitFor "the preview to be gone" page "!document.querySelector('#shell [data-pane-preview]')"
+                do! waitFor "focus to be back on the chip" page "document.activeElement?.hasAttribute('data-chat-block') === true"
             }
 
         // The strip's door (Plan 20, stage 1), and the whole point of the shape: it opens a
@@ -4795,15 +4747,16 @@ let editorTests =
         // The same door from the EMPTY pane (P1-4), where the strip offers no `+` and the
         // empty pane's own button is the one way to make something — so the menu hangs from
         // that button, and Escape hands the cursor back to it rather than to a `+` that is not
-        // on the page. The harness's strip is emptied the way a person empties one.
+        // on the page. The harness's strip is emptied by its terminals ending: a tab has no
+        // close of its own (P2-1), and a closed terminal nobody is looking at leaves the strip.
         editorCase "the empty pane's door opens the menu under itself, and gives focus back when it shuts" <| fun page ->
             async {
-                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab-close]")
-                do! awaitU (page.ClickAsync "#shell [data-pane-tab-close]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab-close]")
-                do! awaitU (page.ClickAsync "#shell [data-pane-tab-close]")
-                // The last close shuts the column; showing it again shows it empty.
+                let closed (id: string) =
+                    Yession.Domain.SessionEvent.TerminalClosed
+                        { Yession.Domain.Terminals.TerminalClosed.TerminalId = harnessTerminal id
+                          Yession.Domain.Terminals.TerminalClosed.Reason = "closed by a peer"
+                          Yession.Domain.Terminals.TerminalClosed.By = None }
+                do! foldHarness page [ 90L, closed "term-harness"; 91L, closed "term-live" ]
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-new]")
 

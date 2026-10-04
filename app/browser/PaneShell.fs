@@ -111,22 +111,39 @@ let toListRow (terminal: Yession.Domain.TerminalId) : unit =
         |> Option.orElseWith (fun () -> find "[data-content-list-toggle]")
         |> focusOn)
 
-/// Return focus to the chat item that opened a tab, given that tab's key — the only thing the
-/// chip and the tab share. Falls back to the way back into the pane when the item has
-/// scrolled out of the rendered chat, or when no chip opened it at all: this runs as the pane
-/// SHUTS, and the strip's first tab — where it used to fall back to — was inside the pane
-/// that had just gone, a focused control zero pixels wide.
-let toChatItem (tabKey: string) : unit =
+/// Whether something painted over this element's centre is not the element — on a phone, the
+/// pane laid over the whole chat column. Measured rather than assumed from a breakpoint,
+/// because what decides it is the layout, and the layout is the one thing that knows. An
+/// element scrolled out of the viewport has no centre on screen to ask about, and is NOT
+/// covered: focusing it scrolls it into view, which is what a reader sent back to it wants.
+let private covered (element: HTMLElement) : bool =
+    let rect = element.getBoundingClientRect ()
+    let x = rect.left + rect.width / 2.0
+    let y = rect.top + rect.height / 2.0
+    if x < 0.0 || y < 0.0 || x > window.innerWidth || y > window.innerHeight then false
+    else
+        match document.elementFromPoint (x, y) with
+        | null -> false
+        | hit -> not (element.contains hit)
+
+/// Return focus to the chat item that opened a preview, once the preview is going — the
+/// subject is the one thing the chip and the preview share (`PreviewSubject.chip`).
+///
+/// Where the chip cannot take it, focus goes to the pane: a chip that has scrolled out of the
+/// rendered chat, a preview no chip opened (the list's file rows, the agent's `focus_tab`),
+/// and a chip the pane is painted over — on a phone the pane IS the column, and a back that
+/// sent focus behind it would put the cursor somewhere nobody can see. The way back into a
+/// SHUT pane comes first, because hiding the pane is the other thing that sends focus here,
+/// and then the panel the preview gave way to.
+let toChatItem (subject: Yession.App.PreviewSubject) : unit =
     nextFrame (fun () ->
-        let parts = tabKey.Split ':'
-        let back =
-            match List.ofArray parts with
-            | "block" :: _ :: blockId :: _ -> find (sprintf "[data-chat-block=\"%s\"]" blockId)
-            | "stretch" :: rest when not (List.isEmpty rest) ->
-                find (sprintf "[data-chat-stretch=\"%s\"]" (String.concat ":" rest))
-            | _ -> None
-        back
+        let chip =
+            let hook, value = Yession.App.PreviewSubject.chip subject
+            find (sprintf "[%s=\"%s\"]" hook value)
+        chip
+        |> Option.filter (fun chip -> not (covered chip))
         |> Option.orElseWith (fun () -> find "[data-content-toggle=\"show\"]")
+        |> Option.orElseWith (fun () -> find "[data-pane-panel]")
         |> focusOn)
 
 /// Hand focus to a terminal's watch toggle when the reader has been stranded (Plan 14,
@@ -306,7 +323,7 @@ let rec move (asked: Yession.App.DomMove) : unit =
     // the pressed control away, so a hand still on it reads as stranded by then.
     | Yession.App.DomMove.OnArrival inner ->
         nextFrame (fun () -> if stranded [ "[data-content-panel]" ] then move inner)
-    | Yession.App.DomMove.FocusChat tabKey -> toChatItem tabKey
+    | Yession.App.DomMove.FocusChat subject -> toChatItem subject
     | Yession.App.DomMove.FocusItemActions messageId -> toItemActions (Yession.Domain.MessageId.value messageId)
     | Yession.App.DomMove.FocusPaneNew -> toPaneNew ()
     | Yession.App.DomMove.RevealBlock (terminalId, blockId) ->

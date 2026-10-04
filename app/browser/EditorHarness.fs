@@ -1148,12 +1148,9 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
         TerminalScreens = Map.ofList [ liveId, "\u001b[32mvim ~/notes\u001b[0m" ]
         // The two terminals this peer opened, as tabs — which is what the fold would have
         // made of them (Plan 20, stage 1). Set by hand because this model is BUILT rather
-        // than folded, and without them the strip would hold only whatever is being
-        // previewed, which is a fresh client's state rather than a working one. Neither is
-        // KEPT: the harness drives the pin gesture, so starting pinned would leave it with
-        // nothing to prove.
-        Tabs = [ TerminalTab terminalId; TerminalTab liveId ]
-        Pinned = Set.empty
+        // than folded, and without them the strip would be empty, which is a fresh client's
+        // state rather than a working one.
+        Tabs = [ terminalId; liveId ]
         TerminalsOpen = false }
 
 let private shellModel : ClientModel = shellModelOf Lines 16
