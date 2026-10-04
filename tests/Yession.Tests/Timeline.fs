@@ -528,6 +528,101 @@ let private paneTests =
             Expect.isTrue (html.Contains "aria-selected=\"true\"") "and it is the selected one"
     ]
 
+// --- A terminal's name, on every surface -----------------------------------------------------
+
+/// The inside of the one element carrying `hook` — scoped to that element, so another surface
+/// saying the same words cannot satisfy an assertion about this one. The element's own
+/// subtree, balanced on its tag name rather than cut at the first close.
+let private markupAt (hook: string) (html: string) : string =
+    match html.IndexOf hook with
+    | -1 -> failwithf "nothing carries %s" hook
+    | at ->
+        let opensAt = html.LastIndexOf ('<', at)
+        let tag = (html.Substring (opensAt + 1)).Split([| ' '; '>' |]).[0]
+        let bodyFrom = html.IndexOf ('>', at) + 1
+        let opener = "<" + tag
+        let closer = "</" + tag + ">"
+        let mutable depth = 1
+        let mutable i = bodyFrom
+        let mutable endsAt = -1
+        while endsAt < 0 && i < html.Length do
+            let startsHere (what: string) = i + what.Length <= html.Length && html.Substring (i, what.Length) = what
+            if startsHere closer then
+                depth <- depth - 1
+                if depth = 0 then endsAt <- i
+            elif startsHere (opener + " ") || startsHere (opener + ">") then
+                depth <- depth + 1
+            i <- i + 1
+        if endsAt < 0 then html.Substring bodyFrom else html.Substring (bodyFrom, endsAt - bodyFrom)
+
+/// The same element's words, as a person reads them.
+let private textAt (hook: string) (html: string) : string =
+    Text.RegularExpressions.Regex.Replace(Support.readable (markupAt hook html), @"\s+", " ").Trim ()
+
+/// Every value `attribute` takes on the elements carrying `hook`, in document order.
+let private attributeOf (hook: string) (attribute: string) (html: string) : string list =
+    html.Split ([| hook |], StringSplitOptions.None)
+    |> Array.skip 1
+    |> Array.toList
+    |> List.choose (fun after ->
+        let tag = (after.Split '>').[0]
+        let marker = attribute + "=\""
+        match tag.IndexOf marker with
+        | -1 -> None
+        | from ->
+            let start = from + marker.Length
+            Some (tag.Substring (start, tag.IndexOf ('"', start) - start)))
+
+/// Three terminals nobody named, opened in order, each shown in the pane and the middle one
+/// last — so it is the selected tab, and the head is naming it.
+let private threeUntitled =
+    [ at 1L 0.0 (opened terminalA "")
+      at 2L 1.0 (opened terminalB "")
+      at 3L 2.0 (opened terminalC "")
+      at 4L 3.0 (started terminalB "1" byAda "make" 1) ]
+
+let private showingAll (model: ClientModel) =
+    model
+    |> Support.step (ShowInPaneMsg (Reading (TerminalTab terminalA)))
+    |> Support.step (ShowInPaneMsg (Reading (TerminalTab terminalC)))
+    |> Support.step (ShowInPaneMsg (Reading (TerminalTab terminalB)))
+
+let private namingTests =
+    testList "A terminal's name, on every surface" [
+        testCase "the strip, the head and the list agree on a terminal's name" <| fun () ->
+            let model = clientOf threeUntitled |> showingAll
+            let strip = Support.render model
+            let list = Support.render (Support.step ToggleContentListMsg model)
+            Expect.equal
+                [ textAt (Dom.attr Dom.Hooks.terminalTab "term-b") strip
+                  textAt Dom.Hooks.paneHeadName strip
+                  textAt (Dom.attr Dom.Hooks.terminalListRow "term-b") list ]
+                [ "term 2"; "term 2"; "term 2" ]
+                "one terminal, one name, wherever it is named"
+
+        testCase "a chat chip names the terminal its command ran in" <| fun () ->
+            let html = Support.render (clientOf threeUntitled)
+            Expect.equal
+                (textAt (Dom.attr Dom.Hooks.chatBlockTerminal "term-b") (markupAt (Dom.attr Dom.Hooks.chatBlock "b-1") html))
+                "term 2"
+                "where it ran, on the chip"
+
+        testCase "a chat chip's accessible name says which terminal its command ran in" <| fun () ->
+            // The chip's own words are replaced by its label for a screen reader, so the label
+            // has to carry the terminal itself rather than lean on the visible name.
+            let html = Support.render (clientOf threeUntitled)
+            let label = attributeOf (Dom.attr Dom.Hooks.chatBlock "b-1") "aria-label" html |> List.exactlyOne
+            Expect.stringContains label "term 2" "where it ran, heard"
+
+        testCase "three untitled terminals' kill controls have three accessible names" <| fun () ->
+            // Nine kill buttons that all said "Kill terminal" were one control as far as
+            // anybody listening could tell.
+            let list = Support.render (Support.step ToggleContentListMsg (clientOf threeUntitled |> showingAll))
+            let labels = attributeOf "data-terminal-close=" "aria-label" list
+            Expect.equal (List.length labels) 3 "one kill per open terminal"
+            Expect.equal (List.length (List.distinct labels)) 3 "and no two named alike"
+    ]
+
 // --- Keyframes and the ranged cast (stage 3) --------------------------------------------------
 
 /// The output records of a `.cast`, in order — what a player would feed the emulator.
@@ -3105,6 +3200,7 @@ let tests =
         stretchTests
         unchangedTests
         paneTests
+        namingTests
         pageTests
         keyframeTests
         videoTests

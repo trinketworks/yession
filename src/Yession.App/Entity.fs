@@ -3,6 +3,7 @@ namespace Yession.App
 open Lit
 open Yession.Domain
 open Yession.Domain.Content
+open Yession.Domain.Terminals
 
 /// How a thing the session names is shown, wherever it is shown.
 ///
@@ -102,6 +103,18 @@ module Entity =
     /// The same colour at a quarter, for a selection laid under text that must stay legible.
     let presenceSelection (model: ClientModel) (actor: ActorRef) : string =
         sprintf "color-mix(in srgb, %s 25%%, transparent)" (presenceColour model actor)
+
+    /// What a terminal is called, on every surface that calls it anything — the tab, the
+    /// pane's head, the list row, a chat chip, a queued command, the lease bar, the closed
+    /// band and every control's accessible name. `TerminalName.display` is the rule; this is
+    /// the one place a surface asks it, so no two of them can name one terminal differently.
+    ///
+    /// `None` while this client has not folded the terminal's `TerminalOpened`: each caller
+    /// already says something different then ("some terminal", the bare id), and inventing a
+    /// name here would take that choice from the only place that knows what it is saying.
+    let terminalName (model: ClientModel) (terminal: TerminalId) : string option =
+        Projection.tryFind terminal model.Terminals
+        |> Option.map (TerminalName.display model.Terminals)
 
     /// Which kind of thing a reference is, for the hook a test reads it by.
     let kind (entity: EntityRef) : string =

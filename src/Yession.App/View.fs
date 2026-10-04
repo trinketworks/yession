@@ -397,8 +397,8 @@ module View =
         // that, rather than inventing a title or going quiet.
         let terminalWords () =
             ClientModel.terminalOfFocus field model
-            |> Option.bind (fun terminal -> Projection.tryFind terminal model.Terminals)
-            |> Option.map (fun view -> Dom.Text.inTerminal (TerminalTitle.value view.Title))
+            |> Option.bind (Entity.terminalName model)
+            |> Option.map Dom.Text.inTerminal
             |> Option.defaultValue Dom.Text.atSomeTerminal
         match field with
         | Title -> Dom.Text.atTitle, Dom.Text.renamingSession
@@ -1522,12 +1522,11 @@ module View =
             html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>terminal busy</span>"""
         else Dom.Text.queuedReady, html $"""<span class="{Style.statusOk}">queued</span>"""
 
-    /// What the terminal this act is queued in is CALLED — its title, or its id while this
+    /// What the terminal this act is queued in is CALLED — its name, or its id while this
     /// client has not folded the terminal yet. Words, never a raw id when a name exists, for
     /// the reason every other author and subject on screen is.
     let private pendingSubject (model: ClientModel) (entry: PendingAct) : string =
-        Projection.tryFind entry.Terminal model.Terminals
-        |> Option.map (fun view -> TerminalTitle.value view.Title)
+        Entity.terminalName model entry.Terminal
         |> Option.defaultValue (TerminalId.value entry.Terminal)
 
     /// A command the agent has queued, in the chat: the SAME chip its block will leave behind
@@ -2450,27 +2449,36 @@ module View =
         // below), the same answer a message gets. Takes the block already RESOLVED, because
         // the grouping fold needs the block's authority before it can place the chip — a
         // chip whose block a page boundary withheld never becomes an entry at all.
+        //
+        // It says WHERE, in the place and voice its queued self said it (`pendingChip`): a
+        // chat of commands across three terminals otherwise reads as one terminal, and the
+        // chip that becomes this one already named it.
         let blockChip (terminalId: TerminalId) (block: Block) =
             let blockId = block.BlockId
+            let status = terminalBlockStatusLabel block.Status
+            let where = Entity.terminalName model terminalId |> Option.defaultValue (TerminalId.value terminalId)
             html $"""
                 <button type="button" class="{Style.chatChip}"
                         data-chat-block="{BlockId.value blockId}"
-                        data-chat-block-status="{terminalBlockStatusLabel block.Status}"
+                        data-chat-block-status="{status}"
                         data-terminal-id="{TerminalId.value terminalId}"
+                        aria-label="{Dom.Text.commandChip block.Command status where}"
                         @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading (BlockTab (terminalId, blockId)))))}>
                   <span class="{Style.terminalPrompt}">$</span>
                   <code class="{Style.chatChipCommand}">{block.Command}</code>
+                  <span class="{Style.chatChipSubject}" data-chat-block-terminal="{TerminalId.value terminalId}">{where}</span>
                   <span class="shrink-0">{terminalBlockStatus model block.Status}</span>
                 </button>"""
         let stretchItem (stretch: TerminalStretch) =
             let length = durationText (TerminalStretch.duration stretch)
+            let where = Entity.terminalName model stretch.TerminalId |> Option.defaultValue stretch.Title
             html $"""
                 <button type="button" class="{Style.chatChip}"
                         data-chat-stretch="{TerminalStretch.key stretch}"
                         data-chat-stretch-end="{stretchEndLabel stretch.End}"
                         data-terminal-id="{TerminalId.value stretch.TerminalId}"
                         @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading (StretchTab stretch))))}>
-                  <span class="{Style.chatChipText}">typed in {stretch.Title} for {length}</span>
+                  <span class="{Style.chatChipText}">typed in {where} for {length}</span>
                   <span class="shrink-0">{stretchEnding model stretch.End}</span>
                 </button>"""
         // One call the agent made. No pane tab: unlike a block there is nothing recorded to
@@ -3108,6 +3116,9 @@ module View =
         // name. The pulsing "live" is the state; the button is what changes it; a sentence
         // ("X is using this terminal") restated all three.
         let who = if holder = mine then "you" else Entity.actorName model holder
+        // And WHERE, because the bar announces itself (`aria-live`) and "live, nick" heard
+        // from a pane of four terminals does not say which one nick has.
+        let where = Entity.terminalName model terminal |> Option.defaultValue (TerminalId.value terminal)
         let control =
             if holder = mine then
                 html $"""
@@ -3124,7 +3135,7 @@ module View =
             <div class="{Style.terminalBandRow}" data-terminal-lease="{label}" aria-live="polite">
               <span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>live</span>
               <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model holder ]}"></span>
-              <span class="{Style.small}">{who}</span>
+              <span class="{Style.small}">{who} in {where}</span>
               <div class="ml-auto flex items-center gap-2">{control}</div>
             </div>"""
 
@@ -3338,10 +3349,13 @@ module View =
         // nothing, and the whole reason the drop is recorded is that a gap in an audit trail
         // must be a stated fact.
         let gone = Map.isEmpty feed.Records && view.DroppedBytes > 0
+        // Which one closed, by the name it wore while open: a closed band reached from the
+        // chat may be the only thing on screen that says which terminal this was.
+        let name = TerminalName.display model.Terminals view
         let closedFor =
             match view.ClosedReason with
-            | Some reason -> sprintf "closed — %s" reason
-            | None -> "closed"
+            | Some reason -> sprintf "%s closed — %s" name reason
+            | None -> sprintf "%s closed" name
         // The gap in the audit trail, stated as a status rather than narrated: the drop is
         // recorded so it can be SAID, and the caps-err voice is how this design says a fact
         // that is wrong.
@@ -3488,6 +3502,7 @@ module View =
     /// come from the event log and therefore render at any scroll depth without a transcript.
     let private paneStretchView (model: ClientModel) (stretch: TerminalStretch) : TemplateResult =
         let length = durationText (TerminalStretch.duration stretch)
+        let where = Entity.terminalName model stretch.TerminalId |> Option.defaultValue stretch.Title
         let recording =
             // The count in the metadata voice (caps, tabular figures); the raw transcript
             // seqs are plumbing and stay out of the room.
@@ -3510,7 +3525,7 @@ module View =
               <div class="{Style.paneFacts}" data-pane-stretch="{TerminalStretch.key stretch}">
                 <div class="{Style.terminalQueuedRow}">
                   <span class="{Style.chatChipWho}">{Entity.actorName model stretch.Holder}</span>
-                  <span class="{Style.small}">typed in {stretch.Title} for {length}</span>
+                  <span class="{Style.small}">typed in {where} for {length}</span>
                   <span class="ml-auto shrink-0">{stretchEnding model stretch.End}</span>
                 </div>
                 {recording}
@@ -3654,6 +3669,7 @@ module View =
     let private contentListView (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let row (view: TerminalView) =
             let id = TerminalId.value view.TerminalId
+            let name = TerminalName.display model.Terminals view
             let affords = ClientModel.affordances view model
             let running = Projection.runningBlock view |> Option.isSome
             let state =
@@ -3693,7 +3709,7 @@ module View =
                 else
                     html $"""
                         <button type="button" class="{Style.btnIconBare}" data-terminal-list-rewind="{id}"
-                                aria-label="Watch {TerminalTitle.value view.Title} from behind its edge"
+                                aria-label="Watch {name} from behind its edge"
                                 @click={Ev(fun _ ->
                                               // ONE message. It used to be this and a select
                                               // beside it, and the second cleared the pin the
@@ -3707,7 +3723,7 @@ module View =
                 else
                     html $"""
                         <button type="button" class="{Style.btnIconBare}" data-terminal-reattach="{id}"
-                                aria-label="Attach {TerminalTitle.value view.Title} again"
+                                aria-label="Attach {name} again"
                                 @click={Ev(fun _ -> dispatch (ReattachTerminalMsg view.TerminalId))}>{Icon.attach}</button>"""
             // Two presses in one place (`KillArmed`): the first arms, the second kills. ONE button
             // whichever face it wears, so the element a keyboard pressed is the element it
@@ -3717,7 +3733,6 @@ module View =
             let kill =
                 if not affords.CanKill then Lit.nothing
                 else
-                    let title = TerminalTitle.value view.Title
                     let armed = model.KillArmed = Some view.TerminalId
                     let running = Projection.runningBlock view |> Option.map (fun b -> b.Command)
                     // Nothing running is a fact worth saying, not an absence: it is what makes
@@ -3726,11 +3741,11 @@ module View =
                     let face, label, content, press =
                         if armed then
                             Style.btnKillArmed,
-                            Dom.Text.confirmKill title running,
+                            Dom.Text.confirmKill name running,
                             html $"""{Dom.Text.killConfirm}<span class="{Style.killArmedRunning}">{says}</span>""",
                             CloseTerminalMsg view.TerminalId
                         else
-                            Style.btnIconBareDanger, Dom.Text.killTerminal title, Icon.stop, ArmKillMsg (Some view.TerminalId)
+                            Style.btnIconBareDanger, Dom.Text.killTerminal name, Icon.stop, ArmKillMsg (Some view.TerminalId)
                     html $"""
                         <button type="button" class="{face}" data-terminal-close="{id}"
                                 data-terminal-close-armed="{if armed then "true" else "false"}"
@@ -3741,14 +3756,23 @@ module View =
                                                   dispatch (ArmKillMsg None))}
                                 @focusout={Ev(fun _ -> if armed then dispatch (ArmKillMsg None))}>{content}</button>"""
             let nameClass = if view.IsOpen then Style.terminalListName else Style.terminalListNameClosed
+            // What it is doing or last did, under the name: nine rows of
+            // `term N` say which is which, and this says which is the one you want.
+            let subtitle =
+                match TerminalName.subtitle view with
+                | "" -> Lit.nothing
+                | command -> html $"""<span class="{Style.terminalListSubtitle}" title="{command}">{command}</span>"""
             html $"""
                 <div class="{Style.terminalListRow}" role="listitem">
                   {state}
-                  <span class="min-w-0 flex items-center">
-                    <button type="button" class="{nameClass}" data-terminal-list-row="{id}"
-                            @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading (TerminalTab view.TerminalId))))}>{TerminalTitle.value view.Title}</button>
-                    {gone}
-                    <span class="{Style.terminalTabPeers}">{peers}</span>
+                  <span class="min-w-0 flex flex-col">
+                    <span class="min-w-0 flex items-center">
+                      <button type="button" class="{nameClass}" data-terminal-list-row="{id}"
+                              @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading (TerminalTab view.TerminalId))))}>{name}</button>
+                      {gone}
+                      <span class="{Style.terminalTabPeers}">{peers}</span>
+                    </span>
+                    {subtitle}
                   </span>
                   <span class="{Style.terminalListVerbs}">{rewind}{reattach}{kill}</span>
                 </div>"""
@@ -3864,6 +3888,12 @@ module View =
             let selectedAttr = if on then "true" else "false"
             let tabIndex = if on then "0" else "-1"
             let klass = if on then Style.terminalTabActive else Style.terminalTab
+            let name = TerminalName.display model.Terminals view
+            // The tab says WHICH terminal; what it is running rides the tooltip, beside the
+            // pin hint when there is one, because a strip of names is what a person scans and
+            // a strip of commands is a strip of truncations.
+            let tooltip =
+                [ TerminalName.subtitle view; hint ] |> List.filter (fun line -> line <> "") |> String.concat "\n"
             // Who is in THIS terminal, on its tab — the same presence the roster reports, put
             // where you would look for it. Without it, a collaborator typing a command in a
             // terminal you are not showing is visible nowhere in this column.
@@ -3882,32 +3912,31 @@ module View =
                 html $"""
                     <div role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-tab="{id}"
                          id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
-                         aria-selected="{selectedAttr}" tabindex="{tabIndex}" title="{hint}"
+                         aria-selected="{selectedAttr}" tabindex="{tabIndex}" title="{tooltip}"
                          data-pane-tab-pinned="{pinnedAttr}"
                          @keydown={Ev(activateKey)}
-                         @click={Ev(fun _ -> activate ())}><span class="{Style.paneTabLabel}">{TerminalTitle.value view.Title}</span>{pinMark}<span class="{Style.terminalTabPeers}">{peers}</span>{closeControl}</div>"""
+                         @click={Ev(fun _ -> activate ())}><span class="{Style.paneTabLabel}">{name}</span>{pinMark}<span class="{Style.terminalTabPeers}">{peers}</span>{closeControl}</div>"""
             else
                 html $"""
                     <div role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-closed-tab="{id}"
                          id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
-                         aria-selected="{selectedAttr}" tabindex="{tabIndex}"
+                         aria-selected="{selectedAttr}" tabindex="{tabIndex}" title="{TerminalName.subtitle view}"
                          @keydown={Ev(activateKey)}
-                         @click={Ev(fun _ -> activate ())}><span class="{Style.paneTabLabel}">{TerminalTitle.value view.Title}</span><span class="{Style.small}"> · closed</span>{pinMark}<span class="{Style.terminalTabPeers}">{peers}</span>{closeControl}</div>"""
+                         @click={Ev(fun _ -> activate ())}><span class="{Style.paneTabLabel}">{name}</span><span class="{Style.small}"> · closed</span>{pinMark}<span class="{Style.terminalTabPeers}">{peers}</span>{closeControl}</div>"""
         // What a tab is CALLED — read by the tab itself and by the properties bar, which names
         // the selected one. One function, so the strip and the bar can never disagree about
         // what you are looking at.
         let tabLabel (tab: PaneTab) =
             match tab with
-            | TerminalTab id ->
-                Projection.tryFind id model.Terminals
-                |> Option.map (fun v -> TerminalTitle.value v.Title)
-                |> Option.defaultValue (TerminalId.value id)
+            | TerminalTab id -> Entity.terminalName model id |> Option.defaultValue (TerminalId.value id)
             | BlockTab (terminalId, blockId) ->
                 Projection.tryFind terminalId model.Terminals
                 |> Option.bind (fun v -> v.Blocks |> List.tryFind (fun b -> b.BlockId = blockId))
                 |> Option.map (fun b -> b.Command)
                 |> Option.defaultValue (BlockId.value blockId)
-            | StretchTab stretch -> sprintf "%s · %s" (Entity.actorName model stretch.Holder) stretch.Title
+            | StretchTab stretch ->
+                let where = Entity.terminalName model stretch.TerminalId |> Option.defaultValue stretch.Title
+                sprintf "%s · %s" (Entity.actorName model stretch.Holder) where
             // The file's own name, which is what the reader asked for. Not the path: a tab
             // strip is narrow, and `artifacts/chart.png/0003-7f2a91` truncates to the part
             // that says least.
@@ -4191,6 +4220,18 @@ module View =
             // holds more than terminals now. "Everything here" says what the list behind the
             // toggle will show, which is the only thing left to say at that moment.
             | None -> "everything here"
+        // And what that terminal is doing, after its name: the head is the one line that names
+        // the selected tab for a reader who cannot see the strip, and `term 2` alone does not
+        // say which build it was. Only a terminal's own tab — every other kind's name already
+        // IS what it holds.
+        let paneSubtitle =
+            match selected with
+            | Some (TerminalTab id) ->
+                match Projection.tryFind id model.Terminals |> Option.map TerminalName.subtitle with
+                | Some command when command <> "" ->
+                    html $"""<span class="{Style.terminalHeadSubtitle}"> · {command}</span>"""
+                | _ -> Lit.nothing
+            | _ -> Lit.nothing
         // The strip's kill and its attach-again are GONE (Plan 20, stage 1): both are verbs
         // about a terminal rather than about which tab you are reading, and both now live on
         // that terminal's row in the list, offered from the one fold that decides what a
@@ -4318,7 +4359,7 @@ module View =
                    aria-valuemin="320" aria-valuenow="420" aria-valuemax="1080"></div>
               <div class="{Style.terminalPane}">
                 <div class="{Style.terminalHead}">
-                  <span class="{Style.terminalHeadName}">{paneName}</span>
+                  <span class="{Style.terminalHeadName}"><span data-pane-head-name>{paneName}</span>{paneSubtitle}</span>
                   {listToggle}
                   <button type="button" class="{Style.navChevronForward}" aria-label="Back to the chat"
                           data-content-toggle="hide"
