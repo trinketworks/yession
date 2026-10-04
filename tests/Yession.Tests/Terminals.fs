@@ -715,6 +715,37 @@ let private emulatorTests =
                 emulator.Dispose ()
             }
 
+        // Where the cursor stands, in the terms a renderer of the serialization can use: the
+        // line `Ansi.parse` makes of it, and the column along that line.
+        testCaseAsync "a screen's cursor is placed in the lines its serialization parses into" <|
+            async {
+                let emulator = Yession.Host.Emulator.openEmulator 80 24
+                emulator.Write "$ ls\r\na b\r\n$ echo hi\u001b[4D"
+                let! screen = emulator.Screen ()
+                emulator.Dispose ()
+                Expect.equal screen.Cursor (Some { ScreenCursor.Line = 2; ScreenCursor.Column = 5 }) "third line, on the o"
+            }
+
+        testCaseAsync "a row the emulator wrapped carries the cursor along the line it continues" <|
+            async {
+                let emulator = Yession.Host.Emulator.openEmulator 20 5
+                emulator.Write ("$ " + String.replicate 30 "x")
+                let! screen = emulator.Screen ()
+                emulator.Dispose ()
+                Expect.equal screen.Cursor (Some { ScreenCursor.Line = 0; ScreenCursor.Column = 32 }) "one line, written unbroken"
+            }
+
+        testCaseAsync "the alternate screen places no cursor" <|
+            async {
+                // Its serialization follows the normal screen's and parses as a continuation
+                // of it, so there is no line of it a caret could honestly stand on.
+                let emulator = Yession.Host.Emulator.openEmulator 80 24
+                emulator.Write "$ vim\r\n\u001b[?1049h\u001b[H~ notes"
+                let! screen = emulator.Screen ()
+                emulator.Dispose ()
+                Expect.equal screen.Cursor None "none drawn"
+            }
+
         testCase "a command that claims no width is a command that resizes nothing" <| fun () ->
             // The agent's commands carry no size, and neither does a person whose terminals
             // column is shut. `None` has to mean "leave it alone" rather than "use the

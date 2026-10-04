@@ -1486,27 +1486,60 @@ module View =
     /// a node of its own. A template per line was a template instance, its markers and its
     /// text — some ten nodes a line, so `seq 100000` drew a million — for output whose every
     /// line looked the same. Plain output, which is most of it, now costs the page one node.
-    let private ansiText (text: string) : TemplateResult list =
+    ///
+    /// With a CURSOR, the character it stands on is drawn as the caret (`Style.terminalCaret`)
+    /// — a live screen's, which is the one surface here a program is typing into. A cursor past
+    /// the end of its line, or below the last one, stands on blanks the serialization did not
+    /// write, so they are written here: a prompt's cursor sits one past the `$ `, and a caret
+    /// that snapped back onto the space would say the next key lands where it does not.
+    let private ansiLines (lines: AnsiLine list) (cursor: ScreenCursor option) : TemplateResult list =
         let pieces = ResizeArray<TemplateResult> ()
         let plain = System.Text.StringBuilder ()
         let flush () =
             if plain.Length > 0 then
                 pieces.Add (html $"{plain.ToString ()}")
                 plain.Clear () |> ignore
-        Ansi.parse text
-        |> List.iteri (fun i line ->
-            // The newline BEFORE every line but the first, so a trailing line adds no
-            // trailing blank one.
-            if i > 0 then plain.Append '\n' |> ignore
-            for span in line.Spans do
+        let emit (span: AnsiSpan) =
+            if span.Text <> "" then
                 let classes = Style.ansiClasses span.Style
                 let inline' = Style.ansiInline span.Style
                 if classes = "" && inline' = "" then plain.Append span.Text |> ignore
                 else
                     flush ()
-                    pieces.Add (html $"""<span class="{classes}" style="{inline'}">{span.Text}</span>"""))
+                    pieces.Add (html $"""<span class="{classes}" style="{inline'}">{span.Text}</span>""")
+        let caret (under: string) =
+            flush ()
+            pieces.Add (html $"""<span class="{Style.terminalCaret}" data-terminal-caret>{under}</span>""")
+        let lines =
+            match cursor with
+            | Some at when at.Line >= List.length lines ->
+                lines @ List.replicate (at.Line + 1 - List.length lines) { Spans = [] }
+            | _ -> lines
+        for i, line in List.indexed lines do
+            // The newline BEFORE every line but the first, so a trailing line adds no
+            // trailing blank one.
+            if i > 0 then plain.Append '\n' |> ignore
+            match cursor with
+            | Some at when at.Line = i && at.Column >= 0 ->
+                let mutable column = 0
+                let mutable placed = false
+                for span in line.Spans do
+                    if placed || column + span.Text.Length <= at.Column then emit span
+                    else
+                        let within = at.Column - column
+                        emit { span with Text = span.Text.Substring (0, within) }
+                        caret (string span.Text.[within])
+                        emit { span with Text = span.Text.Substring (within + 1) }
+                        placed <- true
+                    column <- column + span.Text.Length
+                if not placed then
+                    plain.Append (System.String (' ', at.Column - column)) |> ignore
+                    caret " "
+            | _ -> for span in line.Spans do emit span
         flush ()
         List.ofSeq pieces
+
+    let private ansiText (text: string) : TemplateResult list = ansiLines (Ansi.parse text) None
 
     /// Something still under way, said by a pulsing dot; the word is for screen readers.
     let private runningDot =
@@ -3259,6 +3292,30 @@ module View =
               <div class="ml-auto flex items-center gap-2">{control}</div>
             </div>"""
 
+    /// What the person a terminal's keyboard was taken from sees in place of its lease bar
+    /// (`ClientModel.Stolen`): who took it, and the two answers — take it back, or put this
+    /// away and leave them to it, after which the lease bar says the same thing as a state.
+    ///
+    /// An `alert`, because it is an interruption: the reader was typing into a screen that has
+    /// just stopped taking their keys. The keyboard itself has already gone to the command
+    /// line under this (`ClientModel.keyboardSwap`), where whatever they go on typing is kept
+    /// as a line for the hand-back rather than lost — not onto Take back, where the space or
+    /// Enter of a word typed in flight would press it and start a tug of war.
+    let private terminalStolenNotice (dispatch: ClientMsg -> unit) (model: ClientModel) (terminal: TerminalId) (takenBy: ActorRef) : TemplateResult =
+        let id = TerminalId.value terminal
+        html $"""
+            <div class="{Style.terminalBandRow}" data-terminal-stolen="{id}" role="alert">
+              <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model takenBy ]}"></span>
+              <span class="{Style.terminalStolenSays}">{Dom.Text.tookTheKeyboard (Entity.actorName model takenBy)}</span>
+              <div class="ml-auto flex items-center gap-3">
+                <button type="button" class="{Style.bandActPrimary}" data-terminal-take="{id}"
+                        @click={Ev(fun _ -> dispatch (TakeTerminalMsg terminal))}>{Dom.Text.takeBack}</button>
+                <button type="button" class="{Style.terminalStolenDismiss}" data-terminal-stolen-dismiss="{id}"
+                        aria-label="{Dom.Text.dismissStolen}"
+                        @click={Ev(fun _ -> dispatch DismissStolenMsg)}>{Icon.close}</button>
+              </div>
+            </div>"""
+
     /// The live screen of a terminal in live mode (Plan 14, stage 6).
     ///
     /// A SCREEN, not a stream: the program running here moves the cursor, and what it
@@ -3276,8 +3333,10 @@ module View =
         let tail = TailSurface.key (TailSurface.Screen terminal)
         let body =
             match ClientModel.terminalScreen terminal model with
-            | None | Some "" -> html $"""<div class="{Style.terminalOutputEmpty}">…</div>"""
-            | Some screen -> html $"""{ansiText screen}"""
+            | None -> html $"""<div class="{Style.terminalOutputEmpty}">…</div>"""
+            | Some screen when screen.Text = "" && Option.isNone screen.Cursor ->
+                html $"""<div class="{Style.terminalOutputEmpty}">…</div>"""
+            | Some screen -> html $"""{ansiLines (Ansi.parse screen.Text) screen.Cursor}"""
         match holder with
         | None ->
             // Nobody is typing, and a device streams anyway. Read-only for the same reason
@@ -3359,9 +3418,11 @@ module View =
         // after somebody's turn at the keyboard — focus and caret stay put when a lease starts
         // under them. Run says `Queue` meanwhile (`sendName`), because that is what it does.
         let leaseBar =
-            match lease with
-            | Some holder -> terminalLeaseBar dispatch model terminal holder
-            | None -> Lit.nothing
+            match lease, model.Stolen with
+            | Some holder, Some stolen when stolen.Terminal = terminal && stolen.TakenBy = holder ->
+                terminalStolenNotice dispatch model terminal holder
+            | Some holder, _ -> terminalLeaseBar dispatch model terminal holder
+            | None, _ -> Lit.nothing
         let commandLines =
             html $"""
                     <div>

@@ -1964,6 +1964,32 @@ let private foldHarness (page: IPage) (events: (int64 * Yession.Domain.SessionEv
 let private harnessTerminal (id: string) : Yession.Domain.TerminalId =
     Yession.Domain.TerminalId.create id |> Result.defaultWith failwith
 
+/// The harness's peer, holding `term-harness`'s keyboard with it focused, and then bob taking
+/// it from them — the release-then-take a steal is, as the session would send it.
+let private stolenFromHarness (page: IPage) : Async<unit> =
+    async {
+        let peer (name: string) =
+            Yession.Domain.ActorRef.PeerRef (Yession.Domain.PeerId.create name |> Result.defaultWith failwith)
+        do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+        do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
+        let! _ =
+            await (page.WaitForFunctionAsync
+                """document.activeElement?.getAttribute('data-terminal-screen') === 'term-harness'""")
+        do!
+            foldHarness page [
+                90L,
+                Yession.Domain.SessionEvent.TerminalLeaseReleased
+                    { Yession.Domain.Terminals.TerminalLeaseReleased.TerminalId = harnessTerminal "term-harness"
+                      Yession.Domain.Terminals.TerminalLeaseReleased.Was = peer "ada"
+                      Yession.Domain.Terminals.TerminalLeaseReleased.Reason = Yession.Domain.Terminals.LeaseStolen (peer "bob")
+                      Yession.Domain.Terminals.TerminalLeaseReleased.ToSeq = 0 }
+                91L,
+                Yession.Domain.SessionEvent.TerminalLeaseTaken
+                    { Yession.Domain.Terminals.TerminalLeaseTaken.TerminalId = harnessTerminal "term-harness"
+                      Yession.Domain.Terminals.TerminalLeaseTaken.By = peer "bob"
+                      Yession.Domain.Terminals.TerminalLeaseTaken.FromSeq = 0 } ]
+    }
+
 /// More terminals in the harness's strip: four opened by its own peer, folded in as the
 /// session would send them, each becoming a tab as a terminal this reader pressed for does.
 /// With the harness's two that is six, which is more than the strip has room for at the pane's
@@ -4133,6 +4159,57 @@ let editorTests =
                         "the keyboard in the pane's panel"
                         page
                         "document.activeElement?.closest('#shell [data-pane-panel]') != null"
+            }
+        // Somebody taking the keyboard from the person typing in it (P3-2). The lease bar
+        // renamed its holder, and for the person stolen from that was the whole announcement
+        // — their keys simply stopped going anywhere.
+        editorCase "a steal tells the person it was taken from, and offers it back" <| fun page ->
+            async {
+                do! stolenFromHarness page
+                do!
+                    waitFor
+                        "take back, in a notice about the steal"
+                        page
+                        "!!document.querySelector(\"#shell [data-terminal-stolen='term-harness'] [data-terminal-take='term-harness']\")"
+            }
+        editorCase "keys typed after a steal do not reach the terminal" <| fun page ->
+            async {
+                do! stolenFromHarness page
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-stolen='term-harness']")
+                do! awaitU (page.Keyboard.TypeAsync "pwd")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                let! typed = await (page.EvaluateAsync<string> "() => window.__typed || ''")
+                Expect.equal typed "" "nothing typed after the steal reached the pty"
+            }
+        // The live screen's ring, on the focus every way into it gives: a script's, which is
+        // not `:focus-visible`, so the ring the rest of the page wears painted nothing here.
+        editorCase "a focused live screen paints its ring" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """document.activeElement?.getAttribute('data-terminal-screen') === 'term-harness'""")
+                let! ring =
+                    await (page.EvaluateAsync<string> """() => {
+                        const s = getComputedStyle(document.activeElement);
+                        return s.outlineStyle + ' ' + s.outlineWidth; }""")
+                Expect.equal ring "solid 2px" "the screen with the keyboard wears the ring"
+            }
+        // The caret is read off the browser's own emulator — the cursor is not in the
+        // serialization in any form a renderer can use, so only a real one can say where it is.
+        editorCase "the live screen marks where its cursor stands" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-harness'][tabindex='0']")
+                // A line typed, then the cursor moved four cells back along it.
+                do! awaitU (page.EvaluateAsync ("() => window.__snapshot('term-harness', 50, '$ echo hi\\u001b[4D', 80, 24)"))
+                do!
+                    waitFor
+                        "the caret on the o of echo"
+                        page
+                        "document.querySelector(\"#shell [data-terminal-screen='term-harness'] [data-terminal-caret]\")?.textContent === 'o'"
             }
         // Moving by WORD, which is most of what navigating a line you have already typed
         // means. Its own case rather than an extra assertion on the one above: that pins the

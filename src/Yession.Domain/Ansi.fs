@@ -47,6 +47,21 @@ type AnsiSpan = { Text : string; Style : AnsiStyle }
 /// One output line: its spans in order. An empty line has no spans.
 type AnsiLine = { Spans : AnsiSpan list }
 
+/// Where a live screen's cursor stands, in the terms of what `Ansi.parse` makes of the screen's
+/// serialization: which LINE (a row the emulator wrapped belongs to the line it continues, as
+/// the serialization writes it unbroken) and which column of it. A place past the last line,
+/// or past the end of one, is still a place: the cursor stands on blanks nobody has written,
+/// and a serialization writes no blanks it does not have to.
+[<RequireQualifiedAccess>]
+type ScreenCursor = { Line : int; Column : int }
+
+/// A live screen as a reader sees it: the serialization, and where its cursor stands —
+/// `None` where that cannot be said. The cursor is not IN the serialization in any form a
+/// renderer can use (the serializer restores it with relative moves that only a grid can
+/// read), so it travels beside it, read off the emulator that produced both.
+[<RequireQualifiedAccess>]
+type LiveScreen = { Text : string; Cursor : ScreenCursor option }
+
 module AnsiStyle =
 
     let plain : AnsiStyle =

@@ -374,6 +374,12 @@ module Dom =
         /// Enter live mode, or steal it. One control, because it is one act.
         let terminalTake = "data-terminal-take"
         let terminalRelease = "data-terminal-release"
+        /// The notice to the person a terminal's keyboard was taken from, in its lease bar's
+        /// place; its value is the terminal. Its Take back is `terminalTake`, the same act.
+        let terminalStolen = "data-terminal-stolen"
+        let terminalStolenDismiss = "data-terminal-stolen-dismiss"
+        /// Where a live screen's cursor stands.
+        let terminalCaret = "data-terminal-caret"
         /// The banner shown when a terminal's shell stopped emitting marks (Plan 13, stage
         /// 2f), and the control that types the instrumentation in again.
         let terminalLost = "data-terminal-lost"
@@ -915,6 +921,10 @@ module Dom =
         /// queue rather than refusing it — it queues the line for the hand-back.
         let run = "Run"
         let queue = "Queue"
+        /// Said to the person a terminal's keyboard was taken from, and what they can do.
+        let tookTheKeyboard (who: string) = who + " took the keyboard"
+        let takeBack = "take back"
+        let dismissStolen = "Dismiss"
         /// When a queued line will run, said on the control that queues it. `None` is this
         /// peer holding the keyboard: the hand-back is theirs to make.
         let runsOnHandBack (holder: string option) =

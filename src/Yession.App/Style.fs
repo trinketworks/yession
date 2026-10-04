@@ -3215,9 +3215,24 @@ module Style =
     /// axes — a terminal's lines are as wide as the program made them, and wrapping them
     /// would redraw a screen the program laid out. The focus ring matters more here than
     /// anywhere: this is the one surface whose whole purpose is having the keyboard.
+    ///
+    /// So it is the one place the ring paints on ANY focus, not only a keyboard's. Every way
+    /// into it is programmatic — the lease landing (`Screens.Sync`), Take over, a jump back to
+    /// the tail — and a script's `focus()` is not `:focus-visible`, so the ring the rest of the
+    /// product wears painted nothing here at the one moment it was needed: a reader who had
+    /// just taken the keyboard could not see where it had gone. Inset, because the screen
+    /// fills a box that ends where it does. Only the holder's copy can take focus at all.
     let terminalScreen =
-        cls [ "flex-1 min-h-0 overflow-auto px-3 py-2 font-terminal text-code-sm leading-4"
-              "whitespace-pre text-ink bg-bg"; focusRing ]
+        cls [ "group/screen flex-1 min-h-0 overflow-auto px-3 py-2 font-terminal text-code-sm leading-4"
+              "whitespace-pre text-ink bg-bg"
+              "focus:outline focus:outline-2 focus:outline-blue focus:-outline-offset-2" ]
+
+    /// Where the screen's cursor stands (`ScreenCursor`): the cell outlined, the way a terminal
+    /// draws the cursor of a window that does not have the keyboard — and filled once the
+    /// screen it is on does, which only the holder's can. Ink on ground both ways round, so
+    /// the character under it reads at the same contrast it had beside it.
+    let terminalCaret =
+        "outline outline-1 -outline-offset-1 outline-ink-dim group-focus/screen:bg-ink group-focus/screen:text-bg group-focus/screen:outline-0"
 
     /// The DVR, which is TWO acts that were wearing one button in one band.
     ///
@@ -3284,6 +3299,15 @@ module Style =
     /// A row in the band that is not the command line — the lease bar, the "not marking"
     /// notice. They used to inherit the section's padding; the band has none.
     let terminalBandRow = "flex items-center gap-2 px-3 py-2 phone:[&>button]:min-h-11"
+
+    /// The notice to the person a terminal's keyboard was taken from (`ClientModel.Stolen`),
+    /// in the lease bar's place: one sentence and the two answers to it. Said in full ink and
+    /// not in the error red — nothing is wrong, and taking it back is a choice, not a repair —
+    /// but louder than the lease bar's caption it stands in for, because for this one reader
+    /// it is news rather than a state.
+    let terminalStolenSays = "min-w-0 font-ui font-light text-small text-ink"
+    /// Its ×: the bare icon verb, a thumb's square on a phone.
+    let terminalStolenDismiss = btnIconBare + " phone:w-11 phone:h-11"
 
     /// The command line: the row IS the field.
     ///

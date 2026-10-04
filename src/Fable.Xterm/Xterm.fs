@@ -17,8 +17,22 @@ type BufferType =
     | Normal
     | Alternate
 
+/// One row of a buffer.
+type [<AllowNullLiteral>] BufferLine =
+    /// Whether this row continues the one above it — the emulator wrapped a line too long for
+    /// the width, rather than the program starting a new one.
+    abstract isWrapped : bool
+
 type [<AllowNullLiteral>] Buffer =
     abstract ``type`` : BufferType
+    /// The cursor's column, `0` to `cols` (after the last cell of the row).
+    abstract cursorX : int
+    /// The cursor's row, counted from `baseY`.
+    abstract cursorY : int
+    /// The row the bottom page starts at: everything above it is scrollback.
+    abstract baseY : int
+    /// A row of the buffer, or `undefined` past its end.
+    abstract getLine : y: int -> BufferLine
 
 type [<AllowNullLiteral>] Buffers =
     abstract active : Buffer
@@ -39,6 +53,8 @@ type [<AllowNullLiteral>] Terminal =
     abstract resize : int * int -> unit
     abstract dispose : unit -> unit
     abstract loadAddon : Addon -> unit
+    /// The width the terminal lays its rows out at.
+    abstract cols : int
     /// The active buffer, and the transition between the two.
     abstract buffer : Buffers
 

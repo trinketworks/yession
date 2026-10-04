@@ -133,9 +133,10 @@ type private Live =
     { Emulator : Emulator
       /// The transcript position the emulator has been fed through.
       mutable Through : int
-      /// The last serialization dispatched, so an unchanged screen is not re-dispatched into
-      /// a render loop that would then ask for it again.
-      mutable Rendered : string }
+      /// The last screen dispatched, so an unchanged screen is not re-dispatched into a
+      /// render loop that would then ask for it again. The cursor is part of it: a caret
+      /// moving along a line the program did not redraw is still the screen moving.
+      mutable Rendered : LiveScreen option }
 
 type Screens =
     { /// The Process's screen for a terminal: the transcript position it represents, and the
@@ -188,9 +189,9 @@ let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> un
     let publish (id: TerminalId) (entry: Live) =
         Async.StartImmediate (
             async {
-                let! screen = entry.Emulator.Serialize ()
-                if screen <> entry.Rendered then
-                    entry.Rendered <- screen
+                let! screen = entry.Emulator.Screen ()
+                if Some screen <> entry.Rendered then
+                    entry.Rendered <- Some screen
                     dispatch (TerminalScreenMsg (id, screen))
             })
 
@@ -266,7 +267,7 @@ let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> un
             // enough to matter.
             let emulator = Emulator.openEmulator keyframe.Cols keyframe.Rows
             emulator.Write keyframe.Screen
-            let entry = { Emulator = emulator; Through = keyframe.Seq; Rendered = "" }
+            let entry = { Emulator = emulator; Through = keyframe.Seq; Rendered = None }
             live.[key] <- entry
             publish id entry
       Sync =

@@ -459,6 +459,36 @@ let private chip (terminal: TerminalId) (n: string) : ClientMsg =
 let private previewing (model: ClientModel) : PreviewSubject option =
     ClientModel.preview model |> Option.map (fun preview -> preview.Subject)
 
+/// A client holding term-a's keyboard, as one page, then bob taking it from them, as the next —
+/// the two events a steal is (`TerminalLeases.take`).
+let private mineThenStolen : EventEnvelope<SessionEvent> list list =
+    [ [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (took terminalA (PeerRef ada) 0) ]
+      [ at 3L 2.0 (released terminalA (PeerRef ada) (LeaseStolen (PeerRef bob)) 4)
+        at 4L 2.0 (took terminalA (PeerRef bob) 4) ] ]
+
+/// What a live screen draws, as the line its caret is on: the text before the caret on that
+/// line, and the caret's own — `None` when it draws none. Rendered through the pane, as
+/// somebody holding term-a's keyboard sees it.
+let private caretOn (screen: LiveScreen) : (string * string) option =
+    let html =
+        heardOf mineThenStolen.Head
+        |> Support.step (ShowInPaneMsg (Reading terminalA))
+        |> Support.step (TerminalScreenMsg (terminalA, screen))
+        |> Support.render
+    let strip (fragment: string) =
+        // Tags and lit's markers out; nothing these cases draw is an entity.
+        System.Text.RegularExpressions.Regex.Replace(fragment, "<[^>]*>", "")
+    let found =
+        System.Text.RegularExpressions.Regex.Match(
+            html,
+            "(<div[^>]*data-terminal-screen=\"term-a\"[^>]*>)(.*?)<span[^>]*" + Dom.Hooks.terminalCaret + "[^>]*>(.*?)</span>",
+            System.Text.RegularExpressions.RegexOptions.Singleline)
+    if not found.Success then None
+    else
+        let before = strip found.Groups.[2].Value
+        let line = match before.LastIndexOf '\n' with | -1 -> before | i -> before.Substring (i + 1)
+        Some (line, strip found.Groups.[3].Value)
+
 let private paneTests =
     testList "The pane: terminals, and a preview over one (P2-1)" [
         testCase "a chip opens a preview, and opens the column it is in" <| fun () ->
@@ -3015,6 +3045,100 @@ let private tabTests =
             let _, effects =
                 ClientModel.update (CommandAnsweredMsg (request, Link.CommandRejected "that terminal is not yours to end")) sent
             Expect.equal effects [] "no move"
+
+        // A steal is news for ONE person (P3-2): the one it was taken from. The lease bar
+        // renames its holder for everybody alike, and for the person who was typing that was
+        // the whole of the announcement.
+        testCase "a steal from me is announced, naming who took it" <| fun () ->
+            let stolen = heardOf mineThenStolen.Head |> thenFolded mineThenStolen.Tail.Head
+            Expect.equal
+                stolen.Stolen
+                (Some { StolenLease.Terminal = terminalA; StolenLease.TakenBy = PeerRef bob })
+                "bob took term-a's keyboard from me"
+
+        testCase "a steal from somebody else is not announced to me" <| fun () ->
+            let watching =
+                heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (took terminalA (PeerRef bob) 0) ]
+                |> thenFolded
+                    [ at 3L 2.0 (released terminalA (PeerRef bob) (LeaseStolen ActorRef.Agent) 4)
+                      at 4L 2.0 (took terminalA ActorRef.Agent 4) ]
+            Expect.equal watching.Stolen None "nothing was taken from me"
+
+        testCase "a steal in a log being replayed is not announced" <| fun () ->
+            // The log keeps every steal for ever; a reload announcing last week's would be
+            // news to nobody.
+            Expect.equal (clientOf (List.concat mineThenStolen)).Stolen None "history, not news"
+
+        testCase "a hand-back and somebody else's take are not a steal" <| fun () ->
+            // The holder changes from me to bob in one page either way; only the release says
+            // whether anything was taken.
+            let handedOn =
+                heardOf mineThenStolen.Head
+                |> thenFolded
+                    [ at 3L 2.0 (released terminalA (PeerRef ada) LeaseReleased 4)
+                      at 4L 2.0 (took terminalA (PeerRef bob) 4) ]
+            Expect.equal handedOn.Stolen None "I gave it up"
+
+        testCase "taking it back puts the notice away" <| fun () ->
+            let takenBack =
+                heardOf mineThenStolen.Head
+                |> thenFolded mineThenStolen.Tail.Head
+                |> thenFolded
+                    [ at 5L 3.0 (released terminalA (PeerRef bob) (LeaseStolen (PeerRef ada)) 6)
+                      at 6L 3.0 (took terminalA (PeerRef ada) 6) ]
+            Expect.equal takenBack.Stolen None "I have it again"
+
+        testCase "the taker handing it back puts the notice away" <| fun () ->
+            let handedBack =
+                heardOf mineThenStolen.Head
+                |> thenFolded mineThenStolen.Tail.Head
+                |> thenFolded [ at 5L 3.0 (released terminalA (PeerRef bob) LeaseReleased 6) ]
+            Expect.equal handedBack.Stolen None "nobody holds it now"
+
+        testCase "dismissing the notice puts it away" <| fun () ->
+            let stolen = heardOf mineThenStolen.Head |> thenFolded mineThenStolen.Tail.Head
+            Expect.equal (Support.step DismissStolenMsg stolen).Stolen None "read, and put away"
+
+        testCase "dismissing the notice lands the keyboard on the command line under it" <| fun () ->
+            // The press takes its own control out of the document.
+            let stolen = heardOf mineThenStolen.Head |> thenFolded mineThenStolen.Tail.Head
+            let _, effects = ClientModel.update DismissStolenMsg stolen
+            Expect.equal effects [ ClientEffect.Move (DomMove.FocusCommandLine terminalA) ] "onto the command line"
+
+        testCase "the notice stands in the lease bar's place, and its take back takes the terminal" <| fun () ->
+            let html =
+                heardOf mineThenStolen.Head
+                |> thenFolded mineThenStolen.Tail.Head
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+                |> Support.render
+            // From the notice's own hook to its dismiss, which is the last thing in it.
+            let notice =
+                match html.IndexOf (Dom.attr Dom.Hooks.terminalStolen "term-a") with
+                | -1 -> ""
+                | start -> html.Substring (start, max 0 (html.IndexOf (Dom.Hooks.terminalStolenDismiss, start) - start))
+            Expect.equal
+                (notice.Contains (Dom.attr Dom.Hooks.terminalTake "term-a"), html.Contains Dom.Hooks.terminalLease)
+                (true, false)
+                "the notice offers take back, and no lease bar beside it"
+
+        testCase "a live screen marks the character its cursor stands on" <| fun () ->
+            Expect.equal
+                (caretOn { LiveScreen.Text = "$ echo hi"; LiveScreen.Cursor = Some { ScreenCursor.Line = 0; ScreenCursor.Column = 5 } })
+                (Some ("$ ech", "o"))
+                "the caret on the o, after what precedes it"
+
+        testCase "a cursor past the end of its line stands on a blank after it" <| fun () ->
+            // A prompt's cursor is one past `$ `, on a cell the serialization never wrote.
+            Expect.equal
+                (caretOn { LiveScreen.Text = "a\r\n$"; LiveScreen.Cursor = Some { ScreenCursor.Line = 1; ScreenCursor.Column = 2 } })
+                (Some ("$ ", " "))
+                "a blank written up to the cursor, and the caret on the next"
+
+        testCase "a cursor below the last line stands on a line of its own" <| fun () ->
+            Expect.equal
+                (caretOn { LiveScreen.Text = "done\r\n"; LiveScreen.Cursor = Some { ScreenCursor.Line = 2; ScreenCursor.Column = 0 } })
+                (Some ("", " "))
+                "the empty lines down to it, and the caret at the start of its own"
 
         testCase "a shut pane is inert from the first paint" <| fun () ->
             // Zero pixels wide on a desktop, off the screen on a phone — and, without this,

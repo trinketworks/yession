@@ -1160,7 +1160,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     Header = Some { Width = 80; Height = 24; Timestamp = 0L } } ]
         // SHUT to begin with, like a fresh client: the phone case is about what happens when
         // a chip brings the pane on screen, which is nothing to watch if it is already there.
-        TerminalScreens = Map.ofList [ liveId, "\u001b[32mvim ~/notes\u001b[0m" ]
+        TerminalScreens = Map.ofList [ liveId, { LiveScreen.Text = "\u001b[32mvim ~/notes\u001b[0m"; LiveScreen.Cursor = None } ]
         // The two terminals this peer opened, as tabs — which is what the fold would have
         // made of them (Plan 20, stage 1). Set by hand because this model is BUILT rather
         // than folded, and without them the strip would be empty, which is a fresh client's
