@@ -859,7 +859,11 @@ let private shellProfileTests =
                 ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty
             match proj.Items with
             | [ item ] ->
-                Expect.equal (ConversationItem.headline item) "new terminals in default start in /repos/octo/hello" "the line says where"
+                Expect.equal (ConversationItem.headline item) "set shell profile for default" "the line says what"
+                Expect.equal
+                    (ConversationItem.said item)
+                    "set shell profile for default — terminals start in /repos/octo/hello"
+                    "the particular says where"
                 Expect.equal item.Author ActorRef.Agent "attributed to whoever set it"
             | other -> failwithf "expected one act-note, got %A" other
 

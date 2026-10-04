@@ -179,11 +179,11 @@ module Act =
         | Act.PrWatched p -> PrWatched.particulars p
         | Act.CredentialSpent g -> GitCredentialSpent.particulars g
         | Act.ArtifactShared a -> ArtifactShared.particulars a
+        | Act.ShellProfileSet p -> ShellProfileSet.particulars p
         | Act.RepoRemoved _
         | Act.RepoBranchSwitched _
         | Act.RepoCapabilitiesApproved _
         | Act.SandboxStopped _
-        | Act.ShellProfileSet _
         // The diff is not a phrase: a screen draws it as lines, and the agent already holds
         // the texts it sent. The headline's counts are the whole of what prose says.
         | Act.FileChanged _
