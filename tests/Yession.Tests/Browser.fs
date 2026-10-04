@@ -4621,6 +4621,25 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 let! _ =
                     await (page.WaitForSelectorAsync "#shell [data-terminal-scrollback][data-terminal-id='term-harness']")
+                // The column OPENS: its width transitions from nothing while the pane inside it
+                // is already its full width, so for 200ms the scrollback is clipped by the column
+                // and its middle is off the right edge of the window — where a hit-test finds
+                // nothing at all. Measured from the click on this box, the column was 110px of
+                // its 420. A quick box had always finished opening by the time the case looked;
+                // a loaded runner had not, and read as a command line drawn under something.
+                // So wait for the column to have opened, and for the focus it hands over on
+                // landing (which scrolls the page to it), before anything is measured.
+                let! _ =
+                    await (
+                        page.WaitForFunctionAsync
+                            """(() => {
+                                 const panel = document.querySelector('#shell [data-content-panel]')
+                                 const scroller = panel.querySelector('[data-terminal-scrollback]')
+                                 const p = panel.getBoundingClientRect(), q = scroller.getBoundingClientRect()
+                                 return panel.getAnimations().length === 0
+                                   && q.left >= p.left - 0.5 && q.right <= p.right + 0.5
+                                   && !!document.activeElement?.closest('#shell [data-content-panel]')
+                               })()""")
                 // Three hundred lines into the running command — one record, so one render.
                 do! awaitU (
                         page.EvaluateAsync
@@ -4645,6 +4664,8 @@ let editorTests =
                                  scroller.scrollTop += (b.top - a.top) + b.height / 2
                                  return true
                                })()""")
+                // What is painted at the row's centre is NAMED when it is not the row, so a red
+                // says what covered it rather than only that something did.
                 let! held =
                     await (
                         page.EvaluateAsync<string>
@@ -4655,11 +4676,14 @@ let editorTests =
                                  const a = scroller.getBoundingClientRect(), b = block.getBoundingClientRect()
                                  const r = row.getBoundingClientRect()
                                  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+                                 const said = el => !el ? 'nothing' : el.tagName.toLowerCase()
+                                   + [...el.attributes].filter(x => x.name.startsWith('data-')).map(x => `[${x.name}=${x.value}]`).join('')
                                  done(JSON.stringify({
                                    blockScrolledAway: b.top < a.top - 500,
                                    rowAtTop: Math.abs(r.top - a.top) <= 1,
                                    rowPainted: !!hit && row.contains(hit),
-                                   measured: { scroller: a.top, block: b.top, row: r.top }
+                                   measured: { scroller: a.top, block: b.top, row: r.top, rowLeft: r.left, rowRight: r.right, window: innerWidth },
+                                   hit: said(hit)
                                  }))
                                }))""")
                 Expect.stringContains
