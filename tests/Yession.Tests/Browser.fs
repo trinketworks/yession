@@ -3378,6 +3378,15 @@ let editorTests =
                     page.EvaluateAsync<float>
                         "() => Number(document.querySelector('#shell [data-term-resize]').getAttribute('aria-valuenow'))"
 
+                // Showing the pane hands the keyboard to what it shows (the focus contract,
+                // `ClientModel.paneLanding`), a frame AFTER the render. Waited for here, because
+                // focusing the divider before that frame is a focus the landing then takes back:
+                // on a quick box the frame had always come first, and on a loaded runner it did
+                // not, which read as a divider that is not a separator.
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                            """() => !!document.activeElement?.closest('#shell [data-content-panel]')""")
+
                 // Focusable, and it says what it is: a separator with a value is the one
                 // shape assistive technology can report and move.
                 let! _ =
