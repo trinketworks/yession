@@ -241,6 +241,9 @@ module Style =
     /// The small leading dot a live status may carry (`bg-current` follows the text colour).
     let statusDot = "inline-block w-1.5 h-1.5 rounded-full bg-current mr-1.5 align-[1px]"
     let statusDotPulse = statusDot + " animate-pulse2 motion-reduce:animate-none"
+    /// A live status said by the dot ALONE (a block or tool call still running): no word
+    /// beside it, so no trailing gap to push it off the line's right edge.
+    let statusDotOnly = "inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse2 motion-reduce:animate-none"
 
     /// A standalone dot given its colour explicitly (`bg-green` etc. composed at the use
     /// site) for a row whose text is a DIFFERENT colour — `bg-current` would fight the

@@ -1452,6 +1452,10 @@ module View =
             // trailing blank one.
             if i = 0 then html $"{spans}" else html $"""{"\n"}{spans}""")
 
+    /// Something still under way, said by a pulsing dot; the word is for screen readers.
+    let private runningDot =
+        html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotOnly}"></span><span class="{Style.srOnly}">{Dom.Text.blockRunning}</span></span>"""
+
     let private terminalBlockStatusLabel =
         function
         | BlockRunning -> Dom.Text.blockRunning
@@ -1461,7 +1465,7 @@ module View =
 
     let private terminalBlockStatus (model: ClientModel) =
         function
-        | BlockRunning -> html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>running</span>"""
+        | BlockRunning -> runningDot
         | BlockFinished (CommandSucceeded code) -> html $"""<span class="{Style.statusOk}">{Icon.checkSm} {code}</span>"""
         | BlockFinished (CommandFailed code) -> html $"""<span class="{Style.statusErr}">{Icon.crossSm} {code}</span>"""
         | BlockFinished CommandTimedOut -> html $"""<span class="{Style.statusErr}">timed out</span>"""
@@ -2464,7 +2468,7 @@ module View =
                 match use'.Outcome with
                 | None ->
                     Dom.Text.blockRunning,
-                    html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>running</span>"""
+                    runningDot
                 | Some ToolCallOk -> Dom.Text.blockOk, html $"""<span class="{Style.statusOk}">{Icon.checkSm}</span>"""
                 | Some (ToolCallFailed reason) -> Dom.Text.blockFailed, html $"""<span class="{Style.statusErr}">{reason}</span>"""
             // `None` is not "no arguments" — it is a foreign tool, whose schema we did not
