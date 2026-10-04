@@ -216,3 +216,49 @@ module TranscriptChunk =
     /// by the router when it refuses an over-long one — never by a client choosing an
     /// address, because a client never chooses one.
     let size = 500
+
+/// How a RUNNING block has been doing, read off its own records: how long since it started,
+/// and how long since it last printed anything.
+///
+/// The second number is the one that matters. "Still running" is true of a build that is
+/// halfway through and of a wait loop polling for a server that died at launch, and an answer
+/// that cannot tell them apart is one an agent re-asks for ten minutes (measured, session
+/// NR5KB8B5: five two-minute waits on an `until curl` loop whose last line was the pid it was
+/// waiting on). A command that has printed nothing for most of its life is a command to look
+/// at, and saying so costs one clause.
+[<RequireQualifiedAccess>]
+type BlockActivity =
+    { /// Since the block's first record.
+      Running : System.TimeSpan
+      /// Since its last OUTPUT record — the whole of `Running` when it has printed nothing.
+      Quiet : System.TimeSpan }
+
+module BlockActivity =
+
+    /// `now` is on the transcript's own clock (seconds since the header), as every `At` is;
+    /// `records` start at the block's first line. `None` for a block with no records yet,
+    /// which has no start to measure from.
+    let ofRecords (now: float) (records: TranscriptRecord list) : BlockActivity option =
+        match records with
+        | [] -> None
+        | first :: _ ->
+            let lastOutput =
+                records
+                |> List.filter (fun r -> r.Kind = TranscriptOutput || r.Kind = TranscriptStderr)
+                |> List.tryLast
+                |> Option.map (fun r -> r.At)
+                |> Option.defaultValue first.At
+            let since (at: float) = System.TimeSpan.FromSeconds (max 0.0 (now - at))
+            Some { Running = since first.At; Quiet = since lastOutput }
+
+    /// The clause an answer carries: `6m12s in, nothing printed for 5m58s`. The quiet half
+    /// is said only once it is long enough to mean something — a command between two lines of
+    /// output is not news.
+    let describe (activity: BlockActivity) : string =
+        let span (t: System.TimeSpan) =
+            if t.TotalHours >= 1.0 then sprintf "%dh%02dm" (int t.TotalHours) t.Minutes
+            elif t.TotalMinutes >= 1.0 then sprintf "%dm%02ds" (int t.TotalMinutes) t.Seconds
+            else sprintf "%ds" (int t.TotalSeconds)
+        if activity.Quiet.TotalSeconds >= 30.0 then
+            sprintf "%s in, nothing printed for %s" (span activity.Running) (span activity.Quiet)
+        else sprintf "%s in, printing" (span activity.Running)

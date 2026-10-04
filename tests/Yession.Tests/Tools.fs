@@ -113,7 +113,8 @@ let private ran (command: string) : TerminalCommandOutcome =
       Output = command
       Kept = OutputEnd.Whole
       Elided = 0
-      From = None }
+      From = None
+      Activity = None }
 
 /// An outcome that ran long enough to be cut, keeping `kept`, from a block starting at `from`.
 let private elidedAs (kept: OutputEnd) (from: int option) : TerminalCommandOutcome =
@@ -124,7 +125,8 @@ let private elidedAs (kept: OutputEnd) (from: int option) : TerminalCommandOutco
       Output = "the middle is gone"
       Kept = kept
       Elided = 48707
-      From = from }
+      From = from
+      Activity = None }
 
 let private elided (from: int option) : TerminalCommandOutcome = elidedAs OutputEnd.Head from
 
@@ -234,6 +236,26 @@ let private sessionTests =
         test "a command still running is told it can be typed into" {
             let said = AgentTools.renderOutcome { elided None with Status = TerminalCommandRunning; Output = "" }
             Expect.stringContains said "write_terminal" "the hand that answers a prompt or ends a stuck one"
+        }
+
+        test "a command still running says how long since it printed anything" {
+            let said =
+                AgentTools.renderOutcome
+                    { elided None with
+                        Status = TerminalCommandRunning
+                        Output = ""
+                        Activity =
+                            Some
+                                { BlockActivity.Running = System.TimeSpan.FromMinutes 6.0
+                                  BlockActivity.Quiet = System.TimeSpan.FromMinutes 5.0 } }
+            Expect.stringContains said "nothing printed for 5m00s" "the clause that tells a hang from a build"
+        }
+
+        // Told to "pass background: true" about a command that already had, an agent read
+        // the flag as ignored and polled the command for ten minutes (session NR5KB8B5).
+        test "a backgrounded command is not told to pass background: true" {
+            let said = AgentTools.renderOutcome { elided None with Status = TerminalCommandStarted; Output = "" }
+            Expect.isFalse (said.Contains "pass background: true") "advice it has already taken"
         }
 
         test "a wait on a person does not offer to end them" {
@@ -458,7 +480,8 @@ let private sessionTests =
                       Output = "warning: Git tree is dirty\nRunning tasks devenv:enterShell\n"
                       Kept = OutputEnd.Whole
                       Elided = 0
-                      From = None }
+                      From = None
+                      Activity = None }
             let first (text: string) = text.Split(' ').[0]
             let finished = render (TerminalCommandRan (CommandSucceeded 0))
             let running = render TerminalCommandRunning

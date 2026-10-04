@@ -300,7 +300,8 @@ let private servicesQueueing (seen: ResizeArray<CommandRequest>) (sandboxes: Wor
                                           Output = ""
                                           Kept = OutputEnd.Whole
                                           Elided = 0
-                                          From = None }
+                                          From = None
+                                          Activity = None }
                             } } }
 
 let private declaring (setup: string option) : EnvironmentSpec =

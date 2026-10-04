@@ -921,6 +921,43 @@ let tests =
                 do! host.Stop ()
             }
 
+        // The answer to a backgrounded command is about what the CALLER does next, and that
+        // differs from a waited-for command that outlasted its wait: nothing to pass, nothing
+        // to poll. Told "STILL RUNNING — pass background: true" about one that already had,
+        // an agent polled it for ten minutes (session NR5KB8B5).
+        testCaseAsync "a backgrounded command answers that it started, not that it is still running" <|
+            async {
+                let mutable finish : (unit -> unit) option = None
+                let environment : SessionEnvironment.SessionEnvironment =
+                    { Ensure = fun _ _ -> async { return EnvironmentAvailable }
+                      Spawn =
+                        fun _ _ ->
+                            async {
+                                return
+                                    Ok
+                                        { WriteStdin = ignore
+                                          CloseStdin = ignore
+                                          Kill = fun () -> finish |> Option.iter (fun f -> f ())
+                                          Exited =
+                                            async {
+                                                do! Async.FromContinuations (fun (cont, _, _) -> finish <- Some cont)
+                                                return SandboxExited 0
+                                            } }
+                            }
+                      SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
+                      Stop = fun () -> async { return () }
+                      CurrentRef = fun () -> Some "scripted"
+                      Shell = fun () -> None
+                      Realisation = fun () -> [] }
+                let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
+                match!
+                    host.TerminalCommands.Execute { CommandRequest.ofCommand "serve" with Background = true } agentActing with
+                | Error reason -> failwith reason
+                | Ok started -> Expect.equal started.Status TerminalCommandStarted "the caller is told it started, and nothing else"
+                finish |> Option.iter (fun f -> f ())
+                do! host.Stop ()
+            }
+
         testCaseAsync "the agent's command runs in the same call, visible to every peer" <|
             async {
                 // Under the bypass classifier (Plan 23) the agent's call answers with the
