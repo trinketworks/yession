@@ -32,6 +32,11 @@
          panels hold one. -->
     <Compile Include="Pending.fs" />
     <Compile Include="Timer.fs" />
+    <!-- Where focus lands when the tablist is walked: arithmetic over an index and a count,
+         so the cheap tier settles the wrap-around without a strip to press keys on. Below
+         the view, which is the only thing that holds the elements, and below the model,
+         whose kill lands focus by the same neighbour rule the strip's Delete does. -->
+    <Compile Include="TabStrip.fs" />
     <Compile Include="Model.fs" />
     <Compile Include="DraftSlot.fs" />
     <Compile Include="Connection.fs" />
@@ -52,10 +57,6 @@
     <!-- What a keydown means to a pty: pure, so the cheap tier can ask it without a
          browser. Below the view, which is the only thing that holds a key event. -->
     <Compile Include="Keystroke.fs" />
-    <!-- Where focus lands when the tablist is walked: arithmetic over an index and a count,
-         so the cheap tier settles the wrap-around without a strip to press keys on. Below
-         the view, which is the only thing that holds the elements. -->
-    <Compile Include="TabStrip.fs" />
     <Compile Include="Glide.fs" />
     <Compile Include="View.fs" />
     <Compile Include="Client.fs" />

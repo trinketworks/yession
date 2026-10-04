@@ -3836,6 +3836,7 @@ module View =
             if view.IsOpen then
                 html $"""
                     <div role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-tab="{id}"
+                         id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
                          aria-selected="{selectedAttr}" tabindex="{tabIndex}" title="{hint}"
                          data-pane-tab-pinned="{pinnedAttr}"
                          @keydown={Ev(activateKey)}
@@ -3843,6 +3844,7 @@ module View =
             else
                 html $"""
                     <div role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-closed-tab="{id}"
+                         id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
                          aria-selected="{selectedAttr}" tabindex="{tabIndex}"
                          @keydown={Ev(activateKey)}
                          @click={Ev(fun _ -> activate ())}><span class="{Style.paneTabLabel}">{TerminalTitle.value view.Title}</span><span class="{Style.small}"> · closed</span>{pinMark}<span class="{Style.terminalTabPeers}">{peers}</span>{closeControl}</div>"""
@@ -3890,6 +3892,7 @@ module View =
             html $"""
                 <div role="tab" class="{if on then Style.terminalTabActive else Style.terminalTab}"
                      data-pane-tab="{PaneTab.key tab}" title="{hint}"
+                     id="{Dom.paneTabId (PaneTab.key tab)}" aria-controls="{Dom.panePanelId}"
                      data-pane-tab-pinned="{pinnedAttr}"
                      aria-selected="{if on then "true" else "false"}" tabindex="{if on then "0" else "-1"}"
                      @keydown={Ev(activateKey)}
@@ -4112,8 +4115,13 @@ module View =
                 // `tabindex="-1"` so the panel can take focus programmatically when a chip
                 // opens it, without becoming a Tab stop of its own. A DOM swap that leaves
                 // focus on the control that vanished is the failure this exists to avoid.
+                //
+                // And it says so when it has it (`Style.panePanel`): focus a reader cannot see
+                // is focus they do not have. Named by its tab, which is how a screen reader
+                // says whose panel this is.
                 html $"""
-                    <div class="{Style.paneBody}" role="tabpanel" tabindex="-1"
+                    <div class="{Style.panePanel}" role="tabpanel" tabindex="-1"
+                         id="{Dom.panePanelId}" aria-labelledby="{Dom.paneTabId (PaneTab.key tab)}"
                          data-pane-panel="{PaneTab.key tab}">
                       {inner}
                     </div>"""
@@ -4251,7 +4259,12 @@ module View =
                         aria-label="Everything in this session"
                         @click={Ev(fun _ -> dispatch ToggleContentListMsg)}>{Icon.list}</button>"""
         html $"""
-            <aside class="{Style.contentPanel}" data-content-panel>
+            <!-- `inert` while shut: a shut pane is zero pixels wide on a desktop and off the
+                 screen on a phone, and every control in it was still a Tab stop — a full cycle
+                 stopped eleven times on things nobody could see. From the model, so the first
+                 paint (`Ssr`) carries it too; the root class (`PaneShell.setOpen`) is only the
+                 animation. -->
+            <aside class="{Style.contentPanel}" data-content-panel ?inert={not model.TerminalsOpen}>
               <!-- The split, as a real separator: `aria-valuenow` and the arrow keys are what
                    make a splitter reachable without a pointer, and the shell keeps the value
                    in step (`PaneShell.installPaneResize`). -->
@@ -4264,12 +4277,7 @@ module View =
                   {listToggle}
                   <button type="button" class="{Style.navChevronForward}" aria-label="Back to the chat"
                           data-content-toggle="hide"
-                          @click={Ev(fun _ ->
-                                        dispatch ToggleContentMsg
-                                        // On a phone this control IS the way back, and it is
-                                        // about to leave the screen — so focus goes where the
-                                        // reader came from, exactly as closing a tab does.
-                                        selected |> Option.iter (fun tab -> dispatch (MoveMsg (DomMove.FocusChat (PaneTab.key tab)))))}>{Icon.right}</button>
+                          @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.right}</button>
                 </div>
                 {if ClientModel.showsList model then Lit.nothing else strip}
                 {if ClientModel.showsList model then contentListView actions dispatch model else body ()}

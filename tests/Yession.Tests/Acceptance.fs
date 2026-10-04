@@ -198,6 +198,7 @@ let private representativeModel : ClientModel =
       Tabs = []
       // Nothing pressed for and still owed: this client is looking, not mid-request.
       Opening = 0
+      KillPending = None
       Pinned = Set.empty
       Pane = None
       TerminalsOpen = true

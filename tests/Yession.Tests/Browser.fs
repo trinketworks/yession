@@ -927,8 +927,14 @@ let tests =
                 // is about what a reopen costs, so it takes the shortest honest route to a
                 // command having run. The KEYSTROKES stay real — the input's binding is what
                 // writes the CRDT, and typing is the only thing that exercises it.
+                //
+                // A reload shuts the column, and a shut column is `inert` — its composer cannot
+                // take focus at all, by keyboard or by script — so the column is shown first.
                 let seed (first: int) (last: int) =
                     async {
+                        let! shut =
+                            await (page.EvaluateAsync<bool> "() => !!document.querySelector(\"[data-content-toggle='show']\")")
+                        if shut then do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                         let! _ = await (page.WaitForSelectorAsync composerInput)
                         do! awaitU (page.EvalOnSelectorAsync (composerInput, "el => el.focus()"))
                         do!
@@ -1206,6 +1212,55 @@ let tests =
                 do! showTerminal page two
                 let! keptToo = commandLineValue page (commandLine two)
                 Expect.equal keptToo "echo two" "and the second kept its own"
+            })
+
+        // A press for a terminal is answered a round trip later, by an event that takes the
+        // pressed control's place (the empty pane's press) or leaves it standing (`+`). Either
+        // way the keyboard goes where the new terminal takes typing. `Srt` for the reason the
+        // case above gives: no sandbox, no terminal.
+        Tag.needs "a terminal to arrive" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        sessionCase "a new terminal takes the keyboard" <|
+            fun page ->
+            async {
+                do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
+                do! openNewTerminal page
+                do! await (page.WaitForSelectorAsync "[data-terminal-tab]") |> Async.Ignore
+                let! tabs = terminalTabs page
+                do!
+                    await (page.WaitForFunctionAsync (
+                            "sel => document.activeElement?.matches(sel) === true",
+                            box (commandLine tabs.[0])))
+                    |> Async.Ignore
+            })
+
+        // The kill is pressed on a row of the list, and the close that answers it takes that
+        // row's kill away — so focus lands on the row that takes its place, rather than on
+        // `body` with the list still under the reader's hand.
+        Tag.needs "two terminals to kill one of" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        sessionCase "killing a terminal from the list lands on the next one" <|
+            fun page ->
+            async {
+                do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
+                do! openNewTerminal page
+                do! openNewTerminal page
+                do!
+                    await (page.WaitForFunctionAsync
+                            "document.querySelectorAll('[data-terminal-tab]').length >= 2")
+                    |> Async.Ignore
+                let! tabs = terminalTabs page
+                let one, two = tabs.[0], tabs.[1]
+                do! awaitU (page.ClickAsync "[data-content-list-toggle='list']")
+                let kill = sprintf "[data-terminal-close='%s']" one
+                do! awaitU (page.FocusAsync kill)
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do!
+                    await (page.WaitForFunctionAsync ("sel => !document.querySelector(sel)", box kill))
+                    |> Async.Ignore
+                do!
+                    await (page.WaitForFunctionAsync (
+                            "id => document.activeElement?.getAttribute('data-terminal-list-row') === id",
+                            box two))
+                    |> Async.Ignore
             })
 
         // Plan 11. THE discriminating check for the manager origin: this fixture sets no
@@ -2521,6 +2576,92 @@ let editorTests =
                         "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
                 let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-chat-block') === true""")
                 return ()
+            }
+
+        // The focus contract (where the keyboard goes after an act in the pane). Each of these
+        // removes the control that was pressed or puts a surface in front of the reader, and
+        // what only a browser can say is where focus actually ENDED — the model can name a
+        // target, and a target that is absent, unfocusable or out of reach lands on `body`.
+        //
+        // The shut pane first: zero pixels wide on a desktop, and every control in it was a
+        // Tab stop — a full cycle stopped eleven times on things nobody could see. Walked from
+        // the last control before the pane, so the very next Tab is the one that would enter
+        // it, and walked with the real keyboard, because "reachable by Tab" is the question.
+        editorCase "a hidden pane takes no Tab stops" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='show']")
+                // What would be skipped has to be there to skip, or this passes over nothing.
+                let! held =
+                    await (page.EvaluateAsync<int>
+                            """() => document.querySelectorAll('#shell [data-content-panel] button, #shell [data-content-panel] [tabindex="0"]').length""")
+                Expect.isTrue (held > 0) "the shut pane still holds controls"
+                let! started =
+                    await (page.EvaluateAsync<bool>
+                            """() => {
+                                 const pane = document.querySelector('#shell [data-content-panel]')
+                                 const before = [...document.querySelectorAll('#shell button')]
+                                   .filter(b => b.tabIndex >= 0 && !b.disabled
+                                             && (pane.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_PRECEDING))
+                                 window.__stops = []
+                                 document.addEventListener('focusin', e =>
+                                   window.__stops.push(e.target.closest('[data-content-panel]') ? 'pane' : 'elsewhere'))
+                                 for (const b of before.reverse()) { b.focus(); if (document.activeElement === b) return true }
+                                 return false
+                               }""")
+                Expect.isTrue started "focus starts on the last control before the pane"
+                for _ in 1 .. 3 do
+                    do! awaitU (page.Keyboard.PressAsync "Tab")
+                let! stops = await (page.EvaluateAsync<string[]> "() => window.__stops")
+                // The first stop is the start itself; at least one more means Tab moved at all.
+                Expect.isTrue (stops.Length > 1) (sprintf "Tab moved focus (stops: %A)" stops)
+                Expect.isFalse (Array.contains "pane" stops) (sprintf "no stop inside the shut pane (stops: %A)" stops)
+            }
+
+        editorCase "showing the pane puts focus on the command line" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                let! _ =
+                    await (page.WaitForFunctionAsync (
+                            "sel => document.activeElement?.matches(sel) === true",
+                            box (commandLine "term-harness")))
+                return ()
+            }
+
+        // Nothing in the chat opened what was showing, so there is no chip to go back to — and
+        // the fallback used to be the strip's first tab, inside the pane that had just shut.
+        editorCase "hiding the pane puts focus on the way back in" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='hide']")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='hide']")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                            """document.activeElement?.getAttribute('data-content-toggle') === 'show'""")
+                return ()
+            }
+
+        // The panel takes focus whenever a chip opens something that is not a terminal, and
+        // the browser's own ring on it was a 1px near-black outline on a near-black column.
+        // Reached from the KEYBOARD, because a ring is owed to keyboard focus (`:focus-visible`)
+        // and a pointer press rightly earns none.
+        editorCase "the tab panel's focus is visible" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
+                do! awaitU (page.FocusAsync "#shell [data-chat-block]")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-pane-panel') === true""")
+                let! ring =
+                    await (page.EvaluateAsync<string>
+                            """() => {
+                                 const s = getComputedStyle(document.activeElement)
+                                 return [s.outlineStyle, s.outlineWidth].join(' ')
+                               }""")
+                match ring.Split ' ' with
+                | [| style; width |] ->
+                    // `auto` is the browser's own ring — the one that did not show.
+                    Expect.isFalse (style = "none" || style = "auto") (sprintf "a ring of our own paints (%s)" ring)
+                    Expect.isTrue (float (width.Replace ("px", "")) >= 2.0) (sprintf "at least 2px (%s)" ring)
+                | _ -> failwithf "the outline answered '%s'" ring
             }
         // What an agent says does not fit a phone: paths, URLs and fenced commands are all
         // longer than a 326px column and none of them has a space where the break has to go.
@@ -4177,8 +4318,12 @@ let editorTests =
                     await (page.WaitForFunctionAsync
                         """document.querySelector('#shell [data-pane-panel]')?.getAttribute('data-pane-panel') === 'terminal:term-harness'""")
                 // Focus followed it in, as it does for a block's chip: the reader was moved,
-                // so their keyboard was too.
-                let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-pane-panel') === true""")
+                // so their keyboard was too — onto the terminal's own command line, which is
+                // where a terminal takes what they type.
+                let! _ =
+                    await (page.WaitForFunctionAsync (
+                            "sel => document.activeElement?.matches(sel) === true",
+                            box (commandLine "term-harness")))
                 // And what they arrived at is the card that can answer it.
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-queued='queue-harness']")
                 return ()
@@ -4423,7 +4568,11 @@ let editorTests =
                 let! _ =
                     await (page.WaitForFunctionAsync
                         """document.querySelector('#shell [data-pane-panel]')?.getAttribute('data-pane-panel') === 'terminal:term-live'""")
-                let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-pane-panel') === true""")
+                // This peer holds that terminal's keyboard, so it has no command line: what
+                // takes the keystrokes is its screen, and that is where focus lands.
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """document.activeElement?.getAttribute('data-terminal-screen') === 'term-live'""")
                 return ()
             }
 
