@@ -3019,11 +3019,11 @@ module TerminalCommands =
           /// Resume a terminal handle. The terminal HALF of `CheckPending` (Plan 15, stage
           /// 3b): the Host joins it to the command gate's half, because a handle names a
           /// request without saying which kind, which is exactly what makes one tool enough.
-          Read : QueueId -> Async<Result<TerminalCommandOutcome, string>> }
+          Read : QueueId -> TerminalWait option -> Async<Result<TerminalCommandOutcome, string>> }
 
     let unavailable : TerminalCommands =
         { Execute = fun _ _ -> async { return Error "this session has no terminals" }
-          Read = fun _ -> async { return Error "this session has no terminals" } }
+          Read = fun _ _ -> async { return Error "this session has no terminals" } }
 
     /// How long a waiter goes without looking when nothing changes.
     let private wakeTick = TimeSpan.FromMilliseconds 100.0
@@ -3140,18 +3140,46 @@ module TerminalCommands =
               From = block |> Option.map (fun b -> b.FromSeq)
               Activity =
                 match status, block with
-                | TerminalCommandRunning, Some b -> terminals.Activity terminal b.FromSeq
+                | TerminalCommandRunning, Some b
+                | TerminalCommandSaid _, Some b -> terminals.Activity terminal b.FromSeq
                 | _ -> None }
 
         /// Wait the work out, then answer. The deadline is measured from the moment the block
         /// STARTED, when one has, so a command that spent time queued behind another still
         /// gets the full command timeout it would have had.
-        let rec awaitOutcome (terminal: TerminalId) (handle: QueueId) (startedAt: DateTimeOffset) (runningSince: DateTimeOffset option) =
+        ///
+        /// With `until`, the caller has said what it is waiting FOR, and three things end the
+        /// wait: the block's output saying it (`TerminalCommandSaid`), the block ending (its
+        /// ordinary outcome — a server that died before its ready line answers FAILED with
+        /// what it said, not a timeout), or the caller's own timeout, measured from the call.
+        /// The whole of the block's output is read, from its first line: a ready line printed
+        /// before the caller asked is still the answer to "is it ready".
+        let rec awaitOutcome
+            (terminal: TerminalId)
+            (handle: QueueId)
+            (startedAt: DateTimeOffset)
+            (runningSince: DateTimeOffset option)
+            (until: TerminalWait option)
+            =
             async {
                 let elapsedSince (from: DateTimeOffset) = clock.Now () - from
                 let observation = observe terminal handle
-                let deadlineFrom = runningSince |> Option.defaultValue startedAt
-                let deadlineElapsed = elapsedSince deadlineFrom >= commandTimeout
+                let deadlineElapsed =
+                    match until with
+                    | Some wait -> elapsedSince startedAt >= TimeSpan.FromSeconds (max 0.0 (min wait.TimeoutSeconds SessionTerminals.turnBoundSeconds))
+                    | None -> elapsedSince (runningSince |> Option.defaultValue startedAt) >= commandTimeout
+                let said =
+                    match until, observation.Block with
+                    | Some wait, Some block when block.Status = BlockRunning ->
+                        TerminalMatch.isMet wait.Until (readOutput terminal block.FromSeq None)
+                        |> Result.map (fun met -> if met then Some wait.Until else None)
+                    | _ -> Ok None
+                match said with
+                // The matcher could not answer — a fault in this code, carried out rather than
+                // read as "not yet", which would look exactly like a command that never said it.
+                | Error fault -> return Error fault
+                | Ok (Some target) -> return Ok (outcomeOf terminal handle (TerminalCommandSaid (TerminalMatch.describe target)))
+                | Ok None ->
                 match TerminalCommandWait.step deadlineElapsed observation with
                 | TerminalCommandWait.Return status -> return Ok (outcomeOf terminal handle status)
                 | TerminalCommandWait.Gone ->
@@ -3162,7 +3190,7 @@ module TerminalCommands =
                         | None, Some block when block.Status = BlockRunning -> Some (clock.Now ())
                         | existing, _ -> existing
                     do! nextWake clock onChanged
-                    return! awaitOutcome terminal handle startedAt runningSince
+                    return! awaitOutcome terminal handle startedAt runningSince until
             }
 
         let execute
@@ -3205,7 +3233,7 @@ module TerminalCommands =
                             command
                             request.Background
                             request.Stdin
-                        if not request.Background then return! awaitOutcome terminal handle (clock.Now ()) None
+                        if not request.Background then return! awaitOutcome terminal handle (clock.Now ()) None None
                         else
                             // Answer with what is true NOW rather than waiting: the caller
                             // said it is not waiting, and the outcome reaches it as a wake
@@ -3223,7 +3251,7 @@ module TerminalCommands =
                             return Ok (outcomeOf terminal handle status)
             }
 
-        let read (handle: QueueId) : Async<Result<TerminalCommandOutcome, string>> =
+        let read (handle: QueueId) (until: TerminalWait option) : Async<Result<TerminalCommandOutcome, string>> =
             async {
                 // The handle names a request, so it is resolvable from either side: the block
                 // it became, or the entry it still is.
@@ -3237,7 +3265,7 @@ module TerminalCommands =
                 // Resumed under the same two-phase policy, which is what makes a late approval
                 // chainable: the caller waits again rather than being told "still waiting" for
                 // ever in a loop of its own.
-                | Some terminal -> return! awaitOutcome terminal handle (clock.Now ()) None
+                | Some terminal -> return! awaitOutcome terminal handle (clock.Now ()) None until
             }
 
         { Execute = execute; Read = read }

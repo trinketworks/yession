@@ -521,14 +521,14 @@ let startFull
         // A handle names a REQUEST without saying which kind it is, so the join lives here
         // and the agent learns one verb. The gate is asked first because it answers from an
         // in-memory table and the terminal side walks the projection.
-        let checkPending (handle: QueueId) : Async<Result<PendingOutcome, string>> =
+        let checkPending (handle: QueueId) (until: TerminalWait option) : Async<Result<PendingOutcome, string>> =
             async {
                 if commandGate.Knows handle then
                     match! commandGate.Read handle with
                     | Ok outcome -> return Ok (PendingCommand outcome)
                     | Error reason -> return Error reason
                 else
-                    match! terminalCommands.Read handle with
+                    match! terminalCommands.Read handle until with
                     | Ok outcome -> return Ok (PendingTerminal outcome)
                     | Error reason -> return Error reason
             }

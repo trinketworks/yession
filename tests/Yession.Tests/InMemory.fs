@@ -54,6 +54,41 @@ let private itemSaying (text: string) (model: ClientModel) =
     |> Option.defaultWith (fun () -> failwithf "nothing on the timeline says %s" text)
 
 
+/// A Host whose one sandbox runs every command as a server: it prints `lines`, then exits
+/// with `exits` — or, with `None`, runs until the returned `finish` is called.
+let private serving (lines: string list) (exits: int option) =
+    async {
+        let mutable finished : (unit -> unit) option = None
+        let finish () = finished |> Option.iter (fun f -> f ())
+        let environment : SessionEnvironment.SessionEnvironment =
+            { Ensure = fun _ _ -> async { return EnvironmentAvailable }
+              Spawn =
+                fun _ onChunk ->
+                    async {
+                        for line in lines do onChunk (Stdout, line)
+                        return
+                            Ok
+                                { WriteStdin = ignore
+                                  CloseStdin = ignore
+                                  Kill = finish
+                                  Exited =
+                                    async {
+                                        match exits with
+                                        | Some code -> return SandboxExited code
+                                        | None ->
+                                            do! Async.FromContinuations (fun (cont, _, _) -> finished <- Some cont)
+                                            return SandboxExited 0
+                                    } }
+                    }
+              SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
+              Stop = fun () -> async { return () }
+              CurrentRef = fun () -> Some "scripted"
+              Shell = fun () -> None
+              Realisation = fun () -> [] }
+        let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
+        return host, finish
+    }
+
 let tests =
     testList "In-memory transport (cheap E2E through the real Host)" [
         testCaseAsync "two clients converge on the title through the Host's State relay" <|
@@ -911,7 +946,7 @@ let tests =
                     | Error reason -> failwith reason
                     | Ok freed ->
                         Expect.equal freed.Status (TerminalCommandRan (CommandSucceeded 0)) "the second ran while the first was running"
-                        match! host.TerminalCommands.Read waiting.Handle with
+                        match! host.TerminalCommands.Read waiting.Handle None with
                         | Error reason -> failwith reason
                         | Ok resumed ->
                             Expect.equal
@@ -1023,6 +1058,36 @@ let tests =
                 let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
                 let! read = host.Files.Read SandboxRef.defaultRef "$TMPDIR/manager.log"
                 Expect.equal read (Ok (FileContent.Text "/scratch/t/manager.log")) "the sandbox's own $TMPDIR, then the rest of the path"
+                do! host.Stop ()
+            }
+
+        // What a hand-written `until curl …` loop was standing in for: carry on once a command
+        // has SAID it is ready. The command keeps running — a server does not finish — so the
+        // answer must be the match, not a timeout and not an end.
+        testCaseAsync "a wait for what a running command says answers when it says it" <|
+            async {
+                let! host, finish = serving [ "booting\r\n"; "ready on 4100\r\n" ] None
+                match! host.TerminalCommands.Execute { CommandRequest.ofCommand "serve" with Background = true } agentActing with
+                | Error reason -> failwith reason
+                | Ok started ->
+                    match! host.TerminalCommands.Read started.Handle (Some { Until = MatchLiteral "ready on"; TimeoutSeconds = 30.0 }) with
+                    | Error reason -> failwith reason
+                    | Ok said -> Expect.equal said.Status (TerminalCommandSaid "ready on") "it said it, and it is still running"
+                finish ()
+                do! host.Stop ()
+            }
+
+        // Session NR5KB8B5's thirteen minutes: the server died at launch and the wait for its
+        // ready line could not tell. A command that ENDS before saying it is the answer.
+        testCaseAsync "a wait for what a command says answers with its exit when it dies first" <|
+            async {
+                let! host, _ = serving [ "YESSION_DATA_DIR is now --data-dir\r\n" ] (Some 2)
+                match! host.TerminalCommands.Execute { CommandRequest.ofCommand "serve" with Background = true } agentActing with
+                | Error reason -> failwith reason
+                | Ok started ->
+                    match! host.TerminalCommands.Read started.Handle (Some { Until = MatchLiteral "ready on"; TimeoutSeconds = 30.0 }) with
+                    | Error reason -> failwith reason
+                    | Ok ended -> Expect.equal ended.Status (TerminalCommandRan (CommandFailed 2)) "its exit, not a wait that ran out"
                 do! host.Stop ()
             }
 

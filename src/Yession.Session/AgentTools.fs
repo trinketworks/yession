@@ -135,23 +135,21 @@ module private ToolArgs =
                 get.Required.Field first Decode.string, get.Required.Field second Decode.string))
             json
 
-    /// `read_terminal`'s three: which terminal, where to read from, and what to wait for. An
-    /// absent `from` is the tail and an absent `wait_for` is a read that does not wait, which
-    /// is what the optional parameters degrade to. A `timeout_seconds` without a `wait_for` is
-    /// nothing to bound, so the wait is only assembled when there is something to wait FOR.
-    let terminalRead (json: string) : Result<string * int option * TerminalWait option, string> =
+    /// What a call is waiting FOR, from the three fields every waiting tool takes alike
+    /// (`read_terminal`, `check_pending`). Absent `wait_for` is a call that does not wait. A
+    /// `timeout_seconds` without one is nothing to bound, so the wait is only assembled when
+    /// there is something to wait FOR.
+    let private waitIn (json: string) (defaultTimeout: float) : Result<TerminalWait option, string> =
         let decoded =
             read
                 (Decode.object (fun get ->
-                    get.Required.Field "terminal" Decode.string,
-                    get.Optional.Field "from" Decode.int,
                     get.Optional.Field "wait_for" Decode.string |> Option.filter (fun s -> s <> ""),
                     get.Optional.Field "wait_for_pattern" Decode.string |> Option.filter (fun s -> s <> ""),
-                    get.Optional.Field "timeout_seconds" Decode.float |> Option.defaultValue 10.0))
+                    get.Optional.Field "timeout_seconds" Decode.float |> Option.defaultValue defaultTimeout))
                 json
         match decoded with
         | Error e -> Error e
-        | Ok (terminal, from, literal, pattern, timeout) ->
+        | Ok (literal, pattern, timeout) ->
             // Two fields rather than one and a mode flag, because a flag makes the meaning of
             // `wait_for` depend on another argument: a caller that sets one and forgets the
             // other gets a LITERAL match on a regex string, which is wrong, silent, and looks
@@ -159,16 +157,29 @@ module private ToolArgs =
             match literal, pattern with
             | Some _, Some _ ->
                 Error "wait_for and wait_for_pattern are two ways to say the same thing — give one"
-            | None, None -> Ok (terminal, from, None)
-            | Some literal, None ->
-                Ok (terminal, from, Some { Until = MatchLiteral literal; TimeoutSeconds = timeout })
+            | None, None -> Ok None
+            | Some literal, None -> Ok (Some { Until = MatchLiteral literal; TimeoutSeconds = timeout })
             | None, Some source ->
                 // Compiled HERE, so a pattern outside the subset is an answer to this call
                 // rather than something discovered part-way through a wait that then has to
                 // explain itself.
                 Pattern.compile source
-                |> Result.map (fun compiled ->
-                    terminal, from, Some { Until = MatchPattern (compiled, source); TimeoutSeconds = timeout })
+                |> Result.map (fun compiled -> Some { Until = MatchPattern (compiled, source); TimeoutSeconds = timeout })
+
+    /// `read_terminal`'s three: which terminal, where to read from, and what to wait for. An
+    /// absent `from` is the tail, which is what the optional parameters degrade to.
+    let terminalRead (json: string) : Result<string * int option * TerminalWait option, string> =
+        read
+            (Decode.object (fun get -> get.Required.Field "terminal" Decode.string, get.Optional.Field "from" Decode.int))
+            json
+        |> Result.bind (fun (terminal, from) -> waitIn json 10.0 |> Result.map (fun wait -> terminal, from, wait))
+
+    /// `check_pending`'s two: which handle, and what it is waiting for. The default timeout
+    /// is the turn's own bound — a caller naming a ready line wants it as long as a command
+    /// may take, not a device's ten seconds.
+    let pending (json: string) : Result<string * TerminalWait option, string> =
+        read (Decode.object (fun get -> get.Required.Field "handle" Decode.string)) json
+        |> Result.bind (fun handle -> waitIn json 120.0 |> Result.map (fun wait -> handle, wait))
 
     /// `write_terminal`'s: which terminal, and what to type — `data` as text, then `keys` by
     /// name (`TerminalKeys`). At least one; both is text followed by keys, which is how a line
@@ -293,9 +304,17 @@ module AgentTools =
             sprintf
                 "STILL RUNNING in %s%s. Not finished; nothing cancelled. For long commands pass background: true and end your turn — you're woken when they finish; otherwise check_pending '%s' for the outcome. Stuck or waiting on input? write_terminal can type in — keys: [\"ctrl-c\"] interrupts.%s"
                 where activity handle output
+        | TerminalCommandSaid waitedFor ->
+            let activity =
+                match outcome.Activity with
+                | Some activity -> sprintf " (%s)" (BlockActivity.describe activity)
+                | None -> ""
+            sprintf
+                "SAID %s in %s%s — what you were waiting for. It is still running; check_pending '%s' for the rest of it.%s"
+                waitedFor where activity handle output
         | TerminalCommandStarted ->
             sprintf
-                "STARTED in %s, in the background. Carry on, or end your turn — you're woken when it finishes; check_pending '%s' picks it up sooner.%s"
+                "STARTED in %s, in the background. Carry on, or end your turn — you're woken when it finishes; check_pending '%s' picks it up sooner, and with wait_for it answers once the command says that (a ready line, a prompt) or ends.%s"
                 where handle output
         | TerminalCommandInteractive ->
             sprintf
@@ -423,13 +442,21 @@ module AgentTools =
     /// `check_pending`: resume a handle, whichever kind of act it named (Plan 15, stage 3b).
     /// ONE verb, because the handle is one type — the alternative is an agent that has to
     /// know, before it asks, what it is waiting on.
-    let private checkPending (capabilities: AgentCapabilities) (handle: string) : Async<ToolAnswer> =
+    let private checkPending (capabilities: AgentCapabilities) (handle: string) (until: TerminalWait option) : Async<ToolAnswer> =
         async {
             match QueueId.create handle with
             | Error e -> return ToolAnswer.text (sprintf "not a command handle: %s" e)
             | Ok handle ->
-                match! capabilities.Terminals.CheckPending handle with
-                | Ok (PendingTerminal outcome) -> return { Text = renderOutcome outcome; Block = outcome.Block; Stream = None; Image = None }
+                match! capabilities.Terminals.CheckPending handle until with
+                | Ok (PendingTerminal outcome) ->
+                    // A wait that ran out says so, beside the status that would otherwise read
+                    // the same as a plain look: what was waited for did not come.
+                    let missed =
+                        match until, outcome.Status with
+                        | Some wait, TerminalCommandRunning ->
+                            sprintf "\n(%s did not appear within %gs)" (TerminalMatch.describe wait.Until) wait.TimeoutSeconds
+                        | _ -> ""
+                    return { Text = renderOutcome outcome + missed; Block = outcome.Block; Stream = None; Image = None }
                 | Ok (PendingCommand outcome) -> return ToolAnswer.text (renderCommandOutcome outcome)
                 | Error reason -> return ToolAnswer.text (sprintf "could not read that command: %s" reason)
         }
@@ -854,13 +881,25 @@ module AgentTools =
 
           tool
               "check_pending"
-              "Pick up whatever a handle named — a long build, a command queued behind a busy terminal, a program waiting on a keystroke. Works for execute_command and anything that said it was still going; returns what the original call would have. A background command needs no polling: end your turn and you're woken when it finishes."
-              [ ToolField.required "handle" "string" "the handle from execute_command, or from a command that said it was still going" ]
+              "Pick up whatever a handle named — a long build, a command queued behind a busy terminal, a program waiting on a keystroke. Works for execute_command and anything that said it was still going; returns what the original call would have. A background command needs no polling: end your turn and you're woken when it finishes. To carry on once a running command has SAID something — a server's ready line, a prompt — give `wait_for`: it answers when the output says it, when the command ends (with its exit code and what it printed — a server that died before it was ready says so), or at `timeout_seconds`, whichever is first. Never write a shell loop that waits for a port or a line."
+              [ ToolField.required "handle" "string" "the handle from execute_command, or from a command that said it was still going"
+                ToolField.optional
+                    "wait_for"
+                    "string"
+                    "answer once the command's output contains this exact text, e.g. \"listening on\". Literal text — for a pattern use wait_for_pattern"
+                ToolField.optional
+                    "wait_for_pattern"
+                    "string"
+                    "answer once the command's output matches this pattern — the same subset read_terminal takes"
+                ToolField.optional
+                    "timeout_seconds"
+                    "number"
+                    "how long to wait for it before answering with what the command has said so far; default and most 120" ]
               (fun args ->
                   async {
-                      match ToolArgs.string "handle" args with
+                      match ToolArgs.pending args with
                       | Error e -> return Error e
-                      | Ok handle -> return! answered (checkPending capabilities handle)
+                      | Ok (handle, until) -> return! answered (checkPending capabilities handle until)
                   })
 
           tool

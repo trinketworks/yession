@@ -207,6 +207,11 @@ type TerminalCommandStatus =
     /// pass background: true" about a command that already had, an agent concluded the flag
     /// had been ignored and polled it instead (session NR5KB8B5).
     | TerminalCommandStarted
+    /// Still running, and it has SAID what the caller was waiting for (`check_pending`'s
+    /// `wait_for`): a server's ready line, a prompt. Carries how that was named. Its own case
+    /// because it is the answer the caller asked for and `TerminalCommandRunning` is not —
+    /// a wait that ended on a match and one that ended on its timeout must not read alike.
+    | TerminalCommandSaid of waitedFor: string
     /// It took the whole screen and is waiting for a keystroke, and the terminal is yours
     /// (Plan 20, stage 6). Its own case because it is the one running block that will never
     /// finish on its own: burning the process deadline on it and then reporting
@@ -420,10 +425,6 @@ type PendingOutcome =
     | PendingTerminal of TerminalCommandOutcome
     | PendingCommand of CommandOutcome
 
-/// Resume a handle `ExecuteCommand` or a gated command yielded (Plan 13, stage 3b; Plan 15,
-/// stage 3b): a long build, a held terminal, a program waiting on a keystroke. One verb,
-/// because the handle type is one type.
-type CheckPending = QueueId -> Async<Result<PendingOutcome, string>>
 
 /// Type into a terminal whose source cannot be instrumented (Plan 19).
 ///
@@ -549,6 +550,15 @@ type TerminalWait =
       /// the caller: a tool call that could be asked to wait an hour is a turn somebody
       /// loses.
       TimeoutSeconds : float }
+
+/// Resume a handle `ExecuteCommand` or a gated command yielded (Plan 13, stage 3b; Plan 15,
+/// stage 3b): a long build, a held terminal, a program waiting on a keystroke. One verb,
+/// because the handle type is one type.
+///
+/// With a `TerminalWait`, a running command is waited on until its output says that, it ends,
+/// or the wait's own timeout passes — whichever is first, and the answer says which. A
+/// command handle (no output to read) ignores it.
+type CheckPending = QueueId -> TerminalWait option -> Async<Result<PendingOutcome, string>>
 
 /// A window of what a terminal has said, and where in its recording that window sits.
 ///
@@ -998,7 +1008,7 @@ module AgentCapabilities =
     let none : AgentCapabilities =
         { Terminals =
             { Execute = fun _ -> async { return Error "no terminal capability" }
-              CheckPending = fun _ -> async { return Error "no terminal capability" }
+              CheckPending = fun _ _ -> async { return Error "no terminal capability" }
               Write = fun _ _ -> async { return Error "no terminal capability" }
               Read = fun _ _ _ -> async { return Error "no terminal capability" }
               Open = fun _ _ -> async { return Error "no terminal capability" }
