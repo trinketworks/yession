@@ -4246,7 +4246,7 @@ module View =
         let strip =
             html $"""
                 <div class="{Style.terminalTabs}">
-                  <div class="{Style.terminalTabScroller}">
+                  <div class="{Style.terminalTabScroller}" data-pane-strip>
                   <div class="{Style.terminalTabList}" role="tablist" aria-label="Open content"
                        @keydown={Ev(fun (e: Browser.Types.Event) ->
                                         let pressed = e :?> Browser.Types.KeyboardEvent

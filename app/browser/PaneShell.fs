@@ -321,6 +321,99 @@ let setOpen (isOpen: bool) : unit =
     if isOpen then document.documentElement.classList.remove [| Yession.App.Dom.termClosedClass |]
     else document.documentElement.classList.add [| Yession.App.Dom.termClosedClass |]
 
+/// The pane's tab strip scrolls sideways, and a scroll box keeps nothing in view by itself: the
+/// fourth terminal at the pane's default width opened past the right-hand edge, selected and
+/// invisible, and the arrow walk moved focus onto tabs nobody could see. Where to scroll is
+/// `TabStrip`'s arithmetic; measuring and scrolling is this.
+module private Strip =
+
+    let private selector = "[" + Yession.App.Dom.Hooks.paneStrip + "]"
+
+    let private port (scroller: HTMLElement) : Yession.App.TabStrip.Scrollport =
+        { Yession.App.TabStrip.Scrollport.Scrolled = scroller.scrollLeft
+          Yession.App.TabStrip.Scrollport.Shown = scroller.clientWidth
+          Yession.App.TabStrip.Scrollport.Holds = scroller.scrollWidth }
+
+    /// The strip a node is in, if it is in one.
+    let around (node: Element) : HTMLElement option =
+        node.closest selector |> Option.map (fun strip -> strip :?> HTMLElement)
+
+    /// Write which ends have tabs past them, for the fade to key on — and only on a change,
+    /// because this runs on every scroll event and an attribute write is a style recalc.
+    let mark (scroller: HTMLElement) : unit =
+        let token = Yession.App.TabStrip.Hidden.token (Yession.App.TabStrip.hidden (port scroller))
+        if scroller.getAttribute Yession.App.Dom.Hooks.paneStripHidden <> token then
+            scroller.setAttribute (Yession.App.Dom.Hooks.paneStripHidden, token)
+
+    /// Scroll the strip the least distance that shows this tab clear of both edges, and not at
+    /// all when it already is. The tab's span is taken in the scroller's own content
+    /// coordinates: where it is on screen, less where the scroll box is, plus how far it has
+    /// scrolled.
+    let reveal (scroller: HTMLElement) (tab: HTMLElement) : unit =
+        let box = scroller.getBoundingClientRect ()
+        let span = tab.getBoundingClientRect ()
+        let start = span.left - box.left - scroller.clientLeft + scroller.scrollLeft
+        Yession.App.TabStrip.reveal (port scroller) start (start + span.width)
+        |> Option.iter (fun left -> scroller.scrollLeft <- left)
+        mark scroller
+
+    /// The selected tab's key at the last render that revealed it. A reveal on EVERY render
+    /// would take the strip back from a reader scrolling it to look at the other tabs the
+    /// moment anything at all arrived; on a CHANGE of selection it is the reader's own act (or
+    /// a collaborator's `TabOpened`) being answered.
+    let mutable private revealed = ""
+
+    let sync () : unit =
+        match find selector with
+        | None -> revealed <- ""
+        | Some scroller ->
+            // A strip with no width is not laid out, and measures zero for everything — and
+            // remembering its selection as revealed would skip the reveal once it is.
+            if scroller.clientWidth > 0.0 then
+                match scroller.querySelector "[role=\"tab\"][aria-selected=\"true\"]" with
+                | null -> revealed <- ""
+                | selected ->
+                    let selected = selected :?> HTMLElement
+                    let key = selected.getAttribute Yession.App.Dom.Hooks.paneTab
+                    if key <> revealed then
+                        revealed <- key
+                        reveal scroller selected
+                mark scroller
+
+/// After every render: the selected tab in view if the selection changed, and the strip's
+/// fade on whichever ends have tabs past them.
+let syncStrip () : unit = Strip.sync ()
+
+/// The listeners that keep the strip honest between renders — bound once per page, delegated
+/// from the document so they survive Lit replacing the strip.
+///
+/// FOCUS is revealed as it lands, from whichever path moved it (the arrow walk, Home/End, the
+/// neighbour a Delete hands focus to, Tab). Only KEYBOARD focus, which is what `:focus-visible`
+/// says: a pointer pressing a half-hidden tab focuses it on the way down, and a strip that
+/// scrolled under the pointer then would release it over a different tab — a click whose two
+/// halves land on different elements goes to neither. A pointer's selection is revealed after
+/// the render it causes, by `syncStrip`.
+let installStrip () : unit =
+    document.addEventListener (
+        "focusin",
+        fun event ->
+            match EventTargets.asHTMLElement event.target with
+            | Some focused when focused.matches ":focus-visible" ->
+                match focused.closest "[role=\"tab\"]", Strip.around focused with
+                | Some tab, Some strip -> Strip.reveal strip (tab :?> HTMLElement)
+                | _ -> ()
+            | _ -> ())
+    // Scroll does not bubble, so captured; and the strip is Lit's to replace, so delegated.
+    document.addEventListener (
+        "scroll",
+        (fun event ->
+            match EventTargets.asHTMLElement event.target with
+            | Some scrolled when scrolled.hasAttribute Yession.App.Dom.Hooks.paneStrip -> Strip.mark scrolled
+            | _ -> ()),
+        true)
+    // A narrower window is a narrower strip, and what fits changes with it.
+    window.addEventListener ("resize", fun _ -> Strip.sync ())
+
 /// The pane's width on desktop, as a custom property on the shell root — the same mechanism
 /// the open state uses, and for the same reasons: it is presentation, a Lit re-render must not
 /// fight it, and the model has no business holding a number of pixels.
@@ -369,6 +462,8 @@ module private Split =
             handle.setAttribute ("aria-valuenow", string (int next))
             handle.setAttribute ("aria-valuemin", string (int minPane))
             handle.setAttribute ("aria-valuemax", string (int (widest ())))
+        // A wider or narrower pane is a wider or narrower strip, and what fits changes with it.
+        Strip.sync ()
         // Storage is denied in a private window, and a split that cannot be remembered is
         // still a split that works.
         try localStorage.setItem (key, string (int next)) with _ -> ()

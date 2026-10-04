@@ -3073,11 +3073,23 @@ module ClientModel =
             // choice left naming it would be a choice in waiting: `selectedPane` passes over a
             // tab that is not in the strip, but the next thing to put that tab back — the
             // agent opening it, a pin — would land the pane on it with nobody asking.
+            //
+            // What it shows instead is the NEIGHBOUR: the tab that slides into the closed
+            // one's place, or the one before it at the end of the row — `TabStrip.neighbour`,
+            // the same answer the keyboard's Delete moves focus to, so focus and the pane
+            // cannot end up on two different tabs of a strip that scrolls.
             let key = PaneTab.key tab
             let letGo (mode: TabMode) = PaneTab.key (TabMode.tab mode) = key
+            let strip = model.Tabs
+            let neighbour =
+                strip
+                |> List.tryFindIndex (fun shown -> PaneTab.key shown = key)
+                |> Option.bind (fun here -> TabStrip.neighbour here strip.Length)
+                |> Option.bind (fun next ->
+                    strip |> List.filter (fun shown -> PaneTab.key shown <> key) |> List.tryItem next)
             let pane =
                 match model.Pane with
-                | Some (OnTab mode) when letGo mode -> None
+                | Some (OnTab mode) when letGo mode -> neighbour |> Option.map (fun next -> OnTab (Reading next))
                 | Some (OnList (Some mode)) when letGo mode -> Some (OnList None)
                 | other -> other
             let tabs = model.Tabs |> List.filter (fun open' -> PaneTab.key open' <> key)

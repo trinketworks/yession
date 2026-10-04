@@ -32,10 +32,12 @@
          panels hold one. -->
     <Compile Include="Pending.fs" />
     <Compile Include="Timer.fs" />
-    <!-- Where focus lands when the tablist is walked: arithmetic over an index and a count,
-         so the cheap tier settles the wrap-around without a strip to press keys on. Below
-         the view, which is the only thing that holds the elements, and below the model,
-         whose kill lands focus by the same neighbour rule the strip's Delete does. -->
+    <!-- The tablist's arithmetic: where focus lands when it is walked, which tab takes a
+         released one's place, and where the strip scrolls to show one. Pure, so the cheap
+         tier settles it without a strip to press keys on. Below the MODEL as well as the
+         view, because the model's own moves use the same neighbour rule the strip's Delete
+         does — a kill lands focus by it, and closing the tab that is showing selects it —
+         one answer, so selection and focus cannot disagree. -->
     <Compile Include="TabStrip.fs" />
     <Compile Include="Model.fs" />
     <Compile Include="DraftSlot.fs" />
