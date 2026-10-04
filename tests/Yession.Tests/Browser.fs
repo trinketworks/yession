@@ -2671,6 +2671,29 @@ let editorTests =
                 }
         askCardColumnCase 390 844
         askCardColumnCase 1440 900
+        // The card is an OVERLAY, not a flow block: it covers the conversation's lower edge
+        // rather than taking height from it. Only a browser settles this — the markup is the
+        // same either way — and it is the whole point of the card's position. The regression it
+        // guards is what it replaced: a flow card docked between the chat and the composer, so
+        // the conversation jumped UP by the card's height the moment it was offered, and again as
+        // the repo list loaded into it and it grew. Measured as the conversation's own box before
+        // the card and after: an overlay leaves it where it was.
+        editorCaseIn 390 844 "the launch card overlays the conversation rather than displacing it" <| fun page ->
+            async {
+                let conversationBox =
+                    """() => {
+                         const c = document.querySelector('#shell [data-conversation]').getBoundingClientRect()
+                         return [Math.round(c.top), Math.round(c.height)]
+                       }"""
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+                let! before = await (page.EvaluateAsync<int[]> conversationBox)
+                do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
+                let! after = await (page.EvaluateAsync<int[]> conversationBox)
+                Expect.equal after before
+                    (sprintf "the card left the conversation's box alone: was top=%d h=%d, now top=%d h=%d"
+                        before.[0] before.[1] after.[0] after.[1])
+            }
         // What a control owes the card's edges, where every line owes the reading rail.
         //
         // Full width on a phone is what makes this visible and what makes it worth pinning:

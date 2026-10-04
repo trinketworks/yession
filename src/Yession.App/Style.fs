@@ -1647,8 +1647,22 @@ module Style =
     // to edge — the queue's rows are bands for the same reason, and a highlight that stopped
     // at a measure would read as a box drawn round the name rather than as the row itself.
 
+    /// The chat and the launch card share ONE positioning context, so the card can be an
+    /// OVERLAY at its foot (above the composer) rather than a flow block between them. A flow
+    /// card is `shrink-0`, so the conversation above it gave up exactly the card's height — and
+    /// did it twice on a cold open, once when the card arrived and again as the repo list loaded
+    /// into it and it grew. An overlay covers the chat's lower edge instead, so nothing above or
+    /// below the card moves when it appears or changes size.
+    let launchArea = "relative flex-1 min-h-0 flex flex-col"
+
+    /// Docked at the foot of `launchArea`, over the conversation's lower edge. `bottom-0` keeps
+    /// the START button (and the composer just beneath) pinned where the hand expects them while
+    /// the card grows UPWARD over the chat as its list loads — never downward off the screen and
+    /// never pushing the chat. The panes cap at `60vh` (`askPaneBase`) and scroll inside, so the
+    /// card has a bounded, screen-relative height however long the listing is. Opaque
+    /// (`bg-surface`) so the chat it covers does not read through it.
     let ask =
-        cls [ "relative shrink-0 pt-6 pb-6 bg-surface"; Stroke.dividerTop ]
+        cls [ "absolute inset-x-0 bottom-0 z-20 pt-6 pb-6 bg-surface"; Stroke.dividerTop ]
 
     /// The blue lead, DRAWN rather than bordered — and it has to be, because a `border-l-2`
     /// sits inside the band's padding box and would push every line in the card two pixels
