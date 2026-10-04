@@ -1376,6 +1376,24 @@ let tests =
                     (sprintf "expected a session-keyed doc store, found: %s" (String.Join (", ", dbNames)))
             }
 
+        // The same browser is the same person. The peer id was always kept per browser; the
+        // name was drawn fresh on every load, so a reload renamed the person and the chat then
+        // attributed what they had done to somebody new. Under `--auth localhost` nothing else
+        // names a peer, so the name a reload comes back with is the one this browser kept.
+        sessionCase "a reload keeps the peer's name" <|
+            fun page ->
+            async {
+                let ownName () =
+                    page.EvaluateAsync<string> """() => document.querySelector('[data-display-name]')?.textContent ?? ''"""
+                    |> await
+                let! before = ownName ()
+                Expect.isFalse (String.IsNullOrWhiteSpace before) "a connected peer shows its own name"
+                let! _ = await (page.ReloadAsync ())
+                do! waitFor "the reloaded page to connect" page connected
+                let! after = ownName ()
+                Expect.equal after before "the reloaded page wears the name it had before"
+            }
+
         sessionCase "a first-visit browser can begin connecting a credential" <|
             fun page ->
             async {
