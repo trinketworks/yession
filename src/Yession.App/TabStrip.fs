@@ -122,3 +122,24 @@ module TabStrip =
         | true, false -> Hidden.Before
         | false, true -> Hidden.After
         | true, true -> Hidden.Both
+
+    /// How many tabs are not wholly in the strip's window, given each tab's span in the
+    /// scroller's own content coordinates — what the strip's overflow count says (P2-2).
+    ///
+    /// A tab half under an edge counts: its name is cut, and a reader who cannot read it
+    /// cannot choose it. A pixel of slack at each edge, for `hidden`'s reason.
+    let hiddenCount (port: Scrollport) (spans: (float * float) list) : int =
+        spans
+        |> List.filter (fun (start, stop) ->
+            start < port.Scrolled - 1.0 || stop > port.Scrolled + port.Shown + 1.0)
+        |> List.length
+
+    /// The arrow walk DOWN a list of rows (the switcher's, P2-2): `walk`'s rule on the other
+    /// axis — Up and Down wrap, Home and End go to the ends, and from nowhere either arrow
+    /// lands on the first row.
+    let walkRows (key: string) (here: int) (count: int) : int option =
+        match key with
+        | "ArrowDown" -> walk "ArrowRight" here count
+        | "ArrowUp" -> walk "ArrowLeft" here count
+        | "Home" | "End" -> walk key here count
+        | _ -> None

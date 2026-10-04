@@ -3646,20 +3646,78 @@ module View =
         | PreviewSubject.Stretch _ -> []
         | PreviewSubject.Content ref -> [ contentDownloadLink ref ]
 
-    /// The terminal LIST (Plan 20, stage 0): every terminal the session has ever had, and
-    /// every verb one of them affords.
+    /// A terminal's kill (P0-5; P2-2): two presses in one place (`KillArmed`) — the first arms,
+    /// the second kills, by `ClientModel.killPress`. ONE button whichever face it wears, so the
+    /// element a keyboard pressed is the element it confirms on and focus never moves between
+    /// the two. Armed, it says what it will end and what is running there. Escape, the wait
+    /// (`ClientModel.armedMs`), or focus leaving it takes it back.
     ///
-    /// The verbs are rendered from `Affordances` and from nothing else — a row wears
-    /// exactly the controls its terminal's state allows, and a control that does not apply is
-    /// ABSENT rather than disabled. That is the same rule the pane's own controls already
-    /// followed by hand in three places; here it is one fold, which is what lets a test assert
-    /// "kill is never offered over a closed terminal" without building a browser.
+    /// ONE control in two places — a row of the switcher, and the tab's × — rather than two
+    /// look-alikes: a close and a kill that looked the same and meant opposite things is what
+    /// this replaced. `glyph` is all that differs, because a × on a tab and a stop on a row
+    /// are what each surface already says a destructive act looks like, and the faces carry
+    /// only what each place needs to sit in its line. Absent, not disabled,
+    /// where the terminal cannot be killed.
+    let private killControl
+        (dispatch: ClientMsg -> unit)
+        (model: ClientModel)
+        (face: string)
+        (armedFace: string)
+        (glyph: TemplateResult)
+        (view: TerminalView)
+        : TemplateResult =
+        if not (ClientModel.affordances view model).CanKill then Lit.nothing
+        else
+            let id = TerminalId.value view.TerminalId
+            let name = TerminalName.display model.Terminals view
+            let armed = model.KillArmed = Some view.TerminalId
+            let running = Projection.runningBlock view |> Option.map (fun b -> b.Command)
+            // Nothing running is a fact worth saying, not an absence: it is what makes a kill
+            // cheap.
+            let says = running |> Option.defaultValue Dom.Text.killIdle
+            let klass, label, content =
+                if armed then
+                    armedFace,
+                    Dom.Text.confirmKill name running,
+                    html $"""{Dom.Text.killConfirm}<span class="{Style.killArmedRunning}">{says}</span>"""
+                else face, Dom.Text.killTerminal name, glyph
+            html $"""
+                <button type="button" class="{klass}" data-terminal-close="{id}"
+                        data-terminal-close-armed="{if armed then "true" else "false"}"
+                        aria-label="{label}" title="{Dom.Text.killTerminal name}"
+                        @click={Ev(fun (e: Browser.Types.Event) ->
+                                      // Not the tab's press too: a × is not a way to select.
+                                      e.stopPropagation ()
+                                      ClientModel.killPress view.TerminalId model |> Option.iter dispatch)}
+                        @keydown={Ev(fun (e: Browser.Types.Event) ->
+                                      if armed && (e :?> Browser.Types.KeyboardEvent).key = "Escape" then
+                                          // Escape here is about the arming, and only that: the
+                                          // switcher or the preview around it stays.
+                                          e.stopPropagation ()
+                                          dispatch (ArmKillMsg None))}
+                        @focusout={Ev(fun _ -> if armed then dispatch (ArmKillMsg None))}>{content}</button>"""
+
+    /// The SWITCHER (Plan 20, stage 0; P2-2): every terminal the session has ever had, with
+    /// every verb one of them affords, every file shared into it, and the way to make another
+    /// terminal — hung under the pane's head name, over whatever the pane shows.
     ///
-    /// Every state a row can be in is carried by a MARK rather than by a sentence: a pulsing
-    /// blue dot is a command running, a peer's own colour is that peer typing, a play outline
-    /// is a recording, and the one state with no glyph — a recording the cap ate — is the only
-    /// one that says a word, in the voice this design keeps for facts that are wrong.
-    let private contentListView (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+    /// It was the pane's other face, behind a toggle nobody could read, and so a second
+    /// population: the terminals the strip did not show, reached by leaving the ones it did.
+    /// Laid over the pane instead, choosing from it is choosing a tab, and the head name and
+    /// the strip's overflow count both open it — every terminal two presses from anywhere.
+    ///
+    /// The verbs are rendered from `Affordances` and from nothing else — a row wears exactly
+    /// the controls its terminal's state allows, and a control that does not apply is ABSENT
+    /// rather than disabled. Every state a row can be in is carried by a MARK rather than by a
+    /// sentence: a pulsing blue dot is a command running, a peer's own colour is that peer
+    /// typing, a play outline is a recording, and the one state with no glyph — a recording
+    /// the cap ate — is the only one that says a word.
+    ///
+    /// A `dialog` holding lists of rows rather than a `listbox`: a row carries its verbs, and a
+    /// listbox's options may hold no controls. The name is the row's own button; the arrows
+    /// walk the names (`TabStrip.walkRows`), Tab reaches the verbs.
+    let private switcherView (dispatch: ClientMsg -> unit) (model: ClientModel) (pressingNew: unit -> unit) : TemplateResult =
+        let selected = ClientModel.selectedTerminal model
         let row (view: TerminalView) =
             let id = TerminalId.value view.TerminalId
             let name = TerminalName.display model.Terminals view
@@ -3704,11 +3762,8 @@ module View =
                         <button type="button" class="{Style.btnIconBare}" data-terminal-list-rewind="{id}"
                                 aria-label="Watch {name} from behind its edge"
                                 @click={Ev(fun _ ->
-                                              // ONE message. It used to be this and a select
-                                              // beside it, and the second cleared the pin the
-                                              // first had just taken — a verb that did nothing
-                                              // but leave the list. The rewind states the whole
-                                              // face now, list included.
+                                              // ONE message, which states the whole face — the
+                                              // switcher shut included.
                                               dispatch (RewindTerminalMsg view.TerminalId)
                                               dispatch (MoveMsg DomMove.FocusPane))}>{Icon.rewind}</button>"""
             let reattach =
@@ -3718,66 +3773,43 @@ module View =
                         <button type="button" class="{Style.btnIconBare}" data-terminal-reattach="{id}"
                                 aria-label="Attach {name} again"
                                 @click={Ev(fun _ -> dispatch (ReattachTerminalMsg view.TerminalId))}>{Icon.attach}</button>"""
-            // Two presses in one place (`KillArmed`): the first arms, the second kills. ONE button
-            // whichever face it wears, so the element a keyboard pressed is the element it
-            // confirms on and focus never moves between the two. Armed, it says what it will end
-            // and what is running there — the row names the terminal, the face names the act.
-            // Escape, the wait (`ClientModel.armedMs`), or focus leaving it takes it back.
-            let kill =
-                if not affords.CanKill then Lit.nothing
-                else
-                    let armed = model.KillArmed = Some view.TerminalId
-                    let running = Projection.runningBlock view |> Option.map (fun b -> b.Command)
-                    // Nothing running is a fact worth saying, not an absence: it is what makes
-                    // a kill cheap.
-                    let says = running |> Option.defaultValue Dom.Text.killIdle
-                    let face, label, content, press =
-                        if armed then
-                            Style.btnKillArmed,
-                            Dom.Text.confirmKill name running,
-                            html $"""{Dom.Text.killConfirm}<span class="{Style.killArmedRunning}">{says}</span>""",
-                            CloseTerminalMsg view.TerminalId
-                        else
-                            Style.btnIconBareDanger, Dom.Text.killTerminal name, Icon.stop, ArmKillMsg (Some view.TerminalId)
-                    html $"""
-                        <button type="button" class="{face}" data-terminal-close="{id}"
-                                data-terminal-close-armed="{if armed then "true" else "false"}"
-                                aria-label="{label}"
-                                @click={Ev(fun _ -> dispatch press)}
-                                @keydown={Ev(fun (e: Browser.Types.Event) ->
-                                              if armed && (e :?> Browser.Types.KeyboardEvent).key = "Escape" then
-                                                  dispatch (ArmKillMsg None))}
-                                @focusout={Ev(fun _ -> if armed then dispatch (ArmKillMsg None))}>{content}</button>"""
             let nameClass = if view.IsOpen then Style.terminalListName else Style.terminalListNameClosed
-            // What it is doing or last did, under the name: nine rows of
-            // `term N` say which is which, and this says which is the one you want.
+            // What it is doing or last did, under the name: nine rows of `term N` say which is
+            // which, and this says which is the one you want.
             let subtitle =
                 match TerminalName.subtitle view with
                 | "" -> Lit.nothing
                 | command -> html $"""<span class="{Style.terminalListSubtitle}" title="{command}">{command}</span>"""
+            // Choosing the terminal the pane is already about keeps the read it is in — a
+            // rewind, a scroll position — as its tab does; any other is read from its text.
+            let mode =
+                model.Pane
+                |> Option.bind PaneMode.subject
+                |> Option.filter (fun mode -> TerminalMode.terminal mode = view.TerminalId)
+                |> Option.defaultValue (Reading view.TerminalId)
             html $"""
                 <div class="{Style.terminalListRow}" role="listitem">
                   {state}
                   <span class="min-w-0 flex flex-col">
                     <span class="min-w-0 flex items-center">
                       <button type="button" class="{nameClass}" data-terminal-list-row="{id}"
-                              @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading view.TerminalId)))}>{name}</button>
+                              aria-current="{if selected = Some view.TerminalId then "true" else "false"}"
+                              @click={Ev(fun _ -> dispatch (OpenInPaneMsg mode))}>{name}</button>
                       {gone}
                       <span class="{Style.terminalTabPeers}">{peers}</span>
                     </span>
                     {subtitle}
                   </span>
-                  <span class="{Style.terminalListVerbs}">{rewind}{reattach}{kill}</span>
+                  <span class="{Style.terminalListVerbs}">{rewind}{reattach}{killControl dispatch model Style.btnIconBareDanger Style.btnKillArmed Icon.stop view}</span>
                 </div>"""
-        // An artifact's row, in the same grid as a terminal's. Reachability is the whole point
-        // of it: an artifact is otherwise findable only by its chip in a message, so one shared
-        // two hundred messages ago cannot be opened again at all.
+        // A file's row, in the same grid as a terminal's. Reachability is the whole point of
+        // it: a file is otherwise findable only by its chip in a message, so one shared two
+        // hundred messages ago could not be opened again at all. It opens as a PREVIEW (P2-1),
+        // which is what a file in this pane is.
         //
-        // The mark is `ContentKind`'s, the same rule the chip and the pane body use, so what a
-        // row promises and what opening it draws cannot disagree. The row is a BUTTON that
-        // selects the pane tab (a person here is choosing what to look at, not navigating away)
-        // and the size sits beside the name because it is what decides between looking at it
-        // here and taking it away.
+        // The mark is `ContentKind`'s, the same rule the chip and the preview use, so what a row
+        // promises and what opening it draws cannot disagree. The size sits beside the name
+        // because it is what decides between looking at it here and taking it away.
         let artifactRow (a: ArtifactShared) =
             let content = ArtifactRef.content a.Ref
             let mark = Icon.ofContent (ContentKind.ofMediaType a.MediaType)
@@ -3799,37 +3831,58 @@ module View =
         let heading (label: string) =
             if List.isEmpty terminals || List.isEmpty artifacts then Lit.nothing
             else html $"""<div class="{Style.listSectionLabel}">{label}</div>"""
-        match terminals, artifacts with
-        // A census of nothing. It says so and offers NOTHING, which is what tells this surface
-        // from the pane's own empty state: that one is where a session with no terminal is
-        // SENT and it carries the way to make one, while this is a place somebody came to look
-        // at what exists. Answering "nothing, and here is a button" to a question about what
-        // exists is how a list and a chooser became one surface — the mistake this reverts.
-        | [], [] ->
-            html $"""
-                <div class="{Style.contentListEmpty}" data-content-list>
-                  <span class="{Style.contentListEmptyWord}">{Dom.Text.nothingOpenedYet}</span>
-                </div>"""
-        | rows, shared ->
-            html $"""
-                <div class="{Style.contentListBody}" data-content-list role="list"
-                     aria-label="Everything in this session">
-                  {if List.isEmpty rows then Lit.nothing else heading "Terminals"}
-                  {rows |> List.map row}
-                  {if List.isEmpty shared then Lit.nothing else heading "Artifacts"}
-                  {shared |> List.map artifactRow}
-                </div>"""
+        let section (label: string) (rows: TemplateResult list) =
+            if List.isEmpty rows then Lit.nothing
+            else
+                html $"""
+                    {heading label}
+                    <div role="list" aria-label="{label}">{rows}</div>"""
+        // The arrow walk down the names — the rows' own buttons and the foot — and only for a
+        // key the walk claims, so Tab still reaches the verbs.
+        let walk (e: Browser.Types.Event) =
+            let pressed = e :?> Browser.Types.KeyboardEvent
+            let panel = e.currentTarget :?> Browser.Types.Element
+            let found =
+                panel.querySelectorAll (
+                    sprintf "[%s], [%s], [%s]" Dom.Hooks.terminalListRow Dom.Hooks.artifactListRow Dom.Hooks.switcherNew)
+            let names = [ for i in 0 .. found.length - 1 -> found.[i] :?> Browser.Types.HTMLElement ]
+            let active = Browser.Dom.document.activeElement
+            let here =
+                names
+                |> List.tryFindIndex (fun name -> System.Object.ReferenceEquals (name, active))
+                |> Option.defaultValue -1
+            match TabStrip.walkRows pressed.key here names.Length with
+            | Some next ->
+                names.[next].focus ()
+                pressed.preventDefault ()
+            | None -> ()
+        let empty =
+            if List.isEmpty terminals && List.isEmpty artifacts then
+                html $"""<span class="{Style.contentListEmptyWord}">{Dom.Text.nothingOpenedYet}</span>"""
+            else Lit.nothing
+        html $"""
+            <button type="button" class="{Style.itemMenuBackdrop}" tabindex="-1"
+                    aria-label="{Dom.Text.dismissMenu}"
+                    @click={Ev(fun _ -> dispatch CloseSwitcherMsg)}></button>
+            <div class="{Style.switcher}" role="dialog" aria-label="{Dom.Text.terminalsAndFiles}" data-content-list
+                 @keydown={Ev(walk)}>
+              {section "Terminals" (terminals |> List.map row)}
+              {section "Files" (artifacts |> List.map artifactRow)}
+              {empty}
+              <button type="button" class="{Style.switcherNew}" data-switcher-new
+                      @click={Ev(fun _ -> pressingNew ())}>+ {Dom.Text.aNewTerminal}</button>
+            </div>"""
 
     /// The content pane: a strip of terminals, and what the chat opened laid over the selected
     /// one as a PREVIEW (P2-1) — a block's read-only view, a stretch's replay, a file shared
     /// into the session. The strip answers "which terminals am I working with"; a preview is a
-    /// glance, one at a time, with its own way back, and never a tab beside them. The LIST
-    /// behind the toggle is where every terminal and every file is reached.
+    /// glance, one at a time, with its own way back, and never a tab beside them. The SWITCHER
+    /// under the head name is where every terminal and every file is reached.
     ///
     /// The strip is `Tabs` and nothing else: terminals this client opened. Every other terminal
-    /// the session has is reached through the list. Until the strip's × kills (P2-2), a tab has
-    /// no close: the list's kill is how a terminal goes, and a closed one leaves the strip once
-    /// the reader is looking at another (`ClientModel.settle`).
+    /// the session has is reached through the switcher. A tab's × is its terminal's kill
+    /// (P2-2) — there is no way to drop a tab and leave its terminal running — and a closed
+    /// one leaves the strip once the reader is looking at another (`ClientModel.settle`).
     let private contentPane (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let tabs = model.Tabs |> List.choose (fun terminal -> Projection.tryFind terminal model.Terminals)
         let selected = ClientModel.selectedTerminal model
@@ -3850,6 +3903,13 @@ module View =
             | [ only ] -> dispatch (OpenTerminalMsg ("", only))
             | _ -> dispatch TogglePaneMenuMsg
         let newAsks = List.length places > 1
+        // The switcher's foot is the same press. When it asks, it asks from the pane's own
+        // menu — under the strip's `+`, or the empty pane's button when nothing is showing —
+        // which opening shuts the switcher for (`TogglePaneMenuMsg`), and the cursor goes with
+        // it, to the control the menu hangs from (`FocusPaneEmpty` lands on whichever is there).
+        let pressingNewFromSwitcher () =
+            pressingNew ()
+            if newAsks then dispatch (MoveMsg DomMove.FocusPaneEmpty)
         let isOn (terminal: TerminalId) = selected = Some terminal
         // Who else has this terminal open, on its tab — the answer to "am I the only one
         // looking at this", which a reader has no other way to learn. Keyed by `ViewRef`, so a
@@ -3870,6 +3930,13 @@ module View =
             (activateKey: Browser.Types.Event -> unit)
             (view: TerminalView)
             =
+            // The × is worn by the selected tab, and by a tab whose kill a Delete armed — the
+            // armed face has to be on screen to be confirmed. One control with the switcher's
+            // row kill (`killControl`), so the strip and the switcher arm the same slot.
+            let kill =
+                if isOn view.TerminalId || model.KillArmed = Some view.TerminalId then
+                    killControl dispatch model Style.terminalTabKill Style.terminalTabKillArmed Icon.close view
+                else Lit.nothing
             let on = isOn view.TerminalId
             let key = ClientModel.tabKey view.TerminalId
             let id = TerminalId.value view.TerminalId
@@ -3900,7 +3967,7 @@ module View =
                          id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
                          aria-selected="{selectedAttr}" tabindex="{tabIndex}" title="{tooltip}"
                          @keydown={Ev(activateKey)}
-                         @click={Ev(fun _ -> activate ())}><span class="{Style.paneTabLabel}">{name}</span><span class="{Style.terminalTabPeers}">{peers}</span></div>"""
+                         @click={Ev(fun _ -> activate ())}><span class="{Style.paneTabLabel}">{name}</span><span class="{Style.terminalTabPeers}">{peers}</span>{kill}</div>"""
             else
                 html $"""
                     <div role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-closed-tab="{id}"
@@ -3937,16 +4004,30 @@ module View =
                     |> Option.filter (fun mode -> TerminalMode.terminal mode = terminal)
                     |> Option.defaultValue (Reading terminal)
                 dispatch (ShowInPaneMsg mode)
-            // A tab is a `div role="tab"` rather than a `button`: a tab that will carry a
-            // control of its own (P2-2's kill) cannot be a button, and what a real button gave
-            // for free was Enter and Space, so the tab says them itself — the strip's own
-            // keydown handler carries the arrow walk.
+            // A tab is a `div role="tab"` rather than a `button`: a tab that carries a control of
+            // its own (its ×) cannot be a button, and what a real button gave for free was Enter
+            // and Space, so the tab says them itself — the strip's own keydown handler carries
+            // the arrow walk.
+            //
+            // Delete is the ×'s press from the keyboard (`ClientModel.killPress`): the first arms
+            // the kill and shows its face on this tab, the second kills. Escape takes the arming
+            // back, and only that — a preview laid over the pane stays.
             let activateKey (e: Browser.Types.Event) =
                 let pressed = e :?> Browser.Types.KeyboardEvent
-                if pressed.key = "Enter" || pressed.key = " " then
+                // Only keys pressed ON the tab: Enter on its × is the ×'s, not a selection.
+                let onTab = System.Object.ReferenceEquals (e.target, e.currentTarget)
+                if onTab && (pressed.key = "Enter" || pressed.key = " ") then
                     // Space on a focused element scrolls the page.
                     pressed.preventDefault ()
                     activate ()
+                elif pressed.key = "Delete" then
+                    ClientModel.killPress terminal model
+                    |> Option.iter (fun press ->
+                        pressed.preventDefault ()
+                        dispatch press)
+                elif pressed.key = "Escape" && model.KillArmed = Some terminal then
+                    pressed.stopPropagation ()
+                    dispatch (ArmKillMsg None)
             terminalTabButton activate activateKey view
         // The preview's own head (P2-1): the way back to the terminal it is laid over, what it
         // is, and its close. Back, the close and Escape are one act (`ClosePreviewMsg`), which
@@ -4129,9 +4210,6 @@ module View =
             if key = "Escape" && model.PaneMenu then
                 dispatch ClosePaneMenuMsg
                 dispatch (MoveMsg DomMove.FocusPaneNew)
-        // A thunk, because the list renders INSTEAD of this: a pane body built on every
-        // render while the list is showing would walk a terminal's whole block history to
-        // produce markup nothing mounts, on every keystroke and every arriving record.
         let body () =
             match previewing, selected with
             // A preview, laid over the selected terminal: its head, then the thing itself. Not
@@ -4197,17 +4275,12 @@ module View =
         // The acts about the thing on screen are the ACTION ROW's, at the foot of the column
         // (`paneActionsView`) — a terminal's take and watch used to be here in the head, which
         // put one kind's verbs somewhere no other kind's could follow. The head keeps what it
-        // is: a readout of which thing this is, and the two ways out of it.
-        //
-        // Not while the LIST is showing: the row states what is on screen affords, and the
-        // list is not that — its rows carry their own verbs, from the same fold.
+        // is: a readout of which thing this is, the door to every other, and the way out.
         let paneActions =
-            if ClientModel.showsList model then Lit.nothing
-            else
-                match previewing, selected with
-                | Some preview, _ -> paneActionsView (PreviewSubject.key preview.Subject) (previewVerbs dispatch model preview)
-                | None, Some terminal -> paneActionsView (ClientModel.tabKey terminal) (terminalVerbs dispatch model terminal)
-                | None, None -> Lit.nothing
+            match previewing, selected with
+            | Some preview, _ -> paneActionsView (PreviewSubject.key preview.Subject) (previewVerbs dispatch model preview)
+            | None, Some terminal -> paneActionsView (ClientModel.tabKey terminal) (terminalVerbs dispatch model terminal)
+            | None, None -> Lit.nothing
         // The bar names what is ON SCREEN, which is the thing a reader cannot work out for
         // themselves: the preview when one is up, else the selected terminal. It used to say
         // "terminals" — the largest text on a phone screen, telling someone looking at
@@ -4217,8 +4290,8 @@ module View =
             | Some preview, _ -> previewLabel preview.Subject
             | None, Some terminal -> terminalLabel terminal
             // Nothing is selected, so the name has to describe the SURFACE — and the surface
-            // holds more than terminals. "Everything here" says what the list behind the
-            // toggle will show, which is the only thing left to say at that moment.
+            // holds more than terminals. "Everything here" says what the switcher behind it
+            // will show, which is the only thing left to say at that moment.
             | None, None -> "everything here"
         // And what that terminal is doing, after its name: the head is the one line that names
         // the selected terminal for a reader who cannot see the strip, and `term 2` alone does
@@ -4231,17 +4304,15 @@ module View =
                     html $"""<span class="{Style.terminalHeadSubtitle}"> · {command}</span>"""
                 | _ -> Lit.nothing
             | _ -> Lit.nothing
-        // The strip's kill and its attach-again are GONE (Plan 20, stage 1): both are verbs
-        // about a terminal rather than about which tab you are reading, and both now live on
-        // that terminal's row in the list, offered from the one fold that decides what a
-        // terminal's state allows. What the strip keeps is navigation and the pin — so the
-        // strip has become incapable of destroying anything, and a person closing tabs out of
-        // habit can no longer kill somebody's build by reflex.
-        //
-        // The strip and the list are alternatives, never both at once, and that is an ARIA
-        // requirement rather than a preference: `role="tablist"` promises a tabpanel showing
-        // one of its tabs, and a strip left standing over the list would be promising a panel
-        // that is not in the document. One surface at a time; the toggle is how you swap them.
+        // Whether the named terminal is running something — the mark every row and chip wears
+        // for it, before the name, so the head says it for a reader who cannot see the strip.
+        let paneRunning =
+            match previewing, selected with
+            | None, Some terminal ->
+                match Projection.tryFind terminal model.Terminals |> Option.bind Projection.runningBlock with
+                | Some _ -> html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span></span>"""
+                | None -> Lit.nothing
+            | _ -> Lit.nothing
         // Outside the scroller, so it is where it was last time whatever the strip holds, and
         // inside a positioned cell of its own, because a menu hung inside an `overflow-x-auto`
         // box is a menu clipped to that box.
@@ -4263,34 +4334,32 @@ module View =
                               @click={Ev(fun _ -> pressingNew ())}>+</button>
                       {if model.PaneMenu then newMenu Style.paneNewMenu else Lit.nothing}
                     </div>"""
+        // How many tabs the strip's window does not show, as the shell measured it
+        // (`StripHidden`), and the door to the switcher that lists them all. Only while there
+        // are any: "+0" is a control offering nothing.
+        let overflow =
+            if model.StripHidden <= 0 then Lit.nothing
+            else
+                html $"""
+                    <button type="button" class="{Style.stripOverflow}" data-pane-strip-overflow="{string model.StripHidden}"
+                            aria-haspopup="dialog" aria-expanded="{if model.Switcher then "true" else "false"}"
+                            aria-label="{Dom.Text.moreTerminals model.StripHidden}" title="{Dom.Text.switchTerminal}"
+                            @click={Ev(fun _ -> dispatch ToggleSwitcherMsg)}>+{string model.StripHidden}{Icon.caret}</button>"""
         let strip =
             html $"""
                 <div class="{Style.terminalTabs}">
                   <div class="{Style.terminalTabScroller}" data-pane-strip>
                   <div class="{Style.terminalTabList}" role="tablist" aria-label="Open content"
                        @keydown={Ev(fun (e: Browser.Types.Event) ->
-                                        // The arrow walk and nothing else. Delete used to close
-                                        // the focused tab; closing a terminal's tab is killing
-                                        // it now, and a key that kills is not one to press by
-                                        // reflex (P2-2 arms it instead).
+                                        // The arrow walk. Delete is each tab's own (it arms
+                                        // that tab's kill), because it needs the terminal.
                                         moveTabFocus (e :?> Browser.Types.KeyboardEvent))}>
                     {tabs |> List.map tabButton}
                   </div>
                   </div>
+                  {overflow}
                   {newCell}
                 </div>"""
-        // ONE control with two faces rather than a pair that swap places: it never leaves the
-        // document, so pressing it can never strand the focus that is on it. Its value is the
-        // face it will show, which is the same contract `data-nav-toggle`,
-        // `data-settings-toggle` and the terminal's own `data-terminal-watch` carry.
-        let listToggle =
-            let showingList = ClientModel.showsList model
-            html $"""
-                <button type="button" class="{Style.cls [ Style.btnIcon; "w-8 h-8 ml-auto" ]}"
-                        data-content-list-toggle="{if showingList then "pane" else "list"}"
-                        aria-pressed="{if showingList then "true" else "false"}"
-                        aria-label="Everything in this session"
-                        @click={Ev(fun _ -> dispatch ToggleContentListMsg)}>{Icon.list}</button>"""
         html $"""
             <!-- `inert` while shut: a shut pane is zero pixels wide on a desktop and off the
                  screen on a phone, and every control in it was still a Tab stop — a full cycle
@@ -4305,22 +4374,30 @@ module View =
                    aria-orientation="vertical" aria-label="Resize the content column"
                    aria-valuemin="320" aria-valuenow="420" aria-valuemax="1080"></div>
               <!-- Escape anywhere in the pane takes a preview down, as its back and its close
-                   do — but not while the strip's menu is open, whose own Escape is about the
-                   menu and runs first, on the cell it hangs from. -->
+                   do — but not while a popover is open over it, whose own Escape is about the
+                   popover and runs first, on the element it hangs from. -->
               <div class="{Style.terminalPane}"
                    @keydown={Ev(fun (e: Browser.Types.Event) ->
                                     let key = (e :?> Browser.Types.KeyboardEvent).key
-                                    if key = "Escape" && Option.isSome previewing && not model.PaneMenu then
+                                    if key = "Escape" && Option.isSome previewing && not model.PaneMenu && not model.Switcher then
                                         dispatch ClosePreviewMsg)}>
-                <div class="{Style.terminalHead}">
-                  <span class="{Style.terminalHeadName}"><span data-pane-head-name>{paneName}</span>{paneSubtitle}</span>
-                  {listToggle}
+                <!-- The head's name is the switcher's door (P2-2), and the switcher hangs from
+                     the head: Escape on the head, so it fires wherever focus is inside it. -->
+                <div class="{Style.terminalHead}"
+                     @keydown={Ev(fun (e: Browser.Types.Event) ->
+                                      if (e :?> Browser.Types.KeyboardEvent).key = "Escape" && model.Switcher then
+                                          dispatch CloseSwitcherMsg)}>
+                  <button type="button" class="{Style.terminalHeadName}" data-pane-switcher
+                          aria-haspopup="dialog" aria-expanded="{if model.Switcher then "true" else "false"}"
+                          title="{Dom.Text.switchTerminal}"
+                          @click={Ev(fun _ -> dispatch ToggleSwitcherMsg)}>{Icon.caret}{paneRunning}<span class="{Style.terminalHeadLabel}"><span data-pane-head-name>{paneName}</span>{paneSubtitle}</span></button>
                   <button type="button" class="{Style.navChevronForward}" aria-label="Back to the chat"
                           data-content-toggle="hide"
                           @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.right}</button>
+                  {if model.Switcher then switcherView dispatch model pressingNewFromSwitcher else Lit.nothing}
                 </div>
-                {if ClientModel.showsList model then Lit.nothing else strip}
-                {if ClientModel.showsList model then contentListView actions dispatch model else body ()}
+                {strip}
+                {body ()}
                 {paneActions}
               </div>
             </aside>"""

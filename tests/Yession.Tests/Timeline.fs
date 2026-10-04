@@ -645,10 +645,10 @@ let private showingAll (model: ClientModel) =
 
 let private namingTests =
     testList "A terminal's name, on every surface" [
-        testCase "the strip, the head and the list agree on a terminal's name" <| fun () ->
+        testCase "the strip, the head and the switcher agree on a terminal's name" <| fun () ->
             let model = clientOf threeUntitled |> showingAll
             let strip = Support.render model
-            let list = Support.render (Support.step ToggleContentListMsg model)
+            let list = Support.render (Support.step ToggleSwitcherMsg model)
             Expect.equal
                 [ textAt (Dom.attr Dom.Hooks.terminalTab "term-b") strip
                   textAt Dom.Hooks.paneHeadName strip
@@ -673,8 +673,8 @@ let private namingTests =
         testCase "three untitled terminals' kill controls have three accessible names" <| fun () ->
             // Nine kill buttons that all said "Kill terminal" were one control as far as
             // anybody listening could tell.
-            let list = Support.render (Support.step ToggleContentListMsg (clientOf threeUntitled |> showingAll))
-            let labels = attributeOf "data-terminal-close=" "aria-label" list
+            let list = Support.render (Support.step ToggleSwitcherMsg (clientOf threeUntitled |> showingAll))
+            let labels = attributeOf "data-terminal-close=" "aria-label" (markupAt Dom.Hooks.contentList list)
             Expect.equal (List.length labels) 3 "one kill per open terminal"
             Expect.equal (List.length (List.distinct labels)) 3 "and no two named alike"
     ]
@@ -887,11 +887,11 @@ let private edgeTabTests =
             let model = firstLook true [ [ at 1L 0.0 (opened terminalA "build") ] ]
             Expect.equal (ClientModel.selectedTerminal model) (Some terminalA) "the terminal this reader opened"
 
-        testCase "a pane that opens itself with nothing of this reader's in the strip shows the list" <| fun () ->
+        testCase "a pane that opens itself with nothing of this reader's in the strip opens the switcher" <| fun () ->
             // The strip holds only what this reader opened, so a terminal somebody else opened
             // gives it nothing to show; an empty pane over a running build is the wrong answer.
             let model = firstLook true [ [ at 1L 0.0 (openedBy (PeerRef bob) terminalA "build") ] ]
-            Expect.isTrue (ClientModel.showsList model) "the list of what is here"
+            Expect.isTrue model.Switcher "the switcher, which says what is here"
 
         testCase "an empty pane offers one way to make a terminal" <| fun () ->
             let html = Support.render (clientOf [] |> Support.step ToggleContentMsg)
@@ -1849,20 +1849,54 @@ let private listTests =
                     model
             Expect.isTrue (ClientModel.hasRecording terminalA byRecord) "a fetched record"
 
-        testCase "choosing a row shows that terminal and leaves the list" <| fun () ->
-            // One act, not two: a row that selected a terminal and left the reader in the
-            // census would have them press twice for one intention.
+        testCase "choosing a terminal in the switcher selects its tab" <| fun () ->
             let model =
                 clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
-                |> Support.step ToggleContentListMsg
-                |> Support.step (ShowInPaneMsg (Reading terminalB))
-            Expect.isFalse (ClientModel.showsList model) "the list stepped aside"
+                |> Support.step ToggleSwitcherMsg
+                |> Support.step (OpenInPaneMsg (Reading terminalB))
             Expect.equal (ClientModel.selectedTerminal model) (Some terminalB) "showing what was chosen"
 
-        // The four cases below are the tombstones of the states four agreeing fields allowed
-        // (Plan 25, stage 2). Each was a real defect, watched happening in a browser; each is
-        // now unwritable rather than merely unwritten.
-        testCase "a chip tapped over the list shows the block it names" <| fun () ->
+        testCase "choosing a terminal in the switcher shuts it" <| fun () ->
+            // One act, not two: a switcher that selected a terminal and stayed standing over
+            // it would have the reader press twice for one intention.
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
+                |> Support.step ToggleSwitcherMsg
+                |> Support.step (OpenInPaneMsg (Reading terminalB))
+            Expect.isFalse model.Switcher "shut by the choosing"
+
+        testCase "choosing a terminal in the switcher lands on its command line" <| fun () ->
+            let switching =
+                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
+                |> Support.step ToggleSwitcherMsg
+            let _, effects = ClientModel.update (OpenInPaneMsg (Reading terminalB)) switching
+            Expect.equal effects [ ClientEffect.Move (DomMove.FocusCommandLine terminalB) ] "onto what a terminal is for"
+
+        testCase "Escape shuts the switcher and hands focus back to the head" <| fun () ->
+            // Escape is `CloseSwitcherMsg` (the head's keydown): the switcher leaves the
+            // document with focus inside it, and the head name it hung from is where it goes.
+            let switching = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step ToggleSwitcherMsg
+            let model, effects = ClientModel.update CloseSwitcherMsg switching
+            Expect.isFalse model.Switcher "shut"
+            Expect.equal effects [ ClientEffect.Move DomMove.FocusPaneSwitcher ] "onto the head's name"
+
+        testCase "opening the switcher takes focus into it" <| fun () ->
+            let _, effects = ClientModel.update ToggleSwitcherMsg (clientOf [ at 1L 0.0 (opened terminalA "build") ])
+            Expect.equal effects [ ClientEffect.Move DomMove.FocusSwitcher ] "into the switcher"
+
+        testCase "opening the switcher shuts the strip's menu" <| fun () ->
+            // One popover over the pane at a time, with one Escape between them.
+            let model = clientOf [] |> Support.step TogglePaneMenuMsg |> Support.step ToggleSwitcherMsg
+            Expect.isFalse model.PaneMenu "the menu went"
+
+        testCase "opening the strip's menu shuts the switcher" <| fun () ->
+            let model = clientOf [] |> Support.step ToggleSwitcherMsg |> Support.step TogglePaneMenuMsg
+            Expect.isFalse model.Switcher "the switcher went"
+
+        // These are the tombstones of the states four agreeing fields allowed (Plan 25, stage
+        // 2). Each was a real defect, watched happening in a browser; each is now unwritable
+        // rather than merely unwritten.
+        testCase "a chip tapped over the switcher shows the block it names" <| fun () ->
             // It used to retitle the pane and show the census: opening a tab cleared the
             // playing and rewound fields and left the list flag alone, so the reader tapped a
             // command and got nothing. A face cannot survive the choice that replaces it.
@@ -1870,19 +1904,19 @@ let private listTests =
                 clientOf [ at 1L 0.0 (opened terminalA "build")
                            at 2L 1.0 (started terminalA "1" byAda "make" 1)
                            at 3L 2.0 (completed terminalA "1" (CommandSucceeded 0) 3) ]
-                |> Support.step ToggleContentListMsg
+                |> Support.step ToggleSwitcherMsg
                 |> Support.step (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Block (terminalA, block "1"))))
-            Expect.isFalse (ClientModel.showsList model) "the census stepped aside"
+            Expect.isFalse model.Switcher "the switcher stepped aside"
             Expect.equal (previewing model) (Some (PreviewSubject.Block (terminalA, block "1"))) "and the block is what is showing"
 
-        testCase "the list's rewind is one act, and it watches behind live" <| fun () ->
+        testCase "the switcher's rewind is one act, and it watches behind live" <| fun () ->
             // It used to be a rewind and a select, and the select cleared the pin the rewind
             // had just taken — a verb whose whole effect was to leave the list.
             let model =
                 withRecords (clientOf [ at 1L 0.0 (opened terminalA "shell") ])
-                |> Support.step ToggleContentListMsg
+                |> Support.step ToggleSwitcherMsg
                 |> Support.step (RewindTerminalMsg terminalA)
-            Expect.isFalse (ClientModel.showsList model) "the census stepped aside"
+            Expect.isFalse model.Switcher "the switcher stepped aside"
             Expect.isTrue (ClientModel.isRewound terminalA model) "and the reader is behind live"
             Expect.isTrue (ClientModel.terminalPlays terminalA model) "watching the recording"
 
@@ -1896,35 +1930,81 @@ let private listTests =
             let moved = Support.step (ShowInPaneMsg (Reading terminalB)) rewound
             Expect.isFalse (ClientModel.isRewound terminalA moved) "the pin died with the read that held it"
 
-        testCase "leaving the list resumes the read it covered" <| fun () ->
-            // The one thing the flag did right, kept: the census is somewhere you GO, and
-            // coming back puts you where you were — a rewind included.
-            let model =
+        // This replaced "leaving the list resumes the read it covered" (and the preview it
+        // covered): the list was a face the pane went to and had to come back from. The
+        // switcher is laid over the pane, so it covers nothing — opening and shutting it is
+        // not a way to lose your place, a rewind included.
+        testCase "opening and closing the switcher does not move the pane's read" <| fun () ->
+            let rewound =
                 withRecords (clientOf [ at 1L 0.0 (opened terminalA "shell") ])
                 |> Support.step (RewindTerminalMsg terminalA)
-                |> Support.step ToggleContentListMsg
-                |> Support.step ToggleContentListMsg
-            Expect.isFalse (ClientModel.showsList model) "back on the tab"
-            Expect.isTrue (ClientModel.isRewound terminalA model) "still behind live, where they left off"
+            let glanced = rewound |> Support.step ToggleSwitcherMsg |> Support.step CloseSwitcherMsg
+            Expect.equal glanced.Pane rewound.Pane "the same read, pin and all"
 
-        testCase "leaving the list resumes the preview it covered" <| fun () ->
-            // A preview is a face like a terminal's read: glancing at the census and coming
-            // back puts the reader where they were.
-            let model =
-                clientOf oneBlock
-                |> Support.step (chip terminalA "1")
-                |> Support.step ToggleContentListMsg
-                |> Support.step ToggleContentListMsg
-            Expect.equal (previewing model) (Some (PreviewSubject.Block (terminalA, block "1"))) "the preview, back"
-
-        testCase "reaching the list opens the column it is in" <| fun () ->
-            // Looking for a terminal you cannot see is exactly the case where the column is
-            // shut, so the toggle brings it with it.
+        testCase "opening the switcher opens the pane it hangs in" <| fun () ->
+            // Looking for a terminal you cannot see is exactly the case where the pane is
+            // shut, so the switcher brings it with it.
             let model = clientOf [ at 1L 0.0 (opened terminalA "build") ]
-            Expect.isFalse model.TerminalsOpen "the column starts shut"
-            let listed = Support.step ToggleContentListMsg model
-            Expect.isTrue (ClientModel.showsList listed) "the list is showing"
-            Expect.isTrue listed.TerminalsOpen "and the column came with it"
+            Expect.isFalse model.TerminalsOpen "the pane starts shut"
+            let switching = Support.step ToggleSwitcherMsg model
+            Expect.isTrue switching.TerminalsOpen "and the pane came with it"
+
+        testCase "hiding the pane shuts the switcher" <| fun () ->
+            // A popover does not outlive what it hangs in.
+            let model = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step ToggleSwitcherMsg
+            Expect.isFalse (Support.step ToggleContentMsg model).Switcher "shut with the pane"
+
+        // --- The strip's × (P2-2) ------------------------------------------------------------
+
+        testCase "the strip's × arms a kill on its first press" <| fun () ->
+            let model = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
+            Expect.equal (ClientModel.killPress terminalA model) (Some (ArmKillMsg (Some terminalA))) "the first press asks"
+
+        testCase "the strip's × kills on the press after the arming" <| fun () ->
+            let armed =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+                |> Support.step (ArmKillMsg (Some terminalA))
+            Expect.equal (ClientModel.killPress terminalA armed) (Some (CloseTerminalMsg terminalA)) "the second press kills"
+
+        testCase "a press on another terminal's kill arms that one instead" <| fun () ->
+            // One slot: a press elsewhere is a new question, never the confirm of the first.
+            let armed =
+                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
+                |> Support.step (ArmKillMsg (Some terminalA))
+            Expect.equal (ClientModel.killPress terminalB armed) (Some (ArmKillMsg (Some terminalB))) "B asked, A not killed"
+
+        testCase "a closed terminal has no kill to press" <| fun () ->
+            let model = clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (closedNow terminalA) ]
+            Expect.isNone (ClientModel.killPress terminalA model) "nothing left to end"
+
+        testCase "the selected tab wears its terminal's kill" <| fun () ->
+            // The acceptance: there is no control that drops a tab and leaves its terminal
+            // running. The tab's one destructive control IS the kill.
+            let html = Support.render (clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA)))
+            Expect.stringContains
+                (markupAt "role=\"tablist\"" html)
+                (Dom.attr Dom.Hooks.terminalClose (TerminalId.value terminalA))
+                "the × on the tab is the kill"
+
+        // --- The switcher's doors (P2-2) -------------------------------------------------------
+
+        testCase "the strip's overflow count is offered only while tabs are hidden" <| fun () ->
+            let model = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
+            Expect.isFalse ((Support.render model).Contains Dom.Hooks.paneStripOverflow) "nothing hidden, no count"
+            Expect.stringContains
+                (Support.render (Support.step (StripOverflowMsg 3) model))
+                (Dom.attr Dom.Hooks.paneStripOverflow "3")
+                "three hidden, and it says three"
+
+        testCase "the switcher's shortcut is Ctrl or Cmd with the backquote key" <| fun () ->
+            Expect.equal
+                [ ClientModel.opensSwitcher "Backquote" true false
+                  ClientModel.opensSwitcher "Backquote" false true
+                  ClientModel.opensSwitcher "Backquote" false false
+                  ClientModel.opensSwitcher "KeyA" true false ]
+                [ true; true; false; false ]
+                "a modifier and the key, and nothing else"
 
         // --- Somewhere to open one (Plan 20, stage 1) ---------------------------------------
 
@@ -1960,14 +2040,11 @@ let private listTests =
             let model = clientOf [ at 1L 0.0 (sandboxStarted devInHello None) ]
             Expect.equal (ClientModel.sandboxPurpose devInHello model) None "nothing to say"
 
-        testCase "the list is where somebody asked for it and nowhere else" <| fun () ->
-            // It briefly answered an empty pane too, on the reading that a session with
-            // nothing open is one list with its sections empty. But the list answers what
-            // EXISTS, and "nothing, and here is a button" is not an answer to that question —
-            // which is how a list and a chooser came to be one surface. The empty pane has its
-            // own answer again, and this one is reached by asking.
-            Expect.isFalse (ClientModel.showsList (clientOf [])) "nothing open is not a reason to show a census"
-            Expect.isTrue (ClientModel.showsList (Support.step ToggleContentListMsg (clientOf []))) "asked for, shown"
+        testCase "the switcher is shut until somebody opens it" <| fun () ->
+            // It is reached by asking — the head's name, the strip's count, the shortcut —
+            // and never put in front of a reader who did not.
+            Expect.isFalse (clientOf []).Switcher "nothing open is not a reason to show it"
+            Expect.isTrue (Support.step ToggleSwitcherMsg (clientOf [])).Switcher "asked for, shown"
 
         testCase "asking for a terminal shuts the menu that asked" <| fun () ->
             // The entry pressed is about to leave the document, and a menu left standing over
@@ -2098,12 +2175,9 @@ let private tabTests =
                 |> Support.step (ShowInTerminalMsg (terminalA, block "1"))
             Expect.equal (stripKeys reached, previewing reached) ([ "terminal:term-a" ], None) "the terminal, and the preview taken down"
 
-        // Until P2-2 turns the strip's × into the kill, a tab has no close at all: closing a
-        // terminal's tab IS ending it now, and the list's kill is the one way to do that.
-        // This replaces "an open tab offers a close, and a kept one does not".
-        testCase "no tab offers a close" <| fun () ->
-            let html = Support.render (clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step ToggleContentMsg)
-            Expect.isFalse (html.Contains "data-pane-tab-close") "the strip cannot end anything"
+        // "no tab offers a close" was here, while a tab had no × at all (P2-1). The × is back
+        // as the terminal's kill (P2-2), pinned by "the selected tab wears its terminal's
+        // kill": there is still no control that drops a tab and leaves its terminal running.
 
         // What the agent can do to a strip (`open_tab` / `close_tab` / `focus_tab`), which
         // reaches every client as events on the log rather than as synced state.
@@ -2281,9 +2355,9 @@ let private tabTests =
                     showing
             Expect.equal effects [] "the reader's cursor stays where they put it"
 
-        testCase "a kill pressed here lands on the row that takes the killed one's place" <| fun () ->
+        testCase "a kill pressed in the switcher lands on the row that takes the killed one's place" <| fun () ->
             let rows = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
-            let pressed = clientOf rows |> Support.step ToggleContentListMsg |> Support.step (CloseTerminalMsg terminalA)
+            let pressed = clientOf rows |> Support.step ToggleSwitcherMsg |> Support.step (CloseTerminalMsg terminalA)
             let _, effects =
                 ClientModel.update
                     (EventsPageMsg
@@ -2293,12 +2367,12 @@ let private tabTests =
                     pressed
             Expect.equal
                 effects
-                [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusListRow terminalB)) ]
+                [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusSwitcherRow terminalB)) ]
                 "onto the next terminal's row"
 
-        testCase "a kill of the last row lands on the row before it" <| fun () ->
+        testCase "a kill of the switcher's last row lands on the row before it" <| fun () ->
             let rows = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
-            let pressed = clientOf rows |> Support.step ToggleContentListMsg |> Support.step (CloseTerminalMsg terminalB)
+            let pressed = clientOf rows |> Support.step ToggleSwitcherMsg |> Support.step (CloseTerminalMsg terminalB)
             let _, effects =
                 ClientModel.update
                     (EventsPageMsg
@@ -2306,11 +2380,47 @@ let private tabTests =
                           LastOffset = Some (EventOffset.create 3L |> expect)
                           IsEnd = true })
                     pressed
-            Expect.equal effects [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusListRow terminalA)) ] "onto the row above"
+            Expect.equal effects [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusSwitcherRow terminalA)) ] "onto the row above"
+
+        testCase "a kill of the selected tab lands on its own tab" <| fun () ->
+            // The selected tab stays, closed, until the reader chooses another (`settle`), and
+            // the hand that pressed its × is already there.
+            let rows = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
+            let pressed =
+                clientOf rows
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+                |> Support.step (ShowInPaneMsg (Reading terminalB))
+                |> Support.step (CloseTerminalMsg terminalB)
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg
+                        { Events = [ at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalB; Reason = "closed by a peer"; By = None }) ]
+                          LastOffset = Some (EventOffset.create 3L |> expect)
+                          IsEnd = true })
+                    pressed
+            Expect.equal effects [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusTab terminalB)) ] "onto its own tab"
+
+        testCase "a kill of a tab that is not selected lands on its neighbour" <| fun () ->
+            // Delete on a focused tab the reader had walked to: it leaves the strip at once, and
+            // the tab that takes its place takes the focus.
+            let rows = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
+            let pressed =
+                clientOf rows
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+                |> Support.step (ShowInPaneMsg (Reading terminalB))
+                |> Support.step (CloseTerminalMsg terminalA)
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg
+                        { Events = [ at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer"; By = None }) ]
+                          LastOffset = Some (EventOffset.create 3L |> expect)
+                          IsEnd = true })
+                    pressed
+            Expect.equal effects [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusTab terminalB)) ] "onto the tab beside it"
 
         testCase "a terminal somebody else ends moves no focus" <| fun () ->
             let rows = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
-            let listing = clientOf rows |> Support.step ToggleContentListMsg
+            let listing = clientOf rows |> Support.step ToggleSwitcherMsg
             let _, effects =
                 ClientModel.update
                     (EventsPageMsg
@@ -2488,7 +2598,7 @@ let private tabTests =
                   "latest ends", (fun (m, n, c) -> if c = 0 then m, n, c else page [ closedNow (latest c) ] (m, n, c))
                   "chip", (fun (m, n, c) -> Support.step (chip (latest c) "1") m, n, c)
                   "back", (fun (m, n, c) -> Support.step ClosePreviewMsg m, n, c)
-                  "list row", (fun (m, n, c) -> Support.step (ShowInPaneMsg (Reading terminalA)) m, n, c)
+                  "switcher row", (fun (m, n, c) -> Support.step (OpenInPaneMsg (Reading terminalA)) m, n, c)
                   "rewind", (fun (m, n, c) -> Support.step (RewindTerminalMsg (latest c)) m, n, c)
                   "the agent opens the latest", (fun s ->
                       let _, _, c = s
@@ -2496,7 +2606,7 @@ let private tabTests =
                   "the agent shows a file", (fun s ->
                       page [ SessionEvent.TabOpened { TabOpened.Ref = ViewingFile chart; TabOpened.Focus = true } ] s)
                   "the agent takes it back", (fun s -> page [ SessionEvent.TabClosed { TabClosed.Ref = ViewingFile chart } ] s)
-                  "list", (fun (m, n, c) -> Support.step ToggleContentListMsg m, n, c) ]
+                  "switcher", (fun (m, n, c) -> Support.step ToggleSwitcherMsg m, n, c) ]
             let rec walk (depth: int) (path: string list) (state: ClientModel * int64 * int) =
                 let model, _, _ = state
                 let selected = ClientModel.selectedTerminal model

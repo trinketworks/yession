@@ -266,13 +266,16 @@ module Dom =
         let contentPanel = "data-content-panel"
         let contentToggle = "data-content-toggle"
         /// The pane head's name for what is selected — the words alone, so the strip, the
-        /// head and the list can be asked whether they agree.
+        /// head and the switcher can be asked whether they agree.
         let paneHeadName = "data-pane-head-name"
         /// On the edge tab that shows the shut pane (P1-4): how many terminals are open, and —
         /// present only while one is running a command — the running mark. What the face says,
         /// as facts a test can read without reading the words.
         let terminalsOpen = "data-terminals-open"
         let terminalsRunning = "data-terminals-running"
+        /// The control that opens the switcher (P2-2): the pane head's name itself, as a
+        /// button. One per page; the strip's overflow count is the switcher's other door.
+        let paneSwitcher = "data-pane-switcher"
         // Terminals: the strip's terminal tabs, the blocks that have run, and the composer that
         // queues the next command. The composer's hooks mirror the message composer's, because
         // the interaction is the same one.
@@ -289,8 +292,10 @@ module Dom =
         /// One per place a terminal can be opened, carrying that sandbox's rendered ref —
         /// which is what makes two repos both declaring `dev` tellable apart in a selector.
         let sandboxNew = "data-sandbox-new"
-        /// A terminal's kill, on its row in the list. On both of its faces — the glyph that
-        /// arms and the word that confirms — because they are one control in one place.
+        /// A terminal's kill, on its row in the switcher and as its tab's × (P2-2). On both of
+        /// its faces — the glyph that arms and the word that confirms — because they are one
+        /// control in one place. The same hook in both places, because it is the same control:
+        /// a test tells them apart by what they are inside (the tablist, the switcher).
         let terminalClose = "data-terminal-close"
         /// Beside `terminalClose`: `"true"` while the kill is armed, one press from done.
         let terminalCloseArmed = "data-terminal-close-armed"
@@ -394,6 +399,10 @@ module Dom =
         /// written by the browser after every render and every scroll, never by the view,
         /// because it is a fact about one scroll position. The fade is keyed on it.
         let paneStripHidden = "data-pane-strip-hidden"
+        /// The strip's overflow count (P2-2): how many tabs are out of its window, carrying
+        /// that number, present only while there are any. It opens the switcher, which lists
+        /// them all.
+        let paneStripOverflow = "data-pane-strip-overflow"
         /// The pane's body, carrying the key of whatever it is showing.
         let panePanel = "data-pane-panel"
         /// A preview laid over the selected terminal (P2-1) — a block, a stretch or a file
@@ -468,14 +477,14 @@ module Dom =
         /// How far behind live the rewound reader is, growing as the terminal keeps
         /// printing under them.
         let terminalBehind = "data-terminal-behind"
-        /// The content LIST (Plan 20, stage 0): everything this pane can show — every terminal
-        /// the session has ever had with every verb one of them affords, and every artifact
-        /// shared into it — grouped by kind, because kind is the axis you browse along. The
-        /// toggle carries `list`/`pane` — the face it will show, so the browser can hand focus
-        /// to whichever control replaces the one just pressed, exactly as the nav and settings
-        /// toggles do.
+        /// The SWITCHER (Plan 20, stage 0; P2-2): everything this pane can show — every
+        /// terminal the session has ever had with every verb one of them affords, and every
+        /// file shared into it — hung under the pane's head name (`paneSwitcher`) while it is
+        /// open. It used to replace the pane, behind a toggle of its own; it is a popover now,
+        /// and the hook kept its name because the thing it marks is still the list.
         let contentList = "data-content-list"
-        let contentListToggle = "data-content-list-toggle"
+        /// The switcher's foot: a new terminal, the same press as the strip's `+`.
+        let switcherNew = "data-switcher-new"
         /// One row, carrying its terminal's id — and the control that shows that terminal,
         /// so a row is keyboard-operable by construction rather than by a handler on a div.
         let terminalListRow = "data-terminal-list-row"
@@ -790,9 +799,15 @@ module Dom =
         /// which act and why; this is only the word that makes the row scannable.
         let refused = "refused"
         let dismissRefusal = "Dismiss"
-        /// What the list says when nothing has been opened. It offers nothing: making
-        /// something is the other door's job, and this one answers what exists.
+        /// What the switcher says when nothing has been opened, above its way to make one.
         let nothingOpenedYet = "Nothing opened here yet"
+        /// The switcher's door, named for what it does and the key that does it too.
+        let switchTerminal = "Switch terminal (Ctrl+` or ⌘`)"
+        /// The strip's overflow count, for anybody not reading the number.
+        let moreTerminals (hidden: int) =
+            if hidden = 1 then "1 more terminal — show all" else sprintf "%d more terminals — show all" hidden
+        /// The switcher's own name, as a dialog.
+        let terminalsAndFiles = "Terminals and files"
         /// A queued command that will run as soon as the terminal is free.
         let queuedReady = "ready"
         /// A queued command held because a peer is typing in its terminal (Plan 13, stage

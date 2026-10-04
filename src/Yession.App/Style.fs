@@ -2150,7 +2150,12 @@ module Style =
     /// `select-none` because it is the size of the screen. A backdrop is chrome and holds no
     /// words, so nothing is lost by making it unselectable — and what is gained is that a
     /// viewport-sized element can never take a selection that was in flight when it mounted.
-    let itemMenuBackdrop = "fixed inset-0 z-20 bg-transparent cursor-default select-none"
+    ///
+    /// It is a `button`, so it wears the ring every button does (the chrome-consistency scan):
+    /// `tabindex="-1"` keeps it out of the Tab order and a pointer press does not match
+    /// `:focus-visible`, so the ring is a promise this control never has to keep — and the one
+    /// it would, if a keyboard ever reached it.
+    let itemMenuBackdrop = cls [ "fixed inset-0 z-20 bg-transparent cursor-default select-none"; focusRing ]
 
     /// The strip's menu of things to open (Plan 20, stage 1). `itemMenu`'s own chrome, because
     /// it is the same KIND of surface — a short set of acts over the page — and two menus in
@@ -2755,10 +2760,18 @@ module Style =
     /// So: 40px, at BOTH breakpoints, holding what this terminal IS plus the acts that are
     /// about the terminal rather than about the command you are typing. The band token is not
     /// missed — a band is for a heading, and this is a readout.
-    let terminalHead = "h-10 shrink-0 flex items-center gap-2 px-3 " + Stroke.dividerBottom
-    /// Which terminal this is. The one thing in the bar that is neither a fact you can change
-    /// nor an act — so it is the only thing in ink.
-    let terminalHeadName = "flex-1 min-w-0 truncate font-ui text-small text-ink"
+    /// `relative`, because the switcher hangs from it (P2-2): a popover anchored inside the
+    /// pane's own box, since the column clips what leaves it.
+    let terminalHead = "relative h-10 shrink-0 flex items-center gap-2 px-3 " + Stroke.dividerBottom
+    /// Which terminal this is, and the door to every other one (P2-2): the name IS the
+    /// switcher's control, so the place a reader looks to learn where they are is the place
+    /// they press to go somewhere else. Ink at rest, as the name always was; blue under the
+    /// hand, because that is what interactive means here.
+    let terminalHeadName =
+        cls [ "flex-1 min-w-0 flex items-center gap-1.5 bg-transparent border-0 p-0 cursor-pointer text-left"
+              "font-ui text-small text-ink hover:text-blue transition-colors"; focusRing ]
+    /// The words inside it, which give way when the bar is narrow.
+    let terminalHeadLabel = "min-w-0 truncate"
     /// What the named terminal is doing, after its name and fainter than it: a fact about the
     /// terminal rather than the terminal, so it gives way first when the bar is narrow.
     let terminalHeadSubtitle = "font-terminal text-code-sm text-ink-faint"
@@ -2852,6 +2865,18 @@ module Style =
               Stroke.underline; focusRingInset ]
     /// A tab's NAME: as much of it as fits, and an ellipsis for the rest.
     let paneTabLabel = "max-w-40 truncate"
+    /// A tab's × (P2-2): the terminal's kill, worn by the selected tab (and by one whose kill
+    /// a Delete armed). The row verb's own face, pulled into the tab's line so it costs the tab
+    /// no height.
+    let terminalTabKill = cls [ btnIconBareDanger; "ml-1 -my-1" ]
+    /// The same, armed: the kill's armed face, pulled into the line the same way, so arming
+    /// it grows the tab sideways and never the strip downwards.
+    let terminalTabKillArmed = cls [ btnKillArmed; "ml-1 -my-1" ]
+    /// The strip's overflow count (P2-2): `+3`, for the tabs past its edges, and the door to
+    /// the switcher that lists them. The strip's own quiet voice, beside the `+`.
+    let stripOverflow =
+        cls [ "shrink-0 self-center h-8 px-1.5 inline-flex items-center gap-0.5 bg-transparent border-0 cursor-pointer"
+              "font-ui text-small tabular-nums text-ink-faint hover:text-ink transition-colors"; focusRing ]
     let terminalTab = cls [ tabBase; Stroke.clear; "text-ink-faint hover:text-ink" ]
     let terminalTabActive = cls [ tabBase; Stroke.blue; "text-ink" ]
     /// Adds a terminal. The one action in the strip that is not a selection — so it wears the
@@ -2930,12 +2955,22 @@ module Style =
     /// it. Centred like the empty pane, because it IS an empty pane — of this kind.
     let contentDownload = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
 
-    // --- The content list (Plan 20, stage 0) ---------------------------------------------
+    // --- The switcher (Plan 20, stage 0; P2-2) -------------------------------------------
 
-    /// The list's scroll box. It takes the pane's whole body, because the list IS the body
-    /// while it is showing — not a drawer over a terminal, which would leave two surfaces
-    /// arguing about which one the reader is in.
-    let contentListBody = "flex-1 min-h-0 overflow-y-auto flex flex-col"
+    /// The switcher: hung under the pane's head, across the pane's width, OVER whatever the
+    /// pane shows. It used to BE the pane's body, behind a toggle of its own, which made it a
+    /// second population — a list of terminals that was not the strip — and a place to go
+    /// rather than a glance. `itemMenu`'s chrome, because it is the same kind of surface.
+    ///
+    /// Capped in height and scrolling inside itself, so a session with forty terminals is a
+    /// list to scroll and never a popover taller than the pane it hangs in.
+    let switcher =
+        cls [ "absolute left-2 right-2 top-full mt-1 z-30 flex flex-col select-none bg-panel"
+              "max-h-[min(70vh,36rem)] overflow-y-auto overscroll-contain"
+              Stroke.ring
+              Stroke.hair ]
+    /// The switcher's foot: the way to make a terminal, after everything that exists.
+    let switcherNew = cls [ itemMenuEntry; "shrink-0 py-2" ]
 
     /// One row: state, name, verbs. A grid rather than a flex row so the names line up down
     /// the list whatever their state marks are — a ragged left edge is what makes a list of
@@ -2979,14 +3014,8 @@ module Style =
     /// The row's verbs, kept on one baseline at its right edge.
     let terminalListVerbs = "flex items-center gap-1 shrink-0"
 
-    /// The list's own empty state. It used to wear the empty pane's idle prompt and its
-    /// button, "because a session with nothing to show is one fact however you arrive at it" —
-    /// which is true of the fact and wrong about the surfaces: the pane is where a session
-    /// with nothing is SENT, and this is where somebody came to look at what exists. One
-    /// carries a way to make something and the other says there is nothing.
-    let contentListEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
-    /// What it says, and all it says.
-    let contentListEmptyWord = "font-ui font-light text-body text-ink-faint select-none"
+    /// The switcher's word when there is nothing in it, above its foot.
+    let contentListEmptyWord = "px-3 py-3 font-ui font-light text-body text-ink-faint select-none"
 
     /// The empty pane: the terminal's own symbol, display-sized, over the one press that
     /// fills it.
