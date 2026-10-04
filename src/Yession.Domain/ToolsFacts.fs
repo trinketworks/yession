@@ -66,7 +66,7 @@ module McpServerNoted =
     /// server leaving are said to the same reader, and the reader is the agent as much as
     /// the person, so both say what the agent can do about it.
     let available (m: McpServerNoted) : Phrase =
-        Phrase.text (sprintf "you can now use the %s tools" (McpServerName.value m.Name))
+        Phrase.text (sprintf "the %s tools are now available" (McpServerName.value m.Name))
 
     let unavailable (m: McpServerNoted) : Phrase =
         Phrase.text (sprintf "the %s tools are no longer available" (McpServerName.value m.Name))
