@@ -195,7 +195,9 @@ let private representativeModel : ClientModel =
       TerminalKeyframes = Map.empty
       TerminalScreens = Map.empty
       TerminalViewports = Map.empty
-      Tabs = []
+      // The terminal this client opened, as the events fold leaves it: the strip is `Tabs`
+      // and nothing else, so a terminal with no tab here would be one this client cannot see.
+      Tabs = [ TerminalTab terminalId ]
       // Nothing pressed for and still owed: this client is looking, not mid-request.
       Opening = 0
       KillPending = None

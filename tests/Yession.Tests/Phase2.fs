@@ -2146,7 +2146,14 @@ let private commandTests =
                 // E2E-4: the UI renders the block from events. The read-only command log it
                 // used to render retired with the merged tool (Plan 13, stage 3b) — a terminal
                 // block IS the read-only record now, and it is the one people can also act on.
-                let html = Support.render (b.Runner.Model ())
+                // Opened by the AGENT, so it is in nobody's strip until somebody goes to it — the
+                // list's row is that door, and `ShowInPaneMsg` is what the row sends.
+                let watching =
+                    let model = b.Runner.Model ()
+                    match model.Terminals.Terminals with
+                    | [ agents ] -> Support.step (ShowInPaneMsg (Reading (TerminalTab agents.TerminalId))) model
+                    | other -> failwithf "expected the agent's one terminal, B knows %d" (List.length other)
+                let html = Support.render watching
                 Expect.isTrue (html.Contains Dom.Hooks.terminalBlock) "the block renders"
                 Expect.isTrue
                     (html.Contains (Dom.attr Dom.Hooks.terminalBlockStatus Dom.Text.blockOk))

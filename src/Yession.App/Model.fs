@@ -456,17 +456,16 @@ module PaneTab =
         | ViewingFile ref -> ContentTab ref
         | ViewingTerminal id -> TerminalTab id
 
-    /// Whether the thing in this tab has ENDED — a terminal that has closed, or one this
-    /// session does not have at all.
+    /// Whether this tab names a terminal this session does not have at all — a tab onto
+    /// nothing, which no strip should hold.
     ///
-    /// A block, a stretch and a file are readings of something that already finished, so
-    /// there is nothing about them left to end: they answer `false` and stay in the strip
-    /// until somebody closes them. This used to be `isLive`, asked as "what may the strip
-    /// keep", which is a question about the strip's policy — and it answered `true` about a
-    /// content tab, which is not a live terminal by any reading.
-    let ended (terminals: Projection) =
+    /// Not "has ENDED", which it once was, asked of every tab on every page. Ending is a
+    /// MOMENT the events fold reads off the page it happens in; a tab opened onto a terminal
+    /// that had already ended is a recording somebody asked to read, and asking the state
+    /// rather than the moment took it back off the strip at the next unrelated event.
+    let missing (terminals: Projection) =
         function
-        | TerminalTab id -> Projection.tryFind id terminals |> Option.forall (fun t -> not t.IsOpen)
+        | TerminalTab id -> Projection.tryFind id terminals |> Option.isNone
         | BlockTab _ | StretchTab _ | ContentTab _ -> false
 
     /// What having this tab up says to everyone else (`ViewRef`) — the one place a tab becomes
@@ -1580,59 +1579,42 @@ module ClientModel =
     let isPinned (tab: PaneTab) (model: ClientModel) : bool =
         Set.contains (PaneTab.key tab) model.Pinned
 
-    /// The tab strip, in the order it renders (Plan 20, stage 1): what this client has open,
-    /// in the order it opened.
+    /// Which tab the pane shows: the stored choice while it is still in the strip, else the
+    /// first OPEN terminal in the strip. Resolved rather than stored, for the same reason
+    /// `composerTarget` is: a choice that outlives what it pointed at is a blank pane nobody
+    /// asked for. The default lands somewhere you can type.
     ///
-    /// A terminal that CLOSES keeps its tab when it was kept, and shows its recording there.
-    /// That is the pin doing what it says: the strip stopped being a census because the list
-    /// became the door to every recording, not because a closed terminal is unkeepable — and
-    /// a tab that vanishes at the moment the thing in it finishes is a tab taken away from
-    /// whoever was watching it finish.
-    let rec paneTabs (model: ClientModel) : PaneTab list =
-        // The resolved SELECTION, when a client that has opened nothing is still being shown
-        // a terminal — a strip that omitted it would be a tablist with no tab for the panel
-        // it is sitting above. Every other way into the pane opens a tab, so this is the one
-        // case left, and it ends the moment anybody touches anything.
-        let fallback =
-            match selectedPane model with
-            | Some chosen when not (model.Tabs |> List.exists (fun open' -> PaneTab.key open' = PaneTab.key chosen)) ->
-                [ chosen ]
-            | _ -> []
-        model.Tabs @ fallback
-
-    /// Which tab the pane shows: the stored choice while what it names still exists, else the
-    /// first pinned OPEN terminal, else the first open one. Resolved rather than stored, for
-    /// the same reason `composerTarget` is: a choice that outlives what it pointed at is a
-    /// blank pane nobody asked for. The default lands somewhere you can type.
+    /// Only ever a member of `Tabs`, and that is the rule the strip stands on: the strip IS
+    /// `Tabs`, so whatever the pane shows has a tab there, closable like any other. It used
+    /// to resolve a third way — the session's first open terminal, whoever's it was — and the
+    /// strip drew that default as a tab it was not: a client that had opened nothing was
+    /// shown a terminal with a close on it, and the first chip it tapped took the terminal
+    /// away, because showing the chip ended the default the terminal had been drawn under.
+    /// A client with nothing open sees the empty pane and its New terminal, and reaches
+    /// everybody else's terminals through the list — a default that OPENED a tab instead
+    /// would put an agent's terminal in a strip that holds only what this reader opened.
     ///
-    /// A choice naming a CLOSED terminal survives, and that is not an oversight: it is how
-    /// the list opens a recording. What it must not survive is naming a terminal the session
-    /// does not have.
-    and selectedPane (model: ClientModel) : PaneTab option =
+    /// A choice naming a CLOSED terminal survives while its tab does, and that is not an
+    /// oversight: it is how the list opens a recording.
+    let selectedPane (model: ClientModel) : PaneTab option =
         let exists (tab: PaneTab) =
             match tab with
             | TerminalTab id -> Projection.tryFind id model.Terminals |> Option.isSome
             | BlockTab _ | StretchTab _ | ContentTab _ -> true
+        let inStrip (tab: PaneTab) = model.Tabs |> List.exists (fun open' -> PaneTab.key open' = PaneTab.key tab)
         // The mode's SUBJECT rather than only what is on screen: while the list is up it is
         // the read the list covers, so the strip, the header and the composer keep answering
         // "which terminal am I working with" instead of going blank behind the census.
         match model.Pane |> Option.bind PaneMode.subject |> Option.map TabMode.tab with
-        | Some chosen when exists chosen -> Some chosen
+        | Some chosen when exists chosen && inStrip chosen -> Some chosen
         | _ ->
             // Open, because this default exists to land somewhere a person can TYPE. A
             // recording is a fine tab and a poor place to arrive with nothing selected.
-            let openTerminalTab =
-                model.Tabs
-                |> List.tryPick (function
-                    | TerminalTab id as tab when
-                        Projection.tryFind id model.Terminals |> Option.exists (fun t -> t.IsOpen) -> Some tab
-                    | _ -> None)
-            match openTerminalTab with
-            | Some tab -> Some tab
-            | None ->
-                Projection.openTerminals model.Terminals
-                |> List.map (fun t -> TerminalTab t.TerminalId)
-                |> List.tryHead
+            model.Tabs
+            |> List.tryPick (function
+                | TerminalTab id as tab when
+                    Projection.tryFind id model.Terminals |> Option.exists (fun t -> t.IsOpen) -> Some tab
+                | _ -> None)
 
     /// Whether the pane is showing the census rather than a tab (Plan 20, stage 0; Plan 25,
     /// stage 2). A face the pane is IN, not a flag over the one it is in — which is why
@@ -2608,12 +2590,34 @@ module ClientModel =
                     | SessionEvent.TabClosed t -> Some (PaneTab.key (PaneTab.ofView t.Ref))
                     | _ -> None)
                 |> Set.ofList
+            // Nor is the tab the reader is LOOKING AT taken from under them: the pin protects
+            // what is off screen, and what is on screen stays until they move off it or close
+            // it themselves. That held before by accident — the pane kept its choice and the
+            // strip drew it back as a tab it no longer was — and is said here now that the
+            // strip draws only `Tabs`.
+            let showing =
+                model.Pane
+                |> Option.bind PaneMode.subject
+                |> Option.map (TabMode.tab >> PaneTab.key)
+            // A terminal ENDING in this page — the moment, not the state. A tab opened onto a
+            // terminal that had already ended is a recording somebody asked to read (the list
+            // is the door to one), and an unrelated event arriving later is no reason to take
+            // it back off a strip whose every tab has a close.
+            let endedHere =
+                freshEvents
+                |> List.choose (fun e ->
+                    match e.Event with
+                    | SessionEvent.TerminalClosed t -> Some (PaneTab.key (TerminalTab t.TerminalId))
+                    | _ -> None)
+                |> Set.ofList
             let tabs =
                 (model.Tabs @ opened)
                 |> List.distinctBy PaneTab.key
                 |> List.filter (fun tab ->
-                    Set.contains (PaneTab.key tab) model.Pinned
-                    || (not (Set.contains (PaneTab.key tab) closed) && not (PaneTab.ended terminals tab)))
+                    let key = PaneTab.key tab
+                    Set.contains key model.Pinned
+                    || showing = Some key
+                    || (not (Set.contains key closed) && not (Set.contains key endedHere) && not (PaneTab.missing terminals tab)))
             // Being SHOWN the terminal you pressed for, which is the whole of what the press
             // promised. A tab in the strip is not that: `selectedPane` keeps the stored
             // choice while what it names still exists, and the terminal you were on still
@@ -3000,7 +3004,14 @@ module ClientModel =
             // over `[0, pin)` replays through the same player a finished terminal uses. If
             // following-while-behind is ever wanted, that custom source is where it goes; it is
             // not something this reducer can grow.
-            { model with Pane = Some (OnTab (WatchingBehind (terminal, length))); TerminalsOpen = true }
+            //
+            // And watching opens the tab, as every way into the pane does: the strip is the
+            // list of what the pane can show, so a rewind with no tab would be a pane showing
+            // something the strip has no name for.
+            { model with
+                Tabs = opened (TerminalTab terminal) model.Tabs
+                Pane = Some (OnTab (WatchingBehind (terminal, length)))
+                TerminalsOpen = true }
         | TogglePinMsg tab ->
             let key = PaneTab.key tab
             if isPinned tab model then
@@ -3021,9 +3032,10 @@ module ClientModel =
             // take away something a person is holding on to, while Delete on a focused tab is
             // deliberate enough to.
             //
-            // The pane lets go of it too, and only when it was the tab that was showing.
-            // Otherwise `selectedPane` would resolve the closed tab right back into the strip
-            // — closing the thing you are looking at would leave it exactly where it was.
+            // The pane lets go of it too, and only when it was the tab that was showing. A
+            // choice left naming it would be a choice in waiting: `selectedPane` passes over a
+            // tab that is not in the strip, but the next thing to put that tab back — the
+            // agent opening it, a pin — would land the pane on it with nobody asking.
             let key = PaneTab.key tab
             let letGo (mode: TabMode) = PaneTab.key (TabMode.tab mode) = key
             let pane =

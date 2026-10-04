@@ -711,7 +711,7 @@ let create (deps: Deps) : Renderer =
     let keyframesAsked = System.Collections.Generic.HashSet<string> ()
 
     let syncKeyframes (model: ClientModel) =
-        for tab in ClientModel.paneTabs model do
+        for tab in model.Tabs do
             match ClientModel.missingKeyframe tab model with
             | None -> ()
             | Some (terminal, seq) ->

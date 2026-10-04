@@ -428,7 +428,7 @@ let private oneBlock =
       at 2L 1.0 (started terminalA "1" byAda "ls -la" 1)
       at 3L 2.0 (completed terminalA "1" (CommandSucceeded 0) 3) ]
 
-let private stripKeys (model: ClientModel) = ClientModel.paneTabs model |> List.map PaneTab.key
+let private stripKeys (model: ClientModel) = model.Tabs |> List.map PaneTab.key
 
 /// More events, onto a client that has already folded some — the same page message a browser
 /// takes, so "what happened next" is folded by the path that folds everything else.
@@ -2093,6 +2093,122 @@ let private pinTests =
                 (ClientModel.selectedPane model)
                 (Some (TerminalTab terminalB))
                 "still the one the press bought"
+
+        // The other deployment, asked of the press rather than of a lease: under a verified
+        // login the session stamps what this connection opens with the USER it was attributed
+        // to, and the fold has to know that user as itself — or the press is owed a terminal
+        // that never arrives, and the pane sits on whatever it was showing.
+        testCase "a terminal I pressed for is in the strip when the log says my user opened it" <| fun () ->
+            let model =
+                clientOf [ at 1L 0.0 (attributed ada) ]
+                |> Support.step (OpenTerminalMsg ("", SandboxRef.defaultRef))
+                |> withPage [ at 2L 1.0 (openedBy (UserRef nick) terminalA "terminal") ]
+            Expect.equal (stripKeys model) [ "terminal:term-a" ] "the press bought a tab"
+
+        // Reported from a live session: the strip read `[TERMINAL ×]`, a chip was tapped, and
+        // it read `[LS /ETC | HEAD -5]` — the terminal gone, reachable again only through the
+        // list. Showing the chip never touched it; it was never a tab to begin with.
+        testCase "a chip opened after a terminal adds a tab beside it, never in its place" <| fun () ->
+            let model =
+                clientOf []
+                |> Support.step (OpenTerminalMsg ("", SandboxRef.defaultRef))
+                |> withPage oneBlock
+                |> Support.step (ShowInPaneMsg (Reading (BlockTab (terminalA, block "1"))))
+            Expect.equal (stripKeys model) [ "terminal:term-a"; "block:term-a:b-1" ] "the terminal, then the chip"
+
+        testCase "pressing + three times opens three tabs" <| fun () ->
+            let press = Support.step (OpenTerminalMsg ("", SandboxRef.defaultRef))
+            let model =
+                clientOf []
+                |> press
+                |> withPage [ at 1L 0.0 (opened terminalA "one") ]
+                |> press
+                |> withPage [ at 2L 1.0 (opened terminalB "two") ]
+                |> press
+                |> withPage [ at 3L 2.0 (opened terminalC "three") ]
+            Expect.equal
+                (stripKeys model)
+                [ "terminal:term-a"; "terminal:term-b"; "terminal:term-c" ]
+                "one tab a press"
+
+        // The half of the old default that drew a tab for what this client never opened.
+        // An agent-only session shows the empty pane and its New terminal; the agent's
+        // terminal is one row away, in the list.
+        testCase "a terminal I never opened is not on my screen" <| fun () ->
+            let model = clientOf [ at 1L 0.0 (openedBy ActorRef.Agent terminalA "running the tests") ]
+            Expect.equal (ClientModel.selectedPane model) None "nothing shown, because nothing opened"
+
+        // The terminal I am watching ends: it stays where I am looking, as its recording,
+        // with a close on it — never swapped for something else under my eyes.
+        testCase "the terminal I am watching keeps its tab when it ends" <| fun () ->
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
+                |> Support.step (ShowInPaneMsg (Reading (TerminalTab terminalA)))
+                |> withPage [ at 3L 2.0 (closedNow terminalA) ]
+            Expect.equal (ClientModel.selectedPane model) (Some (TerminalTab terminalA)) "still the one on screen"
+
+        // The list is the door to a recording, and what it opens is a tab like any other:
+        // still there after looking elsewhere and after somebody else's event lands.
+        testCase "a recording opened from the list stays in the strip until it is closed" <| fun () ->
+            let recording = TerminalTab terminalA
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (closedNow terminalA); at 3L 2.0 (opened terminalB "logs") ]
+                |> Support.step (ShowInPaneMsg (Reading recording))
+                |> Support.step (ShowInPaneMsg (Reading (TerminalTab terminalB)))
+                |> withPage [ at 4L 3.0 (opened terminalC "unrelated") ]
+            Expect.isTrue (List.contains (PaneTab.key recording) (stripKeys model)) "kept open, because nobody closed it"
+
+        // "the strip is `Tabs`" is vacuous once the strip has no other source, so the rule
+        // is asked of the thing that could still break it: every history of the acts that
+        // move a pane, exhaustively to a small depth, and after every step.
+        testCase "whatever the pane shows is in the strip" <| fun () ->
+            let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
+            let ids = [ terminalA; terminalB; terminalC ]
+            // State beside the model: the next offset, and how many terminals have opened, so
+            // each step can name a real one.
+            let steps : (string * (ClientModel * int64 * int -> ClientModel * int64 * int)) list =
+                let page (events: SessionEvent list) (model, next, count) =
+                    let envelopes = events |> List.mapi (fun i e -> at (next + int64 i) (float next) e)
+                    withPage envelopes model, next + int64 (List.length events), count
+                let latest count = ids.[max 0 (min (count - 1) 2)]
+                [ "press", (fun (m, n, c) -> Support.step (OpenTerminalMsg ("", SandboxRef.defaultRef)) m, n, c)
+                  "mine arrives", (fun (m, n, c) ->
+                      if c >= 3 then m, n, c
+                      else
+                          let m', n', _ = page [ opened ids.[c] "mine"; started ids.[c] "1" byAda "ls" 1 ] (m, n, c)
+                          m', n', c + 1)
+                  "the agent's arrives", (fun (m, n, c) ->
+                      if c >= 3 then m, n, c
+                      else
+                          let m', n', _ = page [ openedBy ActorRef.Agent ids.[c] "theirs" ] (m, n, c)
+                          m', n', c + 1)
+                  "latest ends", (fun (m, n, c) -> if c = 0 then m, n, c else page [ closedNow (latest c) ] (m, n, c))
+                  "chip", (fun (m, n, c) -> Support.step (ShowInPaneMsg (Reading (BlockTab (latest c, block "1")))) m, n, c)
+                  "list row", (fun (m, n, c) -> Support.step (ShowInPaneMsg (Reading (TerminalTab terminalA))) m, n, c)
+                  "rewind", (fun (m, n, c) -> Support.step (RewindTerminalMsg (latest c)) m, n, c)
+                  "close shown", (fun (m, n, c) ->
+                      match ClientModel.selectedPane m with
+                      | Some tab -> Support.step (CloseTabMsg tab) m, n, c
+                      | None -> m, n, c)
+                  "pin shown", (fun (m, n, c) ->
+                      match ClientModel.selectedPane m with
+                      | Some tab -> Support.step (TogglePinMsg tab) m, n, c
+                      | None -> m, n, c)
+                  "the agent shows a file", (fun s ->
+                      page [ SessionEvent.TabOpened { TabOpened.Ref = ViewingFile chart; TabOpened.Focus = true } ] s)
+                  "the agent takes it back", (fun s -> page [ SessionEvent.TabClosed { TabClosed.Ref = ViewingFile chart } ] s)
+                  "list", (fun (m, n, c) -> Support.step ToggleContentListMsg m, n, c) ]
+            let rec walk (depth: int) (path: string list) (state: ClientModel * int64 * int) =
+                let model, _, _ = state
+                match ClientModel.selectedPane model with
+                | Some tab when not (model.Tabs |> List.exists (fun t -> PaneTab.key t = PaneTab.key tab)) ->
+                    failwithf "after [%s] the pane shows %s, which the strip [%s] does not hold"
+                        (String.Join ("; ", List.rev path)) (PaneTab.key tab) (String.Join ("; ", stripKeys model))
+                | _ -> ()
+                if depth > 0 then
+                    for name, step in steps do
+                        walk (depth - 1) (name :: path) (step state)
+            walk 4 [] (clientOf [ at 1L 0.0 (sent "1" "hello") ], 2L, 0)
 
         testCase "unattributed, I am still my peer" <| fun () ->
             // `--auth localhost` verifies nobody, so the log says `PeerRef` and the answer has
