@@ -25,7 +25,7 @@ module SessionCommands =
     let handle
         (requestInterrupt: PeerId -> AgentTurnId -> Result<unit, string>)
         (openTerminal: ActorRef -> Source -> TerminalTitle -> Async<Result<TerminalId, string>>)
-        (closeTerminal: TerminalId -> string -> Async<Result<unit, string>>)
+        (closeTerminal: TerminalId -> ActorRef -> string -> Async<Result<unit, string>>)
         (takeLease: TerminalId -> ActorRef -> Async<Result<unit, string>>)
         (releaseLease: TerminalId -> ActorRef -> Async<Result<unit, string>>)
         (rearmTerminal: TerminalId -> Async<Result<unit, string>>)
@@ -99,7 +99,7 @@ module SessionCommands =
                 | Ok _ -> return CommandAccepted
                 | Error reason -> return CommandRejected reason
             | CloseTerminal terminalId ->
-                match! closeTerminal terminalId "closed by a peer" with
+                match! closeTerminal terminalId (Principal.toActor (principalFor peerId)) "closed by a peer" with
                 | Ok () -> return CommandAccepted
                 | Error reason -> return CommandRejected reason
             // Taking a lease succeeds even when someone else holds it: collaborators are

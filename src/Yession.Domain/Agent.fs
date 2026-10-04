@@ -1099,7 +1099,7 @@ module AgentWake =
         let turns : Map<string, Principal option * TurnCause> ref = ref Map.empty
         events
         |> List.fold
-            (fun (background: Map<string, Principal>, lastAgent: Map<string, Principal>, pendingCommands: (string * Principal) list, owed) event ->
+            (fun (background: Map<string, Principal * string>, lastAgent: Map<string, Principal>, pendingCommands: (string * Principal) list, owed) event ->
                 match event with
                 // A new turn takes everything before it: whatever those blocks did, that
                 // turn's digest reported it. `lastAgent` is NOT reset — it is not a debt, it
@@ -1129,7 +1129,7 @@ module AgentWake =
                         | None -> lastAgent
                     let background =
                         match b.Background, Authority.onBehalfOf b.Authority with
-                        | true, Some owner -> Map.add (BlockId.value b.BlockId) owner background
+                        | true, Some owner -> Map.add (BlockId.value b.BlockId) (owner, TerminalId.value b.TerminalId) background
                         | _ -> background
                     background, lastAgent, pendingCommands, owed
                 // A finished background command is a debt HELD, not owed yet: the same turn
@@ -1142,7 +1142,7 @@ module AgentWake =
                 | SessionEvent.TerminalBlockCompleted b ->
                     let pendingCommands =
                         match Map.tryFind (BlockId.value b.BlockId) background with
-                        | Some owner -> pendingCommands @ [ BlockId.value b.BlockId, owner ]
+                        | Some (owner, _) -> pendingCommands @ [ BlockId.value b.BlockId, owner ]
                         | None -> pendingCommands
                     background, lastAgent, pendingCommands, owed
                 // A tool call that became a block, reporting its outcome to the turn that made
@@ -1164,6 +1164,21 @@ module AgentWake =
                         match Map.tryFind (TerminalId.value e.TerminalId) lastAgent with
                         | Some owner -> better (IntegrationLost e.TerminalId, owner) owed
                         | None -> owed
+                    background, lastAgent, pendingCommands, owed
+                // The agent closing a terminal of its own ends whatever it left running there,
+                // and it knows that — it is what closing did. A completion that close CAUSED is
+                // therefore already delivered, by the agent to itself, and waking it to report
+                // it is a turn spent saying "you did that" (session NR5KB8B5, which closed a
+                // terminal its stuck wait loop held and was woken a minute later to be told
+                // the loop had ended). A PERSON closing it is still news, and stays owed.
+                | SessionEvent.TerminalClosed e when e.By = Some ActorRef.Agent ->
+                    let closed = TerminalId.value e.TerminalId
+                    let pendingCommands =
+                        pendingCommands
+                        |> List.filter (fun (block, _) ->
+                            match Map.tryFind block background with
+                            | Some (_, terminal) -> terminal <> closed
+                            | None -> true)
                     background, lastAgent, pendingCommands, owed
                 | SessionEvent.TerminalClosed e when Set.contains (TerminalId.value e.TerminalId) attached ->
                     let owed =

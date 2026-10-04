@@ -721,7 +721,7 @@ module SessionTerminals =
           /// the roster reports as `Mine`.
           OpenedByAgent : TerminalId -> bool
           /// Close a terminal. Rejected when it is not open.
-          Close : TerminalId -> string -> Async<Result<unit, string>>
+          Close : TerminalId -> ActorRef -> string -> Async<Result<unit, string>>
           /// Run one drained queue entry to completion, recording the block and streaming
           /// its output into the transcript. `onStarted` fires once the block's durable
           /// start event is written — that is the moment the queue entry has been consumed
@@ -845,7 +845,7 @@ module SessionTerminals =
           AgentTerminal = fun _ _ -> async { return Error "this session has no environment" }
           OpenAgentTerminal = fun _ _ -> async { return Error "this session has no environment" }
           OpenedByAgent = fun _ -> false
-          Close = fun _ _ -> async { return Error "this session has no terminals" }
+          Close = fun _ _ _ -> async { return Error "this session has no terminals" }
           RunBlock = fun _ _ _ _ -> async { return () }
           Refuse = fun _ _ _ _ -> async { return () }
           Take = fun _ _ -> async { return Error "this session has no terminals" }
@@ -1726,7 +1726,7 @@ module SessionTerminals =
                                 | Some pty ->
                                     let! ending = pty.Exited
                                     if isOpen id then
-                                        do! closeTerminal id (Source.shellEndedReason ending) |> Async.Ignore
+                                        do! closeTerminal id ActorRef.System (Source.shellEndedReason ending) |> Async.Ignore
                                 | None -> ()
                             })
                     | Attached _ ->
@@ -1787,14 +1787,14 @@ module SessionTerminals =
                                 if not ending && isOpen id then
                                     ending <- true
                                     do!
-                                        closeTerminal id (Source.endedReason capabilities outcome)
+                                        closeTerminal id ActorRef.System (Source.endedReason capabilities outcome)
                                         |> Async.Ignore
                             })
                     | None -> ()
                     return Ok id
             }
 
-        and closeTerminal (id: TerminalId) (reason: string) : Async<Result<unit, string>> =
+        and closeTerminal (id: TerminalId) (by: ActorRef) (reason: string) : Async<Result<unit, string>> =
             async {
                 if not (isOpen id) then return Error "terminal is not open"
                 else
@@ -1853,7 +1853,7 @@ module SessionTerminals =
                     // of the recording too, and answering the default (`true`, for the shells
                     // that predate sources) would tell a reader of a closed DEVICE to go and
                     // use execute_command on it.
-                    do! append (SessionEvent.TerminalClosed { TerminalId = id; Reason = reason })
+                    do! append (SessionEvent.TerminalClosed { TerminalId = id; Reason = reason; By = Some by })
                     // Whatever was queued here is now queued on nothing. The drain is what
                     // says so, on the record, and it is told now rather than at the next doc
                     // update — which, for a queue nobody is writing to, is never.
@@ -2547,7 +2547,7 @@ module SessionTerminals =
                                           Result = CommandExecutionFailed "the session stopped while it was running"
                                           ToSeq = readTranscript id 0 None |> List.length })
                         | None -> ()
-                        do! append (SessionEvent.TerminalClosed { TerminalId = id; Reason = "session restarted" })
+                        do! append (SessionEvent.TerminalClosed { TerminalId = id; Reason = "session restarted"; By = Some ActorRef.System })
                     | Error _ -> ()
                 leftOpen <- Set.empty
             }
@@ -2735,7 +2735,7 @@ module SessionTerminals =
                         | _ -> None
                     match retired with
                     | Some (id, true) ->
-                        let! _ = closeTerminal id "the shell profile changed"
+                        let! _ = closeTerminal id ActorRef.System "the shell profile changed"
                         ()
                     | _ -> ()
                     // What was STORED, not what the caller typed: the answer, the timeline

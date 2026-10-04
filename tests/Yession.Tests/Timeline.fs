@@ -284,7 +284,7 @@ let private stretchTests =
                 merge
                     [ at 1L 0.0 (opened terminalA "shell")
                       at 2L 1.0 (took terminalA (PeerRef bob) 5)
-                      at 3L 9.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer" }) ]
+                      at 3L 9.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer"; By = None }) ]
             match stretchesOf items with
             | [ stretch ] ->
                 Expect.equal stretch.End LeaseHolderGone "nobody decided anything; the terminal went away"
@@ -341,7 +341,7 @@ let private unchangedTests =
                   at 3L 2.0 (completed terminalA "1" (CommandSucceeded 0) 9)
                   at 4L 3.0 (took terminalA (PeerRef bob) 9)
                   at 5L 4.0 (released terminalA (PeerRef bob) LeaseReleased 20)
-                  at 6L 5.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "done" }) ]
+                  at 6L 5.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "done"; By = None }) ]
             let said = [ at 7L 6.0 (sent "1" "ship it") ]
             let withTerminals, _ = ConversationProjection.applyEvents None (terminalEvents @ said) ConversationProjection.empty
             let without, _ = ConversationProjection.applyEvents None said ConversationProjection.empty
@@ -662,7 +662,7 @@ let private recordedTerminal =
       at 3L 2.0 (completed terminalA "1" (CommandSucceeded 0) 3)
       at 4L 3.0 (started terminalA "2" byAda "make test" 3)
       at 5L 4.0 (completed terminalA "2" (CommandFailed 1) 5)
-      at 6L 5.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer" }) ]
+      at 6L 5.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer"; By = None }) ]
 
 let private withRecords (model: ClientModel) =
     [ 1, { At = 10.0; Kind = TranscriptOutput; Data = "building\r\n" }
@@ -904,7 +904,7 @@ let private videoTests =
 let private liveOnlyTerminal =
     [ at 1L 0.0 (opened terminalA "shell")
       at 2L 1.0 (took terminalA (PeerRef bob) 1)
-      at 3L 5.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer" }) ]
+      at 3L 5.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer"; By = None }) ]
 
 let private readsTests =
     testList "Which read a surface shows" [
@@ -958,7 +958,7 @@ let private readsTests =
                 |> Support.step (RewindTerminalMsg terminalA)
                 |> Support.step
                     (EventsPageMsg
-                        { Events = [ at 6L 61.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "done" }) ]
+                        { Events = [ at 6L 61.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "done"; By = None }) ]
                           LastOffset = Some (EventOffset.create 6L |> expect)
                           IsEnd = true })
             Expect.isFalse (ClientModel.isRewound terminalA model) "no live edge, no rewind"
@@ -1060,7 +1060,7 @@ let private dvrTests =
                     (TerminalRecordMsg (terminalA, 5, { At = 60.0; Kind = TranscriptOutput; Data = "after\r\n" }))
                 |> Support.step
                     (EventsPageMsg
-                        { Events = [ at 3L 61.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "done" }) ]
+                        { Events = [ at 3L 61.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "done"; By = None }) ]
                           LastOffset = Some (EventOffset.create 3L |> expect)
                           IsEnd = true })
             Expect.isFalse (ClientModel.isRewound terminalA model) "no live edge, no rewind"
@@ -1128,7 +1128,7 @@ let private dvrTests =
                 withRecords
                     (clientOf
                         [ at 1L 0.0 (opened terminalA "shell")
-                          at 2L 1.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "done" }) ])
+                          at 2L 1.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "done"; By = None }) ])
             Expect.isFalse
                 ((Support.render closed).Contains (Dom.attr Dom.Hooks.terminalWatch "live"))
                 "there is no live edge to be behind"
@@ -1394,7 +1394,7 @@ let private toolTests =
 // --- The terminal list (Plan 20, stage 0) --------------------------------------------------
 
 let private closedNow (id: TerminalId) =
-    SessionEvent.TerminalClosed { TerminalId = id; Reason = "closed by a peer" }
+    SessionEvent.TerminalClosed { TerminalId = id; Reason = "closed by a peer"; By = None }
 
 /// A sandbox a repo declared and this session brought up — what the chooser offers beside
 /// `default`. Scoped, because the scope is what makes two repos' `dev` two places.
