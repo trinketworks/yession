@@ -936,6 +936,51 @@ let tests =
                     |> Async.Ignore
             })
 
+        // While somebody else holds a terminal's keyboard the session HOLDS its queue rather
+        // than refusing it, so a watcher can still say the next command and it runs the moment
+        // the terminal is handed back. That only works if the watcher has somewhere to write
+        // it: the lease bar used to stand in place of the command line.
+        Tag.needs "a command that really runs" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        sessionPair "a watcher queues a command during a lease and it runs on hand-back" <|
+            fun pageA pageB ->
+            async {
+                do! awaitU (pageA.Locator("[data-content-toggle='show']").First.ClickAsync ())
+                do! openNewTerminal pageA
+                let hasTab = """!!document.querySelector('[data-terminal-tab]')"""
+                let! _ = await (pageA.WaitForFunctionAsync hasTab)
+                do! awaitU (pageB.Locator("[data-content-toggle='show']").First.ClickAsync ())
+                do! awaitU (pageB.Locator("[data-pane-switcher]").First.ClickAsync ())
+                let! _ = await (pageB.WaitForSelectorAsync "[data-content-list] [data-terminal-list-row]")
+                do! awaitU (pageB.Locator("[data-content-list] [data-terminal-list-row]").First.ClickAsync ())
+                let! _ = await (pageB.WaitForFunctionAsync hasTab)
+
+                // A takes the keyboard; B sees whose it is.
+                let! _ = await (pageA.WaitForSelectorAsync "[data-terminal-take]")
+                do! awaitU (pageA.Locator("[data-terminal-take]").First.ClickAsync ())
+                do! waitFor "B to see the lease" pageB "!!document.querySelector('[data-terminal-lease]')"
+
+                // B writes the next command anyway, and sends it the way a person does.
+                let line = "[data-terminal-input^='term-draft:']:not([readonly])"
+                let! _ = await (pageB.WaitForSelectorAsync line)
+                do! awaitU (pageB.ClickAsync line)
+                do! awaitU (pageB.Keyboard.TypeAsync "echo queued-behind-a-lease")
+                do! awaitU (pageB.Keyboard.PressAsync "Enter")
+                do! waitFor
+                        "B's command held for the terminal, not run and not refused"
+                        pageB
+                        (sprintf "!!document.querySelector('[%s=\"%s\"]')"
+                            Yession.App.Dom.Hooks.terminalQueuedStatus Yession.App.Dom.Text.queuedAwaitingTerminal)
+
+                // A hands it back, and what B queued runs — for both of them.
+                do! awaitU (pageA.ClickAsync "[data-terminal-release]")
+                let ran =
+                    """[...document.querySelectorAll('[data-terminal-block]')]
+                         .some(b => b.textContent.includes('echo queued-behind-a-lease')
+                                 && b.getAttribute('data-terminal-block-status') === 'ok')"""
+                do! waitFor "the queued command to have run, on A" pageA ran
+                do! waitFor "the queued command to have run, on B" pageB ran
+            })
+
         // Reported from a live session: `+`, a command, then the command's chip in the chat —
         // and the strip went from `[TERMINAL]` to `[ECHO ONE]`, the live terminal gone from it
         // and reachable again only through the list. A chip opens a PREVIEW over the terminal
@@ -3892,11 +3937,9 @@ let editorTests =
                 Expect.equal after before "Tab types a tab; it does not leave the terminal"
             }
         // Taking the keyboard is the whole of what live mode is, and the keyboard has to
-        // follow it. Only a browser can answer this: both routes into live mode remove the
-        // element that had focus in the render they arrive on — `take` removes itself, and the
-        // lease landing replaces the command line with the lease bar — so what is under test
-        // is where focus ends up after a DOM swap, which is not a fact any rendered string
-        // holds.
+        // follow it. Only a browser can answer this: `take` removes itself in the render the
+        // lease arrives on, so what is under test is where focus ends up after a DOM swap,
+        // which is not a fact any rendered string holds.
         editorCase "taking a terminal puts the keyboard in it" <| fun page ->
             async {
                 // `term-harness` is the pane's opening tab, and it holds no lease: a terminal
@@ -3916,6 +3959,27 @@ let editorTests =
                 do! awaitU (page.Keyboard.PressAsync "ArrowUp")
                 let! typed = await (page.EvaluateAsync<string> "() => window.__typed || ''")
                 Expect.equal typed "\u001b[A" "a key pressed after the take reaches the terminal"
+            }
+        // The alt-screen flip, from where it is usually set off: `vim` typed into the command
+        // line and run from it, the block takes the screen, and its author gets the keyboard.
+        // The command line STAYS through a lease (it queues for the hand-back), so focus is
+        // not stranded on `body` — it is somewhere worse, a line under the editor, where the
+        // `i` meant for vim would be typed into the queue instead.
+        editorCase "a lease landing on its author's command line takes the keyboard to the screen" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                let line = "#shell " + commandLine "term-harness"
+                let! _ = await (page.WaitForSelectorAsync line)
+                do! awaitU (page.FocusAsync line)
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """document.activeElement?.getAttribute('data-terminal-input')?.startsWith('term-draft:term-harness:') === true""")
+
+                do! awaitU (page.EvaluateAsync "() => window.__take('term-harness')")
+                do! waitFor
+                        "the keyboard on the screen the lease landed on, not on the command line under it"
+                        page
+                        """document.activeElement?.getAttribute('data-terminal-screen') === 'term-harness'"""
             }
         // The other route in, and the reason the focus move lives in the render loop rather
         // than on the press: a block that takes the screen hands its author the keyboard with

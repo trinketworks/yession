@@ -80,15 +80,18 @@ let toPane () : unit =
         |> Option.orElseWith (fun () -> find "[data-pane-switcher]")
         |> focusOn)
 
-/// Onto a terminal's command line: THIS peer's, which is the one that is not `readonly` —
-/// every other author's line in the same terminal is drawn beside it, read-only. A terminal
-/// whose keyboard this peer holds has no command line and takes keystrokes on its screen; one
-/// whose keyboard somebody else holds, or that has closed, has neither, and the panel is what
-/// is left. Never nothing: focus that lands nowhere lands on `body`.
+/// Onto where this peer types into a terminal. A terminal whose keyboard this peer HOLDS takes
+/// keystrokes on its screen — the command line under it still queues for the hand-back, but
+/// somebody who took the keyboard took it to type at the shell, so the screen comes first.
+/// Otherwise THIS peer's command line, which is the one that is not `readonly` — every other
+/// author's line in the same terminal is drawn beside it, read-only — and it is there whoever
+/// else holds the keyboard. A closed terminal has neither, and the panel is what is left.
+/// Never nothing: focus that lands nowhere lands on `body`.
 let toCommandLine (terminal: Yession.Domain.TerminalId) : unit =
     nextFrame (fun () ->
-        find (sprintf "[data-terminal-input^=\"%s\"]:not([readonly])" (Yession.Domain.Collab.BodyKey.terminalDraftsIn terminal))
-        |> Option.orElseWith (fun () -> find "[data-terminal-screen][tabindex=\"0\"]")
+        find (sprintf "[data-terminal-screen=\"%s\"][tabindex=\"0\"]" (Yession.Domain.TerminalId.value terminal))
+        |> Option.orElseWith (fun () ->
+            find (sprintf "[data-terminal-input^=\"%s\"]:not([readonly])" (Yession.Domain.Collab.BodyKey.terminalDraftsIn terminal)))
         |> Option.orElseWith (fun () -> find "[data-pane-panel]")
         |> focusOn)
 
@@ -201,11 +204,16 @@ let toWatchToggle () : unit =
 /// Hand focus to the live screen when this peer has just become the one typing into it.
 ///
 /// Taking the keyboard is the whole of what live mode IS, and until this the keyboard did not
-/// follow it. Both routes in remove the focused element in the same render they arrive on:
-/// pressing `take` removes the `take` button, and the lease landing replaces the command line
-/// with the lease bar — so whichever of the two had focus is gone and focus falls to `body`.
-/// The person then types into nothing, which is indistinguishable from a terminal that does
-/// not work.
+/// follow it. Pressing `take` removes the `take` button in the render the lease arrives on, so
+/// focus falls to `body` and the person then types into nothing, which is indistinguishable
+/// from a terminal that does not work.
+///
+/// The other route in leaves focus somewhere that is no longer where the keys belong. The
+/// alt-screen flip hands a block's author the terminal it just took over — `vim`, typed into
+/// this terminal's command line and run from it — and the command line stays (it queues for
+/// the hand-back), so the person's focus is still in it, about to type `i` into a line under
+/// the editor rather than into the editor. Being in THIS terminal's command line when its
+/// keyboard becomes yours is counted as stranded.
 ///
 /// The guard is what makes this safe to run from the render loop: a lease can land on a
 /// terminal while its holder is reading somewhere else entirely (the alt-screen flip follows
@@ -213,13 +221,14 @@ let toWatchToggle () : unit =
 /// message composer because a terminal three tabs away went full-screen would be worse than
 /// the stranding it fixes.
 ///
-/// `tabindex="0"` in the selector rather than the terminal's id: the screen renders in three
-/// variants and only the holder's takes keystrokes, so the focusable one is the only one this
-/// could ever mean. The pane shows one tab at a time, which is what makes that unambiguous —
-/// the same reason `toWatchToggle` names no terminal either.
-let toTerminalScreen () : unit =
+/// `tabindex="0"` as well as the terminal's id: the screen renders in three variants and only
+/// the holder's takes keystrokes.
+let toTerminalScreen (terminal: Yession.Domain.TerminalId) : unit =
     nextFrame (fun () ->
-        if stranded [] then focusOn (find "[data-terminal-screen][tabindex=\"0\"]"))
+        let ownLine =
+            sprintf "[data-terminal-input^=\"%s\"]" (Yession.Domain.Collab.BodyKey.terminalDraftsIn terminal)
+        if stranded [ ownLine ] then
+            focusOn (find (sprintf "[data-terminal-screen=\"%s\"][tabindex=\"0\"]" (Yession.Domain.TerminalId.value terminal))))
 
 /// Scroll a terminal's history to one of its commands, and say which one (Plan 25, stage 3).
 ///

@@ -408,6 +408,15 @@ let private heldTerminalModel : ClientModel =
                 leasedTerminalModel.Terminals.Terminals
                 |> List.map (fun t -> { t with Lease = Some (PeerRef ada) }) } }
 
+/// The accessible name of THIS peer's send control in a rendered page — what its own command
+/// line's button says pressing it will do. Empty when there is no such control, so a case
+/// asserting a name also fails when the line is gone.
+let private sendName (html: string) : string =
+    let tag =
+        System.Text.RegularExpressions.Regex.Match(
+            html, sprintf "<button[^>]*%s[^>]*>" (Dom.attr Dom.Hooks.terminalSend (PeerId.value ada))).Value
+    System.Text.RegularExpressions.Regex.Match(tag, "aria-label=\"([^\"]*)\"").Groups.[1].Value
+
 /// The same session with the terminal's shell no longer marking (Plan 13, stage 2f). The
 /// queued command is a PEER's.
 let private lostIntegrationModel : ClientModel =
@@ -965,11 +974,40 @@ let private uiChecklistTests =
                   "the queue is still there", Dom.attr Dom.Hooks.terminalQueued "queue-ui-term" ]
             for label, marker in required do
                 Expect.isTrue (html.Contains marker) (sprintf "%s (`%s`) must render" label marker)
-            // The command line is gone, not disabled: a box marked "Run" that cannot run
-            // anything is the misleading half of live mode.
-            Expect.isFalse
+
+        // This case used to assert the opposite: that the command line GAVE WAY to the bar,
+        // because a box marked "Run" that could not run was the misleading half of live mode.
+        // The fix for that was the label, not the box. The session holds the queue while a
+        // peer is live rather than refusing it, so the watcher's line is the one thing they
+        // can still use — and without it they had nowhere to say the next command.
+        testCase "live mode: a watcher keeps their command line under the lease bar" <| fun () ->
+            let html = Support.render leasedTerminalModel
+            Expect.isTrue
                 (html.Contains (Dom.attr Dom.Hooks.terminalInput (BodyKey.terminalDraft terminalId ada)))
-                "the composer's own command line gives way to the bar"
+                "the composer's own command line is still there"
+
+        testCase "live mode: Run says Queue, for the watcher and for the holder" <| fun () ->
+            // What a send does while somebody holds the keyboard is wait for the hand-back,
+            // and the control says so in its accessible name rather than leaving the queue
+            // card to explain afterwards.
+            Expect.equal
+                (sendName (Support.render leasedTerminalModel), sendName (Support.render heldTerminalModel))
+                (Dom.Text.queue, Dom.Text.queue)
+                "both sides of a lease queue"
+
+        testCase "a terminal nobody holds runs what is sent" <| fun () ->
+            // The other half, so the case above cannot pass on a control that always says Queue.
+            Expect.equal (sendName (Support.render representativeModel)) Dom.Text.run "a free terminal runs"
+
+        testCase "behind live, the composer is still there and still runs" <| fun () ->
+            // Rewinding is where this reader is looking, not something the terminal is doing:
+            // it is still live, still takes commands, and runs them now.
+            let rewound = Support.step (RewindTerminalMsg terminalId) representativeModel
+            Expect.isTrue (ClientModel.isRewound terminalId rewound) "the fixture is behind live"
+            Expect.equal
+                (sendName (Support.render rewound))
+                Dom.Text.run
+                "a command line, whose send runs"
 
         testCase "a queued command in a leased terminal says it waits for the TERMINAL" <| fun () ->
             // A queue that said only *pending* would leave the hold looking like a stall;

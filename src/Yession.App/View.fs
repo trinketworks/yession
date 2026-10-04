@@ -3181,8 +3181,11 @@ module View =
         ClientModel.terminalQueue terminal model |> List.map (pendingCard actions dispatch model)
 
     /// The lease bar (Plan 13, stage 2e): who is typing here, and the one control that
-    /// changes it. Shown in place of the command lines — never in place of the queue, which
-    /// keeps working while a peer is live and is precisely what the release will run.
+    /// changes it. A banner ABOVE the command lines, never in their place: the session holds
+    /// the queue while somebody is live rather than refusing it
+    /// (`TerminalQueueDrain.AwaitingTerminal`), so a line written now is precisely what the
+    /// hand-back will run, and a watcher with nowhere to write it had lost the one thing they
+    /// could still do.
     let private terminalLeaseBar (dispatch: ClientMsg -> unit) (model: ClientModel) (terminal: TerminalId) (holder: ActorRef) : TemplateResult =
         let mine = ClientModel.me model
         // The hook keeps the stable token (a test asserting WHO holds a lease should not have
@@ -3277,6 +3280,18 @@ module View =
                 html $"""
                     <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model editor}"
                           title="{name}" data-terminal-draft-editor="{ActorRef.token editor}"></span>""")
+        // What a send does NOW, said on the control rather than left for the queue card to
+        // explain afterwards. While somebody holds the keyboard the session holds the queue,
+        // so the press queues and says for whom it waits. Behind the live edge it still RUNS —
+        // being rewound is this reader's view, not the terminal's state — and the title says
+        // where it will be seen. `hasCommand` is untouched: whether there is anything to send
+        // is one question, what sending does is another.
+        let sendName, sendWhen =
+            match lease with
+            | Some holder when holder = ClientModel.me model -> Dom.Text.queue, Dom.Text.runsOnHandBack None
+            | Some holder -> Dom.Text.queue, Dom.Text.runsOnHandBack (Some (Entity.actorName model holder))
+            | None when ClientModel.isRewound terminal model -> Dom.Text.run, Dom.Text.runsBehindLive
+            | None -> Dom.Text.run, ""
         // Someone else mid-command: their live text, read-only here. Watching a collaborator
         // type a command is the same affordance as watching them type a message, which is
         // the whole reason the terminal composer is built out of the message composer's parts.
@@ -3288,7 +3303,7 @@ module View =
                   <input type="text" class="{Style.fieldMonoBare}" readonly aria-label="{ClientModel.nameOf author model}'s command"
                          data-terminal-input="{BodyKey.terminalDraft terminal author}">
                   <span class="{Style.terminalEditors}">{editors author}</span>
-                  <button type="button" class="{Style.btnSendInField}" aria-label="Run"
+                  <button type="button" class="{Style.btnSendInField}" aria-label="{sendName}" title="{sendWhen}"
                           data-terminal-send="{PeerId.value author}"
                           @click={Ev(fun _ -> actions.SendTerminalDraft terminal author)}>{Icon.send}</button>
                 </div>"""
@@ -3299,15 +3314,16 @@ module View =
         // anything to do without the view measuring the field, and the two cannot disagree.
         let hasCommand = drafting |> List.contains mine
         let runClass = if hasCommand then Style.btnSendInField else Style.btnSendInFieldWaiting
-        // In live mode the command lines give way to the lease bar. Drafting into a box marked
-        // "Run" that cannot run anything is the misleading half; the QUEUE above stays, because
-        // queueing during a live session is meaningful — the entry runs the moment the terminal
-        // comes back.
-        let commandLines =
+        // In live mode the lease bar stands ABOVE the command lines, a sibling rather than a
+        // replacement, so the line you were typing in is the same element before, during and
+        // after somebody's turn at the keyboard — focus and caret stay put when a lease starts
+        // under them. Run says `Queue` meanwhile (`sendName`), because that is what it does.
+        let leaseBar =
             match lease with
             | Some holder -> terminalLeaseBar dispatch model terminal holder
-            | None ->
-                html $"""
+            | None -> Lit.nothing
+        let commandLines =
+            html $"""
                     <div>
                       {others |> List.map peerDraft}
                       <div class="{Style.terminalCommandWrap}">
@@ -3329,7 +3345,7 @@ module View =
                                data-terminal-input="{BodyKey.terminalDraft terminal mine}">
                         <div class="{Style.terminalCommandTrail}">
                           <span class="{Style.terminalEditors}">{editors mine}</span>
-                          <button type="button" class="{runClass}" aria-label="Run" aria-keyshortcuts="Enter"
+                          <button type="button" class="{runClass}" aria-label="{sendName}" title="{sendWhen}" aria-keyshortcuts="Enter"
                                   data-terminal-send="{PeerId.value mine}"
                                   @click={Ev(fun _ -> actions.SendTerminalDraft terminal mine)}>{Icon.send}</button>
                         </div>
@@ -3359,6 +3375,7 @@ module View =
               <span class="{Style.bandEdge}"></span>
               {lostBanner}
               {terminalQueue actions dispatch model terminal}
+              {leaseBar}
               {commandLines}
             </section>"""
 
@@ -4314,9 +4331,10 @@ module View =
             html $"""
                 {above}
                 {if not view.IsOpen then terminalClosedBand model view
-                 // Behind the live edge there is nothing to type into and nothing to queue
-                 // against what you are watching: the way back is the bar's `Live`.
-                 elif rewound then Lit.nothing
+                 // Behind the live edge the terminal is still live, and still takes commands:
+                 // rewinding is where this reader is LOOKING, not something the terminal is
+                 // doing. The composer stays under the recording, and its Run says where what
+                 // it runs will be seen.
                  else terminalComposer actions dispatch model view.TerminalId}"""
         // Somewhere new to put something — the menu the pivot's `+` hangs. A MENU and not a
         // section of a list, which is what this was and what made it unreadable: a row that
