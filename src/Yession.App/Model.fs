@@ -1031,6 +1031,13 @@ type ClientModel =
       /// can be told from "never remembered", which `TerminalsOpen = false` alone cannot say.
       /// Set at boot, never changed.
       PaneRemembered : bool
+      /// Whether this client has, once, read the log through to where the session said it
+      /// ended — after which what a page brings is NEWS, and before which it is history being
+      /// replayed. Latched: a later catch-up (a reconnect, or the round trip after any send)
+      /// does not turn news back into history. What reads it is a move that answers a change
+      /// under the reader (`keyboardSwap`): a terminal's face changing in a replayed log is
+      /// not something that happened under anybody's hand.
+      HeardThrough : bool
       /// Whether the pane may still open ITSELF, once, when the log has been read through
       /// (P1-4, `openOfItself`): a desktop's first look at a session with a terminal running
       /// should show it, rather than a header with nothing in it about the build.
@@ -1219,6 +1226,15 @@ type DomMove =
     /// since, and a caret yanked out of the message composer because a terminal landed would
     /// be worse than the stranding this exists to fix.
     | OnArrival of DomMove
+    /// The same move, made only while focus has been DROPPED: on `body`, because the control
+    /// that held it has just left the document — or on the pane's panel, which is where the
+    /// last such drop was caught when there was nothing better to land on.
+    ///
+    /// Narrower than `OnArrival`, which also moves a hand that is anywhere in the pane. For a
+    /// swap nobody here pressed for — the terminal on screen changing what it offers a
+    /// keyboard (`ClientModel.keyboardSwap`) — a reader in the strip or the switcher when a
+    /// shell dies is still somewhere, and is left there.
+    | IfDropped of DomMove
     /// Scroll a terminal's history to one of its commands and mark it.
     | RevealBlock of TerminalId * BlockId
     /// Scroll the conversation to one message and mark it.
@@ -1784,6 +1800,7 @@ module ClientModel =
           TerminalsOpen = false
           PaneMemory = None
           PaneRemembered = false
+          HeardThrough = false
           PaneOpensItself = false
           ItemMenu = None
           PaneMenu = false
@@ -2011,6 +2028,12 @@ module ClientModel =
     /// is read first and holds most of it; and caught up.
     let private readThrough (model: ClientModel) : bool =
         model.Connection = Connected && model.HistoryRead && not model.EventConsumer.IsCatchingUp
+
+    /// Latch `HeardThrough` on whichever message first carries the client past `readThrough`.
+    /// Run last after every message (`fold`), so that it is the fold's own verdict and no
+    /// message has to remember to set it.
+    let private heard (model: ClientModel) : ClientModel =
+        if model.HeardThrough || not (readThrough model) then model else { model with HeardThrough = true }
 
     /// Put back what this browser remembered of the pane, once the log has been read through
     /// (P0-4). Run after every message, like `reconcileLaunch`, so whichever message carries
@@ -2684,6 +2707,41 @@ module ClientModel =
     let me (model: ClientModel) : ActorRef =
         Attribution.actorFor model.Attribution.PeerUsers model.Peer.PeerId
 
+    /// Where the keyboard goes when the terminal on screen changes what it offers one — `None`
+    /// when it does not. `before` and `after` are a message's fold, either side of it.
+    ///
+    /// The terminal offers this peer its command line, its live screen while this peer holds
+    /// the lease, or neither — somebody else holds it, or the shell has gone. A change between
+    /// those swaps the control under the hand for another: Hand it back is removed by the
+    /// release it asked for, a lease taken by somebody else replaces the command line with
+    /// their bar, a shell that dies replaces both with its closed band. Focus on the control
+    /// that went falls to `body`, and the floor this shell holds itself to is that a swap of
+    /// the focused element refocuses its replacement. So it lands where the pane lands now
+    /// (`paneLanding`: the command line, which falls back to the panel — or, where a dead
+    /// terminal took the default with it, the terminal the pane has moved to), and only if it
+    /// was dropped (`IfDropped`): an arrival does not know where the hand is.
+    ///
+    /// Only for NEWS (`HeardThrough`): a log being replayed on load changes a terminal's face
+    /// under nobody's hand, and focus resting on `body` then is a page that has just loaded,
+    /// not a control that went.
+    ///
+    /// Not the edge INTO this peer's own live screen, which is `Screens.Sync`'s: the screen
+    /// takes keystrokes only once a snapshot has been painted into it, which that loop sees and
+    /// this fold does not. Not under a preview or the switcher, which cover the terminal; and
+    /// not for a kill pressed here, whose answer `killLanding` places.
+    let keyboardSwap (before: ClientModel) (after: ClientModel) : DomMove option =
+        let offers (model: ClientModel) (terminal: TerminalId) =
+            Projection.tryFind terminal model.Terminals |> Option.map (fun view -> view.IsOpen, view.Lease)
+        let covered (model: ClientModel) = Option.isSome (preview model) || model.Switcher
+        match selectedTerminal before with
+        | Some shown when before.HeardThrough && not (covered before) && not (covered after) ->
+            let live = selectedTerminal after = Some shown && offers after shown = Some (true, Some (me after))
+            let killed = before.KillPending = Some shown && after.KillPending = None
+            if offers before shown <> offers after shown && not live && not killed then
+                Some (DomMove.IfDropped (paneLanding after))
+            else None
+        | Some _ | None -> None
+
     /// Whether a durable actor is this client. The question every ownership rule here asks —
     /// is this terminal mine, is this lease mine — with `me` as its one answer.
     let isMine (actor: ActorRef) (model: ClientModel) : bool =
@@ -2986,7 +3044,7 @@ module ClientModel =
     /// and through `openOfItself`, which waits for the same line as `recall` and needs the
     /// model from before the message to tell whether something else moved the column first.
     let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
-        reconcileLaunch (openOfItself model (settle (recall (
+        heard (reconcileLaunch (openOfItself model (settle (recall (
         match msg with
         | ConnectingMsg ->
             { model with Connection = Connecting }
@@ -3791,7 +3849,7 @@ module ClientModel =
                     Pane =
                         if selectedTerminal model = Some terminal then next |> Option.map (Reading >> OnTerminal)
                         else model.Pane }
-        ))))
+        )))))
 
     /// A message's consequences: the next model, and what it asks of the world outside it.
     let update (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =
@@ -3896,4 +3954,5 @@ module ClientModel =
                 | RefusalMount.Pane -> [ ClientEffect.Move (paneLanding next) ]
                 | RefusalMount.Chat -> [ ClientEffect.Move DomMove.FocusComposer ]
             | _ -> []
-        next, effects @ answered @ unnoticed @ offering
+        let swapped = keyboardSwap model next |> Option.map ClientEffect.Move |> Option.toList
+        next, effects @ answered @ unnoticed @ swapped @ offering
