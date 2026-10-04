@@ -2423,16 +2423,20 @@ module Style =
     let private composerBand =
         "group relative shrink-0 flex flex-col bg-surface focus-within:bg-surface-2 transition-colors"
 
-    /// On the phones this is for, the band is the last thing on screen and used to run flush
-    /// to the bottom edge, under the thumb about to press it; the `max-md` clearance gives it
-    /// room without touching desktop, where the band never meets an edge at all.
+    /// The band is the last thing on screen on a phone, and used to run flush to the bottom
+    /// edge, under the thumb about to press it. That called for a `max-md`-only clearance,
+    /// but an iPad in portrait (and plenty of other tablets) sits ABOVE the `md` breakpoint
+    /// while still being a thumb, not a cursor: the gated version left exactly the touch
+    /// screens it was for without the room it was for. So the clearance is unconditional —
+    /// a few pixels desktop never asked for, spent everywhere else on every screen a thumb
+    /// actually reaches this band on.
     ///
     /// ONE clearance, plain thumb room — the same `pb-4` the terminal's command band spends
     /// for the same reason. It briefly had a second, wider one for when the verbs' row was
     /// showing; the row carries its own `pt-1` and its own height, so the band was paying
     /// twice for one gap, and the wider number only ever arrived while a state elsewhere in
     /// the file happened to agree with this one.
-    let composer = composerBand + " max-md:pb-4"
+    let composer = composerBand + " pb-4"
 
     /// The band's top rule, in two parts — because it is doing two jobs and one element could
     /// only ever do one of them.
