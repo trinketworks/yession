@@ -239,6 +239,14 @@ let private conversationProjectionTests =
         // the same claim on every box. Loose on purpose — ten times the transcript may cost
         // three times the word and still pass — because what it exists to catch is the copy,
         // which makes it cost ten times.
+        //
+        // Each size is the BEST of five samples, taken turn about. A fold of either is at
+        // most a few milliseconds, so a single collector pause landing in one is the whole
+        // ratio: timed once each, over code with no copy in it, this read anywhere from 0.6x
+        // to 5.8x across full cheap-tier runs. A pause only ever adds, so the fastest of a
+        // few is the cost without one, and alternating puts a slow stretch of the run on both
+        // sizes rather than one. A sample is twenty folds back to back, because the clock here
+        // ticks in whole milliseconds and a warm fold takes less than one.
         testCase "one streamed word costs the same whatever the transcript behind it holds" <| fun () ->
             let turn = AgentTurnId.create "t-1" |> expect
             let filler (n: int) =
@@ -263,18 +271,22 @@ let private conversationProjectionTests =
                             { MessageId = MessageId.create "streamed" |> expect
                               AgentTurnId = turn
                               Delta = "x" }) ]
-            let costOf (behind: int) =
+            let foldOf (behind: int) =
                 let seeded, hw = ConversationProjection.applyEvents None (filler behind) ConversationProjection.empty
                 let words = streaming (int64 behind + 1L) 2000
-                let started = DateTimeOffset.UtcNow
-                let folded, _ = ConversationProjection.applyEvents hw words seeded
-                let ms = (DateTimeOffset.UtcNow - started).TotalMilliseconds
-                Expect.equal (List.length folded.Items) (behind + 1) "the transcript is what the seed plus the one message make it"
-                ms
-            let short' = costOf 50
-            let long' = costOf 800
+                fun () ->
+                    let started = DateTimeOffset.UtcNow
+                    let folds = [ for _ in 1 .. 20 -> ConversationProjection.applyEvents hw words seeded |> fst ]
+                    let ms = (DateTimeOffset.UtcNow - started).TotalMilliseconds
+                    for folded in folds do
+                        Expect.equal (List.length folded.Items) (behind + 1) "the transcript is what the seed plus the one message make it"
+                    ms
+            let short', long' =
+                let foldShort, foldLong = foldOf 50, foldOf 800
+                let samples = [ for _ in 1 .. 5 -> foldShort (), foldLong () ]
+                samples |> List.map fst |> List.min, samples |> List.map snd |> List.min
             let ratio = long' / (max short' 1.0)
-            printfn "  2000 words into 50 items: %.0fms; into 800: %.0fms — %.1fx" short' long' ratio
+            printfn "  20 x 2000 words into 50 items: %.0fms; into 800: %.0fms — %.1fx" short' long' ratio
             Expect.isTrue
                 (ratio < 3.0)
                 (sprintf
