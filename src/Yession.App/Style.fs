@@ -2901,6 +2901,8 @@ module Style =
     /// collaborator typing a command in a terminal you are not looking at is visible from
     /// the strip rather than only from inside it.
     let terminalTabPeers = "inline-flex items-center gap-0.5 ml-1.5 align-[1px]"
+    /// The running pulse on a terminal's tab, between its name and anyone in it.
+    let terminalTabRunning = "inline-flex items-center ml-1.5 align-[1px]"
 
     /// The pane's body — whatever the selected tab shows. It takes the column's remaining
     /// height so the thing inside it scrolls rather than the column.
@@ -3047,8 +3049,14 @@ module Style =
     /// short history it showed: two lines pinned to the floor under 500px of void, measured on
     /// a phone. No terminal has ever looked like that. `relative` so the way back to the live
     /// edge can float over this box rather than take a band from it.
-    let terminalScrollback = "relative flex-1 min-h-0 overflow-y-auto flex flex-col px-3 py-3"
-    let terminalStream = "flex flex-col gap-2"
+    ///
+    /// The vertical air is the STREAM's, not the box's: a command line held at the top while
+    /// its output scrolls (`terminalBlockSummary`) is held at the box's content edge, and a
+    /// padded box held it 12px down with the output it was hiding showing above it.
+    let terminalScrollback = "relative flex-1 min-h-0 overflow-y-auto flex flex-col px-3"
+    let terminalStream = "flex flex-col gap-2 py-3"
+    /// The commands inside a run's fold: the stream's rhythm, without its edges.
+    let terminalBlockRunBody = "flex flex-col gap-2"
 
     /// One block: the command that ran, then everything it printed.
     ///
@@ -3058,21 +3066,28 @@ module Style =
     /// separates them in a terminal: a green prompt glyph, the command in ink, its output
     /// dim beneath, and a line of air.
     let terminalBlock = "flex flex-col"
-    /// The command line as it was run — and the block's disclosure: pressing it opens the
-    /// facts (who ran it, who let it, how it ended) that used to be printed beside every
-    /// command whether anyone wanted them or not. A real `<summary>`, so the disclosure is
-    /// the browser's and arrives keyboard-operable and correctly announced.
+    /// The command line as it was run, and how it went.
     let terminalBlockCommand = "flex items-baseline gap-2"
-    let terminalBlockSummary =
-        cls [ "group"; terminalBlockCommand; "cursor-pointer list-none"
+    /// A block's command line in the scrollback, which STAYS while its output scrolls: a
+    /// 300-line output used to carry its own command off the top, and a reader in the middle
+    /// of it was looking at a screen of numbers with nothing to say what printed them.
+    /// Sticky within its block, so the next block's command takes over as it arrives rather
+    /// than stacking beneath; painted with the pane's own ground, so the lines going under it
+    /// go under it rather than through it.
+    let terminalBlockSummary = cls [ terminalBlockCommand; "sticky top-0 z-10 bg-panel" ]
+    /// A run's fold ("ran N commands") — a real `<summary>`, so the disclosure is the
+    /// browser's and arrives keyboard-operable and correctly announced. Not sticky: the
+    /// commands inside it are, and two rows held at one edge is one row hidden.
+    let terminalBlockRunSummary =
+        cls [ terminalBlockCommand; "cursor-pointer list-none"
               "hover:text-ink transition-colors duration-150 ease-out"; focusRing ]
-    /// The mark at the end of the line: an ellipsis, because what it hides is the rest of
-    /// the sentence. `group-open:` turns it while the facts are showing.
-    let terminalBlockMark =
-        "ml-auto shrink-0 font-terminal text-code-sm text-ink-faint select-none "
-        + "group-hover:text-ink transition-colors duration-150 ease-out motion-reduce:transition-none"
-    /// The facts themselves, on the output's column so they read as an aside to the command
-    /// rather than as more output.
+    /// Its mark: the chevron every fold turns (`queryLegendMark`), pointing on at rest and
+    /// down when open. It was an ellipsis, which at the end of a line reads as a menu.
+    let terminalBlockRunMark =
+        "ml-auto shrink-0 text-ink-faint select-none group-hover:text-ink "
+        + "transition-[color,rotate] duration-150 ease-out motion-reduce:transition-none group-open:rotate-90"
+    /// The facts under a command, on the output's column so they read as an aside to the
+    /// command rather than as more output.
     let terminalBlockFacts = "flex flex-wrap items-baseline gap-x-4 gap-y-0.5 pl-4 py-1"
     let terminalBlockFact = caps + " text-ink-faint"
     /// The ✓/✗/running tally beside "ran N commands" on a `terminalBlockRun` — the same

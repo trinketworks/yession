@@ -650,7 +650,7 @@ let private namingTests =
             let strip = Support.render model
             let list = Support.render (Support.step ToggleSwitcherMsg model)
             Expect.equal
-                [ textAt (Dom.attr Dom.Hooks.terminalTab "term-b") strip
+                [ textAt Dom.Hooks.terminalTabName (markupAt (Dom.attr Dom.Hooks.terminalTab "term-b") strip)
                   textAt Dom.Hooks.paneHeadName strip
                   textAt (Dom.attr Dom.Hooks.terminalListRow "term-b") list ]
                 [ "term 2"; "term 2"; "term 2" ]
@@ -898,6 +898,69 @@ let private edgeTabTests =
             let doors =
                 System.Text.RegularExpressions.Regex.Matches(html, "(data-pane-new|data-terminal-new)[\\s=>]").Count
             Expect.equal doors 1 "one New terminal, not two"
+    ]
+
+// --- How a block ended, on every surface ----------------------------------------------------
+
+/// One command in terminal A that ended as `result`, with terminal A on screen — so its block
+/// is in the pane's scrollback and its chip in the chat, both on one page.
+let private endedAs (result: CommandResult) : string =
+    clientOf
+        [ at 1L 0.0 (opened terminalA "build")
+          at 2L 1.0 (started terminalA "1" byAda "false" 1)
+          at 3L 2.0 (completed terminalA "1" result 3) ]
+    |> Support.step (ShowInPaneMsg (Reading terminalA))
+    |> Support.render
+
+/// Every status mark drawn inside `html`, by the token it carries.
+let private marksIn (html: string) : string list =
+    Text.RegularExpressions.Regex.Matches (html, Dom.Hooks.blockMark + "=\"([^\"]*)\"")
+    |> Seq.map (fun m -> m.Groups.[1].Value)
+    |> List.ofSeq
+
+let private statusTests =
+    testList "A block says how it ended, the same way everywhere" [
+        testCase "a succeeded block says so in the pane and in the chat, with the same token" <| fun () ->
+            // The pane drew nothing for a success, so a finished command and one still waiting
+            // on its first byte looked alike there. The article's own status attribute was
+            // right all along — and is not what anybody reads.
+            let html = endedAs (CommandSucceeded 0)
+            Expect.equal
+                [ marksIn (markupAt (Dom.attr Dom.Hooks.terminalBlock "b-1") html)
+                  marksIn (markupAt (Dom.attr Dom.Hooks.chatBlock "b-1") html) ]
+                [ [ Dom.Text.blockOk ]; [ Dom.Text.blockOk ] ]
+                "one mark on each surface, saying the same thing"
+
+        testCase "a failed chip has an accessible word" <| fun () ->
+            // Its name was "false, failed…" only by the luck of the token being a word; the
+            // glyph is decoration, and the exit code alone is a number nobody can place.
+            let label =
+                attributeOf (Dom.attr Dom.Hooks.chatBlock "b-1") "aria-label" (endedAs (CommandFailed 1))
+                |> List.exactlyOne
+            Expect.stringContains label "failed" "a screen reader hears that it failed"
+
+        testCase "a failed block's mark is heard in words in the pane, not as a number" <| fun () ->
+            let mark = textAt Dom.Hooks.blockMark (markupAt (Dom.attr Dom.Hooks.terminalBlock "b-1") (endedAs (CommandFailed 1)))
+            Expect.stringContains mark "failed" "the glyph is a picture; the words are for whoever cannot see it"
+
+        testCase "a block's facts are on screen without a press" <| fun () ->
+            // They were behind a `…` that read as a menu. A command that did not get to exit
+            // carries the one fact its mark cannot: why.
+            let block =
+                markupAt
+                    (Dom.attr Dom.Hooks.terminalBlock "b-1")
+                    (endedAs (CommandExecutionFailed "the session stopped while it was running"))
+            Expect.isTrue (block.Contains Dom.Hooks.terminalBlockFacts) "the facts are rendered"
+            Expect.isFalse (block.Contains "<details") "and nothing has to be opened to read them"
+
+        testCase "a terminal running a command marks its tab, and an idle one does not" <| fun () ->
+            let strip = Support.render (clientOf threeUntitled |> showingAll)
+            Expect.equal
+                ([ terminalA; terminalB; terminalC ]
+                 |> List.map (fun id ->
+                     (markupAt (Dom.attr Dom.Hooks.terminalTab (TerminalId.value id)) strip).Contains Dom.Hooks.terminalTabRunning))
+                [ false; true; false ]
+                "only term-b has a command running"
     ]
 
 // --- Keyframes and the ranged cast (stage 3) --------------------------------------------------
@@ -1229,9 +1292,10 @@ let private videoTests =
             //
             // The phrase is carried deliberately: `swift-heron` alone also appears in the
             // roster, so an assertion decoupled from the copy passes even when this pane
-            // prints the bare id. Coupling to "rejected by" is what SCOPES it to the refusal
-            // — and the refuser is a REFERENCE after it, drawn as they are drawn everywhere.
-            let at = html.IndexOf "rejected by "
+            // prints the bare id. Coupling to the refusal's own word (`Dom.Text.blockRefused`)
+            // is what SCOPES it to the refusal — and the refuser is a REFERENCE after it, drawn
+            // as they are drawn everywhere.
+            let at = html.IndexOf (Dom.Text.blockRefused + " ")
             Expect.isTrue (at >= 0) "the tab says who refused it"
             let refuser = html.Substring (at, html.IndexOf ("</span></span>", at) + "</span></span>".Length - at)
             Expect.isTrue (refuser.Contains (Dom.attr "data-entity-kind" "actor")) "as a reference to the person"
@@ -3411,6 +3475,7 @@ let tests =
         namingTests
         reloadTests
         edgeTabTests
+        statusTests
         pageTests
         keyframeTests
         videoTests
