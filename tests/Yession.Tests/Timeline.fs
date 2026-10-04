@@ -793,6 +793,20 @@ let private reloadTests =
             let model = reloaded memory [ events ]
             Expect.equal (ClientModel.selectedTerminal model) (Some terminalB) "the terminal that was on top is again"
 
+        // Catch-up is a fraction of a second on a quiet session and tens of seconds on a long
+        // one under load. Restoring only once it had finished left the strip's FIRST terminal
+        // on top all that while — the default for a pane with nothing chosen — which read as a
+        // reload that had forgotten the terminal you were on, and took what you typed.
+        testCase "a remembered selection is on top from the page that names it, before catch-up ends" <| fun () ->
+            let memory = { remembering [ terminalA; terminalB ] with PaneMemory.Selected = Some terminalB }
+            let catchingUp =
+                ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
+                |> ClientModel.remembered (Some memory)
+                |> Support.step HistoryReadMsg
+                |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (EventOffset.create 9L |> expect) })
+                |> withPage [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "shell") ]
+            Expect.equal (ClientModel.selectedTerminal catchingUp) (Some terminalB) "the terminal that was on top, already"
+
         testCase "a preview is not remembered; the terminal under it is" <| fun () ->
             let model = clientOf oneBlock |> Support.step (chip terminalA "1")
             Expect.equal

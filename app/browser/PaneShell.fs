@@ -663,8 +663,9 @@ module Memory =
         found
 
     /// Write the pane down, if it changed. Not while a memory is still HELD by the model
-    /// (`ClientModel.PaneMemory`): the strip on screen then is the one the log rebuilt, and
-    /// writing it would overwrite the strip waiting to be put back.
+    /// (`ClientModel.PaneMemory`): the strip on screen then holds only the terminals the log
+    /// has named so far, and writing it would forget the rest of the strip waiting to be put
+    /// back.
     let keep (model: Yession.App.ClientModel) : unit =
         match model.Session, model.PaneMemory with
         | Some session, None ->

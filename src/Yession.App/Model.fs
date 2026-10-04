@@ -1015,7 +1015,8 @@ type ClientModel =
       /// session may reasonably want different columns on screen.
       TerminalsOpen : bool
       /// What this browser remembered of the pane for this session, HELD until the log has
-      /// been read through (P0-4) — then applied once (`recall`) and cleared.
+      /// been read through (P0-4) — applied to each terminal as the log names it, and
+      /// cleared once the whole log has been read (`recall`).
       ///
       /// Held rather than applied at boot, because a tab is only worth restoring onto a
       /// terminal the session still has, and only the log can say which those are: the
@@ -1024,9 +1025,9 @@ type ClientModel =
       /// page. Only the open bit is applied at boot (`remembered`), because it needs nothing
       /// checked and is the one part a person would see jump.
       ///
-      /// While this is held, nothing writes the memory back: what the model holds then is the
-      /// strip the log rebuilt, not the one this person had, and writing it would forget the
-      /// very thing waiting to be restored.
+      /// While this is held, nothing writes the memory back: what the model holds then is
+      /// the part of the strip whose terminals have arrived so far, and writing it would
+      /// forget the rest of what is waiting to be restored.
       PaneMemory    : PaneMemory option
       /// Whether there WAS a memory for this session when the page loaded — so "restored shut"
       /// can be told from "never remembered", which `TerminalsOpen = false` alone cannot say.
@@ -2016,8 +2017,8 @@ module ClientModel =
 
     /// A freshly loaded client, given what this browser remembered of the pane for this
     /// session. The column's open bit is applied now, because it needs nothing checked and is
-    /// the part a person sees move; the strip waits for the log (`PaneMemory`'s doc, and
-    /// `recall` below).
+    /// the part a person sees move; the strip comes back as the log names its terminals
+    /// (`PaneMemory`'s doc, and `recall` below).
     ///
     /// `None` — a session this browser has never seen, or storage that would not answer — is
     /// the client exactly as `init` made it.
@@ -2043,22 +2044,34 @@ module ClientModel =
     let private heard (model: ClientModel) : ClientModel =
         if model.HeardThrough || not (readThrough model) then model else { model with HeardThrough = true }
 
-    /// Put back what this browser remembered of the pane, once the log has been read through
-    /// (P0-4). Run after every message, like `reconcileLaunch`, so whichever message carries
-    /// the client past the line is the one that restores — the last page of catch-up, or the
-    /// connection itself when the local store already held everything. Idempotent: with no
-    /// memory held it returns the model it was given.
+    /// Put back what this browser remembered of the pane (P0-4), terminal by terminal as the
+    /// log names them, and let go of the memory once the log has been read through. Run after
+    /// every message, like `reconcileLaunch`, so whichever message brings a remembered
+    /// terminal in is the one that restores its tab, and whichever carries the client past the
+    /// line — the last page of catch-up, or the connection itself when the local store already
+    /// held everything — is the one that settles it. Idempotent: with no memory held it returns
+    /// the model it was given.
+    ///
+    /// AS the log arrives, not once it has: catch-up is a fraction of a second on a quiet
+    /// session and tens of seconds on a long one under load, and a pane that waited for the end
+    /// of it showed the strip's FIRST terminal on top all that while — the default for a pane
+    /// with nothing chosen — so a reload looked like it had forgotten the terminal you were on,
+    /// and a person who started typing typed into the wrong one. The terminal you were on is on
+    /// top from the page that names it.
     ///
     /// The remembered strip REPLACES the one history rebuilt. Replaying the log reopens every
     /// terminal this person ever opened, including the ones they had since closed, and the
-    /// strip they had is the answer to which of those they wanted. A terminal the session no
-    /// longer has is dropped here, and a closed one that is not the selection by `settle`.
+    /// strip they had is the answer to which of those they wanted. A terminal the session does
+    /// not have (yet) has no tab; the memory is held until the log has been read through, so
+    /// one named on a later page is not lost, and one the session no longer has is gone for
+    /// good once it has. A closed one that is not the selection is dropped by `settle`.
     ///
     /// What this person has done SINCE loading wins over what they had: a terminal chosen
-    /// before the log had arrived stays chosen, and stays in the strip.
+    /// before the log had arrived stays chosen, and stays in the strip. The choice this
+    /// restores is one of those too, so a later page never moves it.
     let private recall (model: ClientModel) : ClientModel =
         match model.PaneMemory with
-        | Some memory when readThrough model ->
+        | Some memory ->
             let restored =
                 memory.Tabs
                 |> List.filter (fun terminal -> Projection.tryFind terminal model.Terminals |> Option.isSome)
@@ -2077,13 +2090,13 @@ module ClientModel =
             { model with
                 Tabs = tabs
                 Pane = pane
-                PaneMemory = None }
-        | Some _ | None -> model
+                PaneMemory = if readThrough model then None else model.PaneMemory }
+        | None -> model
 
     /// The pane opening itself on a desktop's first look at a session (P1-4), once the log has
-    /// been read through — the same line `recall` waits for, and for the same reason: before
-    /// it, "this session has no terminal" and "this client has not heard about it yet" look
-    /// identical.
+    /// been read through — the same line `recall` lets go of its memory at, and for the same
+    /// reason: before it, "this session has no terminal" and "this client has not heard about
+    /// it yet" look identical.
     ///
     /// Only when nothing else has answered for the column: no memory of it (`PaneRemembered`,
     /// whose open bit is that person's own answer), a screen it can sit beside the chat on, and
@@ -3047,9 +3060,9 @@ module ClientModel =
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
     /// after every message, rather than being read live from whatever the connection
     /// happens to be doing at render time — and through `recall`, for the same reason, so a
-    /// remembered pane comes back on whichever message finishes reading the log; and through
+    /// remembered pane comes back on whichever message brings its terminals in; and through
     /// `settle`, after it, so the strip holds only what it may whichever message moved it;
-    /// and through `openOfItself`, which waits for the same line as `recall` and needs the
+    /// and through `openOfItself`, which waits for the line `recall` settles at and needs the
     /// model from before the message to tell whether something else moved the column first.
     let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
         heard (reconcileLaunch (openOfItself model (settle (recall (

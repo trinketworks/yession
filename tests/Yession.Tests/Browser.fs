@@ -1061,28 +1061,56 @@ let tests =
                 do! awaitU (page.ClickAsync "[data-repo-picker-dismiss]")
                 let! _ = await (page.WaitForFunctionAsync "!document.querySelector('[data-repo-picker]')")
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
+                // Three terminals, and the MIDDLE one chosen. Not the first: with nothing
+                // remembered the pane lands on the strip's first open terminal, so a kept
+                // first tab is the answer a reload gives whether or not it remembered — which
+                // is how this case stayed green over a reload that came back to the first tab
+                // every time. Not the last either, which is where the last press left it.
                 do! openNewTerminal page
+                do! waitFor "a terminal in the strip" page "document.querySelectorAll('[data-pane-tab]').length === 1"
+                do! openNewTerminal page
+                do! waitFor "a second terminal in the strip" page "document.querySelectorAll('[data-pane-tab]').length === 2"
+                do! openNewTerminal page
+                do! waitFor "a third terminal in the strip" page "document.querySelectorAll('[data-pane-tab]').length === 3"
+                let middle = "[data-pane-tab]:nth-child(2)"
+                let! chosen = await (page.GetAttributeAsync (middle, "data-pane-tab"))
+                do! awaitU (page.ClickAsync middle)
+                let chosenOnTop =
+                    sprintf "document.querySelector(\"[data-pane-tab='%s']\")?.getAttribute('aria-selected') === 'true'" chosen
+                do! waitFor "the middle terminal to be on top" page chosenOnTop
+                // A command in it, and that command's preview laid over it — which is not what
+                // comes back; the terminal under it is.
                 let composerInput = "[data-terminal-input^='term-draft:']:not([readonly])"
                 let! _ = await (page.WaitForSelectorAsync composerInput)
                 do! awaitU (page.ClickAsync composerInput)
                 do! awaitU (page.Keyboard.TypeAsync "echo kept")
                 do! awaitU (page.ClickAsync "[data-terminal-send]")
                 let! _ = await (page.WaitForSelectorAsync "[data-chat-block]")
-                // A second terminal, so that which one is on top is a choice rather than the
-                // only answer — then the first chosen again, and its command previewed over it.
-                do! openNewTerminal page
-                do! waitFor "a second terminal in the strip" page "document.querySelectorAll('[data-pane-tab]').length === 2"
-                let first = "[data-pane-tab]:first-child"
-                do! awaitU (page.ClickAsync first)
-                let firstOnTop = sprintf "document.querySelector(\"%s\")?.getAttribute('aria-selected') === 'true'" first
-                do! waitFor "the first terminal to be on top" page firstOnTop
                 do! awaitU (page.ClickAsync "[data-chat-block]")
                 let! _ = await (page.WaitForSelectorAsync "[data-pane-preview]")
 
+                // What was on top the FIRST moment the strip held all three again — recorded by
+                // the page itself, from before the reload paints anything, because the fault
+                // this pins was a window: the strip came back from the local store at once and
+                // the choice only once catch-up had finished, so a reload showed the first tab
+                // on top for as long as catch-up took. Waiting for the end of it, as this case
+                // used to, waited the fault out.
+                do!
+                    awaitU (
+                        page.AddInitScriptAsync
+                            """new MutationObserver((_, watching) => {
+                                 const tabs = document.querySelectorAll('[data-pane-tab]')
+                                 if (tabs.length !== 3) return
+                                 const top = [...tabs].find(t => t.getAttribute('aria-selected') === 'true')
+                                 window.__firstOnTop = top ? top.getAttribute('data-pane-tab') : 'nothing'
+                                 watching.disconnect()
+                               }).observe(document, { subtree: true, childList: true, attributes: true })""")
                 let! _ = await (page.ReloadAsync ())
                 do! waitFor "the reloaded page to connect" page connected
-                do! waitFor "both terminals to be back in the strip" page "document.querySelectorAll('[data-pane-tab]').length === 2"
-                do! waitFor "the first terminal to be on top again" page firstOnTop
+                do! waitFor "all three terminals to be back in the strip" page "document.querySelectorAll('[data-pane-tab]').length === 3"
+                do! waitFor "the chosen terminal to be on top again" page chosenOnTop
+                let! firstOnTop = await (page.EvaluateAsync<string> "() => window.__firstOnTop ?? 'never recorded'")
+                Expect.equal firstOnTop chosen "on top from the first moment the strip was back, not once catch-up ended"
                 do! waitFor "no preview, which was a glance" page "!document.querySelector('[data-pane-preview]')"
                 do! waitFor
                         "the pane to be open"
