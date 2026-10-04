@@ -475,16 +475,16 @@ let private revealSettings () : unit =
 // turns into data a `match` must cover, rather than an exception a caller must remember to
 // catch.
 
-/// The two axes `fetchMe` resolves to. A record of two independent bools (the shape this
-/// replaced) let a caller ask whether `reachable = false, authorized = true` — a
+/// What a session that DID answer the probe said. A record of two independent bools (the
+/// shape this replaced) let a caller ask whether `reachable = false, authorized = true` — a
 /// combination that cannot actually happen; a case per real outcome makes it
-/// unrepresentable instead of merely undocumented.
-type private ProbeOutcome =
-    | ProbeUnreachable of detail: string
+/// unrepresentable instead of merely undocumented. Not reaching it at all is the `Error` of
+/// `fetchMe`, because it is the one answer that means "ask again" (`SessionLifecycle.reach`).
+type private ProbeAnswer =
     | ProbeUnauthorized
     | ProbeAuthorized of MeProbe.Response
 
-let private fetchMe (url: string) (deadlineMs: float) : Async<ProbeOutcome> =
+let private fetchMe (url: string) (deadlineMs: float) : Async<Result<ProbeAnswer, string>> =
     async {
         // The deadline is the page's own timer rather than `AbortSignal.timeout`, whose timer
         // the platform keeps: a page timer is on the page's clock, so the case that pins a
@@ -501,14 +501,14 @@ let private fetchMe (url: string) (deadlineMs: float) : Async<ProbeOutcome> =
         let! attempt = Fetch.fetchUnsafe url init |> Async.AwaitPromise |> Async.Catch
         JS.clearTimeout deadline
         match attempt with
-        | Choice2Of2 exn -> return ProbeUnreachable (string exn.Message)
+        | Choice2Of2 exn -> return Error (string exn.Message)
         | Choice1Of2 response when response.Ok ->
             let! body = response.text () |> Async.AwaitPromise
             match MeProbe.ofJson body with
-            | Ok me -> return ProbeAuthorized me
-            | Error err -> return ProbeUnreachable err
-        | Choice1Of2 response when response.Status = 401 || response.Status = 403 -> return ProbeUnauthorized
-        | Choice1Of2 response -> return ProbeUnreachable (sprintf "HTTP %d" response.Status)
+            | Ok me -> return Ok (ProbeAuthorized me)
+            | Error err -> return Error err
+        | Choice1Of2 response when response.Status = 401 || response.Status = 403 -> return Ok ProbeUnauthorized
+        | Choice1Of2 response -> return Error (sprintf "HTTP %d" response.Status)
     }
 
 // `location.replace`, not `assign`: the one navigation this shell performs on its own is the
@@ -1316,16 +1316,23 @@ let private start () =
         // Manager's `/open` page enters a session through `/login`, so the cookie is
         // already there by the time this shell loads, and the shell is painted once. The
         // bounce from here is for a shell reached any other way — a bookmark, a home-screen
-        // icon, an expired cookie. A NETWORK failure (offline, session down) is a
-        // `Disconnected` with its reason, not silence: the local-first shell — IndexedDB doc
-        // plus the event ranges in this client's own store — stays fully usable, and the model
-        // says why it is alone.
-        let! outcome = fetchMe (Page.href Me) Client.Probe.deadline.TotalMilliseconds
-        match outcome with
-        | ProbeUnreachable detail ->
-            dispatchRef (ConnectFailedMsg (Client.ChannelFault.describe (Client.ChannelUnreachable detail)))
-        | ProbeUnauthorized -> renavigateTo (Page.href Login)
-        | ProbeAuthorized me ->
+        // icon, an expired cookie. A NETWORK failure (offline, session down) is `Retrying`
+        // with its reason, and the probe is asked again until the session answers: the
+        // local-first shell — IndexedDB doc plus the event ranges in this client's own
+        // store — stays fully usable meanwhile, and the model says why it is alone and that
+        // it is still trying.
+        let ask () =
+            async {
+                match! fetchMe (Page.href Me) Client.Probe.deadline.TotalMilliseconds with
+                | Error detail -> return Error (Client.ChannelFault.describe (Client.ChannelUnreachable detail))
+                | Ok answer -> return Ok answer
+            }
+        let! reached =
+            Client.SessionLifecycle.reach (Client.SessionLifecycle.supervision jsRandom) ask waitBeforeRetry (fun msg -> dispatchRef msg)
+        match reached with
+        | None -> ()
+        | Some ProbeUnauthorized -> renavigateTo (Page.href Login)
+        | Some (ProbeAuthorized me) ->
             // Authenticated: the read stream has a cookie that will be accepted, and its
             // opening frames are what fill the panels and the query surface alike.
             subscribeRead ()

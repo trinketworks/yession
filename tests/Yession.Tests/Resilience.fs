@@ -796,16 +796,15 @@ let private channelTests =
 
         testCase "a settled disconnection carries its reason into the model and the page" <| fun () ->
             let init = ClientModel.init (peer "ada" "Ada")
+            // The one disconnection that settles: a session that heard this peer and refused
+            // it. One that could not be reached is never settled — it is `Retrying`.
             let refused = Support.step (RejectedMsg "peer token expired") init
-            let unreachable = Support.step (ConnectFailedMsg "the session did not answer") init
             Expect.equal refused.Connection (Disconnected (Some "peer token expired"))
                 "a rejection keeps the reason the session gave"
-            Expect.equal unreachable.Connection (Disconnected (Some "the session did not answer"))
-                "and so does a session that never answered"
-            let html = Support.render unreachable
+            let html = Support.render refused
             Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.connection Dom.Text.disconnected))
                 "the status word is unchanged — the reason is additive"
-            Expect.isTrue (html.Contains "the session did not answer")
+            Expect.isTrue (html.Contains "peer token expired")
                 "the reason is on the page, where the old model had nothing to show"
             Expect.isTrue (html.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedOffline))
                 "and the strip reports the session leg, not the feed"
@@ -1130,7 +1129,7 @@ let private lifecycleTests =
                     |> List.choose (function
                         | ConnectedMsg _ -> Some "connected"
                         | DisconnectedMsg -> Some "dropped"
-                        | RejectedMsg _ | ConnectFailedMsg _ -> Some "settled"
+                        | RejectedMsg _ -> Some "settled"
                         | _ -> None)
                 Expect.equal lifecycleStory [ "connected"; "dropped"; "connected" ] "one clean round trip"
                 do! host.Stop ()
@@ -1239,6 +1238,33 @@ let private lifecycleTests =
                     model.Value.Connection
                     (Retrying ("the session did not answer", 3))
                     "and the model holds that it is still trying, why, and how far it has got"
+            }
+
+        testCaseAsync "a session that cannot be asked who this is is asked again until it answers" <|
+            async {
+                // The probe before the transport used to settle on its first failure, so a page
+                // opened while its session was down never tried again. Now "not reached" is the
+                // one answer that means "ask again", reported the way the transport's own
+                // failures are, and an answer — whatever it says — ends the asking.
+                let asks = ref 0
+                let waits = ResizeArray<System.TimeSpan option> ()
+                let dispatched = ResizeArray<ClientMsg> ()
+                let! answer =
+                    Client.SessionLifecycle.reach
+                        (Client.SessionLifecycle.supervision (fun () -> 0.0))
+                        (fun () ->
+                            async {
+                                asks.Value <- asks.Value + 1
+                                if asks.Value < 3 then return Error "HTTP 502" else return Ok "a token"
+                            })
+                        (fun delay -> async { waits.Add delay; return true })
+                        dispatched.Add
+                Expect.equal answer (Some "a token") "the third ask was answered, and that answer is the result"
+                Expect.equal
+                    (List.ofSeq dispatched)
+                    [ RetryingMsg ("HTTP 502", 1); RetryingMsg ("HTTP 502", 2) ]
+                    "each unreached ask was reported as a retry, with its reason and its count"
+                Expect.isTrue (waits |> Seq.forall Option.isSome) "on a schedule, never the indefinite park"
             }
 
         testCaseAsync "an accepted session earns exactly one more attempt; the announcement is not repeated" <|
