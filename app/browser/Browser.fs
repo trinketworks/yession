@@ -1310,7 +1310,11 @@ let private start () =
                             latestModel.TerminalFeeds
                             |> Map.tryFind terminal
                             |> Option.map (fun feed -> feed.ReadThrough)
-                            |> Option.defaultValue 0) }
+                            |> Option.defaultValue 0)
+                    // A burst of live output is folded a frame at a time, not a record at a
+                    // time: the frame is when the page draws, so a render between two frames
+                    // is one nobody sees.
+                    NextFrame = Render.raf }
             let openChannel () = connectChannel (absolute (Page.href Signal))
 
             // The session leg. The RULES — announce, open, serve, and come back only for a
@@ -1327,7 +1331,19 @@ let private start () =
                                 // feed's resilience policy is composed here and nowhere else:
                                 // `Client.connect` receives a channel that already knows how to
                                 // notice its own death, and holds no notion of heartbeats.
-                                let channel = Link.supervise Link.LinkPolicy.shipped carrier
+                                //
+                                // Its verdict is said out loud: a link the heartbeat ended
+                                // reads, from the page, exactly like a network that dropped,
+                                // and the two have different causes (a busy page misses its
+                                // own pongs).
+                                let channel =
+                                    Link.supervise
+                                        { Link.LinkPolicy.shipped with
+                                            Observe =
+                                                function
+                                                | Link.LinkDied reason -> JS.console.debug ("yession/link: closed, " + reason)
+                                                | Link.LinkProbed _ -> () }
+                                        carrier
                                 let connection =
                                     Client.connect
                                         { options with ResumeAfter = resumeAfter }

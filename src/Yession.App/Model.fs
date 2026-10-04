@@ -457,6 +457,57 @@ module TerminalFeed =
         |> List.map (fun r -> r.Data)
         |> String.concat ""
 
+    /// How many of its LAST lines a block shows in the page. The rest is in the recording,
+    /// which plays the whole of it; what the page draws is bounded by this and by nothing a
+    /// command printed.
+    ///
+    /// Bounded because a render draws every block, and a block is redrawn on every record
+    /// that lands while it runs. Drawn whole, `seq 100000` was a hundred thousand lines
+    /// re-parsed and re-diffed per record — 170 renders, a million DOM nodes at the end, and a
+    /// main thread held for minutes, long enough for the link heartbeat to go unanswered and
+    /// the Session to drop a peer that was alive. A bound is the only answer that holds for
+    /// the next command, which will print more.
+    ///
+    /// Two thousand lines is more than any screen shows and well inside what a render can
+    /// carry once per record; a terminal's own scrollback is often less.
+    let shownLines = 2000
+
+    /// The last `keep` lines of `text`, and how many lines came before them. A line ends at
+    /// `\n` (a `\r\n` is one break, and a bare `\r` rewrites the line it is on, which is how
+    /// `Ansi.parse` reads the same bytes), and a trailing partial line is a line.
+    ///
+    /// Cut at a line break, so the cut can never split an escape sequence — none contains one.
+    /// What it CAN cut is the colour a line before the cut set and did not reset; the shown
+    /// lines then start in the plain style until they set their own. That is the honest
+    /// price of not parsing a hundred thousand lines to find out.
+    let lastLines (keep: int) (text: string) : int * string =
+        let keep = max 1 keep
+        // Walk back over `keep` line breaks, not counting one that ends the text: that break
+        // closes the last line rather than starting another.
+        let mutable at = if text.EndsWith "\n" then text.Length - 1 else text.Length
+        let mutable found = 0
+        let mutable cut = -1
+        while cut < 0 && at > 0 do
+            let nl = text.LastIndexOf ('\n', at - 1)
+            if nl < 0 then at <- 0
+            else
+                found <- found + 1
+                if found = keep then cut <- nl + 1 else at <- nl
+        if cut < 0 then 0, text
+        else
+            // Every line before the cut ends in a break, so the breaks are the count.
+            let mutable elided = 0
+            let mutable i = text.IndexOf '\n'
+            while i >= 0 && i < cut do
+                elided <- elided + 1
+                i <- text.IndexOf ('\n', i + 1)
+            elided, text.Substring cut
+
+    /// What a block shows of a range's output — its last `shownLines` lines — and how many
+    /// lines before them it leaves to the recording.
+    let shownOutput (fromSeq: int) (toSeq: int) (feed: TerminalFeed) : int * string =
+        outputText fromSeq toSeq feed |> lastLines shownLines
+
 /// Something opened from the chat to READ, laid over the terminal it belongs to (P2-1): one
 /// command and what it printed, one stretch of somebody holding a terminal's keyboard, or one
 /// file from the session's content root.
@@ -1353,13 +1404,21 @@ type ClientMsg =
     /// queries there are: a message per query would be a message per FUTURE query too.
     | QueryFrameMsg of QueryFrame
     // --- Terminals (Plan 13) ---------------------------------------------------------
-    /// One transcript record arrived live over the data channel. Keyed by seq, so folding
-    /// it is idempotent against the same record arriving in a page below.
-    | TerminalRecordMsg of TerminalId * seq: int * TranscriptRecord
+    /// Transcript records that arrived live over the data channel — every one that landed
+    /// for this terminal within one frame, in arrival order. Keyed by seq, so folding them
+    /// is idempotent against the same records arriving in a page below.
+    ///
+    /// A LIST, for the reason `TerminalPageMsg` is one: a message is a render. A record is
+    /// one pty read, and a burst is many reads a second — `seq 100000` sent some 170 in under
+    /// three seconds — so one message per record was one full render per record, queued
+    /// faster than a phone could draw them, with the link's heartbeat waiting in the same
+    /// queue behind them until the Session gave the peer up for dead. The read loop
+    /// (`Client.connect`) gathers what arrives within a frame into one of these.
+    | TerminalRecordsMsg of TerminalId * records: (int * TranscriptRecord) list
     /// A PAGE of a terminal's transcript — fetched over HTTP, or replayed from what this
     /// device kept: its records, the header when the page carried line 0, and how far the
     /// contiguous prefix now reaches. ONE message for the whole page, deliberately, because a
-    /// message is a render: this used to be one `TerminalRecordMsg` per record plus the two
+    /// message is a render: this used to be one record message per record plus the two
     /// after, so a reopen replayed a session's kept 2,138 lines as 2,176 full re-renders of
     /// the page — 9.9s of the main thread on a laptop, minutes on a phone, during which no
     /// tap landed and the `/me` probe that would have said "session stopped" never ran. The
@@ -3387,15 +3446,15 @@ module ClientModel =
             { model with
                 Queries =
                     { model.Queries with Values = Map.add (QueryName.value name) value model.Queries.Values } }
-        | TerminalRecordMsg (terminal, seq, record) ->
-            let feed = terminalFeed terminal model |> TerminalFeed.withRecord seq record
+        | TerminalRecordsMsg (terminal, records) ->
+            let feed =
+                records
+                |> List.fold (fun feed (seq, record) -> TerminalFeed.withRecord seq record feed) (terminalFeed terminal model)
             { model with TerminalFeeds = Map.add terminal feed model.TerminalFeeds }
         | TerminalPageMsg (terminal, records, header, readThrough) ->
             // Through the three folds it stands for rather than a fourth spelling of them, so
-            // a page and the same lines arriving one at a time cannot come to differ.
-            let folded =
-                records
-                |> List.fold (fun m (seq, record) -> fold (TerminalRecordMsg (terminal, seq, record)) m) model
+            // a page and the same lines arriving live cannot come to differ.
+            let folded = fold (TerminalRecordsMsg (terminal, records)) model
             let withHeader =
                 match header with
                 | Some h -> fold (TerminalHeaderMsg (terminal, h)) folded

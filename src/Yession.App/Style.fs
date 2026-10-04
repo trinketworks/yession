@@ -3222,6 +3222,9 @@ module Style =
     /// terminal prints.
     let terminalOutput = "overflow-x-auto font-terminal text-code-sm leading-4 whitespace-pre-wrap break-words text-ink-dim"
     let terminalOutputEmpty = small
+    /// The lines a block leaves to its recording (`TerminalFeed.shownLines`), said above the
+    /// ones it shows — quiet, because nothing is missing: the recording holds every one.
+    let terminalOutputElided = small
     /// The truncation notice: a stated gap in the record, in the error voice because a
     /// missing audit trail is not a neutral fact.
     let terminalTruncated = caps + " shrink-0 px-3 py-2 text-err"

@@ -341,6 +341,9 @@ module Dom =
         /// key: never one block, so a lone command still carries plain `terminalBlock`.
         let terminalBlockRun = "data-terminal-block-run"
         let terminalOutput = "data-terminal-output"
+        /// How many of a block's earlier lines the page leaves to the recording
+        /// (`TerminalFeed.shownLines`); its value is the count. Absent when it shows them all.
+        let terminalOutputElided = "data-terminal-output-elided"
         let terminalTruncated = "data-terminal-truncated"
         let terminalInput = "data-terminal-input"
         /// The READ half of the same `Y.Text` roots `terminalInput` writes: a mount that shows
@@ -761,6 +764,10 @@ module Dom =
         // Non-human authors.
         let agent = "agent"
         let sessionProcess = "session-process"
+        /// The lines above a block's shown window, counted — they are in the recording, not lost.
+        let outputElided (lines: int) =
+            if lines = 1 then "1 earlier line is in the recording"
+            else sprintf "%d earlier lines are in the recording" lines
         // Terminal block/queue status tokens (Plan 13).
         let blockRunning = "running"
         let blockOk = "ok"

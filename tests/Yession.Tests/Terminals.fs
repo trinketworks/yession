@@ -5054,9 +5054,46 @@ let private feedSliceTests =
                 "stdout and stderr concatenated in order, input dropped"
     ]
 
+let private shownOutputTests =
+    // What the PAGE draws of a block's output: its last lines, never all of them, because a
+    // running block is redrawn per record and a hundred thousand lines redrawn per record held
+    // a browser's main thread for minutes (`seq 100000`). The recording keeps every line;
+    // these are about the window, and about it saying what it left out.
+    let numbered (count: int) = String.concat "" [ for n in 1 .. count -> sprintf "line-%06d\r\n" n ]
+
+    testList "What a block shows of what it printed" [
+        testCase "output longer than the window shows its last lines" <| fun () ->
+            let _, shown = TerminalFeed.lastLines 3 (numbered 10)
+            Expect.equal shown "line-000008\r\nline-000009\r\nline-000010\r\n" "the three lines that end it"
+
+        testCase "the lines before the window are counted" <| fun () ->
+            let elided, _ = TerminalFeed.lastLines 3 (numbered 10)
+            Expect.equal elided 7 "ten printed, three shown"
+
+        testCase "output within the window is shown whole, with nothing counted out" <| fun () ->
+            Expect.equal (TerminalFeed.lastLines 3 (numbered 3)) (0, numbered 3) "all of it, as it was"
+
+        testCase "a last line still being printed is one of the lines shown" <| fun () ->
+            // Live output is cut wherever the pty's read ended, which is mid-line as often as
+            // not — and the line being written is the one a reader is watching.
+            let elided, shown = TerminalFeed.lastLines 2 "one\ntwo\nthr"
+            Expect.equal (elided, shown) (1, "two\nthr") "the partial line counts, and is kept"
+
+        testCase "however much a block printed, the page draws at most the window" <| fun () ->
+            // The bound itself, at the size that broke it: what reaches a render is
+            // `shownLines` lines whatever was printed, and the rest is a number.
+            let feed = TerminalFeed.withRecord 0 { At = 0.0; Kind = TranscriptOutput; Data = numbered 100000 } TerminalFeed.empty
+            let elided, shown = TerminalFeed.shownOutput 0 1 feed
+            Expect.equal
+                (elided, shown.Split('\n').Length - 1)
+                (100000 - TerminalFeed.shownLines, TerminalFeed.shownLines)
+                "the window's worth of lines drawn, the rest counted"
+    ]
+
 let tests =
     testList "Terminals (Plan 13)" [
         feedSliceTests
+        shownOutputTests
         affordanceTests
         sourceTests
         drainTests

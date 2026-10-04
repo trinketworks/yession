@@ -1640,7 +1640,7 @@ do
     PageGlobal.set Published.record (System.Action<_, _, _, _> (fun id seq kind data ->
         match TerminalId.create id, TranscriptKind.parse kind with
         | Ok terminal, Some kind ->
-            dispatch (TerminalRecordMsg (terminal, seq, { At = 0.0; Kind = kind; Data = data }))
+            dispatch (TerminalRecordsMsg (terminal, [ seq, { At = 0.0; Kind = kind; Data = data } ]))
         | _ -> ()))
     render ()
     // The shell harness drives the real render, so it gets the real page listeners too — a
@@ -1659,7 +1659,7 @@ do
     // while records were landing in them.
     //
     // The stream goes into the block-mode terminal as transcript records, which is what the
-    // app's own record path dispatches (`TerminalRecordMsg`); the running block in the burst
+    // app's own record path dispatches (`TerminalRecordsMsg`); the running block in the burst
     // card grows with them, so the conversation redraws too. The fling itself is NOT made here:
     // a synthetic scroll would be a scroll the browser's input pipeline never saw, and the
     // driver has real touch input. So it is two calls — begin, fling, end — and the report says
@@ -1700,10 +1700,9 @@ do
                         let seq = 2 + sent
                         sent <- sent + 1
                         dispatch (
-                            TerminalRecordMsg (
+                            TerminalRecordsMsg (
                                 (if elsewhere then elsewhereTerminal else harnessTerminal),
-                                seq,
-                                { At = float seq; Kind = TranscriptOutput; Data = sprintf "line %d\r\n" seq }))),
+                                [ seq, { At = float seq; Kind = TranscriptOutput; Data = sprintf "line %d\r\n" seq } ]))),
                 everyMs)
         finish <-
             Some (fun () ->

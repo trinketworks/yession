@@ -537,7 +537,7 @@ let private paneTests =
             // rendering free to drift from the first.
             let model =
                 clientOf oneBlock
-                |> Support.step (TerminalRecordMsg (terminalA, 1, { At = 0.0; Kind = TranscriptOutput; Data = "total 0\n" }))
+                |> Support.step (TerminalRecordsMsg (terminalA, [ 1, { At = 0.0; Kind = TranscriptOutput; Data = "total 0\n" } ]))
                 |> Support.step (chip terminalA "1")
             let html = Support.render model
             let required =
@@ -1207,7 +1207,7 @@ let private keyframeTests =
             let model =
                 clientOf oneBlock
                 |> Support.step (TerminalHeaderMsg (terminalA, baseHeader))
-                |> Support.step (TerminalRecordMsg (terminalA, 1, { At = 3.0; Kind = TranscriptOutput; Data = "out\r\n" }))
+                |> Support.step (TerminalRecordsMsg (terminalA, [ 1, { At = 3.0; Kind = TranscriptOutput; Data = "out\r\n" } ]))
                 |> Support.step (TerminalKeyframeMsg (terminalA, { Seq = 1; Cols = 80; Rows = 24; Screen = "SCREEN" }))
             match ClientModel.rangedCast terminalA 1 2 model with
             | Some cast -> Expect.equal (outputsOf cast) [ "SCREEN"; "out\r\n" ] "painted from the keyframe at line 1"
@@ -1240,7 +1240,7 @@ let private withRecords (model: ClientModel) =
       2, { At = 11.0; Kind = TranscriptOutput; Data = "done\r\n" }
       3, { At = 40.0; Kind = TranscriptOutput; Data = "testing\r\n" }
       4, { At = 43.5; Kind = TranscriptOutput; Data = "FAILED\r\n" } ]
-    |> List.fold (fun m (seq, record) -> Support.step (TerminalRecordMsg (terminalA, seq, record)) m) model
+    |> List.fold (fun m (seq, record) -> Support.step (TerminalRecordsMsg (terminalA, [ seq, record ])) m) model
     |> Support.step (TerminalHeaderMsg (terminalA, baseHeader))
 
 /// A page of transcript is one message and one render (`TerminalPageMsg`); what has to hold
@@ -1255,7 +1255,7 @@ let private pageTests =
                   4, { At = 43.5; Kind = TranscriptOutput; Data = "FAILED\r\n" } ]
             let oneAtATime =
                 records
-                |> List.fold (fun m (seq, record) -> Support.step (TerminalRecordMsg (terminalA, seq, record)) m) fresh
+                |> List.fold (fun m (seq, record) -> Support.step (TerminalRecordsMsg (terminalA, [ seq, record ])) m) fresh
                 |> Support.step (TerminalHeaderMsg (terminalA, baseHeader))
                 |> Support.step (TerminalReadThroughMsg (terminalA, 5))
             let asPage = Support.step (TerminalPageMsg (terminalA, records, Some baseHeader, 5)) fresh
@@ -1267,6 +1267,36 @@ let private pageTests =
                 |> Support.step (TerminalHeaderMsg (terminalA, baseHeader))
             let later = Support.step (TerminalPageMsg (terminalA, [ 7, { At = 1.0; Kind = TranscriptOutput; Data = "x" } ], None, 8)) fresh
             Expect.equal (Map.find terminalA later.TerminalFeeds).Header (Some baseHeader) "line 0 came earlier and stays"
+    ]
+
+/// What a block draws of a long output. The window itself is `TerminalFeed.lastLines`'s, and
+/// tested there; this is the render saying so, which is the half a reader sees.
+let private outputWindowTests =
+    testList "A block's output, drawn" [
+        testCase "a block that printed more than it draws says how many lines the recording holds" <| fun () ->
+            let printed = TerminalFeed.shownLines + 1000
+            let model =
+                clientOf oneBlock
+                |> Support.step (
+                    TerminalRecordsMsg (
+                        terminalA,
+                        [ 1,
+                          { At = 0.0
+                            Kind = TranscriptOutput
+                            Data = String.concat "" [ for n in 1 .. printed -> sprintf "line-%d\r\n" n ] } ]))
+                |> Support.step (chip terminalA "1")
+            Expect.isTrue
+                ((Support.render model).Contains (Dom.attr Dom.Hooks.terminalOutputElided "1000"))
+                "the thousand lines above the window are counted where the block is drawn"
+
+        testCase "a block that printed within the window draws it all and counts nothing out" <| fun () ->
+            let model =
+                clientOf oneBlock
+                |> Support.step (TerminalRecordsMsg (terminalA, [ 1, { At = 0.0; Kind = TranscriptOutput; Data = "total 0\n" } ]))
+                |> Support.step (chip terminalA "1")
+            Expect.isFalse
+                ((Support.render model).Contains Dom.Hooks.terminalOutputElided)
+                "nothing was left out, so nothing says it was"
     ]
 
 let private videoTests =
@@ -1581,7 +1611,7 @@ let private dvrTests =
             // The terminal keeps printing. What is being watched does not move.
             let stillGrowing =
                 Support.step
-                    (TerminalRecordMsg (terminalA, 5, { At = 60.0; Kind = TranscriptOutput; Data = "after\r\n" }))
+                    (TerminalRecordsMsg (terminalA, [ 5, { At = 60.0; Kind = TranscriptOutput; Data = "after\r\n" } ]))
                     model
             Expect.equal (castAt stillGrowing) (castAt model) "the recording under the reader is unchanged"
 
@@ -1610,7 +1640,7 @@ let private dvrTests =
             Expect.equal (ClientModel.behindLive terminalA model) (Some 0.0) "nothing has accrued yet"
             let grown =
                 Support.step
-                    (TerminalRecordMsg (terminalA, 5, { At = 103.5; Kind = TranscriptOutput; Data = "after\r\n" }))
+                    (TerminalRecordsMsg (terminalA, [ 5, { At = 103.5; Kind = TranscriptOutput; Data = "after\r\n" } ]))
                     model
             Expect.equal (ClientModel.behindLive terminalA grown) (Some 60.0) "a minute of recording arrived behind the pin"
             Expect.isTrue ((Support.render grown).Contains (Dom.Text.behindLive (Some "1m 0s"))) "and the pane says so"
@@ -1629,7 +1659,7 @@ let private dvrTests =
                 withRecords (clientOf [ at 1L 0.0 (opened terminalA "shell"); at 2L 1.0 (took terminalA (PeerRef bob) 1) ])
                 |> Support.step (RewindTerminalMsg terminalA)
                 |> Support.step
-                    (TerminalRecordMsg (terminalA, 5, { At = 60.0; Kind = TranscriptOutput; Data = "after\r\n" }))
+                    (TerminalRecordsMsg (terminalA, [ 5, { At = 60.0; Kind = TranscriptOutput; Data = "after\r\n" } ]))
                 |> Support.step
                     (EventsPageMsg
                         { Events = [ at 3L 61.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "done"; By = None }) ]
@@ -1655,7 +1685,7 @@ let private dvrTests =
                 withRecords (clientOf live)
                 |> Support.step (RewindTerminalMsg terminalA)
                 |> Support.step
-                    (TerminalRecordMsg (terminalA, 5, { At = 60.0; Kind = TranscriptOutput; Data = "after\r\n" }))
+                    (TerminalRecordsMsg (terminalA, [ 5, { At = 60.0; Kind = TranscriptOutput; Data = "after\r\n" } ]))
                 |> Support.step (ShowInPaneMsg (Reading terminalA))
             Expect.isFalse (ClientModel.isRewound terminalA model) "caught back up"
             match ClientModel.terminalReplay terminalA model with
@@ -2061,7 +2091,7 @@ let private listTests =
             Expect.isTrue (ClientModel.hasRecording terminalA byHint) "a live terminal's length"
             let byRecord =
                 Support.step
-                    (TerminalRecordMsg (terminalA, 0, { At = 0.0; Kind = TranscriptOutput; Data = "hi" }))
+                    (TerminalRecordsMsg (terminalA, [ 0, { At = 0.0; Kind = TranscriptOutput; Data = "hi" } ]))
                     model
             Expect.isTrue (ClientModel.hasRecording terminalA byRecord) "a fetched record"
 
@@ -3739,6 +3769,7 @@ let tests =
         statusTests
         latestTests
         pageTests
+        outputWindowTests
         keyframeTests
         videoTests
         readsTests

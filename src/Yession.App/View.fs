@@ -1480,21 +1480,33 @@ module View =
     /// Styled terminal output. Each parsed run becomes one span carrying its SGR styling;
     /// lines are separated by real newlines inside a `pre-wrap` block, so selecting and
     /// copying output yields the text a person would expect rather than a run of divs.
+    ///
+    /// Unstyled text is ONE piece however many lines it spans: consecutive plain runs, and the
+    /// newlines between them, are joined into a single text node, and only a styled run gets
+    /// a node of its own. A template per line was a template instance, its markers and its
+    /// text — some ten nodes a line, so `seq 100000` drew a million — for output whose every
+    /// line looked the same. Plain output, which is most of it, now costs the page one node.
     let private ansiText (text: string) : TemplateResult list =
+        let pieces = ResizeArray<TemplateResult> ()
+        let plain = System.Text.StringBuilder ()
+        let flush () =
+            if plain.Length > 0 then
+                pieces.Add (html $"{plain.ToString ()}")
+                plain.Clear () |> ignore
         Ansi.parse text
-        |> List.mapi (fun i line ->
-            let spans =
-                line.Spans
-                |> List.map (fun span ->
-                    // A run with no styling at all is emitted bare — the overwhelmingly
-                    // common case, and one span per plain line is a span too many.
-                    let classes = Style.ansiClasses span.Style
-                    let inline' = Style.ansiInline span.Style
-                    if classes = "" && inline' = "" then html $"{span.Text}"
-                    else html $"""<span class="{classes}" style="{inline'}">{span.Text}</span>""")
+        |> List.iteri (fun i line ->
             // The newline BEFORE every line but the first, so a trailing line adds no
             // trailing blank one.
-            if i = 0 then html $"{spans}" else html $"""{"\n"}{spans}""")
+            if i > 0 then plain.Append '\n' |> ignore
+            for span in line.Spans do
+                let classes = Style.ansiClasses span.Style
+                let inline' = Style.ansiInline span.Style
+                if classes = "" && inline' = "" then plain.Append span.Text |> ignore
+                else
+                    flush ()
+                    pieces.Add (html $"""<span class="{classes}" style="{inline'}">{span.Text}</span>"""))
+        flush ()
+        List.ofSeq pieces
 
     /// Something still under way, said by a pulsing dot; the word is for screen readers.
     let private runningDot =
@@ -2972,8 +2984,16 @@ module View =
         // by the range its completion event recorded — which is what makes a reload show
         // exactly the same block as the live view did.
         let toSeq = block.ToSeq |> Option.defaultValue (max feed.KnownLength block.FromSeq)
-        let output = TerminalFeed.outputText block.FromSeq toSeq feed
-        if output <> "" then html $"""<div class="{Style.terminalOutput}" data-terminal-output>{ansiText output}</div>"""
+        // Its last lines, never all of them (`TerminalFeed.shownLines`): the page redraws a
+        // running block per record, so what it draws must not grow with what was printed.
+        // The lines left out are SAID, above what is shown and outside it, so a copy of the
+        // output is the output and a reader is not left taking the window for the whole.
+        let elided, output = TerminalFeed.shownOutput block.FromSeq toSeq feed
+        let earlier =
+            if elided = 0 then Lit.nothing
+            else
+                html $"""<div class="{Style.terminalOutputElided}" data-terminal-output-elided="{string elided}">{Dom.Text.outputElided elided}</div>"""
+        if output <> "" then html $"""{earlier}<div class="{Style.terminalOutput}" data-terminal-output>{ansiText output}</div>"""
         else
             match block.Status with
             | BlockRunning -> html $"""<div class="{Style.terminalOutputEmpty}" data-terminal-output>…</div>"""
