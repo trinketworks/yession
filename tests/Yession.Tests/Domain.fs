@@ -1125,6 +1125,10 @@ let private chapterTests =
     let notable = itemSaying "n" (ItemContent.Act notableAct)
     let ordinary = itemSaying "o" (ItemContent.Act ordinaryAct)
     let said = itemSaying "s" (ItemContent.Message "something happened")
+    /// A policy written for these cases rather than the product's, so what they pin is the
+    /// MECHANISM — a verdict's precedence, a stretch, a name — and a change to which acts
+    /// open chapters by themselves (`AutoChapters`) cannot turn any of them red.
+    let policy : ChapterPolicy = { ChapterPolicy.OpensByNature = fun _ item -> item.MessageId = notable.MessageId }
     /// What somebody's verdict alone looks like, without a name over it — the shape a doc
     /// written before chapters had names decodes to, and the one an auto-chapter keeps.
     let verdict (item: ConversationItem) (opens: bool) =
@@ -1136,36 +1140,48 @@ let private chapterTests =
     testList "Chapters (where the session divides)" [
         // The default half. A watch is the reason somebody is waiting, so its news opens a
         // chapter without anybody having asked for one.
-        testCase "an act that is notable by nature opens one with nobody having said anything" <| fun () ->
-            Expect.isTrue (Chapters.opens Map.empty notable) "a chapter opens here"
-            Expect.isFalse (Chapters.opens Map.empty ordinary) "and an ordinary act is not"
+        testCase "where the policy opens one, it opens with nobody having said anything" <| fun () ->
+            Expect.isTrue (Chapters.opens policy Map.empty [ notable ] notable) "a chapter opens here"
+            Expect.isFalse (Chapters.opens policy Map.empty [ ordinary ] ordinary) "and an ordinary act is not"
 
         // The half that makes the default affordable. A default nobody can refuse becomes
         // noise the first time it is wrong.
         testCase "a person's no closes a chapter an act opens by nature" <| fun () ->
-            Expect.isFalse (Chapters.opens (verdict notable false) notable) "their answer, not the act's"
+            Expect.isFalse (Chapters.opens policy (verdict notable false) [ notable ] notable) "their answer, not the act's"
 
         // And the other direction: a chapter can open anywhere something was said, which is
         // what makes these the reader's own divisions rather than a feed of what this
         // repository thinks is important.
         testCase "a person's yes opens one where nothing would have" <| fun () ->
-            Expect.isTrue (Chapters.opens (verdict said true) said) "a message somebody chose"
+            Expect.isTrue (Chapters.opens policy (verdict said true) [ said ] said) "a message somebody chose"
 
         // `toggle` takes the ITEM, so the caller never has to know what it defaulted to —
         // which is the whole reason the default and the verdict are read in one place.
         testCase "toggling an act that is notable by nature records the no" <| fun () ->
-            Expect.equal (opensOf notable (Chapters.toggle Yession.App.Collab.CollabText.ylmish notable Map.empty)) (Some false) "recorded, not merely absent"
+            Expect.equal (opensOf notable (Chapters.toggle Yession.App.Collab.CollabText.ylmish policy [ notable ] notable Map.empty)) (Some false) "recorded, not merely absent"
 
         // Absence and no are different answers, so coming back from a no is a yes rather
         // than a delete — and a later change to what is notable by nature cannot silently
         // reverse a decision somebody has already made.
         testCase "toggling it back records the yes, rather than forgetting the answer" <| fun () ->
-            let chapters = Map.empty |> Chapters.toggle Yession.App.Collab.CollabText.ylmish notable |> Chapters.toggle Yession.App.Collab.CollabText.ylmish notable
+            let chapters = Map.empty |> Chapters.toggle Yession.App.Collab.CollabText.ylmish policy [ notable ] notable |> Chapters.toggle Yession.App.Collab.CollabText.ylmish policy [ notable ] notable
             Expect.equal (opensOf notable chapters) (Some true) "an answer either way"
+
+        // What makes a policy safe to refine: it is shown only what came BEFORE an item, so a
+        // chapter it opened cannot be closed by anything said after it.
+        testCase "the policy is shown what came before an item, newest first, and nothing after" <| fun () ->
+            let shown = System.Collections.Generic.List<string * string list> ()
+            let watching : ChapterPolicy =
+                { ChapterPolicy.OpensByNature =
+                    fun before item ->
+                        shown.Add (MessageId.value item.MessageId, before |> List.map (fun i -> MessageId.value i.MessageId))
+                        false }
+            Chapters.openings watching Map.empty [ said; ordinary; notable ] |> ignore
+            Expect.equal (List.ofSeq shown) [ "s", []; "o", [ "s" ]; "n", [ "o"; "s" ] ] "each item, with its past and no future"
 
         testCase "the chapters keep the order the conversation holds them in" <| fun () ->
             Expect.equal
-                (Chapters.over (verdict said true) [ said; ordinary; notable ] |> List.map (fun i -> i.MessageId))
+                (Chapters.over policy (verdict said true) [ said; ordinary; notable ] |> List.map (fun i -> i.MessageId))
                 [ said.MessageId; notable.MessageId ]
                 "both chapters, in timeline order"
 
@@ -1202,15 +1218,15 @@ let private chapterTests =
         // change rather than an empty field.
         testCase "opening a chapter writes the guess down" <| fun () ->
             let message = itemSaying "m" (ItemContent.Message "Do both ends.")
-            Expect.equal (nameIn message (Chapters.toggle Yession.App.Collab.CollabText.ylmish message Map.empty)) (Some "Do both ends.") "seeded, not left empty"
+            Expect.equal (nameIn message (Chapters.toggle Yession.App.Collab.CollabText.ylmish policy [ message ] message Map.empty)) (Some "Do both ends.") "seeded, not left empty"
 
         // A mis-tap costs a chapter, never a sentence.
         testCase "closing a chapter keeps the name somebody wrote" <| fun () ->
             let chapters =
                 Map.empty
-                |> Chapters.toggle Yession.App.Collab.CollabText.ylmish said
-                |> Chapters.rename said (Ylmish.Text.ofString "Where it was settled")
-                |> Chapters.toggle Yession.App.Collab.CollabText.ylmish said
+                |> Chapters.toggle Yession.App.Collab.CollabText.ylmish policy [ said ] said
+                |> Chapters.rename policy [ said ] said (Ylmish.Text.ofString "Where it was settled")
+                |> Chapters.toggle Yession.App.Collab.CollabText.ylmish policy [ said ] said
             Expect.equal (opensOf said chapters) (Some false) "the chapter is closed"
             Expect.equal (nameIn said chapters) (Some "Where it was settled") "and the words are still there"
 
@@ -1228,7 +1244,7 @@ let private chapterTests =
         // Renaming is not a way to divide the session: what it writes down is the verdict the
         // item already carried, so naming a chapter that opened by itself leaves it open.
         testCase "renaming a chapter nobody opened keeps the verdict it had" <| fun () ->
-            let chapters = Chapters.rename notable (Ylmish.Text.ofString "The watch begins") Map.empty
+            let chapters = Chapters.rename policy [ notable ] notable (Ylmish.Text.ofString "The watch begins") Map.empty
             Expect.equal (opensOf notable chapters) (Some true) "still open, by nature"
             Expect.equal (nameIn notable chapters) (Some "The watch begins") "and now it is called something"
 
@@ -1238,10 +1254,10 @@ let private chapterTests =
         // standing behind it. `toggle` seeds the guess, so a chapter has words from the
         // moment it exists — "has it got a name yet" is not a question about emptiness.
         testCase "a chapter still wearing the guess is unwritten" <| fun () ->
-            Expect.isTrue (Chapters.unwritten Yession.App.Collab.CollabText.ylmish (Chapters.toggle Yession.App.Collab.CollabText.ylmish said Map.empty) said) "the guess is not a name"
+            Expect.isTrue (Chapters.unwritten Yession.App.Collab.CollabText.ylmish (Chapters.toggle Yession.App.Collab.CollabText.ylmish policy [ said ] said Map.empty) said) "the guess is not a name"
 
         testCase "a chapter somebody named is not" <| fun () ->
-            let chapters = Chapters.rename said (Ylmish.Text.ofString "Where it was settled") Map.empty
+            let chapters = Chapters.rename policy [ said ] said (Ylmish.Text.ofString "Where it was settled") Map.empty
             Expect.isFalse (Chapters.unwritten Yession.App.Collab.CollabText.ylmish chapters said) "theirs, and nothing may type over it"
 
         // An act that opens a chapter by nature has no entry at all until somebody touches
@@ -1264,7 +1280,7 @@ let private chapterTests =
                     [ a.MessageId, { Opens = true; Name = Ylmish.Text.empty }
                       c.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]
             Expect.equal
-                (Chapters.covers chapters [ a; b; c; d ] a |> List.map ConversationItem.said)
+                (Chapters.covers policy chapters [ a; b; c; d ] a |> List.map ConversationItem.said)
                 [ "first"; "second" ]
                 "up to the next chapter, and not past it"
 
@@ -1273,7 +1289,7 @@ let private chapterTests =
             let b = itemSaying "b" (ItemContent.Message "second")
             let chapters = Map.ofList [ a.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]
             Expect.equal
-                (Chapters.covers chapters [ a; b ] a |> List.map ConversationItem.said)
+                (Chapters.covers policy chapters [ a; b ] a |> List.map ConversationItem.said)
                 [ "first"; "second" ]
                 "nothing after it to stop at"
 
@@ -1287,7 +1303,7 @@ let private chapterTests =
                 Map.ofList
                     [ a.MessageId, { Opens = true; Name = Ylmish.Text.empty }
                       c.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]
-            Expect.equal (Chapters.summaryAsk (Chapters.reading chapters [ a; b; c ] a) None).Lines [ "first"; "second" ] "its own, and no more"
+            Expect.equal (Chapters.summaryAsk (Chapters.reading policy chapters [ a; b; c ] a) None).Lines [ "first"; "second" ] "its own, and no more"
 
         // A session can hold a stack trace, a diff, or forty messages. A name is made from
         // the shape of a chapter, and an ask that sent all of it would spend a model's
@@ -1295,7 +1311,7 @@ let private chapterTests =
         testCase "a chapter longer than anybody reads is not sent whole" <| fun () ->
             let long = itemSaying "l" (ItemContent.Message (String.replicate 500 "word "))
             let chapters = Map.ofList [ long.MessageId, { Opens = true; Name = Ylmish.Text.empty } ]
-            let ask = Chapters.summaryAsk (Chapters.reading chapters [ long ] long) None
+            let ask = Chapters.summaryAsk (Chapters.reading policy chapters [ long ] long) None
             let sent = ask.Lines |> List.sumBy (fun line -> line.Length)
             Expect.isTrue (sent < (ConversationItem.said long).Length) "bounded, rather than the whole of it"
 
@@ -1916,7 +1932,7 @@ let private prWatchTests =
         // a watch is the reason somebody is waiting; the unwatch is not, because it is where
         // the story stops being told rather than a place worth coming back to.
         testCase "a watch and its news are chapters; letting it go is not" <| fun () ->
-            let notable = ConversationItem.notable
+            let notable = AutoChapters.policy.OpensByNature []
             let envelopes =
                 [ PrWatched.create (msg "w1") (Authority.ofAuthor (Principal.Peer ada)) pr (snapshotOf PrOpen ChecksPending None)
                   |> expect
@@ -3457,7 +3473,7 @@ let private namingTests =
         testCase "a chapter no doc entry opens is not a subject" <| fun () ->
             let act =
                 { saying "n" "PR octo/hello#12 merged" with Content = ItemContent.Act notableAct }
-            Expect.isTrue (Chapters.opens Map.empty act) "it does open a chapter"
+            Expect.isTrue (Chapters.opens AutoChapters.policy Map.empty [ act ] act) "it does open a chapter"
             Expect.equal (chaptersOwed Map.empty Map.empty [ act ]) [] "and it is still not named"
 
         // A closed chapter is not a chapter.

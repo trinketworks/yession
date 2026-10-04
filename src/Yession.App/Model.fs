@@ -1061,7 +1061,7 @@ type ClientMsg =
     /// Open a chapter at this message, or close the one there — one message, because there is
     /// one act. Which way it goes is `Chapters.toggle`'s to decide, from the item and the
     /// verdicts already recorded: a message carrying the desired state would be a message
-    /// whose sender had to know what an act that opens one by nature defaults to.
+    /// whose sender had to know what the chapter policy defaults to.
     | ToggleChapterMsg of MessageId
     /// Call the chapter at this message something else — the whole name, as the field now
     /// reads, carried as `Ylmish.Text` so the EDIT crosses rather than the result. A message
@@ -2193,7 +2193,13 @@ module ClientModel =
     /// chapter IS on a screen is a measurement of a laid-out page, and the list is the same
     /// on a phone and a desk.
     let chapters (model: ClientModel) : ConversationItem list =
-        Chapters.over model.Synced.Chapters model.Conversation.Items
+        Chapters.over AutoChapters.policy model.Synced.Chapters model.Conversation.Items
+
+    /// Every message a chapter opens at, for a surface that draws the transcript and asks of
+    /// each row in turn. Asked once per render rather than once per row, because the policy
+    /// reads what came before an item (`Chapters.openings`).
+    let chapterOpenings (model: ClientModel) : Set<MessageId> =
+        Chapters.openings AutoChapters.policy model.Synced.Chapters model.Conversation.Items
 
     /// What this session's pull-request watches currently stand at, read off the
     /// `pull_requests` query — the only shape a browser has them in, since the query stream
@@ -3072,7 +3078,7 @@ module ClientModel =
             | Some item ->
                 model
                 |> withSynced
-                    { model.Synced with Chapters = Chapters.toggle CollabText.ylmish item model.Synced.Chapters }
+                    { model.Synced with Chapters = Chapters.toggle CollabText.ylmish AutoChapters.policy model.Conversation.Items item model.Synced.Chapters }
             | None -> model
         // The item again, and for the reason the toggle needs it: a chapter nobody has touched
         // has no entry, so the rename has to record the verdict the item already carried.
@@ -3081,7 +3087,7 @@ module ClientModel =
             | Some item ->
                 model
                 |> withSynced
-                    { model.Synced with Chapters = Chapters.rename item said model.Synced.Chapters }
+                    { model.Synced with Chapters = Chapters.rename AutoChapters.policy model.Conversation.Items item said model.Synced.Chapters }
             | None -> model
         // Requests of the session and nothing else: what they change arrives as events, which
         // every peer folds alike, so a local guess here would be a state only this peer had.

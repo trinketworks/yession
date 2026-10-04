@@ -194,7 +194,7 @@ module SyncedStateSync =
     ///
     /// The verdict is written as a WORD rather than as the presence of a key, because "nobody
     /// has decided" and "somebody decided no" are different answers and only the second
-    /// overrides an act that is notable by nature.
+    /// overrides a chapter the policy opens by nature (`AutoChapters`).
     ///
     /// The name is a nested `Y.Text`, which is the one place this codec carries collaborative
     /// text below the top level. Ylmish supports it precisely here: a keyed-map item is
