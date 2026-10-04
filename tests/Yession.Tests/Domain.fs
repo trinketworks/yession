@@ -233,24 +233,19 @@ let private conversationProjectionTests =
         // one real session, about ten million item copies, which measured as 373ms of the
         // 402ms that folding its conversation cost at all.
         //
-        // Pinned as a RATIO for the reason the render budget is a count and not a duration:
-        // a millisecond figure on a shared runner is the flaky test this repository warns
-        // about, while "a word costs the same into a long transcript as into a short one" is
-        // the same claim on every box. Loose on purpose — ten times the transcript may cost
-        // three times the word and still pass — because what it exists to catch is the copy,
-        // which makes it cost ten times.
-        //
-        // Each size is the BEST of five samples, taken turn about. A fold of either is at
-        // most a few milliseconds, so a single collector pause landing in one is the whole
-        // ratio: timed once each, over code with no copy in it, this read anywhere from 0.6x
-        // to 5.8x across full cheap-tier runs. A pause only ever adds, so the fastest of a
-        // few is the cost without one, and alternating puts a slow stretch of the run on both
-        // sizes rather than one. A sample is twenty folds back to back, because the clock here
-        // ticks in whole milliseconds and a warm fold takes less than one.
-        testCase "one streamed word costs the same whatever the transcript behind it holds" <| fun () ->
+        // Pinned as SHARING rather than as time: a word that copies nothing behind it hands
+        // back the very list it was folded onto, so the transcript after a word and before it
+        // are one object past the message being written. That is the whole cost claim, and it
+        // has no clock in it. This case used to time 2000 words into 50 items against 2000
+        // into 800 and require the ratio under 3x; a fold of either is a few milliseconds, so
+        // one collector pause or a contended core was the whole ratio, and it went red on
+        // code with no copy in it — once as 20ms against 3ms, and again after it was made the
+        // best of five interleaved samples.
+        testCase "one streamed word leaves the transcript behind it untouched" <| fun () ->
             let turn = AgentTurnId.create "t-1" |> expect
-            let filler (n: int) =
-                [ for i in 1 .. n ->
+            let streamed = MessageId.create "streamed" |> expect
+            let filler =
+                [ for i in 1 .. 800 ->
                     envelopeOf
                         (int64 i)
                         (MessageSent
@@ -258,42 +253,19 @@ let private conversationProjectionTests =
                               QueueId = None
                               Author = Principal.Peer peerId
                               Body = "filler" }) ]
-            let streaming (first: int64) (words: int) =
-                [ yield envelopeOf first (AgentTurnStarted { AgentTurnId = turn; Cause = TurnCause.Woke WakeReason.CommandFinished })
-                  yield envelopeOf (first + 1L)
-                            (AgentMessageStarted
-                                { MessageId = MessageId.create "streamed" |> expect
-                                  AgentTurnId = turn
-                                  Antecedent = None })
-                  for w in 1 .. words ->
-                    envelopeOf (first + 1L + int64 w)
-                        (AgentMessageDelta
-                            { MessageId = MessageId.create "streamed" |> expect
-                              AgentTurnId = turn
-                              Delta = "x" }) ]
-            let foldOf (behind: int) =
-                let seeded, hw = ConversationProjection.applyEvents None (filler behind) ConversationProjection.empty
-                let words = streaming (int64 behind + 1L) 2000
-                fun () ->
-                    let started = DateTimeOffset.UtcNow
-                    let folds = [ for _ in 1 .. 20 -> ConversationProjection.applyEvents hw words seeded |> fst ]
-                    let ms = (DateTimeOffset.UtcNow - started).TotalMilliseconds
-                    for folded in folds do
-                        Expect.equal (List.length folded.Items) (behind + 1) "the transcript is what the seed plus the one message make it"
-                    ms
-            let short', long' =
-                let foldShort, foldLong = foldOf 50, foldOf 800
-                let samples = [ for _ in 1 .. 5 -> foldShort (), foldLong () ]
-                samples |> List.map fst |> List.min, samples |> List.map snd |> List.min
-            let ratio = long' / (max short' 1.0)
-            printfn "  20 x 2000 words into 50 items: %.0fms; into 800: %.0fms — %.1fx" short' long' ratio
+            let started =
+                [ envelopeOf 801L (AgentTurnStarted { AgentTurnId = turn; Cause = TurnCause.Woke WakeReason.CommandFinished })
+                  envelopeOf 802L (AgentMessageStarted { MessageId = streamed; AgentTurnId = turn; Antecedent = None }) ]
+            let before, hw = ConversationProjection.applyEvents None (filler @ started) ConversationProjection.empty
+            let after, _ =
+                ConversationProjection.applyEvents
+                    hw
+                    [ envelopeOf 803L (AgentMessageDelta { MessageId = streamed; AgentTurnId = turn; Delta = "x" }) ]
+                    before
             Expect.isTrue
-                (ratio < 3.0)
-                (sprintf
-                    "a word cost %.1fx as much into a transcript 16x longer (%.0fms against %.0fms) — \
-                     folding a word is copying the transcript again; see `Recent` and `updateItem` \
-                     in `src/Yession.Domain/Conversation.fs`"
-                    ratio long' short')
+                (LanguagePrimitives.PhysicalEquality (List.tail before.Recent) (List.tail after.Recent))
+                "a word copied the transcript behind the message it was written into — see `Recent` \
+                 and `updateItem` in `src/Yession.Domain/Conversation.fs`"
 
         testCase "folding a fixed ordered sequence is deterministic" <| fun () ->
             let events = envelopes [ 0L; 1L; 2L; 3L ]
