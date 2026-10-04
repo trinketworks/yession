@@ -1592,6 +1592,7 @@ module SessionTerminals =
                                     let how =
                                         match run with
                                         | SandboxExited code -> sprintf "exited with code %d" code
+                                        | SandboxSignalled signal -> sprintf "was ended by %s" signal
                                         | SandboxRunFailed reason -> sprintf "could not run: %s" reason
                                     emit
                                         id
@@ -2177,6 +2178,7 @@ module SessionTerminals =
                                         match! handle.Exited with
                                         | SandboxExited 0 -> return CommandSucceeded 0
                                         | SandboxExited code -> return CommandFailed code
+                                        | SandboxSignalled signal -> return CommandExecutionFailed (sprintf "it was ended by %s" signal)
                                         | SandboxRunFailed reason -> return CommandExecutionFailed reason
                                 }
                         if dropped > 0 then
@@ -2714,6 +2716,8 @@ module SessionTerminals =
                                                 "there is no directory %s in the %s sandbox. The paths add_repo and the repos query answer with are what this takes."
                                                 path
                                                 name)
+                                | SandboxSignalled signal ->
+                                    return Error (sprintf "the %s sandbox's shell was ended by %s, so nothing was set." name signal)
                                 | SandboxRunFailed reason -> return Error reason
                         }
                 match checked' with

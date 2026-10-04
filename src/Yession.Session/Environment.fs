@@ -151,6 +151,8 @@ module SessionEnvironment =
                                     Error (
                                         if SandboxVerification.named checks output then Named explained
                                         else Unnamed explained)
+                            | SandboxSignalled signal ->
+                                return Error (Named (sprintf "this sandbox's start-up check was ended by %s" signal))
                             | SandboxRunFailed reason ->
                                 return Error (Named (sprintf "this sandbox cannot run a command at all: %s" reason))
                     }

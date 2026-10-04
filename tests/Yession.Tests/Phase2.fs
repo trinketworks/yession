@@ -242,6 +242,7 @@ let private toolsWithRuntime (runtime: string list) : Sandboxes.SrtTools =
     { Bwrap = None
       Socat = None
       Ripgrep = None
+      Setsid = None
       Nesting = Sandboxes.StrictNesting
       Runtime = runtime }
 

@@ -1169,8 +1169,9 @@ let private agentCredentials () =
 
 // The srt backend confines with bubblewrap on Linux and Seatbelt on macOS. Seatbelt is part
 // of the OS, so darwin always has the capability; on Linux it is bubblewrap, socat (the bridge
-// into the unshared network namespace) and ripgrep (srt refuses to start a sandbox without
-// one) that have to be there — and, since bwrap needs unprivileged user namespaces, being
+// into the unshared network namespace), ripgrep (srt refuses to start a sandbox without
+// one) and util-linux's setsid (a terminal's shell takes its pty with it) that have to be
+// there — and, since bwrap needs unprivileged user namespaces, being
 // installed is not the same as WORKING. Run the profile the suites will run under, rather than
 // look for binaries: a kernel that forbids the nested namespace fails here, where the reason
 // is one line, instead of inside a suite.
@@ -1181,6 +1182,7 @@ let private srtAvailable () =
         let bwrap = match named "YESSION_BIN_BWRAP" with null | "" -> "bwrap" | path -> path
         let socat = match named "YESSION_BIN_SOCAT" with null | "" -> "socat" | path -> path
         let ripgrep = match named "YESSION_BIN_RIPGREP" with null | "" -> "rg" | path -> path
+        let setsid = match named "YESSION_BIN_SETSID" with null | "" -> "setsid" | path -> path
         let weak = (match named "YESSION_NESTED_SANDBOX" with null -> "" | v -> v.Trim().ToLowerInvariant ()) = "weak"
         let confines =
             if weak then
@@ -1190,7 +1192,8 @@ let private srtAvailable () =
                 probeSucceeds bwrap [ "--ro-bind"; "/"; "/"; "--dev"; "/dev"; "--unshare-net"; "--unshare-pid"
                                       "--unshare-user"; "--cap-drop"; "ALL"; "--proc"; "/proc"; "--"
                                       bwrap; "--ro-bind"; "/"; "/"; "--unshare-user"; "true" ]
-        probeSucceeds socat [ "-V" ] && probeSucceeds ripgrep [ "--version" ] && confines
+        probeSucceeds socat [ "-V" ] && probeSucceeds ripgrep [ "--version" ] && probeSucceeds setsid [ "--version" ]
+        && confines
 
 // A real serial engine, probed by USING it rather than by looking for files — the same rule
 // `Srt` follows, and for a sharper reason here: the `serialport` addon can be present and still
@@ -1258,7 +1261,7 @@ let private requireCapabilities (caps: string list) =
           if List.contains "Caddy" caps && not (caddyAvailable ()) then
             "Caddy: no `caddy` on PATH (`devenv shell` provides one)"
           if List.contains "Srt" caps && not (srtAvailable ()) then
-            "Srt: no working confinement (bubblewrap, socat, ripgrep, and — under the strict "
+            "Srt: no working confinement (bubblewrap, socat, ripgrep, setsid, and — under the strict "
             + "profile — a nested user namespace; an unprivileged container needs "
             + "YESSION_NESTED_SANDBOX=weak)"
           // Egress, because the self-hosting run's container substitutes a whole devshell
@@ -1692,7 +1695,8 @@ module private LinuxTarget =
     /// The sandbox tools srt names, at their paths ON the target (a name absent is left unset —
     /// `toolsFrom` treats that as "not here" rather than guessing).
     let sandboxTools target : (string * string) list =
-        [ "YESSION_BIN_BWRAP", "bwrap"; "YESSION_BIN_SOCAT", "socat"; "YESSION_BIN_GIT", "git"; "YESSION_BIN_RIPGREP", "rg" ]
+        [ "YESSION_BIN_BWRAP", "bwrap"; "YESSION_BIN_SOCAT", "socat"; "YESSION_BIN_GIT", "git"; "YESSION_BIN_RIPGREP", "rg"
+          "YESSION_BIN_SETSID", "setsid" ]
         |> List.choose (fun (var, bin) ->
             match sshOut target (sprintf "command -v %s || true" bin) with
             | Some p when p.Trim () <> "" -> Some (var, p.Trim ())

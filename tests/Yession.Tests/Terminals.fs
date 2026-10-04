@@ -4221,7 +4221,7 @@ let private lostOverALateShellWaking (mayOweWake: unit -> unit) (loans: SessionT
 let private exitingShell () =
     let environment, _, _ = profileEnvironment (fun () -> Set.empty)
     let ending, ended = latch ()
-    let mutable code = 0
+    let mutable how = SandboxExited 0
     let shell : SessionEnvironment.SessionEnvironment =
         { environment with
             SpawnPty =
@@ -4238,11 +4238,11 @@ let private exitingShell () =
                                   Exited =
                                     async {
                                         do! ended
-                                        return SandboxExited code
+                                        return how
                                     } } } }
     shell,
-    fun (exitCode: int) ->
-        code <- exitCode
+    fun (run: SandboxRun) ->
+        how <- run
         ending ()
 
 /// One block, typed at such a shell and still running, and the switch that ends the shell
@@ -4279,7 +4279,7 @@ let private shellExitTests =
         testCaseAsync "a shell that exits ends the block it was running" <|
             async {
                 let! terminals, id, log, endShell = blockOverAnExitingShell ()
-                endShell 0
+                endShell (SandboxExited 0)
                 do!
                     waitUntilWithin 2_000 "the block to end when its shell did" (fun () ->
                         not (terminals.Busy () |> Set.contains (TerminalId.value id)))
@@ -4297,12 +4297,26 @@ let private shellExitTests =
         testCaseAsync "a shell that exits closes its terminal, saying how the shell went" <|
             async {
                 let! terminals, id, log, endShell = blockOverAnExitingShell ()
-                endShell 3
+                endShell (SandboxExited 3)
                 do!
                     waitUntilWithin 2_000 "the terminal to close when its shell exited" (fun () ->
                         not (terminals.IsOpen id))
                 let! reasons = closureReasons log
                 Expect.equal reasons [ "the shell exited with code 3" ] "closed for the reason the shell gave"
+            }
+
+        // A signal is said by name. It used to be folded into "exited with code -1", which is
+        // how a ^C that reached the sandbox's wrapper instead of the job closed terminals for
+        // a reason nobody could act on: the name is what says something SENT it.
+        testCaseAsync "a shell a signal ended closes its terminal, naming the signal" <|
+            async {
+                let! terminals, id, log, endShell = blockOverAnExitingShell ()
+                endShell (SandboxSignalled "SIGINT")
+                do!
+                    waitUntilWithin 2_000 "the terminal to close when its shell was signalled" (fun () ->
+                        not (terminals.IsOpen id))
+                let! reasons = closureReasons log
+                Expect.equal reasons [ "the shell was ended by SIGINT" ] "closed for the signal that ended the shell"
             }
     ]
 

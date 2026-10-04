@@ -476,6 +476,7 @@ let portsTests =
                     match ending with
                     | SandboxRunFailed reason -> Expect.isFalse (reason = "") "it says why, however little it knows"
                     | SandboxExited code -> failwithf "a dropped connection is not an exit (got %d)" code
+                    | SandboxSignalled signal -> failwithf "a dropped connection is not a signal (got %s)" signal
                     do! provider.stop () |> Interop.awaitPromise
             }
 

@@ -77,6 +77,10 @@ in
     lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${pkgs.socat}/bin/socat";
   env.YESSION_BIN_RIPGREP =
     lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${pkgs.ripgrep}/bin/rg";
+  # A terminal's shell is started under it inside the sandbox, to take its pty as its
+  # controlling terminal (bubblewrap's new session has none) — `SrtTools.Setsid` says why.
+  env.YESSION_BIN_SETSID =
+    lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${lib.getExe' pkgs.util-linux "setsid"}";
 
   env.UV_PYTHON = "${pkgs.python312}/bin/python3.12";
   env.UV_PYTHON_DOWNLOADS = "never";

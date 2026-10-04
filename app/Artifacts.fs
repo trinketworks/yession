@@ -386,6 +386,7 @@ let create
                 | Ok handle ->
                     match! handle.Exited with
                     | SandboxExited code -> return Ok (code, out.ToString (), err.ToString ())
+                    | SandboxSignalled signal -> return Error (sprintf "it was ended by %s" signal)
                     | SandboxRunFailed reason -> return Error reason
         }
 

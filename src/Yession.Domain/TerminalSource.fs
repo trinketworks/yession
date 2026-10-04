@@ -205,6 +205,7 @@ module Source =
         match ending with
         | SandboxExited code when capabilities.HasExitCode -> sprintf "the stream ended with code %d" code
         | SandboxExited _ -> "the stream ended"
+        | SandboxSignalled signal -> sprintf "the stream was ended by %s" signal
         | SandboxRunFailed reason -> reason
 
     /// The same thing said about a SHELL, which is the other way a source ends. Apart from
@@ -215,6 +216,7 @@ module Source =
     let shellEndedReason (ending: SandboxRun) : string =
         match ending with
         | SandboxExited code -> sprintf "the shell exited with code %d" code
+        | SandboxSignalled signal -> sprintf "the shell was ended by %s" signal
         | SandboxRunFailed reason -> sprintf "the shell stopped: %s" reason
 
 /// Reach a byte stream somebody else is producing, and hand back a handle shaped exactly

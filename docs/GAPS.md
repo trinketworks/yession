@@ -168,8 +168,8 @@ first's.
       which git to run (below), not to widen the scope for a shim.
   - **Every binary a confined spawn execs is NAMED; git was the last exception.**
     `YESSION_BIN_GIT` (the installable sets it on both platforms, unlike the Linux-only
-    srt tools) joins `YESSION_BIN_BWRAP`, `YESSION_BIN_SOCAT`, `YESSION_BIN_RIPGREP`
-    and `YESSION_BIN_CLAUDE`. Unset, the verbs still fall back to PATH so an off-Nix
+    srt tools) joins `YESSION_BIN_BWRAP`, `YESSION_BIN_SOCAT`, `YESSION_BIN_RIPGREP`,
+    `YESSION_BIN_SETSID` and `YESSION_BIN_CLAUDE`. Unset, the verbs still fall back to PATH so an off-Nix
     install does not regress — and an `npm i -g yession` on macOS is exactly where that
     fallback is wrong, so the git sandbox proves `git --version` before any verb runs one
     and refuses with a sentence naming `YESSION_BIN_GIT` and this host's resources profile

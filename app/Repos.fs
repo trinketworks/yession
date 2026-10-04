@@ -399,6 +399,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                     | SandboxExited code ->
                         return
                             Error (unusableGit config.Git (sprintf "exit %d: %s" code (capText 400 (output.Trim ()))))
+                    | SandboxSignalled signal -> return Error (unusableGit config.Git (sprintf "it was ended by %s" signal))
                     | SandboxRunFailed reason -> return Error (unusableGit config.Git reason)
             }
 
@@ -453,6 +454,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                     | Ok handle ->
                         match! handle.Exited with
                         | SandboxRunFailed reason -> return Error reason
+                        | SandboxSignalled signal -> return Error (sprintf "git was ended by %s" signal)
                         | SandboxExited code -> return Ok { Code = code; Stdout = stdout; Stderr = stderr }
             }
 

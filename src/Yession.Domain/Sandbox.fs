@@ -328,6 +328,12 @@ module SandboxPath =
 type SandboxRun =
     /// The process ran and exited with this code (-1 when the OS reported none).
     | SandboxExited of code: int
+    /// The process was ended by a signal, named as the OS names it (`SIGINT`), by a backend
+    /// that was told which. Not `SandboxExited -1`: a signal is the answer to "why did this
+    /// end", and the one a person needs when it ended something they did not mean to end —
+    /// a ^C that reached the wrong process closed terminals as "exited with code -1", which
+    /// pointed at nothing.
+    | SandboxSignalled of signal: string
     /// The process could not run, or its streams failed, for this reason.
     | SandboxRunFailed of reason: string
 

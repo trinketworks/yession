@@ -60,9 +60,32 @@ type ForkOptions =
       cwd : string option
       env : Environment }
 
+/// Both ends of a pty `Native.open` made, as descriptors, and the far end's device name.
+///
+/// Neither descriptor is close-on-exec and both are NON-blocking, as node-pty leaves them:
+/// what writes the master has to expect `EAGAIN`, and the far end has to be made blocking
+/// again before a program reads it as its stdin — Node's `spawn` does, for the three
+/// standard streams.
+type [<AllowNullLiteral>] Opened =
+    abstract master : int
+    abstract slave : int
+    abstract pty : string
+
+/// The addon underneath `spawn`, which node-pty exports as `native`: a pty with NO process on
+/// it yet. `spawn` opens one and makes it the controlling terminal of the session it forks,
+/// which is the one thing a caller that wants a process FURTHER DOWN to take it cannot have —
+/// a terminal is the controlling terminal of at most one session.
+type [<AllowNullLiteral>] Native =
+    /// `openpty(3)` at this size.
+    abstract ``open`` : columns: int * rows: int -> Opened
+    /// `TIOCSWINSZ` on a master, which is what sends the far end's foreground job `SIGWINCH`.
+    abstract resize : master: int * columns: int * rows: int -> unit
+
 /// What `require('node-pty')` answers with.
 type [<AllowNullLiteral>] Exports =
     abstract spawn : file: string * args: string array * options: ForkOptions -> Pty
+    /// `null` on Windows, which has no `openpty`.
+    abstract native : Native
 
 /// `createRequire(from)` — a CommonJS `require` resolving from the module at `from`. Typed as
 /// answering THIS package's exports, because `load` is the only thing that asks it anything.
