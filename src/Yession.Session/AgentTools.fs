@@ -372,7 +372,7 @@ module AgentTools =
             | Error e -> return ToolAnswer.text e
             | Ok target ->
                 match! capabilities.Terminals.Execute { Command = command; Target = target; Background = background; Stdin = stdin } with
-                | Ok outcome -> return { Text = renderOutcome outcome; Block = outcome.Block; Stream = None }
+                | Ok outcome -> return { Text = renderOutcome outcome; Block = outcome.Block; Stream = None; Image = None }
                 | Error reason -> return ToolAnswer.text (sprintf "could not run the command: %s" reason)
         }
 
@@ -414,7 +414,7 @@ module AgentTools =
             | Error e -> return ToolAnswer.text (sprintf "not a command handle: %s" e)
             | Ok handle ->
                 match! capabilities.Terminals.CheckPending handle with
-                | Ok (PendingTerminal outcome) -> return { Text = renderOutcome outcome; Block = outcome.Block; Stream = None }
+                | Ok (PendingTerminal outcome) -> return { Text = renderOutcome outcome; Block = outcome.Block; Stream = None; Image = None }
                 | Ok (PendingCommand outcome) -> return ToolAnswer.text (renderCommandOutcome outcome)
                 | Error reason -> return ToolAnswer.text (sprintf "could not read that command: %s" reason)
         }
@@ -484,14 +484,22 @@ module AgentTools =
         (offset: int option)
         (limit: int option)
         (sandbox: string option)
-        : Async<string> =
+        : Async<ToolAnswer> =
         let raw = sandbox |> Option.defaultValue (SandboxRef.render SandboxRef.defaultRef)
-        withSandbox raw (fun name ->
-            async {
+        async {
+            match SandboxRef.parse raw with
+            | Error e -> return ToolAnswer.text (sprintf "not a sandbox: %s" e)
+            | Ok name ->
                 match! capabilities.Files.Read name path with
-                | Ok content -> return FileSlice.render path (FileSlice.ofContent content offset limit)
-                | Error reason -> return sprintf "could not read %s: %s" path reason
-            })
+                | Ok (FileContent.Text content) -> return ToolAnswer.text (FileSlice.render path (FileSlice.ofContent content offset limit))
+                // The picture rides beside the text; the text is what the record keeps, so it
+                // says what was looked at and never carries the bytes.
+                | Ok (FileContent.Image image) ->
+                    return
+                        { ToolAnswer.text (sprintf "%s — a picture (%s, %d kB), shown to you with this answer" path image.Type (ToolImage.kilobytes image)) with
+                            Image = Some image }
+                | Error reason -> return ToolAnswer.text (sprintf "could not read %s: %s" path reason)
+        }
 
     /// An edit is a command: the gate's answer is rendered by the one renderer every gated
     /// command shares, so a refusal reads as a refusal here too.
@@ -884,7 +892,7 @@ module AgentTools =
           (let descriptor, body =
               tool
                   "read_file"
-                  "Read a file, or a window of it, numbered by line. Prefer this over cat/sed/head/tail in execute_command: it's on the record as a read of THIS file, and the people here see what you looked at. Paths are as a terminal in that sandbox would take them — relative to where its terminals start (the checkout, once add_repo and set_shell_profile have run), or absolute. Every answer says which lines it covers of how many; a long file comes back a page at a time, and the answer says which `offset` reads on. Lines longer than 2000 characters are cut."
+                  "Read a file, or a window of it, numbered by line. Prefer this over cat/sed/head/tail in execute_command: it's on the record as a read of THIS file, and the people here see what you looked at. Paths are as a terminal in that sandbox would take them — relative to where its terminals start (the checkout, once add_repo and set_shell_profile have run), or absolute. Every answer says which lines it covers of how many; a long file comes back a page at a time, and the answer says which `offset` reads on. Lines longer than 2000 characters are cut. A picture (.png, .jpg, .gif, .webp) comes back as the picture itself, for you to look at — so look before you describe one."
                   [ ToolField.required "path" "string" "the file, e.g. \"src/Program.fs\" or \"repos/octocat/hello-world/README.md\""
                     ToolField.optional "offset" "integer" "the first line to read, 1-based; omit for the top"
                     ToolField.optional "limit" "integer" "how many lines; omit for 2000"
@@ -893,7 +901,7 @@ module AgentTools =
                       async {
                           match ToolArgs.fileRead args with
                           | Error e -> return Error e
-                          | Ok (path, offset, limit, sandbox) -> return! ok (readFile capabilities path offset limit sandbox)
+                          | Ok (path, offset, limit, sandbox) -> return! answered (readFile capabilities path offset limit sandbox)
                       })
            { descriptor with ReadOnly = true }, body)
 

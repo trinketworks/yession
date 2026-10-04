@@ -775,6 +775,21 @@ type SandboxCapabilities =
       /// as the agent's — which is exactly the kind of act the gate exists for.
       SetShellProfile : SetShellProfile }
 
+/// What reading a file gave back: its text, or — for a picture — the picture itself, which a
+/// model can only take in as an image (`ToolImage`) and never as text it could read.
+[<RequireQualifiedAccess>]
+type FileContent =
+    | Text of string
+    | Image of ToolImage
+
+module FileContent =
+
+    /// Whether a path is NAMED as a picture a model can be shown. The name only picks how the
+    /// file is read; what comes back is decided by its bytes (`ToolImage.ofBase64`).
+    let namedAsPicture (path: string) : bool =
+        let lower = path.ToLowerInvariant ()
+        [ ".png"; ".jpg"; ".jpeg"; ".gif"; ".webp" ] |> List.exists lower.EndsWith
+
 /// Read one file inside a sandbox, whole: its text as it stands, or why not. Whole rather
 /// than a window, because the sandbox is asked ONCE and the file's length is part of every
 /// answer (`FileSlice.render`); the window is cut afterwards, from the text, where a test can
@@ -783,7 +798,7 @@ type SandboxCapabilities =
 /// The path is in the sandbox's own vocabulary — as a terminal there would take it, relative
 /// to where terminals in that sandbox start, or absolute — never a host path. A file tool
 /// that took host paths would be the second door `execute_command` is the only one of.
-type ReadFile = SandboxRef -> string -> Async<Result<string, string>>
+type ReadFile = SandboxRef -> string -> Async<Result<FileContent, string>>
 
 /// One exact-string edit to one file in one sandbox (`FileEdit.apply`'s arguments, with
 /// the file they are about). A record rather than five positionals, because a bare

@@ -5,6 +5,7 @@ open Yession.Domain
 open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
 open Yession.Domain.Files
+open Yession.Domain.Tools
 
 /// The files inside a sandbox, reached without a terminal: what `read_file` fetches before
 /// `FileSlice` cuts the window the caller asked for, and where `edit_file` and `write_file`
@@ -22,10 +23,11 @@ module SessionFiles =
 
     [<RequireQualifiedAccess>]
     type SessionFiles =
-        { /// The whole text of one file, as the sandbox holds it: `path` in the sandbox's own
-          /// vocabulary, resolved where a terminal there would resolve it — the shell
-          /// profile's directory when one is set, the sandbox's own otherwise.
-          Read : SandboxRef -> string -> Async<Result<string, string>>
+        { /// One file, as the sandbox holds it: `path` in the sandbox's own vocabulary,
+          /// resolved where a terminal there would resolve it — the shell profile's directory
+          /// when one is set, the sandbox's own otherwise. Its text; or, for a file named as a
+          /// picture, the picture (`FileContent.Image`), read as bytes and checked to be one.
+          Read : ReadFile
           /// One exact-string edit (`FileEdit.apply`), read-apply-write as ONE verb: a caller
           /// that could write without having read is a caller that can put back a file
           /// somebody else changed in between. The write happens only when the edit applied,
@@ -140,6 +142,26 @@ module SessionFiles =
                 | Ok said -> return Error (complaint "cat" sandbox said)
             }
 
+        /// A picture's bytes cannot cross as text — this channel carries strings, and a PNG
+        /// is not one — so a file NAMED as a picture comes back as base64, which every
+        /// sandbox's userland has, and is then read for what it IS (`ToolImage.ofBase64`).
+        /// The name picks the route and the bytes decide the answer: a `.png` that holds
+        /// something else is said to, rather than shown as a picture it is not.
+        let readContent (sandbox: SandboxRef) (path: string) : Async<Result<FileContent, string>> =
+            async {
+                if FileContent.namedAsPicture path then
+                    match! run sandbox "a file was read" "base64 < \"$1\"" [ path ] None with
+                    | Error reason -> return Error reason
+                    | Ok said when said.Code = 0 ->
+                        match ToolImage.ofBase64 said.Out with
+                        | Ok image -> return Ok (FileContent.Image image)
+                        | Error why -> return Error (sprintf "%s is not a picture you can be shown: %s" path why)
+                    | Ok said -> return Error (complaint "base64" sandbox said)
+                else
+                    let! text = read sandbox path
+                    return text |> Result.map FileContent.Text
+            }
+
         /// `content` into `path`, whole. In place (`cat >`), so the file keeps its inode and
         /// mode — an executable stays executable — and the directories to it are made, so a
         /// new file in a new directory is one call rather than a refused one and a `mkdir`.
@@ -236,7 +258,7 @@ module SessionFiles =
                 | Ok said -> return Error (complaint "find" sandbox said)
             }
 
-        { SessionFiles.Read = read
+        { SessionFiles.Read = readContent
           SessionFiles.Edit = edit
           SessionFiles.Write = write
           SessionFiles.Search = search

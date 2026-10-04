@@ -287,7 +287,7 @@ let tests =
                 Expect.isTrue (TestFiles.exists (workspace + "/src/a/One.fs")) "the write landed in the workspace"
                 match! files.Read sandbox "src/a/One.fs" with
                 | Error e -> failwithf "read refused: %s" e
-                | Ok text -> Expect.equal text "let one = 1\nlet two = 2\n" "what was written is what is read"
+                | Ok text -> Expect.equal text (FileContent.Text "let one = 1\nlet two = 2\n") "what was written is what is read"
                 match!
                     files.Edit
                         ActorRef.Agent

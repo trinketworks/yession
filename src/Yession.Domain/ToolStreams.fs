@@ -128,7 +128,7 @@ module ToolStreams =
                                                         + "\n\nThis turn has already been given "
                                                         + string perTurnLimit
                                                         + " terminals, so this stream was not opened. Ask again on a later turn."
-                                                    Stream = None }
+                                                    Stream = None; Image = None }
                                     else
                                         let! line, isNew = attachOne call offer
                                         if isNew then remaining <- remaining - 1

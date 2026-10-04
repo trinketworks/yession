@@ -118,6 +118,61 @@ type ToolCall =
       Name : string
       Arguments : string }
 
+/// A picture a tool hands the model to LOOK at — an image block beside the answer's text,
+/// which is the only way a model sees one. Without it an agent that took a screenshot could
+/// share it and open it in front of everyone else, and then had to describe what it showed
+/// without having seen it (session NR5KB8B5 did exactly that, in confident detail).
+///
+/// Built only through `ofBase64`, which reads the bytes rather than trusting a name: an image
+/// block that is not the image it claims to be is not a bad answer, it is a request the model
+/// API refuses whole — the turn fails on a `.png` that turned out to hold an error page.
+[<RequireQualifiedAccess>]
+type ToolImage =
+    private
+        { MediaType : string
+          Base64 : string }
+
+    member this.Type = this.MediaType
+    member this.Data = this.Base64
+
+module ToolImage =
+
+    /// The bytes one picture may be. Under the model API's own per-image limit with room to
+    /// spare, and over any screenshot a phone or desktop viewport makes at 2x.
+    let maxBytes = 3_000_000
+
+    /// The formats a model reads, by the signature each file opens with.
+    let private sniff (head: byte array) : string option =
+        let starts (signature: byte list) =
+            head.Length >= signature.Length && List.forall2 (fun i b -> head.[i] = b) [ 0 .. signature.Length - 1 ] signature
+        let ascii (at: int) (text: string) =
+            head.Length >= at + text.Length
+            && Seq.forall2 (fun i (c: char) -> head.[i] = byte c) [ at .. at + text.Length - 1 ] text
+        if starts [ 0x89uy; 0x50uy; 0x4Euy; 0x47uy; 0x0Duy; 0x0Auy; 0x1Auy; 0x0Auy ] then Some "image/png"
+        elif starts [ 0xFFuy; 0xD8uy; 0xFFuy ] then Some "image/jpeg"
+        elif ascii 0 "GIF87a" || ascii 0 "GIF89a" then Some "image/gif"
+        elif ascii 0 "RIFF" && ascii 8 "WEBP" then Some "image/webp"
+        else None
+
+    /// A picture from its base64 (whitespace ignored, as `base64` wraps it), or the sentence
+    /// saying why it is not one the model can be shown.
+    let ofBase64 (encoded: string) : Result<ToolImage, string> =
+        let encoded = encoded |> String.filter (fun c -> not (System.Char.IsWhiteSpace c))
+        let bytes = encoded.Length / 4 * 3
+        if bytes > maxBytes then
+            Error (sprintf "it is %d kB, past the %d kB a picture shown to you may be" (bytes / 1000) (maxBytes / 1000))
+        else
+            // Sixteen characters are twelve bytes, which every signature above fits in.
+            let head =
+                try System.Convert.FromBase64String (encoded.Substring (0, min 16 (encoded.Length / 4 * 4)))
+                with _ -> [||]
+            match sniff head with
+            | Some mediaType -> Ok { MediaType = mediaType; Base64 = encoded }
+            | None -> Error "its bytes are not a PNG, JPEG, GIF or WebP, whatever its name says"
+
+    /// Roughly how big, for the sentence beside it.
+    let kilobytes (image: ToolImage) : int = image.Data.Length / 4 * 3 / 1000
+
 /// What a tool answered: the text the model reads, and — when the call became one — the
 /// block it produced.
 ///
@@ -131,11 +186,15 @@ type ToolAnswer =
       /// A byte stream the provider offered along with its answer (Plan 19), already
       /// admitted by whoever decoded it. `None` for every in-process tool: the session's own
       /// verbs run in the session, and a stream is by definition somebody else's.
-      Stream : StreamOffer option }
+      Stream : StreamOffer option
+      /// A picture shown to the model beside the text (`ToolImage`). The text stays what the
+      /// record keeps — the tool-use log says which file was looked at and how big it was,
+      /// never the bytes.
+      Image : ToolImage option }
 
 module ToolAnswer =
 
-    let text (value: string) : ToolAnswer = { Text = value; Block = None; Stream = None }
+    let text (value: string) : ToolAnswer = { Text = value; Block = None; Stream = None; Image = None }
 
 /// Invoke a tool. ONE function, so an in-process tool and a proxied one are
 /// indistinguishable to the caller — which is what makes a single audit seam possible

@@ -26,12 +26,14 @@ open Fable.Core.JsInterop
 
 // --- tools --------------------------------------------------------------------------------
 
-/// One content block of a tool's answer. Text is the only kind this repository's tools
-/// return — MCP's `CallToolResult` admits images and embedded resources, and nothing here
-/// produces one.
+/// One content block of a tool's answer — MCP's `CallToolResult` content: `text`, or an
+/// `image` carried as base64 `data` with its `mimeType`. Embedded resources it also admits,
+/// and nothing here produces one.
 type [<AllowNullLiteral>] ToolContent =
     abstract ``type`` : string with get, set
     abstract text : string with get, set
+    abstract data : string with get, set
+    abstract mimeType : string with get, set
 
 /// What a tool handler resolves to (MCP's `CallToolResult`). `isError` is the PROTOCOL
 /// failure flag — no such tool, unreadable arguments — not "the tool ran and it went
@@ -42,15 +44,27 @@ type [<AllowNullLiteral>] ToolResult =
 
 module ToolResult =
 
-    /// The single-text-block answer, the only shape this repository's tools produce.
+    let private textBlock (text: string) : ToolContent =
+        jsOptions<ToolContent> (fun b ->
+            b.``type`` <- "text"
+            b.text <- text)
+
+    /// The single-text-block answer.
     let ofText (isError: bool) (text: string) : ToolResult =
-        let block =
-            jsOptions<ToolContent> (fun b ->
-                b.``type`` <- "text"
-                b.text <- text)
         jsOptions<ToolResult> (fun r ->
-            r.content <- [| block |]
+            r.content <- [| textBlock text |]
             r.isError <- isError)
+
+    /// Text and a picture after it — how a model is SHOWN an image, which no text can do.
+    let ofTextAndImage (text: string) (mimeType: string) (base64: string) : ToolResult =
+        let image =
+            jsOptions<ToolContent> (fun b ->
+                b.``type`` <- "image"
+                b.data <- base64
+                b.mimeType <- mimeType)
+        jsOptions<ToolResult> (fun r ->
+            r.content <- [| textBlock text; image |]
+            r.isError <- false)
 
 /// The arguments a call carried, as the SDK hands them to a handler: already validated
 /// against the raw shape the tool was declared with. Opaque, because the only honest reading
