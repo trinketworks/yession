@@ -776,7 +776,7 @@ module Dom =
         let causeMissing = "an earlier item"
         /// The cause when the session starting brought a sandbox up.
         let causeBooted = "The session started"
-        let causeResumed = "The session resumed"
+        let causeResumed = "Resumed session"
         /// The verb after the person whose credential arrived: "Ada connected".
         let causeConnected = "connected"
         /// The accessible name of the ref, said in full for a reader who does not get the

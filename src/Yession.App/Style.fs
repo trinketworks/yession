@@ -1491,7 +1491,13 @@ module Style =
     /// push the reply itself down the screen.
     let replyRef = "pl-8 flex items-baseline gap-1.5 text-small text-ink-faint"
     let replyRefMark = "shrink-0 text-ink-faint"
-    let replyRefQuote = "truncate min-w-0 italic"
+    /// `pr-px` beside `truncate`: italic leans its last glyph's ink past its own advance
+    /// width, and a box whose `overflow: hidden` edge sits flush on that advance width
+    /// slices the overhang off with no ellipsis to show for it — text measured as fitting
+    /// exactly, rendered one stroke short ("The session resumed" losing the tail of its
+    /// "d"). The truncate/ellipsis path is unaffected: it still fires on real overflow:
+    /// this is for the near-exact-fit case where the browser never thought it had any.
+    let replyRefQuote = "truncate min-w-0 italic pr-px"
     /// An act's cause, ABOVE its headline: a row of the act's own grid (`contents`), its mark
     /// in the gutter over the fold arrow and its sentence in the content column. The same
     /// quiet voice as a reply's ref, but the sentence holds references (some of them links),
