@@ -2983,6 +2983,39 @@ let private tabTests =
             let moves = effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
             Expect.equal moves [] "history is not a swap"
 
+        // A refused kill is an ANSWER to the press, as a refused New terminal is (P0-6): left
+        // owed, whatever closed that terminal next — its shell exiting an hour later, somebody
+        // else's kill — was taken for this press's answer and moved the reader's focus.
+        testCase "a refused kill is owed nothing: a later close of that terminal moves no focus" <| fun () ->
+            let rows = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
+            let refused =
+                clientOf rows
+                |> Support.step ToggleSwitcherMsg
+                |> Support.step (CloseTerminalMsg terminalA)
+                |> refusedAs (Link.CloseTerminal terminalA) "that terminal is not yours to end"
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg
+                        { Events = [ at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "exited"; By = None }) ]
+                          LastOffset = Some (EventOffset.create 3L |> expect)
+                          IsEnd = true })
+                    refused
+            Expect.equal effects [] "the press was answered by its refusal"
+
+        testCase "a refused kill leaves focus on the kill that was refused" <| fun () ->
+            // The terminal is still open and its kill still under the hand: nothing left the
+            // document, so there is nowhere to send the keyboard.
+            let rows = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
+            let request = RequestId.fresh ()
+            let sent =
+                clientOf rows
+                |> Support.step ToggleSwitcherMsg
+                |> Support.step (CloseTerminalMsg terminalA)
+                |> Support.step (CommandSentMsg (request, Link.CloseTerminal terminalA))
+            let _, effects =
+                ClientModel.update (CommandAnsweredMsg (request, Link.CommandRejected "that terminal is not yours to end")) sent
+            Expect.equal effects [] "no move"
+
         testCase "a shut pane is inert from the first paint" <| fun () ->
             // Zero pixels wide on a desktop, off the screen on a phone — and, without this,
             // every control in it a Tab stop. The served page carries it, so it holds before
