@@ -3941,6 +3941,53 @@ let editorTests =
                     await (page.EvaluateAsync<string> "() => document.activeElement?.outerHTML?.slice(0, 60) ?? 'NOTHING'")
                 Expect.stringContains kept "data-term-resize" "a lease landing leaves focus that survived the render where it was"
             }
+        // The way back out of live mode, and the other DOM swap of the focused element in a
+        // terminal. Hand it back removes itself once the release it asked for arrives, and a
+        // shell that dies takes the command line with it: either way focus fell to `body`, and
+        // the next Tab started from the top of the document. It goes where the pane lands
+        // instead — the command line, or the panel where there is none.
+        editorCase "handing a terminal back puts the keyboard on its command line" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
+                let release = "#shell [data-terminal-release='term-harness']"
+                let! _ = await (page.WaitForSelectorAsync release)
+                // The press, then its answer: this page has no session, so the release arrives
+                // the way the session would send it.
+                do! awaitU (page.ClickAsync release)
+                do!
+                    foldHarness page [
+                        90L,
+                        Yession.Domain.SessionEvent.TerminalLeaseReleased
+                            { Yession.Domain.Terminals.TerminalLeaseReleased.TerminalId = harnessTerminal "term-harness"
+                              Yession.Domain.Terminals.TerminalLeaseReleased.Was = Yession.Domain.ActorRef.PeerRef (Yession.Domain.PeerId.create "ada" |> Result.defaultWith failwith)
+                              Yession.Domain.Terminals.TerminalLeaseReleased.Reason = Yession.Domain.Terminals.LeaseReleased
+                              Yession.Domain.Terminals.TerminalLeaseReleased.ToSeq = 0 } ]
+                do!
+                    waitFor
+                        "the keyboard on the command line"
+                        page
+                        "document.activeElement?.matches(\"#shell [data-terminal-input^='term-draft:']:not([readonly])\") === true"
+            }
+        editorCase "a shell dying under the reader leaves the keyboard in the pane" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                let commandLine = "#shell [data-terminal-input^='term-draft:']:not([readonly])"
+                let! _ = await (page.WaitForSelectorAsync commandLine)
+                do! awaitU (page.FocusAsync commandLine)
+                do!
+                    foldHarness page [
+                        90L,
+                        Yession.Domain.SessionEvent.TerminalClosed
+                            { Yession.Domain.Terminals.TerminalClosed.TerminalId = harnessTerminal "term-harness"
+                              Yession.Domain.Terminals.TerminalClosed.Reason = "the shell exited with code -1"
+                              Yession.Domain.Terminals.TerminalClosed.By = None } ]
+                do!
+                    waitFor
+                        "the keyboard in the pane's panel"
+                        page
+                        "document.activeElement?.closest('#shell [data-pane-panel]') != null"
+            }
         // Moving by WORD, which is most of what navigating a line you have already typed
         // means. Its own case rather than an extra assertion on the one above: that pins the
         // printable/control/escape table and should keep failing for only that reason.

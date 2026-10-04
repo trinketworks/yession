@@ -424,6 +424,19 @@ let private withPage (events: EventEnvelope<SessionEvent> list) (model: ClientMo
         (EventsPageMsg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true })
         model
 
+/// A client that has read the log through — booted, its local store read, connected to a
+/// session whose log ends at the last of `events`, and caught up — so that what arrives next
+/// is NEWS (`ClientModel.HeardThrough`) rather than history being replayed.
+let private heardOf (events: EventEnvelope<SessionEvent> list) : ClientModel =
+    ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
+    |> Support.step HistoryReadMsg
+    |> Support.step
+        (ConnectedMsg
+            { SessionId = sessionId
+              AssignedDisplayName = "swift-heron"
+              LatestOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset) })
+    |> withPage events
+
 let private oneBlock =
     [ at 1L 0.0 (opened terminalA "build")
       at 2L 1.0 (started terminalA "1" byAda "ls -la" 1)
@@ -2836,6 +2849,95 @@ let private tabTests =
                           IsEnd = true })
                     listing
             Expect.equal effects [] "no press here, so no move"
+
+        // The terminal on screen changing what it offers a keyboard swaps the control under the
+        // hand for another, and focus on the one that went falls to `body` — Hand it back,
+        // removed by the release it asked for, did exactly that. It lands where the pane
+        // lands, if it was dropped. Each case below is a client that has read the log through
+        // (`heardOf`), so what arrives next is news.
+        testCase "a terminal handed back lands a dropped keyboard on its command line" <| fun () ->
+            let live =
+                heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (took terminalA (PeerRef ada) 0) ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg
+                        { Events = [ at 3L 2.0 (released terminalA (PeerRef ada) LeaseReleased 4) ]
+                          LastOffset = Some (EventOffset.create 3L |> expect)
+                          IsEnd = true })
+                    live
+            Expect.equal effects [ ClientEffect.Move (DomMove.IfDropped (DomMove.FocusCommandLine terminalA)) ] "onto the command line"
+
+        testCase "a shell dying under the reader lands a dropped keyboard on what its pane offers" <| fun () ->
+            let reading =
+                heardOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg
+                        { Events = [ at 2L 1.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "exited"; By = None }) ]
+                          LastOffset = Some (EventOffset.create 2L |> expect)
+                          IsEnd = true })
+                    reading
+            Expect.equal effects [ ClientEffect.Move (DomMove.IfDropped (DomMove.FocusCommandLine terminalA)) ] "where the pane still is"
+
+        testCase "a lease taken by somebody else lands a dropped keyboard where the pane lands" <| fun () ->
+            // The command line goes, for their bar: there is nothing to type into, and the
+            // pane's own landing says what is left.
+            let reading =
+                heardOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg
+                        { Events = [ at 2L 1.0 (took terminalA (PeerRef bob) 0) ]
+                          LastOffset = Some (EventOffset.create 2L |> expect)
+                          IsEnd = true })
+                    reading
+            Expect.equal effects [ ClientEffect.Move (DomMove.IfDropped (DomMove.FocusCommandLine terminalA)) ] "no stranding"
+
+        testCase "a lease of mine arriving is not this move's: the live screen takes it" <| fun () ->
+            // `Screens.Sync` focuses the live screen once there is a screen to focus.
+            let reading =
+                heardOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg
+                        { Events = [ at 2L 1.0 (took terminalA (PeerRef ada) 0) ]
+                          LastOffset = Some (EventOffset.create 2L |> expect)
+                          IsEnd = true })
+                    reading
+            Expect.equal effects [] "nothing from the fold"
+
+        testCase "a terminal changing under a preview moves nothing" <| fun () ->
+            // The preview covers it; nothing under the hand went.
+            let previewing = heardOf oneBlock |> Support.step (chip terminalA "1")
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg
+                        { Events = [ at 4L 3.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "exited"; By = None }) ]
+                          LastOffset = Some (EventOffset.create 4L |> expect)
+                          IsEnd = true })
+                    previewing
+            Expect.equal effects [] "the preview is still there"
+
+        testCase "a terminal's face changing in a log being replayed moves nothing" <| fun () ->
+            // On load, focus rests on `body` because the page has just loaded, not because a
+            // control went; a lease that ended an hour ago is history, not a swap.
+            let replayed =
+                ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
+                |> Support.step HistoryReadMsg
+                |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (EventOffset.create 3L |> expect) })
+                |> withPage [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (took terminalA (PeerRef ada) 0) ]
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg
+                        { Events = [ at 3L 2.0 (released terminalA (PeerRef ada) LeaseReleased 4) ]
+                          LastOffset = Some (EventOffset.create 3L |> expect)
+                          IsEnd = true })
+                    replayed
+            // Only the moves: the same page may anchor the launch card, which asks for its
+            // listing, and that is not what this is about.
+            let moves = effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
+            Expect.equal moves [] "history is not a swap"
 
         testCase "a shut pane is inert from the first paint" <| fun () ->
             // Zero pixels wide on a desktop, off the screen on a phone — and, without this,

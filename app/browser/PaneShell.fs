@@ -477,6 +477,15 @@ let rec move (asked: Yession.App.DomMove) : unit =
     // the pressed control away, so a hand still on it reads as stranded by then.
     | Yession.App.DomMove.OnArrival inner ->
         nextFrame (fun () -> if stranded [ "[data-content-panel]" ] then move inner)
+    // The same frame on, and only for a hand that the render dropped — or that the last drop
+    // left on the panel, which is a catch rather than somewhere a reader chose to be.
+    | Yession.App.DomMove.IfDropped inner ->
+        nextFrame (fun () ->
+            let onPanel =
+                match document.activeElement with
+                | null -> false
+                | active -> active.hasAttribute Yession.App.Dom.Hooks.panePanel
+            if stranded [] || onPanel then move inner)
     | Yession.App.DomMove.FocusChat subject -> toChatItem subject
     | Yession.App.DomMove.FocusItemActions messageId -> toItemActions (Yession.Domain.MessageId.value messageId)
     | Yession.App.DomMove.FocusPaneNew -> toPaneNew ()

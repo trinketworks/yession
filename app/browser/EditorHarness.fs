@@ -889,6 +889,9 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
               Woke = None; CausedBy = None } ]
     { ClientModel.init { PeerId = peerId; DisplayName = "swift-heron" } with
         Connection = Connected
+        // A client already at work in the session, so what `__fold` brings is news rather
+        // than a log being replayed on load (`ClientModel.HeardThrough`).
+        HeardThrough = true
         Session = Some (SessionId.create "harness" |> expect)
         // Two chapters, so the chapter rail has strokes to draw. Where a stroke
         // LANDS is arithmetic a model test settles; whether it lands beside the reading
