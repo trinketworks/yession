@@ -990,6 +990,11 @@ type ClientModel =
       /// the answer to a press made HERE. A terminal somebody else ends must not move this
       /// reader's cursor. One slot rather than a count: there is one kill control under a
       /// hand at a time, and the latest press is the one focus follows.
+      ///
+      /// Spent too by the session REFUSING the kill (`CommandAnsweredMsg`), `Opening`'s other
+      /// answer for the same reason: after a refusal no close is coming for this press, and
+      /// left owed, whatever closed that terminal next — its shell exiting, somebody else's
+      /// kill — would be taken for this press's answer and move the reader's focus.
       KillPending   : TerminalId option
       /// Which terminal's kill is ARMED — pressed once, waiting on a second press in the same
       /// place to confirm it (`ArmKillMsg`). `QueueDeleteArmed`'s shape, for its reason and a
@@ -3784,6 +3789,13 @@ module ClientModel =
                     match asked with
                     | Some (OpenTerminal _) -> max 0 (model.Opening - 1)
                     | _ -> model.Opening
+                // And a refused kill spends the kill it asked for, by the same rule: no close
+                // is coming for it now. Only the press still owed — a refusal of an earlier
+                // kill must not cancel a later one.
+                let killPending =
+                    match asked, model.KillPending with
+                    | Some (CloseTerminal refused), Some pending when refused = pending -> None
+                    | _ -> model.KillPending
                 let refusal =
                     { Refusal.Reason = reason
                       Refusal.FromPane = asked |> Option.exists Refusal.fromPane
@@ -3794,7 +3806,10 @@ module ClientModel =
                     model.Refused
                     |> Option.bind (fun was -> was.FocusedIn)
                     |> Option.filter (fun was -> was = Refusal.mount model.TerminalsOpen refusal)
-                { model with Opening = opening; Refused = Some { refusal with FocusedIn = focusedIn } }
+                { model with
+                    Opening = opening
+                    KillPending = killPending
+                    Refused = Some { refusal with FocusedIn = focusedIn } }
             // An acceptance clears whatever the last refusal was. The reader has just been
             // told something worked, and a notice about something that did not, left standing
             // beside it, is a screen arguing with itself.
@@ -3958,12 +3973,16 @@ module ClientModel =
         // A terminal pressed for lands where the pane now shows it — and so does one the
         // session REFUSED, which spends the press too: the pane has not moved, so that is
         // back where the press was made rather than on `body`. A kill lands where
-        // `killLanding` says, measured against the pane the press was made on.
+        // `killLanding` says, measured against the pane the press was made on — once it has
+        // CLOSED. A refused kill spends the press too, but nothing left the document: the
+        // terminal is still open, its kill is still under the hand, and a landing measured for
+        // a terminal that went would take the reader to its neighbour.
         let answered =
             [ if next.Opening < model.Opening then
                   ClientEffect.Move (DomMove.OnArrival (paneLanding next))
               match model.KillPending, next.KillPending with
-              | Some killed, None -> ClientEffect.Move (DomMove.OnArrival (killLanding model killed))
+              | Some killed, None when not (Projection.tryFind killed next.Terminals |> Option.exists (fun view -> view.IsOpen)) ->
+                  ClientEffect.Move (DomMove.OnArrival (killLanding model killed))
               | _ -> () ]
         // The refusal notice going while the keyboard is in it — its dismiss pressed, or an
         // acceptance clearing it — takes the focused element out of the document, so focus
