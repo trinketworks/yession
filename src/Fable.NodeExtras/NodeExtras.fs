@@ -1927,6 +1927,133 @@ module Ttys =
     /// is safe to do once this has been destroyed.
     let openTty (fd: int) : Readable = construct readStreamClass fd
 
+// --- Signals, by name --------------------------------------------------------------------------
+
+/// `os.constants.signals`: every signal this platform has, from its name to its number. Opaque,
+/// because the one thing asked of it is the reverse of how it is keyed.
+type internal SignalNumbers =
+    interface end
+
+[<AllowNullLiteral>]
+type internal OsConstants =
+    abstract signals : SignalNumbers
+
+[<RequireQualifiedAccess>]
+module Signals =
+
+    [<Import("constants", "node:os")>]
+    let private constants : OsConstants = jsNative
+
+    [<Emit("Object.entries($0)")>]
+    let private entries (table: SignalNumbers) : (string * int) array = jsNative
+
+    /// The name this platform gives signal `number` (`2` is `SIGINT`) — what a process a
+    /// signal ended is described by, since the numbers past the first few differ between
+    /// Linux and macOS. `None` for a number this platform has no signal for.
+    let name (number: int) : string option =
+        entries constants.signals
+        |> Array.tryFind (fun (_, n) -> n = number)
+        |> Option.map fst
+
+// --- A terminal a child takes for its own ------------------------------------------------------
+
+/// The options `child_process.spawn` reads when all three streams are one descriptor —
+/// `NodeSpawnOptions` with a number where its `Stdio` is, because a descriptor is not one of
+/// the three words Node otherwise takes there. A `ResizeArray` because that is what Fable
+/// makes a plain JavaScript array of: an `int array` is an `Int32Array`, which Node refuses.
+[<AllowNullLiteral>]
+type internal DescriptorSpawnOptions =
+    abstract cwd : string with get, set
+    abstract env : VerbatimEnv with get, set
+    abstract stdio : ResizeArray<int> with get, set
+    abstract detached : bool with get, set
+
+/// A pty a child is handed as a DEVICE, for the child to make its controlling terminal itself —
+/// rather than one a fork made it the controlling terminal of on the way in, which is what
+/// node-pty's `spawn` does and what a process that starts a new session further down (bubblewrap's
+/// `--new-session`) then has no way to get back.
+[<AutoOpen>]
+module PtyDescriptors =
+
+    [<Import("writeSync", "node:fs")>]
+    let private writeFrom (fd: int) (buffer: Buffer) (offset: int) : int = jsNative
+
+    [<Import("spawn", "node:child_process")>]
+    let private spawnWith (command: string) (arguments: string array) (options: DescriptorSpawnOptions) : ChildProcess =
+        jsNative
+
+    /// Spawn a child whose stdin, stdout and stderr are all `fd` — a terminal, for a process
+    /// further down to make its controlling terminal. Node makes the three blocking in the
+    /// child, which is what lets a pty's far end that was opened non-blocking be one a program
+    /// waits on.
+    ///
+    /// NOT detached, though detaching is what a long-lived child is usually given: a detached
+    /// child LEADS a session, and a session leader with no controlling terminal acquires the
+    /// first terminal anything in it opens without `O_NOCTTY`. bubblewrap's parent does exactly that (measured: `ps` showed it
+    /// holding the pty as its controlling terminal), after which the process the terminal was
+    /// for is refused it with EPERM. Left in this process's session, the child leads nothing
+    /// and can take nothing.
+    let spawnOnTerminal
+        (command: string)
+        (arguments: string list)
+        (cwd: string option)
+        (env: ChildEnv)
+        (fd: int)
+        : ChildProcess =
+        let options =
+            jsOptions<DescriptorSpawnOptions> (fun o ->
+                cwd |> Option.iter (fun cwd -> o.cwd <- cwd)
+                ChildEnv.toJs env |> Option.iter (fun env -> o.env <- env)
+                o.stdio <- ResizeArray [ fd; fd; fd ]
+                o.detached <- false)
+        spawnWith command (Array.ofList arguments) options
+
+    /// Writes to a NON-blocking descriptor, in order, without losing the part the kernel had no
+    /// room for. A pty master is one: what a person pastes while the program on the far end is
+    /// not reading fills the line discipline's buffer, the write answers `EAGAIN`, and a writer
+    /// that took that as done would drop the rest of the paste — or, retried synchronously,
+    /// spin the event loop the far end needs to make room. So the remainder waits for a later
+    /// turn, as node-pty's own writer does.
+    ///
+    /// Any other failure is the descriptor going away under a process that has ended, and what
+    /// was queued for it is dropped with it: there is nobody left to type at.
+    type DescriptorWriter (fd: int) =
+        let pending = ResizeArray<Buffer> ()
+        let mutable offset = 0
+        let mutable waiting = false
+        let mutable closed = false
+
+        let rec drain () =
+            waiting <- false
+            let mutable blocked = false
+            while not blocked && not closed && pending.Count > 0 do
+                let head = pending.[0]
+                try
+                    offset <- offset + writeFrom fd head offset
+                    if offset >= head.length then
+                        pending.RemoveAt 0
+                        offset <- 0
+                with error ->
+                    blocked <- true
+                    match Errors.errno error with
+                    | Some "EAGAIN" ->
+                        waiting <- true
+                        JS.setTimeout drain 5 |> ignore
+                    | _ ->
+                        pending.Clear ()
+                        offset <- 0
+
+        /// Queue `text`, as UTF-8, behind everything written before it.
+        member _.Write (text: string) : unit =
+            if not closed && text <> "" then
+                pending.Add (Node.Api.buffer.Buffer.from (text, BufferEncoding.Utf8))
+                if not waiting then drain ()
+
+        /// Write nothing more. What is still queued is dropped.
+        member _.Close () : unit =
+            closed <- true
+            pending.Clear ()
+
 // --- Aborting ---------------------------------------------------------------------------------
 
 /// The WHATWG `AbortSignal` — a Node global since v15, and what a cancellable Node API takes.

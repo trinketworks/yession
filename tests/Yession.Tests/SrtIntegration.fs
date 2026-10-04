@@ -93,6 +93,7 @@ let private shell (sandbox: Sandbox) (script: string) : Async<SandboxRun * strin
 let private exitCode (run: SandboxRun) =
     match run with
     | SandboxExited code -> code
+    | SandboxSignalled signal -> failwithf "the sandboxed process was ended by %s" signal
     | SandboxRunFailed reason -> failwithf "the sandboxed process did not run: %s" reason
 
 // --- The agent CLI's spawner, driven directly ----------------------------------------------
@@ -552,4 +553,144 @@ let siblings =
                 failwithf "the sandbox that named the host could not reach it, so nothing below means anything: %s" reachedErr
             Expect.isFalse (refusedOut.Contains "reached") "the sibling that named no host did not reach it"
         })
+    ]
+
+// --- [Srt, Pty]: a terminal under srt, as a person drives one -------------------------------
+
+/// A shell on a pty in an srt sandbox — the shell production opens, an interactive POSIX
+/// `sh`, typed at like a person: the handle, what it has printed, and how it ended if it has.
+let private openShell (sandbox: Sandbox) : Async<PtyHandle * (unit -> string) * (unit -> SandboxRun option)> =
+    async {
+        match sandbox.SpawnPty with
+        | None -> return failwith "srt reports no pty here, where the Pty capability said there was one"
+        | Some spawnPty ->
+            let output = System.Text.StringBuilder ()
+            let shell = TerminalShell.posix
+            let exec =
+                { Executable = shell.Executable
+                  Arguments = shell.InteractiveArguments
+                  Env = Map.empty
+                  WorkingDirectory = None
+                  Via = Entrypoint }
+            match! spawnPty exec 80 24 (fun data -> output.Append data |> ignore) with
+            | Error reason -> return failwithf "no shell on a pty under srt: %s" reason
+            | Ok pty ->
+                let mutable ended = None
+                Async.StartImmediate (
+                    async {
+                        let! ending = pty.Exited
+                        ended <- Some ending
+                    })
+                return pty, (fun () -> output.ToString ()), (fun () -> ended)
+    }
+
+/// One such shell in a fresh sandbox, for `body`; the sandbox goes when it returns.
+let private withTerminal
+    (body: PtyHandle -> (unit -> string) -> (unit -> SandboxRun option) -> Async<unit>)
+    : Async<unit> =
+    async {
+        let workspace = TestFiles.canonical (TestFiles.tempDir "yession-srt-")
+        let! sandbox = startSandbox (policyIn workspace [])
+        let! pty, said, ended = openShell sandbox
+        try
+            do! body pty said ended
+        finally
+            pty.Kill ()
+        do! sandbox.Dispose ()
+    }
+
+/// Poll until `condition` holds or 20s pass — a confined shell on a loaded box starts when it
+/// starts, and a fixed sleep long enough to be safe is slow on every run.
+let private within (condition: unit -> bool) : Async<bool> =
+    let rec go remaining =
+        async {
+            if condition () then return true
+            elif remaining <= 0 then return false
+            else
+                do! Async.Sleep 50
+                return! go (remaining - 50)
+        }
+    go 20000
+
+let terminals =
+    testList "Srt terminals" [
+
+        // bubblewrap starts the sandbox in a new session, and a terminal is the controlling
+        // terminal of at most one: given the pty by node-pty's fork, the shell inside had
+        // none, no job control, and a ^C reached the only process group the terminal had —
+        // the wrapper's, which died of it and took the shell along. Every ^C closed the
+        // terminal, mid-command or at an idle prompt. The ^C waits for the job to say it has
+        // started (under `sh -c`, so whichever of it or its sleep holds the terminal is
+        // ended by it), and the echo after it can only print once the 30s sleep has gone.
+        // The quotes inside each word keep the shell's echo of the typed line from matching.
+        testCaseAsync "^C in a terminal under srt ends the job in front of it, and the shell lives on" <|
+            withTerminal (fun pty said ended ->
+                async {
+                    pty.Write "sh -c 'echo st''arted; sleep 30'\r"
+                    let! started = within (fun () -> (said ()).Contains "started" || Option.isSome (ended ()))
+                    if not started || Option.isSome (ended ()) then
+                        failwithf "the job never started, so nothing below means anything: %s" (said ())
+                    pty.Write "\u0003"
+                    pty.Write "echo al''ive-$((6*7))\r"
+                    let! alive = within (fun () -> (said ()).Contains "alive-42" || Option.isSome (ended ()))
+                    Expect.isTrue
+                        (alive && Option.isNone (ended ()))
+                        (sprintf "the shell answered after the ^C (it ended: %A); it printed: %s" (ended ()) (said ()))
+                })
+
+        // The pty is opened for the shell to TAKE, and the far end is opened again by name for
+        // it: the descriptor `openpty` hands back is non-blocking, and a program whose stdin
+        // is non-blocking reads EAGAIN where it meant to wait for a person to type. The line
+        // goes in only once `head` has been seen to start — a poll later, by which time it is
+        // waiting — because a line already there when it reads would be read either way.
+        testCaseAsync "a program in a terminal under srt waits for what is typed at it" <|
+            withTerminal (fun pty said ended ->
+                async {
+                    pty.Write "echo wai''ting; echo got-$(head -n1)\r"
+                    let! waiting = within (fun () -> (said ()).Contains "waiting" || Option.isSome (ended ()))
+                    if not waiting || Option.isSome (ended ()) then
+                        failwithf "the program never started, so nothing below means anything: %s" (said ())
+                    pty.Write "typed42\r"
+                    let! got = within (fun () -> (said ()).Contains "got-typed42")
+                    Expect.isTrue got (sprintf "head read the line it waited for; the terminal printed: %s" (said ()))
+                })
+
+        // A pty's master is the keyboard of the shell on its far end, and node-pty leaves every
+        // master it opens inheritable — so a shell this session spawns, if nothing closes them,
+        // holds the keyboard of every terminal already open, in whatever sandbox. The shell is
+        // asked through `ls`, which holds what the shell would hand any command it runs.
+        testCaseAsync "a terminal's shell under srt holds no other terminal's keyboard" <|
+            async {
+                let workspace = TestFiles.canonical (TestFiles.tempDir "yession-srt-")
+                let! sandbox = startSandbox (policyIn workspace [])
+                let! first, _, _ = openShell sandbox
+                let! second, said, ended = openShell sandbox
+                try
+                    second.Write "echo mas''ters-$(ls -l /proc/self/fd | grep -c ptmx)\r"
+                    let! answered = within (fun () -> (said ()).Contains "masters-" || Option.isSome (ended ()))
+                    if not answered || Option.isSome (ended ()) then
+                        failwithf "the shell never answered, so nothing below means anything: %s" (said ())
+                    Expect.isTrue
+                        ((said ()).Contains "masters-0")
+                        (sprintf "the second shell holds no pty master; it printed: %s" (said ()))
+                finally
+                    first.Kill ()
+                    second.Kill ()
+                do! sandbox.Dispose ()
+            }
+
+        // node-pty's `resize` reached the process it forked; here the shell is further down,
+        // and the size has to be the pty's own for every process on it to read.
+        testCaseAsync "the size a terminal under srt is resized to is the size its program sees" <|
+            withTerminal (fun pty said ended ->
+                async {
+                    pty.Write "echo rea''dy\r"
+                    let! ready = within (fun () -> (said ()).Contains "ready" || Option.isSome (ended ()))
+                    if not ready || Option.isSome (ended ()) then
+                        failwithf "the shell never answered, so nothing below means anything: %s" (said ())
+                    pty.Resize 117 33
+                    pty.Write "stty size\r"
+                    let! sized = within (fun () -> (said ()).Contains "33 117")
+                    Expect.isTrue sized (sprintf "stty reported the new size; the terminal printed: %s" (said ()))
+                })
     ]

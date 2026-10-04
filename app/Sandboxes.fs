@@ -1162,14 +1162,18 @@ module private Pty =
 
     let available () : bool = not (isNull (modul.Force ()))
 
-    /// node-pty reports an exit code AND a signal; a process a signal ended has no meaningful
-    /// code, so it is reported the way `SandboxExited` reports one everywhere else — -1, "the
-    /// OS gave us none". node-pty says "no signal" as `0` as readily as by leaving it out.
-    let private exitCode (exit: Fable.NodePty.Exit) : int =
+    /// node-pty reports an exit code AND a signal, and a process a signal ended is said to
+    /// have been — by the signal's name, which is what a person reading why their terminal
+    /// closed can act on. It used to be `-1` here, "the OS gave us none", when the OS had in
+    /// fact said exactly what happened: a ^C that reached the wrong process closed terminals
+    /// as "the shell exited with code -1", which pointed nowhere. node-pty says "no signal" as
+    /// `0` as readily as by leaving it out.
+    let private ended (exit: Fable.NodePty.Exit) : SandboxRun =
         match exit.signal with
-        | Some signal when signal <> 0 -> -1
+        | Some signal when signal <> 0 ->
+            SandboxSignalled (Signals.name signal |> Option.defaultValue (sprintf "signal %d" signal))
         | Some _
-        | None -> exit.exitCode
+        | None -> SandboxExited exit.exitCode
 
     /// The start directory as node-pty's options say it: the empty string this seam is handed
     /// for "no directory" is `None`, which starts the pty where this process is.
@@ -1206,11 +1210,90 @@ module private Pty =
                           Fable.NodePty.ForkOptions.env = Fable.NodePty.Environment.ofMap env }
                     )
                 proc.onData onOutput
-                proc.onExit (fun exit -> exited.Settle (SandboxExited (exitCode exit)))
+                proc.onExit (fun exit -> exited.Settle (ended exit))
                 Ok
                     { Write = proc.write
                       Resize = fun cols rows -> proc.resize (cols, rows)
                       Kill = fun () -> proc.kill ()
+                      Exited = exited.Await }
+            with ex -> Error ex.Message
+
+    /// Open a pty and run `executable arguments` on it for that process to make its OWN
+    /// controlling terminal — where `spawn` makes it the controlling terminal of the process
+    /// it forks, on the way in.
+    ///
+    /// The difference is everything under a wrapper that starts a new session, which
+    /// bubblewrap does (`--new-session`, unconditionally, in srt's Linux profile). A terminal
+    /// is the controlling terminal of at most one session, so once node-pty's child holds it
+    /// nothing further down can take it: the shell inside ran with no controlling terminal and
+    /// no job control, and ^C — which the line discipline turns into SIGINT for the terminal's
+    /// foreground process group — reached the one group it had, the wrapper's. It died of it
+    /// and the shell with it: every ^C, running or idle, closed the terminal.
+    ///
+    /// Opened here, the pty is NOBODY's controlling terminal: this process opens the far end
+    /// `O_NOCTTY`, hands it to the child as all three streams, and lets go of it. The child is
+    /// expected to start with something that takes it — `setsid --ctty`, inside the sandbox —
+    /// and from there it is an ordinary terminal: the shell has job control, ^C reaches the job
+    /// in the foreground, and a resize reaches it as SIGWINCH.
+    ///
+    /// Confinement is untouched. The new session bubblewrap starts is still a new session; the
+    /// terminal the sandbox's shell takes is the one this sandbox was given, whose other end
+    /// only this process holds.
+    let spawnAdopting
+        (executable: string)
+        (arguments: string list)
+        (cwd: string)
+        (env: Map<string, string>)
+        (cols: int)
+        (rows: int)
+        (onOutput: string -> unit)
+        : Result<PtyHandle, string> =
+        match modul.Force () with
+        | null -> Error "node-pty is not available on this host"
+        | m when isNull m.native -> Error "node-pty cannot open a pty on its own on this platform"
+        | m ->
+            try
+                let pty = m.native.``open`` (cols, rows)
+                // The child holds the far end now; this process must not, or the master never
+                // reads end-of-file and a terminal whose shell has gone looks like one that is
+                // merely quiet. Closed in the same turn it was opened in, so no other spawn can
+                // inherit it: node-pty does not make it close-on-exec.
+                let child =
+                    try spawnOnTerminal executable arguments (startIn cwd) (ChildEnv.Replacing env) pty.slave
+                    finally Node.Api.fs.closeSync pty.slave
+                let exited = OneShot<SandboxRun> ()
+                let writer = DescriptorWriter pty.master
+                let reader = openTty pty.master
+                let mutable released = false
+                // The master goes once nothing can be read from it — EIO, which is what a pty
+                // says when the last holder of its far end has gone, AFTER the output still in
+                // it — and not at the exit, which can arrive before that output has been read.
+                // Destroying the reader CLOSES the master: libuv reopens a far end it is handed
+                // (which is why `openTty`'s other callers close theirs) but takes a master as
+                // it is. So the writer stops first, before its descriptor's number is free for
+                // the next thing this process opens.
+                let release () =
+                    if not released then
+                        released <- true
+                        writer.Close ()
+                        reader.destroy ()
+                Readables.text reader onOutput
+                reader.onError (fun _ -> release ())
+                ChildProcessStreams.onError child (fun error ->
+                    exited.Settle (SandboxRunFailed (StreamError.describe error)))
+                ChildProcessStreams.onExit child (fun code ->
+                    match code, signalCode child with
+                    | Some code, _ -> exited.Settle (SandboxExited code)
+                    | None, Some signal -> exited.Settle (SandboxSignalled signal)
+                    | None, None -> exited.Settle (SandboxExited -1))
+                Ok
+                    { Write = writer.Write
+                      Resize =
+                        fun cols rows ->
+                            if not released then
+                                try m.native.resize (pty.master, cols, rows) with _ -> ()
+                      // SIGHUP, as a terminal closing sends and as node-pty's own `kill` does.
+                      Kill = fun () -> try child.kill "SIGHUP" |> ignore with _ -> ()
                       Exited = exited.Await }
             with ex -> Error ex.Message
 
@@ -1495,6 +1578,8 @@ module DockerSandbox =
             | Ok handle ->
                 match! handle.Exited with
                 | SandboxRunFailed reason -> return Error (sprintf "could not look for a shell behind the entrypoint: %s" reason)
+                | SandboxSignalled signal ->
+                    return Error (sprintf "the look for a shell behind the entrypoint was ended by %s" signal)
                 // The look itself ends `; true`, so it exits 0 whatever it found: any other
                 // code is the ENTRYPOINT failing before the look ran — `nix develop` losing a
                 // fetch, say. Reported as that, with its code, rather than as "found none",
@@ -1886,6 +1971,13 @@ type SrtTools =
       /// without one — and naming it is what stops a host's incidental `rg` from deciding
       /// how a session confines.
       Ripgrep : string option
+      /// util-linux's `setsid`, which a terminal's shell is started under INSIDE the sandbox
+      /// so that it takes the pty as its controlling terminal (`Pty.spawnAdopting` says why
+      /// nothing else can). `Some` on Linux — the path named, or `setsid` for the sandbox's
+      /// own `PATH` to find, as an unnamed bubblewrap is found — and `None` on macOS, where
+      /// Seatbelt starts no session of its own and the terminal node-pty hands the shell
+      /// reaches it untouched.
+      Setsid : string option
       Nesting : SandboxNesting
       /// The host files every sandbox on this box may read whatever its policy says: the
       /// interpreter its commands run, the libraries that interpreter links, the trust
@@ -2069,6 +2161,32 @@ module SrtSandbox =
     let commandLine (executable: string) (arguments: string list) : string =
         executable :: arguments |> List.map quoteArg |> String.concat " "
 
+    /// The line a terminal's shell is started with under srt on Linux: under `setsid --ctty`,
+    /// so it takes the pty `Pty.spawnAdopting` opens for it as its controlling terminal, and
+    /// holding no descriptor but its own three.
+    ///
+    /// The second half is not tidiness. node-pty leaves the master of every pty it opens
+    /// inheritable, so a child Node spawns holds the master of every terminal this session
+    /// has open — and a master is the KEYBOARD of the shell on its far end. node-pty's own
+    /// fork closes them; Node's `spawn`, which `spawnAdopting` has to use, does not, and
+    /// bubblewrap passes what it is given through. So the shell a terminal in one sandbox
+    /// opened could type commands into a terminal in another. They are closed here, as the
+    /// first thing srt's shell does inside the sandbox, before anything the terminal runs
+    /// exists to inherit them. That shell is bash (srt's default, which this module does not
+    /// override), and bash is what can name a descriptor past 9.
+    ///
+    /// The loop carries NO redirection of its own. A compound command's `2>/dev/null` is made
+    /// by saving stderr to a descriptor past 9 and restoring it afterwards — and that saved
+    /// copy is in `/proc/self/fd` too, so the loop closed it and the shell came out with its
+    /// stderr on `/dev/null`: no prompt, ever, and so no terminal that ever marked one.
+    /// Closing a descriptor that is already gone (the glob's own) is not an error to bash.
+    ///
+    /// `--wait`, because `setsid` forks when it already leads a process group, and a parent
+    /// that returned at once would end the sandbox with the shell barely started.
+    let adoptingLine (setsid: string) (executable: string) (arguments: string list) : string =
+        "for fd in /proc/self/fd/*; do fd=${fd##*/}; if [ \"$fd\" -gt 2 ]; then eval \"exec $fd>&-\"; fi; done; exec "
+        + commandLine setsid ("--ctty" :: "--wait" :: executable :: arguments)
+
     /// A policy as an srt configuration.
     ///
     /// Reads are deny-then-allow, and what is denied is EVERYTHING. srt starts readable
@@ -2178,6 +2296,10 @@ module SrtSandbox =
                     { Bwrap = named "YESSION_BIN_BWRAP"
                       Socat = named "YESSION_BIN_SOCAT"
                       Ripgrep = named "YESSION_BIN_RIPGREP"
+                      Setsid =
+                        match platform () with
+                        | Node.Base.Platform.Darwin -> None
+                        | _ -> Some (named "YESSION_BIN_SETSID" |> Option.defaultValue "setsid")
                       Nesting = nesting
                       // The binaries a confined spawn execs but the platform list cannot
                       // know the location of: the claude CLI the AgentSandbox starts, and
@@ -2186,7 +2308,7 @@ module SrtSandbox =
                         runtimeReadPaths
                             (platform ())
                             ([ execPath (); srtPackage ]
-                             @ ([ "YESSION_BIN_CLAUDE"; "YESSION_BIN_GIT" ] |> List.choose named))
+                             @ ([ "YESSION_BIN_CLAUDE"; "YESSION_BIN_GIT"; "YESSION_BIN_SETSID" ] |> List.choose named))
                             ambient })
 
     /// The config object srt itself reads.
@@ -2625,15 +2747,17 @@ module SrtSandbox =
                     | Error reason -> return Error (sprintf "srt sandbox failed: %s" reason)
                     | Ok confiner ->
                         let children = Children.Registry ()
-                        let confined (exec: SandboxExec) =
+                        // `line` is what srt's shell is to run; `exec` says where and with what.
+                        let confinedAs (line: string) (exec: SandboxExec) =
                             async {
                                 let env = mergeEnv (environment Map.empty policy) exec.Env
                                 let cwd =
                                     SandboxPath.resolvedFrom policy.WorkingDirectory exec.WorkingDirectory
                                     |> Option.toObj
-                                let! wrapped = confiner.Wrap (commandLine exec.Executable exec.Arguments) (startIn cwd)
+                                let! wrapped = confiner.Wrap line (startIn cwd)
                                 return wrapped |> Result.map (fun argv -> argv, cwd, env)
                             }
+                        let confined (exec: SandboxExec) = confinedAs (commandLine exec.Executable exec.Arguments) exec
                         let spawn (exec: SandboxExec) (onChunk: OutputStream * string -> unit) =
                             async {
                                 try
@@ -2648,21 +2772,37 @@ module SrtSandbox =
                             Ok
                                 { Ref = "srt"
                                   Spawn = spawn
-                                  // srt confines by REWRITING the argv, so a pty costs nothing
-                                  // extra here: wrap exactly as `spawn` does, then open the pty
-                                  // on what came back. The confinement is in the argv, not in
-                                  // how the process is attached to a terminal.
+                                  // srt confines by REWRITING the argv, so a pty costs little
+                                  // extra here: wrap as `spawn` does, then open the pty on what
+                                  // came back. The confinement is in the argv, not in how the
+                                  // process is attached to a terminal.
+                                  //
+                                  // Except that on Linux the argv starts a new SESSION
+                                  // (bubblewrap's `--new-session`), and a shell in a session
+                                  // with no controlling terminal has no job control: ^C killed
+                                  // the wrapper instead of the job. So there the shell is
+                                  // started under `setsid --ctty`, which takes the terminal from
+                                  // inside, and the pty is opened for it to take rather than
+                                  // given to the wrapper — `Pty.spawnAdopting` and
+                                  // `adoptingLine` have the whole of it.
                                   SpawnPty =
                                     if not (Pty.available ()) then None
                                     else
                                         Some (fun exec cols rows onOutput ->
                                             async {
                                                 try
-                                                    match! confined exec with
+                                                    let line =
+                                                        match tools.Setsid with
+                                                        | Some setsid -> adoptingLine setsid exec.Executable exec.Arguments
+                                                        | None -> commandLine exec.Executable exec.Arguments
+                                                    match! confinedAs line exec with
                                                     | Error reason -> return Error reason
                                                     | Ok ([], _, _) -> return Error "srt returned an empty argv"
                                                     | Ok (executable :: arguments, cwd, env) ->
-                                                        return Pty.spawn executable arguments cwd env cols rows onOutput
+                                                        match tools.Setsid with
+                                                        | Some _ ->
+                                                            return Pty.spawnAdopting executable arguments cwd env cols rows onOutput
+                                                        | None -> return Pty.spawn executable arguments cwd env cols rows onOutput
                                                 with ex -> return Error ex.Message
                                             })
                                   Shell = None

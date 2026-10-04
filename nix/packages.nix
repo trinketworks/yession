@@ -339,7 +339,9 @@ let
 
   # The srt backend confines with bubblewrap, reaches its filtering proxy through socat (the
   # network namespace is unshared, so a Unix-socket bridge is the only way out), and finds the
-  # files it must deny outright with ripgrep. All three are NAMED rather than left to PATH: srt
+  # files it must deny outright with ripgrep; a terminal's shell takes its pty as its controlling
+  # terminal with util-linux's setsid, inside the sandbox, because bubblewrap starts it in a new
+  # session that has none. All four are NAMED rather than left to PATH: srt
   # treats an explicit path as a directive and reports it missing, where a PATH lookup would
   # silently pick up someone else's build — or find nothing, and fail a sandbox that had no
   # business depending on the host's incidental tools. macOS confines with Seatbelt, which ships
@@ -352,7 +354,8 @@ let
     \
         --set-default YESSION_BIN_BWRAP ${pkgs.bubblewrap}/bin/bwrap \
         --set-default YESSION_BIN_SOCAT ${pkgs.socat}/bin/socat \
-        --set-default YESSION_BIN_RIPGREP ${pkgs.ripgrep}/bin/rg'';
+        --set-default YESSION_BIN_RIPGREP ${pkgs.ripgrep}/bin/rg \
+        --set-default YESSION_BIN_SETSID ${lib.getExe' pkgs.util-linux "setsid"}'';
 
   # nix — the installable: the two wrapped Node bins over tasks.fsx's shims, the runtime
   # node_modules, and the Nix node-datachannel addon, with the agent pointed at claude-code.

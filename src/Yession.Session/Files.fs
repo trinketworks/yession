@@ -121,6 +121,7 @@ module SessionFiles =
                                         maxChars
                                         (SandboxRef.render sandbox))
                         | SandboxExited code -> return Ok { Said.Code = code; Said.Out = out.ToString (); Said.Err = err.ToString () }
+                        | SandboxSignalled signal -> return Error (sprintf "it was ended by %s" signal)
                         | SandboxRunFailed reason -> return Error reason
             }
 
