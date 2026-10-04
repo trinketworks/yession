@@ -117,6 +117,8 @@ module Frames =
                           "sandbox", Codec.sandboxRef.Encode sandbox ]
                 | CloseTerminal id ->
                     Encode.object [ "kind", Encode.string "closeTerminal"; "terminalId", Codec.terminalId.Encode id ]
+                | InterruptTerminal id ->
+                    Encode.object [ "kind", Encode.string "interruptTerminal"; "terminalId", Codec.terminalId.Encode id ]
                 | TakeTerminalLease id ->
                     Encode.object [ "kind", Encode.string "takeTerminalLease"; "terminalId", Codec.terminalId.Encode id ]
                 | ReleaseTerminalLease id ->
@@ -158,6 +160,7 @@ module Frames =
                         (Decode.field "title" Decode.string)
                         (Decode.optional "sandbox" Codec.sandboxRef.Decode)
                 | "closeTerminal" -> Decode.field "terminalId" Codec.terminalId.Decode |> Decode.map CloseTerminal
+                | "interruptTerminal" -> Decode.field "terminalId" Codec.terminalId.Decode |> Decode.map InterruptTerminal
                 | "takeTerminalLease" -> Decode.field "terminalId" Codec.terminalId.Decode |> Decode.map TakeTerminalLease
                 | "releaseTerminalLease" ->
                     Decode.field "terminalId" Codec.terminalId.Decode |> Decode.map ReleaseTerminalLease

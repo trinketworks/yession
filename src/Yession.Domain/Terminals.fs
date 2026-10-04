@@ -141,7 +141,11 @@ type Block =
       FromSeq : int
       /// One past its last transcript line; `None` while it is still running.
       ToSeq : int option
-      Status : BlockStatus }
+      Status : BlockStatus
+      /// Who interrupted it, when somebody did (`TerminalBlockInterrupted`). Beside the
+      /// status rather than in it: the block still ends however its shell says, and an
+      /// interrupt that came too late to matter is still somebody's act.
+      StoppedBy : ActorRef option }
 
 /// One terminal, as the UI knows it.
 type TerminalView =
@@ -346,11 +350,14 @@ module Projection =
                                   Background = e.Background
                                   FromSeq = e.FromSeq
                                   ToSeq = None
-                                  Status = BlockRunning } ] })
+                                  Status = BlockRunning
+                                  StoppedBy = None } ] })
         | SessionEvent.TerminalBlockCompleted e ->
             proj
             |> updateTerminal e.TerminalId (fun t ->
                 t |> updateBlock e.BlockId (fun b -> { b with ToSeq = Some e.ToSeq; Status = BlockFinished e.Result }))
+        | SessionEvent.TerminalBlockInterrupted e ->
+            proj |> updateTerminal e.TerminalId (updateBlock e.BlockId (fun b -> { b with StoppedBy = Some e.By }))
         | SessionEvent.TerminalCommandRejected e ->
             proj
             |> updateTerminal e.TerminalId (fun t ->
@@ -372,7 +379,8 @@ module Projection =
                                   // [From, To) gets nothing without a special case.
                                   FromSeq = 0
                                   ToSeq = Some 0
-                                  Status = BlockRejected (e.RejectedBy, e.Reason) } ] })
+                                  Status = BlockRejected (e.RejectedBy, e.Reason)
+                                  StoppedBy = None } ] })
         | SessionEvent.TerminalIntegrationLost e ->
             proj |> updateTerminal e.TerminalId (fun t -> { t with IntegrationLost = true })
         | SessionEvent.TerminalIntegrationRestored e ->

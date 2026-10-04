@@ -39,6 +39,13 @@ type SessionCommand =
     | OpenTerminal of title: string * sandbox: SandboxRef
     /// Close a terminal. Rejected if it is already closed or was never opened.
     | CloseTerminal of TerminalId
+    /// Interrupt the block running in a terminal: ^C to the job in its foreground, exactly
+    /// what a person at its keyboard would send, and never the terminal itself — closing is
+    /// `CloseTerminal`, and it ends everything the shell was carrying. Any peer may: a
+    /// collaborator who can kill the whole terminal can certainly stop one command in it,
+    /// and what it needs is to be on the record (`TerminalBlockInterrupted`). Rejected when
+    /// nothing is running there, or there is no shell to send it through.
+    | InterruptTerminal of TerminalId
     /// Take the terminal's stdin — enter live mode (Plan 13, stage 2e). Succeeds even when
     /// another peer holds it: collaborators are trusted, so this STEALS rather than queues,
     /// and the previous holder's lease ends on the record. Rejected only when the terminal

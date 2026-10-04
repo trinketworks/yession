@@ -41,6 +41,7 @@ module Bootstrap =
         | SessionEvent.TerminalLeaseReleased _ -> "terminal-lease-released"
         | SessionEvent.TerminalBlockStarted _ -> "terminal-block-started"
         | SessionEvent.TerminalBlockCompleted _ -> "terminal-block-completed"
+        | SessionEvent.TerminalBlockInterrupted _ -> "terminal-block-interrupted"
         | SessionEvent.TerminalCommandRejected _ -> "terminal-command-rejected"
         | SessionEvent.TerminalIntegrationLost _ -> "terminal-integration-lost"
         | SessionEvent.TerminalIntegrationRestored _ -> "terminal-integration-restored"

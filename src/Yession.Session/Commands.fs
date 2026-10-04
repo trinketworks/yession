@@ -26,6 +26,7 @@ module SessionCommands =
         (requestInterrupt: PeerId -> AgentTurnId -> Result<unit, string>)
         (openTerminal: ActorRef -> Source -> TerminalTitle -> Async<Result<TerminalId, string>>)
         (closeTerminal: TerminalId -> ActorRef -> string -> Async<Result<unit, string>>)
+        (interruptTerminal: TerminalId -> ActorRef -> Async<Result<unit, string>>)
         (takeLease: TerminalId -> ActorRef -> Async<Result<unit, string>>)
         (releaseLease: TerminalId -> ActorRef -> Async<Result<unit, string>>)
         (rearmTerminal: TerminalId -> Async<Result<unit, string>>)
@@ -100,6 +101,12 @@ module SessionCommands =
                 | Error reason -> return CommandRejected reason
             | CloseTerminal terminalId ->
                 match! closeTerminal terminalId (Principal.toActor (principalFor peerId)) "closed by a peer" with
+                | Ok () -> return CommandAccepted
+                | Error reason -> return CommandRejected reason
+            // Attributed, like the close beside it: a command someone else started, stopped
+            // early, is news to its author, and who stopped it is the news.
+            | InterruptTerminal terminalId ->
+                match! interruptTerminal terminalId (Principal.toActor (principalFor peerId)) with
                 | Ok () -> return CommandAccepted
                 | Error reason -> return CommandRejected reason
             // Taking a lease succeeds even when someone else holds it: collaborators are

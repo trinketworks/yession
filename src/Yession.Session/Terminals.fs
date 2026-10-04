@@ -731,6 +731,12 @@ module SessionTerminals =
           OpenedByAgent : TerminalId -> bool
           /// Close a terminal. Rejected when it is not open.
           Close : TerminalId -> ActorRef -> string -> Async<Result<unit, string>>
+          /// Interrupt the block running in a terminal: ^C to its foreground job, the terminal
+          /// left standing, and who asked on the record (`TerminalBlockInterrupted`). Refused
+          /// when the terminal is not open, nothing is running in it, or it has no shell to
+          /// send ^C through. ONE verb, record and keystroke, so there is no interrupt that is
+          /// not attributed and no attribution of an interrupt that was not sent.
+          Interrupt : TerminalId -> ActorRef -> Async<Result<unit, string>>
           /// Run one drained queue entry to completion, recording the block and streaming
           /// its output into the transcript. `onStarted` fires once the block's durable
           /// start event is written — that is the moment the queue entry has been consumed
@@ -860,6 +866,7 @@ module SessionTerminals =
           OpenAgentTerminal = fun _ _ -> async { return Error "this session has no environment" }
           OpenedByAgent = fun _ -> false
           Close = fun _ _ _ -> async { return Error "this session has no terminals" }
+          Interrupt = fun _ _ -> async { return Error "this session has no terminals" }
           RunBlock = fun _ _ _ _ -> async { return () }
           Refuse = fun _ _ _ _ -> async { return () }
           Take = fun _ _ -> async { return Error "this session has no terminals" }
@@ -2357,6 +2364,38 @@ module SessionTerminals =
         let noShell =
             "this terminal has no shell: each command here runs as its own process, so there is nothing to type into — its first lines say why"
 
+        /// ^C to the block running in `id`, and the record of who sent it.
+        ///
+        /// Through the pty, as a byte, rather than as a signal to some process: the line
+        /// discipline is what knows which job is in the foreground, and it delivers SIGINT to
+        /// exactly that one — the shell, which ignores it at a prompt and survives it under a
+        /// job, is never the target. That is also why a block whose program owns the terminal
+        /// (an editor in raw mode) receives a ^C key rather than a signal: it is what a person
+        /// at the keyboard would have sent.
+        ///
+        /// Admitted once the block's command has STARTED — its start mark seen — which is the
+        /// window in which the foreground job is that command. Between its line being typed
+        /// and that mark, a ^C lands at the line editor instead: the line is discarded, the
+        /// mark that would have finished the block never comes, and the block is left running
+        /// over a shell that is back at its prompt. So that window is refused, saying so, and
+        /// the next press lands.
+        let interrupt (id: TerminalId) (by: ActorRef) : Async<Result<unit, string>> =
+            async {
+                let key = TerminalId.value id
+                match live.TryGetValue key with
+                | false, _ -> return Error "terminal is not open"
+                | true, terminal ->
+                    match terminal.Shell, pending.ContainsKey key, typedBlock.TryGetValue key with
+                    | None, _, _ when Set.contains key busy ->
+                        return Error "this terminal has no shell: each command here runs as its own process, so there is no ^C to send — close the terminal to stop it"
+                    | Some pty, true, (true, (blockId, _)) when sawCommandStart.Contains key ->
+                        do! appendAs by (SessionEvent.TerminalBlockInterrupted { TerminalId = id; BlockId = blockId; By = by })
+                        pty.Write "\u0003"
+                        return Ok ()
+                    | _ when Set.contains key busy -> return Error "the command has not started yet, so there is nothing to stop — try again in a moment"
+                    | _ -> return Error "nothing is running in this terminal"
+            }
+
         let write (id: TerminalId) (by: ActorRef) (data: string) : Async<Result<unit, string>> =
             async {
                 let key = TerminalId.value id
@@ -2815,6 +2854,7 @@ module SessionTerminals =
           OpenAgentTerminal = openAgentTerminal
           OpenedByAgent = fun id -> agentOpened.Contains (TerminalId.value id)
           Close = closeTerminal
+          Interrupt = interrupt
           RunBlock = runBlock
           Refuse = refuse
           Take = take

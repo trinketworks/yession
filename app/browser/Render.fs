@@ -293,12 +293,19 @@ let private boundTerminalInputs = JS.Constructors.WeakSet.Create<Browser.Types.H
 /// A command line is one line, so there is no new line for Alt-Enter to insert and none is
 /// bound. `isComposing` guards the IME: mid-composition Enter commits the candidate word, and
 /// running a half-typed command because someone accepted a suggestion is not a thing to do.
+///
+/// Ctrl-C in an EMPTY line is ^C to whatever the terminal is running — the one meaning the
+/// key has in a terminal, and the one it is free to have here: with nothing in the line and
+/// nothing selected on the page there is nothing for it to copy. With either, it is left to
+/// the platform. Whether there is anything running to interrupt is the model's to decide
+/// (`InterruptTerminalMsg`), not this listener's.
 let private bindTerminalInput
     (el: Browser.Types.HTMLInputElement)
     (onInput: unit -> unit)
     (onSelect: unit -> unit)
     (onBlur: unit -> unit)
     (onEnter: unit -> unit)
+    (onInterrupt: unit -> unit)
     : unit =
     if not (boundTerminalInputs.has el) then
         boundTerminalInputs.add el |> ignore
@@ -314,7 +321,16 @@ let private bindTerminalInput
                 let event = event :?> Browser.Types.KeyboardEvent
                 if event.key = "Enter" && not (isComposing event) then
                     event.preventDefault ()
-                    onEnter ())
+                    onEnter ()
+                elif
+                    event.ctrlKey && not (event.altKey || event.metaKey || event.shiftKey)
+                    && (event.key = "c" || event.key = "C")
+                    && not (isComposing event)
+                    && el.value = ""
+                    && Browser.Dom.window.getSelection().toString () = ""
+                then
+                    event.preventDefault ()
+                    onInterrupt ())
 
 // --- The render ---------------------------------------------------------------------------
 
@@ -543,12 +559,18 @@ let create (deps: Deps) : Renderer =
                 match lineOf () |> Option.bind fieldOfKey with
                 | Some (TerminalDraftBody (terminal, author)) -> deps.Links.SendTerminalDraft terminal author
                 | _ -> ()
+            // ^C from a composer slot is for the terminal the slot is in, whoever's slot it is.
+            let onInterrupt () =
+                match lineOf () |> Option.bind fieldOfKey with
+                | Some (TerminalDraftBody (terminal, _)) -> dispatch (InterruptTerminalMsg terminal)
+                | _ -> ()
             bindTerminalInput
                 el
                 (fun () -> lineOf () |> Option.iter (fun key -> TerminalText.setTo texts key el.value))
                 reportFocus
                 (fun () -> sendFocus None)
                 onEnter
+                onInterrupt
             let key = el.getAttribute "data-terminal-input"
             if not (isNull (box key)) && key <> "" then setInputValue el (TerminalText.read texts key)
         for el in terminalTexts () do

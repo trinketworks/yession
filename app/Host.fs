@@ -988,6 +988,7 @@ let startFull
                         requestInterrupt
                         terminals.Open
                         terminals.Close
+                        terminals.Interrupt
                         terminals.Take
                         terminals.Release
                         terminals.Rearm

@@ -292,6 +292,15 @@ and TerminalMarkedLate =
       /// When the block's line was handed to the pty; the envelope's timestamp is when the
       /// mark arrived, so the difference is how late the shell answered.
       WrittenAt : DateTimeOffset }
+/// Somebody interrupted the block running in a terminal: ^C to the job in its foreground,
+/// the terminal left standing. The block still ends the way its shell says — an interrupted
+/// command usually exits 130 — and this is the half an exit code cannot carry: WHO stopped
+/// it, which is the first thing the author of a long build that ended early wants to know.
+
+and TerminalBlockInterrupted =
+    { TerminalId : TerminalId
+      BlockId : BlockId
+      By : ActorRef }
 /// Marking is back (Plan 13, stage 2f): a peer used the re-arm control and the shell that is
 /// actually there now answered our instrumentation.
 

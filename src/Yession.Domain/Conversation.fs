@@ -527,6 +527,7 @@ module ConversationProjection =
         | SessionEvent.TerminalClosed _
         | SessionEvent.TerminalBlockStarted _
         | SessionEvent.TerminalBlockCompleted _
+        | SessionEvent.TerminalBlockInterrupted _
         | SessionEvent.TerminalLeaseTaken _
         | SessionEvent.TerminalLeaseReleased _
         | SessionEvent.TerminalCommandRejected _

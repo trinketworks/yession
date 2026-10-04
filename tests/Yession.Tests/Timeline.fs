@@ -1029,7 +1029,8 @@ let private blockOf (authority: Authority) (n: string) (status: BlockStatus) : B
       Background = false
       FromSeq = 0
       ToSeq = Some 1
-      Status = status }
+      Status = status
+      StoppedBy = None }
 
 let private doneBy (authority: Authority) (n: string) = blockOf authority n (BlockFinished (CommandSucceeded 0))
 
@@ -2112,6 +2113,35 @@ let private listTests =
                 clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ArmKillMsg (Some terminalA))
             let _, effects = ClientModel.update (CloseTerminalMsg terminalA) armed
             Expect.isTrue (List.contains (ClientEffect.CloseTerminal terminalA) effects) "the second press is the kill"
+
+        // Stop and Ctrl-C in an empty command line both send this; the model is where it is
+        // decided whether there is anything to stop.
+        testCase "an interrupt asks the session to stop a terminal's running block" <| fun () ->
+            let running =
+                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (started terminalA "1" byAda "sleep 600" 0) ]
+            let _, effects = ClientModel.update (InterruptTerminalMsg terminalA) running
+            Expect.isTrue (List.contains (ClientEffect.InterruptTerminal terminalA) effects) "^C is asked for"
+
+        // The Stop that was pressed goes when the command ends, with focus on it.
+        testCase "an interrupt puts the keyboard on the terminal's command line" <| fun () ->
+            let running =
+                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (started terminalA "1" byAda "sleep 600" 0) ]
+            let _, effects = ClientModel.update (InterruptTerminalMsg terminalA) running
+            Expect.isTrue
+                (List.contains (ClientEffect.Move (DomMove.FocusCommandLine terminalA)) effects)
+                "focus lands where the next command is typed"
+
+        // Ctrl-C at an idle command line is pressed far more often than at a busy one, and a
+        // request the session can only refuse would be a refusal notice for a key that meant
+        // nothing.
+        testCase "an interrupt with nothing running asks nothing of the session" <| fun () ->
+            let idle =
+                clientOf
+                    [ at 1L 0.0 (opened terminalA "build")
+                      at 2L 1.0 (started terminalA "1" byAda "make" 0)
+                      at 3L 2.0 (completed terminalA "1" (CommandSucceeded 0) 3) ]
+            let _, effects = ClientModel.update (InterruptTerminalMsg terminalA) idle
+            Expect.equal effects [] "nothing sent"
 
         testCase "a kill armed over a terminal that closes is taken back" <| fun () ->
             // Somebody else ended it, or it exited: the armed control has nothing left to end,

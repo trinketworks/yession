@@ -537,6 +537,19 @@ module Events =
                   TerminalMarkedLate.BlockId = get.Required.Field "blockId" Codec.blockId.Decode
                   TerminalMarkedLate.WrittenAt = get.Required.Field "writtenAt" Codec.timestamp.Decode }) }
 
+    let private terminalBlockInterrupted : Codec<TerminalBlockInterrupted> =
+        { Encode =
+            fun (p: TerminalBlockInterrupted) ->
+                Encode.object
+                    [ "terminalId", Codec.terminalId.Encode p.TerminalId
+                      "blockId", Codec.blockId.Encode p.BlockId
+                      "by", Codec.actor.Encode p.By ]
+          Decode =
+            Decode.object (fun get ->
+                { TerminalBlockInterrupted.TerminalId = get.Required.Field "terminalId" Codec.terminalId.Decode
+                  TerminalBlockInterrupted.BlockId = get.Required.Field "blockId" Codec.blockId.Decode
+                  TerminalBlockInterrupted.By = get.Required.Field "by" Codec.actor.Decode }) }
+
     let private terminalIntegrationRestored : Codec<TerminalIntegrationRestored> =
         { Encode = fun (p: TerminalIntegrationRestored) -> Encode.object [ "terminalId", Codec.terminalId.Encode p.TerminalId ]
           Decode =
@@ -1401,6 +1414,10 @@ module Events =
                           "payload", terminalIntegrationRestored.Encode p ]
                 | SessionEvent.TerminalMarkedLate p ->
                     Encode.object [ "type", Encode.string "terminalMarkedLate"; "payload", terminalMarkedLate.Encode p ]
+                | SessionEvent.TerminalBlockInterrupted p ->
+                    Encode.object
+                        [ "type", Encode.string "terminalBlockInterrupted"
+                          "payload", terminalBlockInterrupted.Encode p ]
                 | TerminalLeaseTaken p ->
                     Encode.object [ "type", Encode.string "terminalLeaseTaken"; "payload", terminalLeaseTaken.Encode p ]
                 | TerminalLeaseReleased p ->
@@ -1506,6 +1523,8 @@ module Events =
                 | "terminalIntegrationRestored" ->
                     Decode.field "payload" terminalIntegrationRestored.Decode |> Decode.map TerminalIntegrationRestored
                 | "terminalMarkedLate" -> Decode.field "payload" terminalMarkedLate.Decode |> Decode.map TerminalMarkedLate
+                | "terminalBlockInterrupted" ->
+                    Decode.field "payload" terminalBlockInterrupted.Decode |> Decode.map TerminalBlockInterrupted
                 | "terminalLeaseTaken" -> Decode.field "payload" terminalLeaseTaken.Decode |> Decode.map TerminalLeaseTaken
                 | "terminalLeaseReleased" -> Decode.field "payload" terminalLeaseReleased.Decode |> Decode.map TerminalLeaseReleased
                 | "terminalTranscriptTruncated" ->

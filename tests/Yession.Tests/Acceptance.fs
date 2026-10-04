@@ -179,7 +179,8 @@ let private representativeModel : ClientModel =
                       Background = false
                       FromSeq = 0
                       ToSeq = Some 2
-                      Status = BlockFinished (CommandSucceeded 0) } ]
+                      Status = BlockFinished (CommandSucceeded 0)
+                      StoppedBy = None } ]
                 DroppedBytes = 0 } ] }
       // The transcript this client has: one coloured line, so the SSR render exercises the
       // ANSI path rather than only the plain one.
@@ -342,7 +343,8 @@ let private runBlock (authority: Authority) (n: int) (status: BlockStatus) : Blo
       Background = false
       FromSeq = 0
       ToSeq = Some 1
-      Status = status }
+      Status = status
+      StoppedBy = None }
 
 /// How many times a hook appears in a rendered page. Counting MOUNTS rather than words: what
 /// these cases promise is one control per item and one stroke per mark, and a substring of
