@@ -2701,8 +2701,13 @@ let editorTests =
                              const on = strip.querySelector('[role=tab][aria-selected=true]')
                              // A tab's colours TRANSITION, so the rule read in the frame the
                              // selection landed is the colour it started from — transparent,
-                             // exactly an unselected tab's. Read it where it settles.
-                             await Promise.all(strip.getAnimations({ subtree: true }).map(a => a.finished))
+                             // exactly an unselected tab's. Read it where it settles — the
+                             // FINITE ones: a tab running a command wears a pulse that never
+                             // finishes, and waiting on it waits for ever.
+                             await Promise.all(
+                               strip.getAnimations({ subtree: true })
+                                 .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
+                                 .map(a => a.finished.catch(() => null)))
                              const off = strip.querySelector('[role=tab][aria-selected=false]')
                              const t = on.getBoundingClientRect()
                              const faults = []
@@ -4603,6 +4608,64 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
                 let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-pane-replay='terminal:term-live']")""")
                 return ()
+            }
+
+        // A long output keeps its command in view. Measured with `seq 1 300`: the block's
+        // command line scrolled out of the top of the scrollback and the screen was numbers,
+        // with nothing on it to say what had printed them. Only a browser can settle this —
+        // the markup is the same whether or not the line holds — so it is measured off the
+        // real boxes: the command row sits on the scrollback's top edge while the block's
+        // own top is far above it, and it is what is PAINTED there, not merely positioned.
+        editorCase "a long output keeps its command in view" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                let! _ =
+                    await (page.WaitForSelectorAsync "#shell [data-terminal-scrollback][data-terminal-id='term-harness']")
+                // Three hundred lines into the running command — one record, so one render.
+                do! awaitU (
+                        page.EvaluateAsync
+                            """() => window.__record('term-harness', 2, 'o',
+                                       Array.from({ length: 300 }, (_, i) => 'line ' + (i + 1)).join('\r\n'))""")
+                // It runs inside the agent's fold. Opened by the element rather than a click:
+                // a click scrolls whatever it must to bring the target into view, the clipped
+                // panel included, and this case is about where things are after a scroll the
+                // READER made.
+                do! awaitU (
+                        page.EvaluateAsync
+                            """() => { document.querySelector("#shell [data-terminal-block-run='block-burst-ok'] details").open = true }""")
+                // Scroll until the middle of that output is at the top of the scrollback.
+                let! _ =
+                    await (
+                        page.WaitForFunctionAsync
+                            """(() => {
+                                 const scroller = document.querySelector('#shell [data-terminal-scrollback]')
+                                 const block = scroller.querySelector('[data-terminal-block=block-burst-running]')
+                                 if (!block || block.getBoundingClientRect().height < 1000) return false
+                                 const a = scroller.getBoundingClientRect(), b = block.getBoundingClientRect()
+                                 scroller.scrollTop += (b.top - a.top) + b.height / 2
+                                 return true
+                               })()""")
+                let! held =
+                    await (
+                        page.EvaluateAsync<string>
+                            """() => new Promise(done => requestAnimationFrame(() => {
+                                 const scroller = document.querySelector('#shell [data-terminal-scrollback]')
+                                 const block = scroller.querySelector('[data-terminal-block=block-burst-running]')
+                                 const row = block.querySelector('[data-terminal-block-command]')
+                                 const a = scroller.getBoundingClientRect(), b = block.getBoundingClientRect()
+                                 const r = row.getBoundingClientRect()
+                                 const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+                                 done(JSON.stringify({
+                                   blockScrolledAway: b.top < a.top - 500,
+                                   rowAtTop: Math.abs(r.top - a.top) <= 1,
+                                   rowPainted: !!hit && row.contains(hit),
+                                   measured: { scroller: a.top, block: b.top, row: r.top }
+                                 }))
+                               }))""")
+                Expect.stringContains
+                    held
+                    "\"blockScrolledAway\":true,\"rowAtTop\":true,\"rowPainted\":true"
+                    "the command line is held at the top, and is what is drawn there"
             }
 
         // "Show in terminal" (Plan 25, stage 3). The reader's context question, answered with

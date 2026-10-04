@@ -1492,6 +1492,8 @@ module View =
     let private runningDot =
         html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotOnly}"></span><span class="{Style.srOnly}">{Dom.Text.blockRunning}</span></span>"""
 
+    /// How a block went, as its HOOKS spell it: four tokens for six outcomes, because what a
+    /// hook is asked is whether it went, not how.
     let private terminalBlockStatusLabel =
         function
         | BlockRunning -> Dom.Text.blockRunning
@@ -1499,17 +1501,45 @@ module View =
         | BlockFinished _ -> Dom.Text.blockFailed
         | BlockRejected _ -> Dom.Text.blockRejected
 
-    let private terminalBlockStatus (model: ClientModel) =
+    /// How a block went, in WORDS — what a screen reader hears where the mark draws a glyph
+    /// and a number, and what a command chip's accessible name says in its middle.
+    let private terminalBlockStatusWord (model: ClientModel) =
         function
-        | BlockRunning -> runningDot
-        | BlockFinished (CommandSucceeded code) -> html $"""<span class="{Style.statusOk}">{Icon.checkSm} {code}</span>"""
-        | BlockFinished (CommandFailed code) -> html $"""<span class="{Style.statusErr}">{Icon.crossSm} {code}</span>"""
-        | BlockFinished CommandTimedOut -> html $"""<span class="{Style.statusErr}">timed out</span>"""
-        | BlockFinished (CommandExecutionFailed _) -> html $"""<span class="{Style.statusErr}">failed</span>"""
-        // Named, not merely absent. "rejected by nick" in line with the commands that ran
+        | BlockRunning -> Dom.Text.blockRunning
+        | BlockFinished (CommandSucceeded code) -> Dom.Text.blockSucceeded code
+        | BlockFinished (CommandFailed code) -> Dom.Text.blockExitFailed code
+        | BlockFinished CommandTimedOut -> Dom.Text.blockTimedOut
+        | BlockFinished (CommandExecutionFailed _) -> Dom.Text.failed
+        | BlockRejected (by, _) -> Dom.Text.blockRefusedBy (Entity.actorName model by)
+
+    /// How a block went, drawn. ONE renderer for every surface that shows a block — its line
+    /// in the pane, its tab's header, its chip in the chat — so a reader who learnt the marks
+    /// on one surface has learnt them on all three: running is the pulse, `✓ 0` and `✕ 1` are
+    /// how it exited, and anything that did not exit says so in a word.
+    ///
+    /// Success is drawn too. The pane used to leave it out, on the argument that `✓ 0` beside
+    /// every command is the same fact printed whether or not it is news — and a reader who
+    /// watched a command finish in the pane could not tell it had, from one still waiting on
+    /// its first byte, without going to the chat to look.
+    ///
+    /// The glyph and the number are a picture; the words beside them are for whoever cannot
+    /// see it (`terminalBlockStatusWord`). A mark that IS a word says it once.
+    let private terminalBlockStatus (model: ClientModel) (status: BlockStatus) : TemplateResult =
+        let token = terminalBlockStatusLabel status
+        let pictured (voice: string) (mark: TemplateResult) =
+            html $"""<span class="{voice}" data-block-mark="{token}"><span aria-hidden="true">{mark}</span><span class="{Style.srOnly}">{terminalBlockStatusWord model status}</span></span>"""
+        match status with
+        | BlockRunning -> pictured Style.statusRun (html $"""<span class="{Style.statusDotOnly}"></span>""")
+        | BlockFinished (CommandSucceeded code) -> pictured Style.statusOk (html $"""{Icon.checkSm} {code}""")
+        | BlockFinished (CommandFailed code) -> pictured Style.statusErr (html $"""{Icon.crossSm} {code}""")
+        | BlockFinished CommandTimedOut
+        | BlockFinished (CommandExecutionFailed _) ->
+            html $"""<span class="{Style.statusErr}" data-block-mark="{token}">{terminalBlockStatusWord model status}</span>"""
+        // Named, not merely absent. "refused by nick" in line with the commands that ran
         // is the whole reason a refusal mints a block at all — so it is a NAME, resolved like
         // every other person on screen, not the id the hook carries.
-        | BlockRejected (by, _) -> html $"""<span class="{Style.statusErr}">rejected by {Entity.render model by (EntityRef.Actor by)}</span>"""
+        | BlockRejected (by, _) ->
+            html $"""<span class="{Style.statusErr}" data-block-mark="{token}">{Dom.Text.blockRefused} {Entity.render model by (EntityRef.Actor by)}</span>"""
 
     let private stretchEndLabel =
         function
@@ -2484,7 +2514,7 @@ module View =
                         data-chat-block="{BlockId.value blockId}"
                         data-chat-block-status="{status}"
                         data-terminal-id="{TerminalId.value terminalId}"
-                        aria-label="{Dom.Text.commandChip block.Command status where}"
+                        aria-label="{Dom.Text.commandChip block.Command (terminalBlockStatusWord model block.Status) where}"
                         @click={Ev(fun _ -> dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Block (terminalId, blockId)))))}>
                   <span class="{Style.terminalPrompt}">$</span>
                   <code class="{Style.chatChipCommand}">{block.Command}</code>
@@ -2957,19 +2987,9 @@ module View =
     /// mark on each line inside would be the same fact said once too often.
     let private terminalBlockView (model: ClientModel) (feed: TerminalFeed) (showAuthor: bool) (block: Block) : TemplateResult =
         let body = terminalBlockOutput feed block
-        // A command that ran and exited 0 says so by being followed by its output and
-        // nothing else — which is what every terminal anyone has used does. `✓ 0` beside
-        // every line was the same fact, printed whether or not it was news, on the surface
-        // that carries the most lines. What is NEWS keeps its status: running, failed,
-        // timed out, refused.
-        let notable =
-            match block.Status with
-            | BlockFinished (CommandSucceeded _) -> Lit.nothing
-            | status -> html $"""<span class="shrink-0">{terminalBlockStatus model status}</span>"""
-        // Whose command this was, on the same terms: shown only when the answer is not the
-        // obvious one. Your own commands need no attribution in your own terminal — but a
-        // command the AGENT ran, or a collaborator did, is the thing a person scanning a
-        // scrollback is looking for.
+        // Whose command this was: shown only when the answer is not the obvious one. Your own
+        // commands need no attribution in your own terminal — but a command the AGENT ran, or
+        // a collaborator did, is the thing a person scanning a scrollback is looking for.
         //
         // Named, not merely MARKED. It was a bare coloured square whose only identification
         // was a `title`: nothing on a phone, which has no hover, and nothing to a screen
@@ -2979,8 +2999,8 @@ module View =
         // Three colours and no words is a legend a reader has to have been given.
         //
         // As a REFERENCE (`Entity.render`), which is the same mark and name the person wears
-        // on every other surface — the roster, the timeline, the facts under this very block —
-        // rather than a second way of saying who somebody is.
+        // on every other surface — the roster, the timeline, the chip in the chat — rather
+        // than a second way of saying who somebody is.
         let author =
             let who = Authority.author block.Authority
             if not showAuthor || ClientModel.isMine who model then Lit.nothing
@@ -2988,39 +3008,28 @@ module View =
                 html $"""
                     <span class="{Style.terminalBlockAuthor}" data-terminal-block-author="{Entity.actorToken who}"
                           >{Entity.render model who (EntityRef.Actor who)}</span>"""
-        // The facts that used to have nowhere to go, or nowhere better than a status beside
-        // the command: who ran it, who let it through, and how it ended. Behind a
-        // disclosure, because a scrollback is read for its OUTPUT and who was behind it is what
-        // you go looking for afterwards — and it is a real `<details>`, so going looking is
-        // a keypress and an announcement rather than a click handler.
-        let fact (text: string) = html $"""<span class="{Style.terminalBlockFact}">{text}</span>"""
-        // Who, as a REFERENCE — the same mark and name the person wears on every other
-        // surface — rather than a name typed into a sentence.
-        let who (verb: string) (actor: ActorRef) =
-            html $"""<span class="{Style.terminalBlockFact}">{verb} {Entity.render model actor (EntityRef.Actor actor)}</span>"""
-        let exitFact =
-            match block.Status with
-            | BlockFinished (CommandSucceeded code)
-            | BlockFinished (CommandFailed code) -> [ fact (sprintf "exit %d" code) ]
-            | BlockFinished CommandTimedOut -> [ fact "timed out" ]
-            | BlockFinished (CommandExecutionFailed reason) -> [ fact (sprintf "did not run — %s" reason) ]
-            | BlockRejected (by, _) -> [ who "refused by" by ]
-            | BlockRunning -> []
+        // The facts the command line does not already say, as a LINE under it. They were
+        // behind a `…` that read as a menu, and opening it said "ran by <you> · exit 1" — the
+        // author the line leaves out because it is you, and the exit the mark beside the
+        // command already draws. What is left is the one fact no mark carries: why a command
+        // that did not exit did not. When the block learns when it started and how long it
+        // took, this is where they go.
         let facts =
-            [ who "ran by" (Authority.author block.Authority)
-              yield! exitFact ]
+            match block.Status with
+            | BlockFinished (CommandExecutionFailed reason) ->
+                html $"""<div class="{Style.terminalBlockFacts}" data-terminal-block-facts><span class="{Style.terminalBlockFact}">{reason}</span></div>"""
+            | BlockRunning
+            | BlockFinished _
+            | BlockRejected _ -> Lit.nothing
         html $"""
             <article class="{Style.terminalBlock}" data-terminal-block="{BlockId.value block.BlockId}"
                      data-terminal-block-status="{terminalBlockStatusLabel block.Status}">
-              <details>
-                <summary class="{Style.terminalBlockSummary}">
-                  {author}
-                  <span class="{Style.terminalCommandText}">ran <code>{block.Command}</code></span>
-                  {notable}
-                  <span class="{Style.terminalBlockMark}" aria-hidden="true">…</span>
-                </summary>
-                <div class="{Style.terminalBlockFacts}" data-terminal-block-facts>{facts}</div>
-              </details>
+              <div class="{Style.terminalBlockSummary}" data-terminal-block-command>
+                {author}
+                <span class="{Style.terminalCommandText}">ran <code>{block.Command}</code></span>
+                <span class="ml-auto shrink-0">{terminalBlockStatus model block.Status}</span>
+              </div>
+              {facts}
               {body}
             </article>"""
 
@@ -3040,9 +3049,10 @@ module View =
 
     /// One fold over a run of commands one actor ran back to back in this terminal — "ran N
     /// commands", with the same ✓/✗/running tally the chat's task card wears, collapsed to
-    /// one line until pressed. A native `<details>`, like the block it is made of: the pane
-    /// already discloses a block's facts that way, and this is one more of the same control
-    /// around several blocks rather than a second fold mechanism borrowed from the chat.
+    /// one line until pressed. A native `<details>`, so the fold arrives keyboard-operable and
+    /// announced, rather than a second fold mechanism borrowed from the chat. Its mark is the
+    /// chevron every other fold in the product turns, not an ellipsis: `…` at the end of a
+    /// line reads as a menu, and what is behind this is the commands, not choices.
     let private terminalBlockRun (model: ClientModel) (feed: TerminalFeed) (blocks: Block list) : TemplateResult =
         let leader = List.head blocks
         let tally = blocks |> List.map (fun b -> TaskCard.stateOf b.Status) |> TaskCard.tally
@@ -3061,14 +3071,14 @@ module View =
                           data-terminal-block-author="{Entity.actorToken runAuthor}"></span>"""
         html $"""
             <article class="{Style.terminalBlock}" data-terminal-block-run="{BlockId.value leader.BlockId}">
-              <details>
-                <summary class="{Style.terminalBlockSummary}">
+              <details class="group">
+                <summary class="{Style.terminalBlockRunSummary}">
                   {author}
                   <span class="{Style.terminalCommandText}">ran {commands}</span>
                   {counts}
-                  <span class="{Style.terminalBlockMark}" aria-hidden="true">…</span>
+                  <span class="{Style.terminalBlockRunMark}" aria-hidden="true">›</span>
                 </summary>
-                <div class="{Style.terminalStream}" data-terminal-block-run-body>
+                <div class="{Style.terminalBlockRunBody}" data-terminal-block-run-body>
                   {blocks |> List.map (terminalBlockView model feed false)}
                 </div>
               </details>
@@ -3733,8 +3743,9 @@ module View =
                         // mark's 1rem track — it wrapped there, grew the row, and moved every
                         // row under it the moment a terminal closed. The track keeps its cell.
                         html $"""<span aria-hidden="true"></span>"""
-                elif running then
-                    html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span></span>"""
+                // The same running mark the tab and the running block wear (`runningDot`), word
+                // for a screen reader included — one status vocabulary on every surface.
+                elif running then runningDot
                 else
                     match view.Lease with
                     // Whoever is typing, in their own colour — the same dot the roster and the
@@ -3958,6 +3969,14 @@ module View =
                          <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model who}"
                                title="{name}" data-terminal-tab-peer="{ActorRef.token who}"></span>"""))
                 @ viewerDots (editors |> List.map fst) view.TerminalId
+            // Something is running here — the pulse its row in the list and its running block
+            // both wear, so a terminal you are not showing still says it is busy, and a build
+            // that finished in another tab stops saying so without anybody going to look. A
+            // mark, not a word: a strip is narrow, and its words are the names.
+            let running =
+                if view.IsOpen && Option.isSome (Projection.runningBlock view) then
+                    html $"""<span class="{Style.terminalTabRunning}" data-terminal-tab-running>{runningDot}</span>"""
+                else Lit.nothing
             // Two literal spellings of one tab, because lit-html cannot inject an attribute
             // NAME through a hole — and the open/closed hooks must stay apart: there is
             // nothing to run in a closed terminal, only something to read.
@@ -3967,14 +3986,14 @@ module View =
                          id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
                          aria-selected="{selectedAttr}" tabindex="{tabIndex}" title="{tooltip}"
                          @keydown={Ev(activateKey)}
-                         @click={Ev(fun _ -> activate ())}><span class="{Style.paneTabLabel}">{name}</span><span class="{Style.terminalTabPeers}">{peers}</span>{kill}</div>"""
+                         @click={Ev(fun _ -> activate ())}><span class="{Style.paneTabLabel}" data-terminal-tab-name>{name}</span>{running}<span class="{Style.terminalTabPeers}">{peers}</span>{kill}</div>"""
             else
                 html $"""
                     <div role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-closed-tab="{id}"
                          id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
                          aria-selected="{selectedAttr}" tabindex="{tabIndex}" title="{TerminalName.subtitle view}"
                          @keydown={Ev(activateKey)}
-                         @click={Ev(fun _ -> activate ())}><span class="{Style.paneTabLabel}">{name}</span><span class="{Style.small}"> · closed</span><span class="{Style.terminalTabPeers}">{peers}</span></div>"""
+                         @click={Ev(fun _ -> activate ())}><span class="{Style.paneTabLabel}" data-terminal-tab-name>{name}</span><span class="{Style.small}"> · closed</span><span class="{Style.terminalTabPeers}">{peers}</span></div>"""
         // What a preview is CALLED — read by the pane's head, which names what is on screen,
         // and by the preview's close. One function, so the two can never disagree.
         let previewLabel (subject: PreviewSubject) =

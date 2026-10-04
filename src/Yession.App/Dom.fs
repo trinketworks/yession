@@ -283,6 +283,13 @@ module Dom =
         /// One per peer whose caret is in THAT terminal, on its tab — the strip's share of
         /// the same presence the roster reports.
         let terminalTabPeer = "data-terminal-tab-peer"
+        /// A terminal tab's name, the words alone — the tab also wears marks (who is in it,
+        /// whether something runs there), and a question about its NAME is not about those.
+        let terminalTabName = "data-terminal-tab-name"
+        /// On a terminal's tab while a command is running in it: the same pulsing mark its row
+        /// in the list wears and its running block wears, so a tab you are not showing still
+        /// says something is under way there.
+        let terminalTabRunning = "data-terminal-tab-running"
         /// The strip's `+` — the door to making something, which is a different door from
         /// the list's. It is called `pane-new` rather than `terminal-new` because a terminal
         /// is only the first kind of thing it will offer.
@@ -304,10 +311,18 @@ module Dom =
         let terminalScrollback = "data-terminal-scrollback"
         let terminalBlock = "data-terminal-block"
         let terminalBlockStatus = "data-terminal-block-status"
+        /// The mark that SAYS how a block went — on the block in the pane and on its chip in
+        /// the chat alike, carrying the same token as `terminalBlockStatus`. Apart from that
+        /// one because the article's attribute is true whether or not anything is drawn, and
+        /// the question a reader asks is what is on the screen.
+        let blockMark = "data-block-mark"
+        /// A block's command line, which stays in view while its own output scrolls under it.
+        let terminalBlockCommand = "data-terminal-block-command"
         /// Who ran a command, on the command's own line — present only when that is not the
         /// reader themselves.
         let terminalBlockAuthor = "data-terminal-block-author"
-        /// The facts beneath a block, behind its disclosure.
+        /// The facts beneath a block's command, as a line — present when there is a fact the
+        /// command line does not already say.
         let terminalBlockFacts = "data-terminal-block-facts"
         /// A run of consecutive same-author blocks, folded under one "ran N commands"
         /// (`View.terminalBlockRun`) — the pane's own version of the chat's `chatTaskCard`.
@@ -728,6 +743,16 @@ module Dom =
         let blockOk = "ok"
         let blockFailed = "failed"
         let blockRejected = "rejected"
+        /// How a block went, in WORDS — what a screen reader hears where a sighted reader
+        /// sees `✓ 0` or `✕ 1`, and what a chip's accessible name carries. The mark is a
+        /// glyph and a number; neither says what it means to anybody who cannot see it.
+        let blockSucceeded (exitCode: int) = sprintf "succeeded, exit %d" exitCode
+        let blockExitFailed (exitCode: int) = sprintf "failed, exit %d" exitCode
+        let blockTimedOut = "timed out"
+        /// A refusal names who refused, as a person's name — the visible mark draws them as
+        /// a reference after this word.
+        let blockRefused = "refused by"
+        let blockRefusedBy (who: string) = sprintf "%s %s" blockRefused who
         /// How a lease stretch ended, on its chat item (Plan 14, stage 1). Four tokens rather
         /// than one, because the question a reader asks afterwards — "did nick finish, get
         /// taken over, drop out, or just wander off?" — has four different answers.
@@ -758,8 +783,9 @@ module Dom =
         /// A command chip's accessible name: what ran, how it went, and WHERE — the part the
         /// chip's look leaves to its terminal name, and the part a screen reader walking a
         /// chat of forty commands across three terminals has no other way to hear. Status
-        /// is the chip's own token (`blockRunning` and friends), in the middle so a later
-        /// word about it has somewhere to go without moving the terminal off the end.
+        /// is the block's status in words (`blockSucceeded` and friends) — the same words the
+        /// block's mark in the pane says to a screen reader, so the two surfaces are heard
+        /// alike as well as seen alike.
         let commandChip (command: string) (status: string) (terminal: string) =
             sprintf "%s, %s, in %s" command status terminal
         /// The strip's `+`, when there is a choice behind it.

@@ -2984,9 +2984,9 @@ let private semanticsTests =
                 elif not inside then out.Append c |> ignore
             out.ToString().Trim ()
 
-        /// One terminal BLOCK's element, from its hook to the facts beneath it — so an
+        /// One terminal BLOCK's command line, from its hook to the output beneath it — so an
         /// assertion that the line says who ran a command cannot be satisfied by the name
-        /// appearing in the disclosure under it, which is exactly where it already was.
+        /// appearing in anything printed under it.
         let blockLineOf (block: string) (html: string) : string =
             // From the `<` that OPENS the element, not from its hook attribute, which is in the
             // middle of a tag — a fragment starting there reads as text to anything stripping
@@ -2994,8 +2994,8 @@ let private semanticsTests =
             let at = html.IndexOf (Dom.attr Dom.Hooks.terminalBlock block)
             Expect.isTrue (at >= 0) "the block renders at all"
             let start = html.LastIndexOf ('<', at)
-            let stop = html.IndexOf (Dom.Hooks.terminalBlockFacts, start)
-            Expect.isTrue (stop > start) "the block has its facts beneath it"
+            let stop = html.IndexOf (Dom.Hooks.terminalOutput, start)
+            Expect.isTrue (stop > start) "the block has its output beneath it"
             html.Substring (start, stop - start)
 
         testCase "a command somebody else ran says WHO on its own line, not only in its facts" <| fun () ->
