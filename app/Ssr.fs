@@ -146,7 +146,7 @@ let page (sessionId: SessionId) (mount: string) (managerOrigin: string option) (
         // applying it from the bundle would paint the sidebar open and then shut it. Desktop
         // only — below the breakpoint the same class means "the drawer is open" (Style.sidebar),
         // which is never a preference.
-        "<script>try{if(matchMedia('(min-width: 768px)').matches"
+        "<script>try{if(matchMedia('" + Style.wideMedia + "').matches"
         + "&&localStorage.getItem('yession.nav')==='collapsed')"
         + "document.documentElement.classList.add('nav-alt')}catch(e){}</script>"
         "</head><body>"

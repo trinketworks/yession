@@ -2909,6 +2909,19 @@ let private chromeTests =
             Expect.equal (sizeOf "the overlays' inset" Style.degradedBarRoom) height "an overlay leaves exactly the bar"
             Expect.equal (sizeOf "the column's padding" Style.degradedBarRoomPad) height "and so does the column"
 
+        // The shell's breakpoint has two readers: the stylesheet, which lays a phone out as one
+        // column and sheets, and the script that writes `nav-alt` — which means "collapsed" on
+        // one side of the line and "drawer open" on the other. A script asking a different
+        // question from the sheet's flips that meaning on the screens between the two answers:
+        // the drawer it thinks it opened is a desktop column it collapsed. So the script's
+        // query is the stylesheet's `wide` variant, verbatim.
+        testCase "the script asks the stylesheet's own breakpoint" <| fun () ->
+            let css = TestFiles.read "app/tailwind.css"
+            let opens = css.IndexOf "@custom-variant wide"
+            Expect.isTrue (opens >= 0) "the stylesheet declares a `wide` variant"
+            let block = css.Substring (opens, css.IndexOf ("@slot", opens) - opens)
+            Expect.stringContains block (sprintf "@media %s {" Style.wideMedia) "Style.wideMedia is that variant's query"
+
         // --- what a notice says first -----------------------------------------------------
 
         /// The rendered page with every `<details …data-detail>` cut out of it: what a notice

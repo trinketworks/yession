@@ -338,111 +338,6 @@ let private writeClipboard (text: string) : Async<bool> =
                 return false
     }
 
-/// A frame later — which is when the render that had to happen, has, and when a class just
-/// written has reached the style flush that acts on it.
-let private nextFrame (act: unit -> unit) : unit =
-    Browser.Dom.window.requestAnimationFrame (fun _ -> act ()) |> ignore
-
-/// The first control matching, focused. Nothing to do when there is none: every selector here
-/// names the control the view mounts OPPOSITE the one that just went, so a miss is a face that
-/// has not arrived rather than a state to repair.
-let private focusFirst (selector: string) : unit =
-    match Browser.Dom.document.querySelector selector with
-    | null -> ()
-    | control -> (control :?> Browser.Types.HTMLElement).focus ()
-
-/// The shell's layout bits, which live on the ROOT element — outside `#app`, which is what
-/// makes them survive every re-render.
-let private rootClasses () = Browser.Dom.document.documentElement.classList
-
-/// Whether the stylesheet's own desktop breakpoint matches right now — ASKED, never decided
-/// again here. `mediaMatches` carries the reason: a script comparing `innerWidth` to a number
-/// of its own is a second definition of the breakpoint, and it disagrees with the first
-/// whenever a scrollbar, a zoom or a rounded viewport gets between them.
-let private onDesktop () : bool = mediaMatches "(min-width: 768px)"
-
-/// Move focus onto the settings face's counterpart control, TWO frames on.
-///
-/// Two, because the face that is arriving is `visibility: hidden` until the transition it just
-/// started reaches its first style flush, and `focus()` on a hidden element is a no-op — which
-/// was measured: one frame left focus on `<body>`.
-let private focusSettingsFace (selector: string) : unit =
-    nextFrame (fun () -> nextFrame (fun () -> focusFirst selector))
-
-// The sidebar/drawer state is one bit on the root element, outside `#app`, so it survives
-// every re-render: default = sidebar visible on desktop, off-canvas on mobile; `nav-alt`
-// = the inverse (see Style.sidebar).
-//
-// Collapsing is a PREFERENCE on desktop, so it is remembered; on mobile the same bit means
-// "the drawer is open", which is not a preference and is never stored. The stored value is
-// re-applied before first paint by the shell document's one inline script (`Ssr.page`) — here,
-// only written.
-//
-// Focus is moved deliberately: the control that was pressed is the one about to disappear, so
-// it hands focus to whichever control replaces it (the header's reopen chevron, or the nav
-// head's collapse button). Skipping that strands focus on a hidden element.
-let private toggleNav () : unit =
-    let classes = rootClasses ()
-    let desktop = onDesktop ()
-    let alt = not (classes.contains "nav-alt")
-    if alt then classes.add "nav-alt" else classes.remove "nav-alt"
-    // The nav control always returns the column to its workspace face — a column that
-    // reopened on settings would be a surprise, and `settings-open` is what chooses the face.
-    classes.remove "settings-open"
-    // What that bit says about the column being SHOWN is the one read against the other,
-    // because `nav-alt` means the opposite thing on each side of the breakpoint.
-    let shown = desktop <> alt
-    if desktop then
-        // Storage is denied in a private window, and a collapse that cannot be remembered is
-        // still a collapse that works.
-        try
-            Browser.WebStorage.localStorage.setItem ("yession.nav", (if shown then "open" else "collapsed"))
-        with _ ->
-            ()
-    nextFrame (fun () ->
-        focusFirst (if shown then "button[data-nav-toggle=\"hide\"]" else "[data-nav-toggle=\"show\"]"))
-
-// Settings is the sidebar column's other FACE (Style.settingsPane), not a drawer over the
-// conversation — so opening it has to bring that column on screen, and `nav-alt` means the
-// opposite thing on each side of the breakpoint: uncollapse on desktop, slide the drawer in on
-// mobile. Focus follows the same rule as the nav toggle.
-let private toggleSettings () : unit =
-    let classes = rootClasses ()
-    let opening = not (classes.contains "settings-open")
-    if opening then classes.add "settings-open" else classes.remove "settings-open"
-    if opening then
-        // Bringing the column on screen is the opposite instruction on each side of the
-        // breakpoint.
-        if onDesktop () then classes.remove "nav-alt" else classes.add "nav-alt"
-    elif not (onDesktop ()) then
-        // Closing the face on a phone closes the drawer with it. On a desktop the column
-        // stays exactly where it was: what changed is which face it shows, not whether it
-        // is there.
-        classes.remove "nav-alt"
-    focusSettingsFace (if opening then "[data-settings-toggle=\"close\"]" else "[data-settings-toggle=\"open\"]")
-
-// The same move, in one direction only.
-//
-// A call to action that leads to settings must never TAKE somebody there and back: the
-// prompt over the timeline is on screen whenever a credential needs signing in, including
-// while the settings face is already open, and a toggle there would shut the very panel it
-// is pointing at. The nav pivots stay toggles because a pivot is a two-way control and this
-// is not one.
-//
-// Idempotent by construction rather than by the caller checking first — `settings-open` is
-// SET, not flipped, so pressing it twice is pressing it once.
-let private revealSettings () : unit =
-    let classes = rootClasses ()
-    let wasOpen = classes.contains "settings-open"
-    classes.add "settings-open"
-    // Bring the column on screen: `nav-alt` means the opposite thing on each side of the
-    // breakpoint — collapsed on desktop, drawer-open on mobile.
-    if onDesktop () then classes.remove "nav-alt" else classes.add "nav-alt"
-    // Focus moves only when the face actually ARRIVED. Stealing it from whatever the reader
-    // was doing, to a control that was already on screen, would be the prompt reaching into a
-    // panel they are already reading.
-    if not wasOpen then focusSettingsFace "[data-settings-toggle=\"close\"]"
-
 // The auth probe: `me` answers with a peer token when the browser's cookie (or an
 // auth-less session) allows it — total in BOTH axes it can fail on, because the two need
 // opposite remedies: `authorized = false` means log in (the shell renavigates), while
@@ -1109,7 +1004,7 @@ let private start () =
                 // BESIDE the chat here, which is what makes opening it unasked a courtesy
                 // rather than the conversation taken off the screen (P1-4). The model decides
                 // when, and whether anything else has answered first (`openOfItself`).
-                PaneOpensItself = onDesktop () }
+                PaneOpensItself = PaneShell.onDesktop () }
             // What this browser had open in this session's pane (P0-4), read before the first
             // render so the column comes back open in the same paint that takes over the
             // served shell. The served shell painted it shut — the server cannot see this
@@ -1193,16 +1088,19 @@ let private start () =
                     | Error _ -> ())
             |> ignore
 
+        // What the shell sends before it brings the nav column on screen (`PaneShell.bringColumnOn`).
+        let hidePane () = dispatchRef HideContentMsg
+
         // The side effects a template can't derive from the model. Send routes to the one
         // implementation in `Client.connect` (capture markdown, enqueue, seed the queue fragment).
         let actions : ViewActions =
             { SendDraft = fun peer -> connectionRef |> Option.iter (fun c -> c.SendDraft peer)
-              ToggleNav = toggleNav
+              ToggleNav = PaneShell.toggleNav hidePane
               // Opening the drawer shows what the stream has already said. There is nothing
               // to re-probe: the panels have a push leg now, exactly as the query surface
               // always did, so opening is a view change and not a round trip.
-              ToggleSettings = toggleSettings
-              RevealSettings = revealSettings
+              ToggleSettings = PaneShell.toggleSettings hidePane
+              RevealSettings = PaneShell.revealSettings hidePane
               ReportFieldSelection =
                 fun field sel ->
                     // A collaborative input's caret, turned into relative positions over the

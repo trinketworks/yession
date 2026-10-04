@@ -1272,6 +1272,14 @@ type ClientMsg =
     | RewindTerminalMsg of TerminalId
     /// Open or close the content column.
     | ToggleContentMsg
+    /// Close the content column, and never open it: the shell's half of "on a phone, two
+    /// sheets never cover the chat at once". The nav drawer and the pane are both overlays
+    /// there, and opening the drawer over an open pane opened it UNDER the pane (both z-40,
+    /// the pane later in the document) — open, and nowhere to be seen. Only the shell knows it
+    /// is on a phone, so it sends this before it brings the drawer on screen. Not
+    /// `ToggleContentMsg`, which would OPEN a shut pane, and which moves focus into or out of
+    /// it: here the drawer arriving is what says where focus goes, and it says so itself.
+    | HideContentMsg
     /// Open this item's actions menu, or shut it if it is the one already open. A toggle
     /// rather than an open, because the control that sends it is the same control either
     /// way — pressing the ellipsis a second time has to put the menu away.
@@ -3304,6 +3312,7 @@ module ClientModel =
         | ToggleContentMsg ->
             // A popover does not outlive the pane it hangs in.
             { model with TerminalsOpen = not model.TerminalsOpen; Switcher = false; PaneMenu = false }
+        | HideContentMsg -> { model with TerminalsOpen = false; Switcher = false; PaneMenu = false }
         | ToggleItemMenuMsg messageId ->
             // Opening one is writing the field, so opening a second shuts the first without
             // anybody arranging it. That is the whole reason this is one slot and not a set.
@@ -3503,6 +3512,10 @@ module ClientModel =
                     match preview model with
                     | Some preview -> [ ClientEffect.Move (DomMove.FocusChat preview.Subject) ]
                     | None -> [ ClientEffect.Move DomMove.FocusPaneReopen ]
+            // No move of its own: the shell sends this as the nav drawer arrives, and the
+            // drawer's arrival puts focus on the drawer (`Browser.toggleNav`). A move here
+            // would race that one for the same keyboard.
+            | HideContentMsg -> []
             // A chip opening a preview is the same promise: the reader was moved, so their
             // keyboard is too.
             | OpenPreviewMsg _ -> [ ClientEffect.Move (paneLanding next) ]

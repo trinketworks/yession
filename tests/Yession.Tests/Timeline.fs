@@ -2391,6 +2391,23 @@ let private tabTests =
             let _, effects = ClientModel.update ToggleContentMsg showing
             Expect.equal effects [ ClientEffect.Move DomMove.FocusPaneReopen ] "onto the reopen control"
 
+        // The nav drawer's arrival on a phone (`PaneShell.bringColumnOn`): one sheet over the
+        // chat at a time. It SHUTS, it never opens — the drawer arriving over a pane that was
+        // already shut must not bring the pane back — and it moves no focus, because the
+        // drawer arriving is what says where focus goes.
+        testCase "hiding the pane shuts an open one" <| fun () ->
+            let showing = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step ToggleContentMsg
+            Expect.isFalse (showing |> Support.step HideContentMsg).TerminalsOpen "shut"
+
+        testCase "hiding a shut pane leaves it shut" <| fun () ->
+            let shut = clientOf [ at 1L 0.0 (opened terminalA "build") ]
+            Expect.isFalse (shut |> Support.step HideContentMsg).TerminalsOpen "still shut, not toggled open"
+
+        testCase "hiding the pane moves no focus of its own" <| fun () ->
+            let showing = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step ToggleContentMsg
+            let _, effects = ClientModel.update HideContentMsg showing
+            Expect.isEmpty effects "the drawer arriving says where focus goes"
+
         // "closing the last tab sends focus to the way back in" and "closing a tab that leaves
         // others moves no focus of its own" were here: closing a tab is not an act this strip
         // has until P2-2 makes it the kill, and the kill's own landing is below.

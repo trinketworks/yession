@@ -373,6 +373,30 @@
    the effect is decoration over a surface that works without it. */
 @custom-variant reduced-transparency (@media (prefers-reduced-transparency: reduce));
 
+/* PHONE and WIDE: the shell's one layout breakpoint, stated as the two halves of one question
+   — is this screen a phone? Width alone used to answer it (`md:` / `max-md:`), and a phone
+   turned on its side answered wrong: 844x390 is wider than 768, so it got the desktop's three
+   columns and a chat 204px wide, one word to a line. A screen that SHORT is a phone however
+   wide it is, so it gets the phone's one column and sheets.
+
+   The two are exact complements, so every rule written as a `phone:` / `wide:` pair holds on
+   exactly one side. A `md:` left beside a `phone:` is the bug this pair exists to stop: at
+   844x390 both match. Width-only rules about how wide a reading column is (a gutter, a grid's
+   columns) stay `md:` / `max-md:`, because there the width IS the question.
+
+   A script that has to agree with the stylesheet asks it by `Style.wideMedia`, and the cheap
+   tier holds that string to the query below. */
+@custom-variant phone {
+  @media (width < 48rem), (height <= 500px) {
+    @slot;
+  }
+}
+@custom-variant wide {
+  @media (width >= 48rem) and (height > 500px) {
+    @slot;
+  }
+}
+
 /* A round mark that has to sit on a one-pixel line (`Style.actNoteRunningOther`, under a cause's
    corner): an `1ex` disc overshot as a round letter is, its diameter rounded to an ODD number
    of pixels. A browser paints a box by rounding each edge to the pixel grid on its own, so a

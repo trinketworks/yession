@@ -492,8 +492,10 @@ module Style =
     /// (`btnComposerSend`, below). They parted over a fact about the two surfaces rather than
     /// a preference: the composer's verbs have a row to themselves, and a row with room in it
     /// should say the word.
+    ///
+    /// 44px square on a phone, where the field it rides is a thumb's height too.
     let private btnInField =
-        cls [ "w-8 h-8 shrink-0 grid place-items-center bg-transparent border-0 cursor-pointer p-0"
+        cls [ "w-8 h-8 phone:w-11 phone:h-11 shrink-0 grid place-items-center bg-transparent border-0 cursor-pointer p-0"
               "transition-colors"; focusRing ]
     let btnSendInField = cls [ btnInField; "text-blue hover:text-blue-up-1" ]
     /// Waiting for something to run. The same control in the same place, at the weight of a
@@ -532,9 +534,15 @@ module Style =
     /// Chrome, not an action: the small sidebar collapse/reveal chevrons. They lean the way
     /// they travel on hover and lead further on press — the only motion chrome earns, and the
     /// reason the two directions are separate values rather than one class plus a guess.
+    ///
+    /// On a phone the glyph stays small and the BOX does not: 44px each way, the target this
+    /// product holds a thumb to (UI baseline), with the glyph centred in it. The `-m-1.5`
+    /// still pays the padding back to the flow, so a site that needs the rest paid back too
+    /// says so itself (`navReopen`).
     let private navChevronBase =
         "bg-transparent border-0 cursor-pointer text-ink-faint hover:text-ink text-small p-1.5 -m-1.5 "
         + "flex items-center gap-1 transition-[translate,color] duration-150 ease-out "
+        + "phone:min-w-11 phone:min-h-11 phone:justify-center "
         + "motion-reduce:transition-none " + focusRing
 
     let navChevronBack = navChevronBase + " hover:-translate-x-0.5 active:-translate-x-1"
@@ -556,7 +564,7 @@ module Style =
     /// Not private any more: `fieldType` folds it in below, and the mono/message fields that
     /// still hand-spell their own font class (no shared size function to fold it into) keep
     /// composing it directly, the way they always did.
-    let touchType = "max-md:text-touch"
+    let touchType = "phone:text-touch"
 
     // --- Fields: ONE face, worn by every input in the product ----------------------------
     // A field is the surface tone inside a hairline ring that brightens on hover and goes
@@ -644,7 +652,7 @@ module Style =
     /// an edged card, is what made a queued COMMAND look like a different kind of thing from
     /// a queued MESSAGE, which is the one thing they are not.
     let fieldMonoBare =
-        cls [ "flex-1 min-w-0"; fieldBare; "font-terminal text-code text-ink placeholder:text-ink-faint"; touchType ]
+        cls [ "flex-1 min-w-0 phone:min-h-11"; fieldBare; "font-terminal text-code text-ink placeholder:text-ink-faint"; touchType ]
 
     // --- Listed rows: the leading edge says what the row IS ------------------------------
     // Every row in a list — a queued message, a queued command, a peer's collapsed draft —
@@ -675,7 +683,7 @@ module Style =
         "group bg-transparent border-0 cursor-pointer flex items-center gap-2 "
         + "font-extralight text-pivot tracking-[-0.01em] lowercase "
         + "text-ink-faint hover:text-ink focus-visible:text-ink transition-colors duration-150 ease-out "
-        + "motion-reduce:transition-none " + focusRingFar
+        + "phone:min-h-11 motion-reduce:transition-none " + focusRingFar
 
     let navPivot = pivotBase
 
@@ -805,28 +813,35 @@ module Style =
     // off-canvas on mobile; `nav-alt` = the inverse. Expressed with arbitrary variants so it
     // stays plain Tailwind.
 
+    /// The stylesheet's `wide` variant (app/tailwind.css), as the media query a SCRIPT asks.
+    /// The shell reads `nav-alt` the opposite way on each side of this line, so the script
+    /// that writes it and the stylesheet that draws it must draw the line in one place — this
+    /// string is that place for the script, and the cheap tier fails if it ever stops being
+    /// the stylesheet's own query. `phone` is its complement, so nothing asks for that one.
+    let wideMedia = "(width >= 48rem) and (height > 500px)"
+
     // --- The degradation bar's one number ------------------------------------------------
     // On a phone the bar is FIXED above all three panes, so the panes leave room for it, so
     // its height and that room are the same number in three class strings. They cannot be
     // composed from a shared token: Tailwind generates only classes that appear LITERALLY in
-    // the source, so `"max-md:h-" + n` produces a class the stylesheet never contains — which
+    // the source, so `"phone:h-" + n` produces a class the stylesheet never contains — which
     // fails silently, the bar falling back to its content height and the reservation to
     // whatever the last edit left. So the number is written out three times, here, together,
     // and `Phase4`'s theme suite fails if the three ever stop agreeing.
 
     /// The bar's own height on a phone.
-    let degradedBarHeight = "max-md:h-12"
+    let degradedBarHeight = "phone:h-12"
     /// The room a pane anchored to the top edge leaves for it (the two off-canvas overlays).
-    let degradedBarRoom = "max-md:[.is-degraded_&]:top-12"
+    let degradedBarRoom = "phone:[.is-degraded_&]:top-12"
     /// The same room, paid in padding, by the column that is in normal flow.
-    let degradedBarRoomPad = "max-md:[.is-degraded_&]:pt-12"
+    let degradedBarRoomPad = "phone:[.is-degraded_&]:pt-12"
 
     /// Reduced motion for a side column, whose transitions are all behind a breakpoint: the
-    /// width shutting on desktop (`md:`), the drawer sliding on a phone (`max-md:`). Tailwind
+    /// width shutting on desktop (`wide:`), the drawer sliding on a phone (`phone:`). Tailwind
     /// orders the stylesheet by variant, so a bare `motion-reduce:transition-none` is EMITTED
     /// ABOVE both and loses to each; the cancellation has to carry the same breakpoint as the
     /// transition it cancels (as `draftCommitBase` does, for the same reason).
-    let private reduceColumnMotion = "md:motion-reduce:transition-none max-md:motion-reduce:transition-none"
+    let private reduceColumnMotion = "wide:motion-reduce:transition-none phone:motion-reduce:transition-none"
 
     /// The 280px column. It holds TWO faces — the workspace nav and settings (`navPane` /
     /// `settingsPane`) — because settings is a place you go, not a thing that covers what you
@@ -834,12 +849,12 @@ module Style =
     /// column is an off-canvas drawer that slides over the conversation.
     let sidebar =
         "relative w-side shrink-0 bg-panel h-full overflow-hidden z-40 " + Stroke.dividerRight + " "
-        + "md:transition-[width] md:duration-200 md:ease-out "
-        + "md:[.nav-alt_&]:w-0 md:[.nav-alt_&]:border-r-0 "
-        + "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:w-[min(var(--spacing-side),84vw)] "
+        + "wide:transition-[width] wide:duration-200 wide:ease-out "
+        + "wide:[.nav-alt_&]:w-0 wide:[.nav-alt_&]:border-r-0 "
+        + "phone:fixed phone:inset-y-0 phone:left-0 phone:w-[min(var(--spacing-side),84vw)] "
         + degradedBarRoom + " "
-        + "max-md:transition-transform max-md:duration-200 max-md:ease-out max-md:-translate-x-[101%] "
-        + "max-md:[.nav-alt_&]:translate-x-0 " + reduceColumnMotion
+        + "phone:transition-transform phone:duration-200 phone:ease-out phone:-translate-x-[101%] "
+        + "phone:[.nav-alt_&]:translate-x-0 " + reduceColumnMotion
 
     /// One face of the column: the two are stacked in place and held at the column's full
     /// width, so nothing reflows while the column animates shut.
@@ -849,7 +864,7 @@ module Style =
     /// whole fade OUT (a discrete step at the end) while flipping instantly on the way IN.
     /// `opacity-0` alone would leave focusable controls behind an invisible panel.
     let private paneBase =
-        "absolute inset-y-0 left-0 w-side max-md:w-[min(var(--spacing-side),84vw)] flex flex-col px-6 pb-5 "
+        "absolute inset-y-0 left-0 w-side phone:w-[min(var(--spacing-side),84vw)] flex flex-col px-6 pb-5 "
         + "overflow-y-auto transition-[opacity,visibility] " + Motion.pace
 
     let navPane = paneBase + " [.settings-open_&]:opacity-0 [.settings-open_&]:invisible"
@@ -885,7 +900,7 @@ module Style =
     let settingsLane2 = laneBase + settingsLaneIn + " [.settings-open_&]:delay-[120ms]"
 
     /// Mobile-only backdrop behind the open drawer; clicking it closes (data-nav-toggle).
-    let scrim = "hidden max-md:[.nav-alt_&]:block fixed inset-0 z-30 bg-black/60"
+    let scrim = "hidden phone:[.nav-alt_&]:block fixed inset-0 z-30 bg-black/60"
 
     /// The shared header band (`--spacing-band`): baselines align across the sidebar/main
     /// hairline because all three heads compose the same token.
@@ -909,7 +924,7 @@ module Style =
     /// padding is spent OUTWARD, so the text sits on the column's rail with everything else
     /// and the hover fill grows around it.
     let chapterEntry =
-        cls [ person; "w-full text-left px-2 -mx-2 py-0.5 hover:text-ink hover:bg-surface-2"
+        cls [ person; "w-full text-left px-2 -mx-2 py-0.5 phone:py-3 hover:text-ink hover:bg-surface-2"
               "transition-colors cursor-pointer"; focusRing ]
 
     /// Its mark, the same dot the rule in the timeline wears, so one chapter looks like one
@@ -1056,11 +1071,15 @@ module Style =
     /// the title steps down a size (`titleInput`) and the id keeps hanging out of flow under
     /// it (`titleId`), which seats the whole band in 56px.
     ///
-    /// Above `md` the stack stays: the header and the sidebar wordmark share one bottom edge
+    /// `pb-[11px]` leaves the row 44px over the band's 1px rule, which is what every control
+    /// in it is on a phone: the chevrons, the edge tab and the title's own box are thumb-sized
+    /// and fill the row exactly, and the id hangs into the 11px under it.
+    ///
+    /// On a wide screen the stack stays: the header and the sidebar wordmark share one bottom edge
     /// (`h-band`, `items-end`), and that shared baseline is the whole reason the band exists.
     let header =
         "relative h-band shrink-0 flex items-end gap-4 px-8 pb-5 "
-        + "max-md:h-14 max-md:items-center max-md:gap-2 max-md:px-4 max-md:pb-4 "
+        + "phone:h-14 phone:items-center phone:gap-2 phone:px-4 phone:pb-[11px] "
         + Stroke.dividerBottom
 
     /// A slow catch-up's progress, drawn ON the header's bottom rule: the rule is the one
@@ -1077,7 +1096,7 @@ module Style =
     /// the agent's absence. `pb-[1px]` is optical, not rhythm: it drops the 11px caps line's
     /// baseline onto the wordmark/title baseline (pb-1 left it 3px high, measured live). On a
     /// phone there is no wordmark to meet: the group centres on the title's line instead.
-    let headerAside = "ml-auto shrink-0 flex items-end gap-5 pb-[1px] max-md:items-center max-md:gap-3 max-md:pb-0"
+    let headerAside = "ml-auto shrink-0 flex items-end gap-5 pb-[1px] phone:items-center phone:gap-3 phone:pb-0"
     let headerStatus = "shrink-0"
 
     /// What this session's pull requests amount to, in the header band: the same line the
@@ -1094,7 +1113,7 @@ module Style =
     /// band rather than an addition to it — and a phone has the tab title, which is the
     /// signal that reaches somebody who is not looking at all.
     let private prStripBase =
-        "bg-transparent border-0 cursor-pointer " + caps + " transition-colors " + focusRing + " max-md:hidden"
+        "bg-transparent border-0 cursor-pointer " + caps + " transition-colors " + focusRing + " phone:hidden"
 
     let prStripIn (tone: string) = prStripBase + " " + tone
 
@@ -1105,7 +1124,7 @@ module Style =
     let headerNoAgent =
         "bg-transparent border-0 cursor-pointer " + caps + " text-blue hover:text-blue-up-1 transition-colors "
         + focusRing + " "
-        + "hidden md:[.nav-alt_&]:block max-md:block max-md:[.nav-alt_&]:hidden"
+        + "hidden wide:[.nav-alt_&]:block phone:block phone:[.nav-alt_&]:hidden phone:py-3.5"
 
     /// The nav column's own mount of the connection report. Hidden on a phone, where the bar
     /// above every pane carries it — the two mounts are complementary by construction, so
@@ -1114,7 +1133,7 @@ module Style =
     /// It covers the STATUS only, never the reconnect card: the card is an action, and a
     /// phone that could see what was wrong but not the button that fixes it would be the
     /// worse half of the trade.
-    let connectionInColumn = "max-md:hidden flex flex-col gap-2"
+    let connectionInColumn = "phone:hidden flex flex-col gap-2"
 
     /// The class the shell wears while anything is degraded, so the panes can make room for
     /// the bar fixed above them. A marker, never a look: the two rules that read it are
@@ -1135,11 +1154,11 @@ module Style =
               Stroke.dividerBottom
               // Where the column IS on screen, the column says it. Where it is not — a
               // collapsed nav, or any phone — this does. Same rule as `headerNoAgent`.
-              "hidden md:[.nav-alt_&]:flex max-md:flex"
+              "hidden wide:[.nav-alt_&]:flex phone:flex"
               // A phone shows one pane at a time and the other two are overlays anchored to
               // the top edge, so this leaves the conversation column's flow and sits over all
               // three. `z-50` clears the overlays (`z-40`) and the scrim between them.
-              "max-md:fixed max-md:inset-x-0 max-md:top-0 max-md:z-50 max-md:px-4"
+              "phone:fixed phone:inset-x-0 phone:top-0 phone:z-50 phone:px-4"
               // One row, always, tall enough for the control it carries whether or not this
               // state has one — the panes reserve this number, so a height that tracked the
               // contents would leave a gap under the bar in some states and overlap the
@@ -1211,12 +1230,12 @@ module Style =
     /// The title block: the editable heading over its dim secondary id. `relative` anchors
     /// the absolutely-positioned remote-cursor overlays; `ml-8` keeps it on the content column.
     /// On a phone the chevron is in the row and pays part of that indent: it occupies 12px
-    /// (a 24px target with `-m-1.5` around it) plus the row's 8px gap, so 12px more is what
-    /// puts the heading back on the 32px rail every message below it sits on — measured live
-    /// at 390, where the title's text and the timeline's caret both start at x=48.
-    /// `max-md:flex-1` is what makes the phone's band a row: the title takes the space the
+    /// of flow (`navReopen`) plus the row's 8px gap, so 12px more is what puts the heading
+    /// back on the 32px rail every message below it sits on — measured live at 390, where the
+    /// title's text and the timeline's caret both start at x=48.
+    /// `phone:flex-1` is what makes the phone's band a row: the title takes the space the
     /// two chevrons leave rather than sizing to an input's default 20 characters.
-    let titleWrap = "relative flex flex-col min-w-0 ml-8 max-md:ml-3 max-md:flex-1"
+    let titleWrap = "relative flex flex-col min-w-0 ml-8 phone:ml-3 phone:flex-1"
 
     /// The title itself: the heading, worn by a text input — and worn as a HEADING at rest.
     /// It used to carry a dotted underline whose job was to say "this edits"; a rule under 28px
@@ -1236,11 +1255,19 @@ module Style =
     /// shared bottom edge than the wordmark's 32/36 does, so the input steps down to put both
     /// on one line (measured live). A phone has no cross-column baseline to meet and no room
     /// for 28px in a 56px row, so it takes the pivot step (19/24) and no nudge.
+    ///
+    /// And on a phone the field is a thumb's height, which a 24px line in a 56px band does
+    /// not leave room for — unless the box takes in the id under it. So it does: 44px tall,
+    /// its last 20 of them padding (`pb-5`) that the id hangs in (`titleId`), and the same 20
+    /// paid back to the flow (`-mb-5`), so the row lays out the 24px line it always did. The
+    /// text sits in the top 24, where it was; the fill and the ring now go round the title and
+    /// its id together, which is the thing a press there edits. `Render.placeInputCursor`'s marker
+    /// subtracts the padding, so a collaborator's caret stays the height of the line.
     let titleInput =
-        cls [ "w-full min-w-0 bg-transparent border-0 px-2 -mx-2 py-0"
+        cls [ "w-full min-w-0 bg-transparent border-0 px-2 -mx-2 py-0 phone:h-11 phone:pb-5 phone:-mb-5"
               "hover:bg-surface-2 focus:bg-surface-2 transition-colors"; focusRing
-              "font-extralight text-heading max-md:text-pivot tracking-[-0.01em] lowercase text-ink"
-              "placeholder:text-ink-faint truncate relative md:top-[2px]" ]
+              "font-extralight text-heading phone:text-pivot tracking-[-0.01em] lowercase text-ink"
+              "placeholder:text-ink-faint truncate relative wide:top-[2px]" ]
 
     /// The session id, shown small and dim under the title as a stable secondary identifier.
     /// It hangs OUT OF FLOW below the title, into the band's bottom padding: in flow it added
@@ -1248,9 +1275,12 @@ module Style =
     /// that far off the wordmark's (measured 41.5 vs 61 at 1440) — and on a phone it is what
     /// made the band a stack rather than the row it now is.
     /// `mt-1` rather than the old `mt-0.5`: the title now draws a focus ring 2px outside its
-    /// own box, and 2px of clearance is what keeps that ring off this line on a phone.
+    /// own box, and 2px of clearance is what keeps that ring off this line on a desktop. On a
+    /// phone the title's box takes this line in (`titleInput`), so a press on it is a press on
+    /// the title — which is why it lets presses through there.
     let titleId =
-        "font-terminal text-code-sm text-ink-faint truncate mt-1 absolute top-full left-0 right-0"
+        "font-terminal text-code-sm text-ink-faint truncate mt-1 absolute top-full left-0 right-0 "
+        + "phone:pointer-events-none"
 
     /// A collaborator's selection highlight in the title: an absolutely-positioned span the
     /// browser places and sizes against the input's own box by measurement (the translucent
@@ -1267,15 +1297,16 @@ module Style =
         "absolute -top-3 left-0 whitespace-nowrap font-semibold text-[9px] leading-3 "
         + "tracking-[0.08em] uppercase px-1 text-bg"
 
-    /// The reopen chevron. Above `md` it is floated in the gutter left of the title so that
+    /// The reopen chevron. On a wide screen it is floated in the gutter left of the title so that
     /// collapsing the sidebar never shifts the heading off the content column. On a phone it
     /// is IN the row — the band is a line of chrome with the title in it, and a control
-    /// hovering over that line would be the one thing on it that is not. It is a 24px target
-    /// occupying 12px of flow (`-m-1.5`), which with the row's 8px gap pays 20 of the 32px
+    /// hovering over that line would be the one thing on it that is not. It is a 44px target
+    /// (`navChevronBase`) reaching to the screen's edge and occupying 12px of flow (`-mx-4`
+    /// against the band's 16px padding), which with the row's 8px gap pays 20 of the 32px
     /// indent the heading gives up there (`titleWrap`). Hidden while the sidebar is visible.
     let navReopen =
-        "absolute left-2 bottom-4.5 w-6 h-6 place-items-center hidden md:[.nav-alt_&]:grid "
-        + "max-md:static max-md:grid max-md:[.nav-alt_&]:hidden"
+        "absolute left-2 bottom-4.5 w-6 h-6 place-items-center hidden wide:[.nav-alt_&]:grid "
+        + "phone:static phone:grid phone:[.nav-alt_&]:hidden phone:-mx-4"
 
     // --- Timeline --------------------------------------------------------------------------
 
@@ -1892,7 +1923,7 @@ module Style =
     let chatChip =
         cls [ "w-full bg-transparent cursor-pointer text-left"
               readingColumn
-              "flex items-baseline gap-2 pl-[32px] py-0.5"
+              "flex items-baseline gap-2 pl-[32px] py-0.5 phone:py-2.5"
               // The same right edge a tool run's line ends on (`itemGround`: `pr-8` less
               // the phone's 16px bleed), so a chip's status and a call's stand in one column.
               "pr-8 max-md:pr-4"
@@ -2135,7 +2166,7 @@ module Style =
     /// One entry. Full width so the whole row is the target, left-aligned so the entries read
     /// as a list rather than as a row of buttons.
     let itemMenuEntry =
-        cls [ "w-full text-left px-3 py-1.5 bg-transparent cursor-pointer"
+        cls [ "w-full text-left px-3 py-1.5 phone:py-3 bg-transparent cursor-pointer"
               "text-small leading-5 text-ink-dim hover:text-ink hover:bg-surface"
               "transition-colors duration-150 ease-out"
               focusRing ]
@@ -2696,8 +2727,9 @@ module Style =
     let noAgentEdge = "w-0.5 justify-self-center bg-blue"
     /// The prompt's text column: the explainer over its one action.
     let noAgentBody = "flex flex-col gap-2"
-    /// Full-width within the column so it reads as the section's one action.
-    let noAgentAction = "w-full"
+    /// Full-width within the column so it reads as the section's one action, and a thumb's
+    /// height on a phone, where the column is a drawer held in one hand.
+    let noAgentAction = "w-full phone:h-11"
 
     // --- Terminals (Plan 13) -------------------------------------------------------------------
     // The conversation column's mirror on the right: a strip of open terminals, the blocks
@@ -2723,17 +2755,17 @@ module Style =
     /// everybody, the split is draggable and remembered (`PaneShell.installPaneResize`). The
     /// transition is suppressed while dragging, or the column chases the pointer a frame late.
     let contentPanel =
-        "relative w-term md:w-[var(--term-w,var(--spacing-term))] shrink-0 bg-panel h-full overflow-hidden z-40 flex flex-col "
+        "relative w-term wide:w-[var(--term-w,var(--spacing-term))] shrink-0 bg-panel h-full overflow-hidden z-40 flex flex-col "
         + Stroke.dividerLeft + " "
-        + "md:transition-[width] md:duration-200 md:ease-out md:[.term-resizing_&]:transition-none "
-        + "md:[.term-closed_&]:w-0 md:[.term-closed_&]:border-l-0 "
-        + "max-md:fixed max-md:inset-y-0 max-md:right-0 max-md:w-full max-md:border-l-0 "
+        + "wide:transition-[width] wide:duration-200 wide:ease-out wide:[.term-resizing_&]:transition-none "
+        + "wide:[.term-closed_&]:w-0 wide:[.term-closed_&]:border-l-0 "
+        + "phone:fixed phone:inset-y-0 phone:right-0 phone:w-full phone:border-l-0 "
         + degradedBarRoom + " "
-        + "max-md:transition-transform max-md:duration-200 max-md:ease-out "
-        + "max-md:[.term-closed_&]:translate-x-[101%] " + reduceColumnMotion
+        + "phone:transition-transform phone:duration-200 phone:ease-out "
+        + "phone:[.term-closed_&]:translate-x-[101%] " + reduceColumnMotion
 
     /// Held at the column's full width so nothing reflows while the column animates shut.
-    let terminalPane = "absolute inset-0 md:w-[var(--term-w,var(--spacing-term))] w-term max-md:w-full flex flex-col"
+    let terminalPane = "absolute inset-0 wide:w-[var(--term-w,var(--spacing-term))] w-term phone:w-full flex flex-col"
 
     /// The split between the chat and this column, made draggable — a real `separator`, so it
     /// answers to the arrow keys as well as the pointer. Desktop only: on a phone the pane IS
@@ -2743,9 +2775,27 @@ module Style =
     /// overflow — which also rules out an outline for focus, so focus is the same blue the
     /// hover shows, at full strength.
     let terminalResize =
-        cls [ "max-md:hidden absolute left-0 inset-y-0 w-1.5 z-50 cursor-col-resize"
+        cls [ "phone:hidden absolute left-0 inset-y-0 w-1.5 z-50 cursor-col-resize"
               "bg-transparent hover:bg-blue/50 focus-visible:bg-blue focus-visible:outline-none"
               "transition-colors motion-reduce:transition-none" ]
+
+    /// The pane's left edge on a phone: the way back, drawn where a sheet that slid in from
+    /// the right is held. The `›` in the head is the way back for everyone; this is the same
+    /// press for a thumb already at the edge, and the mark is what says the sheet came from
+    /// somewhere — the affordance a swipe would have, without a gesture to discover.
+    ///
+    /// Out of the accessibility tree and the Tab order (`aria-hidden`, `tabindex=-1`): it is a
+    /// duplicate, and a reader of the tree should meet the way back once. Which is also why it
+    /// may be 6px wide — WCAG 2.5.8 excepts a target whose act an equivalent control on the
+    /// same screen offers at full size, and the head's is 44.
+    ///
+    /// The splitter's place on a desktop (`terminalResize`); the two never share a screen.
+    let paneGrabEdge =
+        cls [ "wide:hidden absolute left-0 inset-y-0 w-1.5 z-50 p-0 border-0 bg-transparent cursor-pointer"
+              "flex items-center"; focusRing ]
+    /// Its mark: a short rule in the faint ink, midway down the edge — a handle, not a
+    /// divider, which the pane's own border already is on a desktop.
+    let paneGrabMark = "block h-10 " + Stroke.lead + " " + Stroke.faint
 
     /// The column's head: a PROPERTIES BAR, not a title.
     ///
@@ -2762,7 +2812,12 @@ module Style =
     /// missed — a band is for a heading, and this is a readout.
     /// `relative`, because the switcher hangs from it (P2-2): a popover anchored inside the
     /// pane's own box, since the column clips what leaves it.
-    let terminalHead = "relative h-10 shrink-0 flex items-center gap-2 px-3 " + Stroke.dividerBottom
+    ///
+    /// 48px on a phone, which is what holds its controls at a thumb's 44 with the rule under
+    /// them. Every control in it is one (`[&>button]`), so a control added here later is too.
+    let terminalHead =
+        "relative h-10 phone:h-12 shrink-0 flex items-center gap-2 px-3 "
+        + "phone:[&>button]:min-w-11 phone:[&>button]:min-h-11 " + Stroke.dividerBottom
     /// Which terminal this is, and the door to every other one (P2-2): the name IS the
     /// switcher's control, so the place a reader looks to learn where they are is the place
     /// they press to go somewhere else. Ink at rest, as the name always was; blue under the
@@ -2862,20 +2917,23 @@ module Style =
     /// onto the label, which is the thing that is allowed to be too long.
     let private tabBase =
         cls [ caps; "bg-transparent cursor-pointer px-2.5 pt-1.5 pb-2 inline-flex items-center transition-colors"
+              "phone:min-h-11 phone:min-w-11"
               Stroke.underline; focusRingInset ]
     /// A tab's NAME: as much of it as fits, and an ellipsis for the rest.
     let paneTabLabel = "max-w-40 truncate"
     /// A tab's × (P2-2): the terminal's kill, worn by the selected tab (and by one whose kill
     /// a Delete armed). The row verb's own face, pulled into the tab's line so it costs the tab
-    /// no height.
-    let terminalTabKill = cls [ btnIconBareDanger; "ml-1 -my-1" ]
+    /// no height. On a phone its box is a thumb's 44 with the glyph centred, pulled in by as
+    /// much again (`-my-2.5`), so the tab it rides is still the 44 every tab is.
+    let terminalTabKill = cls [ btnIconBareDanger; "ml-1 -my-1 phone:min-w-11 phone:min-h-11 phone:-my-2.5" ]
     /// The same, armed: the kill's armed face, pulled into the line the same way, so arming
     /// it grows the tab sideways and never the strip downwards.
-    let terminalTabKillArmed = cls [ btnKillArmed; "ml-1 -my-1" ]
+    let terminalTabKillArmed = cls [ btnKillArmed; "ml-1 -my-1 phone:min-h-11 phone:-my-2.5" ]
     /// The strip's overflow count (P2-2): `+3`, for the tabs past its edges, and the door to
     /// the switcher that lists them. The strip's own quiet voice, beside the `+`.
     let stripOverflow =
         cls [ "shrink-0 self-center h-8 px-1.5 inline-flex items-center gap-0.5 bg-transparent border-0 cursor-pointer"
+              "phone:h-11 phone:min-w-11 phone:justify-center"
               "font-ui text-small tabular-nums text-ink-faint hover:text-ink transition-colors"; focusRing ]
     let terminalTab = cls [ tabBase; Stroke.clear; "text-ink-faint hover:text-ink" ]
     let terminalTabActive = cls [ tabBase; Stroke.blue; "text-ink" ]
@@ -2896,7 +2954,7 @@ module Style =
     /// because they are the pane's two doors and a reader should see them as a pair. It used
     /// to wear the tab vocabulary — a bare faint glyph on a clear ground — which made one of
     /// the two doors look like a control and the other like a mark somebody left behind.
-    let terminalTabNew = cls [ btnIcon; "w-8 h-8 shrink-0" ]
+    let terminalTabNew = cls [ btnIcon; "w-8 h-8 phone:w-11 phone:h-11 shrink-0" ]
     /// A tab's presence marks: one dot per peer whose caret is in THAT terminal, so a
     /// collaborator typing a command in a terminal you are not looking at is visible from
     /// the strip rather than only from inside it.
@@ -2926,7 +2984,7 @@ module Style =
     /// A preview's head (P2-1): the way back to the terminal it is laid over, and its close.
     /// A row of its own over the preview rather than a tab in the strip, which is the whole
     /// difference between this preview and the one that was removed for looking like a tab.
-    let panePreviewHead = "shrink-0 flex items-center gap-2 pl-3 pr-2 pt-2"
+    let panePreviewHead = "shrink-0 flex items-center gap-2 pl-3 pr-2 pt-2 phone:[&>button]:min-h-11 phone:[&>button]:min-w-11"
     /// "‹ back to term 2" — the pivot this design navigates by (`navPivot`), the settings
     /// column's own way back, so going back reads the same wherever it is offered.
     let panePreviewBack = cls [ navPivot; "min-w-0" ]
@@ -2941,7 +2999,10 @@ module Style =
     /// A read-only tab's verbs, under whatever it is showing: the way to the recording, and
     /// the way back. A row rather than a column, because they are alternatives to each other
     /// rather than a list of facts.
-    let paneActions = "shrink-0 flex items-center gap-2 px-3 py-3 " + Stroke.dividerTop
+    ///
+    /// On a phone every verb in it is a thumb's height (`[&>*]`), whatever face it wears — a
+    /// button, or a download link.
+    let paneActions = "shrink-0 flex items-center gap-2 px-3 py-3 phone:[&>*]:min-h-11 " + Stroke.dividerTop
 
     // --- Content: a file the pane shows rather than a terminal ---------------------------
 
@@ -2986,7 +3047,7 @@ module Style =
     /// holds the widest with room, and each mark is centred in it rather than left in it, so
     /// a dot and an icon read as one column rather than as a column with a wobble.
     let terminalListRow =
-        "grid grid-cols-[1rem_1fr_auto] items-center gap-2 px-3 py-2 "
+        "grid grid-cols-[1rem_1fr_auto] items-center gap-2 px-3 py-2 phone:py-0 "
         + "[&>*:first-child]:justify-self-center "
         + Stroke.dividerBottom
 
@@ -2994,14 +3055,14 @@ module Style =
     /// list of names, blue under the pointer because that is what interactive means here —
     /// the same reasoning `recordLink` carries, at the list's size.
     let terminalListName =
-        cls [ "bg-transparent cursor-pointer text-left w-full truncate p-0 font-ui text-body text-ink"
+        cls [ "bg-transparent cursor-pointer text-left w-full truncate p-0 phone:min-h-11 font-ui text-body text-ink"
               "no-underline hover:text-blue transition-colors"; focusRing ]
 
     /// A closed row's name. The recording is still worth opening, and the row says which
     /// half of the list it is in by its tone rather than by repeating the word "closed" —
     /// the play mark beside it is what it IS.
     let terminalListNameClosed =
-        cls [ "bg-transparent cursor-pointer text-left w-full truncate p-0 font-ui text-body text-ink-dim"
+        cls [ "bg-transparent cursor-pointer text-left w-full truncate p-0 phone:min-h-11 font-ui text-body text-ink-dim"
               "no-underline hover:text-blue transition-colors"; focusRing ]
 
     /// A closed row's "not kept", beside its name: one line, never squeezed, so a row that
@@ -3014,14 +3075,18 @@ module Style =
     let terminalListSubtitle = "block min-w-0 truncate font-terminal text-code-sm text-ink-faint"
 
     /// The row's verbs, kept on one baseline at its right edge.
-    let terminalListVerbs = "flex items-center gap-1 shrink-0"
+    ///
+    /// On a phone each is a 44px box with its glyph centred (`[&>*]`): the 24px glyph is
+    /// WCAG 2.5.8's floor for the MARK, never for the target, and a kill 4px from a rewind is
+    /// a kill pressed by a thumb aiming at the rewind.
+    let terminalListVerbs = "flex items-center gap-1 shrink-0 phone:[&>*]:min-w-11 phone:[&>*]:min-h-11"
 
     /// The switcher's word when there is nothing in it, above its foot.
     let contentListEmptyWord = "px-3 py-3 font-ui font-light text-body text-ink-faint select-none"
 
     /// The empty pane: the terminal's own symbol, display-sized, over the one press that
-    /// fills it.
-    let terminalEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
+    /// fills it — a thumb's height on a phone, like every press in this column.
+    let terminalEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center phone:[&_button]:min-h-11"
 
     /// What a section of the list is called. Quiet and small: the rows are the content, and a
     /// heading that competed with them would make a list of three terminals read as two lists.
@@ -3156,15 +3221,15 @@ module Style =
     ///
     /// `composerBand`, above, kept as one token rather than a matching string, so the tone
     /// and the rule can never quietly drift from the message composer's. The bottom
-    /// clearance is its own, though (`max-md:pb-4`, plain thumb room): Run stays on the
+    /// clearance is its own, though (`phone:pb-4`, plain thumb room): Run stays on the
     /// command line rather than dropping below it the way Send does, so this band never
     /// needs its room — which is also the clearance the message composer falls back to when
     /// its own row is not showing (`composer`, above).
-    let terminalComposer = composerBand + " max-md:pb-4"
+    let terminalComposer = composerBand + " phone:pb-4"
 
     /// A row in the band that is not the command line — the lease bar, the "not marking"
     /// notice. They used to inherit the section's padding; the band has none.
-    let terminalBandRow = "flex items-center gap-2 px-3 py-2"
+    let terminalBandRow = "flex items-center gap-2 px-3 py-2 phone:[&>button]:min-h-11"
 
     /// The command line: the row IS the field.
     ///
@@ -3182,9 +3247,11 @@ module Style =
     /// `py-3` is not a guess: 12 + 16 + 12 is exactly the 40px the message composer's band
     /// stands at (`py-2` around a 24px line), and the two sit side by side on a desktop where
     /// four pixels of disagreement between them reads as one of the columns being wrong.
+    /// A phone has no column beside it to agree with, and a thumb to hold: 44px there, with
+    /// room at the trailing edge for the 44px Run (`btnInField`).
     let terminalCommand =
         cls [ "w-full"; fieldBare
-              "font-terminal text-code text-ink px-3 py-3 pr-10 placeholder:text-green"; touchType ]
+              "font-terminal text-code text-ink px-3 py-3 pr-10 phone:py-3.5 phone:pr-13 placeholder:text-green"; touchType ]
     /// What sits at the field's trailing edge, inside its border: whoever else has a caret in
     /// this slot, and the verb.
     let terminalCommandTrail = "absolute right-1 inset-y-0 flex items-center gap-1"
@@ -3201,7 +3268,7 @@ module Style =
     /// state.
     let private terminalQueued = cls [ "flex-col gap-1 px-3 py-2"; rowBase ]
     let terminalQueuedReady = cls [ terminalQueued; Stroke.green ]
-    let terminalQueuedRow = "flex items-center gap-2"
+    let terminalQueuedRow = "flex items-center gap-2 phone:[&_button]:min-w-11 phone:[&_button]:min-h-11"
     /// Someone else's composer slot in this terminal: shown, not editable-by-mistake — it is
     /// the same live text, so it is the terminal's version of watching a draft being written.
     /// Its leading edge is the author's own colour, set inline.

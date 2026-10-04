@@ -1397,12 +1397,20 @@ do
     /// The listing's next page, answered below once dispatch exists — the same forward
     /// reference `takeRef` is, for the same reason.
     let mutable moreRef : string -> unit = ignore
-    let actions =
-        { ViewActions.ssr with TypeIntoTerminal = recordTyped }
     // The forward reference is the same shape `Browser.fs` uses: the render needs dispatch
     // (a rewound cast that plays off its end jumps back to live) and dispatch's render needs
     // the render.
     let mutable dispatchRef : ClientMsg -> unit = ignore
+    // The nav column's moves are the app's own (`PaneShell`): on a phone the drawer and the
+    // pane are two sheets over one chat, and what keeps them from stacking is the drawer
+    // closing the pane through the model — which only a real dispatch can show.
+    let hidePane () = dispatchRef HideContentMsg
+    let actions =
+        { ViewActions.ssr with
+            TypeIntoTerminal = recordTyped
+            ToggleNav = PaneShell.toggleNav hidePane
+            ToggleSettings = PaneShell.toggleSettings hidePane
+            RevealSettings = PaneShell.revealSettings hidePane }
     let shellDoc = Y.Doc.Create ()
     let shellTexts = TextRegistry shellDoc
     // Bound once rather than built inline at the render, because the draft-slot rule below

@@ -245,6 +245,122 @@ let revealBlock (terminalId: string) (blockId: string) : unit =
             reflow block
             block.classList.add [| "animate-reveal-line" |]))
 
+// --- The nav column -------------------------------------------------------------------
+// Here rather than in `Browser.fs` for the reason this module exists: the host-free harness
+// drives the same moves, and the nav drawer and this pane are the two sheets a phone has.
+
+/// The first control matching, focused. Nothing to do when there is none: every selector here
+/// names the control the view mounts OPPOSITE the one that just went, so a miss is a face that
+/// has not arrived rather than a state to repair.
+let private focusFirst (selector: string) : unit = focusOn (find selector)
+
+/// The shell's layout bits, which live on the ROOT element — outside `#app`, which is what
+/// makes them survive every re-render.
+let private rootClasses () = document.documentElement.classList
+
+/// Whether the stylesheet's own desktop breakpoint matches right now — ASKED, never decided
+/// again here. `mediaMatches` carries the reason: a script comparing `innerWidth` to a number
+/// of its own is a second definition of the breakpoint, and it disagrees with the first
+/// whenever a scrollbar, a zoom or a rounded viewport gets between them.
+let onDesktop () : bool = mediaMatches Yession.App.Style.wideMedia
+
+/// Move focus onto the settings face's counterpart control, TWO frames on.
+///
+/// Two, because the face that is arriving is `visibility: hidden` until the transition it just
+/// started reaches its first style flush, and `focus()` on a hidden element is a no-op — which
+/// was measured: one frame left focus on `<body>`.
+let private focusSettingsFace (selector: string) : unit =
+    nextFrame (fun () -> nextFrame (fun () -> focusFirst selector))
+
+// The sidebar/drawer state is one bit on the root element, outside `#app`, so it survives
+// every re-render: default = sidebar visible on desktop, off-canvas on mobile; `nav-alt`
+// = the inverse (see Style.sidebar).
+//
+// Collapsing is a PREFERENCE on desktop, so it is remembered; on mobile the same bit means
+// "the drawer is open", which is not a preference and is never stored. The stored value is
+// re-applied before first paint by the shell document's one inline script (`Ssr.page`) — here,
+// only written.
+//
+// Bringing the column ON SCREEN, which every way in shares: `nav-alt` means the opposite thing
+// on each side of the breakpoint — uncollapsed on desktop, drawer-open on a phone.
+//
+// And on a phone the drawer is one of TWO sheets over the chat. The content pane is the other,
+// at the same layer and later in the document, so a drawer opened while the pane was up opened
+// UNDERNEATH it: open, holding focus, and nowhere to be seen. Raising the drawer over the pane
+// would have worked too, and left two sheets stacked over the chat with two ways back that go
+// to different places; closing the pane first means there is only ever one, and the drawer's
+// own way back lands on the chat — which is where the pane's goes as well. The pane is the
+// model's (`HideContentMsg`), the breakpoint is the shell's, so the shell is where the two meet.
+//
+// One verb for every way the column arrives — the nav toggle, settings, a call to action that
+// reveals settings — so the next way in cannot open the drawer and forget the pane.
+let private bringColumnOn (hidePane: unit -> unit) : unit =
+    let classes = rootClasses ()
+    if onDesktop () then classes.remove "nav-alt"
+    else
+        hidePane ()
+        classes.add "nav-alt"
+
+// Focus is moved deliberately: the control that was pressed is the one about to disappear, so
+// it hands focus to whichever control replaces it (the header's reopen chevron, or the nav
+// head's collapse button). Skipping that strands focus on a hidden element.
+let toggleNav (hidePane: unit -> unit) () : unit =
+    let classes = rootClasses ()
+    let desktop = onDesktop ()
+    // Whether the column is SHOWN once this press lands. The bit is read against the
+    // breakpoint, because `nav-alt` means the opposite thing on each side of it.
+    let shown = not (desktop <> classes.contains "nav-alt")
+    if shown then bringColumnOn hidePane
+    elif desktop then classes.add "nav-alt"
+    else classes.remove "nav-alt"
+    // The nav control always returns the column to its workspace face — a column that
+    // reopened on settings would be a surprise, and `settings-open` is what chooses the face.
+    classes.remove "settings-open"
+    if desktop then
+        // Storage is denied in a private window, and a collapse that cannot be remembered is
+        // still a collapse that works.
+        try
+            Browser.WebStorage.localStorage.setItem ("yession.nav", (if shown then "open" else "collapsed"))
+        with _ ->
+            ()
+    nextFrame (fun () ->
+        focusFirst (if shown then "button[data-nav-toggle=\"hide\"]" else "[data-nav-toggle=\"show\"]"))
+
+// Settings is the sidebar column's other FACE (Style.settingsPane), not a drawer over the
+// conversation — so opening it has to bring that column on screen (`bringColumnOn`). Focus
+// follows the same rule as the nav toggle.
+let toggleSettings (hidePane: unit -> unit) () : unit =
+    let classes = rootClasses ()
+    let opening = not (classes.contains "settings-open")
+    if opening then classes.add "settings-open" else classes.remove "settings-open"
+    if opening then bringColumnOn hidePane
+    elif not (onDesktop ()) then
+        // Closing the face on a phone closes the drawer with it. On a desktop the column
+        // stays exactly where it was: what changed is which face it shows, not whether it
+        // is there.
+        classes.remove "nav-alt"
+    focusSettingsFace (if opening then "[data-settings-toggle=\"close\"]" else "[data-settings-toggle=\"open\"]")
+
+// The same move, in one direction only.
+//
+// A call to action that leads to settings must never TAKE somebody there and back: the
+// prompt over the timeline is on screen whenever a credential needs signing in, including
+// while the settings face is already open, and a toggle there would shut the very panel it
+// is pointing at. The nav pivots stay toggles because a pivot is a two-way control and this
+// is not one.
+//
+// Idempotent by construction rather than by the caller checking first — `settings-open` is
+// SET, not flipped, so pressing it twice is pressing it once.
+let revealSettings (hidePane: unit -> unit) () : unit =
+    let classes = rootClasses ()
+    let wasOpen = classes.contains "settings-open"
+    classes.add "settings-open"
+    bringColumnOn hidePane
+    // Focus moves only when the face actually ARRIVED. Stealing it from whatever the reader
+    // was doing, to a control that was already on screen, would be the prompt reaching into a
+    // panel they are already reading.
+    if not wasOpen then focusSettingsFace "[data-settings-toggle=\"close\"]"
+
 /// On a phone the sidebar is a DRAWER over the conversation, so a jump made from inside it
 /// lands behind it: the message is scrolled, flashed and focused under a sheet the reader is
 /// still looking at. On a desktop the column is beside the conversation and nothing has to
@@ -252,7 +368,7 @@ let revealBlock (terminalId: string) (blockId: string) : unit =
 ///
 /// `nav-alt` is the same bit `toggleNav` writes, and on a phone it means the drawer is open.
 let private closeNavDrawer () : unit =
-    if not (mediaMatches "(min-width: 768px)") then
+    if not (onDesktop ()) then
         document.documentElement.classList.remove [| "nav-alt" |]
 
 /// Scroll the conversation to one message and flash it — deliberately the same two moves
