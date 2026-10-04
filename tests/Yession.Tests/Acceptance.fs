@@ -207,6 +207,7 @@ let private representativeModel : ClientModel =
       TerminalsOpen = true
       PaneMemory = None
       PaneRemembered = false
+      PaneOpensItself = false
       ItemMenu = None
       PaneMenu = false
       Refused = None

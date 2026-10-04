@@ -2172,6 +2172,14 @@ module Style =
               "min-w-[14rem]"
               Stroke.ring
               Stroke.hair ]
+    /// The same menu hung from the empty pane's button (P1-4), which is centred in the
+    /// column rather than at its right edge: so it hangs centred under it, and reads its
+    /// entries from the left whatever the empty state's own alignment.
+    let paneNewMenuUnder =
+        cls [ "absolute left-1/2 -translate-x-1/2 top-full mt-1 z-30 py-1 select-none bg-panel text-left"
+              "min-w-[14rem]"
+              Stroke.ring
+              Stroke.hair ]
 
     /// An entry carrying a note under its name. The menu's own entry sets the box, the
     /// padding and the states; this only makes it two lines.
@@ -2869,6 +2877,8 @@ module Style =
     /// The cell the `+` sits in: anchored at the strip's right edge, and the positioning
     /// context its menu hangs from.
     let terminalTabNewCell = "relative shrink-0 flex items-center"
+    /// The empty pane's button's cell: the positioning context its menu hangs from.
+    let terminalEmptyNewCell = "relative"
     /// The door to something new. The LIST toggle's weight exactly (`btnIcon`, 32px square),
     /// because they are the pane's two doors and a reader should see them as a pair. It used
     /// to wear the tab vocabulary — a bare faint glyph on a clear ground — which made one of
@@ -3182,6 +3192,12 @@ module Style =
     /// variant: whether the control exists is a fact about the model, and a button that is
     /// merely invisible is still in the tab order.
     let terminalReopen = navChevronBack + " shrink-0"
+    /// Its mark, AFTER the count ("2 terminals ●"), because the count is what the tab is
+    /// named by and the mark only qualifies it. Idle: a dot in the control's own faint ink,
+    /// saying terminals are there and nothing is happening in them. Running: the live
+    /// status's own blue pulse, the same mark a running block wears everywhere else.
+    let terminalReopenIdle = "inline-block w-1.5 h-1.5 rounded-full bg-current"
+    let terminalReopenRunning = "inline-block w-1.5 h-1.5 rounded-full bg-blue animate-pulse2 motion-reduce:animate-none"
 
     // --- ANSI styling ---------------------------------------------------------------------------
     // Turning a parsed `AnsiStyle` into what a span wears. Split in two on purpose:

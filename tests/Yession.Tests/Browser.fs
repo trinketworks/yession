@@ -410,8 +410,9 @@ let private someOwnText (selector: string) (text: string) =
 /// function form `() => (async () => false)()` settles at once, while `() => false` correctly times
 /// out. `EvaluateAsync` awaits a returned Promise (confirmed: `(async () => false)()` -> false), so
 /// polling it is correct for both predicate shapes.
-/// Open a terminal the way a person does (Plan 20, stage 1): press the strip's `+`, and take
-/// the choice if one is offered.
+/// Open a terminal the way a person does (Plan 20, stage 1): press the strip's `+` — or, in an
+/// empty pane, its own button, which is the one door there (P1-4) — and take the choice if one
+/// is offered.
 ///
 /// Whether one IS offered depends on the session — with one place to put a terminal the door
 /// makes one, and with a repo's sandbox up it opens a menu. So this reads the answer off the
@@ -420,10 +421,12 @@ let private someOwnText (selector: string) (text: string) =
 /// rendered before any press so there is no race to lose.
 let private openNewTerminal (page: IPage) : Async<unit> =
     async {
+        let door = "[data-pane-new], [data-terminal-new]"
+        let! _ = await (page.WaitForSelectorAsync door)
         let! asks =
             await (page.EvaluateAsync<bool>
-                "() => document.querySelector('[data-pane-new]')?.getAttribute('aria-haspopup') === 'menu'")
-        do! awaitU (page.Locator("[data-pane-new]").First.ClickAsync ())
+                ("door => document.querySelector(door)?.getAttribute('aria-haspopup') === 'menu'", door))
+        do! awaitU (page.Locator(door).First.ClickAsync ())
         if asks then
             let! _ = await (page.WaitForSelectorAsync "[data-sandbox-new='default']")
             do! awaitU (page.Locator("[data-sandbox-new='default']").First.ClickAsync ())
@@ -2850,6 +2853,71 @@ let editorTests =
         // Tab stop — a full cycle stopped eleven times on things nobody could see. Walked from
         // the last control before the pane, so the very next Tab is the one that would enter
         // it, and walked with the real keyboard, because "reachable by Tab" is the question.
+        // The shut pane's edge tab (P1-4) is the one thing on the first screen that says
+        // terminals exist, so it has to BE on that screen: inside the header band rather than
+        // pushed out of it by the words it now carries, inside the viewport, and big enough to
+        // press. On a desktop it also stands on the title's baseline, which is the band's whole
+        // reason for being one band — measured as an equality of baselines, never as pixels.
+        // A phone's band centres its group on the title's line instead (`Style.headerAside`),
+        // so there the baseline is not the promise and is not asserted.
+        let edgeTabOnTheBand (desktop: bool) (page: IPage) =
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='show']")
+                let measure =
+                            """(desktop) => {
+                                 const wrong = []
+                                 const tab = document.querySelector('#shell [data-content-toggle="show"]')
+                                 // The harness mounts the shell below its editors, so it is
+                                 // brought on screen first: a point off screen hits nothing.
+                                 tab.scrollIntoView({ block: 'center' })
+                                 const at = tab.getBoundingClientRect()
+                                 const band = document.querySelector('#shell header').getBoundingClientRect()
+                                 if (at.top < band.top || at.bottom > band.bottom || at.left < band.left || at.right > band.right)
+                                   wrong.push('outside the header band: ' + JSON.stringify(at) + ' in ' + JSON.stringify(band))
+                                 if (at.left < 0 || at.right > window.innerWidth)
+                                   wrong.push('outside the viewport: ' + at.left + '..' + at.right + ' of ' + window.innerWidth)
+                                 if (at.width < 24 || at.height < 24)
+                                   wrong.push('too small to press: ' + at.width + 'x' + at.height)
+                                 // What is painted at its centre is the tab, not something over it.
+                                 const hit = document.elementFromPoint(at.left + at.width / 2, at.top + at.height / 2)
+                                 if (!hit || !tab.contains(hit)) wrong.push('covered at its centre by ' + (hit && hit.outerHTML.slice(0, 80)))
+                                 if (desktop) {
+                                   const probe = () => {
+                                     const p = document.createElement('span')
+                                     p.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline'
+                                     return p
+                                   }
+                                   const words = tab.querySelector('[data-terminals-count]')
+                                   const mine = probe()
+                                   words.appendChild(mine)
+                                   const tabBaseline = mine.getBoundingClientRect().bottom
+                                   mine.remove()
+                                   // An input's baseline is its text's, and it lends it to a line
+                                   // box only in flow — so its OFFSET inside the input is read
+                                   // with the wrapper laid out as a block for a moment, and
+                                   // added to where the input really is.
+                                   const title = document.querySelector('#shell [data-session-title]')
+                                   const top = title.getBoundingClientRect().top
+                                   const wrap = title.parentElement
+                                   const was = wrap.style.display
+                                   wrap.style.display = 'block'
+                                   const theirs = probe()
+                                   title.after(theirs)
+                                   const offset = theirs.getBoundingClientRect().bottom - title.getBoundingClientRect().top
+                                   theirs.remove()
+                                   wrap.style.display = was
+                                   const drift = tabBaseline - (top + offset)
+                                   if (Math.abs(drift) > 2) wrong.push('off the title baseline by ' + drift + 'px')
+                                 }
+                                 return wrong.join('; ')
+                               }"""
+                let! wrong = await (page.EvaluateAsync<string> (measure, desktop))
+                Expect.equal wrong "" "the edge tab sits on the header band"
+            }
+
+        editorCaseIn 1440 900 "the edge tab is on the header's baseline and inside the viewport, on a desktop" <| edgeTabOnTheBand true
+        editorCaseIn 390 844 "the edge tab is inside the header and the viewport, on a phone" <| edgeTabOnTheBand false
+
         editorCase "a hidden pane takes no Tab stops" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='show']")
@@ -4712,6 +4780,33 @@ let editorTests =
                 let! _ =
                     await (page.WaitForFunctionAsync
                         """document.activeElement?.hasAttribute('data-pane-new') === true""")
+                return ()
+            }
+
+        // The same door from the EMPTY pane (P1-4), where the strip offers no `+` and the
+        // empty pane's own button is the one way to make something — so the menu hangs from
+        // that button, and Escape hands the cursor back to it rather than to a `+` that is not
+        // on the page. The harness's strip is emptied the way a person empties one.
+        editorCase "the empty pane's door opens the menu under itself, and gives focus back when it shuts" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab-close]")
+                do! awaitU (page.ClickAsync "#shell [data-pane-tab-close]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab-close]")
+                do! awaitU (page.ClickAsync "#shell [data-pane-tab-close]")
+                // The last close shuts the column; showing it again shows it empty.
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-new]")
+
+                do! awaitU (page.Locator("#shell [data-terminal-new]").First.PressAsync "Enter")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-new-menu]")
+                do! awaitU (page.Locator("#shell [data-sandbox-new]").First.FocusAsync ())
+
+                do! awaitU (page.Keyboard.PressAsync "Escape")
+                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-pane-new-menu]")""")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """document.activeElement?.hasAttribute('data-terminal-new') === true""")
                 return ()
             }
 

@@ -735,6 +735,137 @@ let private reloadTests =
                 "what is written is what is read"
     ]
 
+// --- The hidden pane is an edge tab; the pane opens itself (P1-4) ---------------------------
+
+/// The shut pane's edge tab, and nothing else of the page: its opening tag through its closing
+/// one. A whole page carries the strip, the list and the chat, each of which can say
+/// "terminal" or carry a running dot of its own, so an unscoped assertion would be answered
+/// by whichever surface happened to be right.
+let private edgeTab (model: ClientModel) : string =
+    let html = Support.render model
+    let hook = Dom.attr Dom.Hooks.contentToggle "show"
+    match html.IndexOf hook with
+    | -1 -> failwith "the shut pane offers no way back in"
+    | at ->
+        let opens = html.LastIndexOf ("<button", at)
+        html.Substring (opens, html.IndexOf ("</button>", at) - opens)
+
+/// A browser's first look at this session, with nothing remembered for it: booted, its local
+/// store read, connected to a session whose log ends at the last of `pages`, and each page
+/// folded in turn — `reloaded`'s order, with no memory. `wide` is the browser's answer to
+/// whether the pane would sit beside the chat (`Browser.fs` seeds it from the breakpoint).
+let private firstLook (wide: bool) (pages: EventEnvelope<SessionEvent> list list) : ClientModel =
+    let latest = pages |> List.concat |> List.tryLast |> Option.map (fun e -> e.Offset)
+    let booted =
+        { ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } with PaneOpensItself = wide }
+        |> ClientModel.remembered None
+        |> Support.step HistoryReadMsg
+        |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest })
+    pages |> List.fold (fun model page -> withPage page model) booted
+
+/// Two terminals open and one ended, so a count of what is OPEN and a count of what ever was
+/// give different answers.
+let private twoOpenOneEnded =
+    [ at 1L 0.0 (opened terminalA "build")
+      at 2L 1.0 (opened terminalB "shell")
+      at 3L 2.0 (opened terminalC "old")
+      at 4L 3.0 (SessionEvent.TerminalClosed { TerminalId = terminalC; Reason = "exited"; By = None }) ]
+
+let private edgeTabTests =
+    testList "The hidden pane is an edge tab (P1-4)" [
+        testCase "the hidden pane's edge tab counts the open terminals" <| fun () ->
+            let tab = edgeTab (clientOf twoOpenOneEnded)
+            Expect.stringContains tab (Dom.attr Dom.Hooks.terminalsOpen "2") "two open, the ended one not counted"
+            Expect.stringContains tab (Dom.Text.terminalsCount 2) "and says so in words"
+
+        testCase "the edge tab marks a terminal running a command" <| fun () ->
+            let running = clientOf (twoOpenOneEnded @ [ at 5L 4.0 (started terminalA "1" byAda "make" 1) ])
+            Expect.stringContains (edgeTab running) Dom.Hooks.terminalsRunning "the running mark is on the tab"
+
+        testCase "the edge tab says which terminal is running, by the name the pane gives it" <| fun () ->
+            let running = clientOf (twoOpenOneEnded @ [ at 5L 4.0 (started terminalA "1" byAda "make" 1) ])
+            let name =
+                Projection.tryFind terminalA running.Terminals
+                |> Option.map (TerminalName.display running.Terminals)
+                |> Option.defaultWith (fun () -> failwith "terminal A is in the projection")
+            Expect.stringContains (edgeTab running) (Dom.Text.showTerminalsNamed 2 [ name ]) "its accessible name names it"
+
+        testCase "the edge tab carries no running mark when nothing runs" <| fun () ->
+            let finished =
+                clientOf
+                    (twoOpenOneEnded
+                     @ [ at 5L 4.0 (started terminalA "1" byAda "make" 1)
+                         at 6L 5.0 (completed terminalA "1" (CommandSucceeded 0) 9) ])
+            Expect.isFalse ((edgeTab finished).Contains Dom.Hooks.terminalsRunning) "a finished command is not running"
+
+        testCase "a desktop client with an open terminal and no memory opens the pane once the log is read" <| fun () ->
+            let model = firstLook true [ [ at 1L 0.0 (opened terminalA "build") ] ]
+            Expect.isTrue model.TerminalsOpen "the pane is open on the first look"
+
+        testCase "a phone client does not open the pane by itself" <| fun () ->
+            // There the pane is the whole screen, and opening it would hide the chat.
+            let model = firstLook false [ [ at 1L 0.0 (opened terminalA "build") ] ]
+            Expect.isFalse model.TerminalsOpen "the chat stays on screen"
+
+        testCase "a session with no open terminal leaves the pane shut" <| fun () ->
+            let model = firstLook true [ [ at 1L 0.0 (sent "1" "hello") ] ]
+            Expect.isFalse model.TerminalsOpen "nothing to see, nothing opened"
+
+        testCase "the pane does not open itself before the log has been read through" <| fun () ->
+            // One page of two: a session that ends later in the log has not been heard yet.
+            let latest = Some (EventOffset.create 9L |> expect)
+            let partial =
+                { ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } with PaneOpensItself = true }
+                |> Support.step HistoryReadMsg
+                |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest })
+                |> withPage [ at 1L 0.0 (opened terminalA "build") ]
+            Expect.isFalse partial.TerminalsOpen "still catching up"
+
+        testCase "a pane remembered shut stays shut" <| fun () ->
+            let latest = Some (EventOffset.create 1L |> expect)
+            let model =
+                { ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } with PaneOpensItself = true }
+                |> ClientModel.remembered (Some PaneMemory.untouched)
+                |> Support.step HistoryReadMsg
+                |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest })
+                |> withPage [ at 1L 0.0 (opened terminalA "build") ]
+            Expect.isFalse model.TerminalsOpen "this browser's own answer wins"
+
+        testCase "a pane shut before the log arrived is not opened over that" <| fun () ->
+            let latest = Some (EventOffset.create 1L |> expect)
+            let model =
+                { ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } with PaneOpensItself = true }
+                |> Support.step ToggleContentMsg
+                |> Support.step ToggleContentMsg
+                |> Support.step HistoryReadMsg
+                |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest })
+                |> withPage [ at 1L 0.0 (opened terminalA "build") ]
+            Expect.isFalse model.TerminalsOpen "somebody already answered"
+
+        testCase "a pane shut after it opened itself stays shut when more arrives" <| fun () ->
+            let model =
+                firstLook true [ [ at 1L 0.0 (opened terminalA "build") ] ]
+                |> Support.step ToggleContentMsg
+                |> withPage [ at 2L 1.0 (opened terminalB "shell") ]
+            Expect.isFalse model.TerminalsOpen "it opens itself once, and is not argued with"
+
+        testCase "a pane that opens itself shows the reader's own terminal" <| fun () ->
+            let model = firstLook true [ [ at 1L 0.0 (opened terminalA "build") ] ]
+            Expect.equal (ClientModel.selectedPane model) (Some (TerminalTab terminalA)) "the terminal this reader opened"
+
+        testCase "a pane that opens itself with nothing of this reader's in the strip shows the list" <| fun () ->
+            // The strip holds only what this reader opened, so a terminal somebody else opened
+            // gives it nothing to show; an empty pane over a running build is the wrong answer.
+            let model = firstLook true [ [ at 1L 0.0 (openedBy (PeerRef bob) terminalA "build") ] ]
+            Expect.isTrue (ClientModel.showsList model) "the list of what is here"
+
+        testCase "an empty pane offers one way to make a terminal" <| fun () ->
+            let html = Support.render (clientOf [] |> Support.step ToggleContentMsg)
+            let doors =
+                System.Text.RegularExpressions.Regex.Matches(html, "(data-pane-new|data-terminal-new)[\\s=>]").Count
+            Expect.equal doors 1 "one New terminal, not two"
+    ]
+
 // --- Keyframes and the ranged cast (stage 3) --------------------------------------------------
 
 /// The output records of a `.cast`, in order — what a player would feed the emulator.
@@ -3314,6 +3445,7 @@ let tests =
         paneTests
         namingTests
         reloadTests
+        edgeTabTests
         pageTests
         keyframeTests
         videoTests

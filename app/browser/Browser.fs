@@ -1104,7 +1104,12 @@ let private start () =
                 EphemeralStorage = (metaContent Dom.ephemeralStorageMetaName).IsSome
                 // The one place that can answer this: the model defaults to true because the
                 // SERVER renders this shell too and has no idea what the browser can do.
-                CanKeepHistory = canKeepHistory () }
+                CanKeepHistory = canKeepHistory ()
+                // Asked of the stylesheet's own breakpoint, once: whether the pane would sit
+                // BESIDE the chat here, which is what makes opening it unasked a courtesy
+                // rather than the conversation taken off the screen (P1-4). The model decides
+                // when, and whether anything else has answered first (`openOfItself`).
+                PaneOpensItself = onDesktop () }
             // What this browser had open in this session's pane (P0-4), read before the first
             // render so the column comes back open in the same paint that takes over the
             // served shell. The served shell painted it shut — the server cannot see this
