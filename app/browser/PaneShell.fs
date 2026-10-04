@@ -73,7 +73,7 @@ let private stranded (leaving: string list) : bool =
         || leaving |> List.exists (fun selector -> (active.closest selector).IsSome)
 
 /// Move focus into the side pane after a chip opened a tab there — onto its panel, or, in a
-/// pane with nothing to show, onto its head's name, which is the door to everything it has.
+/// pane with nothing to show, onto its `all` item, which is the door to everything it has.
 let toPane () : unit =
     nextFrame (fun () ->
         find "[data-pane-panel]"
@@ -102,18 +102,20 @@ let toPaneEmpty () : unit =
     nextFrame (fun () ->
         find "[data-terminal-new]" |> Option.orElseWith (fun () -> find "[data-pane-new]") |> focusOn)
 
-/// Onto one terminal's row in the switcher, or the switcher's door when it has shut since.
+/// Onto one terminal's row on the `all` page, or the page's pivot item when it has gone since.
 let toSwitcherRow (terminal: Yession.Domain.TerminalId) : unit =
     nextFrame (fun () ->
         find (sprintf "[data-content-list] [data-terminal-list-row=\"%s\"]" (Yession.Domain.TerminalId.value terminal))
         |> Option.orElseWith (fun () -> find "[data-pane-switcher]")
         |> focusOn)
 
-/// Into the switcher as it opens: onto the row of the terminal the pane is about (it says so
-/// with `aria-current`), else the first name in it, else its foot. A frame late, so a reader
-/// who has already moved into the switcher by then is where they meant to be, and is left
-/// there: landing them back on the current row would put their next Enter on a row they did
-/// not choose.
+/// Into the `all` page as it opens: onto the row of the terminal the pane is about (it says
+/// so with `aria-current`), else the first name in it, else the page itself — an empty one
+/// still holds the focus it was given — else its pivot item.
+///
+/// A frame late by construction, so a reader quick enough to have moved inside the page
+/// already — a click on a row's verb, the arrow walk — is where they meant to be, and is left
+/// there: this places focus that has nowhere to be yet, never focus somebody put down.
 let toSwitcher () : unit =
     nextFrame (fun () ->
         let inside =
@@ -123,11 +125,18 @@ let toSwitcher () : unit =
         if not inside then
             find "[data-content-list] [data-terminal-list-row][aria-current=\"true\"]"
             |> Option.orElseWith (fun () -> find "[data-content-list] [data-terminal-list-row], [data-content-list] [data-artifact-list-row]")
-            |> Option.orElseWith (fun () -> find "[data-content-list] [data-switcher-new]")
+            |> Option.orElseWith (fun () -> find "[data-pane-panel]")
+            |> Option.orElseWith (fun () -> find "[data-pane-switcher]")
             |> focusOn)
 
-/// Onto the switcher's door, the pane head's name. One per page.
-let toPaneSwitcher () : unit = nextFrame (fun () -> focusOn (find "[data-pane-switcher]"))
+/// Onto the pivot's selected item, once the `all` page has gone: the terminal or preview it
+/// was laid over. With nothing under it the pane is empty, and its press is what is there.
+let toPivot () : unit =
+    nextFrame (fun () ->
+        find "[data-pane-pivot] [role=\"tab\"][aria-selected=\"true\"]"
+        |> Option.orElseWith (fun () -> find "[data-terminal-new]")
+        |> Option.orElseWith (fun () -> find "[data-pane-switcher]")
+        |> focusOn)
 
 /// Onto one terminal's tab, or the panel when it has left the strip since.
 let toTab (terminal: Yession.Domain.TerminalId) : unit =
@@ -462,7 +471,7 @@ let rec move (asked: Yession.App.DomMove) : unit =
     | Yession.App.DomMove.FocusPaneEmpty -> toPaneEmpty ()
     | Yession.App.DomMove.FocusSwitcherRow terminal -> toSwitcherRow terminal
     | Yession.App.DomMove.FocusSwitcher -> toSwitcher ()
-    | Yession.App.DomMove.FocusPaneSwitcher -> toPaneSwitcher ()
+    | Yession.App.DomMove.FocusPivot -> toPivot ()
     | Yession.App.DomMove.FocusTab terminal -> toTab terminal
     // Asked a frame on, after the render the arrival caused — which is the render that took
     // the pressed control away, so a hand still on it reads as stranded by then.
@@ -524,26 +533,21 @@ module private Strip =
         |> Option.iter (fun left -> scroller.scrollLeft <- left)
         mark scroller
 
+    /// The least scroll that shows this tab's START clear of the edges — where its name
+    /// begins, and where a press on it landed — and none when it already is.
+    let revealStart (scroller: HTMLElement) (tab: HTMLElement) : unit =
+        let box = scroller.getBoundingClientRect ()
+        let span = tab.getBoundingClientRect ()
+        let start = span.left - box.left - scroller.clientLeft + scroller.scrollLeft
+        Yession.App.TabStrip.reveal (port scroller) start (start + min span.width 1.0)
+        |> Option.iter (fun left -> scroller.scrollLeft <- left)
+        mark scroller
+
     /// The selected tab's key (and width) at the last render that revealed it. A reveal on EVERY render
     /// would take the strip back from a reader scrolling it to look at the other tabs the
     /// moment anything at all arrived; on a CHANGE of selection it is the reader's own act (or
     /// a collaborator's `TabOpened`) being answered.
     let mutable private revealed = ""
-
-    /// How many tabs are not wholly in the scroller's window (`TabStrip.hiddenCount`), or
-    /// `None` when the strip is not laid out and measures nothing.
-    let hiddenCount () : int option =
-        match find selector with
-        | Some scroller when scroller.clientWidth > 0.0 ->
-            let box = scroller.getBoundingClientRect ()
-            let found = scroller.querySelectorAll "[role=\"tab\"]"
-            let spans =
-                [ for i in 0 .. found.length - 1 ->
-                      let span = (found.[i] :?> HTMLElement).getBoundingClientRect ()
-                      let start = span.left - box.left - scroller.clientLeft + scroller.scrollLeft
-                      start, start + span.width ]
-            Some (Yession.App.TabStrip.hiddenCount (port scroller) spans)
-        | Some _ | None -> None
 
     let sync () : unit =
         match find selector with
@@ -556,22 +560,23 @@ module private Strip =
                 | null -> revealed <- ""
                 | selected ->
                     let selected = selected :?> HTMLElement
-                    // Its WIDTH too: arming its × widens the selected tab (P2-2), and a tab
-                    // that grew past the edge is as out of view as one newly chosen there.
-                    let key =
-                        sprintf "%s %.0f" (selected.getAttribute Yession.App.Dom.Hooks.paneTab) (selected.getBoundingClientRect ()).width
+                    // Its WIDTH too: arming its × widens the selected tab (P2-2). But a tab
+                    // that only GREW is kept by its start, where it was: the arming is a
+                    // press, and the confirm is only a confirm if the spot that was pressed
+                    // is still the control — a strip that scrolled the grown tab whole into
+                    // view slid the armed kill out from under the second press. So a new
+                    // selection is revealed whole, and a wider one only if its start left.
+                    let width = sprintf "%.0f" (selected.getBoundingClientRect ()).width
+                    let key = selected.id + " " + width
                     if key <> revealed then
+                        let sameTab = revealed.StartsWith (selected.id + " ")
                         revealed <- key
-                        reveal scroller selected
+                        if sameTab then revealStart scroller selected else reveal scroller selected
                 mark scroller
 
 /// After every render: the selected tab in view if the selection changed, and the strip's
 /// fade on whichever ends have tabs past them.
 let syncStrip () : unit = Strip.sync ()
-
-/// How many of the strip's tabs its window does not show, or `None` when it is not laid out
-/// (P2-2). The caller sends it to the model, which renders the overflow count from it.
-let stripHidden () : int option = Strip.hiddenCount ()
 
 /// The listeners that keep the strip honest between renders — bound once per page, delegated
 /// from the document so they survive Lit replacing the strip.

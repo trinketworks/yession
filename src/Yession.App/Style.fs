@@ -14,8 +14,10 @@ open Yession.Domain.Terminals
 /// shell and rejected: it is a media-browsing metaphor, and the job here is watching one
 /// conversation, editing a queue, and intervening fast. The session is one room, and
 /// navigation through it is vertical time, not horizontal space. Zune survives in the type,
-/// the colour and the motion, and the pivot idiom survives at exactly one scale — the
-/// sidebar's two destinations (`navPivot`), which are a place you go, not a surface you pan.
+/// the colour and the motion, and the pivot idiom survives at two scales — the sidebar's two
+/// destinations (`navPivot`), which are a place you go, not a surface you pan; and the content
+/// pane's row of what it holds (`panePivotRow`), which IS a set of surfaces side by side, one
+/// at a time, which is what a pivot was for.
 ///
 /// The rules that keep it coherent:
 ///
@@ -253,6 +255,11 @@ module Style =
     /// A live status said by the dot ALONE (a block or tool call still running): no word
     /// beside it, so no trailing gap to push it off the line's right edge.
     let statusDotOnly = "inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse2 motion-reduce:animate-none"
+    /// The same dot standing still: a state that has SETTLED (a terminal's last command
+    /// failed), where the pulse is one still under way.
+    let statusDotSolid = "inline-block w-1.5 h-1.5 rounded-full bg-current"
+    /// The dot with nothing in it: a state that has ENDED (a terminal that closed).
+    let statusDotHollow = "inline-block w-1.5 h-1.5 rounded-full border border-current"
 
     /// A standalone dot given its colour explicitly (`bg-green` etc. composed at the use
     /// site) for a row whose text is a DIFFERENT colour — `bg-current` would fight the
@@ -2251,7 +2258,7 @@ module Style =
     /// stops at 320px, which this clears with its gutters. The viewport term is the floor
     /// under that, for a screen narrower than any phone sold.
     let paneNewMenu =
-        cls [ "absolute right-0 top-9 z-30 py-1 select-none bg-panel"
+        cls [ "absolute right-0 top-full mt-1 z-30 py-1 select-none bg-panel"
               "min-w-[14rem]"
               Stroke.ring
               Stroke.hair ]
@@ -2845,39 +2852,93 @@ module Style =
     /// divider, which the pane's own border already is on a desktop.
     let paneGrabMark = "block h-10 " + Stroke.lead + " " + Stroke.faint
 
-    /// The column's head: a PROPERTIES BAR, not a title.
+    /// The column's head: a PIVOT, the one row this pane is navigated by (Zune's own idiom,
+    /// which the rest of the shell already speaks: big light words, no boxes).
     ///
-    /// It used to be the 88px band the sidebar and the main header wear, carrying the word
-    /// "terminals" — the largest text on a phone screen, telling a reader looking at terminals
-    /// that these are terminals, for 10% of the height. What a reader cannot otherwise know is
-    /// which terminal this is and whether the agent has to ask before it runs, and neither had
-    /// anywhere to live: the second was a labelled form control directly above the command
-    /// line, in the highest-attention position on the surface, for a setting changed twice a
-    /// session.
+    /// It was three layers — a 40px bar naming the selected terminal and opening a boxed
+    /// popover of every terminal, under it a strip of uppercase tabs with a `+` and a `+N`,
+    /// then the content — and the name of where you were sat ABOVE the row you moved between
+    /// places with, so the hierarchy read upside down and there were two ways to make a
+    /// terminal. Now every name is in one row, in the type the shell uses for places
+    /// (`navPivot`'s face, a size up), the selected one in full ink and the rest in the
+    /// faintest ink the floor admits; `all` ends it, then the one `+`, then the way back to the
+    /// chat. Nothing in it is boxed.
     ///
-    /// So: 40px, at BOTH breakpoints, holding what this terminal IS plus the acts that are
-    /// about the terminal rather than about the command you are typing. The band token is not
-    /// missed — a band is for a heading, and this is a readout.
-    /// `relative`, because the switcher hangs from it (P2-2): a popover anchored inside the
-    /// pane's own box, since the column clips what leaves it.
+    /// On a phone every control in it is a thumb's 44 (`phone:min-h-11` on each).
+    let panePivotRow = "shrink-0 flex items-center gap-1 pl-1.5 pr-3 pt-2 phone:pt-1 phone:pr-1"
+    /// The tablist: the scroller of tabs, then `all`, which stays put at the scroller's end
+    /// however many tabs it holds — a door to every terminal that scrolled away with them
+    /// would be no door. `min-w-0` so the scroller is what gives way when the names outgrow
+    /// the row.
+    let panePivotList = "flex-1 min-w-0 flex items-center"
+    /// The tabs' own scroll box, and nothing else that moves.
     ///
-    /// 48px on a phone, which is what holds its controls at a thumb's 44 with the rule under
-    /// them. Every control in it is one (`[&>button]`), so a control added here later is too.
-    let terminalHead =
-        "relative h-10 phone:h-12 shrink-0 flex items-center gap-2 px-3 "
-        + "phone:[&>button]:min-w-11 phone:[&>button]:min-h-11 " + Stroke.dividerBottom
-    /// Which terminal this is, and the door to every other one (P2-2): the name IS the
-    /// switcher's control, so the place a reader looks to learn where they are is the place
-    /// they press to go somewhere else. Ink at rest, as the name always was; blue under the
-    /// hand, because that is what interactive means here.
-    let terminalHeadName =
-        cls [ "flex-1 min-w-0 flex items-center gap-1.5 bg-transparent border-0 p-0 cursor-pointer text-left"
-              "font-ui text-small text-ink hover:text-blue transition-colors"; focusRing ]
-    /// The words inside it, which give way when the bar is narrow.
-    let terminalHeadLabel = "min-w-0 truncate"
-    /// What the named terminal is doing, after its name and fainter than it: a fact about the
-    /// terminal rather than the terminal, so it gives way first when the bar is narrow.
-    let terminalHeadSubtitle = "font-terminal text-code-sm text-ink-faint"
+    /// When names run past an end, that end fades (`TabStrip.hidden`, written by the browser
+    /// as `data-pane-strip-hidden`): a row cut off at a name reads as a row that ends there,
+    /// and a desktop's overlay scrollbar shows only while something is scrolling. The fade is
+    /// 1.5rem, which `TabStrip.edge` keeps a revealed tab clear of. No scrollbar: a pivot is
+    /// panned, and a bar under 22px type would be the one line in the head. Nothing a tab
+    /// paints may leave this box, which is why tabs wear `focusRingInset`.
+    let panePivotScroller =
+        cls [ "min-w-0 flex items-center gap-2 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              "data-[pane-strip-hidden=end]:[mask-image:linear-gradient(to_right,#000_calc(100%_-_1.5rem),transparent)]"
+              "data-[pane-strip-hidden=start]:[mask-image:linear-gradient(to_left,#000_calc(100%_-_1.5rem),transparent)]"
+              "data-[pane-strip-hidden=both]:[mask-image:linear-gradient(to_right,transparent,#000_1.5rem,#000_calc(100%_-_1.5rem),transparent)]" ]
+    /// One pivot item: a name, as it was written — never cased or tracked into a label — in
+    /// light 22px type. A flex ROW rather than a truncating box, because it carries a mark and,
+    /// selected, the terminal's kill; the bound and the ellipsis are the name's.
+    ///
+    /// Told apart by INK alone, which is how Zune did it: the selected item in full ink, the
+    /// rest in `ink-faint`, the dimmest ink that still clears 4.5:1 on every surface
+    /// (app/tailwind.css) — so an item not chosen is quieter and still readable, never a
+    /// ghost. Selecting moves no text: there is no rule to grow and no weight to change.
+    let private pivotItemBase =
+        cls [ "shrink-0 bg-transparent border-0 cursor-pointer px-1.5 py-1 phone:min-h-11 phone:min-w-11 inline-flex items-center justify-center gap-1.5"
+              "font-ui font-light text-[22px] leading-7 whitespace-nowrap transition-colors duration-150 ease-out"
+              "motion-reduce:transition-none"; focusRingInset ]
+    let pivotItem = cls [ pivotItemBase; "text-ink-faint hover:text-ink" ]
+    let pivotItemOn = cls [ pivotItemBase; "text-ink" ]
+    /// A preview's item (P2-1): the same type, slanted — a glance at something the chat
+    /// opened, laid over the terminal beside it, and never mistaken for one of the terminals.
+    /// The fault the last preview was removed for was looking exactly like a tab.
+    let pivotItemPreview = cls [ pivotItemBase; "italic text-ink" ]
+    /// A pivot item's name: as much of it as fits, and an ellipsis for the rest — capped so
+    /// that at the narrowest pane the splitter allows, the selected item and its × still fit
+    /// beside `all` whole. The `all` page writes the name out in full.
+    let pivotName = "max-w-32 truncate"
+    /// A mark beside a name (`View.terminalMark`): the running pulse, a failed exit, a closed
+    /// terminal. Sized to the small type, sat on the name's line.
+    let pivotMark = "inline-flex items-center self-center"
+    /// A tab's × (P2-2): the terminal's kill, worn by the selected tab (and by one whose kill
+    /// a Delete armed). The row verb's own face, sat on the name's line so it costs the row no
+    /// height. On a phone its box is a thumb's 44 with the glyph centred, pulled in by as much
+    /// again (`-my-2.5`), so the item it rides is still the 44 every item is.
+    let terminalTabKill = cls [ btnIconBareDanger; "self-center phone:min-w-11 phone:min-h-11 phone:-my-2.5" ]
+    /// The same, armed: the kill's armed face, sat the same way, so arming it grows the item
+    /// sideways and never the row downwards.
+    let terminalTabKillArmed = cls [ btnKillArmed; "self-center phone:min-h-11 phone:-my-2.5" ]
+    /// The pivot's one way to make something: a `+` in the pivot's own type, unboxed, faint at
+    /// rest like every item not chosen. The cell is the positioning context its menu hangs
+    /// from, outside the scroller, because a menu hung inside an `overflow-x-auto` box is
+    /// clipped to that box.
+    let terminalTabNewCell = "relative shrink-0 flex items-center"
+    let terminalTabNew =
+        cls [ "shrink-0 w-8 h-8 phone:w-11 phone:h-11 grid place-items-center bg-transparent border-0 cursor-pointer p-0"
+              "font-ui font-extralight text-[26px] leading-none text-ink-faint hover:text-ink transition-colors"; focusRing ]
+    /// The empty pane's button's cell: the positioning context its menu hangs from.
+    let terminalEmptyNewCell = "relative"
+    /// A tab's presence marks: one dot per peer whose caret is in THAT terminal, so a
+    /// collaborator typing a command in a terminal you are not looking at is visible from
+    /// the pivot rather than only from inside it.
+    let terminalTabPeers = "inline-flex items-center gap-0.5 self-center"
+
+    /// The one line under the pivot, about the selected item — present only when the body
+    /// does not already say it (`View.paneSubtitle`). Small and faint: it is a caption to the
+    /// name over it, aligned with it, never a second heading.
+    let panePivotSubtitle =
+        "shrink-0 flex items-center gap-2 min-w-0 px-3 pb-2 font-ui text-small text-ink-faint"
+    /// A command inside it, in the terminal's own face, cut short rather than wrapped.
+    let panePivotSubtitleCommand = "min-w-0 truncate font-terminal text-code-sm text-ink-dim"
 
     /// A property of the terminal, stated as a fact and changed by touching the fact.
     ///
@@ -2895,120 +2956,6 @@ module Style =
     /// Closing a terminal kills what is running in it. It reddens under the hand — the same
     /// promise the danger button makes, kept without the rectangle.
     let terminalBarDanger = cls [ terminalBarActBase; "text-ink-faint hover:text-err" ]
-
-    /// The open-terminal strip: one chip per terminal, scrolling horizontally when there are
-    /// more than fit rather than wrapping into a second band that shifts the whole column.
-    ///
-    /// The strip's row. It no longer scrolls — the SCROLLER inside it does — for two reasons
-    /// that arrived together: the `+` used to sit inside the scroll box, so a session with
-    /// enough tabs put the way to open another one off the right-hand edge; and a menu hung
-    /// inside an `overflow-x-auto` box is clipped to that box, because a scroll container
-    /// clips both axes whichever one you asked to scroll. The row draws the divider, so it
-    /// runs under the `+` as well as under the tabs.
-    let terminalTabs = "shrink-0 flex items-stretch gap-1 px-3 pt-2 " + Stroke.dividerBottom
-    /// The tabs' own scroll box: everything that moves when there are more tabs than room.
-    ///
-    /// `-mb-px` lays its bottom pixel OVER the row's divider, and the tabs, stretched to its
-    /// height, put their bottom borders on that pixel: one line under the row, which the
-    /// selected tab paints blue for its width and every other tab leaves showing through. It
-    /// used to be the TABS that reached down (`-mb-px` on each), past the bottom of this box —
-    /// and a scroll container clips at its padding box, so the selection's whole mark was the
-    /// one pixel it cut off (sampled: no blue under the selected tab at all), and the overhang
-    /// made the box scroll a pixel vertically besides. Nothing a tab paints may leave this
-    /// box, which is also why tabs wear `focusRingInset`.
-    ///
-    /// When tabs run past an end, that end fades (`TabStrip.hidden`, written by the browser as
-    /// `data-pane-strip-hidden`): a row cut off at a tab boundary reads as a row that ends
-    /// there, and a desktop's overlay scrollbar shows only while something is scrolling. The
-    /// fade is 1.5rem, which `TabStrip.edge` keeps a revealed tab clear of. A thin scrollbar
-    /// where the platform draws one at all.
-    let terminalTabScroller =
-        cls [ "flex-1 min-w-0 -mb-px flex items-stretch overflow-x-auto [scrollbar-width:thin]"
-              "data-[pane-strip-hidden=end]:[mask-image:linear-gradient(to_right,#000_calc(100%_-_1.5rem),transparent)]"
-              "data-[pane-strip-hidden=start]:[mask-image:linear-gradient(to_left,#000_calc(100%_-_1.5rem),transparent)]"
-              "data-[pane-strip-hidden=both]:[mask-image:linear-gradient(to_right,transparent,#000_1.5rem,#000_calc(100%_-_1.5rem),transparent)]" ]
-    /// The tabs THEMSELVES, and nothing else. `role="tablist"` is a promise about what its
-    /// children are, and the strip also holds two things that are not tabs — "+ new" and
-    /// "close" — which a reader was told were tabs (four of them, in a list of two) and which
-    /// the strip's own arrow-key walk had to step over. The row keeps its look; the promise
-    /// now covers only what keeps it.
-    ///
-    /// A real box rather than `display: contents`: a role on a contents box is dropped from
-    /// the accessibility tree by some browsers, which would trade one wrong tablist for no
-    /// tablist at all. `shrink-0` keeps the strip the thing that scrolls when the tabs
-    /// outgrow it, exactly as when they were its direct children.
-    let terminalTabList = "flex items-stretch gap-1 shrink-0"
-    /// A tab is marked by an UNDERLINE, not by a box.
-    ///
-    /// The selected one used to be a full blue rectangle — which in this design is the button
-    /// vocabulary, and specifically the primary one: `btnPrimary` is a blue-bordered rectangle
-    /// wearing blue text. So the strip's answer to "which terminal am I looking at" shouted at
-    /// exactly the weight of the page's one real call to action, next to the thing you actually
-    /// press. Nothing in a tab strip is a CTA; a tab is a statement about where you are.
-    ///
-    /// The mark is `Stroke.underline`, the same hairline the session title wears — an
-    /// established, chrome-light affordance in this vocabulary rather than a new width. Every
-    /// tab carries the border box (`Stroke.clear` when it is not the one), so selecting moves
-    /// no text, and the selection is said twice quietly instead of once loudly: ink rather than
-    /// faint, over a blue rule.
-    ///
-    /// And it is the strip's OWN rule, not a second one. The scroller lays its bottom pixel
-    /// over the divider the strip already draws and each tab stretches to it, so there is one
-    /// line under the row and the selected tab paints its segment of it: an unselected tab's
-    /// border is transparent and the hairline shows straight through. Drawn at the tab's own
-    /// height instead, it was a second rule 23px above the first — two horizontal lines saying
-    /// one thing, which is the ornament this pass exists to remove.
-    /// The tab is a flex ROW rather than a truncating box, because it holds a control: the
-    /// close button sits inside the tab (a tab is what the pointer aims at, and a control
-    /// outside it would be a child of the tablist that is not a tab), and a `truncate` on the
-    /// tab itself would clip the button rather than the name. The bound and the ellipsis moved
-    /// onto the label, which is the thing that is allowed to be too long.
-    let private tabBase =
-        cls [ caps; "bg-transparent cursor-pointer px-2.5 pt-1.5 pb-2 inline-flex items-center transition-colors"
-              "phone:min-h-11 phone:min-w-11"
-              Stroke.underline; focusRingInset ]
-    /// A tab's NAME: as much of it as fits, and an ellipsis for the rest.
-    let paneTabLabel = "max-w-40 truncate"
-    /// A tab's × (P2-2): the terminal's kill, worn by the selected tab (and by one whose kill
-    /// a Delete armed). The row verb's own face, pulled into the tab's line so it costs the tab
-    /// no height. On a phone its box is a thumb's 44 with the glyph centred, pulled in by as
-    /// much again (`-my-2.5`), so the tab it rides is still the 44 every tab is.
-    let terminalTabKill = cls [ btnIconBareDanger; "ml-1 -my-1 phone:min-w-11 phone:min-h-11 phone:-my-2.5" ]
-    /// The same, armed: the kill's armed face, pulled into the line the same way, so arming
-    /// it grows the tab sideways and never the strip downwards.
-    let terminalTabKillArmed = cls [ btnKillArmed; "ml-1 -my-1 phone:min-h-11 phone:-my-2.5" ]
-    /// The strip's overflow count (P2-2): `+3`, for the tabs past its edges, and the door to
-    /// the switcher that lists them. The strip's own quiet voice, beside the `+`.
-    let stripOverflow =
-        cls [ "shrink-0 self-center h-8 px-1.5 inline-flex items-center gap-0.5 bg-transparent border-0 cursor-pointer"
-              "phone:h-11 phone:min-w-11 phone:justify-center"
-              "font-ui text-small tabular-nums text-ink-faint hover:text-ink transition-colors"; focusRing ]
-    let terminalTab = cls [ tabBase; Stroke.clear; "text-ink-faint hover:text-ink" ]
-    let terminalTabActive = cls [ tabBase; Stroke.blue; "text-ink" ]
-    /// Adds a terminal. The one action in the strip that is not a selection — so it wears the
-    /// strip's own quiet face and says `+`, rather than being the bordered rectangle that
-    /// out-shouted every tab beside it. What it does is named for anyone not reading pixels.
-    ///
-    /// The strip's other non-tab, `close`, is gone from here entirely: it kills a running
-    /// terminal, and dressing that as a sibling of "switch to this one" put the most
-    /// destructive control in the pane one pixel from the most routine. It is an act about
-    /// the terminal, and it lives with the terminal's other properties, in the bar.
-    /// The cell the `+` sits in: anchored at the strip's right edge, and the positioning
-    /// context its menu hangs from.
-    let terminalTabNewCell = "relative shrink-0 flex items-center"
-    /// The empty pane's button's cell: the positioning context its menu hangs from.
-    let terminalEmptyNewCell = "relative"
-    /// The door to something new. The LIST toggle's weight exactly (`btnIcon`, 32px square),
-    /// because they are the pane's two doors and a reader should see them as a pair. It used
-    /// to wear the tab vocabulary — a bare faint glyph on a clear ground — which made one of
-    /// the two doors look like a control and the other like a mark somebody left behind.
-    let terminalTabNew = cls [ btnIcon; "w-8 h-8 phone:w-11 phone:h-11 shrink-0" ]
-    /// A tab's presence marks: one dot per peer whose caret is in THAT terminal, so a
-    /// collaborator typing a command in a terminal you are not looking at is visible from
-    /// the strip rather than only from inside it.
-    let terminalTabPeers = "inline-flex items-center gap-0.5 ml-1.5 align-[1px]"
-    /// The running pulse on a terminal's tab, between its name and anyone in it.
-    let terminalTabRunning = "inline-flex items-center ml-1.5 align-[1px]"
 
     /// The pane's body — whatever the selected tab shows. It takes the column's remaining
     /// height so the thing inside it scrolls rather than the column.
@@ -3029,19 +2976,6 @@ module Style =
     /// One name for one box. It had two, and the second was reached for by whichever surface
     /// its author happened to be reading.
     let paneReadonly = "flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 px-3 py-3"
-    /// A preview's head (P2-1): the way back to the terminal it is laid over, and its close.
-    /// A row of its own over the preview rather than a tab in the strip, which is the whole
-    /// difference between this preview and the one that was removed for looking like a tab.
-    let panePreviewHead = "shrink-0 flex items-center gap-2 pl-3 pr-2 pt-2 phone:[&>button]:min-h-11 phone:[&>button]:min-w-11"
-    /// "‹ back to term 2" — the pivot this design navigates by (`navPivot`), the settings
-    /// column's own way back, so going back reads the same wherever it is offered.
-    let panePreviewBack = cls [ navPivot; "min-w-0" ]
-    /// The terminal's name in the way back gives way first when the column is narrow.
-    let panePreviewBackLabel = "min-w-0 truncate"
-    /// The preview's close: the same act as back, in the place a close is looked for.
-    let panePreviewClose = cls [ btnIconBare; "ml-auto shrink-0" ]
-    /// What the preview is · which terminal it belongs to, in the metadata voice.
-    let panePreviewMeta = cls [ caps; "shrink-0 px-3 pb-2 text-ink-faint truncate " + Stroke.dividerBottom ]
     /// A stretch's facts, above whatever renders its recording.
     let paneFacts = "shrink-0 flex flex-col gap-1 px-3 py-3 " + Stroke.dividerBottom
     /// A read-only tab's verbs, under whatever it is showing: the way to the recording, and
@@ -3066,90 +3000,83 @@ module Style =
     /// it. Centred like the empty pane, because it IS an empty pane — of this kind.
     let contentDownload = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
 
-    // --- The switcher (Plan 20, stage 0; P2-2) -------------------------------------------
+    // --- The `all` page: the switcher (Plan 20, stage 0; P2-2) ------------------------------
 
-    /// The switcher: hung under the pane's head, across the pane's width, OVER whatever the
-    /// pane shows. It used to BE the pane's body, behind a toggle of its own, which made it a
-    /// second population — a list of terminals that was not the strip — and a place to go
-    /// rather than a glance. `itemMenu`'s chrome, because it is the same kind of surface.
-    ///
-    /// Capped in height and scrolling inside itself, so a session with forty terminals is a
-    /// list to scroll and never a popover taller than the pane it hangs in.
-    let switcher =
-        cls [ "absolute left-2 right-2 top-full mt-1 z-30 flex flex-col select-none bg-panel"
-              "max-h-[min(70vh,36rem)] overflow-y-auto overscroll-contain"
-              Stroke.ring
-              Stroke.hair ]
-    /// The switcher's foot: the way to make a terminal, after everything that exists.
-    let switcherNew = cls [ itemMenuEntry; "shrink-0 py-2" ]
+    /// The `all` page: the pane's body while the pivot's last item is selected. It has been
+    /// the pane's other face and then a bordered popover hung under the head, with dots, a
+    /// divider under every row and a foot that made terminals; it is a page now, the way a
+    /// Zune list is a page — names in large light type down the left, no rule between them,
+    /// the air doing the separating.
+    let allPage = "flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col py-2 select-none"
 
-    /// One row: state, name, verbs. A grid rather than a flex row so the names line up down
-    /// the list whatever their state marks are — a ragged left edge is what makes a list of
-    /// twenty read as twenty unrelated things.
-    ///
-    /// The mark's track is a FIXED `1rem` and not `auto`, which is what that sentence needs
-    /// and what it did not have: every row is its own grid container, so an `auto` track is
-    /// sized by that row's own mark and coordinates with nothing. The marks are four
-    /// different widths — a 6px sync dot, an 8px prompt, a 12px status glyph, a 14px content
-    /// icon — so the names stood at four different offsets, measured 731/733/737. `1rem`
-    /// holds the widest with room, and each mark is centred in it rather than left in it, so
-    /// a dot and an icon read as one column rather than as a column with a wobble.
-    let terminalListRow =
-        "grid grid-cols-[1rem_1fr_auto] items-center gap-2 px-3 py-2 phone:py-0 "
-        + "[&>*:first-child]:justify-self-center "
-        + Stroke.dividerBottom
+    /// One row: its name (and the marks beside it) over what it last ran, its verbs at the
+    /// right. The names line up down the page because every mark sits AFTER its name — a
+    /// leading column of marks of four different widths is what made the old list's left
+    /// edge ragged.
+    let terminalListRow = "group/row flex items-center gap-3 px-3 py-2 phone:py-1"
 
-    /// The row's own control: its name, which opens it. Ink at rest so the list reads as a
-    /// list of names, blue under the pointer because that is what interactive means here —
-    /// the same reasoning `recordLink` carries, at the list's size.
+    /// The row's own control: its name, which opens it — the pivot's type, so the page reads
+    /// as the pivot's names written out in full. Ink at rest so the page reads as a list of
+    /// names, blue under the pointer because that is what interactive means here.
     let terminalListName =
-        cls [ "bg-transparent cursor-pointer text-left w-full truncate p-0 phone:min-h-11 font-ui text-body text-ink"
-              "no-underline hover:text-blue transition-colors"; focusRing ]
+        cls [ "min-w-0 truncate bg-transparent border-0 cursor-pointer text-left p-0 phone:min-h-11"
+              "font-ui font-light text-[22px] leading-7 text-ink hover:text-blue transition-colors"; focusRing ]
 
-    /// A closed row's name. The recording is still worth opening, and the row says which
-    /// half of the list it is in by its tone rather than by repeating the word "closed" —
-    /// the play mark beside it is what it IS.
+    /// A closed row's name: dimmer, which says which half of the list it is in by its tone
+    /// rather than by repeating the word — its mark says the rest.
     let terminalListNameClosed =
-        cls [ "bg-transparent cursor-pointer text-left w-full truncate p-0 phone:min-h-11 font-ui text-body text-ink-dim"
-              "no-underline hover:text-blue transition-colors"; focusRing ]
+        cls [ "min-w-0 truncate bg-transparent border-0 cursor-pointer text-left p-0 phone:min-h-11"
+              "font-ui font-light text-[22px] leading-7 text-ink-dim hover:text-blue transition-colors"; focusRing ]
+
+    /// A row's name line: the name, then its marks, on one line that gives way in the name.
+    let terminalListNameLine = "min-w-0 flex items-center gap-2"
 
     /// A closed row's "recording lost", beside its name: one line, never squeezed, so a row that
     /// says it is the height of one that does not.
-    let terminalListGone = statusErr + " shrink-0 whitespace-nowrap ml-2"
+    let terminalListGone = statusErr + " shrink-0 whitespace-nowrap"
 
     /// What a terminal row's terminal is doing or last ran, under its name: the command, in
-    /// the terminal's own face, one line and faint — it tells nine `term N` rows apart, and
-    /// it is not the thing the row opens.
+    /// the terminal's own face, small and faint — it tells nine `term N` rows apart, and it is
+    /// not the thing the row opens. An artifact's size sits in the same slot.
     let terminalListSubtitle = "block min-w-0 truncate font-terminal text-code-sm text-ink-faint"
 
-    /// The row's verbs, kept on one baseline at its right edge.
+    /// The row's verbs, at its right edge — quiet until they are wanted. On a desktop they
+    /// come up under the pointer or the keyboard anywhere in the row (`group/row`, and
+    /// `focus-within` so Tab reaches them visibly); on a device that cannot hover, and on a
+    /// phone, they are always there, because there is no other way to them. `opacity`, never
+    /// `hidden`, so they never leave the tab order, and an ARMED kill is worn whatever the
+    /// pointer does — a confirm that faded out would be a confirm nobody could see.
     ///
     /// On a phone each is a 44px box with its glyph centred (`[&>*]`): the 24px glyph is
     /// WCAG 2.5.8's floor for the MARK, never for the target, and a kill 4px from a rewind is
     /// a kill pressed by a thumb aiming at the rewind.
-    let terminalListVerbs = "flex items-center gap-1 shrink-0 phone:[&>*]:min-w-11 phone:[&>*]:min-h-11"
+    let terminalListVerbs =
+        cls [ "ml-auto flex items-center gap-1 shrink-0 phone:[&>*]:min-w-11 phone:[&>*]:min-h-11"
+              "opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100"
+              "has-[[data-terminal-close-armed=true]]:opacity-100"
+              "[@media(hover:none)]:opacity-100 phone:opacity-100"
+              "transition-opacity duration-150 ease-out motion-reduce:transition-none" ]
 
-    /// The switcher's word when there is nothing in it, above its foot.
+    /// The page's word when there is nothing on it.
     let contentListEmptyWord = "px-3 py-3 font-ui font-light text-body text-ink-faint select-none"
 
     /// The empty pane: the terminal's own symbol, display-sized, over the one press that
     /// fills it — a thumb's height on a phone, like every press in this column.
     let terminalEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center phone:[&_button]:min-h-11"
 
-    /// What a section of the list is called. Quiet and small: the rows are the content, and a
-    /// heading that competed with them would make a list of three terminals read as two lists.
-    /// Present only when there is more than one kind to tell apart (`listSections`).
-    let listSectionLabel =
-        cls [ "px-3 pt-3 pb-1 font-ui font-semibold text-label tracking-caps uppercase text-ink-faint select-none" ]
+    /// What a section of the page is called: the pivot's lowercase, small, faint. The rows
+    /// are the content, and a heading that competed with them would make a page of three
+    /// terminals read as two lists. Present only when there is more than one kind to tell
+    /// apart (`listSections`).
+    let listSectionLabel = "px-3 pt-4 pb-1 font-ui font-light text-small lowercase text-ink-faint select-none"
 
-    /// An artifact's row: mark, name, size. Same grid as a terminal's, so the two sections read
-    /// as one list of things rather than two designs — the middle column is what differs, and
-    /// it is a name in both.
+    /// An artifact's row: the same row as a terminal's, so the two sections read as one list
+    /// of things rather than two designs.
     let artifactListRow = terminalListRow
 
-    /// The size beside an artifact's name — the one fact that decides whether to open it here
+    /// The size under an artifact's name — the one fact that decides whether to open it here
     /// or take it away, so it is on the row rather than behind it.
-    let artifactListSize = "shrink-0 font-ui font-light text-small text-ink-faint tabular-nums"
+    let artifactListSize = "block font-ui font-light text-small text-ink-faint tabular-nums"
 
     /// The block history's scroll box, and the stream inside it.
     ///

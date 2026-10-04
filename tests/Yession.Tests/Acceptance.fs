@@ -211,7 +211,6 @@ let private representativeModel : ClientModel =
       ItemMenu = None
       PaneMenu = false
       Switcher = false
-      StripHidden = 0
       Refused = None
       Asked = Map.empty
       OpenFolds = Set.empty
@@ -2190,15 +2189,14 @@ let private contentListTests =
         // The headings exist to tell two kinds apart. Over terminals alone, "Terminals" names
         // the only thing on screen — a word that says nothing and costs a line.
         testCase "the sections are named only when there are two kinds to tell apart" <| fun () ->
-            Expect.isTrue ((listed (withShare "chart.png")).Contains "Files") "both kinds present, both named"
-            Expect.isFalse ((listed representativeModel).Contains ">Terminals<") "terminals alone need no heading"
+            Expect.isTrue ((listed (withShare "chart.png")).Contains "data-list-section") "both kinds present, both named"
+            Expect.isFalse ((listed representativeModel).Contains "data-list-section") "terminals alone need no heading"
 
-        // What the switcher is FOR, which is the question the `New` section the list briefly
-        // carried was not an answer to. A census of nothing says there is nothing. Its foot
-        // makes a terminal (P2-2) the way the strip's `+` does — asking where from the `+`'s
-        // own menu when there is a choice — so the places themselves are never rows here,
-        // which would make this surface the chooser again by a shorter route.
-        testCase "a switcher with nothing in it says so, and lists no places to open one" <| fun () ->
+        // What the `all` page is FOR, which is the question the `New` section the list briefly
+        // carried was not an answer to. A census of nothing says there is nothing. Making a
+        // terminal is the pivot's `+` and its menu, never a row here — that would make this
+        // surface the chooser again by a shorter route, and a second door beside the `+`.
+        testCase "an all page with nothing on it says so, and lists no places to open one" <| fun () ->
             let bare =
                 { representativeModel with
                     Terminals = { representativeModel.Terminals with Terminals = [] }
@@ -2900,11 +2898,12 @@ let private chromeTests =
         testCase "every icon-only control in the pane carries a name and a title" <| fun () ->
             let shut = Support.render { representativeModel with TerminalsOpen = false }
             let reattachable = Support.render { renewableTerminalModel with Switcher = true }
-            let overflowing = Support.render { representativeModel with StripHidden = 2 }
+            // A closed terminal the reader is still on wears the × that puts its tab away.
+            let closed = Support.render closedTerminalModel
             let previewing =
                 Support.render
                     (Support.step (ShowPreviewMsg (Preview.ofSubject (PreviewSubject.Block (terminalId, blockId)))) representativeModel)
-            let html = shell + listShell + shut + reattachable + overflowing + previewing
+            let html = shell + listShell + shut + reattachable + closed + previewing
             // The opening tag of every element carrying `hook`, valued or bare — and only that
             // attribute, not one it is a prefix of (`data-terminal-close-armed`).
             let tagsWith (hook: string) =
@@ -2921,7 +2920,7 @@ let private chromeTests =
             for hook in
                 [ Dom.Hooks.contentToggle
                   Dom.Hooks.paneNew
-                  Dom.Hooks.paneStripOverflow
+                  Dom.Hooks.paneTabDismiss
                   Dom.Hooks.panePreviewClose
                   Dom.Hooks.terminalListRewind
                   Dom.Hooks.terminalReattach

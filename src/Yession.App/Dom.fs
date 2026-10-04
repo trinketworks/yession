@@ -276,17 +276,21 @@ module Dom =
         // so the column is named after what it holds rather than after the first kind it held.
         let contentPanel = "data-content-panel"
         let contentToggle = "data-content-toggle"
-        /// The pane head's name for what is selected — the words alone, so the strip, the
-        /// head and the switcher can be asked whether they agree.
-        let paneHeadName = "data-pane-head-name"
         /// On the edge tab that shows the shut pane (P1-4): how many terminals are open, and —
         /// present only while one is running a command — the running mark. What the face says,
         /// as facts a test can read without reading the words.
         let terminalsOpen = "data-terminals-open"
         let terminalsRunning = "data-terminals-running"
-        /// The control that opens the switcher (P2-2): the pane head's name itself, as a
-        /// button. One per page; the strip's overflow count is the switcher's other door.
+        /// The control that opens the switcher (P2-2): the pivot's last item, `all`, a tab of
+        /// its own whose panel is the list. One per page.
         let paneSwitcher = "data-pane-switcher"
+        /// The pane's pivot: the one row of names across its top — every tab, a preview while
+        /// one is up, and `all` — and the `role="tablist"` they are the tabs of.
+        let panePivot = "data-pane-pivot"
+        /// The one line under the pivot about the selected item, when what the body shows
+        /// does not already say it: what a live or replaying terminal is running and how it
+        /// went, what kind of thing a preview is and whose. Absent rather than empty.
+        let paneSubtitle = "data-pane-subtitle"
         // Terminals: the strip's terminal tabs, the blocks that have run, and the composer that
         // queues the next command. The composer's hooks mirror the message composer's, because
         // the interaction is the same one.
@@ -430,21 +434,26 @@ module Dom =
         /// written by the browser after every render and every scroll, never by the view,
         /// because it is a fact about one scroll position. The fade is keyed on it.
         let paneStripHidden = "data-pane-strip-hidden"
-        /// The strip's overflow count (P2-2): how many tabs are out of its window, carrying
-        /// that number, present only while there are any. It opens the switcher, which lists
-        /// them all.
-        let paneStripOverflow = "data-pane-strip-overflow"
         /// The pane's body, carrying the key of whatever it is showing.
         let panePanel = "data-pane-panel"
         /// A preview laid over the selected terminal (P2-1) — a block, a stretch or a file
         /// opened from the chat — carrying its subject's key (`PreviewSubject.key`). Present
-        /// exactly while one is up, and never inside the strip.
+        /// exactly while one is up, on its panel.
         let panePreview = "data-pane-preview"
-        /// The preview's way back to the terminal it is laid over.
-        let panePreviewBack = "data-pane-preview-back"
-        /// The preview's close — the same act as its back.
+        /// The preview's pivot item, carrying the same key: a name of its own kind in the
+        /// pivot, never a terminal's tab (`paneTab`), and the item its close rides.
+        let panePreviewTab = "data-pane-preview-tab"
+        /// The preview's close, on its pivot item. The way back to the terminal under it is
+        /// that terminal's own item, beside it.
         let panePreviewClose = "data-pane-preview-close"
-        /// What the preview is, and which terminal it belongs to.
+        /// A CLOSED terminal's × on its pivot item, carrying its id: it puts the tab away
+        /// (`DismissTabMsg`), where an open one's × is its kill (`terminalClose`).
+        let paneTabDismiss = "data-pane-tab-dismiss"
+        /// A terminal's state mark beside its name, on the pivot and the `all` page alike
+        /// (`View.terminalMark`): `running`, `failed` (its last command did not succeed) or
+        /// `closed`. Absent for an open terminal that is idle and fine.
+        let paneMark = "data-pane-mark"
+        /// What the preview is, and which terminal it belongs to — its subtitle.
         let panePreviewMeta = "data-pane-preview-meta"
         /// A block's read-only view: its command line and everything it printed.
         let paneBlock = "data-pane-block"
@@ -510,12 +519,10 @@ module Dom =
         let terminalBehind = "data-terminal-behind"
         /// The SWITCHER (Plan 20, stage 0; P2-2): everything this pane can show — every
         /// terminal the session has ever had with every verb one of them affords, and every
-        /// file shared into it — hung under the pane's head name (`paneSwitcher`) while it is
-        /// open. It used to replace the pane, behind a toggle of its own; it is a popover now,
-        /// and the hook kept its name because the thing it marks is still the list.
+        /// file shared into it — as the pivot's `all` page (`paneSwitcher`). It has been the
+        /// pane's other face and a popover under its head; the hook kept its name through
+        /// both because the thing it marks is still the list.
         let contentList = "data-content-list"
-        /// The switcher's foot: a new terminal, the same press as the strip's `+`.
-        let switcherNew = "data-switcher-new"
         /// One row, carrying its terminal's id — and the control that shows that terminal,
         /// so a row is keyboard-operable by construction rather than by a handler on a div.
         let terminalListRow = "data-terminal-list-row"
@@ -819,19 +826,10 @@ module Dom =
         let killedBy = "killed by"
         /// How many lines a stretch's recording holds.
         let linesRecorded (n: int) = if n = 1 then "1 line recorded" else sprintf "%d lines recorded" n
-        /// What the pane's head says when nothing is selected: the column of terminals.
-        let terminals = "terminals"
-        /// The way out of the content column. A title as well as a name: hover is how a
-        /// desktop reader learns an icon.
-        let backToChat = "Back to the chat"
-        /// A preview's way back, naming the terminal it returns to (P2-1) — and with no
-        /// terminal under it, just the way back.
-        let backTo (terminal: string) = sprintf "back to %s" terminal
-        let back = "back"
         /// A preview's close, naming what it closes. It says PREVIEW, because "close" on its
         /// own is the word this product uses for ending a terminal.
         let closePreview (what: string) = sprintf "Close preview %s" what
-        /// What kind of thing a preview is, at the head of it.
+        /// What kind of thing a preview is, in its subtitle.
         let aCommand = "command"
         let aStretch = "session"
         let aFile = "file"
@@ -882,15 +880,26 @@ module Dom =
         /// which act and why; this is only the word that makes the row scannable.
         let refused = "refused"
         let dismissRefusal = "Dismiss"
-        /// What the switcher says when nothing has been opened, above its way to make one.
+        /// What the `all` page says when nothing has been opened. It offers nothing: making
+        /// something is the pivot's `+`, and this answers what exists.
         let nothingOpenedYet = "No terminals yet"
-        /// The switcher's door, named for what it does and the key that does it too.
-        let switchTerminal = "Switch terminal (Ctrl+` or ⌘`)"
-        /// The strip's overflow count, for anybody not reading the number.
-        let moreTerminals (hidden: int) =
-            if hidden = 1 then "1 more terminal — show all" else sprintf "%d more terminals — show all" hidden
-        /// The switcher's own name, as a dialog.
+        /// What a terminal's mark says to a screen reader (`View.terminalMark`): it has
+        /// closed, or the last thing it ran did not succeed. Running says `blockRunning`, as
+        /// every running mark does.
+        let markClosed = "closed"
+        /// A closed terminal's × on its pivot item: put its tab away.
+        let dismissTab (terminal: string) = sprintf "Put away %s" terminal
+        let markFailed = "last command failed"
+        /// The pivot's last item: everything, as a page. Lowercase, as every pivot word is.
+        let all = "all"
+        /// Its title: what it does, and the key that does it too.
+        let switchTerminal = "Every terminal and file (Ctrl+` or ⌘`)"
+        /// The `all` page's own name, as a list.
         let terminalsAndFiles = "Terminals and files"
+        /// The pivot itself, as a tablist.
+        let paneItems = "Open in this pane"
+        /// The way out of the pane, back to the conversation.
+        let backToChat = "Back to the chat"
         /// A queued command that will run as soon as the terminal is free.
         let queuedReady = "ready"
         /// A queued command held because a peer is typing in its terminal (Plan 13, stage
