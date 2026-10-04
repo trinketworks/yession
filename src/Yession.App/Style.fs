@@ -1972,13 +1972,20 @@ module Style =
     /// a line drawn on the page rather than a break in the conversation.
     /// `relative` because a collaborator's caret in the name is placed against this box: the
     /// marker is positioned from the input's own offsets, and those are its offset parent's.
+    ///
+    /// A fold's grid (`foldRow`): the 2rem gutter, then the content column. A flex row with a
+    /// gap put the dot at the column's left edge and the name wherever the dot's width and
+    /// the gap happened to land it — eight pixels short of the edge every body and fold
+    /// title starts on, so a chapter's words were the one line in the column that did not
+    /// line up with the words under it.
     let chapterRule =
-        cls [ "relative flex items-center gap-2.5 border-t border-hair pt-3 mt-6 -mb-1 max-md:mt-4"
+        cls [ "relative grid grid-cols-[2rem_1fr] items-center border-t border-hair pt-3 mt-6 -mb-1 max-md:mt-4"
               readingColumn; "max-md:max-w-none" ]
 
-    /// The mark on it: a dot at the reading edge, so a chapter has an anchor the eye finds
-    /// on the way past. Decorative — the name beside it is what says which chapter this is.
-    let chapterDot = "w-1.5 h-1.5 rounded-full bg-ink-faint shrink-0"
+    /// The mark on it, in the gutter where a fold's chevron sits and centred the way the
+    /// chevron is (`fold`), so the two marks the margin carries stand on one rail.
+    /// Decorative — the name beside it is what says which chapter this is.
+    let chapterDot = "col-start-1 justify-self-center w-1.5 h-1.5 rounded-full bg-ink-faint"
 
     /// A stretch in which nothing was running, drawn as a break in the page rather than as
     /// something somebody said — because nobody did. Where a chapter hangs its name UNDER a
@@ -2023,7 +2030,9 @@ module Style =
     /// stopped being a name. `touchType` because a keyboard is coming, and a phone zooms into
     /// anything under 16px it focuses and never zooms back out.
     let chapterName =
-        cls [ "flex-1 min-w-0 bg-transparent border-0 px-1.5 py-0.5"
+        // `-ml-1.5` takes the padding back out on the left, so the WORDS start on the content
+        // column's edge and only the lifted surface reaches into the gutter.
+        cls [ "col-start-2 -ml-1.5 min-w-0 bg-transparent border-0 px-1.5 py-0.5"
               "hover:bg-surface-2 focus:bg-surface-2 transition-colors"; focusRing
               "font-ui font-light text-small text-ink-dim focus:text-ink truncate"
               touchType ]
