@@ -52,10 +52,21 @@ module Client =
           /// published — no command round-trip; the Session consumes the queue and the
           /// message lands in the timeline as events.
           SendDraft : PeerId -> unit
-          /// Ask the Session to cancel the running agent turn (Step 17). The
-          /// outcome arrives as events: `AgentTurnInterrupted` on success, or nothing
-          /// if the turn already finished (the request is then rejected).
-          InterruptTurn : AgentTurnId -> unit
+          /// Send the Session a command (`SessionCommand` says what each one asks for and
+          /// when it is refused), answering with the request's id.
+          ///
+          /// ONE verb for every command, and it tells the model what it sent
+          /// (`CommandSentMsg`) before the command leaves, because the answer comes back as
+          /// a bare id (`CommandAnsweredMsg`) and only the model can say what it answers. A
+          /// verb per command used to send and forget, so a refusal — the one answer a
+          /// person needs to READ — arrived with nothing to say what it refused, and was
+          /// dropped. Sending and recording are one act here so that no command can be
+          /// sent without the second half.
+          ///
+          /// What a command CHANGES arrives as events, as ever — a new terminal is a
+          /// `TerminalOpened`, not a response — one path for a durable fact, and the one
+          /// every peer already reads.
+          Ask : SessionCommand -> RequestId
           /// Broadcast the local peer's caret+selection focus (or `None` when it leaves every
           /// collaborative field), so collaborators see the cursor. Ephemeral presence — the
           /// Session relays it to other peers and never persists it.
@@ -70,30 +81,6 @@ module Client =
           /// frame: the connection remembers the last of each, which is what makes "the peer
           /// stopped typing" unable to erase "the peer is still watching".
           ReportViewing : ViewRef option -> unit
-          /// Ask the Session to open a terminal (Plan 13). The new terminal arrives
-          /// as a `TerminalOpened` event, not as a response — one source of truth for a
-          /// durable fact, and it is the one every peer already reads.
-          /// A SHELL in the sandbox named — `SandboxRef.defaultRef` from a caller who does
-          /// not care, which is a real name rather than an absence.
-          OpenTerminal : string -> SandboxRef -> unit
-          /// Consent to what a repo asks for (Plan 27). Carries the set that was SHOWN, so
-          /// the Process can refuse if the file moved between the screen and the button.
-          ApproveRepoCapabilities : RepoRef -> string list -> unit
-          /// Put the first repo into the session (the launch surface). Answers with the
-          /// request's id, so the surface can tell the session's reply to THIS command from
-          /// any other's (`CommandAnsweredMsg`); the outcome itself arrives as events.
-          AddRepo : RepoRef -> string option -> RequestId
-          /// Ask the Session to close a terminal.
-          CloseTerminal : TerminalId -> unit
-          /// Take a terminal's stdin — enter live mode, stealing the lease if another peer
-          /// holds it (Plan 13, stage 2e). The outcome arrives as a `TerminalLeaseTaken`
-          /// event, on the same one-source-of-truth rule as opening a terminal.
-          TakeTerminal : TerminalId -> unit
-          /// Hand the terminal back to block mode. Refused unless this peer is the holder.
-          ReleaseTerminal : TerminalId -> unit
-          /// Type the shell instrumentation in again (Plan 13, stage 2f).
-          RearmTerminal : TerminalId -> unit
-          ReattachTerminal : TerminalId -> unit
           /// Keystrokes for a terminal this peer holds (Plan 14, stage 6). A FRAME, not a
           /// command: there is no response by design, because a keystroke that needed an
           /// acknowledgement would make typing a round trip. The Session checks the
@@ -216,17 +203,21 @@ module Client =
         /// a connection decides it a second time.
         let perform (ports: Ports) (dispatch: ClientMsg -> unit) (effect: ClientEffect) : unit =
             let connected (send: Connection -> unit) = ports.Connection () |> Option.iter send
+            // What it was is the model's to remember (`Connection.Ask` reports it); the id is
+            // only wanted back by the launch, which waits on its own answer.
+            let ask (command: SessionCommand) = connected (fun c -> c.Ask command |> ignore)
             match effect with
-            | ClientEffect.TakeTerminal terminal -> connected (fun c -> c.TakeTerminal terminal)
-            | ClientEffect.ReleaseTerminal terminal -> connected (fun c -> c.ReleaseTerminal terminal)
-            | ClientEffect.RearmTerminal terminal -> connected (fun c -> c.RearmTerminal terminal)
-            | ClientEffect.ReattachTerminal terminal -> connected (fun c -> c.ReattachTerminal terminal)
-            | ClientEffect.CloseTerminal terminal -> connected (fun c -> c.CloseTerminal terminal)
-            | ClientEffect.OpenTerminal (title, sandbox) -> connected (fun c -> c.OpenTerminal title sandbox)
-            | ClientEffect.InterruptTurn turn -> connected (fun c -> c.InterruptTurn turn)
-            | ClientEffect.ApproveRepoCapabilities (repo, granted) -> connected (fun c -> c.ApproveRepoCapabilities repo granted)
+            | ClientEffect.TakeTerminal terminal -> ask (TakeTerminalLease terminal)
+            | ClientEffect.ReleaseTerminal terminal -> ask (ReleaseTerminalLease terminal)
+            | ClientEffect.RearmTerminal terminal -> ask (RearmTerminal terminal)
+            | ClientEffect.ReattachTerminal terminal -> ask (ReattachTerminal terminal)
+            | ClientEffect.CloseTerminal terminal -> ask (CloseTerminal terminal)
+            | ClientEffect.OpenTerminal (title, sandbox) -> ask (OpenTerminal (title, sandbox))
+            | ClientEffect.InterruptTurn turn -> ask (InterruptAgentTurn turn)
+            | ClientEffect.ApproveRepoCapabilities (repo, granted) -> ask (ApproveRepoCapabilities (repo, granted))
             | ClientEffect.Launch (LaunchEffect.Start target) ->
-                connected (fun c -> dispatch (LaunchMsg (LaunchSent (c.AddRepo target.Repo target.Branch, target))))
+                connected (fun c ->
+                    dispatch (LaunchMsg (LaunchSent (c.Ask (AddRepo (target.Repo, target.Branch)), target))))
             | ClientEffect.Launch read ->
                 ports.Launch |> Option.iter (fun reads -> Async.StartImmediate (launchRead reads dispatch read))
             | ClientEffect.Claude call ->
@@ -1156,9 +1147,9 @@ module Client =
             DocSync.onLocalUpdate doc (fun payload ->
                 Async.StartImmediate (channel.Send (State (StateSync payload))))
 
-        // A response is folded into the model, which correlates the one it is waiting on —
-        // the launch's — by request id and lets the rest go: every other command's outcome
-        // is an event, and the response adds nothing to it.
+        // A response is folded into the model, which knows what each request asked for
+        // (`Ask` told it): the launch's answer is the launch card's, a refusal of anything
+        // else is the notice, and an acceptance adds nothing to the events that follow it.
         let onResponse (requestId: RequestId) (result: SessionCommandResult) =
             dispatch (CommandAnsweredMsg (requestId, result))
 
@@ -1373,10 +1364,14 @@ module Client =
                 // No slot means nothing published to send: an untouched composer, or a draft a
                 // co-editor sent a moment ago. Both are no-ops, not errors.
                 | None -> ()
-          InterruptTurn =
-            fun turnId ->
-                Async.StartImmediate (
-                    channel.Send (Command (Request (RequestId.fresh (), InterruptAgentTurn turnId))))
+          Ask =
+            fun command ->
+                let request = RequestId.fresh ()
+                // Recorded BEFORE it leaves, so no answer can arrive ahead of the record of
+                // what it answers.
+                dispatch (CommandSentMsg (request, command))
+                Async.StartImmediate (channel.Send (Command (Request (request, command))))
+                request
           ReportPresence =
             fun focus ->
                 // Presence carries who is editing so collaborators can label and colour the
@@ -1387,34 +1382,6 @@ module Client =
             fun viewing ->
                 reportedViewing <- viewing
                 sendPresence ()
-          OpenTerminal =
-            fun title sandbox ->
-                Async.StartImmediate (channel.Send (Command (Request (RequestId.fresh (), OpenTerminal (title, sandbox)))))
-          ApproveRepoCapabilities =
-            fun repo granted ->
-                Async.StartImmediate (
-                    channel.Send (Command (Request (RequestId.fresh (), ApproveRepoCapabilities (repo, granted)))))
-          AddRepo =
-            fun repo branch ->
-                let request = RequestId.fresh ()
-                Async.StartImmediate (channel.Send (Command (Request (request, AddRepo (repo, branch)))))
-                request
-          CloseTerminal =
-            fun terminalId ->
-                Async.StartImmediate (channel.Send (Command (Request (RequestId.fresh (), CloseTerminal terminalId))))
-          TakeTerminal =
-            fun terminalId ->
-                Async.StartImmediate (channel.Send (Command (Request (RequestId.fresh (), TakeTerminalLease terminalId))))
-          ReleaseTerminal =
-            fun terminalId ->
-                Async.StartImmediate (
-                    channel.Send (Command (Request (RequestId.fresh (), ReleaseTerminalLease terminalId))))
-          RearmTerminal =
-            fun terminalId ->
-                Async.StartImmediate (channel.Send (Command (Request (RequestId.fresh (), RearmTerminal terminalId))))
-          ReattachTerminal =
-            fun terminalId ->
-                Async.StartImmediate (channel.Send (Command (Request (RequestId.fresh (), ReattachTerminal terminalId))))
           TypeIntoTerminal =
             fun terminalId data ->
                 Async.StartImmediate (channel.Send (Terminal (TerminalInput (terminalId, data))))

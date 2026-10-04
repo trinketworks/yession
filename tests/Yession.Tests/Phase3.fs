@@ -352,7 +352,7 @@ let private interruptTests =
 
                 // Interrupt: the partial body is kept as said, the stop names who stopped
                 // it, and the queued message drains immediately into a NEW turn.
-                a.Connection.InterruptTurn firstTurn
+                a.Connection.Ask (InterruptAgentTurn firstTurn) |> ignore
                 do! a.Runner.WaitFor (fun m ->
                         (m.Conversation.Items |> List.exists (fun i -> (ConversationItem.said i) = "partial thoughts"))
                         && (m.Conversation.Items

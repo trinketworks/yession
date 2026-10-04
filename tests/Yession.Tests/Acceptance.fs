@@ -212,6 +212,7 @@ let private representativeModel : ClientModel =
       Switcher = false
       StripHidden = 0
       Refused = None
+      Asked = Map.empty
       OpenFolds = Set.empty
       DatedBreaks = Set.empty
       QueueDeleteArmed = None

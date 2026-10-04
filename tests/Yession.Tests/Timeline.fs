@@ -1870,6 +1870,29 @@ let private sandboxStarted (sandbox: SandboxRef) (description: string option) =
           OnBehalfOf = None
           CausedBy = None }
 
+// --- A refusal is said once, where it was asked (P0-6) -------------------------------------
+
+let private noSandbox = "there is no sandbox named 'default' in this session, and none at all"
+let private newTerminal = Link.OpenTerminal ("", SandboxRef.defaultRef)
+
+/// A command this client sent, refused — the two halves the connection dispatches: the record
+/// of what was sent (`Client.Connection.Ask`), then the session's answer.
+let private refusedAs (command: Link.SessionCommand) (reason: string) (model: ClientModel) : ClientModel =
+    let request = RequestId.fresh ()
+    model
+    |> Support.step (CommandSentMsg (request, command))
+    |> Support.step (CommandAnsweredMsg (request, Link.CommandRejected reason))
+
+/// Which mounts the rendered page draws a refusal in, read off the page rather than off the
+/// decision, so "exactly one" is a claim about the screen. The content pane is rendered after
+/// the conversation column, so a notice past the pane's opening tag is the pane's.
+let private refusalsDrawn (model: ClientModel) : RefusalMount list =
+    let page = Support.render model
+    let pane = page.IndexOf "data-content-panel"
+    System.Text.RegularExpressions.Regex.Matches (page, "data-command-refused(?!-)")
+    |> Seq.map (fun found -> if pane >= 0 && found.Index > pane then RefusalMount.Pane else RefusalMount.Chat)
+    |> List.ofSeq
+
 let private listTests =
     testList "The terminal list (Plan 20, stage 0)" [
 
@@ -2144,7 +2167,7 @@ let private listTests =
                 clientOf []
                 |> Support.step (CommandAnsweredMsg (RequestId.fresh (), Link.CommandRejected "there is no sandbox named 'default' in this session"))
             Expect.equal
-                refused.Refused
+                (refused.Refused |> Option.map (fun refusal -> refusal.Reason))
                 (Some "there is no sandbox named 'default' in this session")
                 "the session's own sentence, which is written to be read"
 
@@ -2165,6 +2188,75 @@ let private listTests =
                 |> Support.step (CommandAnsweredMsg (RequestId.fresh (), Link.CommandRejected "no"))
                 |> Support.step DismissRefusalMsg
             Expect.equal model.Refused None "put away"
+
+        // A refused New terminal is still the ANSWER to the press that asked for it. Left
+        // owed, the next terminal this person opened anywhere — from another tab, which the
+        // log cannot tell from this one — was taken for the one this press asked for, and
+        // pulled the pane over to it long after the press had been told no.
+        testCase "a refused New terminal is owed nothing: the next terminal of mine leaves the pane where it is" <| fun () ->
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+                |> Support.step (OpenTerminalMsg ("", SandboxRef.defaultRef))
+                |> refusedAs newTerminal noSandbox
+                |> withPage [ at 2L 1.0 (opened terminalB "mine, from another tab") ]
+            Expect.equal (ClientModel.selectedTerminal model) (Some terminalA) "still where I was"
+
+        // Where the refusal is SAID. The press for a terminal verb was made in the pane, so
+        // the answer is drawn there — a reader looking at the pane does not look up at the
+        // conversation's header for it — and ONE mount draws it: the same refusal in both
+        // places is a screen saying one thing twice.
+        testCase "a terminal verb's refusal is drawn in the pane, and only there, while it is open" <| fun () ->
+            let model =
+                clientOf []
+                |> Support.step ToggleContentMsg
+                |> refusedAs newTerminal noSandbox
+            Expect.equal (refusalsDrawn model) [ RefusalMount.Pane ] "where the press was"
+
+        testCase "with the pane shut, a terminal verb's refusal is drawn in the conversation, and only there" <| fun () ->
+            let model = clientOf [] |> refusedAs newTerminal noSandbox
+            Expect.equal (refusalsDrawn model) [ RefusalMount.Chat ] "never behind a shut column"
+
+        testCase "a refusal of something pressed in the conversation is drawn there, even with the pane open" <| fun () ->
+            let turn = AgentTurnId.create "turn-1" |> expect
+            let model =
+                clientOf []
+                |> Support.step ToggleContentMsg
+                |> refusedAs (Link.InterruptAgentTurn turn) "that turn is not running"
+            Expect.equal (refusalsDrawn model) [ RefusalMount.Chat ] "where the interrupt was"
+
+        // The notice leaving the document takes whatever was focused in it along, and focus
+        // left there falls to `body` — the keyboard user who pressed its dismiss is then
+        // nowhere. It goes on to the surface the notice sat over.
+        testCase "a refusal holding focus in the pane hands it to the pane when it goes" <| fun () ->
+            let model =
+                clientOf []
+                |> Support.step ToggleContentMsg
+                |> refusedAs newTerminal noSandbox
+                |> Support.step (RefusalFocusMsg (Some RefusalMount.Pane))
+            Expect.equal
+                (ClientModel.update DismissRefusalMsg model |> snd)
+                [ ClientEffect.Move DomMove.FocusPaneEmpty ]
+                "onto what the pane offers — here, its New terminal"
+
+        testCase "a refusal holding focus in the conversation hands it to the composer when it goes" <| fun () ->
+            let model =
+                clientOf []
+                |> refusedAs newTerminal noSandbox
+                |> Support.step (RefusalFocusMsg (Some RefusalMount.Chat))
+            Expect.equal
+                (ClientModel.update (CommandAnsweredMsg (RequestId.fresh (), Link.CommandAccepted)) model |> snd)
+                [ ClientEffect.Move DomMove.FocusComposer ]
+                "taken away by an acceptance, and focus goes on all the same"
+
+        // An acceptance can clear the notice under somebody typing somewhere else entirely.
+        testCase "a refusal nobody is in leaves focus where it is when it goes" <| fun () ->
+            let model =
+                clientOf []
+                |> refusedAs newTerminal noSandbox
+                |> Support.step (RefusalFocusMsg (Some RefusalMount.Chat))
+                |> Support.step (RefusalFocusMsg None)
+            Expect.isEmpty (ClientModel.update DismissRefusalMsg model |> snd) "nothing to hand on"
 
         testCase "the menu opens and shuts on the one control" <| fun () ->
             // A toggle rather than a pair, so the control that opened it is the control that

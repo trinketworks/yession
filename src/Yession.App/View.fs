@@ -1006,18 +1006,26 @@ module View =
     /// Dismissible, because a refusal is NEWS rather than a state: nothing recovers it and
     /// nothing re-raises it, so once it has been read there is nothing left for it to do. The
     /// next command that succeeds clears it too (`CommandAnsweredMsg`).
-    let private refusalNotice (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+    ///
+    /// Two mounts — here, and in the content pane under its strip, where every terminal verb
+    /// is pressed — and ONE notice: `ClientModel.refusalMount` says which draws it, and the
+    /// other draws nothing. It tells the model when the keyboard is inside it, so whatever
+    /// takes it away can hand focus on instead of stranding it (`ClientModel.update`).
+    let private refusalNotice (dispatch: ClientMsg -> unit) (model: ClientModel) (mount: RefusalMount) : TemplateResult =
         match model.Refused with
-        | None -> Lit.nothing
-        | Some reason ->
+        | Some refusal when ClientModel.refusalMount model = Some mount ->
+            let shape = Style.refusalIn mount
             html $"""
-                <section class="{Style.signInPrompt}" data-command-refused role="status">
-                  <span class="{Style.signInPromptStatus}"><span class="{Style.statusDot}"></span>{Dom.Text.refused}</span>
-                  <span class="{Style.signInPromptBody}"><span class="{Style.small}">{reason}</span></span>
-                  <button type="button" class="{Style.refusalDismiss}" data-command-refused-dismiss
+                <section class="{shape.Row}" data-command-refused role="status"
+                         @focusin={Ev(fun _ -> dispatch (RefusalFocusMsg (Some mount)))}
+                         @focusout={Ev(fun _ -> dispatch (RefusalFocusMsg None))}>
+                  <span class="{shape.Status}"><span class="{Style.statusDot}"></span>{Dom.Text.refused}</span>
+                  <span class="{shape.Body}"><span class="{Style.small}">{refusal.Reason}</span></span>
+                  <button type="button" class="{shape.Dismiss}" data-command-refused-dismiss
                           aria-label="{Dom.Text.dismissRefusal}"
                           @click={Ev(fun _ -> dispatch DismissRefusalMsg)}>{Icon.close}</button>
                 </section>"""
+        | _ -> Lit.nothing
 
     /// The connection report where the nav column is NOT on screen: a phone, or a desktop
     /// with the column collapsed. Same visibility rule the header's "no agent" stand-in
@@ -4435,6 +4443,7 @@ module View =
                   {if model.Switcher then switcherView dispatch model pressingNewFromSwitcher else Lit.nothing}
                 </div>
                 {strip}
+                {refusalNotice dispatch model RefusalMount.Pane}
                 {body ()}
                 {paneActions}
               </div>
@@ -4455,7 +4464,7 @@ module View =
               {degradedBar actions model}
               {header actions dispatch model}
               {signInPrompt actions model}
-              {refusalNotice dispatch model}
+              {refusalNotice dispatch model RefusalMount.Chat}
               <div class="{Style.launchArea}">
                 {chat actions dispatch model}
                 {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}

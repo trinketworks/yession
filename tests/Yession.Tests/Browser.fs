@@ -636,7 +636,10 @@ let private productStartInfo (args: string list) (env: (string * string) list) :
 /// two hosts at once — and, on a runner, two hosts in a row inside the same TIME_WAIT — would
 /// be fighting over one port. The session's own address comes off the readiness line, which is
 /// the only place it is stated.
-let private startHost () : Host =
+///
+/// `env` is what the case changes about the deployment, on top of what `check` already set for
+/// the whole run (a resources profile among it).
+let private startHost (env: (string * string) list) : Host =
     let ordinal = System.Threading.Interlocked.Increment hostsStarted
     let dataDir = sprintf "tests/browser/.data/host-%d-%d" (Process.GetCurrentProcess().Id) ordinal
     if Directory.Exists dataDir then Directory.Delete (dataDir, true)
@@ -647,7 +650,7 @@ let private startHost () : Host =
             [ "--auth"; "localhost"
               "--data-dir"; dataDir
               "--port"; "0" ]
-            []
+            env
     psi.RedirectStandardOutput <- true   // stderr inherits → visible in the log
     let p = new Process (StartInfo = psi)
     let ready = TaskCompletionSource<string> ()
@@ -683,10 +686,10 @@ let private reportingAll (name: string) (pages: (IPage * Evidence) list) (body: 
 /// One CONTEXT per peer, never two pages in one: a peer id lives in origin-partitioned
 /// localStorage, so two pages in one context are one person in two tabs rather than the two
 /// collaborators a convergence case is about.
-let private peersCase (name: string) (peers: int) (body: Host -> IPage list -> Async<unit>) =
+let private peersCase (env: (string * string) list) (name: string) (peers: int) (body: Host -> IPage list -> Async<unit>) =
     testCaseAsync name <|
         async {
-            let host = startHost ()
+            let host = startHost env
             let! outcome =
                 Async.Catch <| withContexts (fun contexts -> async {
                     let! opened =
@@ -726,7 +729,11 @@ let private peersCase (name: string) (peers: int) (body: Host -> IPage list -> A
 
 /// A case with one peer in it.
 let private sessionCase (name: string) (body: IPage -> Async<unit>) =
-    peersCase name 1 (fun _ pages -> body pages.Head)
+    peersCase [] name 1 (fun _ pages -> body pages.Head)
+
+/// A case with one peer, on a deployment the case changes (`startHost`).
+let private sessionCaseOn (env: (string * string) list) (name: string) (body: IPage -> Async<unit>) =
+    peersCase env name 1 (fun _ pages -> body pages.Head)
 
 /// A case with one peer that also reads the SESSION's own files. Everything above asserts on
 /// what a browser can see, which is the right default; this is for the one thing a browser
@@ -734,17 +741,82 @@ let private sessionCase (name: string) (body: IPage -> Async<unit>) =
 /// it, and assuming it is what made the reopen budget below mean different things on different
 /// machines.
 let private hostSessionCase (name: string) (body: Host -> IPage -> Async<unit>) =
-    peersCase name 1 (fun host pages -> body host pages.Head)
+    peersCase [] name 1 (fun host pages -> body host pages.Head)
 
 /// A case with two, which is what convergence and presence are about.
 let private sessionPair (name: string) (body: IPage -> IPage -> Async<unit>) =
-    peersCase name 2 (fun _ pages ->
+    peersCase [] name 2 (fun _ pages ->
         match pages with
         | [ a; b ] -> body a b
         | other -> failwithf "expected two peers, got %d" other.Length)
 
+/// The refusal notices a person can SEE: drawn, with something at their centre that belongs
+/// to them. A notice under a shut column or behind the pane is in the document and not on the
+/// screen, and "said once" is a claim about the screen.
+let private refusalsOnScreen =
+    """[...document.querySelectorAll('[data-command-refused]')].filter(el => {
+         const box = el.getBoundingClientRect()
+         if (box.width === 0 || box.height === 0) return false
+         const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+         return !!hit && el.contains(hit)
+       })"""
+
+/// A session with no resources profile has no `default` sandbox, so New terminal is refused —
+/// the press this suite can make the session refuse without running anything. The profile
+/// `check` sets for the whole run is taken away for this one host.
+let private refusingNewTerminal = [ "YESSION_SESSION_RESOURCES", "" ]
+
+/// Open the pane, press New terminal there, and wait for the refusal to be on screen.
+let private refusedInPane (page: IPage) : Async<unit> =
+    async {
+        do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
+        do! openNewTerminal page
+        do! waitFor "a refusal on screen" page (sprintf "%s.length > 0" refusalsOnScreen)
+    }
+
 let tests =
     testList "Browser E2E" [
+        // The press was made in the pane, so the answer is said there — and once. The
+        // conversation column has a mount too, and a reader looking at the pane does not look
+        // up at the conversation's header for news about the button under their hand.
+        sessionCaseOn refusingNewTerminal "a New terminal refused in the pane is said in the pane, once" <|
+            fun page ->
+            async {
+                do! refusedInPane page
+                do! waitFor
+                        "exactly one visible refusal, inside the pane, in the session's words"
+                        page
+                        (sprintf
+                            """(() => {
+                                 const shown = %s
+                                 return shown.length === 1
+                                   && !!shown[0].closest('[data-content-panel]')
+                                   && shown[0].textContent.includes("'default'")
+                               })()"""
+                            refusalsOnScreen)
+            }
+
+        // The dismiss takes the notice out of the document with the keyboard inside it, and
+        // focus left there falls to `body`: the person who pressed it is then nowhere.
+        sessionCaseOn refusingNewTerminal "dismissing a refusal from the keyboard hands focus on, never to the page" <|
+            fun page ->
+            async {
+                do! refusedInPane page
+                // The refused press is an answer, and lands focus where the pane is (a frame
+                // for the move to be asked, a frame for it to be made); let it, so the dismiss
+                // below is pressed from where a person tabbing to it would be.
+                do! awaitU (page.EvaluateAsync
+                                "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r))))")
+                do! awaitU (page.FocusAsync "[data-command-refused-dismiss]")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do! waitFor
+                        "the refusal gone, and focus in the pane it sat in"
+                        page
+                        """!document.querySelector('[data-command-refused]')
+                           && document.activeElement !== document.body
+                           && !!document.activeElement?.closest('[data-content-panel]')"""
+            }
+
         sessionPair "markdown typed in the rich composer renders formatted, converges, and sends as markdown" <|
             fun pageA pageB ->
             async {
