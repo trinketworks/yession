@@ -1210,169 +1210,90 @@ let private unmergePr (capabilities: AgentCapabilities) (raw: string) (number: i
             | Error e -> return sprintf "could not take the pull request back: %s" e
         })
 
-/// Reading a call's arguments, the way `AgentTools.fs`'s own `ToolArgs` does for every other
-/// tool: every body reads its own JSON, so a decode that lived elsewhere would have to know
-/// every tool's shape to do the same job.
-let private readArgs (decoder: Decoder<'a>) (json: string) : Result<'a, string> =
-    let json = if String.IsNullOrWhiteSpace json then "{}" else json
-    match Decode.fromString decoder json with
-    | Ok value -> Ok value
-    | Error e -> Error (sprintf "could not read the arguments: %s" e)
-
-/// `watch_pr`/`unwatch_pr`'s pair: which repo, and which pull request on it.
-let private repoNumberArgs (json: string) : Result<string * int, string> =
-    readArgs
-        (Decode.object (fun get ->
-            get.Required.Field "repo" Decode.string,
-            get.Required.Field "number" Decode.int))
-        json
-
-/// `create_pr`'s six: which repo, the branch the work is on, the branch it is for, what to
-/// call it, what to say about it, and whether it is a draft. The two branches are read as
-/// they were written and turned into a draft by the domain, which is where the refusals
-/// live (`PrDraft.create`).
-let private prDraftArgs (json: string) : Result<string * string * string * string * string option * bool, string> =
-    readArgs
-        (Decode.object (fun get ->
-            get.Required.Field "repo" Decode.string,
-            get.Required.Field "head" Decode.string,
-            get.Required.Field "base" Decode.string,
-            get.Required.Field "title" Decode.string,
-            get.Optional.Field "body" Decode.string |> Option.filter (fun s -> s <> ""),
-            get.Optional.Field "draft" Decode.bool |> Option.defaultValue false))
-        json
-
-/// `list_prs`' four: the repo, and which of its pull requests — read into a `PrQuery` by the
-/// domain, which is where a state word or a limit is refused.
-let private listArgs (json: string) : Result<string * PrQuery, string> =
-    readArgs
-        (Decode.object (fun get ->
-            get.Required.Field "repo" Decode.string,
-            get.Optional.Field "state" Decode.string,
-            get.Optional.Field "head" Decode.string,
-            get.Optional.Field "limit" Decode.int))
-        json
-    |> Result.bind (fun (repo, state, head, limit) -> PrQuery.create state head limit |> Result.map (fun q -> repo, q))
-
-/// `merge_pr`'s three: the pair above, and how the commits should land — `squash` unless
-/// said otherwise, for `PrMergeMethod.create`'s reason.
-let private mergeArgs (json: string) : Result<string * int * string, string> =
-    readArgs
-        (Decode.object (fun get ->
-            get.Required.Field "repo" Decode.string,
-            get.Required.Field "number" Decode.int,
-            get.Optional.Field "method" Decode.string |> Option.defaultValue "squash"))
-        json
+/// `watch_pr`/`unwatch_pr`'s pair, and every other verb's that takes one pull request:
+/// which repo, and which pull request on it.
+let private repoNumber : ToolArgs<string * int> =
+    toolArgs {
+        let! repo = ToolArgs.text "repo" "owner/name"
+        and! number = ToolArgs.integer "number" "the pull request number"
+        return repo, number
+    }
 
 /// The tools, built from a turn's capabilities exactly the way `AgentTools.fs`'s
 /// `verbs` builds every other one — descriptor paired with body, so a tool cannot be
 /// declared without being callable. Merged into the `yession` registry through
 /// `AgentCapabilities.Repos.ProviderTools`.
 let providerTools (capabilities: AgentCapabilities) : (ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>)) list =
-    let tool name description fields body : ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>) =
-        ToolDescriptor.create AgentTools.Namespace name description (ToolSchema.ofFields fields), body
+    let tool = AgentTools.tool
     [ tool
           "list_prs"
           "List a repository's pull requests on GitHub as they stand right now — any of them, whoever opened them, watched or not: number, title, branches, author, and for an open one whether it is a draft, its checks, whether it conflicts, and whether it is on its way in (armed to merge, or in the merge queue). Most recently updated first. A look, not a watch: it changes nothing and says nothing further — watch_pr is how to be told when one changes, and the pull_requests query is the ones this session already watches. Reads with the GitHub credential of whoever's turn this is, so a \"cannot see it\" on a repo that exists means their credential cannot reach it."
-          [ ToolField.required "repo" "string" "owner/name"
-            ToolField.optional "state" "string" "\"open\" (the default), \"closed\", \"merged\" or \"all\""
-            ToolField.optional "head" "string" "only those from this branch, e.g. \"claude/fix-the-thing\""
-            ToolField.optional "limit" "integer" "how many, 1 to 50; 20 unless said" ]
-          (fun args ->
-              async {
-                  match listArgs args with
-                  | Error e -> return Error e
-                  | Ok (repo, query) -> return! ok (listPrs capabilities repo query)
-              })
+          (toolArgs {
+              let! repo = ToolArgs.text "repo" "owner/name"
+              and! state = ToolArgs.textOption "state" "\"open\" (the default), \"closed\", \"merged\" or \"all\""
+              and! head = ToolArgs.textOption "head" "only those from this branch, e.g. \"claude/fix-the-thing\""
+              and! limit = ToolArgs.integerOption "limit" "how many, 1 to 50; 20 unless said"
+              // Read into a `PrQuery` by the domain, which is where a state word or a limit
+              // is refused.
+              return PrQuery.create state head limit |> Result.map (fun query -> repo, query)
+           })
+          (AgentTools.whenValid (fun (repo, query) -> ok (listPrs capabilities repo query)))
       tool
           "create_pr"
           "Open a pull request on GitHub, from a branch that is already pushed. The commits have to be up there first — push from a terminal with execute_command; this opens the pull request and nothing else. It answers with the number, as `owner/repo#n`, which is what watch_pr takes: this session says nothing further about a pull request nobody watches. Opening one that is already open from the same branch onto the same base changes nothing and reports the one that exists, so calling it twice is safe. It spends the GitHub credential of whoever's turn this is, so a \"cannot see it\" on a repo that exists means their credential cannot reach that repo — say so rather than retrying; everyone in the session sees the pull request open in the timeline. What GitHub will not open it says why in its own words — no commits between the two branches, a head branch it cannot find — and that sentence is what comes back."
-          [ ToolField.required "repo" "string" "owner/name"
-            ToolField.required
-                "head"
-                "string"
-                "the branch the work is on, e.g. \"claude/fix-the-thing\"; \"owner:branch\" for a branch on a fork"
-            ToolField.required "base" "string" "the branch it is for, e.g. \"master\" — there is no default, name it"
-            ToolField.required "title" "string" "the pull request title, e.g. \"fix: a closed terminal ends its block\""
-            ToolField.optional "body" "string" "the description, in markdown; omit for none"
-            ToolField.optional
-                "draft"
-                "boolean"
-                "true to open it as a draft — on the record, and explicitly not asking for review yet. A draft cannot merge: ready_pr undrafts it when it is ready" ]
-          (fun args ->
-              async {
-                  match prDraftArgs args with
-                  | Error e -> return Error e
-                  | Ok (repo, head, onto, title, body, draft) ->
-                      return! ok (createPr capabilities repo head onto title body draft)
-              })
+          (toolArgs {
+              let! repo = ToolArgs.text "repo" "owner/name"
+              // The two branches are read as they were written and turned into a draft by
+              // the domain, which is where the refusals live (`PrDraft.create`).
+              and! head =
+                  ToolArgs.text
+                      "head"
+                      "the branch the work is on, e.g. \"claude/fix-the-thing\"; \"owner:branch\" for a branch on a fork"
+              and! onto = ToolArgs.text "base" "the branch it is for, e.g. \"master\" — there is no default, name it"
+              and! title = ToolArgs.text "title" "the pull request title, e.g. \"fix: a closed terminal ends its block\""
+              and! body = ToolArgs.textOption "body" "the description, in markdown; omit for none"
+              and! draft =
+                  ToolArgs.flag
+                      "draft"
+                      "true to open it as a draft — on the record, and explicitly not asking for review yet. A draft cannot merge: ready_pr undrafts it when it is ready"
+              return repo, head, onto, title, body, draft
+           })
+          (fun (repo, head, onto, title, body, draft) -> ok (createPr capabilities repo head onto title body draft))
       tool
           "ready_pr"
           "Mark a draft pull request on GitHub ready for review — the undoing of create_pr's draft flag, and what a draft needs before merge_pr can take it; draft_pr is the other way. One that is not a draft, or has merged, is reported as such and nothing is changed, so calling it twice is safe. It spends the GitHub credential of whoever's turn this is, and everyone in the session sees the act in the timeline. What GitHub will not do it says why in its own words, and that sentence is what comes back."
-          [ ToolField.required "repo" "string" "owner/name"
-            ToolField.required "number" "integer" "the pull request number" ]
-          (fun args ->
-              async {
-                  match repoNumberArgs args with
-                  | Error e -> return Error e
-                  | Ok (repo, number) -> return! ok (readyPr capabilities repo number)
-              })
+          repoNumber
+          (fun (repo, number) -> ok (readyPr capabilities repo number))
       tool
           "draft_pr"
           "Turn an open pull request on GitHub back into a draft — ready_pr the other way: still on the record, no longer asking for review. Not how to hold a merge: a pull request nobody calls merge_pr on does not merge. One on its way in (auto merge armed, or in the merge queue) is left there and the answer says so — take it back with unmerge_pr first. One that is already a draft, or has merged, is reported as such and nothing is changed, so calling it twice is safe. It spends the GitHub credential of whoever's turn this is, and everyone in the session sees the act in the timeline. What GitHub will not do it says why in its own words, and that sentence is what comes back."
-          [ ToolField.required "repo" "string" "owner/name"
-            ToolField.required "number" "integer" "the pull request number" ]
-          (fun args ->
-              async {
-                  match repoNumberArgs args with
-                  | Error e -> return Error e
-                  | Ok (repo, number) -> return! ok (draftPr capabilities repo number)
-              })
+          repoNumber
+          (fun (repo, number) -> ok (draftPr capabilities repo number))
       tool
           "merge_pr"
           "Merge a pull request on GitHub, by whichever route its state allows: if its checks are still running it is set to merge automatically when they pass (auto merge, which watch_pr then reports as armed); if it is mergeable now and the base branch has a merge queue it goes into the queue (reported as queued, as is an armed one once its checks pass and GitHub enqueues it); if it is mergeable now with no queue it is merged at once. The answer says which happened, and the session starts watching it (as watch_pr would) so the timeline says when it lands — or when a merge queue ejects it, which reads as stalled. One already armed, queued or merged is reported as such and nothing is changed, so calling it twice is safe. A draft does not merge: undraft it with ready_pr first. It spends the GitHub credential of whoever's turn this is: what lands on the base branch is theirs, and everyone in the session sees the act in the timeline. What GitHub will not do it says why in its own words — auto merge not allowed on the repository, a review still required, the method not allowed — and that sentence is what comes back."
-          [ ToolField.required "repo" "string" "owner/name"
-            ToolField.required "number" "integer" "the pull request number"
-            ToolField.optional
-                "method"
-                "string"
-                "how the commits land: \"squash\" (the default), \"merge\" for a merge commit, or \"rebase\"" ]
-          (fun args ->
-              async {
-                  match mergeArgs args with
-                  | Error e -> return Error e
-                  | Ok (repo, number, method) -> return! ok (mergePr capabilities repo number method)
-              })
+          (toolArgs {
+              let! repo, number = repoNumber
+              // `squash` unless said otherwise, for `PrMergeMethod.create`'s reason.
+              and! method =
+                  ToolArgs.textOption
+                      "method"
+                      "how the commits land: \"squash\" (the default), \"merge\" for a merge commit, or \"rebase\""
+              return repo, number, method |> Option.defaultValue "squash"
+           })
+          (fun (repo, number, method) -> ok (mergePr capabilities repo number method))
       tool
           "unmerge_pr"
           "Take a pull request on GitHub back off its way in: if auto merge is armed it is disarmed, and if it sits in the merge queue it is pulled out. The undoing of merge_pr — and the only one there is, since what has merged has merged: one already merged, or never on its way in, is reported as such and nothing is changed. A watch on it then reports stalled, which is what it is. It spends the GitHub credential of whoever's turn this is, and everyone in the session sees the act in the timeline."
-          [ ToolField.required "repo" "string" "owner/name"
-            ToolField.required "number" "integer" "the pull request number" ]
-          (fun args ->
-              async {
-                  match repoNumberArgs args with
-                  | Error e -> return Error e
-                  | Ok (repo, number) -> return! ok (unmergePr capabilities repo number)
-              })
+          repoNumber
+          (fun (repo, number) -> ok (unmergePr capabilities repo number))
       tool
           "watch_pr"
           "Watch a pull request on GitHub. The session polls it and announces on the timeline when it merges, closes, reopens, when its checks pass or fail, when auto merge is armed (armed), when it enters the merge queue (queued), and when it stops being on either while it is still open (stalled — disarmed, or ejected from the queue without merging, which nothing else reports); the current state of every watched pull request is the pull_requests query. Reads it with the credential of whoever's turn this is, so a \"cannot see it\" on a pull request that exists means their GitHub credential cannot reach that repo. Watching one already watched reports its state and changes nothing."
-          [ ToolField.required "repo" "string" "owner/name"
-            ToolField.required "number" "integer" "the pull request number" ]
-          (fun args ->
-              async {
-                  match repoNumberArgs args with
-                  | Error e -> return Error e
-                  | Ok (repo, number) -> return! ok (watchPr capabilities repo number)
-              })
+          repoNumber
+          (fun (repo, number) -> ok (watchPr capabilities repo number))
       tool
           "unwatch_pr"
           "Stop watching a pull request. The session stops polling it and says nothing further about it; everyone sees the stop in the timeline."
-          [ ToolField.required "repo" "string" "owner/name"
-            ToolField.required "number" "integer" "the pull request number" ]
-          (fun args ->
-              async {
-                  match repoNumberArgs args with
-                  | Error e -> return Error e
-                  | Ok (repo, number) -> return! ok (unwatchPr capabilities repo number)
-              }) ]
+          repoNumber
+          (fun (repo, number) -> ok (unwatchPr capabilities repo number)) ]

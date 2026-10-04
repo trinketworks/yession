@@ -71,6 +71,11 @@ module ToolArgs =
         { ToolArgs.Fields = [ ToolField.secret key description ]
           ToolArgs.Read = fun get -> get.Required.Field key Decode.string }
 
+    /// A required integer.
+    let integer (key: string) (description: string) : ToolArgs<int> =
+        { ToolArgs.Fields = [ ToolField.required key "integer" description ]
+          ToolArgs.Read = fun get -> get.Required.Field key Decode.int }
+
     /// An optional string. An empty one is absent: a model that computed a value and got
     /// nothing has not asked for "", and a tool handed "" would refuse it later and less
     /// clearly.
