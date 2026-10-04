@@ -330,6 +330,16 @@ type RefusalMount =
     /// where a terminal verb's refusal goes when the pane is shut.
     | Chat
 
+/// A terminal's keyboard taken from THIS client by somebody else (`ClientModel.Stolen`): which
+/// terminal, and who has it now.
+///
+/// News for one person. The log says a steal to everybody alike — a lease ended, `LeaseStolen`
+/// — and the lease bar renames its holder for everybody alike; but only the person it was
+/// taken from was in the middle of something, and for them the bar changing a name under the
+/// screen they were typing into was the whole of the announcement.
+[<RequireQualifiedAccess>]
+type StolenLease = { Terminal : TerminalId; TakenBy : ActorRef }
+
 /// What the session last REFUSED (`ClientModel.Refused`): its own sentence, and the two
 /// things the client needs to say it well.
 ///
@@ -920,7 +930,7 @@ type ClientModel =
       /// A screen, not a stream — a terminal in live mode is running a program that moves
       /// the cursor, and what it DISPLAYS is a projection of what it emitted. The transcript
       /// stays the record; this is the view.
-      TerminalScreens : Map<TerminalId, string>
+      TerminalScreens : Map<TerminalId, LiveScreen>
       /// How big this client's own view of each terminal is, in CHARACTER CELLS: the box the
       /// output is laid into, measured from the rendered page rather than assumed.
       ///
@@ -1096,6 +1106,13 @@ type ClientModel =
       /// press was (`refusalMount`); never for the launch's own add, whose card says its own
       /// refusal under the row it was sent from.
       Refused       : Refusal option
+      /// The last time somebody took a terminal's keyboard from this client, while it still
+      /// stands: set by the steal arriving as NEWS (`HeardThrough` — a steal replayed on a
+      /// reload happened to nobody who is here now), and gone the moment it is no longer
+      /// true — this client takes it back, the taker hands it on or back, the terminal ends —
+      /// or once it has been read and put away (`DismissStolenMsg`). One slot: a second steal
+      /// is the newer news. Drawn in place of that terminal's lease bar, for this client only.
+      Stolen        : StolenLease option
       /// The commands this client has sent and not yet heard back about, by request id, with
       /// what each asked for. Written where a command is SENT (`CommandSentMsg`, from the one
       /// verb that sends one, `Client.Connection.Ask`) and spent by its answer — which comes
@@ -1459,7 +1476,7 @@ type ClientMsg =
     /// The live screen, recomposed (Plan 14, stage 6). Dispatched by the platform half,
     /// which owns the emulator: a screen is a projection an emulator maintains, and the
     /// reducer is pure.
-    | TerminalScreenMsg of TerminalId * screen: string
+    | TerminalScreenMsg of TerminalId * screen: LiveScreen
     /// This client's own view of a terminal was measured, and it had moved (Plan 13, stage
     /// 2b). Dispatched by the platform half, which is the only half that can measure a box —
     /// and it measures on the edges a render loop cannot see, a splitter dragged or a window
@@ -1558,6 +1575,9 @@ type ClientMsg =
     /// Put away the notice saying what the session last refused. A refusal is news, not a
     /// state: once it has been read there is nothing left for it to do.
     | DismissRefusalMsg
+    /// Put away the notice saying somebody took a terminal's keyboard from this client. The
+    /// lease bar it stood in place of says the rest: who has it, and how to take it.
+    | DismissStolenMsg
     /// The keyboard went into the refusal notice drawn at this mount (`Some`), or left it
     /// (`None`). Told by the notice itself, so that whatever takes it away — its dismiss, or
     /// an acceptance — can hand focus on rather than strand it on `body`.
@@ -1820,6 +1840,7 @@ module ClientModel =
           PaneMenu = false
           Switcher = false
           Refused = None
+          Stolen = None
           Asked = Map.empty
           OpenFolds = Set.empty
           DatedBreaks = Set.empty
@@ -2405,7 +2426,7 @@ module ClientModel =
             max 0.0 (latestBefore System.Int32.MaxValue - latestBefore pin))
 
     /// The live screen of a terminal, when this client has composed one.
-    let terminalScreen (terminal: TerminalId) (model: ClientModel) : string option =
+    let terminalScreen (terminal: TerminalId) (model: ClientModel) : LiveScreen option =
         model.TerminalScreens |> Map.tryFind terminal
 
     /// A terminal's feed, empty when nothing has arrived for it yet.
@@ -3157,6 +3178,37 @@ module ClientModel =
                 freshEvents
                 |> List.map (fun e -> e.Event)
                 |> List.fold Attribution.applyEvent model.Attribution
+            // A steal FROM this client, which only this client is told about (`Stolen`). Read
+            // off the release the steal wrote rather than off the lease changing hands: a
+            // hand-back and somebody else's take in one page change the holder just the same,
+            // and nobody took anything from anybody. "This client" is `ClientModel.me`'s rule,
+            // asked of the attribution this page folds — as `opened` below asks it, and for
+            // the same reason.
+            //
+            // Only NEWS (`HeardThrough`): the log keeps every steal for ever, and a reload that
+            // announced last week's would be telling nobody anything. Then held only while it
+            // is still true — the taker still has the keyboard of a terminal still open — so a
+            // notice can never outlive the steal it reports, whichever event ended it.
+            let stolen =
+                let mine = Attribution.actorFor attribution.PeerUsers model.Peer.PeerId
+                let heard =
+                    if not model.HeardThrough then model.Stolen
+                    else
+                        freshEvents
+                        |> List.fold
+                            (fun stolen e ->
+                                match e.Event with
+                                | SessionEvent.TerminalLeaseReleased released when released.Was = mine ->
+                                    match released.Reason with
+                                    | LeaseStolen by when by <> mine ->
+                                        Some { StolenLease.Terminal = released.TerminalId; StolenLease.TakenBy = by }
+                                    | LeaseStolen _ | LeaseReleased | LeaseHolderGone | LeaseIdle -> stolen
+                                | _ -> stolen)
+                            model.Stolen
+                heard
+                |> Option.filter (fun stolen ->
+                    Projection.tryFind stolen.Terminal terminals
+                    |> Option.exists (fun view -> view.IsOpen && view.Lease = Some stolen.TakenBy))
             // The terminal half of the chat, gated on the same offset as the conversation —
             // one page, two folds, merged only at render.
             let timeline, _ =
@@ -3282,6 +3334,7 @@ module ClientModel =
                 Agent = agent
                 Environment = environment
                 Terminals = terminals
+                Stolen = stolen
                 Tabs = tabs
                 Pane = pane
                 Opening = opening
@@ -3828,6 +3881,7 @@ module ClientModel =
             // beside it, is a screen arguing with itself.
             | CommandAccepted -> { model with Refused = None }
         | DismissRefusalMsg -> { model with Refused = None }
+        | DismissStolenMsg -> { model with Stolen = None }
         | RefusalFocusMsg mount ->
             { model with Refused = model.Refused |> Option.map (fun refusal -> { refusal with FocusedIn = mount }) }
         | SetModelMsg choice -> model |> withSynced { model.Synced with Model = choice }
@@ -3901,6 +3955,13 @@ module ClientModel =
         let effects =
             match msg with
             | TakeTerminalMsg terminal -> [ ClientEffect.TakeTerminal terminal ]
+            // The notice goes from under the press that put it away, and the lease bar takes
+            // its place; the keyboard goes to the command line under both, which is where the
+            // pane lands whenever somebody else holds the keyboard.
+            | DismissStolenMsg ->
+                model.Stolen
+                |> Option.map (fun stolen -> ClientEffect.Move (DomMove.FocusCommandLine stolen.Terminal))
+                |> Option.toList
             | ReleaseTerminalMsg terminal -> [ ClientEffect.ReleaseTerminal terminal ]
             | RearmTerminalMsg terminal -> [ ClientEffect.RearmTerminal terminal ]
             | ReattachTerminalMsg terminal -> [ ClientEffect.ReattachTerminal terminal ]

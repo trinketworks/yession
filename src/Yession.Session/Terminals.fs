@@ -63,6 +63,11 @@ type Emulator =
       /// waiting for what has been fed to be applied returns a screen that has not been
       /// drawn yet, which is not a snapshot of anything.
       Serialize : unit -> Async<string>
+      /// The same screen as a READER sees it: the serialization, and where its cursor
+      /// stands. Read in the one moment both describe — behind the same barrier — because a
+      /// cursor read a write later is a caret drawn on the wrong character. The Process never
+      /// asks: nobody reads its screen but a peer, who composes their own.
+      Screen : unit -> Async<LiveScreen>
       Resize : int -> int -> unit
       /// Subscribe to alternate-screen transitions — `true` on entry, `false` on exit.
       ///
@@ -85,6 +90,7 @@ module Emulator =
     let none : Emulator =
         { Write = ignore
           Serialize = fun () -> async { return "" }
+          Screen = fun () -> async { return { LiveScreen.Text = ""; LiveScreen.Cursor = None } }
           Resize = fun _ _ -> ()
           // No emulator, no alt-screen signal, and therefore no auto-flip: a terminal here
           // still runs blocks and can still be taken by hand. Detection is the part that

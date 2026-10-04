@@ -214,6 +214,7 @@ let private representativeModel : ClientModel =
       PaneMenu = false
       Switcher = false
       Refused = None
+      Stolen = None
       Asked = Map.empty
       OpenFolds = Set.empty
       DatedBreaks = Set.empty
@@ -401,7 +402,7 @@ let private leasedTerminalModel : ClientModel =
                 |> List.map (fun t -> { t with Lease = Some (PeerRef bob) }) }
         // The screen this client composed from the Process's snapshot and the records since
         // (Plan 14, stage 6). Coloured, so the render exercises the ANSI path.
-        TerminalScreens = Map.ofList [ terminalId, "\u001b[32mvim ~/notes\u001b[0m" ] }
+        TerminalScreens = Map.ofList [ terminalId, { LiveScreen.Text = "\u001b[32mvim ~/notes\u001b[0m"; LiveScreen.Cursor = None } ] }
 
 /// The same terminal, held by THIS peer: the one copy of the screen that takes keystrokes.
 let private heldTerminalModel : ClientModel =
