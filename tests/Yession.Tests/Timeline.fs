@@ -1580,6 +1580,38 @@ let private listTests =
                 |> Support.step (OpenTerminalMsg ("", devInHello))
             Expect.isFalse opened.PaneMenu "shut by the asking"
 
+        // What the session REFUSED. Every command answers, and until this the launch surface
+        // was the only caller that read the answer — so a press the session would not honour
+        // did nothing and said nothing. It cost an afternoon of diagnosing why terminals
+        // would not open on one machine; the refusal had been saying why the whole time, to
+        // a client that threw it away.
+        testCase "a command the session refused is kept, in the words it refused with" <| fun () ->
+            let refused =
+                clientOf []
+                |> Support.step (CommandAnsweredMsg (RequestId.fresh (), Link.CommandRejected "there is no sandbox named 'default' in this session"))
+            Expect.equal
+                refused.Refused
+                (Some "there is no sandbox named 'default' in this session")
+                "the session's own sentence, which is written to be read"
+
+        testCase "a command the session accepted clears the last refusal" <| fun () ->
+            // A notice about something that did not work, left standing beside something that
+            // did, is a screen arguing with itself.
+            let model =
+                clientOf []
+                |> Support.step (CommandAnsweredMsg (RequestId.fresh (), Link.CommandRejected "no"))
+                |> Support.step (CommandAnsweredMsg (RequestId.fresh (), Link.CommandAccepted))
+            Expect.equal model.Refused None "nothing left to say"
+
+        testCase "a refusal read is a refusal done with" <| fun () ->
+            // News, not a state: nothing recovers it and nothing re-raises it, so it has to be
+            // dismissible or it is a notice that outlives its own subject.
+            let model =
+                clientOf []
+                |> Support.step (CommandAnsweredMsg (RequestId.fresh (), Link.CommandRejected "no"))
+                |> Support.step DismissRefusalMsg
+            Expect.equal model.Refused None "put away"
+
         testCase "the menu opens and shuts on the one control" <| fun () ->
             // A toggle rather than a pair, so the control that opened it is the control that
             // shuts it and focus never has to go looking for a replacement.
