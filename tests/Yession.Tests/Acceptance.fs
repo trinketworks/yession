@@ -209,6 +209,8 @@ let private representativeModel : ClientModel =
       PaneOpensItself = false
       ItemMenu = None
       PaneMenu = false
+      Switcher = false
+      StripHidden = 0
       Refused = None
       OpenFolds = Set.empty
       DatedBreaks = Set.empty
@@ -2063,7 +2065,7 @@ let private uiChecklistTests =
 // next improvement while saying the design was wrong.
 let private terminalListTests =
     testList "The terminal list" [
-        let listed (model: ClientModel) = Support.render { model with Pane = Some (OnList model.Pane) }
+        let listed (model: ClientModel) = Support.render { model with Switcher = true }
         let id = TerminalId.value terminalId
 
         // Every case below is the same shape deliberately: the verb where it works, and its
@@ -2104,16 +2106,10 @@ let private terminalListTests =
                 ((listed closedTerminalModel).Contains (Dom.attr Dom.Hooks.terminalListGone id))
                 "and a recording that survived says nothing of the sort"
 
-        // An ARIA requirement rather than a layout preference: `role="tablist"` promises a
-        // tabpanel showing one of its tabs, and a strip left standing over the list would be
-        // promising a panel that is not in the document.
-        testCase "the strip and the list are never on screen together" <| fun () ->
-            Expect.isTrue
-                ((Support.render representativeModel).Contains "role=\"tablist\"")
-                "the strip, while the pane is showing a tab"
-            Expect.isFalse
-                ((listed representativeModel).Contains "role=\"tablist\"")
-                "and no tablist promising a panel the list has replaced"
+        // "the strip and the list are never on screen together" was here: the list REPLACED
+        // the pane then, and a tablist left standing over it promised a panel that was not in
+        // the document. The switcher (P2-2) is a popover over the pane, panel and all, so the
+        // strip under it is telling the truth.
 
         testCase "every terminal the session has had is reachable from the list, open or not" <| fun () ->
             // The reason the strip can stop being a census (Plan 20, stage 1): the row IS the
@@ -2155,7 +2151,7 @@ let private terminalListTests =
 // of the conversation would be addressable and unreachable at once.
 let private contentListTests =
     testList "The list panel's artifacts" [
-        let listed (model: ClientModel) = Support.render { model with Pane = Some (OnList model.Pane) }
+        let listed (model: ClientModel) = Support.render { model with Switcher = true }
         let stamp = ArtifactStamp.ofActor ActorRef.Agent
         let shareOf (name: string) : ConversationItem =
             { MessageId = MessageId.create ("msg-" + name) |> expect
@@ -2189,14 +2185,15 @@ let private contentListTests =
         // The headings exist to tell two kinds apart. Over terminals alone, "Terminals" names
         // the only thing on screen — a word that says nothing and costs a line.
         testCase "the sections are named only when there are two kinds to tell apart" <| fun () ->
-            Expect.isTrue ((listed (withShare "chart.png")).Contains "Artifacts") "both kinds present, both named"
+            Expect.isTrue ((listed (withShare "chart.png")).Contains "Files") "both kinds present, both named"
             Expect.isFalse ((listed representativeModel).Contains ">Terminals<") "terminals alone need no heading"
 
-        // What the list is FOR, which is the question the `New` section it briefly carried was
-        // not an answer to. A census of nothing says there is nothing; the way to make
-        // something is the strip's door, and a button here would make this surface the chooser
-        // again by a shorter route.
-        testCase "a list with nothing in it says so, and offers nothing" <| fun () ->
+        // What the switcher is FOR, which is the question the `New` section the list briefly
+        // carried was not an answer to. A census of nothing says there is nothing. Its foot
+        // makes a terminal (P2-2) the way the strip's `+` does — asking where from the `+`'s
+        // own menu when there is a choice — so the places themselves are never rows here,
+        // which would make this surface the chooser again by a shorter route.
+        testCase "a switcher with nothing in it says so, and lists no places to open one" <| fun () ->
             let bare =
                 { representativeModel with
                     Terminals = { representativeModel.Terminals with Terminals = [] }
@@ -2821,11 +2818,11 @@ let private chromeTests =
                     GitHub =
                         { representativeModel.GitHub with
                             Flow = GitHubAwaitingApproval ("049A-EBB0", "https://github.com/login/device", "mine", 5) } }
-        // The terminal list (Plan 20, stage 0) replaces the pane's body, so no other render
+        // The switcher (Plan 20, stage 0; P2-2) renders only while open, so no other render
         // contains its controls. Scanned HERE rather than pinned again beside the list's own
         // tests: the accessibility floor is asserted once and centrally, and a surface that
         // is invisible to the scan is a surface the floor does not cover.
-        let listShell = Support.render { representativeModel with Pane = Some (OnList None) }
+        let listShell = Support.render { representativeModel with Switcher = true }
         // Every notice at once — a dead feed, a credential the provider rejected, a session
         // that stopped, and a deployment that can keep none of it. Scanned here for the same
         // reason the terminal list is: a surface the floor's scan cannot see is a surface the

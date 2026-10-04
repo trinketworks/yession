@@ -68,8 +68,8 @@ module Icon =
     let private stopPath = "M4 4 L12 4 L12 12 L4 12 Z"
     /// Go back INTO something: an arrow meeting the wall it reconnects to.
     let private attachPath = "M2.5 8 L10 8 M6.75 4.75 L10 8 L6.75 11.25 M12.5 3.5 L12.5 12.5"
-    /// A list. What the terminal list's toggle shows, and it needs no other reading.
-    let private listPath = "M3.5 4.5 L12.5 4.5 M3.5 8 L12.5 8 M3.5 11.5 L12.5 11.5"
+    /// A caret pointing down: this opens something beneath it (the pane head's switcher).
+    let private caretPath = "M4 6.25 L8 10.25 L12 6.25"
     /// An archive box: a lid across the top, the body under it, and a notch in the middle of
     /// the lid for the hand. Deliberately NOT a downward arrow or a tray with one — this set
     /// already spends arrows on direction, and an arrow here would read as "download".
@@ -158,7 +158,8 @@ module Icon =
     let rewind = stroked "w-3.5 h-3.5" rewindPath
     let stop = stroked "w-3.5 h-3.5" stopPath
     let attach = stroked "w-3.5 h-3.5" attachPath
-    let list = stroked "w-3.5 h-3.5" listPath
+    /// The switcher's door, before the head's name (P2-2).
+    let caret = stroked "w-3 h-3 shrink-0" caretPath
     /// Retire this session from the working list. A row-riding verb like the three above, and
     /// it needs no word for the same reason: it is rendered only on a row that can be
     /// archived, and an archived row wears the word `Unarchive` instead.

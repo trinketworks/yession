@@ -816,15 +816,15 @@ let tests =
                 do! openNewTerminal pageA
 
                 // Opening is a command; the terminal reaches BOTH peers as an event, so B
-                // learns about it without having asked for anything — on its row in the list,
-                // because B's strip holds only what B opened. Choosing the row is how B goes
-                // to watch.
+                // learns about it without having asked for anything — on its row in the
+                // switcher, because B's strip holds only what B opened. Choosing the row is how
+                // B goes to watch.
                 let hasTab = """!!document.querySelector('[data-terminal-tab]')"""
                 let! _ = await (pageA.WaitForFunctionAsync hasTab)
                 do! awaitU (pageB.Locator("[data-content-toggle='show']").First.ClickAsync ())
-                do! awaitU (pageB.Locator("[data-content-list-toggle='list']").First.ClickAsync ())
-                let! _ = await (pageB.WaitForSelectorAsync "[data-terminal-list-row]")
-                do! awaitU (pageB.Locator("[data-terminal-list-row]").First.ClickAsync ())
+                do! awaitU (pageB.Locator("[data-pane-switcher]").First.ClickAsync ())
+                let! _ = await (pageB.WaitForSelectorAsync "[data-content-list] [data-terminal-list-row]")
+                do! awaitU (pageB.Locator("[data-content-list] [data-terminal-list-row]").First.ClickAsync ())
                 let! _ = await (pageB.WaitForFunctionAsync hasTab)
 
                 // A types a command with REAL key events, so the input's binding is what
@@ -1315,11 +1315,11 @@ let tests =
                     |> Async.Ignore
             })
 
-        // The kill is pressed on a row of the list, and the close that answers it takes that
-        // row's kill away — so focus lands on the row that takes its place, rather than on
-        // `body` with the list still under the reader's hand.
+        // The kill is pressed on a row of the switcher, and the close that answers it takes
+        // that row's kill away — so focus lands on the row that takes its place, rather than
+        // on `body` with the switcher still under the reader's hand.
         Tag.needs "two terminals to kill one of" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
-        sessionCase "killing a terminal from the list lands on the next one" <|
+        sessionCase "killing a terminal from the switcher lands on the next one" <|
             fun page ->
             async {
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
@@ -1331,8 +1331,8 @@ let tests =
                     |> Async.Ignore
                 let! tabs = terminalTabs page
                 let one, two = tabs.[0], tabs.[1]
-                do! awaitU (page.ClickAsync "[data-content-list-toggle='list']")
-                let kill = sprintf "[data-terminal-close='%s']" one
+                do! awaitU (page.ClickAsync "[data-pane-switcher]")
+                let kill = sprintf "[data-content-list] [data-terminal-close='%s']" one
                 do! awaitU (page.FocusAsync kill)
                 // Two presses: the first arms the kill, the second, on the same control,
                 // performs it (`KillArmed`).
@@ -1346,7 +1346,7 @@ let tests =
                     |> Async.Ignore
                 do!
                     await (page.WaitForFunctionAsync (
-                            "id => document.activeElement?.getAttribute('data-terminal-list-row') === id",
+                            "id => document.activeElement?.closest('[data-content-list]') && document.activeElement?.getAttribute('data-terminal-list-row') === id",
                             box two))
                     |> Async.Ignore
             })
@@ -4815,26 +4815,24 @@ let editorTests =
                 return ()
             }
 
-        // One column of names, whatever marks the rows wear. The list puts four different
-        // marks in its first cell — a 6px sync dot, an 8px prompt on a row that offers a
-        // terminal, a 12px status glyph, a 14px content icon — and a ragged left edge is what
-        // makes a list of twenty read as twenty unrelated things.
+        // One column of names, whatever marks the rows wear. The switcher puts several
+        // different marks in its first cell — a 6px sync dot, a 12px status glyph, a 14px
+        // content icon — and a ragged left edge is what makes a list of twenty read as twenty
+        // unrelated things.
         //
         // Only a browser can answer it, and the markup looks right either way: every row is
         // its own grid container, so the `auto` track this started with was sized by that
         // row's own mark and coordinated with nothing. Measured, not pixel-matched — the
         // offset itself is the design and may move; that they AGREE is the promise.
-        editorCase "the list's names stand in one column, whatever mark each row wears" <| fun page ->
+        editorCase "the switcher's names stand in one column, whatever mark each row wears" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-content-list-toggle='list']")
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
 
-                // Both kinds of row at once, which is the whole point: a run of terminals
-                // alone could line up and still be ragged against what sits above them.
                 let! kinds =
                     await (page.EvaluateAsync<int> """() => new Set([...document.querySelectorAll(
-                        "#shell [data-content-list] > div[role='listitem'] > :first-child")]
+                        "#shell [data-content-list] [role='listitem'] > :first-child")]
                         .map(m => Math.round(m.getBoundingClientRect().width))).size""")
                 Expect.isTrue (kinds > 1) (sprintf "the rows wear marks of different widths, got %d width(s)" kinds)
 
@@ -4842,8 +4840,7 @@ let editorTests =
                 // which would drag the verbs at the far edge into the count.
                 let names =
                     [ Yession.App.Dom.Hooks.terminalListRow
-                      Yession.App.Dom.Hooks.artifactListRow
-                      Yession.App.Dom.Hooks.sandboxNew ]
+                      Yession.App.Dom.Hooks.artifactListRow ]
                     |> List.map (sprintf "#shell [data-content-list] [%s]")
                     |> String.concat ", "
                 let! counted =
@@ -4856,33 +4853,26 @@ let editorTests =
                 return ()
             }
 
-        // The terminal list (Plan 20, stage 0). WHICH verbs a row offers is a fold the cheap
-        // tier already pins; what only a browser can answer is the DOM swap — the list
-        // replaces the strip and the pane's body at once, so choosing a row removes the
-        // control that was pressed, and focus has to land on what replaced it rather than
-        // on `body`. That is the WCAG floor, not a nicety.
-        editorCase "the list opens a terminal and hands focus to the pane it replaced itself with" <| fun page ->
+        // The switcher (P2-2). WHICH verbs a row offers is a fold the cheap tier already pins;
+        // what only a browser can answer is the DOM swap — choosing a row shuts the switcher,
+        // so the control that was pressed leaves the document, and focus has to land on what
+        // the choice put on screen rather than on `body`. That is the WCAG floor, not a
+        // nicety.
+        editorCase "choosing a terminal in the switcher lands on its command line" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-content-list-toggle='list']")
-
-                // One surface at a time: the tablist promises a panel showing one of its
-                // tabs, and it must not be left standing over a list that replaced it.
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [role='tablist']")""")
 
                 // Every terminal the session has is reachable here, whether or not the strip
                 // would have carried it.
-                let! rows = await (page.EvaluateAsync<int> "() => document.querySelectorAll('#shell [data-terminal-list-row]').length")
+                let! rows = await (page.EvaluateAsync<int> "() => document.querySelectorAll('#shell [data-content-list] [data-terminal-list-row]').length")
                 Expect.equal rows 3 "every terminal the harness has, the closed one included"
 
-                // Choosing a row shows that terminal AND leaves the list — one act — so the
-                // row that was pressed is gone from the document by the time focus moves.
-                // Driven from the KEYBOARD, because that is the half of this a click cannot
-                // answer: a row has to be a real control somebody can reach and press
-                // without a pointer, and the focus move afterwards is what the floor asks
-                // for when the pressed control leaves the document.
-                do! awaitU (page.FocusAsync "#shell [data-terminal-list-row='term-live']")
+                // Driven from the KEYBOARD: a row has to be a real control somebody can reach
+                // and press without a pointer, and the focus move afterwards is what the floor
+                // asks for when the pressed control leaves the document.
+                do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-list-row='term-live']")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 let! _ = await (page.WaitForFunctionAsync """!document.querySelector('#shell [data-content-list]')""")
                 let! _ =
@@ -4896,6 +4886,65 @@ let editorTests =
                 return ()
             }
 
+        // The switcher's door gives focus back when it shuts. Escape from inside it removes the
+        // element focus was on; the head's name is the control it hung from, and the only
+        // place a reader who pressed Escape expects to be.
+        editorCase "Escape closes the switcher and returns focus to the head" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.Locator("#shell [data-pane-switcher]").PressAsync "Enter")
+                // Opened from the keyboard, focus went in with it.
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """!!document.activeElement?.closest('#shell [data-content-list]')""")
+                do! awaitU (page.Keyboard.PressAsync "Escape")
+                let! _ = await (page.WaitForFunctionAsync """!document.querySelector('#shell [data-content-list]')""")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """document.activeElement?.hasAttribute('data-pane-switcher') === true""")
+                return ()
+            }
+
+        // The shortcut works from anywhere on the page — the whole point of one — including
+        // with the pane shut, which it opens.
+        editorCase "the switcher's shortcut opens it from the chat" <| fun page ->
+            async {
+                do! awaitU (page.Keyboard.PressAsync "Control+Backquote")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                return ()
+            }
+
+        // The overflow door (P2-2). With more tabs than the strip's window shows, the strip
+        // says how many it is hiding, and that count opens the switcher, which lists every
+        // terminal — the hidden ones included. Only a browser can answer it: the count is a
+        // measurement of a laid-out strip, which no render of the markup has.
+        editorCase "the overflow count opens the switcher and names the hidden terminals" <| fun page ->
+            async {
+                do! openManyTerminals page
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-strip-overflow]")
+                // The tabs a reader cannot see, measured: whatever is not wholly inside the
+                // strip's window.
+                let! hidden =
+                    await (page.EvaluateAsync<string> """() => {
+                        const strip = document.querySelector('#shell [data-pane-strip]').getBoundingClientRect();
+                        return JSON.stringify([...document.querySelectorAll('#shell [data-pane-strip] [data-pane-tab]')]
+                            .filter(t => { const r = t.getBoundingClientRect(); return r.left < strip.left - 1 || r.right > strip.right + 1; })
+                            .map(t => t.getAttribute('data-pane-tab').replace('terminal:', '')));
+                    }""")
+                let hidden = System.Text.Json.JsonSerializer.Deserialize<string array> hidden
+                Expect.isNonEmpty hidden "the strip is hiding some of its tabs"
+                let! count = await (page.GetAttributeAsync ("#shell [data-pane-strip-overflow]", "data-pane-strip-overflow"))
+                Expect.equal count (string hidden.Length) "and the count says how many"
+                do! awaitU (page.ClickAsync "#shell [data-pane-strip-overflow]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                let! listed =
+                    await (page.EvaluateAsync<string> """() => JSON.stringify([...document.querySelectorAll(
+                        '#shell [data-content-list] [data-terminal-list-row]')].map(r => r.getAttribute('data-terminal-list-row')))""")
+                let listed = System.Text.Json.JsonSerializer.Deserialize<string array> listed |> Set.ofArray
+                for id in hidden do
+                    Expect.isTrue (listed.Contains id) (sprintf "%s, hidden by the strip, is in the switcher" id)
+            }
+
         // A kill is two presses in one place (`KillArmed`). What only a browser can answer is
         // WHERE the second press lands: the armed face is wider than the glyph that armed it,
         // and the confirm is only a confirm if the spot that was pressed is now the confirming
@@ -4903,11 +4952,12 @@ let editorTests =
         editorCase "one press on kill asks, and the asking control is where the press was" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-content-list-toggle='list']")
-                let! rect = await (page.Locator("#shell [data-terminal-close='term-harness']").BoundingBoxAsync ())
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                let kill = "#shell [data-content-list] [data-terminal-close='term-harness']"
+                let! rect = await (page.Locator(kill).BoundingBoxAsync ())
                 let x, y = rect.X + rect.Width / 2.0f, rect.Y + rect.Height / 2.0f
                 do! awaitU (page.Mouse.ClickAsync (x, y))
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-close='term-harness'][data-terminal-close-armed='true']")
+                let! _ = await (page.WaitForSelectorAsync (kill + "[data-terminal-close-armed='true']"))
                 // Hit-tested, not compared by rectangle: what matters is what a press at that
                 // point would reach, which is whatever is painted there.
                 let! under =
@@ -4926,20 +4976,47 @@ let editorTests =
         editorCase "a double-click on a kill ends that terminal and no other" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-content-list-toggle='list']")
-                do! awaitU (page.Locator("#shell [data-terminal-close='term-harness']").DblClickAsync ())
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                do! awaitU (page.Locator("#shell [data-content-list] [data-terminal-close='term-harness']").DblClickAsync ())
                 let! sent = await (page.EvaluateAsync<string> "() => JSON.stringify(window.__closed || [])")
                 Expect.equal sent "[\"term-harness\"]" "one kill, of the terminal the double-click was on"
             }
 
+        // The tab's × IS that kill (P2-2) — the same control, the same two presses — so the
+        // same double-click on it ends its terminal and only its terminal, and selects nothing
+        // on the way: a × is not a way into the tab it sits on.
+        editorCase "a double-click on a tab's × ends that terminal and no other" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.Locator("#shell [role='tablist'] [data-terminal-close='term-harness']").DblClickAsync ())
+                let! sent = await (page.EvaluateAsync<string> "() => JSON.stringify(window.__closed || [])")
+                Expect.equal sent "[\"term-harness\"]" "one kill, of the tab the double-click was on"
+            }
+
+        // Delete on a focused tab is the ×'s press from the keyboard: the first arms, and the
+        // armed face shows on that tab, so a reader can see what the next Delete will do.
+        editorCase "Delete on a tab arms its kill, and Delete again kills it" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.FocusAsync "#shell [data-pane-tab='terminal:term-harness']")
+                do! awaitU (page.Keyboard.PressAsync "Delete")
+                let! _ = await (page.WaitForSelectorAsync "#shell [role='tablist'] [data-terminal-close='term-harness'][data-terminal-close-armed='true']")
+                let! sent = await (page.EvaluateAsync<int> "() => (window.__closed || []).length")
+                Expect.equal sent 0 "the first Delete asked"
+                do! awaitU (page.Keyboard.PressAsync "Delete")
+                let! sent = await (page.EvaluateAsync<string> "() => JSON.stringify(window.__closed || [])")
+                Expect.equal sent "[\"term-harness\"]" "the second killed that terminal"
+            }
+
         // The keyboard half of the same control (UI baseline: a swap must never strand
         // focus). Escape takes the arming back and the control it was on keeps focus, so the
-        // next Enter asks again rather than landing somewhere else.
+        // next Enter asks again rather than landing somewhere else — and the switcher it is in
+        // stays open, because that Escape was about the arming.
         editorCase "Escape takes an armed kill back and leaves focus where it was" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-content-list-toggle='list']")
-                let kill = "#shell [data-terminal-close='term-harness']"
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                let kill = "#shell [data-content-list] [data-terminal-close='term-harness']"
                 do! awaitU (page.FocusAsync kill)
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 let! _ = await (page.WaitForSelectorAsync (kill + "[data-terminal-close-armed='true']"))
@@ -4960,7 +5037,7 @@ let editorTests =
         //
         // Two deaths, because there are two closed faces: the harness's first terminal has a
         // recording, and one opened here has none, so it closes into "not kept".
-        editorCase "the rows of the list do not move when a terminal dies" <| fun page ->
+        editorCase "the rows of the switcher do not move when a terminal dies" <| fun page ->
             async {
                 let expect r = Result.defaultWith failwith r
                 let fold (offset: int64) (event: Yession.Domain.SessionEvent) =
@@ -4980,7 +5057,7 @@ let editorTests =
                           Yession.Domain.Terminals.TerminalClosed.Reason = "closed by a peer"
                           Yession.Domain.Terminals.TerminalClosed.By = None }
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-content-list-toggle='list']")
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 // Opened from elsewhere, so the newest and last: what its close must not change
                 // is its own height.
                 do!
@@ -4991,7 +5068,7 @@ let editorTests =
                               Yession.Domain.Terminals.TerminalOpened.Title = Yession.Domain.Terminals.TerminalTitle.fromProse "bare"
                               Yession.Domain.Terminals.TerminalOpened.Sandbox = None
                               Yession.Domain.Terminals.TerminalOpened.Renewable = false })
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-close='term-bare']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-close='term-bare']")
                 let rows =
                     """() => JSON.stringify([...document.querySelectorAll('#shell [data-content-list] [role=listitem]')]
                         .filter(r => r.querySelector('[data-terminal-list-row]'))

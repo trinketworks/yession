@@ -553,8 +553,11 @@ module TerminalMode =
         // watch rather than being carried into a read that has no use for it.
         | WatchingBehind (terminal, _) -> Reading terminal
 
-/// The pane's one face (Plan 25, stage 2; P2-1): a terminal, a preview over one, or the
-/// census of every terminal.
+/// The pane's one face (Plan 25, stage 2; P2-1): a terminal, or a preview over one.
+///
+/// The census of every terminal used to be a third face here (`OnList`), a destination the
+/// pane went to and came back from. It is the SWITCHER now (P2-2), a popover over whichever
+/// face is up (`ClientModel.Switcher`), so it covers nothing and there is nothing to resume.
 type PaneMode =
     | OnTerminal of TerminalMode
     /// Something opened from the chat, laid over the terminal it belongs to (`under`, the read
@@ -568,37 +571,28 @@ type PaneMode =
     /// is this one: a preview is on screen exactly while `Pane` is `Previewing`, and `Tabs`
     /// never holds one — it cannot, being a list of terminals.
     | Previewing of Preview * under: TerminalMode option
-    /// The terminal list. A DESTINATION rather than a mask over one — which is what it was as
-    /// a boolean, and why a chip could open a tab nobody could see.
-    ///
-    /// It remembers the face it covered so that glancing at the list and coming back resumes
-    /// it, a DVR pin or a preview included. Never another list: the one way here
-    /// (`ToggleContentListMsg`) leaves the list rather than nesting it.
-    | OnList of resume: PaneMode option
 
 module PaneMode =
 
-    /// The terminal read this face is ABOUT — the one showing, the one a preview is laid
-    /// over, or the one the list is covering. What the pane's furniture (the strip, the
-    /// composer, presence) reads, because those answer "which terminal am I working with"
-    /// rather than "what is on screen".
-    let rec subject =
+    /// The terminal read this face is ABOUT — the one showing, or the one a preview is laid
+    /// over. What the pane's furniture (the strip, the composer, presence) reads, because
+    /// those answer "which terminal am I working with" rather than "what is on screen".
+    let subject =
         function
         | OnTerminal mode -> Some mode
         | Previewing (_, under) -> under
-        | OnList resume -> resume |> Option.bind subject
 
-    /// The terminal read on screen, if one is: `None` under a preview and behind the list.
+    /// The terminal read on screen, if one is: `None` under a preview.
     let showing =
         function
         | OnTerminal mode -> Some mode
-        | Previewing _ | OnList _ -> None
+        | Previewing _ -> None
 
-    /// The preview on screen, if one is: `None` behind the list, which covers it.
+    /// The preview on screen, if one is.
     let preview =
         function
         | Previewing (preview, _) -> Some preview
-        | OnTerminal _ | OnList _ -> None
+        | OnTerminal _ -> None
 
 /// What a pane tab's player should be handed (Plan 14, stage 4) — a whole recording, or a
 /// range of one, plus the things the stock player already knows how to do with it.
@@ -769,11 +763,12 @@ type ClientModel =
       /// P2-1).
       ///
       /// The strip used to be a census — every terminal the session ever had, for ever,
-      /// because it was the only door to a recording. The list is that door now, so the
+      /// because it was the only door to a recording. The switcher is that door now, so the
       /// strip can be what a person is actually working with: the terminals THIS client
-      /// opened — pressed for, chose from the list, reached through a chip — or was handed by
-      /// `open_tab`/`focus_tab`. Not every live terminal: the agent's own are reached through
-      /// the list, because nothing a session DOES puts a tab in somebody's strip.
+      /// opened — pressed for, chose from the switcher, reached through a chip — or was
+      /// handed by `open_tab`/`focus_tab`. Not every live terminal: the agent's own are
+      /// reached through the switcher, because nothing a session DOES puts a tab in somebody's
+      /// strip.
       ///
       /// Terminals and nothing else, by type. A block, a stretch or a file opened from the
       /// chat is a PREVIEW over the selected terminal (`PaneMode.Previewing`), never a tab,
@@ -786,7 +781,9 @@ type ClientModel =
       ///
       /// What closes one is its terminal CLOSING — at once if it is not the one selected, and
       /// when the reader selects another if it is (`settle`), so a tab never vanishes at the
-      /// moment the thing in it finishes. Or `close_tab`, for one not on screen.
+      /// moment the thing in it finishes. Or `close_tab`, for one not on screen. There is no
+      /// way to drop a tab and leave its terminal running (P2-2): a tab's × is the kill, so
+      /// the strip never says a terminal is gone while it is still running somewhere.
       Tabs          : TerminalId list
       /// How many terminals this client has ASKED for and not yet been shown.
       ///
@@ -805,8 +802,8 @@ type ClientModel =
       Opening       : int
       /// The terminal this client last asked to END, until the close arrives.
       ///
-      /// `Opening`'s shape, for `Opening`'s reason: the kill is pressed on a row of the list,
-      /// the close comes back as an event like every other peer's, and that event removes the
+      /// `Opening`'s shape, for `Opening`'s reason: the kill is pressed on a tab's × or a
+      /// row of the switcher, the close comes back as an event like every other peer's, and that event removes the
       /// control that was pressed — so the only thing that can say where focus goes next is
       /// the fold that sees the close arrive, and it can say so only if it knows the close is
       /// the answer to a press made HERE. A terminal somebody else ends must not move this
@@ -824,8 +821,8 @@ type ClientModel =
       /// (`ClientModel.timers`), by Escape, by focus leaving the control, and by the terminal
       /// closing under it.
       KillArmed     : TerminalId option
-      /// What the pane is SHOWING: which terminal and which read of it, a preview over one,
-      /// or the census (Plan 25, stage 2; P2-1). `None` = nothing chosen yet, resolved to a
+      /// What the pane is SHOWING: which terminal and which read of it, or a preview over one
+      /// (Plan 25, stage 2; P2-1). `None` = nothing chosen yet, resolved to a
       /// default by `selectedTerminal`.
       ///
       /// One field rather than the four this replaces, because the four had to agree and
@@ -880,6 +877,24 @@ type ClientModel =
       /// was asked. Model state rather than the DOM's own, for `ItemMenu`'s reason — a menu
       /// rendered only while open cannot be asked whether it is open.
       PaneMenu      : bool
+      /// Whether the switcher is open (P2-2): every terminal this session has had, live and
+      /// closed, and every file shared into it, hung under the pane's head name.
+      ///
+      /// `PaneMenu`'s shape, for its reason — one popover hangs off one control — and the two
+      /// share a slot in effect: opening either shuts the other, so there is never a second
+      /// popover over the pane with one Escape between them. It is the list that used to
+      /// REPLACE the pane (`PaneMode.OnList`); laid over it instead, it covers no read and so
+      /// has nothing to resume, and choosing from it is choosing a tab.
+      Switcher      : bool
+      /// How many of the strip's tabs are scrolled out of its window, as the browser last
+      /// measured it (`StripOverflowMsg`). The strip's overflow count says it, and opens the
+      /// switcher, because a strip of eight in a pane that shows four and a half used to give
+      /// no sign that there was anything past its edge.
+      ///
+      /// The model's rather than the DOM's because the count is RENDERED, and a render cannot
+      /// read a measurement: the shell measures after each render and sends the number only
+      /// when it changes.
+      StripHidden   : int
       /// The last thing the session REFUSED, in its own words.
       ///
       /// A command answers `CommandAccepted` or `CommandRejected`, and until now only the
@@ -978,8 +993,16 @@ type DomMove =
     | FocusPaneReopen
     /// Onto the empty pane's one press — what a pane with nothing in it offers.
     | FocusPaneEmpty
-    /// Onto this terminal's row in the list.
-    | FocusListRow of TerminalId
+    /// Onto this terminal's row in the switcher.
+    | FocusSwitcherRow of TerminalId
+    /// Into the switcher, once it has opened: onto the row of the terminal the pane is about,
+    /// else its first row — the place a reader who opened it to change terminals starts from.
+    | FocusSwitcher
+    /// Onto the control the switcher hangs from (the pane's head name), once the switcher has
+    /// gone — `FocusPaneNew`'s reason, for the other popover this pane has.
+    | FocusPaneSwitcher
+    /// Onto this terminal's tab in the strip — where a kill pressed on the strip lands.
+    | FocusTab of TerminalId
     /// The same move, made only while focus is in the pane or nowhere at all.
     ///
     /// For a move that follows an EVENT rather than a press: a terminal a press asked for, a
@@ -1273,6 +1296,17 @@ type ClientMsg =
     /// and focus never has to go looking for a replacement.
     | TogglePaneMenuMsg
     | ClosePaneMenuMsg
+    /// Open or shut the switcher (P2-2). A toggle for `TogglePaneMenuMsg`'s reason: the head
+    /// name that opens it is the control that shuts it. Opening it brings the pane with it —
+    /// reaching for a terminal you cannot see is exactly the case where the pane is shut.
+    | ToggleSwitcherMsg
+    /// Shut the switcher: Escape, and a press outside it. Choosing from it shuts it too, as
+    /// part of the choice (`ShowInPaneMsg`), and lands focus where the choice put the reader.
+    | CloseSwitcherMsg
+    /// How many tabs the strip hides past its edges, as the shell measured it after a render
+    /// (`StripHidden`). Sent only on a change, so a render that measures what the model
+    /// already holds sends nothing and the loop it would make ends there.
+    | StripOverflowMsg of hidden: int
     /// Something was copied to the clipboard (`Some` the hook of the box it came from), or
     /// the moment for saying so has passed (`None`).
     ///
@@ -1280,8 +1314,6 @@ type ClientMsg =
     /// so this is dispatched only where the write SUCCEEDED. A confirmation the reducer
     /// could set on its own would be a claim about a clipboard nothing here has read.
     | CopiedMsg of string option
-    /// Show the content list, or go back to the read it covered (Plan 20, stage 0).
-    | ToggleContentListMsg
     /// Ensure the composer slot for (terminal, author) exists, carrying the queue key it
     /// becomes when sent. The author's own call, exactly as for a message draft.
     | EnsureTerminalDraftMsg of TerminalId * PeerId * QueueId
@@ -1307,10 +1339,10 @@ type ClientMsg =
     | RearmTerminalMsg of TerminalId
     /// Ask the provider for a closed terminal's stream again (Plan 19, step 4).
     | ReattachTerminalMsg of TerminalId
-    /// End a terminal. Not closing its tab: this is the one verb that stops what runs in it.
+    /// End a terminal — the one verb that stops what runs in it, and what a tab's × is (P2-2).
     ///
-    /// Dispatched by the list only on a SECOND press, once the terminal is `KillArmed` — the
-    /// first press sends `ArmKillMsg` instead. Like `DeleteQueuedMsg`, the two-press rule is a
+    /// Dispatched by a kill control only on a SECOND press, once the terminal is `KillArmed` —
+    /// the first press sends `ArmKillMsg` instead (`ClientModel.killPress`). Like `DeleteQueuedMsg`, the two-press rule is a
     /// property of the control, not of this message, which still ends the terminal whoever
     /// sends it.
     | CloseTerminalMsg of TerminalId
@@ -1500,6 +1532,8 @@ module ClientModel =
           PaneOpensItself = false
           ItemMenu = None
           PaneMenu = false
+          Switcher = false
+          StripHidden = 0
           Refused = None
           OpenFolds = Set.empty
           DatedBreaks = Set.empty
@@ -1642,10 +1676,10 @@ module ClientModel =
     /// that default as a tab it was not. A client with nothing open sees the empty pane and its
     /// New terminal, and reaches everybody else's terminals through the list.
     ///
-    /// The choice is the read SHOWING, the one a preview is laid over, or the one the list
-    /// covers (`PaneMode.subject`): the strip, the head and presence answer "which terminal am
-    /// I working with", which a preview or the census does not change. A choice naming a
-    /// CLOSED terminal survives while its tab does — it is how the list opens a recording.
+    /// The choice is the read SHOWING, or the one a preview is laid over (`PaneMode.subject`):
+    /// the strip, the head and presence answer "which terminal am I working with", which a
+    /// preview does not change. A choice naming a CLOSED terminal survives while its tab does —
+    /// it is how the switcher opens a recording.
     let selectedTerminal (model: ClientModel) : TerminalId option =
         let exists (terminal: TerminalId) = Projection.tryFind terminal model.Terminals |> Option.isSome
         match model.Pane |> Option.bind PaneMode.subject |> Option.map TerminalMode.terminal with
@@ -1773,10 +1807,10 @@ module ClientModel =
     ///
     /// Opens, and never shuts: a session with nothing open leaves the column as the page found
     /// it. What it opens ONTO is the reader's own tab where the strip offers one
-    /// (`selectedTerminal`), and otherwise the list — the strip holds only what this reader opened,
-    /// so a fresh browser on a session whose terminals are the agent's or a colleague's has an
-    /// empty strip, and an empty pane saying "New terminal" over a running build is the one
-    /// thing this must not show. The list is what answers "what is here".
+    /// (`selectedTerminal`), and otherwise the switcher (P2-2) — the strip holds only what this
+    /// reader opened, so a fresh browser on a session whose terminals are the agent's or a
+    /// colleague's has an empty strip, and an empty pane saying "New terminal" over a running
+    /// build is the one thing this must not show. The switcher is what answers "what is here".
     let private openOfItself (before: ClientModel) (model: ClientModel) : ClientModel =
         if not model.PaneOpensItself then model
         elif model.TerminalsOpen <> before.TerminalsOpen then { model with PaneOpensItself = false }
@@ -1787,34 +1821,20 @@ module ClientModel =
             { model with
                 PaneOpensItself = false
                 TerminalsOpen = true
-                Pane =
-                    match model.Pane, selectedTerminal model with
-                    | Some (OnList _), _ | _, Some _ -> model.Pane
-                    | _ -> Some (OnList None) }
-
-    /// Whether the pane is showing the census rather than a terminal or a preview (Plan 20,
-    /// stage 0; Plan 25, stage 2). A face the pane is IN, not a flag over the one it is in —
-    /// which is why nothing else has to remember to clear it.
-    let showsList (model: ClientModel) : bool =
-        match model.Pane with
-        | Some (OnList _) -> true
-        | Some (OnTerminal _ | Previewing _) | None -> false
+                Switcher = model.Switcher || Option.isNone (selectedTerminal model) }
 
     /// Where focus lands when the pane comes on screen showing what this model shows.
     ///
     /// ONE answer for every way the pane is shown — the reopen control, a chip, a row of the
-    /// list, a terminal arriving that somebody here pressed for — because each of them is the
-    /// same promise: the keyboard follows the reader into the column. A terminal is a thing you
-    /// type into, so it lands on its command line; a preview on its panel; nothing on the
-    /// press that makes something. The list is its own face and carries no panel, and
-    /// `FocusPane` answers for it (`PaneShell.toPane`).
+    /// switcher, a terminal arriving that somebody here pressed for — because each of them is
+    /// the same promise: the keyboard follows the reader into the column. A terminal is a thing
+    /// you type into, so it lands on its command line; a preview on its panel; nothing on the
+    /// press that makes something.
     let paneLanding (model: ClientModel) : DomMove =
-        if showsList model then DomMove.FocusPane
-        else
-            match preview model, selectedTerminal model with
-            | Some _, _ -> DomMove.FocusPane
-            | None, Some terminal -> DomMove.FocusCommandLine terminal
-            | None, None -> DomMove.FocusPaneEmpty
+        match preview model, selectedTerminal model with
+        | Some _, _ -> DomMove.FocusPane
+        | None, Some terminal -> DomMove.FocusCommandLine terminal
+        | None, None -> DomMove.FocusPaneEmpty
 
     /// The command the pane's text read is positioned at (Plan 25, stage 3) — what the
     /// browser scrolls into view once the render that put it on screen has happened. Not
@@ -1827,16 +1847,11 @@ module ClientModel =
     /// this screen cannot drift: there is one answer and the render and the report read it.
     ///
     /// A preview reports what it is OF (`PreviewSubject.view`): a command or a stretch is its
-    /// terminal, which is the terminal it is laid over, and a file is the file.
-    ///
-    /// `None` while the list covers the pane, and that is the honest answer rather than an
-    /// oversight — the census is up, nothing else is on screen, and telling someone you are
-    /// reading their image while you are looking at a list of terminals is a claim this cannot
-    /// support. The subject survives everywhere else (`selectedTerminal`) because the strip is
-    /// about what you are working WITH; this is about what you can SEE.
+    /// terminal, which is the terminal it is laid over, and a file is the file. The switcher
+    /// changes nothing here: it is a popover over what is on screen, which is still on screen.
     let viewing (model: ClientModel) : ViewRef option =
         match model.Pane with
-        | None | Some (OnList _) -> None
+        | None -> None
         | Some (Previewing (preview, _)) -> Some (PreviewSubject.view preview.Subject)
         | Some (OnTerminal _) -> selectedTerminal model |> Option.map ViewingTerminal
 
@@ -2168,8 +2183,8 @@ module ClientModel =
         // Nothing to play: a file is drawn, not replayed.
         | PreviewSubject.Content _ -> false
 
-    /// The terminal list, in the order it renders (Plan 20, stage 0): every terminal in the
-    /// order it was OPENED, closed ones where they stood.
+    /// The switcher's terminals, in the order it lists them (Plan 20, stage 0; P2-2): every
+    /// terminal in the order it was OPENED, closed ones where they stood.
     ///
     /// One order, and it never changes under a row. It used to be two — the open terminals
     /// first, then the closed ones newest first — and that made a kill a reorder: the killed
@@ -2184,26 +2199,60 @@ module ClientModel =
     /// make the list's order a function of how much a terminal printed.
     let terminalRows (model: ClientModel) : TerminalView list = model.Terminals.Terminals
 
-    /// Where focus lands after a kill this client asked for, given the list as it stood when
+    /// The other item in `items` that takes `gone`'s place once it has gone — the next one,
+    /// or at the end the one before: `TabStrip.neighbour`'s rule over what is left.
+    let private successor (items: TerminalId list) (gone: TerminalId) : TerminalId option =
+        let others = items |> List.filter (fun id -> id <> gone)
+        items
+        |> List.tryFindIndex (fun id -> id = gone)
+        |> Option.bind (fun here -> TabStrip.neighbour here (List.length items))
+        |> Option.bind (fun index -> List.tryItem index others)
+
+    /// Where focus lands after a kill this client asked for, given the pane as it stood when
     /// the kill was pressed (`model` is the fold's BEFORE).
     ///
-    /// The next row — `TabStrip.neighbour`'s rule, the one the strip's Delete follows, over
-    /// the OTHER rows. Asked of the order the reader was looking at; the list holds still
-    /// through a close (`terminalRows`), so that is also the order they are looking at after
-    /// it. With no other row, the killed terminal's own: a closed terminal keeps its row, as
-    /// its recording, and that row is where the hand already is.
+    /// Pressed in the SWITCHER (it was open): the next row, asked of the order the reader was
+    /// looking at — the switcher holds still through a close (`terminalRows`), so that is also
+    /// the order they are looking at after it. With no other row, the killed terminal's own: a
+    /// closed terminal keeps its row, as its recording, and that row is where the hand is.
+    ///
+    /// Pressed on the STRIP: the selected tab stays, closed, until the reader chooses another
+    /// (`settle`), so a kill of it lands on its own tab — the hand is already there. Any other
+    /// tab leaves the strip at once, and its neighbour takes the focus it had.
     let killLanding (model: ClientModel) (killed: TerminalId) : DomMove =
-        let rows = terminalRows model |> List.map (fun view -> view.TerminalId)
-        let others = rows |> List.filter (fun id -> id <> killed)
-        rows
-        |> List.tryFindIndex (fun id -> id = killed)
-        |> Option.bind (fun here -> TabStrip.neighbour here (List.length rows))
-        |> Option.bind (fun index -> List.tryItem index others)
-        |> Option.defaultValue killed
-        |> DomMove.FocusListRow
+        if model.Switcher then
+            let rows = terminalRows model |> List.map (fun view -> view.TerminalId)
+            successor rows killed |> Option.defaultValue killed |> DomMove.FocusSwitcherRow
+        elif selectedTerminal model = Some killed then DomMove.FocusTab killed
+        else
+            match successor model.Tabs killed with
+            | Some next -> DomMove.FocusTab next
+            | None -> DomMove.FocusPane
 
-    /// Every artifact the session holds, latest version first shared first — what the list
-    /// panel offers beside the terminals, and the only way to reach one whose chip has scrolled
+    /// Whether a key press is the switcher's shortcut (P2-2): Ctrl+` (⌘` on a Mac — either
+    /// modifier, because a page cannot know which keyboard it is under). By the key's
+    /// POSITION (`code`), not the character it types, which differs by layout. Spelled for the
+    /// reader in `Dom.Text.switchTerminal`.
+    let opensSwitcher (code: string) (ctrl: bool) (meta: bool) : bool =
+        (ctrl || meta) && code = "Backquote"
+
+    /// What one press on a terminal's kill asks for, wherever the control is (P2-2) — the
+    /// strip's × and Delete on a tab, a row's kill in the switcher. `None` where there is
+    /// nothing to kill.
+    ///
+    /// The two-press rule (`KillArmed`) is HERE rather than in each control, so the strip and
+    /// the switcher cannot disagree about it: the first press arms, a press on the armed one
+    /// kills. A press on a terminal other than the armed one arms THAT one, which disarms the
+    /// first — one slot, so at most one terminal is ever a press from gone.
+    let killPress (terminal: TerminalId) (model: ClientModel) : ClientMsg option =
+        match Projection.tryFind terminal model.Terminals with
+        | Some view when (affordances view model).CanKill ->
+            if model.KillArmed = Some terminal then Some (CloseTerminalMsg terminal)
+            else Some (ArmKillMsg (Some terminal))
+        | Some _ | None -> None
+
+    /// Every artifact the session holds, latest version first shared first — what the switcher
+    /// offers beneath the terminals, and the only way to reach one whose chip has scrolled
     /// out of the conversation.
     ///
     /// Read straight off the conversation projection (`ConversationProjection.artifacts`), so
@@ -3182,12 +3231,12 @@ module ClientModel =
         // Asking shuts the menu that asked. The entry pressed is about to leave the
         // document, and a menu left standing over a terminal that is on its way is a surface
         // the reader has to dismiss before they can see what they asked for.
-        | OpenTerminalMsg _ -> { model with Opening = model.Opening + 1; PaneMenu = false }
+        | OpenTerminalMsg _ -> { model with Opening = model.Opening + 1; PaneMenu = false; Switcher = false }
         | ShowInPaneMsg mode ->
             // The WHOLE next face, stated by every way in. Nothing here clears a subset and
-            // hopes the rest was already right: the list cannot survive a choice that
-            // replaces it, a preview cannot outlive the reader moving to a terminal, and a
-            // pin or a start hint cannot outlive the mode that carried it.
+            // hopes the rest was already right: the switcher cannot outlive the choice made in
+            // it, a preview cannot outlive the reader moving to a terminal, and a pin or a
+            // start hint cannot outlive the mode that carried it.
             //
             // And showing a terminal OPENS it: the strip is the list of terminals the pane
             // can be about, so a terminal shown with no tab would be a pane showing something
@@ -3195,6 +3244,7 @@ module ClientModel =
             { model with
                 Tabs = opened (TerminalMode.terminal mode) model.Tabs
                 Pane = Some (OnTerminal mode)
+                Switcher = false
                 TerminalsOpen = true }
         | OpenInPaneMsg mode -> fold (ShowInPaneMsg mode) model
         | ShowPreviewMsg preview
@@ -3202,7 +3252,7 @@ module ClientModel =
             // Laid over the terminal the subject belongs to, which is shown in the strip as
             // the selected tab — so the strip never empties under a preview, and "back" has
             // somewhere to go. That terminal is opened if it was not: tapping a command's chip
-            // is asking about that terminal, the same as choosing it from the list.
+            // is asking about that terminal, the same as choosing it from the switcher.
             //
             // ONE preview: this replaces whatever preview was up, and what it was laid over
             // carries across, so six chips tapped are one preview over the terminal the
@@ -3215,11 +3265,12 @@ module ClientModel =
                     | Some mode -> opened (TerminalMode.terminal mode) model.Tabs
                     | None -> model.Tabs
                 Pane = Some (Previewing (preview, under))
+                Switcher = false
                 TerminalsOpen = true }
         | ClosePreviewMsg ->
             match model.Pane with
             | Some (Previewing (_, under)) -> { model with Pane = under |> Option.map OnTerminal }
-            | Some (OnTerminal _ | OnList _) | None -> model
+            | Some (OnTerminal _) | None -> model
         | ShowInTerminalMsg (terminal, block) -> fold (ShowInPaneMsg (ReadingAt (terminal, block))) model
         | MoveMsg _
         | CopyMsg _
@@ -3248,16 +3299,19 @@ module ClientModel =
             { model with
                 Tabs = opened terminal model.Tabs
                 Pane = Some (OnTerminal (WatchingBehind (terminal, length)))
+                Switcher = false
                 TerminalsOpen = true }
         | ToggleContentMsg ->
-            { model with TerminalsOpen = not model.TerminalsOpen }
+            // A popover does not outlive the pane it hangs in.
+            { model with TerminalsOpen = not model.TerminalsOpen; Switcher = false; PaneMenu = false }
         | ToggleItemMenuMsg messageId ->
             // Opening one is writing the field, so opening a second shuts the first without
             // anybody arranging it. That is the whole reason this is one slot and not a set.
             let next = if model.ItemMenu = Some messageId then None else Some messageId
             { model with ItemMenu = next }
         | CloseItemMenuMsg -> { model with ItemMenu = None }
-        | TogglePaneMenuMsg -> { model with PaneMenu = not model.PaneMenu }
+        // Opening either popover shuts the other (`Switcher`): one over the pane at a time.
+        | TogglePaneMenuMsg -> { model with PaneMenu = not model.PaneMenu; Switcher = false }
         | ClosePaneMenuMsg -> { model with PaneMenu = false }
         | ToggleFoldMsg key ->
             let next =
@@ -3276,17 +3330,13 @@ module ClientModel =
                 | None -> 1
             { model with Copied = Some { Copy.Box = box; Copy.Nth = nth } }
         | CopiedMsg None -> { model with Copied = None }
-        | ToggleContentListMsg ->
-            // Going to the list KEEPS the read it covers, so coming back resumes it — a
-            // rewind included, which is the one thing the boolean did right. The column comes
-            // with it: reaching the list from a shut column is exactly the case where a
-            // person is looking for a terminal they cannot see.
-            let next =
-                match model.Pane with
-                | Some (OnList resume) -> resume
-                | Some (OnTerminal _ | Previewing _ as face) -> Some (OnList (Some face))
-                | None -> Some (OnList None)
-            { model with Pane = next; TerminalsOpen = true }
+        | ToggleSwitcherMsg ->
+            // Opening brings the pane: reaching for a terminal you cannot see is exactly the
+            // case where the pane is shut. Shutting leaves the pane as it is.
+            if model.Switcher then { model with Switcher = false }
+            else { model with Switcher = true; PaneMenu = false; TerminalsOpen = true }
+        | CloseSwitcherMsg -> { model with Switcher = false }
+        | StripOverflowMsg hidden -> { model with StripHidden = max 0 hidden }
         | EnsureTerminalDraftMsg (terminal, author, queueId) ->
             // Typing changes nothing about the strip: a terminal being typed in is on screen
             // already, which is the whole of what it needs.
@@ -3466,6 +3516,13 @@ module ClientModel =
                 | None -> []
             | ShowInTerminalMsg (terminal, block) ->
                 [ ClientEffect.Move (DomMove.RevealBlock (terminal, block)); ClientEffect.Move DomMove.FocusPane ]
+            // Into the switcher as it opens, and back to the head name it hangs from as it
+            // shuts: either way the control under the hand is about to change, and the
+            // keyboard has to go with the reader rather than be left on `body`.
+            | ToggleSwitcherMsg ->
+                if next.Switcher then [ ClientEffect.Move DomMove.FocusSwitcher ]
+                else [ ClientEffect.Move DomMove.FocusPaneSwitcher ]
+            | CloseSwitcherMsg when model.Switcher -> [ ClientEffect.Move DomMove.FocusPaneSwitcher ]
             | MoveMsg move -> [ ClientEffect.Move move ]
             // A deliberate send settles the view on what was just sent, whether or not the
             // sender had scrolled away while composing — the pin machinery
@@ -3482,8 +3539,8 @@ module ClientModel =
         // fold SPENT rather than off which message carried it, so whatever folds an arrival
         // answers for it. Both are `OnArrival`: the hand may have gone elsewhere since.
         //
-        // A terminal pressed for lands where the pane now shows it. A kill lands on the row
-        // that takes the killed one's place, measured against the list the press was made on.
+        // A terminal pressed for lands where the pane now shows it. A kill lands where
+        // `killLanding` says, measured against the pane the press was made on.
         let answered =
             [ if next.Opening < model.Opening then
                   ClientEffect.Move (DomMove.OnArrival (paneLanding next))
