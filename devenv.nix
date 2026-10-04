@@ -181,7 +181,7 @@ ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
   # in locked mode and refuses to.
   scripts.lock.exec = ''exec dotnet fsi tasks.fsx lock'';
   scripts.build.exec = ''exec dotnet fsi tasks.fsx build'';
-  scripts.start.exec = ''exec dotnet fsi tasks.fsx start'';
+  scripts.start.exec = ''exec dotnet fsi tasks.fsx start "$@"'';
   scripts.dev.exec = ''exec dotnet fsi tasks.fsx dev'';
   # Named `check`, not `test`, because `test` is a shell builtin and would shadow the script.
   scripts.check.exec = ''exec dotnet fsi tasks.fsx check "$@"'';

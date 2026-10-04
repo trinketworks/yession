@@ -6,6 +6,18 @@ module Yession.Frames
 //   dotnet fsi tasks.fsx frames --manager … --session https://…/s/<id>/       # one that exists
 //   dotnet fsi tasks.fsx frames --manager … --seconds 20 --desktop --out ./frames
 //
+// Or one honest picture of any page — `--still`, which films nothing and writes `still.png`:
+//
+//   dotnet fsi tasks.fsx frames --boot --still                                # a fresh session, phone
+//   dotnet fsi tasks.fsx frames --boot --still --page / --size 1440x900       # the Manager's page
+//   dotnet fsi tasks.fsx frames --manager … --still --page … --measure "<js>" # and a measurement
+//
+// `--boot` is the verb's, not this module's: it builds the tree, starts a scratch Manager on it
+// and passes `--manager` here (`tasks.fsx`). A still is what `.agents/skills/ui-exploration`
+// once did with a script of its own — a true device viewport, the hover and focus a desktop
+// has, the `{vw, docW, overflowX}` ground truth printed beside the picture — moved here so
+// there is one Chromium launcher, one way of finding the browser, and one camera.
+//
 // It answers the question a person asks when a page "jumps": WHAT was on the screen at each
 // moment, and WHICH render put it there. A render counter and a DOM diff say what the client
 // did; a screenshot says what the person saw; neither alone explains a jump, because the
@@ -211,7 +223,7 @@ let private connect (url: string) : JS.Promise<Cdp> =
 
 /// A headless Chromium on a debugging port of the OS's choosing, read back from the file it
 /// writes into its profile directory — no port to collide on.
-let private launch (executable: string) (width: int) (height: int) : JS.Promise<obj * string> =
+let private launch (executable: string) (width: int) (height: int) (extra: string list) : JS.Promise<obj * string> =
     promise {
         let profile : string = fs?mkdtempSync (joinTwo (os?tmpdir () |> unbox) "yession-frames-") |> unbox
         let args =
@@ -220,7 +232,8 @@ let private launch (executable: string) (width: int) (height: int) : JS.Promise<
             // can answer, and the first navigation never gets a response.
             [| "--headless=new"; "--remote-debugging-port=0"; sprintf "--user-data-dir=%s" profile; "--no-first-run"
                "--use-mock-keychain"; "--password-store=basic"; "--ignore-certificate-errors"
-               sprintf "--window-size=%d,%d" width height; "about:blank" |]
+               sprintf "--window-size=%d,%d" width height |]
+            |> fun fixedArgs -> Array.append fixedArgs (Array.ofList (extra @ [ "about:blank" ]))
         let child = childProcess?spawn (executable, args, createObj [ "stdio" ==> "ignore" ])
         let portFile = joinTwo profile "DevToolsActivePort"
         let mutable port = ""
@@ -375,6 +388,10 @@ let private outOption = Cli.value "out" "dir" "where the report goes (default ./
 let private minPxOption = Cli.value "min-px" "n" "changed pixels a frame needs to be shown (default 400)"
 let private desktopOption = Cli.flag "desktop" None "1280x800 instead of a 390x844 phone"
 let private keepOption = Cli.flag "keep" None "leave the created session running"
+let private pageOption = Cli.value "page" "url" "any page to load instead of a session — a path is taken from --manager"
+let private stillOption = Cli.flag "still" None "one picture once it lands, instead of a film"
+let private sizeOption = Cli.value "size" "WxH" "the viewport, e.g. 390x844 or 1440x900 (default: --desktop's or a phone's)"
+let private measureOption = Cli.value "measure" "expression" "with --still: JavaScript evaluated in the page before the picture, awaited, printed"
 
 let private spec =
     Cli.spec "yession-frames"
@@ -385,6 +402,10 @@ let private spec =
     |> Cli.accepts minPxOption
     |> Cli.accepts desktopOption
     |> Cli.accepts keepOption
+    |> Cli.accepts pageOption
+    |> Cli.accepts stillOption
+    |> Cli.accepts sizeOption
+    |> Cli.accepts measureOption
 
 // --- the run -----------------------------------------------------------------------------------
 
@@ -421,25 +442,39 @@ let private run () =
             | Cli.Outcome.Proceed parsed -> parsed
             | Cli.Outcome.Answered text -> say text; exitWith 0
             | Cli.Outcome.Refused complaint -> abort complaint
-        let manager =
-            match Cli.valueOf managerOption args with
-            | Some m -> m.TrimEnd '/'
-            | None -> abort "yession-frames needs --manager: the Manager the session lives on"
+        let manager = Cli.valueOf managerOption args |> Option.map (fun m -> m.TrimEnd '/')
+        let needManager () =
+            match manager with
+            | Some m -> m
+            | None -> abort "yession-frames needs --manager: the Manager the session lives on (or --page with a full address)"
         let seconds = Cli.valueOf secondsOption args |> Option.map int |> Option.defaultValue 8
         let minPx = Cli.valueOf minPxOption args |> Option.map int |> Option.defaultValue 400
         let out : string = nodePath?resolve (Cli.valueOf outOption args |> Option.defaultValue "frames") |> unbox
-        let desktop = Cli.isSet desktopOption args
-        let width, height = if desktop then 1280, 800 else 390, 844
+        let still = Cli.isSet stillOption args
+        let page = Cli.valueOf pageOption args
+        // A desktop is a width, not a flag: what changes at 600px is that the page is laid out
+        // for a pointer that can hover, and below it for a finger that cannot.
+        let width, height =
+            match Cli.valueOf sizeOption args with
+            | Some size ->
+                match size.Split 'x' |> Array.map Int32.TryParse with
+                | [| (true, w); (true, h) |] -> w, h
+                | _ -> abort (sprintf "--size %s: want WIDTHxHEIGHT, e.g. 390x844" size)
+            | None -> if Cli.isSet desktopOption args then 1280, 800 else 390, 844
+        let desktop = width >= 600
         fs?rmSync (out, createObj [ "recursive" ==> true; "force" ==> true ]) |> ignore
-        fs?mkdirSync (joinTwo out "frames", createObj [ "recursive" ==> true ]) |> ignore
+        fs?mkdirSync ((if still then out else joinTwo out "frames"), createObj [ "recursive" ==> true ]) |> ignore
 
-        // The session, made the way the form makes one: a POST, answered with the `/open` page
-        // that launches it and hands the browser over once its address answers.
+        // The page: one named outright, an existing session, or a session made the way the
+        // form makes one — a POST, answered with the `/open` page that launches it and hands
+        // the browser over once its address answers.
         let! openUrl, created =
             promise {
-                match Cli.valueOf sessionOption args with
-                | Some given -> return given, false
-                | None ->
+                match page, Cli.valueOf sessionOption args with
+                | Some page, _ -> return (if page.StartsWith "/" then needManager () + page else page), false
+                | None, Some given -> return given, false
+                | None, None ->
+                    let manager = needManager ()
                     // The form the Create button submits, with nothing in it: the Manager
                     // mints the id when a submission names none, and what comes back is the
                     // `/open` page's address in a `Location` this does NOT follow — the camera
@@ -458,11 +493,97 @@ let private run () =
             }
         say (sprintf "open %s" openUrl)
 
-        let! child, target = launch (chromiumPath ()) width height
+        // Stopped, like the probe's: a session made for a camera has nobody coming back to it.
+        let stopCreated () =
+            promise {
+                if created && not (Cli.isSet keepOption args) then
+                    // Which session, read back off the `/open` address the Manager answered
+                    // with — through the same parser the Manager routes it by, so a route that
+                    // moves moves both ends of this at once.
+                    let id =
+                        match ManagerRoute.parse "GET" (Fable.BrowserExtras.Urls.pathname openUrl) with
+                        | Ok (ManagerRoute.OpenSession id) -> id
+                        | _ -> failwithf "not an /open address: %s" openUrl
+                    let! stopped =
+                        Fetch.fetchUnsafe
+                            (ManagerRoute.at (needManager ()) (ManagerRoute.Session (id, SessionVerb.Stop)))
+                            [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST ]
+                    say (sprintf "stop %s %d" (SessionId.value id) stopped.Status)
+            }
+
+        // Landed: a named page once it has loaded; otherwise once the document is the session
+        // shell, wherever the deployment mounts it (a path under the Manager, a port of its
+        // own) — the shell is the one document with the client's mount in it, and the
+        // Manager's opening page has none.
+        let landedProbe =
+            match page with
+            | Some _ -> "document.readyState === 'complete' ? location.href : ''"
+            | None -> sprintf "document.getElementById('%s') ? location.href : ''" Yession.App.Dom.appId
+
+        // Headless Chromium reports no pointing device, so `(hover: hover)` is false and every
+        // Tailwind `hover:` utility — wrapped in that query — silently does nothing: a desktop
+        // picture of a hovered control would be its rest state. A desktop width is given the
+        // pointer a desktop has. (`Emulation.setEmulatedMedia` cannot set these, and
+        // `setTouchEmulationEnabled` switches them back off.) A phone keeps the default, which
+        // is what a phone is.
+        let pointer =
+            if desktop then
+                [ "--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4" ]
+            else []
+        let! child, target = launch (chromiumPath ()) width height pointer
         let! cdp = connect target
         let! _ = cdp.Send "Page.enable" (createObj [])
         let! _ = cdp.Send "Runtime.enable" (createObj [])
         let! _ = cdp.Send "Network.enable" (createObj [])
+
+        if still then
+            // A TRUE device viewport. Headless Chromium clamps its window to ~500px wide, so a
+            // `--window-size` phone is a 500px layout cropped to 390 — overflow hides and wrapping
+            // never happens. The metrics override is what a phone-width picture means.
+            let! _ = cdp.Send "Emulation.setDeviceMetricsOverride" (createObj [ "width" ==> width; "height" ==> height; "deviceScaleFactor" ==> 2; "mobile" ==> not desktop ])
+            // A headless page is never the focused window, so `:focus` matches nothing and a
+            // "focused" picture is the rest state. This makes the page believe it is frontmost.
+            let! _ = cdp.Send "Emulation.setFocusEmulationEnabled" (createObj [ "enabled" ==> true ])
+            // And a phone is a finger: no hover, a coarse pointer. Without this a phone-width
+            // picture on a desktop host keeps the host's mouse (`hover: true` on a Mac), and a
+            // hover-only affordance photographs as present where a phone never shows it.
+            if not desktop then
+                let! _ = cdp.Send "Emulation.setTouchEmulationEnabled" (createObj [ "enabled" ==> true; "maxTouchPoints" ==> 5 ])
+                ()
+            let! _ = cdp.Send "Page.navigate" (createObj [ "url" ==> openUrl ])
+            let mutable landed = ""
+            let startedAt = clock.Now ()
+            while landed = "" && (clock.Now () - startedAt).TotalSeconds < 60.0 do
+                do! delay 250
+                let! href = evaluate cdp landedProbe
+                landed <- match unbox href with | null -> "" | s -> s
+            // Settled, not merely landed: a client connects and renders after its document
+            // loads, and the first frame of a transition is not where it arrives.
+            do! delay 1500
+            // The ground truth beside the picture: trust it only when `vw` is the width asked
+            // for, and `overflowX` is a page a phone cannot scroll back from.
+            let! truth = evaluate cdp "JSON.stringify({ vw: innerWidth, docW: document.documentElement.scrollWidth, overflowX: document.documentElement.scrollWidth > innerWidth, hover: matchMedia('(hover: hover)').matches })"
+            say (unbox truth)
+            match Cli.valueOf measureOption args with
+            | Some expression ->
+                let! measured = evaluate cdp expression
+                say (JS.JSON.stringify measured)
+            | None -> ()
+            let! shot = cdp.Send "Page.captureScreenshot" (createObj [ "format" ==> "png" ])
+            let picture = joinTwo out "still.png"
+            writeFile picture (bytesOfBase64 (unbox shot?data))
+            say (sprintf "wrote %s (%dx%d)" picture width height)
+            cdp.Close ()
+            child?kill () |> ignore
+            do! stopCreated ()
+            // A page that never landed is a failed picture of SOMETHING, kept because what the
+            // tab showed is usually why — and said with a code, so a caller cannot read it as a
+            // picture of the page it asked for.
+            if landed = "" then
+                say (sprintf "never landed in 60s: %s shows whatever the tab had" picture)
+                exitWith 1
+            exitWith 0
+
         if not desktop then
             let! _ = cdp.Send "Emulation.setDeviceMetricsOverride" (createObj [ "width" ==> width; "height" ==> height; "deviceScaleFactor" ==> 2; "mobile" ==> true ])
             ()
@@ -632,20 +753,7 @@ let private run () =
 
         cdp.Close ()
         child?kill () |> ignore
-        // Stopped, like the probe's: a session made for a camera has nobody coming back to it.
-        if created && not (Cli.isSet keepOption args) then
-            // Which session, read back off the `/open` address the Manager answered with —
-            // through the same parser the Manager routes it by, so a route that moves moves
-            // both ends of this at once.
-            let id =
-                match ManagerRoute.parse "GET" (Fable.BrowserExtras.Urls.pathname openUrl) with
-                | Ok (ManagerRoute.OpenSession id) -> id
-                | _ -> failwithf "not an /open address: %s" openUrl
-            let! stopped =
-                Fetch.fetchUnsafe
-                    (ManagerRoute.at manager (ManagerRoute.Session (id, SessionVerb.Stop)))
-                    [ Fetch.Types.RequestProperties.Method Fetch.Types.HttpMethod.POST ]
-            say (sprintf "stop %s %d" (SessionId.value id) stopped.Status)
+        do! stopCreated ()
         exitWith 0
     }
 
