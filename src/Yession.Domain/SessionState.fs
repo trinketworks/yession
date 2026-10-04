@@ -106,10 +106,15 @@ module BodyKey =
     let draft (author: PeerId) : string = "draft:" + PeerId.value author
     let queued (id: QueueId) : string = "queue:" + QueueId.value id
 
+    /// What every author's composer slot in one terminal starts with — how a terminal's
+    /// command lines are found without knowing whose they are.
+    let terminalDraftsIn (terminal: TerminalId) : string =
+        "term-draft:" + TerminalId.value terminal + ":"
+
     /// A terminal composer's `Y.Text` root. Keyed by both ids because the slot is per
     /// author PER TERMINAL — one person may be mid-command in two terminals at once.
     let terminalDraft (terminal: TerminalId) (author: PeerId) : string =
-        "term-draft:" + TerminalId.value terminal + ":" + PeerId.value author
+        terminalDraftsIn terminal + PeerId.value author
 
     /// A queued terminal command's `Y.Text` root. Keyed by the queue id alone: the entry
     /// already names its terminal, and the key must not change when the text is edited.

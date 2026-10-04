@@ -1877,11 +1877,174 @@ let private pinTests =
 
         testCase "a chip that opens a tab takes the reader to the pane" <| fun () ->
             // One message for both halves, so no chip can open a pane and leave focus behind it.
-            let model, effects = ClientModel.update (OpenInPaneMsg (Reading (TerminalTab terminalA))) (clientOf [ at 1L 0.0 (opened terminalA "build") ])
+            let model, effects =
+                ClientModel.update
+                    (OpenInPaneMsg (Reading (BlockTab (terminalA, block "1"))))
+                    (clientOf oneBlock)
             Expect.equal
                 (ClientModel.selectedPane model, effects)
-                (Some (TerminalTab terminalA), [ ClientEffect.Move DomMove.FocusPane ])
+                (Some (BlockTab (terminalA, block "1")), [ ClientEffect.Move DomMove.FocusPane ])
                 "the tab is showing, and focus is asked to follow it"
+
+        // Where focus lands after each act in the pane (the focus contract). Every one of these
+        // takes away the control that was pressed, or puts a new surface in front of the
+        // reader, and each says where the keyboard goes next — so that it never falls to
+        // `body`, and never onto something in a pane that is not on screen.
+        testCase "a row of the list opening a terminal lands on its command line" <| fun () ->
+            // A terminal is a thing you type into: being taken to one is being taken to the
+            // line that takes the typing, not to the region around it.
+            let _, effects =
+                ClientModel.update
+                    (OpenInPaneMsg (Reading (TerminalTab terminalA)))
+                    (clientOf [ at 1L 0.0 (opened terminalA "build") ])
+            Expect.equal effects [ ClientEffect.Move (DomMove.FocusCommandLine terminalA) ] "onto the command line"
+
+        testCase "showing the pane lands on the shown terminal's command line" <| fun () ->
+            let shut = clientOf [ at 1L 0.0 (opened terminalA "build") ]
+            Expect.isFalse shut.TerminalsOpen "the pane starts shut"
+            let _, effects = ClientModel.update ToggleContentMsg shut
+            Expect.equal effects [ ClientEffect.Move (DomMove.FocusCommandLine terminalA) ] "onto the command line"
+
+        testCase "showing an empty pane lands on the press that fills it" <| fun () ->
+            let _, effects = ClientModel.update ToggleContentMsg (clientOf [])
+            Expect.equal effects [ ClientEffect.Move DomMove.FocusPaneEmpty ] "onto the empty pane's press"
+
+        testCase "hiding the pane returns focus to the chip that opened what it showed" <| fun () ->
+            let tab = BlockTab (terminalA, block "1")
+            let showing = clientOf oneBlock |> Support.step (ShowInPaneMsg (Reading tab))
+            let _, effects = ClientModel.update ToggleContentMsg showing
+            Expect.equal effects [ ClientEffect.Move (DomMove.FocusChat (PaneTab.key tab)) ] "back to the chip"
+
+        testCase "hiding an empty pane sends focus to the way back in" <| fun () ->
+            // Nothing is showing, so no chip opened it — and everything in the pane is about
+            // to be out of reach.
+            let showing = clientOf [] |> Support.step ToggleContentMsg
+            let _, effects = ClientModel.update ToggleContentMsg showing
+            Expect.equal effects [ ClientEffect.Move DomMove.FocusPaneReopen ] "onto the reopen control"
+
+        testCase "closing the last tab sends focus to the way back in" <| fun () ->
+            // The pane shuts with it, so the tab's neighbour — where Delete sends focus while
+            // there is one — is nowhere.
+            let showing =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> Support.step (ShowInPaneMsg (Reading (TerminalTab terminalA)))
+            let _, effects = ClientModel.update (CloseTabMsg (TerminalTab terminalA)) showing
+            Expect.equal effects [ ClientEffect.Move DomMove.FocusPaneReopen ] "onto the reopen control"
+
+        testCase "closing a tab that leaves others moves no focus of its own" <| fun () ->
+            // The strip's Delete hands focus to the neighbour BEFORE the close; a second move
+            // from here would take it off again.
+            let showing =
+                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
+                |> Support.step (ShowInPaneMsg (Reading (TerminalTab terminalA)))
+            let _, effects = ClientModel.update (CloseTabMsg (TerminalTab terminalA)) showing
+            Expect.equal effects [] "nothing beside what the strip already did"
+
+        testCase "a terminal pressed for lands on its command line when it arrives" <| fun () ->
+            let asked =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> Support.step (ShowInPaneMsg (Reading (TerminalTab terminalA)))
+                |> Support.step (OpenTerminalMsg ("", SandboxRef.defaultRef))
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg { Events = [ at 2L 1.0 (opened terminalB "new") ]; LastOffset = Some (EventOffset.create 2L |> expect); IsEnd = true })
+                    asked
+            Expect.equal
+                effects
+                [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusCommandLine terminalB)) ]
+                "onto the new terminal's command line, if the hand is still in the pane"
+
+        testCase "a terminal nobody here pressed for moves no focus" <| fun () ->
+            let showing =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> Support.step (ShowInPaneMsg (Reading (TerminalTab terminalA)))
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg { Events = [ at 2L 1.0 (opened terminalB "elsewhere") ]; LastOffset = Some (EventOffset.create 2L |> expect); IsEnd = true })
+                    showing
+            Expect.equal effects [] "the reader's cursor stays where they put it"
+
+        testCase "a kill pressed here lands on the row that takes the killed one's place" <| fun () ->
+            let rows = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
+            let pressed = clientOf rows |> Support.step ToggleContentListMsg |> Support.step (CloseTerminalMsg terminalA)
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg
+                        { Events = [ at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer" }) ]
+                          LastOffset = Some (EventOffset.create 3L |> expect)
+                          IsEnd = true })
+                    pressed
+            Expect.equal
+                effects
+                [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusListRow terminalB)) ]
+                "onto the next terminal's row"
+
+        testCase "a kill of the last row lands on the row before it" <| fun () ->
+            let rows = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
+            let pressed = clientOf rows |> Support.step ToggleContentListMsg |> Support.step (CloseTerminalMsg terminalB)
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg
+                        { Events = [ at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalB; Reason = "closed by a peer" }) ]
+                          LastOffset = Some (EventOffset.create 3L |> expect)
+                          IsEnd = true })
+                    pressed
+            Expect.equal effects [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusListRow terminalA)) ] "onto the row above"
+
+        testCase "a terminal somebody else ends moves no focus" <| fun () ->
+            let rows = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
+            let listing = clientOf rows |> Support.step ToggleContentListMsg
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg
+                        { Events = [ at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer" }) ]
+                          LastOffset = Some (EventOffset.create 3L |> expect)
+                          IsEnd = true })
+                    listing
+            Expect.equal effects [] "no press here, so no move"
+
+        testCase "a shut pane is inert from the first paint" <| fun () ->
+            // Zero pixels wide on a desktop, off the screen on a phone — and, without this,
+            // every control in it a Tab stop. The served page carries it, so it holds before
+            // the bundle has run.
+            let aside (model: ClientModel) =
+                System.Text.RegularExpressions.Regex.Match(Support.render model, "<aside[^>]*data-content-panel[^>]*>").Value
+            let shut = clientOf [ at 1L 0.0 (opened terminalA "build") ]
+            Expect.stringContains (aside shut) " inert" "shut, and out of reach"
+            let shown = shut |> Support.step ToggleContentMsg
+            Expect.isFalse ((aside shown).Contains " inert") "shown, and reachable"
+
+        testCase "every tab names the panel, and the panel names the tab that is showing" <| fun () ->
+            // `aria-controls` and `aria-labelledby` are id references, so what is asserted is
+            // that each reference RESOLVES to the element it promises — not what the ids are.
+            let html =
+                clientOf oneBlock
+                |> Support.step (ShowInPaneMsg (Reading (BlockTab (terminalA, block "1"))))
+                |> Support.render
+            let attr (name: string) (element: string) =
+                System.Text.RegularExpressions.Regex.Match(element, sprintf " %s=\"([^\"]*)\"" name).Groups.[1].Value
+            let panel = System.Text.RegularExpressions.Regex.Match(html, "<div[^>]*role=\"tabpanel\"[^>]*>").Value
+            let tabs =
+                System.Text.RegularExpressions.Regex.Matches(html, "<div[^>]*role=\"tab\"[^>]*>")
+                |> Seq.map (fun m -> m.Value)
+                |> List.ofSeq
+            Expect.isTrue (tabs.Length > 1) "a strip of more than one tab"
+            for tab in tabs do
+                Expect.equal (attr "aria-controls" tab) (attr "id" panel) "the tab names the panel"
+            let selected = tabs |> List.filter (fun tab -> tab.Contains "aria-selected=\"true\"")
+            Expect.equal
+                (selected |> List.map (attr "id"))
+                [ attr "aria-labelledby" panel ]
+                "the panel is labelled by the one selected tab"
+
+        testCase "two tab keys never share an id" <| fun () ->
+            // Keys carry `:` and `/`; an id spells them out, and the spelling must not let two
+            // keys collide or leave a character a selector would have to escape.
+            let keys = [ "a:b"; "a/b"; "a_b"; "a_003ab"; "a_003a"; "block:t:b-1"; "content:artifacts/x.png/0001" ]
+            let ids = keys |> List.map Dom.paneTabId
+            Expect.equal (List.distinct ids).Length keys.Length "one id per key"
+            for id in ids do
+                Expect.isTrue (System.Text.RegularExpressions.Regex.IsMatch (id, "^[A-Za-z0-9_-]+$")) (sprintf "%s needs no escaping" id)
 
         testCase "show in terminal scrolls the history to the command and focuses the pane" <| fun () ->
             let _, effects = ClientModel.update (ShowInTerminalMsg (terminalA, block "1")) (clientOf [ at 1L 0.0 (opened terminalA "build") ])

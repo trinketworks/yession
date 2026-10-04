@@ -49,6 +49,23 @@ module Dom =
     /// inside Tailwind variants, which have to be literal to be generated at all.
     let termClosedClass = "term-closed"
 
+    /// The pane's tab panel's `id`. ONE panel, whichever tab it is showing — the strip renders
+    /// one at a time — so every tab names this one in `aria-controls`, and the panel names the
+    /// selected tab back (`paneTabId`) in `aria-labelledby`. That pair is what tells assistive
+    /// technology which tab the region under the strip belongs to.
+    let panePanelId = "pane-panel"
+
+    /// A tab's `id`, from its key (`PaneTab.key`). Keys carry `:` and `/`, which an id may
+    /// hold but a selector has to escape, so everything outside `[A-Za-z0-9-]` is spelled as
+    /// `_` and its code in four hex digits — `_` included, and the width fixed, so two keys
+    /// can never come out as one id.
+    let paneTabId (key: string) : string =
+        key
+        |> String.collect (fun c ->
+            if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c = '-' then string c
+            else sprintf "_%04x" (int c))
+        |> sprintf "pane-tab-%s"
+
     /// `data-*` hooks on the session client shell (`View`) and its browser delegation.
     module Hooks =
         // Header — the collaborative session title and its secondary id.

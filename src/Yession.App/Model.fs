@@ -791,6 +791,16 @@ type ClientModel =
       /// exactly the terminal that answers it, and the next one to arrive finds nothing
       /// owed.
       Opening       : int
+      /// The terminal this client last asked to END, until the close arrives.
+      ///
+      /// `Opening`'s shape, for `Opening`'s reason: the kill is pressed on a row of the list,
+      /// the close comes back as an event like every other peer's, and that event removes the
+      /// control that was pressed — so the only thing that can say where focus goes next is
+      /// the fold that sees the close arrive, and it can say so only if it knows the close is
+      /// the answer to a press made HERE. A terminal somebody else ends must not move this
+      /// reader's cursor. One slot rather than a count: there is one kill control under a
+      /// hand at a time, and the latest press is the one focus follows.
+      KillPending   : TerminalId option
       /// Which of them this client KEPT, by tab key.
       ///
       /// A mark on an open tab rather than a list of its own, because "in my strip" and
@@ -919,6 +929,27 @@ type DomMove =
     /// sends a press, because that press opens a menu hanging off this control rather than
     /// off itself.
     | FocusPaneNew
+    /// Onto this terminal's command line — this peer's own, the one that takes keystrokes.
+    /// Where a terminal tab is FOR, so it is where showing one lands. A terminal with no
+    /// command line to offer (somebody holds its keyboard, or it has closed) lands on what it
+    /// does offer instead, and never on nothing.
+    | FocusCommandLine of TerminalId
+    /// Onto the control that shows the pane again, once the pane has gone. Hiding the pane
+    /// takes every control in it out of reach at once, so focus has to go somewhere outside
+    /// it, and the way back in is the one place that is always about the pane.
+    | FocusPaneReopen
+    /// Onto the empty pane's one press — what a pane with nothing in it offers.
+    | FocusPaneEmpty
+    /// Onto this terminal's row in the list.
+    | FocusListRow of TerminalId
+    /// The same move, made only while focus is in the pane or nowhere at all.
+    ///
+    /// For a move that follows an EVENT rather than a press: a terminal a press asked for, a
+    /// kill a press asked for, each arriving a round trip later. A press knows it is about to
+    /// take the control under the hand away; an arrival does not know where the hand has gone
+    /// since, and a caret yanked out of the message composer because a terminal landed would
+    /// be worse than the stranding this exists to fix.
+    | OnArrival of DomMove
     /// Scroll a terminal's history to one of its commands and mark it.
     | RevealBlock of TerminalId * BlockId
     /// Scroll the conversation to one message and mark it.
@@ -1410,6 +1441,7 @@ module ClientModel =
           TerminalViewports = Map.empty
           Tabs = []
           Opening = 0
+          KillPending = None
           Pinned = Set.empty
           Pane = None
           TerminalsOpen = false
@@ -1609,6 +1641,22 @@ module ClientModel =
         match model.Pane with
         | Some (OnList _) -> true
         | Some (OnTab _) | None -> false
+
+    /// Where focus lands when the pane comes on screen showing what this model shows.
+    ///
+    /// ONE answer for every way the pane is shown — the reopen control, a chip, a row of the
+    /// list, a terminal arriving that somebody here pressed for — because each of them is the
+    /// same promise: the keyboard follows the reader into the column. A terminal is a thing you
+    /// type into, so it lands on its command line; anything else on its panel; nothing on the
+    /// press that makes something. The list is its own face and carries no panel, and
+    /// `FocusPane` answers for it (`PaneShell.toPane`).
+    let paneLanding (model: ClientModel) : DomMove =
+        if showsList model then DomMove.FocusPane
+        else
+            match selectedPane model with
+            | None -> DomMove.FocusPaneEmpty
+            | Some (TerminalTab id) -> DomMove.FocusCommandLine id
+            | Some (BlockTab _ | StretchTab _ | ContentTab _) -> DomMove.FocusPane
 
     /// The command the pane's text read is positioned at (Plan 25, stage 3) — what the
     /// browser scrolls into view once the render that put it on screen has happened.
@@ -1953,6 +2001,24 @@ module ClientModel =
     let terminalRows (model: ClientModel) : TerminalView list =
         let opened, closed = model.Terminals.Terminals |> List.partition (fun t -> t.IsOpen)
         opened @ List.rev closed
+
+    /// Where focus lands after a kill this client asked for, given the list as it stood when
+    /// the kill was pressed (`model` is the fold's BEFORE).
+    ///
+    /// The row that takes the killed one's place — `TabStrip.neighbour`'s rule, the one the
+    /// strip's Delete follows, over the OTHER rows. Asked of the order the reader was looking
+    /// at, not of the list after the close, so the answer does not depend on where a closed
+    /// terminal's row goes. With no other row, the killed terminal's own: a closed terminal
+    /// keeps its row, as its recording, and that row is where the hand already is.
+    let killLanding (model: ClientModel) (killed: TerminalId) : DomMove =
+        let rows = terminalRows model |> List.map (fun view -> view.TerminalId)
+        let others = rows |> List.filter (fun id -> id <> killed)
+        rows
+        |> List.tryFindIndex (fun id -> id = killed)
+        |> Option.bind (fun here -> TabStrip.neighbour here (List.length rows))
+        |> Option.bind (fun index -> List.tryItem index others)
+        |> Option.defaultValue killed
+        |> DomMove.FocusListRow
 
     /// Every artifact the session holds, latest version first shared first — what the list
     /// panel offers beside the terminals, and the only way to reach one whose chip has scrolled
@@ -2602,6 +2668,16 @@ module ClientModel =
                 Tabs = tabs
                 Pane = pane
                 Opening = opening
+                // Spent by the close that answers it, in the page that carries it.
+                KillPending =
+                    model.KillPending
+                    |> Option.filter (fun killed ->
+                        not (
+                            freshEvents
+                            |> List.exists (fun e ->
+                                match e.Event with
+                                | SessionEvent.TerminalClosed closed -> closed.TerminalId = killed
+                                | _ -> false)))
                 Peers = peers
                 Attribution = attribution
                 EventConsumer =
@@ -3129,8 +3205,11 @@ module ClientModel =
         | ReleaseTerminalMsg _
         | RearmTerminalMsg _
         | ReattachTerminalMsg _
-        | CloseTerminalMsg _
         | ApproveRepoCapabilitiesMsg _ -> model
+        // A request of the session like those above, and also a press whose control the
+        // answer will take away: remembered, so the close that answers it can say where the
+        // hand goes next (`KillPending`).
+        | CloseTerminalMsg terminal -> { model with KillPending = Some terminal }
         )
 
     /// A message's consequences: the next model, and what it asks of the world outside it.
@@ -3156,7 +3235,22 @@ module ClientModel =
             | LaunchMsg launchMsg -> Launch.update launchMsg model.Launch |> snd |> List.map ClientEffect.Launch
             | ClaudePressedMsg press -> ClaudePress.call press model.Claude |> Result.toList |> List.map ClientEffect.Claude
             | GitHubPressedMsg press -> GitHubPress.call press model.GitHub |> Result.toList |> List.map ClientEffect.GitHub
-            | OpenInPaneMsg _ -> [ ClientEffect.Move DomMove.FocusPane ]
+            // Into the pane, and onto what the pane is FOR when it is a terminal: the reader
+            // was moved, so their keyboard is too (`paneLanding`).
+            | OpenInPaneMsg _ -> [ ClientEffect.Move (paneLanding next) ]
+            // Showing the pane is the same promise as a chip opening a tab in it. Hiding it
+            // sends focus back where the reader came from — the chip that opened what was
+            // showing — or, with nothing showing, to the way back in: every control in a pane
+            // that has gone is out of reach, so focus cannot stay where it was.
+            | ToggleContentMsg ->
+                if next.TerminalsOpen then [ ClientEffect.Move (paneLanding next) ]
+                else
+                    match selectedPane model with
+                    | Some tab -> [ ClientEffect.Move (DomMove.FocusChat (PaneTab.key tab)) ]
+                    | None -> [ ClientEffect.Move DomMove.FocusPaneReopen ]
+            // Closing the last tab shuts the column with focus inside it.
+            | CloseTabMsg _ when model.TerminalsOpen && not next.TerminalsOpen ->
+                [ ClientEffect.Move DomMove.FocusPaneReopen ]
             | ShowInTerminalMsg (terminal, block) ->
                 [ ClientEffect.Move (DomMove.RevealBlock (terminal, block)); ClientEffect.Move DomMove.FocusPane ]
             | MoveMsg move -> [ ClientEffect.Move move ]
@@ -3171,4 +3265,16 @@ module ClientModel =
             | GitHubPollDueMsg round ->
                 GitHubPoll.due round model.GitHub |> Option.map (fun scope -> ClientEffect.GitHubPoll (round, scope)) |> Option.toList
             | _ -> []
-        next, effects @ offering
+        // The answers to presses made here, arriving a round trip later — read off what the
+        // fold SPENT rather than off which message carried it, so whatever folds an arrival
+        // answers for it. Both are `OnArrival`: the hand may have gone elsewhere since.
+        //
+        // A terminal pressed for lands where the pane now shows it. A kill lands on the row
+        // that takes the killed one's place, measured against the list the press was made on.
+        let answered =
+            [ if next.Opening < model.Opening then
+                  ClientEffect.Move (DomMove.OnArrival (paneLanding next))
+              match model.KillPending, next.KillPending with
+              | Some killed, None -> ClientEffect.Move (DomMove.OnArrival (killLanding model killed))
+              | _ -> () ]
+        next, effects @ answered @ offering

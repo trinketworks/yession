@@ -2861,6 +2861,14 @@ module Style =
     /// The pane's body — whatever the selected tab shows. It takes the column's remaining
     /// height so the thing inside it scrolls rather than the column.
     let paneBody = "flex-1 min-h-0 flex flex-col"
+    /// The tab panel itself: the body's box, and a ring when it holds focus. A chip, a row of
+    /// the list and "show in terminal" all put focus HERE, and without a ring of its own the
+    /// panel wore the browser's — a 1px near-black outline on a near-black column, which is
+    /// focus nobody can see. Drawn INSIDE the edge, because the column clips at its own
+    /// border and a ring held outside it would be cut away on every side but none.
+    let panePanel =
+        paneBody
+        + " focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue focus-visible:-outline-offset-2"
     /// A read-only region: a player's own mount, or text shown rather than typed into. The
     /// same scrolling box the block history uses, so a block read from the chat looks exactly
     /// like the block read in its terminal — without the bottom anchoring, because a player

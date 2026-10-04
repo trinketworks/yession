@@ -3,8 +3,9 @@ module Yession.Host.Ssr
 // Our own dependency-free server-side renderer for Fable.Lit templates. A lit-html
 // `TemplateResult` is `{ strings, values }`: the static markup parts interleaved with the
 // hole values. Rendering to a string is just that interleave — recursing into nested
-// templates and arrays, escaping text, and dropping the bindings a string can't carry
-// (event/property/boolean holes, `@ . ?`). Because it never parses HTML, it handles
+// templates and arrays, escaping text, dropping the bindings a string can't carry
+// (event/property holes, `@ .`), and writing a boolean hole (`?`) as the attribute it
+// toggles. Because it never parses HTML, it handles
 // `<textarea>` child-text bindings that @lit-labs/ssr miscounts, and because it pulls no
 // dependencies it bundles trivially into the shipped single-file executable — no CDN, no
 // parse5. The browser renders the same templates live; this is the first paint.
@@ -21,6 +22,12 @@ let private binding = Regex "[@.?][A-Za-z0-9_-]+=\"?$"
 
 /// The same, with the whitespace that set it off: what goes when the binding goes.
 let private bindingWithSpace = Regex "\\s*[@.?][A-Za-z0-9_-]+=\"?$"
+
+/// A BOOLEAN attribute hole (`?name=`), naming the attribute. Unlike a listener or a property,
+/// this is markup a string can carry: present when the value is true, absent when it is false
+/// — and it has to be in the first paint when it says what may be focused (`inert` on a shut
+/// pane), or the page is wrong until the bundle has run.
+let private booleanBinding = Regex "\\s*\\?([A-Za-z0-9_-]+)=$"
 
 /// A static part ending in an attribute-value hole (`name=` or `name="`).
 let private attributeHole = Regex "=\"?$"
@@ -56,7 +63,13 @@ and private renderParts (parts: Parts) : string =
     let sb = System.Text.StringBuilder ()
     for i in 0 .. values.Length - 1 do
         let s = strings.[i]
-        if binding.IsMatch s then
+        let flag = booleanBinding.Match s
+        if flag.Success then
+            sb.Append (booleanBinding.Replace (s, "")) |> ignore
+            match Hole.classify values.[i] with
+            | Hole.Flag true -> sb.Append(" ").Append flag.Groups.[1].Value |> ignore
+            | _ -> ()
+        elif binding.IsMatch s then
             // Drop the binding syntax and its value — a string can't carry a listener.
             sb.Append (bindingWithSpace.Replace (s, "")) |> ignore
         else

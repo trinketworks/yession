@@ -72,12 +72,50 @@ let private stranded (leaving: string list) : bool =
         System.Object.ReferenceEquals (active, document.body)
         || leaving |> List.exists (fun selector -> (active.closest selector).IsSome)
 
-/// Move focus into the side pane after a chip opened a tab there.
-let toPane () : unit = nextFrame (fun () -> focusOn (find "[data-pane-panel]"))
+/// Move focus into the side pane after a chip opened a tab there. The LIST is a face of the
+/// pane with no panel under it, and its toggle — the control that says which face this is —
+/// is where a reader shown the list lands.
+let toPane () : unit =
+    nextFrame (fun () ->
+        find "[data-pane-panel]"
+        |> Option.orElseWith (fun () -> find "[data-content-list-toggle]")
+        |> focusOn)
+
+/// Onto a terminal's command line: THIS peer's, which is the one that is not `readonly` —
+/// every other author's line in the same terminal is drawn beside it, read-only. A terminal
+/// whose keyboard this peer holds has no command line and takes keystrokes on its screen; one
+/// whose keyboard somebody else holds, or that has closed, has neither, and the panel is what
+/// is left. Never nothing: focus that lands nowhere lands on `body`.
+let toCommandLine (terminal: Yession.Domain.TerminalId) : unit =
+    nextFrame (fun () ->
+        find (sprintf "[data-terminal-input^=\"%s\"]:not([readonly])" (Yession.Domain.Collab.BodyKey.terminalDraftsIn terminal))
+        |> Option.orElseWith (fun () -> find "[data-terminal-screen][tabindex=\"0\"]")
+        |> Option.orElseWith (fun () -> find "[data-pane-panel]")
+        |> focusOn)
+
+/// Onto the control that shows the pane again — present exactly while the pane is shut, so a
+/// frame after the render that shut it, it is there.
+let toPaneReopen () : unit = nextFrame (fun () -> focusOn (find "[data-content-toggle=\"show\"]"))
+
+/// Onto the empty pane's press, or the strip's `+` when the pane is not empty after all — the
+/// same act from the other place it is offered.
+let toPaneEmpty () : unit =
+    nextFrame (fun () ->
+        find "[data-terminal-new]" |> Option.orElseWith (fun () -> find "[data-pane-new]") |> focusOn)
+
+/// Onto one terminal's row in the list, or the list's toggle when the list is no longer what
+/// the pane shows.
+let toListRow (terminal: Yession.Domain.TerminalId) : unit =
+    nextFrame (fun () ->
+        find (sprintf "[data-terminal-list-row=\"%s\"]" (Yession.Domain.TerminalId.value terminal))
+        |> Option.orElseWith (fun () -> find "[data-content-list-toggle]")
+        |> focusOn)
 
 /// Return focus to the chat item that opened a tab, given that tab's key — the only thing the
-/// chip and the tab share. Falls back to the strip's first tab when the item has scrolled out
-/// of the rendered chat, because focus has to land somewhere real.
+/// chip and the tab share. Falls back to the way back into the pane when the item has
+/// scrolled out of the rendered chat, or when no chip opened it at all: this runs as the pane
+/// SHUTS, and the strip's first tab — where it used to fall back to — was inside the pane
+/// that had just gone, a focused control zero pixels wide.
 let toChatItem (tabKey: string) : unit =
     nextFrame (fun () ->
         let parts = tabKey.Split ':'
@@ -88,7 +126,7 @@ let toChatItem (tabKey: string) : unit =
                 find (sprintf "[data-chat-stretch=\"%s\"]" (String.concat ":" rest))
             | _ -> None
         back
-        |> Option.orElseWith (fun () -> find "[role=\"tablist\"] [role=\"tab\"]")
+        |> Option.orElseWith (fun () -> find "[data-content-toggle=\"show\"]")
         |> focusOn)
 
 /// Hand focus to a terminal's watch toggle when the reader has been stranded (Plan 14,
@@ -254,9 +292,17 @@ let toPaneNew () : unit =
 
 /// Carry out a move the model asked for (`Yession.App.DomMove`) — the one place a move is
 /// turned into the document call that makes it, for the page and the harness alike.
-let move (move: Yession.App.DomMove) : unit =
-    match move with
+let rec move (asked: Yession.App.DomMove) : unit =
+    match asked with
     | Yession.App.DomMove.FocusPane -> toPane ()
+    | Yession.App.DomMove.FocusCommandLine terminal -> toCommandLine terminal
+    | Yession.App.DomMove.FocusPaneReopen -> toPaneReopen ()
+    | Yession.App.DomMove.FocusPaneEmpty -> toPaneEmpty ()
+    | Yession.App.DomMove.FocusListRow terminal -> toListRow terminal
+    // Asked a frame on, after the render the arrival caused — which is the render that took
+    // the pressed control away, so a hand still on it reads as stranded by then.
+    | Yession.App.DomMove.OnArrival inner ->
+        nextFrame (fun () -> if stranded [ "[data-content-panel]" ] then move inner)
     | Yession.App.DomMove.FocusChat tabKey -> toChatItem tabKey
     | Yession.App.DomMove.FocusItemActions messageId -> toItemActions (Yession.Domain.MessageId.value messageId)
     | Yession.App.DomMove.FocusPaneNew -> toPaneNew ()
