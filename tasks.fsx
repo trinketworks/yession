@@ -770,13 +770,6 @@ let ownProfile = Path.Combine (repoRoot, "tests", "resources.yaml")
 let private underOwnProfile () =
     Environment.SetEnvironmentVariable ("YESSION_SESSION_RESOURCES", ownProfile)
 
-// Local runs are single-machine, so the loopback trust rule is the right default here;
-// the shipped binary defaults to `--auth none` (deny) until the operator chooses.
-let start () =
-    build ()
-    underOwnProfile ()
-    exec "node" [ "app/out/Main.js"; "--auth"; "localhost" ]
-
 let dev () =
     make [ Target.Tools; Target.Packages ]
     underOwnProfile ()
@@ -803,6 +796,29 @@ let providerReady = "MCP at"
 let managerSmokeArgs (dataDir: string) =
     [ "--secrets"; "ephemeral"; "--data-dir"; dataDir; "--port"; "0" ]
 
+/// A throwaway Manager's data dir: under the repository (ignored), never under `/tmp`, because
+/// the default srt sandbox refuses a session home there and `set_shell_profile` then fails.
+/// Given to `run`, and deleted when it returns however it returns.
+let withScratchDataDir (run: string -> 'a) : 'a =
+    let dataDir = Path.Combine (repoRoot, ".yession-scratch", Guid.NewGuid().ToString "N")
+    Directory.CreateDirectory dataDir |> ignore
+    try run dataDir
+    finally try Directory.Delete (dataDir, true) with _ -> ()
+
+// Local runs are single-machine, so the loopback trust rule is the right default here;
+// the shipped binary defaults to `--auth none` (deny) until the operator chooses.
+//
+// `start --scratch` is the same Manager made disposable — the smoke's options, so it takes a
+// port of its own (the address is on its `management UI at` line), keeps nothing, and leaves
+// alone whatever Manager this machine already runs on 8321. What to run in a background
+// terminal when a loop needs one Manager across several pictures (`frames --manager`).
+let start (args: string list) =
+    build ()
+    underOwnProfile ()
+    let manager = [ "app/out/Main.js"; "--auth"; "localhost" ]
+    if List.contains "--scratch" args then withScratchDataDir (fun dataDir -> exec "node" (manager @ managerSmokeArgs dataDir))
+    else exec "node" manager
+
 /// Every command the package offers answers `--version`.
 ///
 /// The cheap half of a smoke, and the only half some bins can have: `yession-session` cannot
@@ -821,6 +837,64 @@ let versionSmoke (what: string) (commandFor: string -> string * string list) =
         let version = run command (arguments @ [ "--version" ])
         printfn "version-smoke: %s %s -> %s" what name version
 
+/// A bin started and seen to be UP: spawned in the repository root, and returned once it has
+/// printed `ready` — with the line that said so, which is where a bin on port 0 says which port
+/// it got. Fails, saying which, when the bin EXITS first or stays silent past 30 seconds.
+///
+/// Both halves of that are what hand-written boots got wrong. A background `&` and an
+/// `until curl …` loop waits for ever on a bin that died at launch, and sends whatever it said
+/// on the way out to a log nobody reads: in session NR5KB8B5 the Manager refused a variable it
+/// no longer reads, exited in a second, and an agent polled the wait loop for thirteen minutes.
+/// So nothing here waits on a port. It waits on the bin's own account of itself, and the exit
+/// that ends the wait early is reported with its code while stderr — inherited, never captured
+/// — is already on the screen saying why.
+///
+/// Stdout is read ASYNCHRONOUSLY and for as long as the process lives, because a caller that
+/// keeps the bin running (`frames --boot`) would otherwise fill the pipe and stall the bin on
+/// its next line. What it said is KEPT and printed only when the boot fails — a Manager's
+/// telemetry is pages of it, and on success the one line worth showing is the ready line.
+let booted
+    (ready: string)
+    (environment: (string * string) list)
+    (command: string)
+    (arguments: string list)
+    : Process * string =
+    // A command with a path separator (e.g. ./result/bin/yession) resolves to an absolute path;
+    // a bare name (node) is left for PATH lookup.
+    let command = if command.Contains "/" then Path.GetFullPath command else command
+    let psi = ProcessStartInfo (command)
+    arguments |> List.iter psi.ArgumentList.Add
+    psi.WorkingDirectory <- repoRoot
+    psi.RedirectStandardOutput <- true
+    psi.UseShellExecute <- false
+    for name, value in environment do
+        psi.EnvironmentVariables.[name] <- value
+    let p = new Process (StartInfo = psi)
+    let seen = new System.Threading.ManualResetEventSlim (false)
+    let readyLine = ref ""
+    let said = Collections.Concurrent.ConcurrentQueue<string> ()
+    p.OutputDataReceived.Add (fun e ->
+        if not (isNull e.Data) && not seen.IsSet then
+            said.Enqueue e.Data
+            if e.Data.Contains ready then
+                readyLine.Value <- e.Data
+                seen.Set ())
+    p.Start () |> ignore
+    p.BeginOutputReadLine ()
+    let deadline = DateTime.UtcNow.AddSeconds 30.0
+    while not seen.IsSet && not p.HasExited && DateTime.UtcNow < deadline do
+        seen.Wait 100 |> ignore
+    if seen.IsSet then
+        printfn "%s" readyLine.Value
+        p, readyLine.Value
+    else
+        said |> Seq.iter (printfn "[%s] %s" (Path.GetFileName command))
+        let why =
+            if p.HasExited then sprintf "exited (%s) before it printed %s" (diedOf p.ExitCode) ready
+            else sprintf "never printed %s in 30s" ready
+        try p.Kill true with _ -> ()
+        failwithf "%s %s %s" command (String.concat " " arguments) why
+
 // Reused by `package`, `install-smoke`, and CI's nix-package job: spawn the given command with
 // an ephemeral data dir + port 0, and assert it prints `ready` before a deadline. A bin that
 // cannot boot never passes the gate.
@@ -832,31 +906,14 @@ let versionSmoke (what: string) (commandFor: string -> string * string list) =
 let bootSmoke (ready: string) (command: string) (arguments: string -> string list) =
     let dataDir = Path.Combine (Path.GetTempPath (), "yession-boot-" + Guid.NewGuid().ToString "N")
     Directory.CreateDirectory dataDir |> ignore
-    let arguments = arguments dataDir
-
-    // A command with a path separator (e.g. ./result/bin/yession) resolves to an absolute path;
-    // a bare name (node) is left for PATH lookup.
-    let command = if command.Contains "/" then Path.GetFullPath command else command
-    let psi = ProcessStartInfo (command)
-    arguments |> List.iter psi.ArgumentList.Add
-    psi.WorkingDirectory <- repoRoot
-    psi.RedirectStandardOutput <- true
-    psi.EnvironmentVariables.["YESSION_SERIAL_PORT"] <- "0"
-    psi.EnvironmentVariables.["JUMPSTARTER_PROVIDER_PORT"] <- "0"
-    let p = Process.Start psi
-
-    try
-        let mutable seen = false
-        let deadline = DateTime.UtcNow.AddSeconds 30.0
-        while not seen && DateTime.UtcNow < deadline && not p.HasExited do
-            let line = p.StandardOutput.ReadLine ()
-            if line <> null then
-                printfn "[smoke] %s" line
-                if line.Contains ready then seen <- true
-        if not seen then failwithf "boot-smoke: %s never printed %s" command ready
-        printfn "boot-smoke: %s booted and printed %s" command ready
-    finally
-        try p.Kill true with _ -> ()
+    let p, _ =
+        booted
+            ready
+            [ "YESSION_SERIAL_PORT", "0"; "JUMPSTARTER_PROVIDER_PORT", "0" ]
+            command
+            (arguments dataDir)
+    printfn "boot-smoke: %s booted and printed %s" command ready
+    try p.Kill true with _ -> ()
 
 // --- package: restore + stage + boot smoke + npm pack ----------------------------------------
 
@@ -2478,15 +2535,44 @@ let probe (args: string list) =
     runInherit repoRoot "node" ([ Path.Combine (out, "Probe.js") ] @ args) |> ignore
 
 /// The camera: a session's first load against a real deployment, every painted frame and every
-/// client render, labelled with each other (`tools/Yession.Frames`). The same terms as the
-/// probe — an instrument, nothing shipped reaches it — and the same shape: its arguments pass
-/// straight through, and it states its own usage. The module's header says how to read what it
-/// makes.
+/// client render, labelled with each other — or, with `--still`, one honest picture of any page
+/// (`tools/Yession.Frames`). The same terms as the probe — an instrument, nothing shipped
+/// reaches it — and the same shape: its arguments pass straight through, and it states its own
+/// usage. The module's header says how to read what it makes.
+///
+/// One argument is this verb's rather than the camera's: `--boot`, which builds this tree,
+/// starts a scratch Manager on it and points the camera there with `--manager`. A scratch
+/// Manager is four facts that every hand-written boot got one of wrong — port 0 (a fixed port
+/// is somebody's installed Manager), a throwaway `--data-dir` outside `/tmp` (the default srt
+/// sandbox refuses a home there), `--secrets ephemeral` (no KEK in the real Keychain), and this
+/// repository's resources profile (without one a session has no sandboxes at all, so a
+/// terminal cannot open) — and `booted` is what knows the bin is up rather than a port loop.
+/// They are said once, here, so a skill that wants a picture names a verb and not a recipe.
 let frames (args: string list) =
     let out = Path.Combine (repoRoot, "tools", "Yession.Frames", "out")
     make [ Target.Tools; Target.Packages ]
     fable (Path.Combine (repoRoot, "tools", "Yession.Frames", "Yession.Frames.fsproj")) out
-    runInherit repoRoot "node" ([ Path.Combine (out, "Frames.js") ] @ args) |> ignore
+    let camera (args: string list) =
+        match runInherit repoRoot "node" ([ Path.Combine (out, "Frames.js") ] @ args) with
+        | 0 -> ()
+        | code -> failwithf "frames: the camera failed (%s)" (diedOf code)
+    if not (List.contains "--boot" args) then camera args
+    else
+        build ()
+        withScratchDataDir (fun dataDir ->
+            let manager, said =
+                booted
+                    managerReady
+                    [ ("YESSION_SESSION_RESOURCES", ownProfile) ]
+                    "node"
+                    ([ "app/out/Main.js"; "--auth"; "localhost" ] @ managerSmokeArgs dataDir)
+            try
+                // The address is the bin's own: `management UI at http://127.0.0.1:<port>/`.
+                let url = said.Substring(said.IndexOf "http").Trim().TrimEnd '/'
+                camera ([ "--manager"; url ] @ List.filter ((<>) "--boot") args)
+            finally
+                try manager.Kill true with _ -> ()
+                manager.WaitForExit ())
 
 // --- crash-repro: the fable SIGSEGV, run until it happens --------------------------------------
 
@@ -2663,7 +2749,7 @@ match arg 1 with
 | Some "restore" -> restore ()
 | Some "lock" -> lock ()
 | Some "build" -> build ()
-| Some "start" -> start ()
+| Some "start" -> start (rest 2)
 | Some "dev" -> dev ()
 | Some "version" -> printfn "%s" (defaultVersion ())
 | Some "stage" -> stage (arg 2 |> Option.defaultWith defaultVersion)

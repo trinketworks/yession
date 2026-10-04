@@ -775,7 +775,8 @@ two-peer WebRTC E2E runs where the Nix-built `Native` addon is present (CI, `ver
 
 To inspect or iterate on a server-rendered surface (the manager page) with real
 screenshots, read `.agents/skills/ui-exploration/SKILL.md` first — headless Chromium's
-window-size clamp makes naive mobile screenshots lie; the skill's CDP driver does not.
+window-size clamp makes naive mobile screenshots lie; the camera it points at
+(`frames --boot --still`) does not.
 
 ### Writing tests
 

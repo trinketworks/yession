@@ -69,6 +69,8 @@ tests/browser/.data*
 
 # Local Session Process runtime data (event logs, doc store)
 .yession/
+# `frames --boot`'s throwaway Manager data dirs (tasks.fsx)
+.yession-scratch/
 
 # Release packaging output
 dist/
