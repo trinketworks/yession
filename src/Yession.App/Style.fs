@@ -3161,7 +3161,7 @@ module Style =
     /// command rather than as more output.
     let terminalBlockFacts = "flex flex-wrap items-baseline gap-x-4 gap-y-0.5 pl-4 py-1"
     let terminalBlockFact = caps + " text-ink-faint"
-    /// The ✓/✗/running tally beside "ran N commands" on a `terminalBlockRun` — the same
+    /// The ✓/✗ tally beside "ran N commands" on a `terminalBlockRun` — the same
     /// shape the chat's task card counts wear (`chatTaskCounts`), kept as its own name
     /// because this one sits on the pane's own fold rather than the chat's.
     let terminalBlockRunCounts = "flex items-baseline gap-2 shrink-0"

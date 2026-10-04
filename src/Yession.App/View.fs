@@ -3033,34 +3033,38 @@ module View =
               {body}
             </article>"""
 
-    /// Consecutive blocks, same author, no other author's command between them — the
-    /// pane's own version of what the chat already folds into a task card (`TaskCard`,
-    /// shared with `taskCard` above). Never one block: a run around a single command is a
-    /// disclosure over nothing, so the caller only reaches for this once a group has two.
-    let private terminalRuns (blocks: Block list) : Block list list =
-        let step (groups: Block list list) (next: Block) : Block list list =
-            match groups with
-            | (leader :: _ as group) :: earlier when Authority.author leader.Authority = Authority.author next.Authority ->
-                (next :: group) :: earlier
-            | _ -> [ next ] :: groups
-        List.fold step [] blocks
-        |> List.rev
-        |> List.map List.rev
-
     /// One fold over a run of commands one actor ran back to back in this terminal — "ran N
     /// commands", with the same ✓/✗/running tally the chat's task card wears, collapsed to
     /// one line until pressed. A native `<details>`, so the fold arrives keyboard-operable and
     /// announced, rather than a second fold mechanism borrowed from the chat. Its mark is the
     /// chevron every other fold in the product turns, not an ellipsis: `…` at the end of a
     /// line reads as a menu, and what is behind this is the commands, not choices.
-    let private terminalBlockRun (model: ClientModel) (feed: TerminalFeed) (blocks: Block list) : TemplateResult =
-        let leader = List.head blocks
+    ///
+    /// Which runs exist is `BlockGroup.ofBlocks`'s to say; whether one is open is the
+    /// model's (`OpenFolds`), bound onto the element and told back by its `toggle`, so a
+    /// render that rebuilds the `<details>` rebuilds it the way the reader left it.
+    let private terminalBlockRun
+        (dispatch: ClientMsg -> unit)
+        (model: ClientModel)
+        (feed: TerminalFeed)
+        (terminal: TerminalId)
+        (leader: Block)
+        (rest: Block list)
+        : TemplateResult =
+        let blocks = leader :: rest
+        let key = BlockGroup.key terminal leader
+        let opened = Set.contains key model.OpenFolds
+        // The element the listener is ON, which is the `<details>` — the one cast, on the
+        // line that needs it, answered as a bool at once.
+        let toggled (e: Browser.Types.Event) =
+            let isOpen = (e.currentTarget :?> Browser.Types.Element).hasAttribute "open"
+            if isOpen <> opened then dispatch (FoldSetMsg (key, isOpen))
         let tally = blocks |> List.map (fun b -> TaskCard.stateOf b.Status) |> TaskCard.tally
         let count n inner = if n = 0 then Lit.nothing else inner
         let failed = count tally.Failed (html $"""<span class="{Style.statusErr}">{Icon.crossSm} {tally.Failed}</span>""")
-        let running = count tally.Running (html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>{tally.Running}</span>""")
+        // No running count: a running command is never in a run (`BlockGroup.ofBlocks`).
         let done' = count tally.Done (html $"""<span class="{Style.statusOk}">{Icon.checkSm} {tally.Done}</span>""")
-        let counts = html $"""<span class="{Style.terminalBlockRunCounts}">{failed}{running}{done'}</span>"""
+        let counts = html $"""<span class="{Style.terminalBlockRunCounts}">{failed}{done'}</span>"""
         let commands = if tally.Commands = 1 then "1 command" else sprintf "%d commands" tally.Commands
         let runAuthor = Authority.author leader.Authority
         let author =
@@ -3071,7 +3075,7 @@ module View =
                           data-terminal-block-author="{Entity.actorToken runAuthor}"></span>"""
         html $"""
             <article class="{Style.terminalBlock}" data-terminal-block-run="{BlockId.value leader.BlockId}">
-              <details class="group">
+              <details class="group" ?open={opened} @toggle={Ev toggled} data-fold-open="{if opened then "yes" else "no"}">
                 <summary class="{Style.terminalBlockRunSummary}">
                   {author}
                   <span class="{Style.terminalCommandText}">ran {commands}</span>
@@ -4097,11 +4101,10 @@ module View =
                 // many. On a closed one there is no command line, and the symbol is the only
                 // thing left to say the surface is a terminal that ran nothing.
                 if not (List.isEmpty view.Blocks) then
-                    view.Blocks
-                    |> terminalRuns
+                    BlockGroup.ofBlocks view.Blocks
                     |> List.map (function
-                        | [ block ] -> terminalBlockView model feed true block
-                        | many -> terminalBlockRun model feed many)
+                        | BlockGroup.Alone block -> terminalBlockView model feed true block
+                        | BlockGroup.Run (leader, rest) -> terminalBlockRun dispatch model feed view.TerminalId leader rest)
                 elif view.IsOpen then []
                 else [ html $"""<div class="{Style.terminalOutputEmpty}"><span class="{Style.terminalPrompt}">$</span></div>""" ]
             // A terminal's two reads, and the ONE control between them (Plan 14, stage 7;
