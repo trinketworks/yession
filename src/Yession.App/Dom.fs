@@ -390,6 +390,13 @@ module Dom =
         /// the two must not be mistaken for each other: a `close` in this strip once did the
         /// destructive one, which is why it was taken out of it.
         let paneTabClose = "data-pane-tab-close"
+        /// The strip's scroll box — what moves when there are more tabs than room. The browser
+        /// scrolls it to keep the selected tab and the focused one in view (`PaneShell`).
+        let paneStrip = "data-pane-strip"
+        /// Which ends of the strip have tabs scrolled past them (`TabStrip.Hidden.token`):
+        /// written by the browser after every render and every scroll, never by the view,
+        /// because it is a fact about one scroll position. The fade is keyed on it.
+        let paneStripHidden = "data-pane-strip-hidden"
         /// The pane's body, carrying the key of whatever it is showing.
         let panePanel = "data-pane-panel"
         /// A block's read-only view: its command line and everything it printed.

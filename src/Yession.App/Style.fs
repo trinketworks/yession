@@ -121,6 +121,15 @@ module Style =
     let focusRing =
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue focus-visible:outline-offset-2"
 
+    /// The same ring drawn just INSIDE the control's edge — for a control that lives in a box
+    /// that clips, where a ring outside its edge is cut off wherever the box ends. A scroll
+    /// container clips both axes whichever one it scrolls, so the pane's tabs, which sit in
+    /// one flush to its top and bottom, showed a focus ring as its right edge alone: a
+    /// vertical bar that read as a separator. Same width, same colour; only the side of the
+    /// edge it is drawn on moves.
+    let focusRingInset =
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue focus-visible:-outline-offset-2"
+
     /// The same ring held further off — for type with no box of its own, where a ring on the
     /// glyphs' own edge reads as an underline.
     let private focusRingFar =
@@ -2746,20 +2755,34 @@ module Style =
     /// The open-terminal strip: one chip per terminal, scrolling horizontally when there are
     /// more than fit rather than wrapping into a second band that shifts the whole column.
     ///
-    /// The tabs run down to the strip's own divider so their marks land on it rather than
-    /// drawing a second line above it (see `tabBase`). `pb-px` is the one pixel their pulled-up
-    /// borders occupy: this strip scrolls, and anything painted outside a scroll container's
-    /// padding box is something to scroll TO — a 1px overhang made the row scrollable on the
-    /// vertical axis (`overflow-x` forces `overflow-y` to `auto`) and Chromium drew a scrollbar
-    /// down the side of the tabs for it.
     /// The strip's row. It no longer scrolls — the SCROLLER inside it does — for two reasons
     /// that arrived together: the `+` used to sit inside the scroll box, so a session with
     /// enough tabs put the way to open another one off the right-hand edge; and a menu hung
     /// inside an `overflow-x-auto` box is clipped to that box, because a scroll container
-    /// clips both axes whichever one you asked to scroll.
-    let terminalTabs = "shrink-0 flex items-stretch gap-1 px-3 pt-2 pb-px " + Stroke.dividerBottom
+    /// clips both axes whichever one you asked to scroll. The row draws the divider, so it
+    /// runs under the `+` as well as under the tabs.
+    let terminalTabs = "shrink-0 flex items-stretch gap-1 px-3 pt-2 " + Stroke.dividerBottom
     /// The tabs' own scroll box: everything that moves when there are more tabs than room.
-    let terminalTabScroller = "flex-1 min-w-0 flex items-stretch overflow-x-auto"
+    ///
+    /// `-mb-px` lays its bottom pixel OVER the row's divider, and the tabs, stretched to its
+    /// height, put their bottom borders on that pixel: one line under the row, which the
+    /// selected tab paints blue for its width and every other tab leaves showing through. It
+    /// used to be the TABS that reached down (`-mb-px` on each), past the bottom of this box —
+    /// and a scroll container clips at its padding box, so the selection's whole mark was the
+    /// one pixel it cut off (sampled: no blue under the selected tab at all), and the overhang
+    /// made the box scroll a pixel vertically besides. Nothing a tab paints may leave this
+    /// box, which is also why tabs wear `focusRingInset`.
+    ///
+    /// When tabs run past an end, that end fades (`TabStrip.hidden`, written by the browser as
+    /// `data-pane-strip-hidden`): a row cut off at a tab boundary reads as a row that ends
+    /// there, and a desktop's overlay scrollbar shows only while something is scrolling. The
+    /// fade is 1.5rem, which `TabStrip.edge` keeps a revealed tab clear of. A thin scrollbar
+    /// where the platform draws one at all.
+    let terminalTabScroller =
+        cls [ "flex-1 min-w-0 -mb-px flex items-stretch overflow-x-auto [scrollbar-width:thin]"
+              "data-[pane-strip-hidden=end]:[mask-image:linear-gradient(to_right,#000_calc(100%_-_1.5rem),transparent)]"
+              "data-[pane-strip-hidden=start]:[mask-image:linear-gradient(to_left,#000_calc(100%_-_1.5rem),transparent)]"
+              "data-[pane-strip-hidden=both]:[mask-image:linear-gradient(to_right,transparent,#000_1.5rem,#000_calc(100%_-_1.5rem),transparent)]" ]
     /// The tabs THEMSELVES, and nothing else. `role="tablist"` is a promise about what its
     /// children are, and the strip also holds two things that are not tabs — "+ new" and
     /// "close" — which a reader was told were tabs (four of them, in a list of two) and which
@@ -2785,20 +2808,20 @@ module Style =
     /// no text, and the selection is said twice quietly instead of once loudly: ink rather than
     /// faint, over a blue rule.
     ///
-    /// And it is the strip's OWN rule, not a second one. `-mb-px` pulls each tab's bottom
-    /// border down onto the divider the strip already draws, so there is one line under the
-    /// row and the selected tab paints its segment of it: an unselected tab's border is
-    /// transparent and the hairline shows straight through. Drawn at the tab's own height
-    /// instead, it was a second rule 23px above the first — two horizontal lines saying one
-    /// thing, which is the ornament this pass exists to remove.
+    /// And it is the strip's OWN rule, not a second one. The scroller lays its bottom pixel
+    /// over the divider the strip already draws and each tab stretches to it, so there is one
+    /// line under the row and the selected tab paints its segment of it: an unselected tab's
+    /// border is transparent and the hairline shows straight through. Drawn at the tab's own
+    /// height instead, it was a second rule 23px above the first — two horizontal lines saying
+    /// one thing, which is the ornament this pass exists to remove.
     /// The tab is a flex ROW rather than a truncating box, because it holds a control: the
     /// close button sits inside the tab (a tab is what the pointer aims at, and a control
     /// outside it would be a child of the tablist that is not a tab), and a `truncate` on the
     /// tab itself would clip the button rather than the name. The bound and the ellipsis moved
     /// onto the label, which is the thing that is allowed to be too long.
     let private tabBase =
-        cls [ caps; "bg-transparent cursor-pointer px-2.5 pt-1.5 pb-2 -mb-px inline-flex items-center transition-colors"
-              Stroke.underline; focusRing ]
+        cls [ caps; "bg-transparent cursor-pointer px-2.5 pt-1.5 pb-2 inline-flex items-center transition-colors"
+              Stroke.underline; focusRingInset ]
     /// A tab's NAME: as much of it as fits, and an ellipsis for the rest.
     let paneTabLabel = "max-w-40 truncate"
     /// Taking a tab off the strip — on the selected tab only, which is where a gesture with

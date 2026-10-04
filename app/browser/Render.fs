@@ -934,6 +934,10 @@ let create (deps: Deps) : Renderer =
         // model, because unlike the sidebar this column's visibility is something the app
         // itself changes (selecting a terminal opens it).
         PaneShell.setOpen model.TerminalsOpen
+        // The strip's selected tab in view when the selection moved — read off the DOM rather
+        // than the model, so a tab a collaborator's `TabOpened` selected is covered too — and
+        // its fade on whichever ends have tabs past them.
+        PaneShell.syncStrip ()
         // Keep a slot rule running for every open terminal: a person may be mid-command
         // in more than one, and each slot follows its own command line.
         syncTerminalSlots model
@@ -959,3 +963,4 @@ let create (deps: Deps) : Renderer =
 let attach () : unit =
     keepSurfacesPinned PinnedSurfaces
     PaneShell.installPaneResize ()
+    PaneShell.installStrip ()

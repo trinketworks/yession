@@ -1693,6 +1693,44 @@ let private editorCaseOn
 /// A case at the browser's own window size.
 let private editorCase = editorCaseOn None
 
+/// Every block chip the harness's chat holds, opened as a tab each: the one at the top level,
+/// then the three inside the task card, which has to be unfolded first. With the harness's two
+/// terminal tabs that is six, which is more than the strip has room for at the pane's default
+/// width — the cases that need an overflowing strip assert that before anything else.
+let private openEveryChip (page: IPage) : Async<unit> =
+    async {
+        let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card] [data-fold]")
+        do! awaitU (page.ClickAsync "#shell [data-chat-task-card] [data-fold]")
+        do! waitFor "the task card to unfold" page
+                """document.querySelector('#shell [data-chat-task-card] [data-fold-body]')?.getAttribute('data-fold-open') === 'yes'"""
+        let chips = page.Locator "#shell [data-chat-block]"
+        let! count = await (chips.CountAsync ())
+        for i in 0 .. count - 1 do
+            do! awaitU (chips.Nth(i).ClickAsync ())
+            do! waitFor (sprintf "chip %d to open its tab and select it" i) page
+                    (sprintf
+                        """document.querySelectorAll('#shell [data-pane-strip] [role=tab]').length >= %d
+                           && document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=true]')
+                                ?.getAttribute('data-pane-tab')?.endsWith(':' + document.querySelectorAll('#shell [data-chat-block]')[%d].getAttribute('data-chat-block')) === true"""
+                        (3 + i) i)
+    }
+
+/// Whether the strip holds more tabs than it shows — the precondition every scrolling case
+/// asserts first, because on a strip that fits, "in view" is true of everything.
+let private stripOverflows =
+    """() => { const s = document.querySelector('#shell [data-pane-strip]'); return s.scrollWidth > s.clientWidth + 1 }"""
+
+/// Whether the element an expression names lies wholly inside the strip's box, sideways.
+let private insideStrip (element: string) =
+    sprintf
+        """() => {
+             const s = document.querySelector('#shell [data-pane-strip]').getBoundingClientRect()
+             const t = (%s).getBoundingClientRect()
+             return t.left >= s.left - 0.5 && t.right <= s.right + 0.5
+           }"""
+        element
+
+
 /// A case at a stated viewport. `ViewportSize` alone, never `IsMobile`: that additionally asks
 /// Chromium to fit the layout to a device window, which measured here lands at 648px rather
 /// than 390 — the very lie the ui-exploration skill warns about, arriving through another door.
@@ -2514,6 +2552,116 @@ let editorTests =
                 do! waitFor "a press on the title unfolds it" page (visibility + " === 'visible'")
                 do! awaitU (page.EvaluateAsync clickTitle)
                 do! waitFor "and a second press folds it back" page (visibility + " === 'hidden'")
+            }
+
+        // The strip scrolls sideways, and nothing about a scroll box keeps what matters in it on
+        // screen: the newest tab — the one just selected — opened past the right-hand edge.
+        editorCase "a newly selected tab is scrolled into view" <| fun page ->
+            async {
+                do! openEveryChip page
+                let! overflows = await (page.EvaluateAsync<bool> stripOverflows)
+                Expect.isTrue overflows "the strip holds more tabs than it shows, or this proves nothing"
+                let! inView =
+                    await (page.EvaluateAsync<bool>
+                        (insideStrip "document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=true]')"))
+                Expect.isTrue inView "the selected tab lies inside the strip's box"
+            }
+
+        // The arrow walk moves FOCUS, and a focused tab past the edge — or under the fade that
+        // says more tabs lie past it — is a keyboard user walking blind. Walked end to end, from
+        // the selected tab at the far right back Home and then right again, so every step that
+        // brings a tab in from either side is asked.
+        editorCase "keyboard focus never rests past the strip's edge or under its fade" <| fun page ->
+            async {
+                do! openEveryChip page
+                let! overflows = await (page.EvaluateAsync<bool> stripOverflows)
+                Expect.isTrue overflows "the strip holds more tabs than it shows, or this proves nothing"
+                let! count = await (page.EvaluateAsync<int> "() => document.querySelectorAll('#shell [data-pane-strip] [role=tab]').length")
+                do! awaitU (page.FocusAsync "#shell [data-pane-strip] [role=tab][aria-selected=true]")
+                // Where the focused tab is, against the strip's box less a fade on each end that
+                // has tabs past it — read off the scroll position, not the attribute the fade is
+                // keyed on, so the measurement does not trust the thing it is checking.
+                let placed =
+                    sprintf
+                        """() => {
+                             const strip = document.querySelector('#shell [data-pane-strip]')
+                             const s = strip.getBoundingClientRect()
+                             const before = strip.scrollLeft > 1
+                             const after = strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1
+                             const t = document.activeElement.getBoundingClientRect()
+                             const left = s.left + (before ? %f : 0), right = s.right - (after ? %f : 0)
+                             return (t.left >= left - 0.5 && t.right <= right + 0.5)
+                               ? '' : `${document.activeElement.getAttribute('data-pane-tab')} at ${t.left}..${t.right}, shown ${left}..${right}`
+                           }"""
+                        Yession.App.TabStrip.edge Yession.App.TabStrip.edge
+                let faults = ResizeArray<string> ()
+                for key in "Home" :: List.replicate (count - 1) "ArrowRight" do
+                    do! awaitU (page.Keyboard.PressAsync key)
+                    let! fault = await (page.EvaluateAsync<string> placed)
+                    if fault <> "" then faults.Add (sprintf "after %s: %s" key fault)
+                Expect.equal (String.concat "; " faults) "" "every tab focus lands on is shown clear of the strip's edges"
+            }
+
+        // The selection's mark is a one-pixel rule under the tab, and the strip is a scroll
+        // box, which clips at its own edge whichever axis it scrolls: a rule drawn a pixel
+        // below that edge was drawn into nothing, and "selected" read only as brighter text.
+        // Measured, not sampled — a tab whose border box reaches past the box is the clip, and
+        // a box that scrolls vertically is what an overhang looks like from outside.
+        editorCase "the selected tab's underline paints" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
+                do! awaitU (page.ClickAsync "#shell [data-chat-block]")
+                do! waitFor "the chip's tab to be selected" page
+                        "document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=true]')?.getAttribute('data-pane-tab')?.startsWith('block:') === true"
+                let! faults =
+                    await (page.EvaluateAsync<string>
+                        """() => {
+                             const strip = document.querySelector('#shell [data-pane-strip]')
+                             const s = strip.getBoundingClientRect()
+                             const on = strip.querySelector('[role=tab][aria-selected=true]')
+                             const off = strip.querySelector('[role=tab][aria-selected=false]')
+                             const t = on.getBoundingClientRect()
+                             const faults = []
+                             if (t.bottom > s.bottom + 0.5) faults.push(`the tab reaches ${t.bottom - s.bottom}px below the strip`)
+                             if (strip.scrollHeight !== strip.clientHeight) faults.push(`the strip overflows ${strip.scrollHeight - strip.clientHeight}px vertically`)
+                             const mark = getComputedStyle(on)
+                             if (parseFloat(mark.borderBottomWidth) === 0) faults.push('the selected tab has no bottom border')
+                             if (mark.borderBottomColor === getComputedStyle(off).borderBottomColor) faults.push('its rule is the same colour as an unselected tab\'s')
+                             return faults.join('; ')
+                           }""")
+                Expect.equal faults "" "the selected tab's rule is drawn inside the strip and unlike the others'"
+            }
+
+        // The focus ring is drawn outside a control's edge by default, and the strip clips at
+        // its own: a tab flush with the box showed its ring as one vertical bar, which reads as
+        // a separator. Reached by the KEYBOARD, because `:focus-visible` is the rule that draws
+        // it, and a programmatic `focus()` alone does not fire it.
+        editorCase "a focused tab's ring is inside the strip" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
+                do! awaitU (page.ClickAsync "#shell [data-chat-block]")
+                do! awaitU (page.FocusAsync "#shell [data-pane-strip] [role=tab][aria-selected=true]")
+                do! awaitU (page.Keyboard.PressAsync "ArrowLeft")
+                do! waitFor "the walk to land on another tab, keyboard-focused" page
+                        "document.activeElement?.matches('#shell [data-pane-strip] [role=tab][aria-selected=false]:focus-visible') === true"
+                let! faults =
+                    await (page.EvaluateAsync<string>
+                        """() => {
+                             const s = document.querySelector('#shell [data-pane-strip]').getBoundingClientRect()
+                             const tab = document.activeElement
+                             const ring = getComputedStyle(tab)
+                             const width = parseFloat(ring.outlineWidth)
+                             if (ring.outlineStyle === 'none' || width === 0) return 'no ring is drawn'
+                             const reach = width + parseFloat(ring.outlineOffset)
+                             const t = tab.getBoundingClientRect()
+                             const faults = []
+                             if (t.top - reach < s.top - 0.5) faults.push('cut off at the top')
+                             if (t.bottom + reach > s.bottom + 0.5) faults.push('cut off at the bottom')
+                             if (t.left - reach < s.left - 0.5) faults.push('cut off at the left')
+                             if (t.right + reach > s.right + 0.5) faults.push('cut off at the right')
+                             return faults.join('; ')
+                           }""")
+                Expect.equal faults "" "the ring is drawn wholly inside the strip's box"
             }
 
         // Terminal work in the chat, and the pane's tabs (Plan 14, stages 1-2). Host-free,

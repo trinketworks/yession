@@ -430,6 +430,13 @@ let private oneBlock =
 
 let private stripKeys (model: ClientModel) = model.Tabs |> List.map PaneTab.key
 
+/// Three tabs opened in order, each one shown as it opened — so the last is the one showing.
+let private threeOpen () =
+    clientOf oneBlock
+    |> Support.step (ShowInPaneMsg (Reading (BlockTab (terminalA, block "1"))))
+    |> Support.step (ShowInPaneMsg (Reading (BlockTab (terminalA, block "2"))))
+    |> Support.step (ShowInPaneMsg (Reading (BlockTab (terminalA, block "3"))))
+
 /// More events, onto a client that has already folded some — the same page message a browser
 /// takes, so "what happened next" is folded by the path that folds everything else.
 let private thenFolded (events: EventEnvelope<SessionEvent> list) (model: ClientModel) : ClientModel =
@@ -1824,6 +1831,27 @@ let private pinTests =
             Expect.isFalse
                 (stripKeys model |> List.contains (PaneTab.key kept))
                 "gone from the strip, not back in it as a preview"
+
+        testCase "closing the tab that is showing selects the one that takes its place" <| fun () ->
+            // The keyboard's Delete hands focus to the tab sliding into the closed one's slot
+            // (`TabStrip.neighbour`); selection must land on the same tab, or focus and the
+            // pane disagree — and falling back to the first terminal put the selection at the
+            // far end of a strip that scrolls.
+            let middle = BlockTab (terminalA, block "2")
+            let model = threeOpen () |> Support.step (ShowInPaneMsg (Reading middle))
+            let shownAt = stripKeys model |> List.findIndex ((=) (PaneTab.key middle))
+            let closed = model |> Support.step (CloseTabMsg middle)
+            Expect.equal
+                (ClientModel.selectedPane closed |> Option.map PaneTab.key)
+                (List.tryItem shownAt (stripKeys closed))
+                "the tab now in the closed one's place"
+
+        testCase "closing the last tab while it is showing selects the one before it" <| fun () ->
+            let closed = threeOpen () |> Support.step (CloseTabMsg (BlockTab (terminalA, block "3")))
+            Expect.equal
+                (ClientModel.selectedPane closed |> Option.map PaneTab.key)
+                (List.tryLast (stripKeys closed))
+                "the new last tab"
 
         testCase "a tab is in the strip once, whether or not it is the one showing" <| fun () ->
             // The preview is what is shown and NOT open. It used to be what is shown and not

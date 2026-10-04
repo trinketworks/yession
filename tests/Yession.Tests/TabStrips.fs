@@ -18,6 +18,10 @@ open Yession.App
 /// different answers.
 let private four = 4
 
+/// A window 360px wide onto a row of tabs 826px wide, scrolled this far.
+let private port (scrolled: float) : TabStrip.Scrollport =
+    { TabStrip.Scrollport.Scrolled = scrolled; TabStrip.Scrollport.Shown = 360.0; TabStrip.Scrollport.Holds = 826.0 }
+
 let tests =
     testList "TabStrips" [
 
@@ -70,4 +74,32 @@ let tests =
         // the caller must not be told to focus index -1.
         testCase "there is no neighbour when releasing the only tab" <| fun () ->
             Expect.equal (TabStrip.neighbour 0 1) None "the only tab"
+
+        // The strip scrolls, and a selected or focused tab past its edge is one nobody can
+        // see. A window 360 wide over a row 826 wide, which is eight tabs at the pane's
+        // default width.
+        testCase "a tab already clear of both edges is not a scroll" <| fun () ->
+            Expect.equal (TabStrip.reveal (port 0.0) 100.0 200.0) None "in the middle"
+
+        testCase "a tab past the right edge comes in at the right, clear of the fade" <| fun () ->
+            Expect.equal (TabStrip.reveal (port 0.0) 400.0 500.0) (Some (500.0 + TabStrip.edge - 360.0)) "the smallest move"
+
+        testCase "a tab past the left edge comes in at the left, clear of the fade" <| fun () ->
+            Expect.equal (TabStrip.reveal (port 300.0) 200.0 300.0) (Some (200.0 - TabStrip.edge)) "the smallest move"
+
+        // The first and last tabs have no room beyond them to be clear INTO, and asking for it
+        // must not be a write past the end the browser would only clamp back.
+        testCase "the ends of the row scroll no further than the row goes" <| fun () ->
+            Expect.equal (TabStrip.reveal (port 300.0) 0.0 96.0) (Some 0.0) "the first"
+            Expect.equal (TabStrip.reveal (port 0.0) 730.0 826.0) (Some (826.0 - 360.0)) "the last"
+            Expect.equal (TabStrip.reveal (port (826.0 - 360.0)) 730.0 826.0) None "the last, already there"
+
+        testCase "a tab wider than the window shows its start" <| fun () ->
+            Expect.equal (TabStrip.reveal (port 0.0) 400.0 800.0) (Some (400.0 - TabStrip.edge)) "where its name is"
+
+        testCase "the fade is on whichever ends have tabs past them" <| fun () ->
+            Expect.equal (TabStrip.hidden { port 0.0 with TabStrip.Scrollport.Holds = 300.0 }) TabStrip.Hidden.Neither "it all fits"
+            Expect.equal (TabStrip.hidden (port 0.0)) TabStrip.Hidden.After "at the start"
+            Expect.equal (TabStrip.hidden (port 200.0)) TabStrip.Hidden.Both "in the middle"
+            Expect.equal (TabStrip.hidden (port (826.0 - 360.0))) TabStrip.Hidden.Before "at the end"
     ]
