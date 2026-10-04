@@ -289,6 +289,29 @@ module SandboxPath =
     ///
     /// An absolute path is already an answer. `None` is a caller with no opinion, which is
     /// the root itself.
+    /// The variable a path STARTS with, and what follows it: `~` and `~/x` are `HOME`,
+    /// `$NAME/x` and `${NAME}/x` are `NAME`. A file tool takes paths "as a terminal in that
+    /// sandbox would", and a terminal expands these — while the tools, handing the path to
+    /// `cat` as an argument, did not, so the `$TMPDIR` that `execute_command` tells an agent to
+    /// write under came back as "no such file" from `read_file` (session NR5KB8B5). Only a
+    /// LEADING one, which is the shape scratch paths have; and only a name, never an
+    /// expression, so resolving it is a lookup and never an evaluation.
+    let leadingVariable (path: string) : (string * string) option =
+        let isName (name: string) =
+            name <> ""
+            && (System.Char.IsLetter name.[0] || name.[0] = '_')
+            && name |> Seq.forall (fun c -> System.Char.IsLetterOrDigit c || c = '_')
+        if path = "~" then Some ("HOME", "")
+        elif path.StartsWith "~/" then Some ("HOME", path.Substring 1)
+        elif path.StartsWith "${" && path.Contains "}" then
+            let close = path.IndexOf '}'
+            let name = path.Substring (2, close - 2)
+            if isName name then Some (name, path.Substring (close + 1)) else None
+        elif path.StartsWith "$" then
+            let name = path.Substring 1 |> Seq.takeWhile (fun c -> System.Char.IsLetterOrDigit c || c = '_') |> System.String.Concat
+            if isName name then Some (name, path.Substring (1 + name.Length)) else None
+        else None
+
     let resolvedFrom (root: string option) (path: string option) : string option =
         match path, root with
         | None, _ -> root

@@ -938,6 +938,13 @@ let private fileTests =
             Expect.equal (ToolImage.ofBase64 wrapped |> Result.map (fun i -> i.Type)) (Ok "image/png") "sniffed from its signature"
         }
 
+        test "a path's leading variable is a name, and only ever a name" {
+            Expect.equal
+                ([ "$TMPDIR/manager.log"; "${HOME}/x"; "~/x"; "src/x"; "$(rm -rf ~)/x" ] |> List.map Yession.Domain.Sandboxes.SandboxPath.leadingVariable)
+                [ Some ("TMPDIR", "/manager.log"); Some ("HOME", "/x"); Some ("HOME", "/x"); None; None ]
+                "a lookup to make, or none — never an expression to run"
+        }
+
         // The window's shape: what the agent CLI's own read tool answers, so a model's habits
         // carry over — numbered lines, 1-based, and a page that says where the next one is.
         test "a window is numbered from its own first line" {

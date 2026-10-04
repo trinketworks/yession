@@ -230,6 +230,13 @@ type ReposConfig =
       /// listing carries it, because the only reason to clone a repo is to work in it and
       /// the work happens in a terminal.
       VisibleAt : string
+      /// Where a terminal in the DEFAULT sandbox starts, NOW — an absolute path, the
+      /// workspace or wherever `set_shell_profile` moved it. Every path a listing says is
+      /// said from here (`SandboxPath.reachedFrom`), so it is one a terminal and a file
+      /// tool there take as written. A fixed `repos/…` was true until a profile moved the
+      /// start into the checkout, after which every file tool read it as
+      /// `repos/…/repos/…` and answered "no such file" (session NR5KB8B5).
+      StartsAt : unit -> string option
       /// Paths beyond `ReposDir` the git sandbox may READ. Empty in production; the
       /// test harness names its local bare-repo fixtures here. None of them may be an
       /// ANCESTOR of `ReposDir`: when both sit under a read-denied region (a HOME, which
@@ -467,7 +474,8 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         let pathOf (repo: RepoRef) = sprintf "%s/%s" reposDir (RepoRef.relativePath repo)
         /// The same checkout as a TERMINAL in this session reaches it. What the listing
         /// reports, and the only path anything outside the git sandbox can act on.
-        let visiblePathOf (repo: RepoRef) = sprintf "%s/%s" config.VisibleAt (RepoRef.relativePath repo)
+        let visiblePathOf (repo: RepoRef) =
+            SandboxPath.reachedFrom (config.StartsAt ()) (sprintf "%s/%s" config.VisibleAt (RepoRef.relativePath repo))
         let present (repo: RepoRef) = Fs.exists (sprintf "%s/.git" (pathOf repo))
 
         /// The checkout's own root `AGENTS.md`, read once at the moment the clone lands
@@ -744,7 +752,8 @@ let private queryDef : QueryDef =
       Title = "repos"
       Description =
         "The repos checked out in this session, each with the branch it is on, whether it \
-         has uncommitted changes, and the path a terminal here reaches it at. Read from the \
+         has uncommitted changes, and its path from where the default sandbox's terminals \
+         and file tools start (`.` when they start in it). Read from the \
          checkouts themselves, so it always agrees with git."
       Shape =
         Rows

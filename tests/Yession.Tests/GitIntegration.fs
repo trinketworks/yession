@@ -312,6 +312,7 @@ let private serviceAsking
           ReposDir = reposDir
           // Host-family: a terminal reaches the checkouts at the directory itself.
           VisibleAt = Sandboxes.reposVisibleAt None SrtBackend reposDir
+          StartsAt = fun () -> None
           ExtraReadPaths = [ fixtures ]
           Git = git
           AllowedDomains = []
@@ -500,6 +501,7 @@ let private srtTests =
                     { Backend = SrtBackend
                       ReposDir = relRepos
                       VisibleAt = Sandboxes.reposVisibleAt None SrtBackend relRepos
+                      StartsAt = fun () -> None
                       ExtraReadPaths = [ fixturesIn fixtures ]
                       Git = namedGit
                       AllowedDomains = []
