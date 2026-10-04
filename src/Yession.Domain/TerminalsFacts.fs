@@ -131,7 +131,14 @@ type TerminalOpened =
 
 and TerminalClosed =
     { TerminalId : TerminalId
-      Reason : string }
+      Reason : string
+      /// Who closed it. The party, not just the sentence, because what a close MEANS to
+      /// whoever was running something there depends on it: the agent closing its own
+      /// terminal already knows what that ended, and waking it to say so is a loop with a
+      /// delay in it (session NR5KB8B5); a person closing it under a running build is news.
+      /// `System` for a source that ended, a profile change or a restart. `None` only for a
+      /// log written before this field existed, which did not say.
+      By : ActorRef option }
 /// A peer took the terminal's stdin (Plan 13, stage 2e) — live mode entered, or STOLEN from
 /// whoever held it before. One event for both, because they are the same fact: from this
 /// moment these keystrokes are that peer's. Collaborators are trusted, so a steal needs no

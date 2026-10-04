@@ -427,11 +427,15 @@ module Events =
             fun (p: TerminalClosed) ->
                 Encode.object
                     [ "terminalId", Codec.terminalId.Encode p.TerminalId
-                      "reason", Encode.string p.Reason ]
+                      "reason", Encode.string p.Reason
+                      "by", Encode.option Codec.actor.Encode p.By ]
           Decode =
             Decode.object (fun get ->
                 { TerminalClosed.TerminalId = get.Required.Field "terminalId" Codec.terminalId.Decode
-                  TerminalClosed.Reason = get.Required.Field "reason" Decode.string }) }
+                  TerminalClosed.Reason = get.Required.Field "reason" Decode.string
+                  // Absent on a log written before the field: the close happened and nobody
+                  // recorded who, which is what `None` says.
+                  TerminalClosed.By = get.Optional.Field "by" Codec.actor.Decode }) }
 
     let private terminalBlockStarted : Codec<TerminalBlockStarted> =
         { Encode =

@@ -652,7 +652,7 @@ let startFull
                             // the machine.
                             if not (terminals.OpenedByAgent id) then
                                 return Error "that terminal is not yours — it belongs to someone in this session"
-                            else return! terminals.Close id "the agent finished with it"
+                            else return! terminals.Close id ActorRef.Agent "the agent finished with it"
                         }
                   List =
                     fun () ->

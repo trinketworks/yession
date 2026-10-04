@@ -874,7 +874,7 @@ let private wakeTests =
                             BlockId = BlockId.create "b1" |> expect
                             Result = CommandExecutionFailed "the session stopped while it was running"
                             ToSeq = 4 }
-                      SessionEvent.TerminalClosed { TerminalId = TerminalId.create "term-a" |> expect; Reason = "session restarted" } ])
+                      SessionEvent.TerminalClosed { TerminalId = TerminalId.create "term-a" |> expect; Reason = "session restarted"; By = None } ])
                 (Some (CommandFinished, Principal.Peer ada))
                 "as whoever it ran for"
 
@@ -938,6 +938,33 @@ let private wakeTests =
                     [ turnStarted "1"; blockStarted "b1" true (Principal.Peer ada); blockCompleted "b1"; toolFinished (Some "b1") ])
                 "its own check_pending already answered it"
 
+        // Closing its own terminal is how the agent ends a command it has given up on, and it
+        // knows what that ended — so the completion the close caused is not news to it. Woken
+        // anyway, an agent spends a turn saying "Done" twice (session NR5KB8B5).
+        testCase "a background command the agent ended by closing its own terminal owes nothing" <| fun () ->
+            Expect.isFalse
+                (AgentWake.due
+                    [ turnStarted "1"
+                      blockStarted "b1" true (Principal.Peer ada)
+                      blockCompleted "b1"
+                      SessionEvent.TerminalClosed
+                          { TerminalId = TerminalId.create "term-a" |> expect
+                            Reason = "the agent finished with it"
+                            By = Some ActorRef.Agent } ])
+                "the agent closed it, so the agent already knows"
+
+        testCase "a background command a person ended by closing the terminal is still owed" <| fun () ->
+            Expect.isTrue
+                (AgentWake.due
+                    [ turnStarted "1"
+                      blockStarted "b1" true (Principal.Peer ada)
+                      blockCompleted "b1"
+                      SessionEvent.TerminalClosed
+                          { TerminalId = TerminalId.create "term-a" |> expect
+                            Reason = "closed by a peer"
+                            By = Some (PeerRef ada) } ])
+                "somebody else stopping the agent's work is news to the agent"
+
         testCase "a still-running poll before completion does not pre-settle the debt" <| fun () ->
             // Every `check_pending` on a background handle names the block, running or not —
             // so a poll that returned STILL RUNNING must not clear a debt that only comes to
@@ -980,7 +1007,7 @@ let private integrationLost (id: TerminalId) =
     SessionEvent.TerminalIntegrationLost { TerminalId = id; BlockId = None; Evidence = None }
 
 let private closedNow (id: TerminalId) =
-    SessionEvent.TerminalClosed { TerminalId = id; Reason = "the source went away" }
+    SessionEvent.TerminalClosed { TerminalId = id; Reason = "the source went away"; By = None }
 
 let private prWatcher = Principal.Peer (PeerId.create "ada" |> expect)
 let private watchedPr = PrRef.create (RepoRef.create "octo/hello" |> expect) 12 |> expect

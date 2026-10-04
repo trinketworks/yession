@@ -210,7 +210,7 @@ let private drainTests =
                       Background = false }
             Expect.equal (TerminalQueueDrain.consumedOf started) (Some "q-a1") "a started block consumes its entry"
             Expect.equal
-                (TerminalQueueDrain.consumedOf (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "x" }))
+                (TerminalQueueDrain.consumedOf (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "x"; By = None }))
                 None
                 "nothing else consumes anything"
     ]
@@ -259,7 +259,7 @@ let private projectionTests =
                 fold
                     [ opened terminalA "build"
                       started terminalA "1" "perl -pi -e 1" 0
-                      SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "stuck" } ]
+                      SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "stuck"; By = None } ]
             let a = Projection.tryFind terminalA proj |> Option.get
             Expect.equal
                 a.Blocks.Head.Status
@@ -270,7 +270,7 @@ let private projectionTests =
                     [ opened terminalA "build"
                       started terminalA "1" "make" 0
                       completed terminalA "1" (CommandFailed 2) 9
-                      SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "done" } ]
+                      SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "done"; By = None } ]
             Expect.equal
                 (Projection.tryFind terminalA finished |> Option.get).Blocks.Head.Status
                 (BlockFinished (CommandFailed 2))
@@ -282,7 +282,7 @@ let private projectionTests =
                     [ opened terminalA "build"
                       started terminalA "1" "make" 0
                       completed terminalA "1" (CommandFailed 2) 9
-                      SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "session restarted" } ]
+                      SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "session restarted"; By = None } ]
             let a = Projection.tryFind terminalA proj |> Option.get
             Expect.isFalse a.IsOpen "it is closed"
             Expect.equal a.ClosedReason (Some "session restarted") "with the reason recorded"
@@ -798,7 +798,7 @@ let private leaseTests =
                 fold
                     [ opened terminalA "build"
                       SessionEvent.TerminalLeaseTaken { TerminalId = terminalA; By = PeerRef ada; FromSeq = 0 }
-                      SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer" } ]
+                      SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer"; By = None } ]
             Expect.equal
                 (Projection.tryFind terminalA proj |> Option.bind (fun t -> t.Lease))
                 None
@@ -836,7 +836,7 @@ let private retentionTests =
             let store = Yession.Host.TranscriptStore.openStore dir
             let transcript = store.Open terminalA { Width = 80; Height = 24; Timestamp = 0L }
             transcript.Append { At = 0.0; Kind = TranscriptOutput; Data = "still here" } |> ignore
-            let proj = fold [ opened terminalA "build"; SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer" } ]
+            let proj = fold [ opened terminalA "build"; SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer"; By = None } ]
             Expect.equal
                 (Projection.tryFind terminalA proj |> Option.map (fun t -> t.IsOpen))
                 (Some false)
@@ -860,7 +860,7 @@ let private retentionTests =
                     [ opened terminalA "build"
                       SessionEvent.TerminalTranscriptTruncated
                         { TerminalId = terminalA; BlockId = None; DroppedBytes = 10 }
-                      SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer" }
+                      SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer"; By = None }
                       SessionEvent.TerminalTranscriptTruncated
                         { TerminalId = terminalA; BlockId = None; DroppedBytes = 4096 } ]
             Expect.equal
@@ -1198,7 +1198,7 @@ let private leaseCommandTests =
                     SessionCommands.handle
                         (fun _ _ -> Ok ())
                         (fun _ _ _ -> async { return Error "not this test" })
-                        (fun _ _ -> async { return Error "not this test" })
+                        (fun _ _ _ -> async { return Error "not this test" })
                         (fun id by -> async { calls.Add (sprintf "take:%s:%A" (TerminalId.value id) by); return Ok () })
                         (fun id by ->
                             async {
@@ -1258,7 +1258,7 @@ let private peerOpenTests =
                         asked.Add (source, title)
                         return answer source
                     })
-                (fun _ _ -> async { return Error "not this test" })
+                (fun _ _ _ -> async { return Error "not this test" })
                 (fun _ _ -> async { return Error "not this test" })
                 (fun _ _ -> async { return Error "not this test" })
                 (fun _ -> async { return Error "not this test" })
@@ -1696,7 +1696,7 @@ let private codecTests =
         testCase "every terminal event round-trips" <| fun () ->
             let events =
                 [ opened terminalA "build"
-                  SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer" }
+                  SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer"; By = None }
                   SessionEvent.TerminalBlockStarted
                       { TerminalId = terminalA
                         BlockId = block "1"
@@ -2437,7 +2437,7 @@ let private managerTests =
                         ShellProfileProjection.empty
                 let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 let before = looks
-                let! _ = terminals.Close (opened |> expect) "closed by a peer"
+                let! _ = terminals.Close (opened |> expect) ActorRef.System "closed by a peer"
                 Expect.isTrue (looks > before) "the wake was told to look"
             }
 
@@ -2449,7 +2449,7 @@ let private managerTests =
                 let terminals, _, _ = makeTerminals log environment openTranscript readTranscript []
                 let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
                 let id = opened |> expect
-                let! _ = terminals.Close id "closed by a peer"
+                let! _ = terminals.Close id ActorRef.System "closed by a peer"
                 do! terminals.RunBlock id (entry "a1" id byAda 1.0) "make" ignore
                 Expect.isEmpty (List.ofSeq spawned) "nothing is spawned"
                 let! events = eventsOf log
@@ -2588,7 +2588,7 @@ let private schedulerTests =
                 let id = opened |> expect
                 let doc = Y.Doc.Create ()
                 let scheduler = TerminalScheduler.create doc terminals ignore Set.empty
-                let! _ = terminals.Close id "killed"
+                let! _ = terminals.Close id ActorRef.System "killed"
                 SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.ofAuthor (Principal.Peer ada)) 1.0 "echo late" false false
                 scheduler.Drain ()
                 do! Async.Sleep 20
@@ -3267,7 +3267,7 @@ let private sourceTests =
                 let terminals, _, _ = makeTerminalsWith attach log environment openTranscript readTranscript []
                 let! opened = terminals.Open (PeerRef ada) (Attached { Ticket = deviceTicket; Renewable = false }) (TerminalTitle.fromProse "USB serial")
                 let id = opened |> expect
-                let! closed = terminals.Close id "closed by a peer"
+                let! closed = terminals.Close id ActorRef.System "closed by a peer"
                 Expect.isOk closed "the hand close succeeds"
                 do! Async.Sleep 20
                 let! reasons = closureReasons log
@@ -3618,7 +3618,7 @@ let private sourceTests =
                 let terminals, _, _ = makeTerminalsWith attach log environment openTranscript readTranscript []
                 let! device = terminals.Open (PeerRef ada) (Attached { Ticket = deviceTicket; Renewable = false }) (TerminalTitle.fromProse "USB serial")
                 let id = expect device
-                let! closed = terminals.Close id "the device went away"
+                let! closed = terminals.Close id ActorRef.System "the device went away"
                 Expect.isOk closed "the terminal closes"
 
                 match! terminals.Tail id ActorRef.Agent None None with
@@ -3830,7 +3830,7 @@ let private agentTerminalTests =
                 let terminals, _, _ = makeTerminals log environment openTranscript readTranscript []
                 let! first = terminals.AgentTerminal SandboxRef.defaultRef "npm test"
                 let id = first |> expect
-                let! _ = terminals.Close id "closed by a peer"
+                let! _ = terminals.Close id ActorRef.System "closed by a peer"
                 let! next = terminals.AgentTerminal SandboxRef.defaultRef "npm test"
                 Expect.notEqual next first "a fresh terminal, because the old one has no process"
             }
@@ -4807,7 +4807,7 @@ let private agentVerbTests =
             async {
                 let terminals, _ = fixture ()
                 let! fourth = openFour terminals
-                let! _ = terminals.Close (fourth |> expect) "done"
+                let! _ = terminals.Close (fourth |> expect) ActorRef.System "done"
                 let! next = terminals.OpenAgentTerminal SandboxRef.defaultRef "one more"
                 Expect.isTrue (Result.isOk next) "the limit counts what is OPEN, not what ever was"
             }
@@ -4833,7 +4833,7 @@ let private agentVerbTests =
                 let! general = terminals.AgentTerminal SandboxRef.defaultRef "perl -pi -e 1"
                 let id = general |> expect
                 Expect.isTrue (terminals.OpenedByAgent id) "it opened it, so it may close it"
-                let! closed = terminals.Close id "stuck"
+                let! closed = terminals.Close id ActorRef.System "stuck"
                 Expect.isTrue (Result.isOk closed) "and closing it is how a stuck command ends"
             }
 
@@ -4862,7 +4862,7 @@ let private agentVerbTests =
                 Async.StartImmediate (terminals.RunBlock id (entry "a1" id agentForAda 1.0) "perl -pi -e 1" started)
                 do! awaitStarted
                 Expect.isTrue (terminals.Busy () |> Set.contains (TerminalId.value id)) "the block is running, and nothing will end it"
-                let! closed = terminals.Close id "stuck"
+                let! closed = terminals.Close id ActorRef.System "stuck"
                 Expect.isOk closed "it closes"
                 let! events = eventsOf log
                 let results = events |> List.choose (function SessionEvent.TerminalBlockCompleted c -> Some c.Result | _ -> None)
