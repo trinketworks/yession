@@ -1485,10 +1485,13 @@ module Style =
     /// Only on the pieces the wrapper actually holds — never on `foldBody`'s own classes,
     /// which sit outside it and open nothing further by being pressed.
     let foldClickable = "cursor-pointer"
-    /// The arrow's cell: one line of the row's own box, whatever the title is set in. Named
+    /// The arrow's cell: one line of the row's own box, whatever the title is set in, and
+    /// the AVATAR's width at the gutter's start (`w-5`), so every mark the margin carries
+    /// stands on the column the speakers' avatars do — centred in the whole 2rem gutter it
+    /// sat six pixels right of them, a second rail beside the one the eye already had. Named
     /// into the gutter, so a row drawn above the title (an act's cause) cannot push it over.
     let fold =
-        cls [ "col-start-1 h-[1lh] flex items-center justify-center cursor-pointer bg-transparent border-0 p-0"
+        cls [ "col-start-1 justify-self-start w-5 h-[1lh] flex items-center justify-center cursor-pointer bg-transparent border-0 p-0"
               "text-ink-faint hover:text-ink transition-colors"; focusRing ]
     let foldMark = cls [ "block"; Motion.turn ]
     let foldMarkOpen = cls [ foldMark; Motion.turned ]
@@ -1534,7 +1537,7 @@ module Style =
     let causeRow = "contents"
     /// The marks linking acts wear `edge`, the controls' rim: a line, not text, and OPAQUE —
     /// a chain's pieces meet across two rows, and a translucent line doubles where they touch.
-    let causeMark = "col-start-1 flex justify-center text-edge"
+    let causeMark = "col-start-1 justify-self-start w-5 flex justify-center text-edge"
     /// The corner that opens a chain: a line and a gap tall, so the cause's sentence sits clear
     /// of the headline under it and the head stops as far above the chevron as a chain's does.
     let causeCorner = "relative block w-3.5 h-[calc(1lh+0.75rem)]"
@@ -1555,17 +1558,18 @@ module Style =
     /// through the act's top padding to meet the rail the act above draws (`causeRail`). Its
     /// line is a box, as the rail is, with only the head drawn over its foot. The bottom
     /// padding holds the head off the chevron by the gap the corner mark keeps (~12px).
-    let causeChainMark = "col-start-1 -mt-2 h-5.5 pb-1.5 relative flex justify-center text-edge"
+    let causeChainMark = "col-start-1 justify-self-start w-5 -mt-2 h-5.5 pb-1.5 relative flex justify-center text-edge"
     /// The body sits one pixel right of centre (`ml-px`: a 2px margin box, centred), 7px into
     /// the head's box — the corner's centre line (`causeCornerTurn`), on the same grid.
     let causeChainBody = "w-px h-full ml-px bg-current"
     let causeChainHead = "absolute bottom-1.5 left-1/2 -translate-x-1/2"
-    /// The line from an act's chevron down to the next link of its chain: the gutter's centre,
+    /// The line from an act's chevron down to the next link of its chain: the avatar column's
+    /// centre (10px — the same line `causeMark`'s and `causeChainMark`'s `w-5` boxes centre on),
     /// through the rows under the headline and on through the gap between the two acts.
     /// Starts the same ~12px under the chevron that the head stops above the next one.
-    /// On the same centre line as every head it runs to (`causeCornerTurn`): `ml-px` makes a
-    /// 2px margin box to centre, putting the line in the column right of the gutter's middle.
-    let causeRail = "col-start-1 row-span-2 justify-self-center w-px ml-px mt-1.5 -mb-2.5 bg-edge"
+    /// On the same centre line as every head it runs to (`causeCornerTurn`), a whole pixel
+    /// column from the gutter's edge so the two round to the pixel grid together.
+    let causeRail = "col-start-1 row-span-2 justify-self-start w-px ml-[10px] mt-1.5 -mb-2.5 bg-edge"
     let causeJump =
         cls [ "bg-transparent border-0 p-0 cursor-pointer hover:text-ink focus-visible:text-ink"; focusRing ]
     /// The same quiet line as `replyRef`, but a real control — it jumps to the message it
@@ -2029,9 +2033,10 @@ module Style =
               readingColumn; "max-md:max-w-none" ]
 
     /// The mark on it, in the gutter where a fold's chevron sits and centred the way the
-    /// chevron is (`fold`), so the two marks the margin carries stand on one rail.
+    /// chevron is (`fold`: on the avatar column, 10px in), so the marks the margin carries
+    /// stand on one rail. `ml-[7px]` puts a 6px dot's centre there.
     /// Decorative — the name beside it is what says which chapter this is.
-    let chapterDot = "col-start-1 justify-self-center w-1.5 h-1.5 rounded-full bg-ink-faint"
+    let chapterDot = "col-start-1 justify-self-start ml-[7px] w-1.5 h-1.5 rounded-full bg-ink-faint"
 
     /// A stretch in which nothing was running, drawn as a break in the page rather than as
     /// something somebody said — because nobody did. Where a chapter hangs its name UNDER a
@@ -2220,9 +2225,10 @@ module Style =
     /// centred across the gutter as text is. It was a flex box centring a dot on the line's
     /// height, which is the middle of the leading and not anywhere the letters are.
     ///
-    /// `pl-px` centres the mark on the cause's line rather than the gutter's middle: the line
-    /// runs in the pixel column right of that middle (`causeCornerTurn`), half a pixel over.
-    let actNoteRunning = cls [ "col-start-1 pl-px text-small leading-[inherit] text-center pointer-events-none" ]
+    /// On the avatar column (`w-5`) the fold arrow stands on (`fold`). `pl-px` centres the
+    /// mark on the cause's line rather than that column's middle: the line runs in the pixel
+    /// column right of that middle (`causeCornerTurn`), half a pixel over.
+    let actNoteRunning = cls [ "col-start-1 justify-self-start w-5 pl-px text-small leading-[inherit] text-center pointer-events-none" ]
     /// The mark for the agent's own act: its diamond, turning — the same mark that turns at
     /// the end of a message it has not started writing, because an agent working on a tool
     /// and an agent thinking are the same statement, and where the mark stands says which.
