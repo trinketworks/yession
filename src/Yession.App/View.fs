@@ -3026,7 +3026,8 @@ module View =
                      data-terminal-block-status="{terminalBlockStatusLabel block.Status}">
               <div class="{Style.terminalBlockSummary}" data-terminal-block-command>
                 {author}
-                <span class="{Style.terminalCommandText}">ran <code>{block.Command}</code></span>
+                <span class="{Style.terminalPrompt}">$</span>
+                <code class="{Style.terminalCommandText}">{block.Command}</code>
                 <span class="ml-auto shrink-0">{terminalBlockStatus model block.Status}</span>
               </div>
               {facts}
@@ -3356,13 +3357,13 @@ module View =
         // pinning its edge, and the pin is read off the feed there rather than by whoever
         // remembered to look it up first.
         let offer =
-            if rewound then Some ("live", "Live", Some (Reading terminal))
+            if rewound then Some ("live", Dom.Text.live, Some (Reading terminal))
             elif playing then
                 // Back to the text, where there is text to go back to.
-                if List.isEmpty view.Blocks then None else Some ("output", "Show output", Some (Reading terminal))
+                if List.isEmpty view.Blocks then None else Some ("output", Dom.Text.output, Some (Reading terminal))
             elif view.IsOpen then
-                if feed.KnownLength > 0 then Some ("watch", "Watch", None) else None
-            elif ClientModel.terminalPlayable terminal model then Some ("watch", "Watch", Some (Watching terminal))
+                if feed.KnownLength > 0 then Some ("watch", Dom.Text.replay, None) else None
+            elif ClientModel.terminalPlayable terminal model then Some ("watch", Dom.Text.replay, Some (Watching terminal))
             else None
         match offer with
         | None -> None
@@ -3385,10 +3386,19 @@ module View =
         // Which one closed, by the name it wore while open: a closed band reached from the
         // chat may be the only thing on screen that says which terminal this was.
         let name = TerminalName.display model.Terminals view
+        // Somebody killing it is said as WHO, drawn as the reference they are everywhere
+        // else — never as the sentence the close was recorded with, which says "a peer" to
+        // the very person who pressed kill. Anything else (a shell that exited, a stream that
+        // ended, a restart) is its reason: there was nobody, and the reason is the news.
         let closedFor =
-            match view.ClosedReason with
-            | Some reason -> sprintf "%s closed — %s" name reason
-            | None -> sprintf "%s closed" name
+            match view.Closed with
+            | Some closed ->
+                match closed.By with
+                | Some (UserRef _ | PeerRef _ | ActorRef.Agent as who) ->
+                    html $"""{name} {Dom.Text.killedBy} {Entity.render model who (EntityRef.Actor who)}"""
+                | Some (ActorRef.Session | ActorRef.System | ActorRef.Configured _)
+                | None -> html $"""{name} closed — {closed.Reason}"""
+            | None -> html $"""{name} closed"""
         // The gap in the audit trail, stated as a status rather than narrated: the drop is
         // recorded so it can be SAID, and the caps-err voice is how this design says a fact
         // that is wrong.
@@ -3397,9 +3407,9 @@ module View =
             else
                 html $"""
                     <span class="{Style.statusErr}"
-                          data-terminal-replay-gone="{TerminalId.value view.TerminalId}">recording not kept</span>"""
+                          data-terminal-replay-gone="{TerminalId.value view.TerminalId}">{Dom.Text.recordingLost}</span>"""
         html $"""
-            <section class="{Style.terminalComposer}">
+            <section class="{Style.terminalComposer}" data-terminal-closed-band="{TerminalId.value view.TerminalId}">
               <span class="{Style.bandRail}"></span>
               <div class="{Style.terminalBandRow}">
                 <span class="{Style.statusFaint}">{closedFor}</span>
@@ -3509,7 +3519,7 @@ module View =
             // seqs are plumbing and stay out of the room.
             match stretch.Range with
             | Some (fromSeq, toSeq) ->
-                html $"""<span class="{Style.label} tabular-nums">{toSeq - fromSeq} lines</span>"""
+                html $"""<span class="{Style.label} tabular-nums">{Dom.Text.linesRecorded (toSeq - fromSeq)}</span>"""
             // Stated, not blank: a stretch with no recorded bounds is a gap in the record,
             // and an empty player would be indistinguishable from a quiet session.
             | None ->
@@ -3524,10 +3534,14 @@ module View =
         html $"""
             <section class="{Style.paneBody}">
               <div class="{Style.paneFacts}" data-pane-stretch="{TerminalStretch.key stretch}">
+                <!-- One row: who, where, how it ended, and for how long LAST — the short parts
+                     never wrap, so a narrow pane gives way in the terminal's name and nowhere
+                     else. -->
                 <div class="{Style.terminalQueuedRow}">
                   <span class="{Style.chatChipWho}">{Entity.actorName model stretch.Holder}</span>
-                  <span class="{Style.small}">typed in {where} for {length}</span>
-                  <span class="ml-auto shrink-0">{stretchEnding model stretch.End}</span>
+                  <span class="{Style.small} min-w-0 truncate">typed in {where}</span>
+                  <span class="ml-auto shrink-0 whitespace-nowrap">{stretchEnding model stretch.End}</span>
+                  <span class="{Style.small} shrink-0 whitespace-nowrap tabular-nums">{length}</span>
                 </div>
                 {recording}
               </div>
@@ -3613,7 +3627,7 @@ module View =
                 else
                     [ html $"""
                         <button type="button" class="{Style.btn}" data-terminal-take="{TerminalId.value view.TerminalId}"
-                                @click={Ev(fun _ -> dispatch (TakeTerminalMsg view.TerminalId))}>{Dom.Text.takeControl}</button>""" ]
+                                @click={Ev(fun _ -> dispatch (TakeTerminalMsg view.TerminalId))}>{Dom.Text.typeHere}</button>""" ]
             take @ Option.toList (terminalWatchToggle dispatch model view)
 
     /// What a preview on screen affords, for the action row: a command's recording and its
@@ -3635,7 +3649,7 @@ module View =
                 if not (ClientModel.previewPlayable preview.Subject model) then []
                 else
                     let face = if playing then "output" else "watch"
-                    let label = if playing then "Show output" else "Watch"
+                    let label = if playing then Dom.Text.output else Dom.Text.replay
                     [ html $"""
                         <button type="button" class="{Style.btn}" data-pane-watch="{face}"
                                 @click={Ev(fun _ ->
@@ -3759,7 +3773,7 @@ module View =
             // A hole in an audit trail is stated, in the voice reserved for a fact that is wrong.
             let gone =
                 if view.IsOpen || affords.CanReplay then Lit.nothing
-                else html $"""<span class="{Style.terminalListGone}" data-terminal-list-gone="{id}">not kept</span>"""
+                else html $"""<span class="{Style.terminalListGone}" data-terminal-list-gone="{id}">{Dom.Text.recordingLost}</span>"""
             let peers =
                 ClientModel.editorsInTerminal view.TerminalId model
                 |> List.map (fun (who, name) ->
@@ -3771,7 +3785,7 @@ module View =
                 else
                     html $"""
                         <button type="button" class="{Style.btnIconBare}" data-terminal-list-rewind="{id}"
-                                aria-label="Watch {name} from behind its edge"
+                                aria-label="{Dom.Text.rewindTerminal name}" title="{Dom.Text.rewindTerminal name}"
                                 @click={Ev(fun _ ->
                                               // ONE message, which states the whole face — the
                                               // switcher shut included.
@@ -3782,7 +3796,7 @@ module View =
                 else
                     html $"""
                         <button type="button" class="{Style.btnIconBare}" data-terminal-reattach="{id}"
-                                aria-label="Attach {name} again"
+                                aria-label="Attach {name} again" title="Attach {name} again"
                                 @click={Ev(fun _ -> dispatch (ReattachTerminalMsg view.TerminalId))}>{Icon.attach}</button>"""
             let nameClass = if view.IsOpen then Style.terminalListName else Style.terminalListNameClosed
             // What it is doing or last did, under the name: nine rows of `term N` say which is
@@ -4126,8 +4140,8 @@ module View =
                     let behind =
                         match ClientModel.behindLive view.TerminalId model with
                         | Some seconds when seconds >= 1.0 ->
-                            sprintf "behind live — %s" (durationText (System.TimeSpan.FromSeconds seconds))
-                        | _ -> "behind live"
+                            Dom.Text.behindLive (Some (durationText (System.TimeSpan.FromSeconds seconds)))
+                        | _ -> Dom.Text.behindLive None
                     html $"""
                         <div class="{Style.terminalLiveFloat}">
                           <span class="{Style.statusFaint}" data-terminal-behind="{TerminalId.value view.TerminalId}">{behind}</span>
@@ -4308,10 +4322,9 @@ module View =
             match previewing, selected with
             | Some preview, _ -> previewLabel preview.Subject
             | None, Some terminal -> terminalLabel terminal
-            // Nothing is selected, so the name has to describe the SURFACE — and the surface
-            // holds more than terminals. "Everything here" says what the switcher behind it
-            // will show, which is the only thing left to say at that moment.
-            | None, None -> "everything here"
+            // Nothing is selected, so the name has to describe the SURFACE: the column of
+            // terminals, which is the word its edge tab says too.
+            | None, None -> Dom.Text.terminals
         // And what that terminal is doing, after its name: the head is the one line that names
         // the selected terminal for a reader who cannot see the strip, and `term 2` alone does
         // not say which build it was. A preview's name already IS what it holds.
@@ -4350,6 +4363,7 @@ module View =
                               aria-haspopup="{if newAsks then "menu" else "false"}"
                               aria-expanded="{if model.PaneMenu then "true" else "false"}"
                               aria-label="{if newAsks then Dom.Text.openSomethingNew else Dom.Text.aNewTerminal}"
+                              title="{if newAsks then Dom.Text.openSomethingNew else Dom.Text.aNewTerminal}"
                               @click={Ev(fun _ -> pressingNew ())}>+</button>
                       {if model.PaneMenu then newMenu Style.paneNewMenu else Lit.nothing}
                     </div>"""
@@ -4415,8 +4429,8 @@ module View =
                           aria-haspopup="dialog" aria-expanded="{if model.Switcher then "true" else "false"}"
                           title="{Dom.Text.switchTerminal}"
                           @click={Ev(fun _ -> dispatch ToggleSwitcherMsg)}>{Icon.caret}{paneRunning}<span class="{Style.terminalHeadLabel}"><span data-pane-head-name>{paneName}</span>{paneSubtitle}</span></button>
-                  <button type="button" class="{Style.navChevronForward}" aria-label="Back to the chat"
-                          data-content-toggle="hide"
+                  <button type="button" class="{Style.navChevronForward}" aria-label="{Dom.Text.backToChat}"
+                          title="{Dom.Text.backToChat}" data-content-toggle="hide"
                           @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.right}</button>
                   {if model.Switcher then switcherView dispatch model pressingNewFromSwitcher else Lit.nothing}
                 </div>

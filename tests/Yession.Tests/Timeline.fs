@@ -677,6 +677,20 @@ let private namingTests =
             let labels = attributeOf "data-terminal-close=" "aria-label" (markupAt Dom.Hooks.contentList list)
             Expect.equal (List.length labels) 3 "one kill per open terminal"
             Expect.equal (List.length (List.distinct labels)) 3 "and no two named alike"
+
+        testCase "a terminal somebody killed names them on its closed band" <| fun () ->
+            // The sentence it was recorded with says "a peer" — to the very person who
+            // pressed kill. Who did it is the event's party, drawn as the name they wear.
+            let model =
+                clientOf
+                    [ at 1L 0.0 (SessionEvent.PeerJoined { PeerId = bob; DisplayName = "brave-owl"; User = None })
+                      at 2L 1.0 (opened terminalA "build")
+                      at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer"; By = Some (PeerRef bob) }) ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+            Expect.stringContains
+                (textAt (Dom.attr Dom.Hooks.terminalClosedBand (TerminalId.value terminalA)) (Support.render model))
+                "brave-owl"
+                "the band says who killed it"
     ]
 
 // --- What the pane had, across a reload (P0-4) ----------------------------------------------
@@ -1484,7 +1498,7 @@ let private dvrTests =
                     (TerminalRecordMsg (terminalA, 5, { At = 103.5; Kind = TranscriptOutput; Data = "after\r\n" }))
                     model
             Expect.equal (ClientModel.behindLive terminalA grown) (Some 60.0) "a minute of recording arrived behind the pin"
-            Expect.isTrue ((Support.render grown).Contains "behind live — 1m 0s") "and the pane says so"
+            Expect.isTrue ((Support.render grown).Contains (Dom.Text.behindLive (Some "1m 0s"))) "and the pane says so"
 
         testCase "a live terminal with NOTHING recorded offers no rewind" <| fun () ->
             // A DVR with nothing behind it is a control with nothing to do.
