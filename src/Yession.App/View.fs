@@ -1293,22 +1293,29 @@ module View =
         let band = if List.isEmpty entries then Style.queueEmpty else Style.queue
         html $"""<section class="{band}" data-message-queue>{head}{items}</section>"""
 
-    /// The way to stop the turn that is running, docked directly above the composer.
+    /// The way to stop the turn that is running, riding the composer's own row beside Send
+    /// rather than a band of its own above it.
     ///
-    /// ONE control, and deliberately nothing beside it. Whether a turn is running is said by
-    /// the caret in the timeline, where the words are landing, and said again to a reader who
-    /// cannot see the caret by the composer's live region below. A band that carried that
-    /// sentence a third time is the activity strip this replaced (see `Style.interruptBand`).
+    /// It used to BE that band — one control, deliberately nothing beside it, because the
+    /// activity strip it replaced said the same fact three times over (a pulse, "agent is
+    /// responding", and this). That history is still true: whether a turn is running is said
+    /// by the caret in the timeline, where the words are landing, and said again to a reader
+    /// who cannot see the caret by the composer's live region. This control is still the only
+    /// one of the three that DOES something, not merely reports.
     ///
-    /// Above the composer rather than at the leading edge of its line, which is where it sat
-    /// for one revision: the line is where the NEXT message is being written, and a
-    /// destructive verb standing exactly where that text begins is one a thumb reaches for
-    /// the wrong reason — and one that shoved the line sideways every time a turn started.
+    /// What moved is where it stands once it's doing that. A second band stacked above the
+    /// composer is a second place to look, and it is exactly the row this one already has: a
+    /// turn running is not a reason to take away Send (queuing the next message is the one
+    /// thing there is to do while the agent writes, and `Style.draftCommitReady` on a phone —
+    /// gated below on `turnActive` too, for exactly this — already pinned that Send never
+    /// leaves). So Interrupt joins it there, a verb among verbs, rather than owning a strip.
     ///
-    /// It rides the composer's dock rather than the streaming message because a message
-    /// scrolls and the dock does not: a stop control that leaves the screen when the
-    /// conversation moves is one nobody can reach at the moment they want it.
-    let private interrupt (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+    /// Beside Send rather than at the leading edge of the line, which is where it sat for one
+    /// revision before the band: the line is where the NEXT message is being written, and a
+    /// destructive verb standing exactly where that text begins is one a thumb reaches for the
+    /// wrong reason — and one that shoved the line sideways every time a turn started. The
+    /// composer's row has room at its trailing edge and does not move when a turn begins.
+    let private interruptControl (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         match model.Agent.ActiveTurn with
         | None -> Lit.nothing
         | Some turn ->
@@ -1318,11 +1325,9 @@ module View =
             let label = if stopping then Dom.Text.interruptingLabel else Dom.Text.interruptLabel
             let word = if stopping then "stopping…" else "interrupt"
             html $"""
-                <div class="{Style.interruptBand}">
-                  <button type="button" class="{Style.btnInterrupt}" aria-label="{label}" aria-busy="{if stopping then "true" else "false"}"
-                          data-interrupt-turn="{AgentTurnId.value turn}" ?disabled={stopping}
-                          @click={Ev(fun _ -> dispatch (InterruptTurnMsg turn))}>{Icon.stop}{word}</button>
-                </div>"""
+                <button type="button" class="{Style.btnInterrupt}" aria-label="{label}" aria-busy="{if stopping then "true" else "false"}"
+                        data-interrupt-turn="{AgentTurnId.value turn}" ?disabled={stopping}
+                        @click={Ev(fun _ -> dispatch (InterruptTurnMsg turn))}>{Icon.stop}{word}</button>"""
 
     /// The composer: ONE draft open, everyone else's as a line you can open.
     ///
@@ -1375,6 +1380,14 @@ module View =
             // has content), so the controls and the send path read the same truth rather than
             // two measurements that can disagree.
             let hasContent = ClientModel.draftHasContent target model
+            // Whether the composer's row has a SECOND reason to stand on a phone besides a
+            // draft: a turn running, which is Interrupt's reason to be in it at all. Without
+            // this, the row that now carries Interrupt would collapse to nothing the moment
+            // the draft is empty (`draftCommit`, below) and a turn starting would cost the
+            // composer its stop control on a phone — the exact regression the band this
+            // replaced was built never to risk. Desktop never collapses the row regardless
+            // (`draftCommitBase` only gates on `max-md`), so this only matters here.
+            let turnActive = model.Agent.ActiveTurn.IsSome
             // Send STAYS — same place in the layout, same place in focus order, so nothing
             // moves under the hand and no Tab stop appears mid-sentence — and waits at a
             // dimmed weight until there is something to send, coming to full strength with the
@@ -1396,7 +1409,7 @@ module View =
             // the very press that reaches for it, wherever a button does not take focus from
             // a tap. See `Style.draftCommit` for what that cost.
             let commitClass =
-                if hasContent then Style.draftCommitReady else Style.draftCommit
+                if hasContent || turnActive then Style.draftCommitReady else Style.draftCommit
             let author =
                 if target = myPeer then Lit.nothing
                 else html $"""<span class="{Style.draftAuthor}">{ClientModel.nameOf target model}'s message</span>"""
@@ -1408,6 +1421,7 @@ module View =
                   </div>
                   <div class="{commitClass}">
                     <span class="{Style.draftEditors}">{editors target}</span>
+                    {interruptControl dispatch model}
                     <button type="button" class="{sendClass}" aria-keyshortcuts="Control+Enter"
                             title="{Dom.Text.composerKeys}"
                             data-send-draft="{PeerId.value target}" @click={Ev(fun _ -> actions.SendDraft target)}>send</button>
@@ -4306,7 +4320,6 @@ module View =
                 {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
               </div>
               {queue dispatch model}
-              {interrupt dispatch model}
               {drafts actions dispatch model}
             </div>
             {contentPane actions dispatch model}
