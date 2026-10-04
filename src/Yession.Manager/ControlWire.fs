@@ -368,7 +368,7 @@ module ControlWire =
                       "clientId", Encode.string r.ClientId
                       "scopes", Encode.string r.Scopes
                       "redirectUri", Encode.option Encode.string r.RedirectUri
-                      "tokenDialect", Encode.string (TokenRequestDialect.describe r.TokenDialect) ]
+                      "tokenDialect", TokenRequestDialect.codec.Encode r.TokenDialect ]
           Decode =
             Decode.object (fun get ->
                 { ConnectionBeginRequest.Target = get.Required.Field "target" secretId.Decode
@@ -377,12 +377,7 @@ module ControlWire =
                   ConnectionBeginRequest.ClientId = get.Required.Field "clientId" Decode.string
                   ConnectionBeginRequest.Scopes = get.Required.Field "scopes" Decode.string
                   ConnectionBeginRequest.RedirectUri = get.Optional.Field "redirectUri" Decode.string
-                  // Optional: a session built before dialects existed speaks the standard,
-                  // so an older session keeps working against a newer Manager.
-                  ConnectionBeginRequest.TokenDialect =
-                    get.Optional.Field "tokenDialect" Decode.string
-                    |> Option.map TokenRequestDialect.ofString
-                    |> Option.defaultValue FormEncoded }) }
+                  ConnectionBeginRequest.TokenDialect = TokenRequestDialect.field "tokenDialect" get }) }
 
     let connectionBeginResponse : Codec<ConnectionBeginResponse> =
         { Encode =
@@ -424,7 +419,7 @@ module ControlWire =
                       "refreshTokenExpiresIn", Encode.option Encode.int r.RefreshTokenExpiresIn
                       "tokenUrl", Encode.string r.TokenUrl
                       "clientId", Encode.string r.ClientId
-                      "tokenDialect", Encode.string (TokenRequestDialect.describe r.TokenDialect) ]
+                      "tokenDialect", TokenRequestDialect.codec.Encode r.TokenDialect ]
           Decode =
             Decode.object (fun get ->
                 { ConnectionPutGrantRequest.Target = get.Required.Field "target" secretId.Decode
@@ -439,10 +434,7 @@ module ControlWire =
                     get.Optional.Field "refreshTokenExpiresIn" Decode.int
                   ConnectionPutGrantRequest.TokenUrl = get.Required.Field "tokenUrl" Decode.string
                   ConnectionPutGrantRequest.ClientId = get.Required.Field "clientId" Decode.string
-                  ConnectionPutGrantRequest.TokenDialect =
-                    get.Optional.Field "tokenDialect" Decode.string
-                    |> Option.map TokenRequestDialect.ofString
-                    |> Option.defaultValue FormEncoded }) }
+                  ConnectionPutGrantRequest.TokenDialect = TokenRequestDialect.field "tokenDialect" get }) }
 
     let connectionDisconnectRequest : Codec<ConnectionDisconnectRequest> =
         { Encode = fun (r: ConnectionDisconnectRequest) -> Encode.object [ "target", secretId.Encode r.Target ]
