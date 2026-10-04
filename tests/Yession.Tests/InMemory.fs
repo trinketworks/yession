@@ -958,6 +958,37 @@ let tests =
                 do! host.Stop ()
             }
 
+        // A picture's bytes cannot cross the sandbox as text, so a file named as one is asked
+        // for as base64 — and what comes back is decided by those bytes. This drives that route
+        // through the real Host with a sandbox that answers only `base64` with a PNG.
+        testCaseAsync "a picture in a sandbox is read as its bytes, and comes back as a picture" <|
+            async {
+                let environment : SessionEnvironment.SessionEnvironment =
+                    { Ensure = fun _ _ -> async { return EnvironmentAvailable }
+                      Spawn =
+                        fun exec onChunk ->
+                            async {
+                                if exec.Arguments |> List.exists (fun a -> a.Contains "base64") then
+                                    onChunk (Stdout, "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==\n")
+                                return
+                                    Ok
+                                        { WriteStdin = ignore
+                                          CloseStdin = ignore
+                                          Kill = ignore
+                                          Exited = async { return SandboxExited 0 } }
+                            }
+                      SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
+                      Stop = fun () -> async { return () }
+                      CurrentRef = fun () -> Some "scripted"
+                      Shell = fun () -> None
+                      Realisation = fun () -> [] }
+                let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
+                match! host.Files.Read SandboxRef.defaultRef "shot.png" with
+                | Ok (FileContent.Image image) -> Expect.equal image.Type "image/png" "the picture, typed by its bytes"
+                | other -> failwithf "expected a picture, got %A" other
+                do! host.Stop ()
+            }
+
         testCaseAsync "the agent's command runs in the same call, visible to every peer" <|
             async {
                 // Under the bypass classifier (Plan 23) the agent's call answers with the

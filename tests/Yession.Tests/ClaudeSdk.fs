@@ -85,6 +85,17 @@ let private answerTests =
             let answer = ToolResult.ofText false "forty-two"
             Expect.equal answer.content.[0].text "forty-two" "the text is the block's"
 
+        // MCP's image block is `{ type: "image", data, mimeType }`, and a binding that named
+        // either field the way the API's own image block does (`source.media_type`) compiles
+        // and shows the model nothing.
+        testCase "a picture is a text block and then an image block, in MCP's field names" <| fun () ->
+            let answer = ToolResult.ofTextAndImage "shot.png" "image/png" "QUJD"
+            Expect.equal
+                (answer.content |> Array.map (fun c -> c.``type``))
+                [| "text"; "image" |]
+                "what was looked at, then the picture"
+            Expect.equal (answer.content.[1].data, answer.content.[1].mimeType) ("QUJD", "image/png") "the bytes and their type"
+
         testCase "a protocol failure is flagged on the answer" <| fun () ->
             // `isError` is "the call did not happen", never "the tool ran and it went
             // badly" — the argument order is the only thing between those two.
@@ -223,8 +234,46 @@ let tests =
 // credential check here, which would turn a missing credential back into a skip.
 // -----------------------------------------------------------------------------
 
+/// A 16x16 PNG of one solid red, which no model could name from the tool's TEXT.
+let private redSquare = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGO4KyhIEmIY1TCqYfhqAABd+f8BJ3/PcwAAAABJRU5ErkJggg=="
+
 let liveTests =
     testList "Claude Agent SDK live" [
+        // The other half of `ofTextAndImage`: that the SDK carries an MCP image block to the
+        // model as a picture it SEES, rather than dropping it or flattening it to text. Only a
+        // real turn can say, and the only proof is the model naming what is in the picture —
+        // the tool's text says nothing about colour.
+        testCaseAsync "a picture a tool answers with is one the model sees" <|
+            async {
+                let look =
+                    tool
+                        "look"
+                        "shows you a picture"
+                        noArguments
+                        (jsOptions<ToolAnnotations> (fun a -> a.readOnlyHint <- true))
+                        (fun _ -> async { return ToolResult.ofTextAndImage "here it is" "image/png" redSquare } |> Async.StartAsPromise)
+                let options =
+                    jsOptions<Options> (fun o ->
+                        o.systemPrompt <- "Answer with one word and nothing else."
+                        o.settingSources <- [||]
+                        o.tools <- [||]
+                        o.mcpServers <- McpServers.ofList [ "probe", createSdkMcpServer "probe" "1.0.0" [| look |] ]
+                        o.allowedTools <- [| "mcp__probe__look" |])
+                let running = query "Call the look tool, then reply with the colour of the picture it shows you, in one lower-case word." options
+                let mutable ending : ResultMessage option = None
+                let mutable finished = false
+                while not finished do
+                    let! step = running.next () |> Interop.awaitPromise
+                    if step.``done`` then finished <- true
+                    else
+                        match Message.classify step.value with
+                        | MessageCase.Result result -> ending <- Some result
+                        | _ -> ()
+                match ending with
+                | Some result -> Expect.stringContains (result.result.ToLowerInvariant ()) "red" "the model named what only the picture said"
+                | None -> failwith "the query never yielded a result message"
+            }
+
         testCaseAsync "a query iterates to a result message carrying the turn's usage" <|
             async {
                 let options =

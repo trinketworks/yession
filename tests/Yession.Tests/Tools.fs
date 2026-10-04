@@ -900,13 +900,43 @@ let private readingFiles (files: Map<string, string>) =
                                   asked.Add ((sandbox, path))
                                   return
                                       match Map.tryFind path files with
-                                      | Some content -> Ok content
+                                      | Some content -> Ok (FileContent.Text content)
                                       | None -> Error "No such file or directory"
                               } } }
     (fun (args: string) -> registry.Invoke (call "yession" "read_file" args)), asked
 
 let private fileTests =
     testList "read_file" [
+
+        // A model takes a picture in only as an image block, so a screenshot an agent could
+        // only describe by its NAME was a screenshot it described without seeing (NR5KB8B5).
+        testCaseAsync "a picture comes back as the picture, and the record keeps only what it was" <|
+            async {
+                let image = ToolImage.ofBase64 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" |> expect
+                let registry =
+                    AgentTools.registry
+                        { AgentCapabilities.none with
+                            Files =
+                                { AgentCapabilities.none.Files with
+                                    Read = fun _ _ -> async { return Ok (FileContent.Image image) } } }
+                match! registry.Invoke (call "yession" "read_file" """{"path":"shot.png"}""") with
+                | Error e -> failwith e
+                | Ok answer ->
+                    Expect.equal answer.Image (Some image) "the model is shown the picture"
+                    Expect.isFalse (answer.Text.Contains "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==") "and the text the log keeps carries no bytes"
+            }
+
+        // An image block that is not the image it claims to be is a request the model API
+        // refuses whole, so the bytes decide — never the name.
+        test "a file named as a picture is one only if its bytes are" {
+            let html = System.Convert.ToBase64String (System.Text.Encoding.UTF8.GetBytes "<html>404</html>")
+            Expect.isError (ToolImage.ofBase64 html) "an error page saved as .png is not a picture"
+        }
+
+        test "a PNG is read as a PNG, whatever whitespace base64 wrapped it in" {
+            let wrapped = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==".Insert (20, "\n")
+            Expect.equal (ToolImage.ofBase64 wrapped |> Result.map (fun i -> i.Type)) (Ok "image/png") "sniffed from its signature"
+        }
 
         // The window's shape: what the agent CLI's own read tool answers, so a model's habits
         // carry over — numbered lines, 1-based, and a page that says where the next one is.

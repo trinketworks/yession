@@ -154,7 +154,10 @@ let private toolOf (registry: ToolRegistry) (descriptor: ToolDescriptor) : ToolD
                     let call : ToolCall =
                         { Namespace = descriptor.Namespace; Name = descriptor.Name; Arguments = arguments }
                     match! registry.Invoke call with
-                    | Ok answer -> return ToolResult.ofText false answer.Text
+                    | Ok answer ->
+                        match answer.Image with
+                        | Some image -> return ToolResult.ofTextAndImage answer.Text image.Type image.Data
+                        | None -> return ToolResult.ofText false answer.Text
                     | Error reason -> return ToolResult.ofText true reason
             }
             |> Async.StartAsPromise)
