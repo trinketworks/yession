@@ -1797,34 +1797,54 @@ let editorTests =
                 Expect.stringContains md "* item one" "bullet serialized to markdown"
             }
 
-        // Addressing somebody is reachable from the keyboard alone: the picker opens on an @,
-        // the arrows and Enter take an offer, and Enter does not open a paragraph under it.
-        editorCase "an @ address is completed from the keyboard" <| fun page ->
+        // Addressing somebody is reachable from the keyboard alone: an @ greys in the rest of a
+        // name, and Tab takes it.
+        editorCase "Tab completes the hinted address" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
                 do! awaitU (page.ClickAsync ".ProseMirror")
-                do! awaitU (page.Keyboard.TypeAsync "thanks @")
-                let! _ = await (page.WaitForSelectorAsync "[role=listbox] [role=option]")
-                do! awaitU (page.Keyboard.PressAsync "ArrowDown")
-                do! awaitU (page.Keyboard.PressAsync "Enter")
+                do! awaitU (page.Keyboard.TypeAsync "thanks @sw")
+                let! _ = await (page.WaitForSelectorAsync "[data-address-hint]")
+                do! awaitU (page.Keyboard.PressAsync "Tab")
                 let! md = await (page.EvaluateAsync<string> "() => window.__md()")
-                Expect.equal (md.TrimEnd ()) "thanks @swift-heron" "the second offer, after the agent, was taken"
+                Expect.equal (md.TrimEnd ()) "thanks @swift-heron" "the hinted name was taken"
             }
 
-        // Escape puts the list away, and Enter is the paragraph key again — a picker that
-        // could not be dismissed would take the composer's own Enter hostage.
-        editorCase "Escape puts the @ picker away and gives Enter back" <| fun page ->
+        editorCase "each Tab moves to the next name on offer" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "@")
+                let! _ = await (page.WaitForSelectorAsync "[data-address-hint]")
+                do! awaitU (page.Keyboard.PressAsync "Tab")
+                do! awaitU (page.Keyboard.PressAsync "Tab")
+                let! md = await (page.EvaluateAsync<string> "() => window.__md()")
+                Expect.equal (md.TrimEnd ()) "@swift-heron" "the second press moved past the agent"
+            }
+
+        // For a keyboard where Tab is spoken for: the right arrow takes the hint too.
+        editorCase "the right arrow completes the hinted address" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
                 do! awaitU (page.ClickAsync ".ProseMirror")
                 do! awaitU (page.Keyboard.TypeAsync "@ag")
-                let! _ = await (page.WaitForSelectorAsync "[role=listbox] [role=option]")
-                do! awaitU (page.Keyboard.PressAsync "Escape")
-                let! _ = await (page.WaitForSelectorAsync ("[role=listbox]", PageWaitForSelectorOptions (State = WaitForSelectorState.Detached)))
-                do! awaitU (page.Keyboard.PressAsync "Enter")
+                let! _ = await (page.WaitForSelectorAsync "[data-address-hint]")
+                do! awaitU (page.Keyboard.PressAsync "ArrowRight")
+                let! md = await (page.EvaluateAsync<string> "() => window.__md()")
+                Expect.equal (md.TrimEnd ()) "@agent" "the arrow took the hint"
+            }
+
+        // Tab is taken only while there is something to complete: a composer that kept it
+        // would be a keyboard trap.
+        editorCase "Tab leaves the composer when nothing is hinted" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
+                do! awaitU (page.ClickAsync ".ProseMirror")
+                do! awaitU (page.Keyboard.TypeAsync "hello")
+                do! awaitU (page.Keyboard.PressAsync "Tab")
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        "document.querySelectorAll('#host .ProseMirror > p').length === 2")
+                        "!document.querySelector('#host').contains(document.activeElement)")
                 ()
             }
 

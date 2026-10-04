@@ -81,6 +81,13 @@ module Addressed =
         |> List.filter starts
         |> List.truncate 6
 
+    /// What the composer greys in after the caret while an address is typed: the rest of the
+    /// first name on offer, when there is any rest. `None` once the name is typed whole.
+    let hint (names: string list) (partial: string) : string option =
+        match offer names partial with
+        | first :: _ when first.Length > partial.Length -> Some (first.Substring partial.Length)
+        | _ -> None
+
 /// Whether a batch of messages starts a turn, and which message it answers (Plan: multiplayer
 /// conversations). The SCHEDULER is the mechanism — it appends every message, asks this, and
 /// runs a turn on the answer's author's credential or runs none — and this is the policy, a
