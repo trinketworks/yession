@@ -3691,6 +3691,45 @@ let editorTests =
                 }
         launchCardCoversNothingCase 390 844
         launchCardCoversNothingCase 1440 900
+        // The card reserves the room its list will want, so repositories ARRIVING do not change
+        // its height. The card is docked at the column's foot; sized to its content it stood only
+        // as tall as a looking line and then LEAPT up off that foot the instant a page of
+        // repositories folded in, taking the conversation above it up with it — the jump this
+        // case exists to forbid. START, at the foot, is the thing that must not move: it is where
+        // the hand is going. So the promise is that the card's height and START's top are the
+        // SAME an instant before the listing arrives (`__launchLooking`) and after (`__launch`).
+        //
+        // Only a browser settles it: the two states fold from different listings into the same
+        // flex column, and whether that column holds its height across them is a fact about
+        // layout the markup cannot show — the card carries `data-repo-picker` in both.
+        let launchCardHoldsHeightCase width height =
+            editorCaseIn width height
+                (sprintf "at %dpx the launch card keeps its height as repositories load" width) <| fun page ->
+                async {
+                    let shape =
+                        """() => {
+                             const card = document.querySelector('#shell [data-repo-picker]').getBoundingClientRect()
+                             const start = document.querySelector('#shell [data-repo-picker-start]').getBoundingClientRect()
+                             return [Math.round(card.height), Math.round(start.top)]
+                           }"""
+                    // The instant before the repositories land: the card is up, still looking.
+                    do! awaitU (page.EvaluateAsync "() => window.__launchLooking()")
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
+                    let! looking = await (page.EvaluateAsync<int[]> shape)
+                    // Ground truth that this IS the looking state and not the loaded one already:
+                    // nothing to hold yet, so the case measures the step it means to.
+                    let! rows = await (page.EvaluateAsync<int> "() => document.querySelectorAll('#shell [data-repo-picker] [data-repo-candidate]').length")
+                    Expect.equal rows 0 "the looking state has no repositories in it yet"
+                    // The repositories arrive.
+                    do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate]")
+                    let! loaded = await (page.EvaluateAsync<int[]> shape)
+                    Expect.equal loaded looking
+                        (sprintf "the card held neither its height nor START's place as the listing loaded: looking was height=%d start=%d, loaded is height=%d start=%d"
+                            looking.[0] looking.[1] loaded.[0] loaded.[1])
+                }
+        launchCardHoldsHeightCase 390 844
+        launchCardHoldsHeightCase 1440 900
         // The way out is a thumb's size on a phone, and says what it does to a screen reader
         // and a pointer alike. Measured as the BOX a press lands on, not the glyph in it.
         editorCaseIn 390 844 "on a phone the launch card's way out is a 44px target with a name" <| fun page ->
