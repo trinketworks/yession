@@ -59,7 +59,45 @@ type JwksKey =
 type Jwks =
     { Keys : JwksKey list }
 
+/// The OIDC profile claims (OIDC Core §5.1) an ID token carries for a real user: each the
+/// strategy knew, and absent when it did not.
+[<RequireQualifiedAccess>]
+type IdTokenProfile =
+    { Name : string option
+      Email : string option
+      Picture : string option }
+
+/// Who an ID token from this provider was issued for, beyond its `sub`: what the provider
+/// writes and the session's relying party reads back to decide whether the cookie it mints
+/// is a person or shared access.
+[<RequireQualifiedAccess>]
+type IdTokenAttribution =
+    /// A real, durable user identity.
+    | User of IdTokenProfile
+    /// Shared access with no attributable user behind it (trust-localhost).
+    | Unattributed
+
+[<RequireQualifiedAccess>]
+module IdTokenAttribution =
+
+    /// What a token says about the identity the strategy authenticated.
+    let ofIdentity (claims: UserClaims option) : IdTokenAttribution =
+        match claims with
+        | Some c ->
+            IdTokenAttribution.User
+                { IdTokenProfile.Name = c.DisplayName
+                  IdTokenProfile.Email = c.Email
+                  IdTokenProfile.Picture = c.Picture }
+        | None -> IdTokenAttribution.Unattributed
+
 module Wire =
+
+    /// A parameter written only when it has a value: OMITTED otherwise rather than written
+    /// `null`, which a reader is entitled to treat as a value.
+    let private optional (name: string) (value: string option) =
+        match value with
+        | Some v -> [ name, Encode.string v ]
+        | None -> []
 
     let registerClientRequest : Codec<RegisterClientRequest> =
         { Encode = fun (r: RegisterClientRequest) -> Encode.object [ "redirectUri", Encode.string r.RedirectUri ]
@@ -124,10 +162,6 @@ module Wire =
     /// `null`: RFC 7517 §4 makes each one optional per key type, and a reader is entitled to
     /// treat a `null` that is present as a value.
     let private jwksKey : Codec<JwksKey> =
-        let optional (name: string) (value: string option) =
-            match value with
-            | Some v -> [ name, Encode.string v ]
-            | None -> []
         { Encode =
             fun (k: JwksKey) ->
                 Encode.object
@@ -163,6 +197,42 @@ module Wire =
     let jwks : Codec<Jwks> =
         { Encode = fun (d: Jwks) -> Encode.object [ "keys", d.Keys |> List.map jwksKey.Encode |> Encode.list ]
           Decode = Decode.object (fun get -> { Jwks.Keys = get.Required.Field "keys" (Decode.list jwksKey.Decode) }) }
+
+    /// The claims an ID token carries beyond the registered ones (`iss`, `sub`, `aud`, `iat`,
+    /// `exp`, which the signing builder sets): the profile, and `yession_attribution`, the
+    /// discriminator between a person and shared access. The provider writes them and the
+    /// session reads them back, through this codec both times, so this is the one place
+    /// their names are spelled.
+    ///
+    /// The attribution is REQUIRED, and only the two this build names are read. Absent or
+    /// unknown is refused rather than read as unattributed: that reading would demote every
+    /// user to shared access the day the two ends stopped agreeing, and say nothing.
+    let idTokenAttribution : Codec<IdTokenAttribution> =
+        let attribution = "yession_attribution"
+        let user = "user"
+        let unattributed = "unattributed"
+        { Encode =
+            function
+            | IdTokenAttribution.User profile ->
+                Encode.object
+                    [ yield attribution, Encode.string user
+                      yield! optional "name" profile.Name
+                      yield! optional "email" profile.Email
+                      yield! optional "picture" profile.Picture ]
+            | IdTokenAttribution.Unattributed -> Encode.object [ attribution, Encode.string unattributed ]
+          Decode =
+            Decode.field attribution Decode.string
+            |> Decode.andThen (fun raw ->
+                if raw = user then
+                    Decode.object (fun get ->
+                        IdTokenAttribution.User
+                            { IdTokenProfile.Name = get.Optional.Field "name" Decode.string
+                              IdTokenProfile.Email = get.Optional.Field "email" Decode.string
+                              IdTokenProfile.Picture = get.Optional.Field "picture" Decode.string })
+                elif raw = unattributed then
+                    Decode.succeed IdTokenAttribution.Unattributed
+                else
+                    Decode.fail (sprintf "unknown attribution '%s' (expected %s or %s)" raw user unattributed)) }
 
     /// OAuth error bodies: `{"error": "..."}` (RFC 6749 §5.2).
     let tokenError : Codec<string> =
