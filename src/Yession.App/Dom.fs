@@ -238,10 +238,10 @@ module Dom =
         /// belongs to. ONE hook across every one of them, because it is one move: the
         /// consequence is on the surface, the reason for it is a keypress away.
         let detail = "data-detail"
-        /// The model picker (settings): the section, and the control itself. The control's
-        /// VALUE is the session's current choice — a model id, or `default` where the
-        /// provider is left to choose — so a test reads the state off the same attribute it
-        /// clicks.
+        /// The model picker (the composer's own row): the wrapper, and the control itself.
+        /// The control's VALUE is the session's current choice — a model id, or `default`
+        /// where the provider is left to choose — so a test reads the state off the same
+        /// attribute it clicks.
         let modelPanel = "data-model-panel"
         let modelSelect = "data-model-select"
         let agentPresence = "data-agent-presence"
