@@ -4964,18 +4964,20 @@ let editorTests =
         editorCaseIn 390 844 "no field a phone can focus renders under 16px" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell")
-                // The model picker lives behind settings, and settings lives behind the
-                // sidebar — both off-canvas on a phone until `nav-alt`/`settings-open` land
-                // on <html> (Style.fs: "Two presentation bits live on the root <html>
-                // element, outside `#app`... toggled by `[data-nav-toggle]`"/`[data-settings-
-                // toggle]`"). This harness mounts `View.view` over a fixed model with no
-                // Session behind it (`ToggleNav`/`ToggleSettings` are `ignore` here,
-                // deliberately — see `EditorHarness.fs`), so the buttons that ask for those
-                // classes in the real client do nothing here. Setting them directly is
-                // asking the same question `Browser.fs`'s handlers answer by setting them:
-                // whether the settings face, once ON screen, holds a field under 16px.
+                // Settings' own fields (the Claude/GitHub panels, the model picker moved out
+                // in Plan "dock send/model/interrupt", but a token input is still exactly
+                // this case) live behind settings, and settings lives behind the sidebar —
+                // both off-canvas on a phone until `nav-alt`/`settings-open` land on <html>
+                // (Style.fs: "Two presentation bits live on the root <html> element, outside
+                // `#app`... toggled by `[data-nav-toggle]`"/`[data-settings-toggle]`").
+                // This harness mounts `View.view` over a fixed model with no Session behind
+                // it (`ToggleNav`/`ToggleSettings` are `ignore` here, deliberately — see
+                // `EditorHarness.fs`), so the buttons that ask for those classes in the real
+                // client do nothing here. Setting them directly is asking the same question
+                // `Browser.fs`'s handlers answer by setting them: whether the settings face,
+                // once ON screen, holds a field under 16px.
                 do! awaitU (page.EvaluateAsync "() => document.documentElement.classList.add('nav-alt', 'settings-open')")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-model-select]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-claude-panel]")
 
                 let! undersized =
                     await (page.EvaluateAsync<string[]>

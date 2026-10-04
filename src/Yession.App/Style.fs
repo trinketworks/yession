@@ -616,6 +616,11 @@ module Style =
     let fieldSelectWrapOf (width: string) = cls [ "relative"; width ]
     let fieldSelectMark = "pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ink-faint"
 
+    /// The model picker's own width, now that it rides the composer's row (`View.modelControl`)
+    /// instead of a settings column that gave it the row's full width. `shrink-0` so Send and
+    /// Interrupt, packed in beside it, never squeeze it below the model names it has to show.
+    let modelControlWidth = "w-28 shrink-0"
+
     /// A field with a VERB at its trailing edge, built exactly as the terminal composer's is
     /// (`terminalCommandWrap` / `terminalCommandTrail`): the wrapper carries the width, the
     /// field reserves the room, and the control sits INSIDE the box it acts on rather than
