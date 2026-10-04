@@ -1097,6 +1097,32 @@ type ClientModel =
       /// from: what the launch surface asks to know whether the session has one.
       Repos         : Repos.ReposProjection }
 
+/// A surface read from its END: what is newest is at the bottom, and a reader who is there
+/// stays there as more arrives — while one who has scrolled away is left where they are and
+/// offered the way back. The rule is the browser's (`Tail`, `app/browser`), because it is a
+/// fact about one scroll position; what is here is the NAME, which the surface and its "jump
+/// to latest" control both carry (`Dom.Hooks.tail`) so a control can say which surface it
+/// brings back, and a surface that changes what it is (blocks to a live screen) is a new one.
+[<RequireQualifiedAccess>]
+type TailSurface =
+    /// The conversation.
+    | Conversation
+    /// A terminal's block history, while it runs commands as blocks.
+    | Blocks of TerminalId
+    /// A terminal's live screen, while a program holds it.
+    | Screen of TerminalId
+
+module TailSurface =
+
+    /// The surface's name in the document. Two terminals' surfaces never share one, and
+    /// neither do one terminal's two: a reader who had scrolled up through its blocks and then
+    /// took the keyboard has not scrolled up through the screen that replaced them.
+    let key (surface: TailSurface) : string =
+        match surface with
+        | TailSurface.Conversation -> "chat"
+        | TailSurface.Blocks terminal -> "blocks:" + TerminalId.value terminal
+        | TailSurface.Screen terminal -> "screen:" + TerminalId.value terminal
+
 /// A move only the document can make: focus, and scrolling something into view. The model says
 /// what is on screen; where the cursor is and how far the reader has scrolled are the
 /// document's, so these leave the reducer as effects (`ClientEffect.Move`) and are carried
@@ -1149,8 +1175,12 @@ type DomMove =
     | RevealBlock of TerminalId * BlockId
     /// Scroll the conversation to one message and mark it.
     | RevealMessage of MessageId
-    /// Scroll the conversation to its own tail.
-    | ScrollToLatest
+    /// Scroll a surface to its own tail and follow it from there — what a sent message
+    /// does to the conversation. Focus stays where it was: the sender is still typing.
+    | ScrollToLatest of TailSurface
+    /// The same, from the surface's own "jump to latest" control — which is not on screen at
+    /// the tail, so the press takes it away and focus goes to the surface it brought back.
+    | JumpToLatest of TailSurface
     /// Onto the message composer's field — or the session's title, where there is no
     /// composer to offer. Where a notice in the conversation column hands the keyboard when
     /// it goes from under it.
@@ -3737,11 +3767,10 @@ module ClientModel =
             | CloseSwitcherMsg when model.Switcher -> [ ClientEffect.Move DomMove.FocusPaneSwitcher ]
             | MoveMsg move -> [ ClientEffect.Move move ]
             // A deliberate send settles the view on what was just sent, whether or not the
-            // sender had scrolled away while composing — the pin machinery
-            // (`keepSurfacesPinned`/`restoreSurfaceScroll`, `Render.fs`) only restores a
-            // reader who was ALREADY at the end before this render, which is a different
-            // question. Reuses the jump-to-latest float's own move rather than a new one.
-            | SendDraftMsg _ -> [ ClientEffect.Move DomMove.ScrollToLatest ]
+            // sender had scrolled away while composing — the tail rule (`Tail`, in the
+            // browser) only keeps a reader who was ALREADY following, which is a different
+            // question. The jump-to-latest control's own scroll, without its focus move.
+            | SendDraftMsg _ -> [ ClientEffect.Move (DomMove.ScrollToLatest TailSurface.Conversation) ]
             | CopyMsg (box, text) -> [ ClientEffect.Copy (box, text) ]
             | RetryNowMsg -> [ ClientEffect.RetryNow ]
             | GitHubPollDueMsg round ->

@@ -103,10 +103,15 @@ module Dom =
         let environment = "data-environment"
         // Conversation timeline.
         let conversation = "data-conversation"
-        /// The float that takes a reader who has scrolled away back to the tail. Present in
-        /// every render — whether it can be SEEN is a scroll distance the document holds and
-        /// `Render.syncJumpToLatest` toggles a class on, so markup can only say it is there.
+        /// The float that takes a reader who has scrolled away back to the tail, valued with
+        /// the `tail` of the surface it brings back. Present in every render — whether it can
+        /// be SEEN is whether that surface's reader is following it, which the document holds
+        /// and `Tail` toggles a class for, so markup can only say it is there.
         let jumpToLatest = "data-jump-to-latest"
+        /// A surface read from its end, valued with its name (`TailSurface.key`): the chat, a
+        /// terminal's blocks, a terminal's live screen. What `Tail` keeps at the end for a
+        /// reader who is there.
+        let tail = "data-tail"
         let messageId = "data-message-id"
         let messageAuthor = "data-message-author"
         let messageStatus = "data-message-status"
@@ -704,6 +709,9 @@ module Dom =
         /// The floating "jump to latest" control's accessible name, since it carries only a down
         /// chevron (`Icon.down`), so this is the whole of what a screen reader says it does.
         let jumpToLatest = "Jump to latest message"
+        /// The same control over a terminal, where what is newest is output rather than a
+        /// message.
+        let jumpToLatestOutput = "Jump to latest output"
         // The ask card, asking for the session's repo. The question carries the whole of it —
         // a caps `session asks` over it said the same thing in fewer words and one line more.
         /// The head's two lines, on the repo pane. The subtitle is who is asking; the branch

@@ -2938,13 +2938,16 @@ module View =
                     | ContentKind.Image _ ->
                         e.preventDefault ()
                         dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Content ref)))
+        // `tabindex="-1"`: never a Tab stop, but somewhere for focus to land when the jump
+        // control that brought the reader here goes away under their hand.
+        let tail = TailSurface.key TailSurface.Conversation
         html $"""
             <div class="{Style.chatRegion}">
-              <section class="{Style.timeline}" data-conversation @click={Ev(contentOpen)}>{body}</section>
-              <div class="{Style.chatJumpToLatestSlot}" data-jump-to-latest>
+              <section class="{Style.timeline}" data-conversation data-tail="{tail}" tabindex="-1" @click={Ev(contentOpen)}>{body}</section>
+              <div class="{Style.chatJumpToLatestSlot}" data-jump-to-latest="{tail}">
                 <div class="{Style.chatJumpToLatestRail}">
                   <button type="button" class="{Style.chatJumpToLatest}" aria-label="{Dom.Text.jumpToLatest}"
-                          @click={Ev(fun _ -> dispatch (MoveMsg DomMove.ScrollToLatest))}>{Icon.down}</button>
+                          @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.JumpToLatest TailSurface.Conversation)))}>{Icon.down}</button>
                 </div>
               </div>
             </div>"""
@@ -3199,6 +3202,7 @@ module View =
     let private terminalScreenView (actions: ViewActions) (model: ClientModel) (terminal: TerminalId) (holder: ActorRef option) : TemplateResult =
         let mine = ClientModel.me model
         let id = TerminalId.value terminal
+        let tail = TailSurface.key (TailSurface.Screen terminal)
         let body =
             match ClientModel.terminalScreen terminal model with
             | None | Some "" -> html $"""<div class="{Style.terminalOutputEmpty}">…</div>"""
@@ -3209,7 +3213,7 @@ module View =
             // everyone else's copy is: the keyboard belongs to the lease, and there is no
             // lease to belong to yet.
             html $"""
-                <div class="{Style.terminalScreen}" data-terminal-screen="{id}"
+                <div class="{Style.terminalScreen}" data-terminal-screen="{id}" data-tail="{tail}"
                      role="region" aria-live="off" aria-label="Live terminal, nobody is typing">{body}</div>"""
         | Some holder ->
 
@@ -3219,7 +3223,7 @@ module View =
             // program on the other end over what the "value" is. The accessible name says
             // what it is and who has it.
             html $"""
-                <div class="{Style.terminalScreen}" data-terminal-screen="{id}"
+                <div class="{Style.terminalScreen}" data-terminal-screen="{id}" data-tail="{tail}"
                      role="application" tabindex="0" aria-label="Live terminal, you are typing here"
                      @keydown={Ev(fun (e: Browser.Types.Event) ->
                                      match keystrokeOf (e :?> Browser.Types.KeyboardEvent) with
@@ -3227,7 +3231,7 @@ module View =
                                      | None -> ())}>{body}</div>"""
         else
             html $"""
-                <div class="{Style.terminalScreen}" data-terminal-screen="{id}"
+                <div class="{Style.terminalScreen}" data-terminal-screen="{id}" data-tail="{tail}"
                      role="region" aria-live="off" aria-label="Live terminal, {Entity.actorName model holder} is typing">{body}</div>"""
 
     /// The terminal composer: your command line, and everyone else's as they type them.
@@ -4107,6 +4111,16 @@ module View =
             | PreviewSubject.Block (terminalId, blockId) -> paneBlockView model preview terminalId blockId
             | PreviewSubject.Stretch stretch -> paneStretchView model preview stretch
             | PreviewSubject.Content ref -> paneContentView ref
+        // The way back to a terminal's newest output, for a reader who scrolled up through
+        // it: the chat's float, over the scroller it brings back. Shown and hidden by `Tail`,
+        // which is the one place that knows whether that reader is still following.
+        let jumpToLatest (surface: TailSurface) =
+            html $"""
+                <div class="{Style.terminalJumpToLatestSlot}" data-jump-to-latest="{TailSurface.key surface}">
+                  <button type="button" class="{Style.terminalJumpToLatest}" aria-label="{Dom.Text.jumpToLatestOutput}"
+                          title="{Dom.Text.jumpToLatestOutput}"
+                          @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.JumpToLatest surface)))}>{Icon.down}</button>
+                </div>"""
         let terminalBody (view: TerminalView) =
             let feed = ClientModel.terminalFeed view.TerminalId model
             let affords = ClientModel.affordances view model
@@ -4189,15 +4203,22 @@ module View =
                         // third. The notice is a line and now renders as one.
                         html $"""
                             {truncated}
-                            {terminalScreenView actions model view.TerminalId view.Lease}"""
+                            <div class="{Style.terminalTailRegion}">
+                              {terminalScreenView actions model view.TerminalId view.Lease}
+                              {jumpToLatest (TailSurface.Screen view.TerminalId)}
+                            </div>"""
                     else
                         html $"""
-                            <div class="{Style.terminalScrollback}" data-terminal-scrollback
-                                 data-terminal-id="{TerminalId.value view.TerminalId}">
-                              <div class="{Style.terminalStream}">
-                                {truncated}
-                                {blocks}
+                            <div class="{Style.terminalTailRegion}">
+                              <div class="{Style.terminalScrollback}" data-terminal-scrollback
+                                   data-terminal-id="{TerminalId.value view.TerminalId}"
+                                   data-tail="{TailSurface.key (TailSurface.Blocks view.TerminalId)}">
+                                <div class="{Style.terminalStream}">
+                                  {truncated}
+                                  {blocks}
+                                </div>
                               </div>
+                              {jumpToLatest (TailSurface.Blocks view.TerminalId)}
                             </div>"""
             html $"""
                 {above}

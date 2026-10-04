@@ -1991,7 +1991,7 @@ let private jumpShown (page: IPage) =
         let! _ =
             await (page.WaitForFunctionAsync
                     """(() => {
-                         const control = document.querySelector('#shell [data-jump-to-latest] button')
+                         const control = document.querySelector('#shell [data-jump-to-latest="chat"] button')
                          const box = control.getBoundingClientRect()
                          if (box.width === 0) return false
                          const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
@@ -2024,7 +2024,7 @@ let private scrolledAwayFromLatest (page: IPage) =
 /// what the control must not hide is the words in it.
 let [<Literal>] private wordsUnderJump =
     """() => {
-         const control = document.querySelector('#shell [data-jump-to-latest] button').getBoundingClientRect()
+         const control = document.querySelector('#shell [data-jump-to-latest="chat"] button').getBoundingClientRect()
          const covered = [], level = []
          for (const body of document.querySelectorAll('#shell [data-conversation] [data-message-body]')) {
            const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT)
@@ -2055,7 +2055,7 @@ let private jumpCoversNoWords (page: IPage) =
                 page.EvaluateAsync
                     """() => {
                          const conversation = document.querySelector('#shell [data-conversation]')
-                         const control = document.querySelector('#shell [data-jump-to-latest] button').getBoundingClientRect()
+                         const control = document.querySelector('#shell [data-jump-to-latest="chat"] button').getBoundingClientRect()
                          const body = conversation.querySelector("[data-message-id='msg-filler-8'] [data-message-body]")
                          const range = document.createRange()
                          range.selectNodeContents(body)
@@ -2071,6 +2071,151 @@ let private jumpCoversNoWords (page: IPage) =
         Expect.isEmpty covered (sprintf "the control lies over these words: %s" (String.concat " | " covered))
         return ()
     }
+
+// --- Surfaces read from their end (`Tail`) ---------------------------------------------------
+//
+// The chat, a terminal's blocks and a terminal's live screen all keep one promise: a reader at
+// the end stays there as more arrives, and one who scrolled away is left there with a way back
+// on screen. Every one of these is a fact about a laid-out page — where a scroll stands, what
+// is painted at a point — so only a browser can keep checking it.
+
+/// The surface the view names `key` (`TailSurface.key`).
+let private tailSurface (key: string) = sprintf "#shell [data-tail='%s']" key
+
+/// A frame and another, so a scroll this case made has been reported to the page (a scroll
+/// event lands a frame after the scroll) and whatever a render left behind has settled.
+let private twoFrames (page: IPage) : Async<unit> =
+    awaitU (page.EvaluateAsync "() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))")
+
+/// Bring a surface's box on screen and put its reader at its end, the way a reader does it,
+/// and say whether there was anywhere else to be — a surface that fits its box is at its end
+/// whatever happens, and a case over one could not fail.
+let private toTheEnd (page: IPage) (key: string) : Async<unit> =
+    async {
+        let! scrolls =
+            await (
+                page.EvaluateAsync<bool> (
+                    """selector => {
+                         const el = document.querySelector(selector)
+                         el.parentElement.scrollIntoView({ block: 'end' })
+                         el.scrollTop = el.scrollHeight
+                         return el.scrollHeight > el.clientHeight + 100
+                       }""",
+                    box (tailSurface key)))
+        Expect.isTrue scrolls (sprintf "the %s surface is taller than its box, so it has an end to keep" key)
+        do! twoFrames page
+    }
+
+/// Put a surface's reader at its START, as a reader who scrolled back to read does.
+let private toTheStart (page: IPage) (key: string) : Async<unit> =
+    async {
+        do! awaitU (
+                page.EvaluateAsync (
+                    """selector => {
+                         const el = document.querySelector(selector)
+                         el.parentElement.scrollIntoView({ block: 'end' })
+                         el.scrollTop = 0
+                       }""",
+                    box (tailSurface key)))
+        do! twoFrames page
+    }
+
+/// Where the newest words in a surface are: the LAST occurrence of `mark` in its text, whether
+/// that line lies wholly inside the surface's box, and whether what is painted at its centre
+/// belongs to the surface — so a line under the composer, a sticky header or a float reads as
+/// not shown. With how far short of its end the surface stands, for a red to say by how much.
+let private newestShown (page: IPage) (key: string) (mark: string) : Async<string> =
+    async {
+        let! _ =
+            await (
+                page.WaitForFunctionAsync (
+                    "([selector, mark]) => document.querySelector(selector)?.textContent.includes(mark)",
+                    box [| tailSurface key; mark |]))
+        do! twoFrames page
+        return!
+            await (
+                page.EvaluateAsync<string> (
+                    """([selector, mark]) => {
+                         const surface = document.querySelector(selector)
+                         const walker = document.createTreeWalker(surface, NodeFilter.SHOW_TEXT)
+                         let node = null, at = -1
+                         while (walker.nextNode()) {
+                           const i = walker.currentNode.textContent.lastIndexOf(mark)
+                           if (i >= 0) { node = walker.currentNode; at = i }
+                         }
+                         const range = document.createRange()
+                         range.setStart(node, at)
+                         range.setEnd(node, at + mark.length)
+                         const line = range.getBoundingClientRect(), box = surface.getBoundingClientRect()
+                         const hit = document.elementFromPoint(line.left + line.width / 2, line.top + line.height / 2)
+                         return JSON.stringify({
+                           inside: line.top >= box.top - 0.5 && line.bottom <= box.bottom + 0.5,
+                           painted: !!hit && surface.contains(hit),
+                           short: Math.round(surface.scrollHeight - surface.clientHeight - surface.scrollTop)
+                         })
+                       }""",
+                    box [| tailSurface key; mark |]))
+    }
+
+/// The verdict `newestShown` has to give for the newest words to be on screen.
+let [<Literal>] private shownFully = "\"inside\":true,\"painted\":true"
+
+/// A message from a collaborator, folded into the harness's conversation at `offset`.
+let private messageLands (page: IPage) (offset: int64) (body: string) : Async<unit> =
+    let expect r = Result.defaultWith failwith r
+    foldHarness page [
+        offset,
+        Yession.Domain.SessionEvent.MessageSent
+            { Yession.Domain.Chat.MessageSent.MessageId = Yession.Domain.MessageId.create (sprintf "msg-tail-%d" offset) |> expect
+              Yession.Domain.Chat.MessageSent.QueueId = None
+              Yession.Domain.Chat.MessageSent.Author = Yession.Domain.Principal.Peer (Yession.Domain.PeerId.create "brave-owl" |> expect)
+              Yession.Domain.Chat.MessageSent.Body = body } ]
+
+/// The pane open on the harness's block-mode terminal, finished opening — its width
+/// transitions from nothing, and until it has, its scrollback is clipped by the column.
+let private paneOnBlocks (page: IPage) : Async<unit> =
+    async {
+        do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+        let! _ = await (page.WaitForSelectorAsync (tailSurface "blocks:term-harness"))
+        do! waitFor "the column to finish opening" page
+                """(() => document.querySelector('#shell [data-content-panel]').getAnimations().length === 0)()"""
+    }
+
+/// The harness terminal's blocks made taller than their box: a running command's three hundred
+/// lines, and every fold in the history open, so the lines are on the page to be scrolled past.
+let private blocksFilled (page: IPage) : Async<unit> =
+    async {
+        do! awaitU (
+                page.EvaluateAsync
+                    """() => window.__record('term-harness', 2, 'o',
+                               Array.from({ length: 300 }, (_, i) => 'line ' + (i + 1)).join('\r\n') + '\r\n')""")
+        do! awaitU (
+                page.EvaluateAsync
+                    """() => document.querySelectorAll("#shell [data-tail='blocks:term-harness'] details").forEach(d => { d.open = true })""")
+        do! twoFrames page
+    }
+
+/// Whether the "jump to latest" over a surface is on screen and is what is painted at its own
+/// centre, so a control that is present, shown and buried does not count.
+let private jumpOffered (key: string) =
+    sprintf
+        """(() => {
+             const control = document.querySelector("#shell [data-jump-to-latest='%s'] button")
+             const box = control.getBoundingClientRect()
+             if (box.width === 0 || box.height === 0) return false
+             const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+             return !!hit && control.contains(hit)
+           })()"""
+        key
+
+/// Whether a surface's reader is at its end.
+let private atItsEnd (key: string) =
+    sprintf
+        """(() => {
+             const el = document.querySelector("%s")
+             return el.scrollTop + el.clientHeight >= el.scrollHeight - 4
+           })()"""
+        (tailSurface key)
 
 let editorTests =
     testList "Editor rendering (browser)" [
@@ -4167,6 +4312,132 @@ let editorTests =
         // control stood, so a desktop case passed with the old placement as well and would
         // have been a case that cannot go red.
         editorCaseIn 390 844 "the jump to the latest message covers none of the words on a phone" <| jumpCoversNoWords
+        // The surfaces read from their end, one list so `--only "read from their end"` runs them.
+        testList "Surfaces read from their end" [
+            // Taking the keyboard puts the reader at the CURSOR — the bottom of the screen, where
+            // the prompt is and what they type appears. The live screen used to be no surface the
+            // scroll rule knew, so it opened at the top of its scrollback: measured on master,
+            // scrollTop 0 of 16,640px, with the prompt being answered sixteen thousand pixels down.
+            editorCaseIn 1440 900 "taking the keyboard opens the live screen at its cursor, not at the top of its scrollback" <| fun page ->
+                async {
+                    do! paneOnBlocks page
+                    // A screen whose scrollback runs far past its box, seeded past everything the
+                    // fixture's feed holds so the prompt is the last thing on it.
+                    do! awaitU (
+                            page.EvaluateAsync
+                                """() => window.__snapshot('term-harness', 50,
+                                           Array.from({ length: 300 }, (_, i) => 'old ' + (i + 1)).join('\r\n') + '\r\nprompt-mark$ ')""")
+                    do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
+                    let! shown = newestShown page "screen:term-harness" "prompt-mark"
+                    Expect.stringContains shown shownFully "the prompt is on screen as the keyboard arrives"
+                }
+            // A reader at the end of the conversation sees what is said next. The rule used to move
+            // them only once the end was more than 200px away, so a message shorter than that
+            // landed below the fold — and the next one, and the next, until the shortfall crossed
+            // the line: measured on master, 80px short, the newest chip half under the composer.
+            editorCaseIn 1440 900 "a reader at the end of the conversation sees the message that lands next" <| fun page ->
+                async {
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+                    do! toTheEnd page "chat"
+                    do! messageLands page 200L "tail-mark-chat, which has just been said"
+                    let! shown = newestShown page "chat" "tail-mark-chat"
+                    Expect.stringContains shown shownFully "the newest message is wholly on screen"
+                }
+            // The same promise over a terminal's blocks, where what arrives is output.
+            editorCaseIn 1440 900 "a reader at the end of a terminal's blocks sees the output that arrives next" <| fun page ->
+                async {
+                    do! paneOnBlocks page
+                    do! blocksFilled page
+                    do! toTheEnd page "blocks:term-harness"
+                    // A new command, and its first line: the newest thing a terminal can show.
+                    let expect r = Result.defaultWith failwith r
+                    do! foldHarness page [
+                            300L,
+                            Yession.Domain.SessionEvent.TerminalBlockStarted
+                                { Yession.Domain.Terminals.TerminalBlockStarted.TerminalId = harnessTerminal "term-harness"
+                                  Yession.Domain.Terminals.TerminalBlockStarted.BlockId = Yession.Domain.BlockId.create "block-tail" |> expect
+                                  Yession.Domain.Terminals.TerminalBlockStarted.QueueId = None
+                                  Yession.Domain.Terminals.TerminalBlockStarted.Authority =
+                                      Yession.Domain.Authority.agentFor (Yession.Domain.Principal.Peer (Yession.Domain.PeerId.create "ada" |> expect))
+                                  Yession.Domain.Terminals.TerminalBlockStarted.Command = "make"
+                                  Yession.Domain.Terminals.TerminalBlockStarted.FromSeq = 3
+                                  Yession.Domain.Terminals.TerminalBlockStarted.Background = false } ]
+                    do! awaitU (page.EvaluateAsync "() => window.__record('term-harness', 3, 'o', 'tail-mark-blocks\\r\\n')")
+                    let! shown = newestShown page "blocks:term-harness" "tail-mark-blocks"
+                    Expect.stringContains shown shownFully "the newest line of output is wholly on screen"
+                }
+            // And over the live screen: a program printing below the cursor scrolls the screen, and
+            // a reader at its end goes with it.
+            editorCaseIn 1440 900 "a reader at the end of a live screen sees the output that arrives next" <| fun page ->
+                async {
+                    do! paneOnBlocks page
+                    do! awaitU (
+                            page.EvaluateAsync
+                                """() => window.__snapshot('term-harness', 50,
+                                           Array.from({ length: 300 }, (_, i) => 'old ' + (i + 1)).join('\r\n') + '\r\n')""")
+                    do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
+                    let! _ = await (page.WaitForSelectorAsync (tailSurface "screen:term-harness"))
+                    do! toTheEnd page "screen:term-harness"
+                    do! awaitU (page.EvaluateAsync "() => window.__record('term-harness', 51, 'o', 'one\\r\\ntwo\\r\\ntail-mark-screen\\r\\n')")
+                    let! shown = newestShown page "screen:term-harness" "tail-mark-screen"
+                    Expect.stringContains shown shownFully "the newest line on the screen is wholly on screen"
+                }
+            // The other half: a reader who scrolled back to read is LEFT there. What arrives while
+            // they read is what the way back is for, not a reason to take them away from the line
+            // they were on.
+            editorCaseIn 1440 900 "a reader who scrolled back through the conversation stays where they are as a message lands" <| fun page ->
+                async {
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+                    do! toTheEnd page "chat"
+                    do! toTheStart page "chat"
+                    do! messageLands page 200L "tail-mark-chat, said while nobody was at the end"
+                    let! _ = await (page.WaitForFunctionAsync "document.querySelector(\"#shell [data-tail='chat']\").textContent.includes('tail-mark-chat')")
+                    do! twoFrames page
+                    let! top = await (page.EvaluateAsync<float> "() => document.querySelector(\"#shell [data-tail='chat']\").scrollTop")
+                    Expect.equal top 0.0 "the reader is still at the line they scrolled back to"
+                }
+            // …and is told there is more below, over a terminal as over the chat. Output a reader
+            // scrolled away from used to arrive with nothing on screen to say so.
+            editorCaseIn 1440 900 "a reader who scrolled back through a terminal's blocks is offered the way to the latest" <| fun page ->
+                async {
+                    do! paneOnBlocks page
+                    do! blocksFilled page
+                    do! toTheEnd page "blocks:term-harness"
+                    do! toTheStart page "blocks:term-harness"
+                    do! waitFor "the way to the latest output to be on screen" page (jumpOffered "blocks:term-harness")
+                }
+            // Pressing the way back lands at the end, and the keyboard lands with it. The press takes
+            // its own control away — a reader at the end has nowhere to jump to — and it used to
+            // leave focus on `body`, so the next Tab started from the top of the page.
+            editorCaseIn 1440 900 "the jump to the latest message lands at the end with the keyboard on the conversation" <| fun page ->
+                async {
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+                    do! toTheEnd page "chat"
+                    do! toTheStart page "chat"
+                    do! waitFor "the way to the latest message to be on screen" page (jumpOffered "chat")
+                    do! awaitU (page.FocusAsync "#shell [data-jump-to-latest='chat'] button")
+                    do! awaitU (page.Keyboard.PressAsync "Enter")
+                    do! waitFor "the conversation to reach its end" page (atItsEnd "chat")
+                    let! focused = await (page.EvaluateAsync<string> "() => document.activeElement?.getAttribute('data-tail') ?? document.activeElement?.tagName ?? 'nothing'")
+                    Expect.equal focused "chat" "the keyboard is on the conversation it was taken to"
+                }
+            // The same press over a terminal's blocks, whose scroller is no place for focus of its
+            // own: it lands on the panel the blocks are shown in.
+            editorCaseIn 1440 900 "the jump to the latest output lands at the end with the keyboard in the pane" <| fun page ->
+                async {
+                    do! paneOnBlocks page
+                    do! blocksFilled page
+                    do! toTheEnd page "blocks:term-harness"
+                    do! toTheStart page "blocks:term-harness"
+                    do! waitFor "the way to the latest output to be on screen" page (jumpOffered "blocks:term-harness")
+                    do! awaitU (page.FocusAsync "#shell [data-jump-to-latest='blocks:term-harness'] button")
+                    do! awaitU (page.Keyboard.PressAsync "Enter")
+                    do! waitFor "the blocks to reach their end" page (atItsEnd "blocks:term-harness")
+                    let! inPane =
+                        await (page.EvaluateAsync<bool> "() => !!document.activeElement?.closest('#shell [data-content-panel]') && !document.activeElement.closest('[data-jump-to-latest]')")
+                    Expect.isTrue inPane "the keyboard is in the pane, on what holds the blocks it was taken to"
+                }
+        ]
         // Dismissing a menu with the keyboard is where focus goes to `body` if nobody puts it
         // back — the failure the WCAG floor names, hit on the very first Escape, and one no
         // rendered string can see: the markup after a close is identical whether the cursor
@@ -4465,7 +4736,8 @@ let editorTests =
                 let! _ =
                     await (page.EvaluateAsync<bool>
                             """() => { const r = document.querySelector('#shell [data-agent-writing]').getBoundingClientRect()
-                                       window.__opening = { x: r.left + r.width / 2, y: r.top + r.height / 2, h: r.height }
+                                       const scrolled = document.querySelector('#shell [data-conversation]').scrollTop
+                                       window.__opening = { x: r.left + r.width / 2, y: r.top + r.height / 2 + scrolled, h: r.height }
                                        return true }""")
                 // Said and measured in one evaluation, so the arrival is caught at its start
                 // however slow the round trip to the page is.
@@ -4484,8 +4756,12 @@ let editorTests =
                                  const arriving = caret.getAnimations()
                                  if (arriving.length === 0) return 'the caret appears where it lands, from nowhere'
                                  arriving.forEach(a => { a.pause(); a.currentTime = 0 })
+                                 // In the CONVERSATION's coordinates, not the window's: a reader at
+                                 // the end is kept there as the first word lands (`Tail`), and the
+                                 // column scrolling under both marks is not the caret leaving.
                                  const r = caret.getBoundingClientRect()
-                                 const at = { x: r.left + r.width / 2, y: r.top + r.height / 2, h: r.height }
+                                 const scrolled = document.querySelector('#shell [data-conversation]').scrollTop
+                                 const at = { x: r.left + r.width / 2, y: r.top + r.height / 2 + scrolled, h: r.height }
                                  const was = window.__opening
                                  const off = Math.max(Math.abs(at.x - was.x), Math.abs(at.y - was.y), Math.abs(at.h - was.h))
                                  return off > 1 ? 'it leaves ' + off.toFixed(2) + 'px from where the turn\'s mark stood' : ''

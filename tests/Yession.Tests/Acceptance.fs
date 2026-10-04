@@ -922,7 +922,7 @@ let private uiChecklistTests =
 
         testCase "the way back to the latest message is rendered, named, and the chat's" <| fun () ->
             // Whether the float can be SEEN is a scroll distance the document holds — nothing a
-            // string render can settle (`Render.syncJumpToLatest` is what toggles it). What
+            // string render can settle (`Tail` in the browser is what toggles it). What
             // markup owns is the rest, and it is the half that breaks silently: an icon-only
             // control with no accessible name is a button that says nothing to a screen reader,
             // and one rendered outside the conversation would scroll the wrong column.
@@ -931,9 +931,10 @@ let private uiChecklistTests =
             Expect.isTrue
                 (html.Contains Dom.Text.jumpToLatest)
                 "carrying a name, since a chevron on its own says nothing"
+            let chats = sprintf "%s=\"%s\"" Dom.Hooks.jumpToLatest (TailSurface.key TailSurface.Conversation)
             Expect.isTrue
-                (html.IndexOf Dom.Hooks.conversation < html.IndexOf Dom.Hooks.jumpToLatest)
-                "and it floats over the conversation, not over a terminal"
+                (html.IndexOf chats > html.IndexOf Dom.Hooks.conversation)
+                "and it floats over the conversation, naming it as the surface it brings back"
 
         testCase "a client that cannot keep history says so; one that can says nothing" <| fun () ->
             // The availability invariant, not the wording: a client whose context denies it a
