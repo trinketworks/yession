@@ -4293,8 +4293,10 @@ module View =
               {header actions dispatch model}
               {signInPrompt actions model}
               {refusalNotice dispatch model}
-              {chat actions dispatch model}
-              {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
+              <div class="{Style.launchArea}">
+                {chat actions dispatch model}
+                {if ClientModel.launchOffered model then askCard actions dispatch model else Lit.nothing}
+              </div>
               {queue dispatch model}
               {interrupt dispatch model}
               {drafts actions dispatch model}

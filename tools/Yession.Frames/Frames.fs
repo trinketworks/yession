@@ -54,15 +54,20 @@ module Yession.Frames
 //   <out>/log.json       everything, for a question the report did not anticipate.
 //
 // What it found on the first run (phone viewport, a fresh session, Chromium): SIX jumps
-// before a repo was even chosen. The server-rendered shell painted the terminals pane OPEN
-// full-width and the first client render slid it shut over 200ms; `/me` answered 401, the
-// shell bounced through `/login` and LOADED AGAIN, so both happened twice; then the repo
-// picker appeared at the foot of the conversation and grew when the list arrived, scrolling
-// the pinned conversation to keep its end. The first four are fixed — the shell now carries
-// `term-closed` from the model (`Ssr.page`), and the Manager's `/open` page enters a session
-// through `/login` so the shell is painted once. What a clean run looks like NOW: the `/open`
-// page, one shell document with the pane off-canvas from its first frame, then the picker
-// appearing and growing at connect — the one jump left, a design choice rather than a fault.
+// before a repo was even chosen, and two more found since. The server-rendered shell painted
+// the terminals pane OPEN full-width and the first client render slid it shut over 200ms;
+// `/me` answered 401, the shell bounced through `/login` and LOADED AGAIN, so both happened
+// twice; the client started `Disconnected`, so the first paint wore the "not connected" strip
+// for ~75ms and then reflowed the panes up by its height when the transport was asked; and the
+// repo picker was a flow block at the foot of the conversation, so the conversation jumped up
+// when it appeared and again as the list loaded into it and it grew. All fixed — the shell
+// carries `term-closed` from the model (`Ssr.page`), the Manager's `/open` page enters a
+// session through `/login` so the shell is painted once, `ClientModel.init` starts `Connecting`
+// (silent) rather than `Disconnected`, and the picker is an OVERLAY (`Style.ask`) that covers
+// the conversation's lower edge instead of taking height from it. What a clean run looks like
+// NOW: the `/open` page, one shell document with the pane off-canvas from its first frame, the
+// connection silent on first paint, then the picker appearing and growing at connect over a
+// conversation that does not move. No jump left.
 //
 // How to read what it makes. Start at the sheets: a jump is two adjacent frames that differ
 // by a lot, and the red box says where. Read the stamps. Same stamp on both frames — the
