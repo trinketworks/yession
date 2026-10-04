@@ -504,6 +504,35 @@ let tests =
                 Expect.isFalse (out.Contains "secret") "and nothing of it came back"
                 do! sandbox.Dispose ()
              }))
+
+            // The second of the two guards the keyboard cases of `terminals` below are about, asked on its own: a
+            // descriptor that reaches srt's wrapper past its three streams — whatever leaked
+            // it, and whatever it is open on — is closed before the command srt confines runs.
+            // bubblewrap passes everything it inherits straight through, so this is the last
+            // place it can be stopped. Node opens nothing inheritable that a case could leak
+            // on purpose, so bash opens one around the wrapper — `exec 9<` keeps it across the
+            // `exec` — which is the shape of any descriptor this process might leak next.
+            //
+            // Linux only: the guard is (`SrtSandbox.holdingOnlyItsOwn` says why).
+            (if platform () = Node.Base.Platform.Darwin then
+                ptestCase "a descriptor srt's wrapper inherits does not reach the command it confines (Linux only)" (fun () -> ())
+             else
+             testCaseAsync "a descriptor srt's wrapper inherits does not reach the command it confines" (async {
+                let workspace = TestFiles.tempDir "yession-srt-"
+                let! argv =
+                    Sandboxes.SrtSandbox.wrapperFor
+                        (srtTools ())
+                        (policyIn workspace [])
+                        "/bin/sh"
+                        [ "-c"; "if [ -e /proc/self/fd/9 ]; then echo held; else echo closed; fi" ]
+                        (Some workspace)
+                let ran =
+                    SyncChildProcesses.spawnSync
+                        "bash"
+                        ([ "-c"; "exec 9</dev/null; exec \"$@\""; "bash" ] @ argv)
+                        SyncOptions.none
+                Expect.equal ran.stdout (Some "closed\n") (sprintf "descriptor 9 was closed inside; stderr: %A" ran.stderr)
+             }))
         ])
 
 // --- [Srt, Ports]: two sandboxes, one session ----------------------------------------------
@@ -655,10 +684,20 @@ let terminals =
                     Expect.isTrue got (sprintf "head read the line it waited for; the terminal printed: %s" (said ()))
                 })
 
-        // A pty's master is the keyboard of the shell on its far end, and node-pty leaves every
-        // master it opens inheritable — so a shell this session spawns, if nothing closes them,
-        // holds the keyboard of every terminal already open, in whatever sandbox. The shell is
-        // asked through `ls`, which holds what the shell would hand any command it runs.
+        // A pty's MASTER is the keyboard of the shell on its far end: whatever writes it is
+        // typed there. node-pty left every master it opened inheritable, so every program the
+        // session started afterwards held the master of every terminal open at the time — and
+        // bubblewrap passes an inherited descriptor straight into the sandbox. A command in
+        // one terminal wrote `echo INJECTED` into another terminal's master, and it ran: one
+        // person's sandboxed command, or the agent's, typing into somebody else's shell.
+        //
+        // Two guards, at two points (CLAUDE.md, Fixing bugs): node-pty makes every master
+        // close-on-exec (nix/node-pty-cloexec.patch; `PtyIntegration` asks that on its own),
+        // and srt's `Wrap` closes whatever a confined line inherited past three streams (the
+        // last case of `tests` asks that on its own). The three cases here ask at the far end,
+        // one per way a session starts a confined program, so each is red only when BOTH have
+        // gone. This one is the shell of the next terminal somebody opens, asked through `ls`,
+        // which holds what the shell would hand any command it runs.
         testCaseAsync "a terminal's shell under srt holds no other terminal's keyboard" <|
             async {
                 let workspace = TestFiles.canonical (TestFiles.tempDir "yession-srt-")
@@ -678,6 +717,49 @@ let terminals =
                     second.Kill ()
                 do! sandbox.Dispose ()
             }
+
+        // Linux only: the probe reads `/proc`.
+        if platform () = Node.Base.Platform.Darwin then
+            ptestCase "a confined command holds no terminal's keyboard (Linux only: the probe reads /proc)" (fun () -> ())
+            ptestCase "the confined agent CLI holds no terminal's keyboard (Linux only: the probe reads /proc)" (fun () -> ())
+        else
+            // A `Spawn`: the agent's tools, the git and file verbs, a start-up check.
+            testCaseAsync "a confined command holds no terminal's keyboard" <|
+                async {
+                    let workspace = TestFiles.tempDir "yession-srt-"
+                    let! sandbox = startSandbox (policyIn workspace [])
+                    let! first = holdTerminal sandbox
+                    let! second = holdTerminal sandbox
+                    try
+                        let! run, out, err = runInSandbox sandbox "/bin/sh" descriptorListing Map.empty None
+                        Expect.equal (exitCode run) 0 (sprintf "the listing ran: %s" err)
+                        Expect.isEmpty (ptyMasters out) (sprintf "the command held a terminal's master; it held:\n%s" out)
+                    finally
+                        first.Kill ()
+                        second.Kill ()
+                    do! sandbox.Dispose ()
+                }
+
+            // The agent CLI, which `AgentSandbox` starts through srt with no `Sandbox` around it —
+            // the terminals are another sandbox's, and their masters this process's.
+            testCaseAsync "the confined agent CLI holds no terminal's keyboard" <|
+                async {
+                    let workspace = TestFiles.tempDir "yession-srt-"
+                    let policy = policyIn workspace []
+                    let! sandbox = startSandbox policy
+                    let! first = holdTerminal sandbox
+                    let! second = holdTerminal sandbox
+                    try
+                        let spawner =
+                            Sandboxes.AgentSandbox.srtClaudeSpawner (Sandboxes.SrtSandbox.wrapperFor (srtTools ()) policy)
+                        let! out, code = driveSpawner spawner "/bin/sh" (Array.ofList descriptorListing) workspace policy.Env ""
+                        Expect.equal code 0 (sprintf "the listing ran: %s" out)
+                        Expect.isEmpty (ptyMasters out) (sprintf "the agent CLI held a terminal's master; it held:\n%s" out)
+                    finally
+                        first.Kill ()
+                        second.Kill ()
+                    do! sandbox.Dispose ()
+                }
 
         // node-pty's `resize` reached the process it forked; here the shell is further down,
         // and the size has to be the pty's own for every process on it to read.

@@ -1178,9 +1178,59 @@ let private leaseLoanTests =
                 }))
     ]
 
+/// A pty's MASTER is the keyboard of the shell on its far end: whatever writes it is typed
+/// there. node-pty left every master it opened inheritable, so every program this process
+/// started afterwards held the master of every terminal open at the time — a command in one
+/// terminal wrote `echo INJECTED` into another's, and it ran. node-pty now makes them
+/// close-on-exec (nix/node-pty-cloexec.patch), and these ask it with no other guard in the
+/// way: the host backend confines nothing, so nothing between this process and the child
+/// closes what the child inherited. (`SrtIntegration` asks the same of what srt confines,
+/// where a second guard stands.)
+///
+/// Linux only: the probe reads `/proc`.
+let private keyboardTests =
+    testList "No child holds a terminal's keyboard" [
+        if Node.Api.``process``.platform = Node.Base.Platform.Darwin then
+            ptestCase "a child this process starts holds no terminal's master (Linux only: the probe reads /proc)" (fun () -> ())
+            ptestCase "a terminal's program holds no other terminal's master (Linux only: the probe reads /proc)" (fun () -> ())
+        else
+            testCaseAsync "a child this process starts holds no terminal's master" <|
+                async {
+                    let policy = { emptyPolicy with Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ()) }
+                    match! Sandboxes.HostSandbox.create () policy with
+                    | Error e -> failwith e
+                    | Ok sandbox ->
+                        let! first = holdTerminal sandbox
+                        let! second = holdTerminal sandbox
+                        let! run, out, err = runInSandbox sandbox "/bin/sh" descriptorListing Map.empty None
+                        Expect.equal run (SandboxExited 0) (sprintf "the listing ran: %s" err)
+                        Expect.isEmpty (ptyMasters out) (sprintf "the child held a terminal's master; it held:\n%s" out)
+                        first.Kill ()
+                        second.Kill ()
+                        do! sandbox.Dispose ()
+                }
+
+            // node-pty's own fork, which is how every terminal's program starts here: its child
+            // closes ITS master on the way in, and inherited every other one.
+            testCaseAsync "a terminal's program holds no other terminal's master" <|
+                async {
+                    let policy = { emptyPolicy with Env = Sandboxes.hostBaseline (Sandboxes.ambientEnv ()) }
+                    match! Sandboxes.HostSandbox.create () policy with
+                    | Error e -> failwith e
+                    | Ok sandbox ->
+                        let! other = holdTerminal sandbox
+                        let! listing = runOnTerminal sandbox "/bin/sh" descriptorListing
+                        Expect.stringContains listing "/dev/pts/" "the listing ran, on a terminal of its own"
+                        Expect.isEmpty (ptyMasters listing) (sprintf "the terminal's program held another's master; it held:\n%s" listing)
+                        other.Kill ()
+                        do! sandbox.Dispose ()
+                }
+    ]
+
 let tests =
     testList "Pty (Plan 13)" [
         throughTheHostTests
+        keyboardTests
         dialectTests
         lentTests
         leaseLoanTests
