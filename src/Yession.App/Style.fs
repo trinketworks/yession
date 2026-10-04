@@ -1867,6 +1867,9 @@ module Style =
         cls [ "w-full bg-transparent cursor-pointer text-left"
               readingColumn
               "flex items-baseline gap-2 pl-[32px] py-0.5"
+              // The same right edge a tool run's line ends on (`itemGround`: `pr-8` less
+              // the phone's 16px bleed), so a chip's status and a call's stand in one column.
+              "pr-8 max-md:pr-4"
               "text-ink-dim hover:text-ink transition-colors duration-150 ease-out"
               focusRing ]
     /// Who ran it — the same caps voice a message's author line wears, one step fainter.
