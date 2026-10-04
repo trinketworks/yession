@@ -2331,46 +2331,37 @@ module Style =
     let proseTableAlignCenter = "text-center"
     let proseTableAlignRight = "text-right"
 
-    // --- Interrupt: one verb, docked over the composer ---------------------------------------
+    // --- Interrupt: one verb, in the composer's own row -----------------------------------
     // The agent's activity strip used to live here: a 48px band carrying a pulse, the words
     // "agent is responding", the turn's number and a bordered Interrupt. It said what the
     // streaming message's own meta line said one line above it, and what that message's caret
     // said in the same breath — one fact, three animated marks, a twelfth of a phone's screen
     // spent on the third of them. The control it carried was the only part that was its own.
-
-    /// Where that control ended up: a band of its own again, holding the verb and NOTHING
-    /// ELSE. That is the whole difference from the strip, and it is worth stating because the
-    /// two look alike from a distance — what says a turn is running is still the caret in the
-    /// timeline where the words are landing, and still the composer's live region for a
-    /// reader the caret cannot reach. A band that holds one verb is a verb you can reach; a
-    /// band that holds a bulletin is the strip coming back.
-    ///
-    /// It spent one revision at the LEADING edge of the composer's own line, mirroring Send.
-    /// That put a destructive verb exactly where the cursor starts, and moved the line
-    /// sideways every time a turn began. Above the line it interrupts nothing: the composer
-    /// keeps its full width whether or not the agent is writing.
-    ///
-    /// `px-2` around the button's own `px-2` is the composer's `px-4` gutter, so the word
-    /// starts on the same reading edge as the text under it.
-    let interruptBand = "shrink-0 flex items-center px-2 pb-1"
+    //
+    // That control then spent a revision as a band of ITS OWN above the composer — one verb,
+    // nothing beside it, which was the right call next to a strip but still a second place to
+    // look beside the row Send already stands on. It lives in that row now (`View.drafts`),
+    // beside Send rather than above it: a turn running was never a reason to take Send away
+    // (queuing the next message is the one thing there is to do while the agent writes), so
+    // the two verbs sharing one row is the row admitting what was already true.
 
     /// Ink at rest, err under the hand — the face every destructive verb here wears, and worn
     /// for the same reason rather than out of symmetry. Err AT rest is this product's tone for
     /// *something is wrong*, and nothing is: a turn running is the normal case, and a red word
-    /// standing over it every time the agent speaks would say otherwise within a day. What
-    /// makes this one findable is not its colour but that it is the only thing in its band.
+    /// standing beside Send every time the agent speaks would say otherwise within a day.
     ///
     /// A step brighter than the faint verbs that ride a listed row (`btnBare`), though, and
     /// that difference is the same rule read the other way: those are faint because the ROW is
-    /// the subject and they are a thing you can do to it. Here the verb IS the subject.
-    /// `gap-1.5` pairs the stop glyph with the word (`Icon.stop`, the same mark the timeline's
-    /// stopped-turn item already wears at `stopSm` size, now costing nothing to repeat here
-    /// since the vocabulary existed before this button used it). `disabled:*` is new too: the
-    /// turn between a click and the stop actually landing (`AgentViewState.Interrupting`),
-    /// where without it the button would sit unchanged — inert in every way a person can
-    /// check except that the request, in fact, went. `pointer-events-none` rather than relying
-    /// on `hover:` losing a specificity fight, so the err hover-face this button is built
-    /// around never has a chance to paint while there is nothing left to hover for.
+    /// the subject and they are a thing you can do to it. Here the verb IS a subject, same as
+    /// Send beside it. `gap-1.5` pairs the stop glyph with the word (`Icon.stop`, the same mark
+    /// the timeline's stopped-turn item already wears at `stopSm` size, now costing nothing to
+    /// repeat here since the vocabulary existed before this button used it). `disabled:*` is
+    /// new too: the turn between a click and the stop actually landing
+    /// (`AgentViewState.Interrupting`), where without it the button would sit unchanged —
+    /// inert in every way a person can check except that the request, in fact, went.
+    /// `pointer-events-none` rather than relying on `hover:` losing a specificity fight, so the
+    /// err hover-face this button is built around never has a chance to paint while there is
+    /// nothing left to hover for.
     let btnInterrupt =
         cls [ "h-8 px-2 shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer font-ui"
               capsLg; "text-ink-dim hover:text-err transition-colors"
@@ -2568,6 +2559,11 @@ module Style =
     /// empty the draft before the press lands. An empty composer still gives the room back,
     /// which is what the coming-and-going was for; it simply no longer offers a control with
     /// nothing to act on.
+    ///
+    /// Interrupt rides this same row now (`View.drafts`), and "something to act on" grew a
+    /// second reason to be true: a turn running, which is what Interrupt acts on, not the
+    /// draft. `View.drafts` ORs the two in rather than this file computing it, because the
+    /// fact "is there a turn running" lives in `model.Agent`, not here.
     ///
     /// GONE means `max-h-0` beside the fade, not the fade alone. `opacity-0` hides a row and
     /// keeps every pixel of its height, so the band under an empty composer carried a 44px
