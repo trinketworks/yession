@@ -299,7 +299,15 @@ module TerminalCommandWait =
           /// alt-screen flip having handed it to the author of whatever is running. Only ever
           /// true beside a running block, and a terminal runs one block at a time, so beside
           /// OUR running block it says the thing we are waiting on is waiting on us.
-          Interactive : bool }
+          Interactive : bool
+          /// Whether the block AHEAD of ours — the one holding the terminal — has already run
+          /// longer than a command's whole deadline. The deadline on a wait behind a block is
+          /// there so a quick command ahead can finish and ours chain onto it; one that has
+          /// already outrun the deadline is not quick, and burning a second deadline on it
+          /// only delays the answer that says how to get out (session NR5KB8B5 waited two
+          /// minutes to be told its command was queued behind a loop four minutes into
+          /// nothing).
+          AheadOutranDeadline : bool }
 
     type Step =
         | Return of TerminalCommandStatus
@@ -341,7 +349,8 @@ module TerminalCommandWait =
             // person's hold, because the way out is different: a block can be ended by whoever
             // owns the terminal, and run beside in another; a person cannot be hurried.
             | Some TerminalQueueDrain.AwaitingBlock ->
-                if deadlineElapsed then Return (TerminalCommandAwaitingTerminal BehindBlock) else KeepWaiting
+                if deadlineElapsed || observation.AheadOutranDeadline then Return (TerminalCommandAwaitingTerminal BehindBlock)
+                else KeepWaiting
             // Marks are gone here and only a person re-arming brings them back — an unbounded
             // wait, like an approval, so it returns at once rather than burning a deadline.
             | Some TerminalQueueDrain.AwaitingIntegration -> Return (TerminalCommandAwaitingTerminal UnmarkedShell)
@@ -3101,7 +3110,16 @@ module TerminalCommands =
                     terminals.IsOpen
                     synced.Pending
                     terminal
-              Interactive = terminals.Interactive terminal }
+              Interactive = terminals.Interactive terminal
+              AheadOutranDeadline =
+                // The block running in this terminal that is not ours, measured off its own
+                // records — the same clock `Activity` reports to the agent.
+                (projection ()).Terminals
+                |> List.tryFind (fun t -> t.TerminalId = terminal)
+                |> Option.bind (fun t ->
+                    t.Blocks |> List.tryFind (fun b -> b.Status = BlockRunning && b.QueueId <> Some handle))
+                |> Option.bind (fun ahead -> terminals.Activity terminal ahead.FromSeq)
+                |> Option.exists (fun activity -> activity.Running >= commandTimeout) }
 
         let outcomeOf (terminal: TerminalId) (handle: QueueId) (status: TerminalCommandStatus) =
             let block = blockFor handle |> Option.map snd

@@ -900,7 +900,7 @@ let private integrationTests =
                       TerminalCommandWait.Observation.InQueue = true
                       TerminalCommandWait.Observation.IsHead = true
                       TerminalCommandWait.Observation.Hold = Some TerminalQueueDrain.AwaitingIntegration
-                      TerminalCommandWait.Observation.Interactive = false })
+                      TerminalCommandWait.Observation.Interactive = false; AheadOutranDeadline = false })
                 (TerminalCommandWait.Return (TerminalCommandAwaitingTerminal UnmarkedShell))
                 "no waiting at all, and the answer says the shell is the problem"
 
@@ -1079,12 +1079,12 @@ let private blockOf (status: BlockStatus) : Block =
 
 /// The observation of a request that is the head of its terminal's queue, held for `hold`.
 let private waitingOn (hold: TerminalQueueDrain.TerminalHold option) : TerminalCommandWait.Observation =
-    { Block = None; InQueue = true; IsHead = true; Hold = hold; Interactive = false }
+    { Block = None; InQueue = true; IsHead = true; Hold = hold; Interactive = false; AheadOutranDeadline = false }
 
 /// The observation of a request whose block exists — running or finished — with nothing left
 /// in the queue. `interactive` is whether detection holds the terminal.
 let private observing (status: BlockStatus) (interactive: bool) : TerminalCommandWait.Observation =
-    { Block = Some (blockOf status); InQueue = false; IsHead = false; Hold = None; Interactive = interactive }
+    { Block = Some (blockOf status); InQueue = false; IsHead = false; Hold = None; Interactive = interactive; AheadOutranDeadline = false }
 
 let private waitTests =
     testList "The command wait" [
@@ -1094,6 +1094,17 @@ let private waitTests =
                 (TerminalCommandWait.step false (waitingOn (Some TerminalQueueDrain.AwaitingTerminal)))
                 (TerminalCommandWait.Return (TerminalCommandAwaitingTerminal HeldByPerson))
                 "no waiting at all, and the answer names the person"
+
+        // The deadline behind a block is there so a QUICK one ahead can finish and ours chain
+        // onto it. One that has already run past a whole deadline is not quick; waiting a
+        // second deadline on it only delays the answer that says how to get out.
+        testCase "behind a block that has already outrun the deadline, the answer comes at once" <| fun () ->
+            Expect.equal
+                (TerminalCommandWait.step
+                    false
+                    { waitingOn (Some TerminalQueueDrain.AwaitingBlock) with AheadOutranDeadline = true })
+                (TerminalCommandWait.Return (TerminalCommandAwaitingTerminal BehindBlock))
+                "no second deadline spent on a block that already spent one"
 
         testCase "waiting on a PROCESS gets the process deadline" <| fun () ->
             // A command running ahead of ours in the same terminal, and our own command once
@@ -1126,7 +1137,7 @@ let private waitTests =
         testCase "an entry BEHIND another waits for the queue, whatever the head waits for" <| fun () ->
             // Reporting the head's reason as ours would misattribute somebody else's wait.
             let behind : TerminalCommandWait.Observation =
-                { Block = None; InQueue = true; IsHead = false; Hold = Some TerminalQueueDrain.AwaitingBlock; Interactive = false }
+                { Block = None; InQueue = true; IsHead = false; Hold = Some TerminalQueueDrain.AwaitingBlock; Interactive = false; AheadOutranDeadline = false }
             Expect.equal (TerminalCommandWait.step false behind) TerminalCommandWait.KeepWaiting "still queued"
             Expect.equal
                 (TerminalCommandWait.step true behind)
@@ -1147,7 +1158,7 @@ let private waitTests =
             // Deleting a queued entry is withdrawal and has no event. Reporting it as any
             // status would be inventing one.
             let withdrawn : TerminalCommandWait.Observation =
-                { Block = None; InQueue = false; IsHead = false; Hold = None; Interactive = false }
+                { Block = None; InQueue = false; IsHead = false; Hold = None; Interactive = false; AheadOutranDeadline = false }
             Expect.equal
                 (TerminalCommandWait.step false withdrawn)
                 TerminalCommandWait.Gone
