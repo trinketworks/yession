@@ -1273,7 +1273,7 @@ module View =
             |> List.map (fun entry ->
                 let id = entry.QueueId
                 // The second press of a two-press delete: armed by the first (below), and
-                // taken back on its own after `ClientModel.queueDeleteArmedMs` if nobody
+                // taken back on its own after `ClientModel.armedMs` if nobody
                 // follows through. One mis-tap next to reorder used to be irreversible; now
                 // it is a press that does nothing but ask again.
                 let armed = model.QueueDeleteArmed = Some id
@@ -3661,9 +3661,11 @@ module View =
                     if affords.CanReplay then
                         html $"""<span class="{Style.statusFaint}" title="Recording">{Icon.playSm}</span>"""
                     else
-                        // No recording and no glyph for the absence of one: a hole in an audit
-                        // trail is stated, in the voice reserved for a fact that is wrong.
-                        html $"""<span class="{Style.statusErr}" data-terminal-list-gone="{id}">not kept</span>"""
+                        // No recording and no glyph for the absence of one: the hole is stated
+                        // in words, beside the name (`gone`), because a word does not fit the
+                        // mark's 1rem track — it wrapped there, grew the row, and moved every
+                        // row under it the moment a terminal closed. The track keeps its cell.
+                        html $"""<span aria-hidden="true"></span>"""
                 elif running then
                     html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span></span>"""
                 else
@@ -3676,6 +3678,10 @@ module View =
                     | Some holder ->
                         html $"""<span class="{Style.statusRun}" title="{Entity.actorName model holder}"><span class="{Style.statusDot}"></span></span>"""
                     | None -> html $"""<span class="{Style.statusFaint}"><span class="{Style.statusDot}"></span></span>"""
+            // A hole in an audit trail is stated, in the voice reserved for a fact that is wrong.
+            let gone =
+                if view.IsOpen || affords.CanReplay then Lit.nothing
+                else html $"""<span class="{Style.terminalListGone}" data-terminal-list-gone="{id}">not kept</span>"""
             let peers =
                 ClientModel.editorsInTerminal view.TerminalId model
                 |> List.map (fun (who, name) ->
@@ -3703,13 +3709,37 @@ module View =
                         <button type="button" class="{Style.btnIconBare}" data-terminal-reattach="{id}"
                                 aria-label="Attach {TerminalTitle.value view.Title} again"
                                 @click={Ev(fun _ -> dispatch (ReattachTerminalMsg view.TerminalId))}>{Icon.attach}</button>"""
+            // Two presses in one place (`KillArmed`): the first arms, the second kills. ONE button
+            // whichever face it wears, so the element a keyboard pressed is the element it
+            // confirms on and focus never moves between the two. Armed, it says what it will end
+            // and what is running there — the row names the terminal, the face names the act.
+            // Escape, the wait (`ClientModel.armedMs`), or focus leaving it takes it back.
             let kill =
                 if not affords.CanKill then Lit.nothing
                 else
+                    let title = TerminalTitle.value view.Title
+                    let armed = model.KillArmed = Some view.TerminalId
+                    let running = Projection.runningBlock view |> Option.map (fun b -> b.Command)
+                    // Nothing running is a fact worth saying, not an absence: it is what makes
+                    // a kill cheap.
+                    let says = running |> Option.defaultValue Dom.Text.killIdle
+                    let face, label, content, press =
+                        if armed then
+                            Style.btnKillArmed,
+                            Dom.Text.confirmKill title running,
+                            html $"""{Dom.Text.killConfirm}<span class="{Style.killArmedRunning}">{says}</span>""",
+                            CloseTerminalMsg view.TerminalId
+                        else
+                            Style.btnIconBareDanger, Dom.Text.killTerminal title, Icon.stop, ArmKillMsg (Some view.TerminalId)
                     html $"""
-                        <button type="button" class="{Style.btnIconBareDanger}" data-terminal-close="{id}"
-                                aria-label="Kill {TerminalTitle.value view.Title}"
-                                @click={Ev(fun _ -> dispatch (CloseTerminalMsg view.TerminalId))}>{Icon.stop}</button>"""
+                        <button type="button" class="{face}" data-terminal-close="{id}"
+                                data-terminal-close-armed="{if armed then "true" else "false"}"
+                                aria-label="{label}"
+                                @click={Ev(fun _ -> dispatch press)}
+                                @keydown={Ev(fun (e: Browser.Types.Event) ->
+                                              if armed && (e :?> Browser.Types.KeyboardEvent).key = "Escape" then
+                                                  dispatch (ArmKillMsg None))}
+                                @focusout={Ev(fun _ -> if armed then dispatch (ArmKillMsg None))}>{content}</button>"""
             let nameClass = if view.IsOpen then Style.terminalListName else Style.terminalListNameClosed
             html $"""
                 <div class="{Style.terminalListRow}" role="listitem">
@@ -3717,6 +3747,7 @@ module View =
                   <span class="min-w-0 flex items-center">
                     <button type="button" class="{nameClass}" data-terminal-list-row="{id}"
                             @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading (TerminalTab view.TerminalId))))}>{TerminalTitle.value view.Title}</button>
+                    {gone}
                     <span class="{Style.terminalTabPeers}">{peers}</span>
                   </span>
                   <span class="{Style.terminalListVerbs}">{rewind}{reattach}{kill}</span>

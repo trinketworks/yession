@@ -432,9 +432,21 @@ module Style =
     /// phone needs to see has to be worn rather than revealed — the same reasoning
     /// `btnInterrupt` uses to stay unworn, read the other way: that button is never armed
     /// twice, this one specifically IS, between the two presses the confirm needs.
-    /// Un-arms itself back to `btnIconBareDanger` on its own (`queueDeleteArmedMs`), so a
+    /// Un-arms itself back to `btnIconBareDanger` on its own (`armedMs`), so a
     /// press nobody confirms cannot leave a row looking primed for ever.
     let btnIconBareDangerArmed = cls [ btnIconBareBase; "bg-err text-bg" ]
+    /// A terminal's kill, ARMED (`View.contentListView`): the err fill worn at rest, as
+    /// `btnIconBareDangerArmed` wears it, but a WORD rather than a glyph — a 24px square cannot
+    /// say what it will end or what is running there, and a kill is the one press in the list
+    /// nobody can take back. The glyph's height, so the row does not move; wider, growing
+    /// leftwards from the glyph's right edge, so the second press lands where the first did.
+    let btnKillArmed =
+        cls [ "h-6 shrink-0 inline-flex items-center gap-1.5 px-2 border-0 cursor-pointer"
+              "bg-err text-bg font-ui"; caps; "transition-colors"; focusRing ]
+    /// What the armed kill says is running, inside it: the command as typed — case kept, so
+    /// not caps — cut short rather than allowed to push the row's name out of its column.
+    let killArmedRunning =
+        "font-terminal text-code-sm normal-case tracking-normal font-normal truncate max-w-[6rem]"
     /// The same verb where it is the only control a row offers a thumb — the Manager's
     /// archive, which on a phone is the one per-row target there is. 24px is WCAG 2.5.8's
     /// minimum exactly and far under a comfortable touch target, so the HIT area is 44px
@@ -2933,6 +2945,10 @@ module Style =
     let terminalListNameClosed =
         cls [ "bg-transparent cursor-pointer text-left w-full truncate p-0 font-ui text-body text-ink-dim"
               "no-underline hover:text-blue transition-colors"; focusRing ]
+
+    /// A closed row's "not kept", beside its name: one line, never squeezed, so a row that
+    /// says it is the height of one that does not.
+    let terminalListGone = statusErr + " shrink-0 whitespace-nowrap ml-2"
 
     /// The row's verbs, kept on one baseline at its right edge.
     let terminalListVerbs = "flex items-center gap-1 shrink-0"

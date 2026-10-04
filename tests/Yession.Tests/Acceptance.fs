@@ -201,6 +201,7 @@ let private representativeModel : ClientModel =
       // Nothing pressed for and still owed: this client is looking, not mid-request.
       Opening = 0
       KillPending = None
+      KillArmed = None
       Pinned = Set.empty
       Pane = None
       TerminalsOpen = true
@@ -2119,6 +2120,32 @@ let private terminalListTests =
             Expect.isTrue
                 ((listed closedTerminalModel).Contains (Dom.attr Dom.Hooks.terminalListRow id))
                 "a closed terminal has a row that opens it"
+
+        // A kill is two presses (`KillArmed`). What the second press confirms has to be said by
+        // the control the keyboard is on, so its accessible name names the act and the
+        // terminal — a screen reader hears what a sighted reader sees on the row.
+        let armedKill (model: ClientModel) =
+            System.Text.RegularExpressions.Regex.Match(
+                listed { model with KillArmed = Some terminalId },
+                sprintf "<button[^>]*%s=\"true\"[^>]*>" Dom.Hooks.terminalCloseArmed).Value
+
+        testCase "an armed kill names the terminal it will end" <| fun () ->
+            let title =
+                Projection.tryFind terminalId representativeModel.Terminals
+                |> Option.map (fun view -> TerminalTitle.value view.Title)
+                |> Option.defaultWith (fun () -> failwith "the fixture has its terminal")
+            let label =
+                System.Text.RegularExpressions.Regex.Match(armedKill representativeModel, "aria-label=\"([^\"]*)\"").Groups.[1].Value
+            Expect.stringContains label title "the confirm says which terminal it ends"
+
+        testCase "an armed kill is the same control as the kill that armed it" <| fun () ->
+            // One button with two faces, never a second control beside the first: the press
+            // that confirms has to land where the one that armed did, and focus has to stay on
+            // it between them.
+            Expect.stringContains
+                (armedKill representativeModel)
+                (Dom.attr Dom.Hooks.terminalClose id)
+                "the armed face is still this terminal's kill"
     ]
 
 // Artifacts in the same panel. What is pinned is REACHABILITY: an artifact is otherwise

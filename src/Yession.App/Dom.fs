@@ -281,7 +281,11 @@ module Dom =
         /// One per place a terminal can be opened, carrying that sandbox's rendered ref —
         /// which is what makes two repos both declaring `dev` tellable apart in a selector.
         let sandboxNew = "data-sandbox-new"
+        /// A terminal's kill, on its row in the list. On both of its faces — the glyph that
+        /// arms and the word that confirms — because they are one control in one place.
         let terminalClose = "data-terminal-close"
+        /// Beside `terminalClose`: `"true"` while the kill is armed, one press from done.
+        let terminalCloseArmed = "data-terminal-close-armed"
         let terminalId = "data-terminal-id"
         /// The scrolling block history — the surface that stays pinned to its newest line.
         let terminalScrollback = "data-terminal-scrollback"
@@ -510,6 +514,16 @@ module Dom =
         // is read before it is chosen, so it can afford the longer name that a control
         // wearing `aria-pressed` could not.
         let itemActions = "More actions"
+
+        // A terminal's kill, armed: the word it confirms with, and what it says is running in
+        // the terminal it would end — the command, or that nothing is.
+        let killConfirm = "Kill"
+        let killIdle = "idle"
+        let killTerminal (title: string) : string = "Kill " + title
+        let confirmKill (title: string) (running: string option) : string =
+            match running with
+            | Some command -> sprintf "Confirm: kill %s, running %s" title command
+            | None -> sprintf "Confirm: kill %s, idle" title
         let makeChapter = "Make chapter"
         let removeChapter = "Remove chapter"
         let dismissMenu = "Close menu"

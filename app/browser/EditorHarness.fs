@@ -149,6 +149,16 @@ module private Published =
     /// could only reach live mode by pressing `take` could never exercise the route that has no
     /// press to make.
     let take : PageGlobal<string -> unit> = PageGlobal.named "__take"
+    /// Every terminal this page has asked the session to END, in the order it asked. Read back
+    /// because a kill is two presses and only the second may ask: what the page SENT is the
+    /// whole question, and with no session behind it nothing else would record it.
+    let closed : PageGlobal<string array> = PageGlobal.named "__closed"
+    /// Fold a page of events into the shell, as the server serves one — an envelope per line,
+    /// in the wire's own encoding (`EventFetch.decodeLines`, the one decoder the real client
+    /// reads pages with). How a fact that arrives from ELSEWHERE reaches this page: a terminal
+    /// somebody ends, or one this page asked to end, comes back as an event, and what the list
+    /// does when it lands is a question only a laid-out page can answer.
+    let fold : PageGlobal<string -> unit> = PageGlobal.named "__fold"
     /// Swap the shell between the session's first screen and a conversation. Both, from one hook,
     /// because the question the card raises is about the two TOGETHER: the ask card stands only
     /// where nothing has been said and a message body only where something has, so the one column
@@ -1425,6 +1435,9 @@ do
                   ResizeTerminal = recordResized
                   Http = fun _ -> async { return Error (Client.HttpUnreachable "the harness serves no session") } } }
     let mutable model = shellModel
+    /// What `Published.closed` reads, kept here for `typed`'s reason: the count is this
+    /// instrument's output, not the place it keeps it.
+    let mutable closed : string array = [||]
     /// Where a render's cost goes while the scroll scenario below is running, and nowhere
     /// otherwise. Timed around the whole of `render` — the view, Lit's diff, and the syncs
     /// after it — because that is the task a frame waits on when a record lands mid-scroll.
@@ -1438,10 +1451,12 @@ do
         effects
         |> List.iter (function
             | ClientEffect.TakeTerminal id -> takeRef id
+            | ClientEffect.CloseTerminal id ->
+                closed <- Array.append closed [| TerminalId.value id |]
+                PageGlobal.set Published.closed closed
             | ClientEffect.ReleaseTerminal _
             | ClientEffect.RearmTerminal _
             | ClientEffect.ReattachTerminal _
-            | ClientEffect.CloseTerminal _
             | ClientEffect.OpenTerminal _
             | ClientEffect.InterruptTurn _
             | ClientEffect.ApproveRepoCapabilities _ -> ()
@@ -1523,6 +1538,17 @@ do
     PageGlobal.set Published.agentTurn (fun () -> liveTurn [ 40L; 41L; 42L ])
     PageGlobal.set Published.agentThinks (fun () -> liveTurn [ 40L; 41L ])
     PageGlobal.set Published.agentSays (fun () -> liveTurn [ 42L ])
+    PageGlobal.set Published.fold (fun body ->
+        match Client.EventFetch.decodeLines body with
+        | Ok events ->
+            dispatch (
+                EventsPageMsg
+                    { Events = events
+                      LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset)
+                      IsEnd = true })
+        // A page that will not decode is the CASE's mistake, and it says so where the case
+        // can read it rather than folding nothing and passing on the silence.
+        | Error fault -> failwithf "__fold: the page did not decode: %s" (Client.FeedFault.describe fault))
     PageGlobal.set Published.take (fun id ->
         match TerminalId.create id with
         | Ok terminal -> takeRef terminal
