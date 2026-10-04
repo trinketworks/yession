@@ -1156,6 +1156,10 @@ module Style =
 
     let signInPromptAction = cls [ btnPrimary; "row-start-1 col-start-2 md:col-start-3 justify-self-end" ]
 
+    /// A refusal's way out, in the corner the sign-in prompt's button holds: an icon rather
+    /// than a primary button, because dismissing news is not the action the notice is FOR.
+    let refusalDismiss = cls [ btnIcon; "row-start-1 col-start-2 md:col-start-3 justify-self-end" ]
+
     /// The mechanism behind a notice, folded away (the degradation strip, the sign-in
     /// prompt, the reconnect card, a credential's fault, the history-store note, a terminal
     /// that stopped marking). What every one of those surfaces has to say FIRST is what it

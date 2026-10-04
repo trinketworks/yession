@@ -1072,9 +1072,9 @@ module View =
         | Some reason ->
             html $"""
                 <section class="{Style.signInPrompt}" data-command-refused role="status">
-                  <span class="{Style.statusErr}"><span class="{Style.statusDot}"></span>{Dom.Text.refused}</span>
-                  <span class="{Style.signInPromptReason}">{reason}</span>
-                  <button type="button" class="{Style.btnIcon}" data-command-refused-dismiss
+                  <span class="{Style.signInPromptStatus}"><span class="{Style.statusDot}"></span>{Dom.Text.refused}</span>
+                  <span class="{Style.signInPromptBody}"><span class="{Style.small}">{reason}</span></span>
+                  <button type="button" class="{Style.refusalDismiss}" data-command-refused-dismiss
                           aria-label="{Dom.Text.dismissRefusal}"
                           @click={Ev(fun _ -> dispatch DismissRefusalMsg)}>{Icon.close}</button>
                 </section>"""
