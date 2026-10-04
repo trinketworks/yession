@@ -1237,6 +1237,11 @@ module View =
     /// two taps down in Settings. Choosing a model is a per-turn decision, so it belongs
     /// where a turn starts, not where the account that pays for it lives.
     ///
+    /// Stands in `Style.draftLead`, not in `commitClass` beside it (`View.drafts`) — that
+    /// div gates on there being a draft or a turn, which is Send's and Interrupt's own
+    /// reason to come and go and never this control's. It rode `commitClass` for one
+    /// revision; see `Style.draftLead` for what that cost.
+    ///
     /// It always offers the provider's own default, and it always offers whatever the
     /// session has CHOSEN — even a model the catalogue no longer lists, because a control
     /// that silently displays something other than the setting behind it is worse than one
@@ -1281,14 +1286,14 @@ module View =
             | None -> Lit.nothing
             | Some (kind, text) -> html $"""<span class="{Style.srOnly}" data-model-note="{kind}">{text}</span>"""
         html $"""
-            <div class="{Style.fieldSelectWrapOf Style.modelControlWidth}" data-model-panel>
-              <select aria-label="model" class="{Style.fieldSelect}"
+            <div class="{Style.modelSelectWrap}" data-model-panel>
+              <select aria-label="model" class="{Style.modelSelect}"
                       data-model-select="{chosen |> Option.map ModelId.value |> Option.defaultValue Dom.Text.modelDefault}"
                       @change={EvVal(fun v -> dispatch (SetModelMsg (match ModelId.create v with Ok id -> Some id | Error _ -> None)))}>
                 <option value="" ?selected={chosen.IsNone}>{Dom.Text.modelDefaultLabel}</option>
                 {options}
               </select>
-              <span class="{Style.fieldSelectMark}">{Icon.down}</span>
+              <span class="{Style.modelSelectMark}">{Icon.down}</span>
               {noteEl}
             </div>"""
 
@@ -1418,8 +1423,10 @@ module View =
                     {author}
                     <div class="{Style.draftInput}" data-rich-body="{BodyKey.draft target}" data-rich-readonly="false" data-draft-input="{PeerId.value target}"></div>
                   </div>
-                  <div class="{commitClass}">
+                  <div class="{Style.draftLead}">
                     {modelControl dispatch model}
+                  </div>
+                  <div class="{commitClass}">
                     <span class="{Style.draftEditors}">{editors target}</span>
                     {interruptControl dispatch model}
                     <button type="button" class="{sendClass}" aria-keyshortcuts="Control+Enter"

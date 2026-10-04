@@ -621,6 +621,27 @@ module Style =
     /// Interrupt, packed in beside it, never squeeze it below the model names it has to show.
     let modelControlWidth = "w-28 shrink-0"
 
+    /// The model picker's own FACE, now that it stands on the composer's row rather than in a
+    /// settings column: bare, the same register as `btnComposerWord` beside it, not the
+    /// bordered/filled/ringed box every settings `<select>` wears (`fieldFace`). Riding
+    /// `fieldSelect` here made the picker a filled rectangle next to a plain word — the one
+    /// control on the row that LOOKS like the decision that matters, when the row's actual
+    /// per-message decision is Send. `appearance-none` still drops the platform caret (the
+    /// mark beside it draws the one that's left); nothing else of the field face survives.
+    let modelSelect =
+        cls [ "h-10 pl-0 pr-5 bg-transparent border-0 appearance-none cursor-pointer w-full"
+              "font-ui font-light text-ink-dim hover:text-ink transition-colors"; touchType; focusRing ]
+
+    /// Its wrapper: `modelControlWidth` for the width Send and Interrupt need it to hold to,
+    /// `relative` for the mark `modelSelectMark` sits against — the same split `fieldSelectWrapOf`
+    /// makes, kept separate because this wrapper carries none of that function's field chrome.
+    let modelSelectWrap = cls [ "relative"; modelControlWidth ]
+
+    /// The caret `appearance-none` took away, drawn at the picker's own faint weight —
+    /// `fieldSelectMark` is `text-ink-faint` too, so the two marks read as one family even
+    /// though the box behind them no longer matches.
+    let modelSelectMark = "pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-ink-faint"
+
     /// A field with a VERB at its trailing edge, built exactly as the terminal composer's is
     /// (`terminalCommandWrap` / `terminalCommandTrail`): the wrapper carries the width, the
     /// field reserves the room, and the control sits INSIDE the box it acts on rather than
@@ -2617,6 +2638,22 @@ module Style =
     /// is a border-box cap and cannot clamp below its own padding, so a `pt-1` left on in the
     /// face above is 4px of band the row still owns while claiming to be gone.
     let draftCommitReady = cls [ draftCommitBase; "max-md:pt-1 max-md:max-h-12" ]
+
+    /// The model picker's own row-mate, standing beside `draftCommit`/`draftCommitReady`
+    /// rather than inside either: choosing a model has nothing to do with whether there is
+    /// a draft to send or a turn to stop, so it carries none of that pair's `max-md:` gating
+    /// — no `max-h-0`, no `opacity-0`, no transition. It was inside `draftCommitBase` for one
+    /// revision (riding `View.drafts`' `commitClass`) and that was the bug, twice over: on a
+    /// phone with an empty draft the picker was invisible along with Send, so nobody could
+    /// choose a model before writing a word; and because the row it rode DOES transition
+    /// (`max-md:transition-[max-height,opacity]`), a tap landing while that transition was
+    /// still settling opened the platform's OWN popup anchored to a rect that kept moving
+    /// under it — a native menu a phone drew in the wrong place for a reason no amount of
+    /// styling the menu itself could reach, because the bug was never the popup's.
+    /// `shrink-0` matches `draftCommitBase`'s own, so the two sit side by side on desktop
+    /// without either claiming space the other needs.
+    let draftLead = "shrink-0 flex items-center"
+
     let draftAuthor = "pl-4 pt-2 " + caps + " text-ink-faint truncate"
 
     // A draft nobody has open here: one line of it, so the composer reads as "what is being
