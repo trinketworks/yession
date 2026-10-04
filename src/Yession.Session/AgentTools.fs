@@ -620,28 +620,32 @@ module AgentTools =
 
     let private repo (description: string) : ToolArgs<string> = ToolArgs.text "repo" description
 
+    /// One tool of this namespace: its descriptor, and the body that answers it. The body is
+    /// handed its arguments already read, so a call whose arguments do not fit the schema is
+    /// an `Error` here, before any body runs — for every tool of the namespace alike, a
+    /// provider's (`Repos.ProviderTools`) included.
+    let tool
+        (name: string)
+        (description: string)
+        (args: ToolArgs<'a>)
+        (body: 'a -> Async<Result<ToolAnswer, string>>)
+        : ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>) =
+        ToolDescriptor.create Namespace name description (ToolArgs.schema args),
+        fun json ->
+            async {
+                match ToolArgs.read args json with
+                | Error e -> return Error e
+                | Ok read -> return! body read
+            }
+
+    /// For the arguments that can be refused once read: a body only runs on what passed.
+    let whenValid (body: 'a -> Async<Result<ToolAnswer, string>>) (read: Result<'a, string>) : Async<Result<ToolAnswer, string>> =
+        match read with
+        | Error e -> async { return Error e }
+        | Ok read -> body read
+
     /// The verbs: everything that is written out rather than generated.
     let private verbs (capabilities: AgentCapabilities) : (ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>)) list =
-        // A body is handed its arguments already read: a call whose arguments do not fit
-        // the schema is an `Error` here, before any body runs.
-        let tool
-            name
-            description
-            (args: ToolArgs<'a>)
-            (body: 'a -> Async<Result<ToolAnswer, string>>)
-            : ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>) =
-            ToolDescriptor.create Namespace name description (ToolArgs.schema args),
-            fun json ->
-                async {
-                    match ToolArgs.read args json with
-                    | Error e -> return Error e
-                    | Ok read -> return! body read
-                }
-        // For the arguments that can be refused once read: a body only runs on what passed.
-        let whenValid (body: 'a -> Async<Result<ToolAnswer, string>>) (read: Result<'a, string>) =
-            match read with
-            | Error e -> async { return Error e }
-            | Ok read -> body read
         [ tool
             "execute_command"
             "Run a shell command in a session terminal — the only way to run anything, seen by everyone and on the record. Not for reading or editing files: use read_file and edit_file, which record WHICH file, unless a dedicated tool genuinely cannot do it — avoid cat, sed, awk, head, tail, grep -n and heredocs here. `sandbox`: a named work sandbox (start_work_sandbox); omit for the default one. `terminal`: a terminal from open_terminal, to run beside something long (each terminal runs one command at a time). For anything long-running pass background: true — it returns a handle at once, you end your turn, and you're woken when it finishes; otherwise it waits and hands back a check_pending handle if the command outlasts the wait. No stdin unless stdin: true (readers get EOF), so pass flags, not prompts. Scratch under $TMPDIR; /tmp is denied. Rewriting a file, write the new content before deleting the old — a delete-then-write can be refused halfway. Read the answer: it says which happened."
