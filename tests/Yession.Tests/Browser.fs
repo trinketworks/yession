@@ -735,6 +735,43 @@ let private sessionCase (name: string) (body: IPage -> Async<unit>) =
 let private sessionCaseOn (env: (string * string) list) (name: string) (body: IPage -> Async<unit>) =
     peersCase env name 1 (fun _ pages -> body pages.Head)
 
+/// A command that would run for ten minutes, sent from a fresh terminal's command line and
+/// waited on until it has SAID it started — before then a ^C is the line editor's, not the
+/// command's — then stopped however `stop` stops it. The case holds once the command has ended
+/// and the same terminal has run one more, which only a terminal that lived through the stop
+/// can do: a ^C that took the shell with it ends the long command too, and the next one never.
+let private stoppedAndStillThere (stop: IPage -> Async<unit>) (page: IPage) : Async<unit> =
+    async {
+        do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
+        do! openNewTerminal page
+        let commandLine = "[data-terminal-input^='term-draft:']:not([readonly])"
+        let! _ = await (page.WaitForSelectorAsync commandLine)
+        do! awaitU (page.ClickAsync commandLine)
+        do! awaitU (page.Keyboard.TypeAsync "echo sta''rted; sleep 600")
+        do! awaitU (page.Keyboard.PressAsync "Enter")
+        do!
+            waitFor
+                "the long command to start"
+                page
+                """[...document.querySelectorAll('[data-terminal-output]')].some(o => o.textContent.includes('started'))"""
+        do! stop page
+        do!
+            waitFor
+                "the long command to end"
+                page
+                """[...document.querySelectorAll('[data-terminal-block]')].some(b => b.textContent.includes('sleep 600')
+                                                                                    && b.getAttribute('data-terminal-block-status') !== 'running')"""
+        do! awaitU (page.ClickAsync commandLine)
+        do! awaitU (page.Keyboard.TypeAsync "echo al''ive")
+        do! awaitU (page.Keyboard.PressAsync "Enter")
+        do!
+            waitFor
+                "the same terminal to run the next command"
+                page
+                """[...document.querySelectorAll('[data-terminal-block]')].some(b => b.textContent.includes("echo al''ive")
+                                                                                    && b.getAttribute('data-terminal-block-status') === 'ok')"""
+    }
+
 /// A case with one peer that also reads the SESSION's own files. Everything above asserts on
 /// what a browser can see, which is the right default; this is for the one thing a browser
 /// cannot answer — how much transcript there actually is — where the alternative is to assume
@@ -1385,6 +1422,23 @@ let tests =
                             box (commandLine tabs.[0])))
                     |> Async.Ignore
             })
+
+        // Stopping one command is not ending the terminal. Before there was a Stop, the only
+        // way out of a `sleep 600` was killing the terminal, its shell and its working
+        // directory with it.
+        Tag.needs "a command to stop" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        sessionCase "Stop on a running command ends it, and the terminal runs the next one" <|
+            stoppedAndStillThere (fun page ->
+                awaitU (page.Locator("[data-terminal-block-stop]").First.ClickAsync ())))
+
+        // With nothing typed, Ctrl-C at the command line has the meaning it has in a terminal.
+        Tag.needs "a command to stop" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        sessionCase "Ctrl-C in an empty command line ends the running command, and the terminal runs the next one" <|
+            stoppedAndStillThere (fun page ->
+                async {
+                    do! awaitU (page.ClickAsync "[data-terminal-input^='term-draft:']:not([readonly])")
+                    do! awaitU (page.Keyboard.PressAsync "Control+c")
+                }))
 
         // The kill is pressed on a row of the switcher, and the close that answers it takes
         // that row's kill away — so focus lands on the row that takes its place, rather than

@@ -251,6 +251,19 @@ let private projectionTests =
             Expect.equal a.Blocks.Head.Status (BlockFinished (CommandSucceeded 0)) "with its exit code"
             Expect.equal a.Blocks.Head.ToSeq (Some 4) "and the transcript range it produced"
 
+        // The exit code says a command was interrupted; only the record says by whom.
+        testCase "an interrupted block carries who stopped it" <| fun () ->
+            let proj =
+                fold
+                    [ opened terminalA "build"
+                      started terminalA "1" "sleep 600" 0
+                      SessionEvent.TerminalBlockInterrupted { TerminalId = terminalA; BlockId = block "1"; By = PeerRef bob }
+                      completed terminalA "1" (CommandFailed 130) 2 ]
+            Expect.equal
+                (Projection.tryFind terminalA proj |> Option.get).Blocks.Head.StoppedBy
+                (Some (PeerRef bob))
+                "the block names the peer who interrupted it"
+
         testCase "a block still running when its terminal closes is finished BY the close" <| fun () ->
             // No process outlives its pty. The Process appends the completion itself when it
             // closes a terminal; this is the fold's own guard, for a log written before it did
@@ -1163,7 +1176,8 @@ let private blockOf (status: BlockStatus) : Block =
       Background = false
       FromSeq = 0
       ToSeq = None
-      Status = status }
+      Status = status
+      StoppedBy = None }
 
 /// The observation of a request that is the head of its terminal's queue, held for `hold`.
 let private waitingOn (hold: TerminalQueueDrain.TerminalHold option) : TerminalCommandWait.Observation =
@@ -1298,6 +1312,7 @@ let private leaseCommandTests =
                         (fun _ _ -> Ok ())
                         (fun _ _ _ -> async { return Error "not this test" })
                         (fun _ _ _ -> async { return Error "not this test" })
+                        (fun id by -> async { calls.Add (sprintf "interrupt:%s:%A" (TerminalId.value id) by); return Ok () })
                         (fun id by -> async { calls.Add (sprintf "take:%s:%A" (TerminalId.value id) by); return Ok () })
                         (fun id by ->
                             async {
@@ -1328,12 +1343,16 @@ let private leaseCommandTests =
                 // anything from anyone, so who pressed it decides nothing.
                 let! rearmed = handle bob (RearmTerminal terminalA)
                 Expect.equal rearmed CommandAccepted "any peer may re-arm"
+                // An interrupt is somebody's act on somebody's command, so it carries them.
+                let! interrupted = handle bob (InterruptTerminal terminalA)
+                Expect.equal interrupted CommandAccepted "any peer may interrupt"
                 Expect.equal
                     (List.ofSeq calls)
                     [ sprintf "take:%s:%A" (TerminalId.value terminalA) (PeerRef ada)
                       sprintf "release:%s:%A" (TerminalId.value terminalA) (PeerRef ada)
-                      sprintf "rearm:%s" (TerminalId.value terminalA) ]
-                    "the lease commands carry the asking peer's actor; the repair carries none"
+                      sprintf "rearm:%s" (TerminalId.value terminalA)
+                      sprintf "interrupt:%s:%A" (TerminalId.value terminalA) (PeerRef bob) ]
+                    "the lease commands and the interrupt carry the asking peer's actor; the repair carries none"
             }
     ]
 
@@ -1358,6 +1377,7 @@ let private peerOpenTests =
                         return answer source
                     })
                 (fun _ _ _ -> async { return Error "not this test" })
+                (fun _ _ -> async { return Error "not this test" })
                 (fun _ _ -> async { return Error "not this test" })
                 (fun _ _ -> async { return Error "not this test" })
                 (fun _ -> async { return Error "not this test" })
@@ -3850,7 +3870,8 @@ let private affordanceTests =
                             Background = false
                             FromSeq = 1
                             ToSeq = Some 3
-                            Status = BlockFinished (CommandSucceeded 0) } ] }
+                            Status = BlockFinished (CommandSucceeded 0)
+                            StoppedBy = None } ] }
             Expect.isTrue (afforded true (viewOf false false)) "closed, recorded, and nothing ran in it"
             Expect.isFalse (afforded true ran) "the commands it ran are the read instead"
             Expect.isFalse (afforded false (viewOf false false)) "and a recording the cap ate is no read at all"
@@ -3883,7 +3904,8 @@ let private affordanceTests =
                             Background = false
                             FromSeq = 1
                             ToSeq = Some 3
-                            Status = BlockFinished (CommandSucceeded 0) } ] }
+                            Status = BlockFinished (CommandSucceeded 0)
+                            StoppedBy = None } ] }
             Expect.isFalse (afforded instrumented) "it has a cheaper read of the same history"
     ]
 
@@ -4317,6 +4339,98 @@ let private shellExitTests =
                         not (terminals.IsOpen id))
                 let! reasons = closureReasons log
                 Expect.equal reasons [ "the shell was ended by SIGINT" ] "closed for the signal that ended the shell"
+            }
+    ]
+
+/// A terminal over a shell whose every write is kept — what an interrupt types into it. The
+/// shell renders a block's line and never finishes it, so a block runs for as long as the case
+/// wants it to; `starts` is whether it also marks the command STARTED, which is what a shell
+/// does the moment the command takes the foreground.
+let private terminalOverAWatchedShell (starts: bool) =
+    async {
+        let log = newLog ()
+        let shell, _ = exitingShell ()
+        let written = ResizeArray<string> ()
+        let watched : SessionEnvironment.SessionEnvironment =
+            { shell with
+                SpawnPty =
+                    fun exec cols rows onOutput ->
+                        async {
+                            match! shell.SpawnPty exec cols rows onOutput with
+                            | Ok pty ->
+                                return
+                                    Ok
+                                        { pty with
+                                            Write =
+                                                fun data ->
+                                                    written.Add data
+                                                    pty.Write data
+                                                    if starts && data.Contains "__y_c; " then
+                                                        onOutput "\u001b]133;C;y=test-nonce\u0007" }
+                            | Error reason -> return Error reason
+                        } }
+        let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+        let terminals, _, _ = makeTerminals log watched openTranscript readTranscript []
+        let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+        let id = opened |> expect
+        return terminals, id, log, written
+    }
+
+/// The same, with a block of Ada's typed at it and `started` once it has been.
+let private blockOverAWatchedShell (starts: bool) =
+    async {
+        let! terminals, id, log, written = terminalOverAWatchedShell starts
+        let mutable started = false
+        Async.StartImmediate (terminals.RunBlock id (entry "b1" id byAda 1.0) "sleep 600" (fun () -> started <- true))
+        do! waitUntilWithin 2_000 "the block to be typed at the shell" (fun () -> started)
+        return terminals, id, log, written
+    }
+
+/// Stopping one command without ending the terminal it runs in. ^C goes through the pty, not
+/// to a process, because the line discipline is what knows which job is in the foreground.
+let private interruptTests =
+    testList "Interrupting a running block" [
+        testCaseAsync "an interrupt types ^C into the shell running the block" <|
+            async {
+                let! terminals, id, _, written = blockOverAWatchedShell true
+                match! terminals.Interrupt id (PeerRef bob) with
+                | Error reason -> failwithf "a running block may be interrupted: %s" reason
+                | Ok () -> Expect.isTrue (written |> Seq.contains "\u0003") "^C went to the shell"
+            }
+
+        testCaseAsync "an interrupt is on the record, as the act of whoever sent it" <|
+            async {
+                let! terminals, id, log, _ = blockOverAWatchedShell true
+                let! _ = terminals.Interrupt id (PeerRef bob)
+                let! events = eventsOf log
+                let running =
+                    events |> List.pick (function SessionEvent.TerminalBlockStarted e -> Some e.BlockId | _ -> None)
+                Expect.equal
+                    (events |> List.choose (function SessionEvent.TerminalBlockInterrupted e -> Some (e.BlockId, e.By) | _ -> None))
+                    [ running, PeerRef bob ]
+                    "the running block, interrupted by the peer who asked"
+            }
+
+        // An idle shell's ^C discards a line nobody typed; refusing says there was nothing to
+        // stop rather than reporting an act that did nothing.
+        testCaseAsync "an interrupt with nothing running is refused, and types nothing" <|
+            async {
+                let! terminals, id, _, written = terminalOverAWatchedShell true
+                let before = written.Count
+                match! terminals.Interrupt id (PeerRef bob) with
+                | Ok () -> failwith "an idle terminal accepted an interrupt"
+                | Error _ -> Expect.equal written.Count before "nothing was typed into the shell"
+            }
+
+        // Typed but not yet started, a ^C is the line editor's: it discards the line, and the
+        // block is left running over a prompt with nothing to finish it.
+        testCaseAsync "an interrupt before the command has started is refused, and types nothing" <|
+            async {
+                let! terminals, id, _, written = blockOverAWatchedShell false
+                let before = written.Count
+                match! terminals.Interrupt id (PeerRef bob) with
+                | Ok () -> failwith "a ^C was sent to a line the shell had not started"
+                | Error _ -> Expect.equal written.Count before "nothing was typed into the shell"
             }
     ]
 
@@ -5136,6 +5250,7 @@ let tests =
         shellStartTests
         shellProfileTests
         shellExitTests
+        interruptTests
         lostEvidenceTests
         codecTests
         orderTests

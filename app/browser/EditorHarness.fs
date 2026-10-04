@@ -1058,7 +1058,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                           Background = false
                           FromSeq = 0
                           ToSeq = Some 2
-                          Status = BlockFinished (CommandSucceeded 0) }
+                          Status = BlockFinished (CommandSucceeded 0)
+                          StoppedBy = None }
                         { BlockId = burstOk
                           QueueId = None
                           Authority = Authority.agentFor (Principal.Peer peerId)
@@ -1066,7 +1067,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                           Background = false
                           FromSeq = 2
                           ToSeq = Some 2
-                          Status = BlockFinished (CommandSucceeded 0) }
+                          Status = BlockFinished (CommandSucceeded 0)
+                          StoppedBy = None }
                         { BlockId = burstFailed
                           QueueId = None
                           Authority = Authority.agentFor (Principal.Peer peerId)
@@ -1074,7 +1076,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                           Background = false
                           FromSeq = 2
                           ToSeq = Some 2
-                          Status = BlockFinished (CommandFailed 1) }
+                          Status = BlockFinished (CommandFailed 1)
+                          StoppedBy = None }
                         { BlockId = burstRunning
                           QueueId = None
                           Authority = Authority.agentFor (Principal.Peer peerId)
@@ -1082,7 +1085,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                           Background = true
                           FromSeq = 2
                           ToSeq = None
-                          Status = BlockRunning }
+                          Status = BlockRunning
+                          StoppedBy = None }
                         // Enough history that the scrollback actually OVERFLOWS its box.
                         // "Show in terminal" (Plan 25, stage 3) scrolls to a command, and a
                         // history that fits on screen is one where every scroll is a no-op —
@@ -1096,7 +1100,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                                 Background = false
                                 FromSeq = 2
                                 ToSeq = Some 2
-                                Status = BlockFinished (CommandSucceeded 0) } ] ]
+                                Status = BlockFinished (CommandSucceeded 0)
+                                StoppedBy = None } ] ]
                     DroppedBytes = 0 }
                   { TerminalId = liveId
                     Title = TerminalTitle.fromProse "shell"
@@ -1494,6 +1499,7 @@ do
                 closed <- Array.append closed [| TerminalId.value id |]
                 PageGlobal.set Published.closed closed
             | ClientEffect.ReleaseTerminal _
+            | ClientEffect.InterruptTerminal _
             | ClientEffect.RearmTerminal _
             | ClientEffect.ReattachTerminal _
             | ClientEffect.OpenTerminal _

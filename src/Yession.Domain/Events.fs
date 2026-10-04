@@ -84,6 +84,7 @@ type SessionEvent =
     | TerminalLeaseReleased of TerminalLeaseReleased
     | TerminalBlockStarted of TerminalBlockStarted
     | TerminalBlockCompleted of TerminalBlockCompleted
+    | TerminalBlockInterrupted of TerminalBlockInterrupted
     | TerminalCommandRejected of TerminalCommandRejected
     | TerminalIntegrationLost of TerminalIntegrationLost
     | TerminalIntegrationRestored of TerminalIntegrationRestored

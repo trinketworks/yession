@@ -212,6 +212,7 @@ module Client =
             | ClientEffect.RearmTerminal terminal -> ask (RearmTerminal terminal)
             | ClientEffect.ReattachTerminal terminal -> ask (ReattachTerminal terminal)
             | ClientEffect.CloseTerminal terminal -> ask (CloseTerminal terminal)
+            | ClientEffect.InterruptTerminal terminal -> ask (InterruptTerminal terminal)
             | ClientEffect.OpenTerminal (title, sandbox) -> ask (OpenTerminal (title, sandbox))
             | ClientEffect.InterruptTurn turn -> ask (InterruptAgentTurn turn)
             | ClientEffect.ApproveRepoCapabilities (repo, granted) -> ask (ApproveRepoCapabilities (repo, granted))

@@ -358,6 +358,7 @@ module Refusal =
         match command with
         | OpenTerminal _
         | CloseTerminal _
+        | InterruptTerminal _
         | TakeTerminalLease _
         | ReleaseTerminalLease _
         | RearmTerminal _
@@ -1592,6 +1593,12 @@ type ClientMsg =
     /// property of the control, not of this message, which still ends the terminal whoever
     /// sends it.
     | CloseTerminalMsg of TerminalId
+    /// Stop the block running in a terminal — ^C to it, the terminal left standing. What a
+    /// running block's Stop sends, and what Ctrl-C in an EMPTY command line sends: there the
+    /// key has no other meaning, and with text in the line it stays the platform's copy. A
+    /// request of the session only when the terminal HAS a running block, which is decided
+    /// here, from the model, rather than at either control (`update`).
+    | InterruptTerminalMsg of TerminalId
     /// Arm (`Some`) or take back the arming (`None`) of a terminal's kill. `Some` replaces
     /// whatever was armed before it; `None` is sent by the wait (`armedMs`), by Escape on the
     /// armed control, and by focus leaving it.
@@ -1629,6 +1636,7 @@ type ClientEffect =
     | RearmTerminal of TerminalId
     | ReattachTerminal of TerminalId
     | CloseTerminal of TerminalId
+    | InterruptTerminal of TerminalId
     | OpenTerminal of title: string * sandbox: SandboxRef
     | InterruptTurn of AgentTurnId
     | ApproveRepoCapabilities of RepoRef * granted: string list
@@ -3773,6 +3781,7 @@ module ClientModel =
         | ReleaseTerminalMsg _
         | RearmTerminalMsg _
         | ReattachTerminalMsg _
+        | InterruptTerminalMsg _
         | ApproveRepoCapabilitiesMsg _ -> model
         // A request of the session like those above, and also a press whose control the
         // answer will take away: remembered, so the close that answers it can say where the
@@ -3810,6 +3819,20 @@ module ClientModel =
             | RearmTerminalMsg terminal -> [ ClientEffect.RearmTerminal terminal ]
             | ReattachTerminalMsg terminal -> [ ClientEffect.ReattachTerminal terminal ]
             | CloseTerminalMsg terminal -> [ ClientEffect.CloseTerminal terminal ]
+            // Asked only of a terminal with a block running: Ctrl-C in an empty command line
+            // is pressed in idle terminals far more often than in busy ones, and a request the
+            // session can only refuse is a refusal notice for a key that meant nothing.
+            //
+            // And the keyboard goes to the command line, because the Stop it may have been
+            // pressed on goes when the command ends — a round trip later, with focus on it,
+            // which strands focus on `body`. The command line is where the next thing is typed
+            // after stopping one; from Ctrl-C there, the move is to where focus already is.
+            | InterruptTerminalMsg terminal ->
+                match Projection.tryFind terminal model.Terminals |> Option.bind Projection.runningBlock with
+                | Some _ ->
+                    [ ClientEffect.InterruptTerminal terminal
+                      ClientEffect.Move (DomMove.FocusCommandLine terminal) ]
+                | None -> []
             | OpenTerminalMsg (title, sandbox) -> [ ClientEffect.OpenTerminal (title, sandbox) ]
             | InterruptTurnMsg turn -> [ ClientEffect.InterruptTurn turn ]
             | ApproveRepoCapabilitiesMsg (repo, granted) -> [ ClientEffect.ApproveRepoCapabilities (repo, granted) ]

@@ -3024,7 +3024,14 @@ module View =
     /// own header already carries the one mark that answers "whose commands are these",
     /// since a group only forms where every block in it shares an author — repeating the
     /// mark on each line inside would be the same fact said once too often.
-    let private terminalBlockView (model: ClientModel) (feed: TerminalFeed) (showAuthor: bool) (block: Block) : TemplateResult =
+    let private terminalBlockView
+        (dispatch: ClientMsg -> unit)
+        (model: ClientModel)
+        (feed: TerminalFeed)
+        (terminal: TerminalId)
+        (showAuthor: bool)
+        (block: Block)
+        : TemplateResult =
         let body = terminalBlockOutput feed block
         // Whose command this was: shown only when the answer is not the obvious one. Your own
         // commands need no attribution in your own terminal — but a command the AGENT ran, or
@@ -3053,11 +3060,42 @@ module View =
         // command already draws. What is left is the one fact no mark carries: why a command
         // that did not exit did not. When the block learns when it started and how long it
         // took, this is where they go.
-        let facts =
+        //
+        // Who stopped it, when somebody did: the exit code says it was interrupted, and only
+        // this says by whom — the thing the author of a long build that ended early asks
+        // first. A reference, for the reason the author is one.
+        let stoppedBy =
+            match block.StoppedBy with
+            | Some who ->
+                html $"""<span class="{Style.terminalBlockFact}" data-terminal-block-stopped-by="{Entity.actorToken who}"
+                         >stopped by {Entity.render model who (EntityRef.Actor who)}</span>"""
+            | None -> Lit.nothing
+        let reason =
             match block.Status with
             | BlockFinished (CommandExecutionFailed reason) ->
-                html $"""<div class="{Style.terminalBlockFacts}" data-terminal-block-facts><span class="{Style.terminalBlockFact}">{reason}</span></div>"""
+                html $"""<span class="{Style.terminalBlockFact}">{reason}</span>"""
             | BlockRunning
+            | BlockFinished _
+            | BlockRejected _ -> Lit.nothing
+        let facts =
+            match block.Status, block.StoppedBy with
+            | BlockFinished (CommandExecutionFailed _), _
+            | _, Some _ -> html $"""<div class="{Style.terminalBlockFacts}" data-terminal-block-facts>{reason}{stoppedBy}</div>"""
+            | _ -> Lit.nothing
+        // Stop: ^C to this command, the terminal left standing — on the command line it stops,
+        // which stays on screen while its output scrolls, so the control is where the eye is
+        // when the output is the reason to press it. Only while it runs, and named for the
+        // command, because a list of running terminals is a list of Stop buttons otherwise
+        // indistinguishable to a screen reader. Ctrl-C in an empty command line is the same
+        // request, which the shortcut attribute says.
+        let stop =
+            match block.Status with
+            | BlockRunning ->
+                html $"""
+                    <button type="button" class="{Style.terminalBlockStop}" data-terminal-block-stop="{BlockId.value block.BlockId}"
+                            aria-label="{Dom.Text.stopCommand block.Command}" title="{Dom.Text.stopCommandHint}"
+                            aria-keyshortcuts="Control+C"
+                            @click={Ev(fun _ -> dispatch (InterruptTerminalMsg terminal))}>{Icon.stop}stop</button>"""
             | BlockFinished _
             | BlockRejected _ -> Lit.nothing
         html $"""
@@ -3068,6 +3106,7 @@ module View =
                 <span class="{Style.terminalPrompt}">$</span>
                 <code class="{Style.terminalCommandText}">{block.Command}</code>
                 <span class="ml-auto shrink-0">{terminalBlockStatus model block.Status}</span>
+                {stop}
               </div>
               {facts}
               {body}
@@ -3123,7 +3162,7 @@ module View =
                   <span class="{Style.terminalBlockRunMark}" aria-hidden="true">›</span>
                 </summary>
                 <div class="{Style.terminalBlockRunBody}" data-terminal-block-run-body>
-                  {blocks |> List.map (terminalBlockView model feed false)}
+                  {blocks |> List.map (terminalBlockView dispatch model feed terminal false)}
                 </div>
               </details>
             </article>"""
@@ -4231,7 +4270,7 @@ module View =
                 if not (List.isEmpty view.Blocks) then
                     BlockGroup.ofBlocks view.Blocks
                     |> List.map (function
-                        | BlockGroup.Alone block -> terminalBlockView model feed true block
+                        | BlockGroup.Alone block -> terminalBlockView dispatch model feed view.TerminalId true block
                         | BlockGroup.Run (leader, rest) -> terminalBlockRun dispatch model feed view.TerminalId leader rest)
                 elif view.IsOpen then []
                 else [ html $"""<div class="{Style.terminalOutputEmpty}"><span class="{Style.terminalPrompt}">$</span></div>""" ]

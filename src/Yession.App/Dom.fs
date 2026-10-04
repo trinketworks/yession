@@ -339,6 +339,11 @@ module Dom =
         /// The facts beneath a block's command, as a line — present when there is a fact the
         /// command line does not already say.
         let terminalBlockFacts = "data-terminal-block-facts"
+        /// A running block's Stop — ^C to it, the terminal left standing. Valued with the
+        /// block id, so a test presses the one on the command it means.
+        let terminalBlockStop = "data-terminal-block-stop"
+        /// Who stopped a block, on its facts line, valued with their actor token.
+        let terminalBlockStoppedBy = "data-terminal-block-stopped-by"
         /// A run of consecutive same-author blocks, folded under one "ran N commands"
         /// (`View.terminalBlockRun`) — the pane's own version of the chat's `chatTaskCard`.
         /// Its value is the FIRST block's id, same rule `chatTaskCard` uses for its turn
@@ -966,6 +971,13 @@ module Dom =
         /// DOES, and this one stops the turn that is running — which is also the only reason
         /// the control is on the band at all.
         let interruptLabel = "Interrupt the agent"
+        /// A running block's Stop, named for the command it stops: a pane with three commands
+        /// running is three Stop controls, and a name that did not say which is a list of
+        /// identical words.
+        let stopCommand (command: string) : string = "Stop " + command
+        /// The same control's tooltip: what it does to the terminal, and the key that does it
+        /// from the command line.
+        let stopCommandHint = "Send ^C to this command (Ctrl-C in an empty command line); the terminal stays open"
         /// The same control's accessible name while its click is in flight (`AgentViewState.
         /// Interrupting`) — between the press and the stop actually landing, so a screen
         /// reader is told the request went somewhere rather than repeating the verb as if
