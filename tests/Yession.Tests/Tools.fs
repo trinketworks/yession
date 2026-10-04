@@ -805,6 +805,13 @@ let private auditTests =
             Expect.isFalse (recorded.Contains "\"b\"") "nor the second one"
         }
 
+        // The marker fails open on a field nobody marked; it must not ALSO fail open on a
+        // schema it cannot read, where "no field is secret" would record every value.
+        test "the redactor records nothing when it cannot read which fields are secret" {
+            let schema = """{"type":"object","properties":{"token":{"type":"string","writeOnly":"yes"}}}"""
+            Expect.equal (ToolArguments.redact schema """{"token":"hunter2"}""") None "an unreadable schema records no arguments"
+        }
+
         // We do not control a foreign schema, so no marking in it can be trusted. The record
         // still says WHERE the call went and how it ended, which is the part that answers
         // "what did the agent just do".

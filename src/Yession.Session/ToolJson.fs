@@ -45,11 +45,13 @@ module ToolArguments =
     /// a custom marker because its meaning — goes in, never comes back out — is exactly the
     /// property being relied on, and because it stays intelligible to any MCP client that
     /// reads the schema.
-    let secretFields (schema: string) : string list =
+    ///
+    /// A schema this cannot read is an `Error`, never an empty list: "no field is secret" is
+    /// the one answer that lets every value through, so it is not available as a fallback.
+    let secretFields (schema: string) : Result<string list, string> =
         let property = Decode.object (fun get -> get.Optional.Field "writeOnly" Decode.bool |> Option.defaultValue false)
-        match Decode.fromString (Decode.field "properties" (Decode.keyValuePairs property)) schema with
-        | Ok fields -> fields |> List.filter snd |> List.map fst
-        | Error _ -> []
+        Decode.fromString (Decode.field "properties" (Decode.keyValuePairs property)) schema
+        |> Result.map (List.filter snd >> List.map fst)
 
     /// What may be recorded of one call's arguments.
     ///
@@ -61,12 +63,14 @@ module ToolArguments =
     /// The trade-off, stated rather than hidden: an allowlist would fail SAFE (an unmarked
     /// field is never recorded) and a marker fails OPEN (an unmarked field is recorded).
     /// The marker is chosen anyway because an allowlist is a parallel list of field names —
-    /// rename an argument and the entry silently stops protecting the thing it named.
+    /// rename an argument and the entry silently stops protecting the thing it named. What
+    /// the marker may NOT also do is fail open on a schema it cannot read: that records
+    /// nothing, as a foreign tool's call does, rather than everything.
     let redact (schema: string) (arguments: string) : string option =
-        let secrets = secretFields schema
-        match Decode.fromString (Decode.keyValuePairs Decode.value) arguments with
-        | Error _ -> None
-        | Ok fields ->
+        match secretFields schema, Decode.fromString (Decode.keyValuePairs Decode.value) arguments with
+        | Error _, _
+        | _, Error _ -> None
+        | Ok secrets, Ok fields ->
             fields
             |> List.map (fun (key, value) ->
                 if List.contains key secrets then key, Encode.nil else key, value)
