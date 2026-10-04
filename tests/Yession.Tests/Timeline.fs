@@ -18,6 +18,7 @@ open Yession.Domain.Files
 open Yession.Domain.Content
 open Yession.App
 open Yession.App.Codecs
+open Hedgehog
 
 let private expect =
     function
@@ -621,6 +622,117 @@ let private namingTests =
             let labels = attributeOf "data-terminal-close=" "aria-label" list
             Expect.equal (List.length labels) 3 "one kill per open terminal"
             Expect.equal (List.length (List.distinct labels)) 3 "and no two named alike"
+    ]
+
+// --- What the pane had, across a reload (P0-4) ----------------------------------------------
+
+/// A tab of each kind a key can name on its own, drawn from the alphabets their ids allow —
+/// a block id may hold a colon, which is the case a key's own separator could swallow.
+let private genTab : Gen<PaneTab> =
+    let chars (extra: char list) =
+        Gen.item ([ 'a' .. 'z' ] @ [ 'A' .. 'Z' ] @ [ '0' .. '9' ] @ extra)
+    let word (extra: char list) (lo: int) (hi: int) = Gen.string (Range.linear lo hi) (chars extra)
+    gen {
+        let! terminal = word [ '-' ] 2 12
+        let terminal = TerminalId.create terminal |> expect
+        let! kind = Gen.int32 (Range.linear 0 2)
+        match kind with
+        | 0 -> return TerminalTab terminal
+        | 1 ->
+            let! blockId = word [ '-'; ':'; '_' ] 1 12
+            return BlockTab (terminal, BlockId.create blockId |> expect)
+        | _ ->
+            let! segments = Gen.list (Range.linear 1 4) (word [ '-'; '_' ] 1 8)
+            return ContentTab (ContentRef.create (String.concat "/" segments) |> expect)
+    }
+
+/// A browser coming back to this session with `memory` kept: booted with it, its local store
+/// read, connected to a session whose log ends at the last of `pages`, and each page folded
+/// in turn — the order a reload takes.
+let private reloaded (memory: PaneMemory) (pages: EventEnvelope<SessionEvent> list list) : ClientModel =
+    let latest = pages |> List.concat |> List.tryLast |> Option.map (fun e -> e.Offset)
+    let booted =
+        ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
+        |> ClientModel.remembered (Some memory)
+        |> Support.step HistoryReadMsg
+        |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest })
+    pages |> List.fold (fun model page -> withPage page model) booted
+
+let private remembering (tabs: string list) : PaneMemory =
+    { PaneMemory.untouched with PaneMemory.Tabs = tabs; PaneMemory.Open = true }
+
+let private reloadTests =
+    testList "What the pane had, across a reload (P0-4)" [
+        testCase "a pane tab's key round-trips" <| fun () ->
+            Property.check (property {
+                let! tab = genTab
+                Expect.equal (PaneTab.ofKey (PaneTab.key tab)) (Some tab) (PaneTab.key tab)
+            })
+
+        testCase "a remembered stretch tab comes back from the timeline it was drawn from" <| fun () ->
+            // A stretch key is only a terminal and an offset; the rest of the stretch is the
+            // timeline's, so that is where a stored one is found again.
+            let events =
+                [ at 1L 0.0 (opened terminalA "shell")
+                  at 2L 10.0 (took terminalA (PeerRef ada) 5)
+                  at 3L 130.0 (released terminalA (PeerRef ada) LeaseReleased 300) ]
+            let stretchKey = "stretch:term-a@3"
+            let model = reloaded (remembering [ stretchKey ]) [ events ]
+            Expect.equal (stripKeys model) [ stretchKey ] "the stretch is back in the strip"
+
+        testCase "a remembered pane comes back open before anything has arrived" <| fun () ->
+            let model = ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } |> ClientModel.remembered (Some (remembering []))
+            Expect.isTrue model.TerminalsOpen "the column is open from the first paint"
+
+        testCase "a session this browser has never seen starts as it always did" <| fun () ->
+            let fresh = ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
+            Expect.equal (ClientModel.paneMemory (ClientModel.remembered None fresh)) PaneMemory.untouched "nothing remembered, nothing changed"
+
+        testCase "the remembered strip replaces the one the log rebuilt" <| fun () ->
+            // Replaying the log reopens every terminal this person ever opened; the strip
+            // they had says which of those they still wanted.
+            let events = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "shell") ]
+            let model = reloaded (remembering [ "terminal:term-b" ]) [ events ]
+            Expect.equal (stripKeys model) [ "terminal:term-b" ] "only the tab that was open"
+
+        testCase "a restored tab for a terminal the session does not have is dropped after the first page" <| fun () ->
+            let model = reloaded (remembering [ "terminal:term-a"; "terminal:term-gone" ]) [ oneBlock ]
+            Expect.equal (stripKeys model) [ "terminal:term-a" ] "the tab onto nothing is gone"
+
+        testCase "a restored tab onto a terminal from the last page of catch-up survives the first" <| fun () ->
+            // The strip is checked once the log is read THROUGH, not at its first page: the
+            // events fold drops every unkept tab whose terminal it has not met yet, so a
+            // check made between pages would drop a terminal the session does have.
+            let model =
+                reloaded
+                    (remembering [ "terminal:term-b" ])
+                    [ [ at 1L 0.0 (opened terminalA "build") ]; [ at 2L 1.0 (opened terminalB "shell") ] ]
+            Expect.equal (stripKeys model) [ "terminal:term-b" ] "the later terminal's tab is back"
+
+        testCase "a restored selection that names a live tab is the selection" <| fun () ->
+            let memory =
+                { remembering [ "terminal:term-a"; "block:term-a:b-1" ] with PaneMemory.Selected = Some "block:term-a:b-1" }
+            let model = reloaded memory [ oneBlock ]
+            Expect.equal
+                (ClientModel.selectedPane model |> Option.map PaneTab.key)
+                (Some "block:term-a:b-1")
+                "the block tab is on top again"
+
+        testCase "a restored pin is a pin" <| fun () ->
+            let memory = { remembering [ "terminal:term-a"; "block:term-a:b-1" ] with PaneMemory.Pinned = [ "terminal:term-a" ] }
+            let model = reloaded memory [ oneBlock ]
+            Expect.isTrue (ClientModel.isPinned (TerminalTab terminalA) model) "the kept terminal is still kept"
+
+        testCase "a remembered pane round-trips through its codec" <| fun () ->
+            let memory =
+                { PaneMemory.Tabs = [ "terminal:term-a"; "block:term-a:b-1" ]
+                  PaneMemory.Pinned = [ "terminal:term-a" ]
+                  PaneMemory.Selected = Some "block:term-a:b-1"
+                  PaneMemory.Open = true }
+            Expect.equal
+                (Codec.fromString PaneMemory.codec (Codec.toString PaneMemory.codec memory))
+                (Ok memory)
+                "what is written is what is read"
     ]
 
 // --- Keyframes and the ranged cast (stage 3) --------------------------------------------------
@@ -3201,6 +3313,7 @@ let tests =
         unchangedTests
         paneTests
         namingTests
+        reloadTests
         pageTests
         keyframeTests
         videoTests

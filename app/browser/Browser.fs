@@ -1091,19 +1091,25 @@ let private start () =
         // Plan 11 makes that load-bearing rather than cosmetic: the reconnect offer names
         // the session to reopen, and it appears precisely when no `PeerAccepted` has
         // happened.
+        let session =
+            metaContent Dom.sessionMetaName
+            |> Option.bind (fun value ->
+                match SessionId.create value with
+                | Ok id -> Some id
+                | Error _ -> None)
         let initial =
             { ClientModel.init { PeerId = peerId; DisplayName = displayName } with
-                Session =
-                    metaContent Dom.sessionMetaName
-                    |> Option.bind (fun value ->
-                        match SessionId.create value with
-                        | Ok id -> Some id
-                        | Error _ -> None)
+                Session = session
                 Manager = metaContent Dom.managerMetaName
                 EphemeralStorage = (metaContent Dom.ephemeralStorageMetaName).IsSome
                 // The one place that can answer this: the model defaults to true because the
                 // SERVER renders this shell too and has no idea what the browser can do.
                 CanKeepHistory = canKeepHistory () }
+            // What this browser had open in this session's pane (P0-4), read before the first
+            // render so the column comes back open in the same paint that takes over the
+            // served shell. The served shell painted it shut — the server cannot see this
+            // browser's storage — so a reload into an open pane is one move, never two.
+            |> ClientModel.remembered (session |> Option.bind PaneShell.Memory.read)
 
         // The connection is wired later (after persistence and signalling); the interrupt
         // control holds this ref so everything else works before — and without — the
