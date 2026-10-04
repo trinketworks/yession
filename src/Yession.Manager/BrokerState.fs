@@ -37,10 +37,29 @@ module TokenRequestDialect =
         | FormEncoded -> "form"
         | JsonEncoded -> "json"
 
-    let ofString (raw: string) : TokenRequestDialect =
+    /// Fail closed: a dialect this Manager cannot name is refused here, where the value is
+    /// in hand, rather than read as the standard and posted to an endpoint that answers
+    /// `invalid_request_error` — a reply that blames the provider for a fault on the wire.
+    let parse (raw: string) : Result<TokenRequestDialect, string> =
         match raw with
-        | "json" -> JsonEncoded
-        | _ -> FormEncoded
+        | "form" -> Ok FormEncoded
+        | "json" -> Ok JsonEncoded
+        | other -> Error (sprintf "unknown token request dialect '%s' (expected form or json)" other)
+
+    let codec : Codec<TokenRequestDialect> =
+        { Encode = describe >> Encode.string
+          Decode =
+            Decode.string
+            |> Decode.andThen (fun raw ->
+                match parse raw with
+                | Ok dialect -> Decode.succeed dialect
+                | Error e -> Decode.fail e) }
+
+    /// The dialect field of a grant or a grant request. Absent is the standard by history,
+    /// not by guess: an envelope stored, or a session built, before dialects existed is
+    /// form-encoded by construction and must keep working. Present-but-unknown is refused.
+    let field (key: string) (get: Decode.IGetters) : TokenRequestDialect =
+        get.Optional.Field key codec.Decode |> Option.defaultValue FormEncoded
 
 /// One grant request, ready to POST: the dialect decides both halves, so a caller can
 /// never pair a JSON body with a form content type.
@@ -79,7 +98,7 @@ module BrokeredCredentialCodec =
                       "refreshExpiresAt", Encode.option Codec.timestamp.Encode g.RefreshExpiresAt
                       "tokenUrl", Encode.string g.TokenUrl
                       "clientId", Encode.string g.ClientId
-                      "dialect", Encode.string (TokenRequestDialect.describe g.Dialect) ]
+                      "dialect", TokenRequestDialect.codec.Encode g.Dialect ]
           Decode =
             Decode.object (fun get ->
                 { OAuthGrant.AccessToken = get.Required.Field "accessToken" Decode.string
@@ -92,12 +111,7 @@ module BrokeredCredentialCodec =
                     |> Option.flatten
                   OAuthGrant.TokenUrl = get.Required.Field "tokenUrl" Decode.string
                   OAuthGrant.ClientId = get.Required.Field "clientId" Decode.string
-                  // Optional: envelopes stored before dialects existed are form-encoded
-                  // by construction, and must keep refreshing rather than fail to decode.
-                  OAuthGrant.Dialect =
-                    get.Optional.Field "dialect" Decode.string
-                    |> Option.map TokenRequestDialect.ofString
-                    |> Option.defaultValue FormEncoded }) }
+                  OAuthGrant.Dialect = TokenRequestDialect.field "dialect" get }) }
 
     let credential : Codec<BrokeredCredential> =
         { Encode =

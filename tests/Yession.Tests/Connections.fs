@@ -80,6 +80,24 @@ let private codecTests =
             match BrokeredCredentialCodec.fromString legacy |> expect with
             | BrokeredOAuth g -> Expect.equal g.Dialect FormEncoded "defaults to the standard"
             | BrokeredStatic _ -> failwith "expected an oauth envelope"
+
+        testCase "a stored grant whose dialect this Manager cannot name fails the decode" <| fun () ->
+            // Read as the standard, it would refresh with a form body against whatever the
+            // provider actually speaks, and the provider's refusal would be the only clue.
+            let unknown =
+                """{"kind":"oauth","grant":{"accessToken":"at","refreshToken":null,"expiresAt":null,"tokenUrl":"http://t","clientId":"c","dialect":"jsn"}}"""
+            Expect.isError (BrokeredCredentialCodec.fromString unknown) "unknown dialect refused"
+
+        testCase "each dialect's wire spelling reads back as that dialect" <| fun () ->
+            // The spellings are a contract with sessions and stored envelopes already out
+            // there. The match is exhaustive, so a third dialect must be spelled here too.
+            let spelling dialect =
+                match dialect with
+                | FormEncoded -> "form"
+                | JsonEncoded -> "json"
+            for dialect in [ FormEncoded; JsonEncoded ] do
+                Expect.equal (ControlWire.toString TokenRequestDialect.codec dialect) (sprintf "\"%s\"" (spelling dialect)) "encodes as its spelling"
+                Expect.equal (ControlWire.fromString TokenRequestDialect.codec (sprintf "\"%s\"" (spelling dialect))) (Ok dialect) "decodes from its spelling"
     ]
 
 // --- Pure: flow logic ----------------------------------------------------------------------
@@ -240,6 +258,16 @@ let private wireTests =
                 """{"target":{"scope":{"kind":"user","sub":"alice"},"name":"claude-code"},"authorizeUrl":"https://p.example/authorize?code=true","tokenUrl":"https://p.example/token","clientId":"cid","scopes":"a b"}"""
             let decoded = ControlWire.fromString ControlWire.connectionBeginRequest older |> expect
             Expect.equal decoded.TokenDialect FormEncoded "defaults to the standard"
+
+        testCase "a begin request naming a dialect this Manager cannot speak is refused" <| fun () ->
+            let unknown =
+                """{"target":{"scope":{"kind":"user","sub":"alice"},"name":"claude-code"},"authorizeUrl":"https://p.example/authorize?code=true","tokenUrl":"https://p.example/token","clientId":"cid","scopes":"a b","tokenDialect":"JSON"}"""
+            Expect.isError (ControlWire.fromString ControlWire.connectionBeginRequest unknown) "unknown dialect refused"
+
+        testCase "a put-grant request naming a dialect this Manager cannot speak is refused" <| fun () ->
+            let unknown =
+                """{"target":{"scope":{"kind":"user","sub":"alice"},"name":"claude-code"},"accessToken":"at","tokenUrl":"https://p.example/token","clientId":"cid","tokenDialect":"jsn"}"""
+            Expect.isError (ControlWire.fromString ControlWire.connectionPutGrantRequest unknown) "unknown dialect refused"
 
         testCase "complete/put/disconnect/resolve round-trip" <| fun () ->
             let complete : ControlWire.ConnectionCompleteRequest = { Target = target (SessionScope sessionA); Code = "c#st" }
