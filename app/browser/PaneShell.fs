@@ -286,9 +286,12 @@ let scrollToLatest () : unit =
 let toItemActions (messageId: string) : unit =
     nextFrame (fun () -> focusOn (find (sprintf "[data-item-actions=\"%s\"]" messageId)))
 
-/// Onto the strip's `+`. One per page, so it is found by its hook alone.
+/// Onto the door the menu of new things hangs from: the strip's `+`, or the empty pane's
+/// button when the pane is empty — the strip offers no `+` then (P1-4), and the empty pane's
+/// press is the same act. At most one of the two is on the page, so each is found by its hook.
 let toPaneNew () : unit =
-    nextFrame (fun () -> focusOn (find "[data-pane-new]"))
+    nextFrame (fun () ->
+        find "[data-pane-new]" |> Option.orElseWith (fun () -> find "[data-terminal-new]") |> focusOn)
 
 /// Carry out a move the model asked for (`Yession.App.DomMove`) — the one place a move is
 /// turned into the document call that makes it, for the page and the harness alike.

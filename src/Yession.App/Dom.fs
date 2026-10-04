@@ -268,6 +268,11 @@ module Dom =
         /// The pane head's name for what is selected — the words alone, so the strip, the
         /// head and the list can be asked whether they agree.
         let paneHeadName = "data-pane-head-name"
+        /// On the edge tab that shows the shut pane (P1-4): how many terminals are open, and —
+        /// present only while one is running a command — the running mark. What the face says,
+        /// as facts a test can read without reading the words.
+        let terminalsOpen = "data-terminals-open"
+        let terminalsRunning = "data-terminals-running"
         // Terminals: the strip's terminal tabs, the blocks that have run, and the composer that
         // queues the next command. The composer's hooks mirror the message composer's, because
         // the interaction is the same one.
@@ -767,6 +772,25 @@ module Dom =
         /// "dev" twice is a menu nobody reading it aloud can use. It CONTAINS the visible
         /// label, which is what keeps a voice control that hears "dev" able to press it.
         let newTerminalIn (sandbox: string) = sprintf "New terminal in %s" sandbox
+        /// The hidden pane's edge tab (P1-4): what the column holds, counted, so that a
+        /// session with work in it says so with the pane shut. With none open it is still the
+        /// door to making one, and says what kind of thing is behind it.
+        let terminalsCount (n: int) =
+            match n with
+            | 0 -> "terminals"
+            | 1 -> "1 terminal"
+            | n -> sprintf "%d terminals" n
+        /// Its hover title — the act, where the face is the count.
+        let showTerminals = "Show terminals"
+        /// Its accessible name: the act and the count, and WHICH terminals are running a
+        /// command, by the names the strip and the list call them (`Entity.terminalName`) —
+        /// the face says that with a dot alone. It CONTAINS the visible words, so a voice
+        /// control that hears "2 terminals" can still press it.
+        let showTerminalsNamed (n: int) (running: string list) =
+            let count = terminalsCount n
+            match running with
+            | [] -> sprintf "Show %s" count
+            | names -> sprintf "Show %s, %s running" count (String.concat ", " names)
         /// What a refusal notice leads with. The session's own sentence follows it, and says
         /// which act and why; this is only the word that makes the row scannable.
         let refused = "refused"

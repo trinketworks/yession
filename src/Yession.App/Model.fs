@@ -883,6 +883,17 @@ type ClientModel =
       /// can be told from "never remembered", which `TerminalsOpen = false` alone cannot say.
       /// Set at boot, never changed.
       PaneRemembered : bool
+      /// Whether the pane may still open ITSELF, once, when the log has been read through
+      /// (P1-4, `openOfItself`): a desktop's first look at a session with a terminal running
+      /// should show it, rather than a header with nothing in it about the build.
+      ///
+      /// A boot fact first — `false` here and for the server, which has no screen, and the
+      /// browser's own answer (`Browser.fs`) of whether its screen is wide enough for the pane
+      /// to sit BESIDE the chat. On a phone the pane is the whole screen, and a pane that
+      /// opened itself there would hide the conversation somebody came to read. Then spent:
+      /// by the decision, or by anything at all moving the column first, because a person who
+      /// has already opened or shut it has answered the question this was going to.
+      PaneOpensItself : bool
       /// Which timeline item has its actions menu open, if any. View state for the same
       /// reason the column above is: a menu one person opened is not a thing anybody else
       /// is looking at.
@@ -981,10 +992,9 @@ type DomMove =
     /// Back to one item's actions control, after the menu it opened has gone. Without it,
     /// dismissing a menu strands focus on `body`.
     | FocusItemActions of MessageId
-    /// Back to the strip's `+`, after the menu it opened has gone — `FocusItemActions`'
-    /// reason, for the other menu this shell has. It is also where the pane's empty state
-    /// sends a press, because that press opens a menu hanging off this control rather than
-    /// off itself.
+    /// Back to the door the menu of new things hangs from, after the menu has gone —
+    /// `FocusItemActions`' reason, for the other menu this shell has. The strip's `+`, or the
+    /// empty pane's own button while the pane is empty and the strip offers no `+` (P1-4).
     | FocusPaneNew
     /// Onto this terminal's command line — this peer's own, the one that takes keystrokes.
     /// Where a terminal tab is FOR, so it is where showing one lands. A terminal with no
@@ -1514,6 +1524,7 @@ module ClientModel =
           TerminalsOpen = false
           PaneMemory = None
           PaneRemembered = false
+          PaneOpensItself = false
           ItemMenu = None
           PaneMenu = false
           Refused = None
@@ -1778,6 +1789,39 @@ module ClientModel =
                 Pane = pane
                 PaneMemory = None }
         | Some _ | None -> model
+
+    /// The pane opening itself on a desktop's first look at a session (P1-4), once the log has
+    /// been read through — the same line `recall` waits for, and for the same reason: before
+    /// it, "this session has no terminal" and "this client has not heard about it yet" look
+    /// identical.
+    ///
+    /// Only when nothing else has answered for the column: no memory of it (`PaneRemembered`,
+    /// whose open bit is that person's own answer), a screen it can sit beside the chat on, and
+    /// nothing having moved it since the page loaded (`before` against `model`: a column opened
+    /// from a chip or shut by its chevron before the log arrived is somebody's decision, and
+    /// this one would only be overriding it). Spent either way, so it happens at most once:
+    /// a person who shuts the pane afterwards is not argued with by the next page of events.
+    ///
+    /// Opens, and never shuts: a session with nothing open leaves the column as the page found
+    /// it. What it opens ONTO is the reader's own tab where the strip offers one
+    /// (`selectedPane`), and otherwise the list — the strip holds only what this reader opened,
+    /// so a fresh browser on a session whose terminals are the agent's or a colleague's has an
+    /// empty strip, and an empty pane saying "New terminal" over a running build is the one
+    /// thing this must not show. The list is what answers "what is here".
+    let private openOfItself (before: ClientModel) (model: ClientModel) : ClientModel =
+        if not model.PaneOpensItself then model
+        elif model.TerminalsOpen <> before.TerminalsOpen then { model with PaneOpensItself = false }
+        elif not (readThrough model) then model
+        elif model.PaneRemembered || List.isEmpty (Projection.openTerminals model.Terminals) then
+            { model with PaneOpensItself = false }
+        else
+            { model with
+                PaneOpensItself = false
+                TerminalsOpen = true
+                Pane =
+                    match model.Pane, selectedPane model with
+                    | Some (OnList _), _ | _, Some _ -> model.Pane
+                    | _ -> Some (OnList None) }
 
     /// Whether the pane is showing the census rather than a tab (Plan 20, stage 0; Plan 25,
     /// stage 2). A face the pane is IN, not a flag over the one it is in — which is why
@@ -2628,9 +2672,11 @@ module ClientModel =
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
     /// after every message, rather than being read live from whatever the connection
     /// happens to be doing at render time — and through `recall`, for the same reason, so a
-    /// remembered pane comes back on whichever message finishes reading the log.
+    /// remembered pane comes back on whichever message finishes reading the log; and through
+    /// `openOfItself`, which waits for the same line and needs the model from before the
+    /// message to tell whether something else moved the column first.
     let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
-        reconcileLaunch (recall (
+        reconcileLaunch (openOfItself model (recall (
         match msg with
         | ConnectingMsg ->
             { model with Connection = Connecting }
@@ -3416,7 +3462,7 @@ module ClientModel =
         // The armed slot is spent by the press that confirms it.
         | CloseTerminalMsg terminal -> { model with KillPending = Some terminal; KillArmed = None }
         | ArmKillMsg next -> { model with KillArmed = next }
-        ))
+        )))
 
     /// A message's consequences: the next model, and what it asks of the world outside it.
     let update (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =
