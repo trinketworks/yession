@@ -878,10 +878,13 @@ let private mintId (prefix: string) =
 // same human across sessions), so colours and draft slots survive reloads. Storage
 // denied (private mode) falls back to the per-load mint.
 //
-// `minted` is a VALUE, evaluated once by whoever called this, so the fresh id stored and the
-// one answered are the same id however many branches read it.
-let private persistentPeerId (minted: string) : string =
-    let key = "yession/peer-id"
+// The display name is kept the same way, beside it, for the same reason: the same browser is
+// the same person. A name drawn fresh on every load renamed the person on a reload, and the
+// chat then attributed their earlier commands and lease stretches to somebody new.
+//
+// `minted` is a VALUE, evaluated once by whoever called this, so the fresh value stored and
+// the one answered are the same value however many branches read it.
+let private persisted (key: string) (minted: string) : string =
     try
         match Browser.WebStorage.localStorage.getItem key with
         | null | "" ->
@@ -1077,10 +1080,10 @@ let private openQueryStream (url: string) (onFrame: string -> unit) : EventSourc
 let private start () =
     async {
         let peerId =
-            match PeerId.create (persistentPeerId (mintId "peer")) with
+            match PeerId.create (persisted "yession/peer-id" (mintId "peer")) with
             | Ok id -> id
             | Error e -> failwith e
-        let displayName = PeerName.random (Random ())
+        let displayName = persisted "yession/peer-name" (PeerName.random (Random ()))
         let doc = Y.Doc.Create ()
         // Seed from the shell. The session id was already SSR'd into the model
         // (`Signalling.bootstrapHtml`) and then dropped on hydration, so `data-session-id`

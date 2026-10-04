@@ -4,7 +4,8 @@ open System
 open Yession.Domain
 
 /// A small pool of friendly display names. The App picks one at random for the
-/// local peer on load (the product shows a human-readable presence name, not a raw id).
+/// local peer on a browser's first load and keeps it there beside the peer id (the
+/// product shows a human-readable presence name, not a raw id).
 module PeerName =
 
     let private adjectives =
