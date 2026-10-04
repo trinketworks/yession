@@ -20,6 +20,7 @@ open Yession.Domain
 open Yession.Domain.Access
 open Yession.Session
 open Fable.OpenIdClient
+open Yession.Oidc
 open Yession.Host.Interop
 
 type Auth =
@@ -119,18 +120,23 @@ let create (sessionId: SessionId) (mount: string) : Auth =
                                 |> Interop.awaitPromise
                             let claims = tokens.claims ()
                             // The attribution rides the validated ID token: only the
-                            // provider's own `yession_attribution = "user"` claim makes
+                            // provider's own claim that it was issued for a user makes
                             // this cookie a real user — never anything client-supplied.
-                            let attribution =
-                                match claims.yession_attribution, UserId.create claims.sub with
-                                | Some "user", Ok user -> AttributedUser user
-                                | _ -> UnattributedAccess
-                            let cookieValue =
-                                cookies.Mint
-                                    { Subject = claims.sub
-                                      DisplayName = claims.name
-                                      Attribution = attribution }
-                            return Ok (Cookies.set cookieName mount cookieValue)
+                            match Wire.fromString Wire.idTokenAttribution (IdTokenClaims.json claims) with
+                            | Error reason ->
+                                return Error (401, sprintf "the ID token's attribution is unreadable: %s" reason)
+                            | Ok said ->
+                                let attribution, displayName =
+                                    match said, UserId.create claims.sub with
+                                    | IdTokenAttribution.User profile, Ok user -> AttributedUser user, profile.Name
+                                    | IdTokenAttribution.User profile, Error _ -> UnattributedAccess, profile.Name
+                                    | IdTokenAttribution.Unattributed, _ -> UnattributedAccess, None
+                                let cookieValue =
+                                    cookies.Mint
+                                        { Subject = claims.sub
+                                          DisplayName = displayName
+                                          Attribution = attribution }
+                                return Ok (Cookies.set cookieName mount cookieValue)
                         with e ->
                             return Error (401, sprintf "authorization failed: %s" e.Message)
             }

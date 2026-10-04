@@ -142,21 +142,10 @@ let create
                      | Ok sessionId, Ok subject ->
                          onTokenIssued grant.Client.ControlSecret sessionId subject grant.Identity.Claims
                      | _ -> ())
-                    // Standard profile claims when the strategy attributed a real user,
-                    // plus `yession_attribution` — the RP-side discriminator between a
-                    // durable user identity and shared unattributed access.
-                    // A claim with no value is left unset rather than set empty, so the
-                    // token omits it.
                     let payload =
-                        jsOptions<Fable.Jose.JwtPayload> (fun p ->
-                            p.yession_attribution <-
-                                (match grant.Identity.Claims with Some _ -> "user" | None -> "unattributed")
-                            match grant.Identity.Claims with
-                            | Some claims ->
-                                claims.DisplayName |> Option.iter (fun v -> p.name <- v)
-                                claims.Email |> Option.iter (fun v -> p.email <- v)
-                                claims.Picture |> Option.iter (fun v -> p.picture <- v)
-                            | None -> ())
+                        IdTokenAttribution.ofIdentity grant.Identity.Claims
+                        |> Wire.toString Wire.idTokenAttribution
+                        |> Fable.Jose.JwtPayload.ofJson
                     Async.StartImmediate (
                         async {
                             let! idToken =

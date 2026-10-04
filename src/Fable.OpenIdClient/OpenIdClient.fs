@@ -20,9 +20,8 @@ type [<AllowNullLiteral>] Configuration =
 type [<AllowNullLiteral>] Url =
     abstract href : string
 
-/// Validated ID-token claims, exposed by the token response's `claims()` helper.
-/// The optional members are the profile claims Yession's provider adds when its
-/// strategy attributed a real user; absent otherwise.
+/// Validated ID-token claims, exposed by the token response's `claims()` helper: the
+/// registered ones. Any other claim is the issuer's, read by decoding `IdTokenClaims.json`.
 type [<AllowNullLiteral>] IdTokenClaims =
     abstract iss : string
     abstract sub : string
@@ -30,8 +29,12 @@ type [<AllowNullLiteral>] IdTokenClaims =
     abstract aud : U2<string, string[]>
     abstract exp : float
     abstract iat : float
-    abstract name : string option
-    abstract yession_attribution : string option
+
+[<RequireQualifiedAccess>]
+module IdTokenClaims =
+
+    /// The claims as JSON text, for a decoder to read.
+    let json (claims: IdTokenClaims) : string = JS.JSON.stringify claims
 
 type [<AllowNullLiteral>] TokenEndpointResponse =
     abstract access_token : string

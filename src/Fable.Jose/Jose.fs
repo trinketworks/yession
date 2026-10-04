@@ -53,15 +53,16 @@ type [<AllowNullLiteral>] Jwk =
 let exportJWK (key: CryptoKey) : JS.Promise<Jwk> = jsNative
 
 /// The claims a token is started with, before the builder's setters add the registered
-/// ones (`iss`, `sub`, `aud`, `iat`, `exp`). The slice used: the OIDC profile claims
-/// Yession's provider adds when its strategy attributed a real user — each absent
-/// otherwise, which is what leaving it unset means — and `yession_attribution`, the
-/// discriminator the relying party reads back (`Fable.OpenIdClient.IdTokenClaims`).
+/// ones (`iss`, `sub`, `aud`, `iat`, `exp`). Opaque: which claims those are is the issuer's
+/// to say, not this binding's, so a payload is made from JSON text an encoder wrote.
 type JwtPayload =
-    abstract yession_attribution : string with get, set
-    abstract name : string with get, set
-    abstract email : string with get, set
-    abstract picture : string with get, set
+    interface end
+
+[<RequireQualifiedAccess>]
+module JwtPayload =
+
+    /// A payload from the JSON text of its claims.
+    let ofJson (text: string) : JwtPayload = JS.JSON.parse text |> unbox
 
 /// The JWS protected header a token is signed under: the slice used.
 type JwsHeaderParameters =
@@ -130,11 +131,16 @@ type JwtVerifyOptions =
 
 /// A verified token's claims: the slice read back. Optional because jose verifies only what
 /// `JwtVerifyOptions` asked of it (and the registered time claims): a claim nobody asked
-/// about may be absent from a token that verified.
+/// about may be absent from a token that verified. Any claim beyond the registered ones is
+/// the issuer's, read by decoding `JwtClaims.json`.
 type [<AllowNullLiteral>] JwtClaims =
     abstract sub : string option
-    /// The discriminator Yession's provider writes (`JwtPayload` above).
-    abstract yession_attribution : string option
+
+[<RequireQualifiedAccess>]
+module JwtClaims =
+
+    /// The claims as JSON text, for a decoder to read.
+    let json (claims: JwtClaims) : string = JS.JSON.stringify claims
 
 type [<AllowNullLiteral>] JwtVerifyResult =
     abstract payload : JwtClaims

@@ -344,6 +344,35 @@ let private wireTests =
             Expect.isTrue (json.Contains "\"EdDSA\"") "the signing alg is advertised"
             Expect.isFalse (json.Contains "\"plain\"") "the plain PKCE method is NOT advertised"
 
+        testCase "each ID-token attribution reads back as the one written" <| fun () ->
+            let profile =
+                { IdTokenProfile.Name = Some "Ada"
+                  IdTokenProfile.Email = Some "ada@example.com"
+                  IdTokenProfile.Picture = None }
+            let each =
+                function
+                | IdTokenAttribution.User _ -> IdTokenAttribution.User profile
+                | IdTokenAttribution.Unattributed -> IdTokenAttribution.Unattributed
+            for said in [ each (IdTokenAttribution.User profile); each IdTokenAttribution.Unattributed ] do
+                Expect.equal
+                    (Wire.toString Wire.idTokenAttribution said |> Wire.fromString Wire.idTokenAttribution)
+                    (Ok said)
+                    (sprintf "%A" said)
+
+        testCase "a profile claim the strategy did not know is absent from the ID token, not empty" <| fun () ->
+            let said =
+                IdTokenAttribution.User
+                    { IdTokenProfile.Name = None
+                      IdTokenProfile.Email = None
+                      IdTokenProfile.Picture = None }
+            Expect.equal (Wire.toString Wire.idTokenAttribution said) """{"yession_attribution":"user"}""" "only the attribution"
+
+        testCase "an ID token that carries no attribution is refused, not read as unattributed" <| fun () ->
+            Expect.isError (Wire.fromString Wire.idTokenAttribution """{"sub":"local","name":"Ada"}""") "no attribution"
+
+        testCase "an ID token naming an attribution this build cannot name is refused" <| fun () ->
+            Expect.isError (Wire.fromString Wire.idTokenAttribution """{"yession_attribution":"admin"}""") "unknown attribution"
+
         testCase "cookie and form parsing tolerate hostile input" <| fun () ->
             Expect.equal (Cookies.parse "a=1; b=2=3;; c ;=x; d=") [ "a", "1"; "b", "2=3"; "d", "" ] "malformed segments drop; values keep ="
             Expect.equal (Cookies.tryFind "b" (Some "a=1; b=2")) (Some "2") "finds by name"
@@ -495,7 +524,10 @@ let private opTests =
                         o.audience <- client.ClientId)
                 let! verified = Fable.Jose.jwtVerify tokenResponse.IdToken keySet expected |> Interop.awaitPromise
                 Expect.equal verified.payload.sub (Some "local") "the ID token's subject is the local user"
-                Expect.equal verified.payload.yession_attribution (Some "unattributed") "localhost access is unattributed"
+                Expect.equal
+                    (Wire.fromString Wire.idTokenAttribution (Fable.Jose.JwtClaims.json verified.payload))
+                    (Ok IdTokenAttribution.Unattributed)
+                    "localhost access is unattributed"
 
                 // Replay: the same code again -> invalid_grant.
                 let! replay = TestHttp.postForm (tokenForm code client.ClientSecret verifier) decoded.TokenEndpoint
