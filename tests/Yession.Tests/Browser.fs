@@ -2593,6 +2593,29 @@ let editorTests =
                 Expect.isTrue (abs off.[2] < 1.0) (sprintf "the arrows spread %.2fpx across the rail" off.[2])
             }
 
+        // The margin has ONE rail, and it is the speakers' avatars: a fold's arrow under an
+        // author line stands on the column that author's avatar stands on, not centred in the
+        // wider gutter beside it — where it sat six pixels right of every avatar, a second
+        // rail next to the one the eye already follows down the page. Asked of the avatar
+        // each fold sits under, by centre, so a larger avatar or a wider gutter keeps it true.
+        editorCase "every fold's arrow stands on its author's avatar column" <| fun page ->
+            async {
+                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
+                let! off =
+                    await (page.EvaluateAsync<float[]> """() => {
+                        const folds = [...document.querySelectorAll('#shell section [data-fold]')]
+                        const apart = folds.map(b => {
+                            const avatar = b.closest('section').querySelector('header > span').getBoundingClientRect()
+                            const arrow = b.querySelector('svg').getBoundingClientRect()
+                            return (arrow.left + arrow.width / 2) - (avatar.left + avatar.width / 2)
+                        })
+                        return [ folds.length, Math.max(...apart.map(Math.abs)) ]
+                    }""")
+                Expect.isTrue (off.[0] >= 1.0) "the page must hold a fold under an author line"
+                Expect.isTrue (off.[1] < 1.0) (sprintf "an arrow stood %.2fpx off its author's avatar" off.[1])
+            }
+
         // Unfolding shows the particulars and folding takes them off the page — not merely
         // out of sight but out of the accessibility tree and the tab order, which is what
         // `visibility` settles and a rendered string cannot see. Waited for, because the
