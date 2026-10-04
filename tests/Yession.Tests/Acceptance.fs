@@ -1058,7 +1058,9 @@ let private uiChecklistTests =
                     (runModelWith
                         [ runBlock agent 1 (BlockFinished (CommandSucceeded 0))
                           runBlock agent 2 (BlockFinished (CommandFailed 1))
-                          runBlock agent 3 BlockRunning ])
+                          runBlock agent 3 (BlockFinished (CommandSucceeded 0))
+                          // The newest stays out of the fold (`BlockGroup.ofBlocks`).
+                          runBlock agent 4 (BlockFinished (CommandSucceeded 0)) ])
             Expect.isTrue
                 (html.Contains (Dom.attr Dom.Hooks.terminalBlockRun "block-run-1"))
                 "the fold is keyed by the FIRST block in it"

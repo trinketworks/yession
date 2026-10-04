@@ -673,8 +673,8 @@ type PaneReplay =
       /// jumping back to live rather than stopping on a stale frame.
       BehindLive : TerminalId option }
 
-/// What a fold on the timeline is a fold OF — the key its open state is kept under. One
-/// type for the three, because they are one control: an arrow on the gutter, a title on
+/// What a fold is a fold OF — the key its open state is kept under. One type for the
+/// timeline's three and the pane's one, because they are one control: a mark, a title on
 /// the line, and something that unfolds beneath. A key per KIND rather than one string
 /// namespace, so an act and a call that happened to share an id could never open together.
 [<RequireQualifiedAccess>]
@@ -690,6 +690,12 @@ type FoldKey =
     /// One agent burst's commands, under "ran n commands" — keyed by the turn, since a task
     /// card groups everything the turn ran into one row rather than one per call.
     | Task of AgentTurnId
+    /// A run of one actor's commands in a terminal's PANE (`BlockGroup.Run`), keyed by the
+    /// run's first block. The pane's fold rather than the timeline's, but kept here for the
+    /// timeline's reason: it was the `<details>` element's own state, so every render that
+    /// rebuilt the element — a hand-back, a preview laid over the terminal and taken down, a
+    /// lone block becoming a run — shut what the reader had opened.
+    | Commands of TerminalId * BlockId
 
 module FoldKey =
 
@@ -700,6 +706,73 @@ module FoldKey =
         | FoldKey.ToolRun id -> "run-" + ToolUseId.value id
         | FoldKey.ToolCall id -> "call-" + ToolUseId.value id
         | FoldKey.Task id -> "task-" + AgentTurnId.value id
+        | FoldKey.Commands (terminal, leader) -> "commands-" + TerminalId.value terminal + "-" + BlockId.value leader
+
+/// How a terminal's history is drawn: each block on its own, or a run of them under one
+/// "ran n commands" fold — the pane's version of the chat's task card.
+[<RequireQualifiedAccess>]
+type BlockGroup =
+    /// One block, drawn whole.
+    | Alone of Block
+    /// Two or more consecutive finished blocks by one actor, oldest first, folded — keyed
+    /// by the first, which is the one block a run never loses as it grows.
+    | Run of leader: Block * rest: Block list
+
+module BlockGroup =
+
+    /// The key a run's fold keeps its open state under.
+    let key (terminal: TerminalId) (leader: Block) : FoldKey = FoldKey.Commands (terminal, leader.BlockId)
+
+    /// Group a terminal's blocks (oldest first) for the pane.
+    ///
+    /// Consecutive blocks from one actor fold together, never past somebody else's command,
+    /// and never a group of one: a disclosure around a single command hides the only thing
+    /// the row has to say behind a click.
+    ///
+    /// And never the NEWEST block, nor one still RUNNING. A run used to take everything its
+    /// actor ran, so from the second command on what had just happened went behind a shut
+    /// fold with everything before it: `pwd`, then `echo second`, and neither answer was on
+    /// screen; a running loop's output was hidden from everyone watching it. What just
+    /// happened, and what is happening, is what a person reads a terminal FOR — the fold is
+    /// for what they have already read. A running block splits a run rather than sitting
+    /// inside one, so its run-mates fold either side of it.
+    ///
+    /// That the first block keys a run is what keeps a fold a reader opened open: a run
+    /// grows at its END (the block that was newest joins once another arrives), so its first
+    /// block is stable for as long as the run is.
+    let ofBlocks (blocks: Block list) : BlockGroup list =
+        let newest = List.tryLast blocks |> Option.map (fun b -> b.BlockId)
+        let foldable (block: Block) =
+            Some block.BlockId <> newest
+            && (match block.Status with
+                | BlockRunning -> false
+                | BlockFinished _ | BlockRejected _ -> true)
+        // Each group so far as its first block and the rest newest-first, so it can never be
+        // empty and its latest block is at hand.
+        let step (groups: (Block * Block list) list) (next: Block) : (Block * Block list) list =
+            match groups with
+            | (first, restNewestFirst) :: earlier ->
+                let previous = List.tryHead restNewestFirst |> Option.defaultValue first
+                if foldable previous && foldable next
+                   && Authority.author previous.Authority = Authority.author next.Authority then
+                    (first, next :: restNewestFirst) :: earlier
+                else (next, []) :: groups
+            | [] -> [ next, [] ]
+        List.fold step [] blocks
+        |> List.rev
+        |> List.map (fun (first, restNewestFirst) ->
+            match restNewestFirst with
+            | [] -> BlockGroup.Alone first
+            | _ -> BlockGroup.Run (first, List.rev restNewestFirst))
+
+    /// The fold a block is behind, if it is behind one — what "show in terminal" has to
+    /// open before there is anything on screen to scroll to.
+    let holding (terminal: TerminalId) (block: BlockId) (blocks: Block list) : FoldKey option =
+        ofBlocks blocks
+        |> List.tryPick (function
+            | BlockGroup.Run (leader, rest) when leader.BlockId = block || rest |> List.exists (fun b -> b.BlockId = block) ->
+                Some (key terminal leader)
+            | BlockGroup.Run _ | BlockGroup.Alone _ -> None)
 
 type ClientModel =
     { Peer          : PeerState
@@ -969,7 +1042,8 @@ type ClientModel =
       /// back as a bare id, so this is the only thing that can say what a refusal refused.
       Asked         : Map<RequestId, SessionCommand>
       /// Which folds are UNFOLDED — an act's particulars, a turn's tool calls, one call's
-      /// input and output. View state like the menu above — what one person opened to read
+      /// input and output, a run of commands in the pane. Not remembered across a reload:
+      /// that is a fresh read, and every fold starts shut. View state like the menu above — what one person opened to read
       /// is nobody else's — but a set rather than one slot: two folds open at once are two
       /// things being read, not two popovers fighting over an Escape. Empty is every line
       /// folded to its title, which is how a timeline is read.
@@ -1356,6 +1430,10 @@ type ClientMsg =
     /// control, as with the menu — and one message for every fold on the timeline, because
     /// they are one control drawn in three places.
     | ToggleFoldMsg of FoldKey
+    /// A fold the DOCUMENT opened or shut: the pane's runs are native `<details>`, whose
+    /// `toggle` reports the state it now has. A set rather than a toggle because the event
+    /// also fires for an open the model asked for itself, and a toggle would undo it.
+    | FoldSetMsg of FoldKey * opened: bool
     /// Show this break's moment instead of its duration, or go back to the duration if it is
     /// already showing one. A toggle rather than a one-way reveal, for the reason the menu and
     /// the folds are: the control that sends it is the same control either way, and a label a
@@ -3359,7 +3437,18 @@ module ClientModel =
             match model.Pane with
             | Some (Previewing (_, under)) -> { model with Pane = under |> Option.map OnTerminal }
             | Some (OnTerminal _) | None -> model
-        | ShowInTerminalMsg (terminal, block) -> fold (ShowInPaneMsg (ReadingAt (terminal, block))) model
+        | ShowInTerminalMsg (terminal, block) ->
+            // The command has to be ON the page before anything can scroll to it or mark it:
+            // a block inside a shut run is not, so the run opens on the way.
+            let behind =
+                model.Terminals.Terminals
+                |> List.tryFind (fun view -> view.TerminalId = terminal)
+                |> Option.bind (fun view -> BlockGroup.holding terminal block view.Blocks)
+            let unfolded =
+                match behind with
+                | Some key -> { model with OpenFolds = Set.add key model.OpenFolds }
+                | None -> model
+            fold (ShowInPaneMsg (ReadingAt (terminal, block))) unfolded
         | MoveMsg _
         | CopyMsg _
         | RetryNowMsg -> model
@@ -3407,6 +3496,8 @@ module ClientModel =
                 if Set.contains key model.OpenFolds then Set.remove key model.OpenFolds
                 else Set.add key model.OpenFolds
             { model with OpenFolds = next }
+        | FoldSetMsg (key, opened) ->
+            { model with OpenFolds = (if opened then Set.add key model.OpenFolds else Set.remove key model.OpenFolds) }
         | ToggleBreakTimeMsg messageId ->
             let next =
                 if Set.contains messageId model.DatedBreaks then Set.remove messageId model.DatedBreaks

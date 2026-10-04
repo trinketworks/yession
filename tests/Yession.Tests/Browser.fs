@@ -4740,13 +4740,6 @@ let editorTests =
                         page.EvaluateAsync
                             """() => window.__record('term-harness', 2, 'o',
                                        Array.from({ length: 300 }, (_, i) => 'line ' + (i + 1)).join('\r\n'))""")
-                // It runs inside the agent's fold. Opened by the element rather than a click:
-                // a click scrolls whatever it must to bring the target into view, the clipped
-                // panel included, and this case is about where things are after a scroll the
-                // READER made.
-                do! awaitU (
-                        page.EvaluateAsync
-                            """() => { document.querySelector("#shell [data-terminal-block-run='block-burst-ok'] details").open = true }""")
                 // Scroll until the middle of that output is at the top of the scrollback.
                 let! _ =
                     await (
@@ -4821,6 +4814,77 @@ let editorTests =
                 // pressed left the document with the tab it was in.
                 let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-pane-panel') === true""")
                 return ()
+            }
+
+        // The same press, for a command that is behind a shut run ("ran 2 commands"). It
+        // landed on the terminal with everything folded: nothing scrolled to, nothing marked,
+        // the promise of the button broken. Only a browser can see the run open, the command
+        // inside the scroller's box and its mark playing.
+        editorCase "showing a folded command in its terminal opens its run and marks it" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card]")
+                do! awaitU (page.ClickAsync "#shell [data-chat-task-card] [data-fold]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card] [data-chat-block='block-burst-failed']")
+                do! awaitU (page.ClickAsync "#shell [data-chat-task-card] [data-chat-block='block-burst-failed']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-show-in-terminal]")
+                do! awaitU (page.ClickAsync "#shell [data-pane-show-in-terminal]")
+
+                // One reading, so a red names every part that did not hold rather than the
+                // first wait that timed out.
+                let landed =
+                    """(() => {
+                         const scroller = document.querySelector('#shell [data-terminal-scrollback]')
+                         const run = scroller && scroller.querySelector("[data-terminal-block-run='block-burst-ok'] details")
+                         const block = scroller && scroller.querySelector('[data-terminal-block=block-burst-failed]')
+                         if (!block) return JSON.stringify({ block: false })
+                         // In view AND painted: a box inside a shut `<details>` can still
+                         // measure as if it were on screen, so ask what is drawn at its line.
+                         const row = block.querySelector('[data-terminal-block-command]')
+                         const a = scroller.getBoundingClientRect(), r = row.getBoundingClientRect()
+                         const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+                         return JSON.stringify({
+                           runOpen: !!run && run.open,
+                           inView: r.top >= a.top - 1 && r.bottom <= a.bottom + 1 && !!hit && block.contains(hit),
+                           marked: block.getAnimations().some(x => x.animationName === 'reveal-line'),
+                           focusInPane: document.activeElement?.hasAttribute('data-pane-panel') === true
+                         })
+                       })()"""
+                let expected = "{\"runOpen\":true,\"inView\":true,\"marked\":true,\"focusInPane\":true}"
+                // The mark is an animation that ENDS, so it is read while it plays: the wait
+                // settles on all four at once, and only a wait that never settled reads again
+                // to say which part was missing.
+                match! Async.Catch (await (page.WaitForFunctionAsync (sprintf "%s === %s" landed (System.Text.Json.JsonSerializer.Serialize expected)))) with
+                | Choice1Of2 _ -> ()
+                | Choice2Of2 _ ->
+                    let! said = await (page.EvaluateAsync<string> ("() => " + landed))
+                    Expect.equal said expected "the run is open, the command in view, marked, and focus in the pane"
+            }
+
+        // A run a person opened is theirs to shut. It was the `<details>` element's own state,
+        // so anything that rebuilt the terminal's history — a preview laid over it and taken
+        // down again — rebuilt it shut. The open is native (a click on the summary), which is
+        // the half no rendered string can see reaching the model.
+        editorCase "a run opened by hand is still open after the terminal is shown again" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-block-run='block-burst-ok'] summary")
+                do! awaitU (page.ClickAsync "#shell [data-terminal-block-run='block-burst-ok'] summary")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """document.querySelector("#shell [data-terminal-block-run='block-burst-ok'] details")?.open === true""")
+
+                // Away to a preview, which takes the history out of the document, and back.
+                do! awaitU (page.ClickAsync "#shell [data-chat-block='block-harness']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-show-in-terminal]")
+                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-terminal-block-run='block-burst-ok']")""")
+                do! awaitU (page.ClickAsync "#shell [data-pane-show-in-terminal]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-block-run='block-burst-ok'] details")
+
+                let! opened =
+                    await (page.EvaluateAsync<bool>
+                        """() => new Promise(done => requestAnimationFrame(() =>
+                             done(document.querySelector("#shell [data-terminal-block-run='block-burst-ok'] details").open)))""")
+                Expect.isTrue opened "open as the reader left it"
             }
 
         // A command the agent has queued, in the chat. Two promises here that no rendered

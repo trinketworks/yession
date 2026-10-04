@@ -977,6 +977,121 @@ let private statusTests =
                 "only term-b has a command running"
     ]
 
+// --- What just ran is never folded away ------------------------------------------------------
+
+/// One block for a grouping case, by Ada unless said otherwise. Its transcript range is
+/// nothing real: grouping reads the author, the status and the order, and nothing else.
+let private blockOf (authority: Authority) (n: string) (status: BlockStatus) : Block =
+    { BlockId = block n
+      QueueId = None
+      Authority = authority
+      Command = "echo " + n
+      Background = false
+      FromSeq = 0
+      ToSeq = Some 1
+      Status = status }
+
+let private doneBy (authority: Authority) (n: string) = blockOf authority n (BlockFinished (CommandSucceeded 0))
+
+/// Each group as the blocks in it — a run joined with `+` — so a whole layout is one line.
+let private groupsOf (blocks: Block list) : string list =
+    BlockGroup.ofBlocks blocks
+    |> List.map (function
+        | BlockGroup.Alone b -> BlockId.value b.BlockId
+        | BlockGroup.Run (leader, rest) -> leader :: rest |> List.map (fun b -> BlockId.value b.BlockId) |> String.concat "+")
+
+/// Ada running `count` commands one after another in term-a, each finished before the next,
+/// from transcript offset `from` — and the pane on that terminal.
+let private ranInA (first: int) (count: int) (from: int64) : EventEnvelope<SessionEvent> list =
+    [ for i in 0 .. count - 1 do
+        let n = first + i
+        let offset = from + int64 (2 * i)
+        yield at offset (float offset) (started terminalA (string n) byAda (sprintf "echo %d" n) (10 * n))
+        yield at (offset + 1L) (float offset + 0.5) (completed terminalA (string n) (CommandSucceeded 0) (10 * n + 5)) ]
+
+/// Three commands in term-a, the pane on it: the first two are a run, the third stands alone.
+let private threeRan : ClientModel =
+    clientOf (at 1L 0.0 (opened terminalA "shell") :: ranInA 1 3 2L)
+    |> Support.step (ShowInPaneMsg (Reading terminalA))
+
+let private firstRun = FoldKey.Commands (terminalA, block "1")
+
+/// Whether the run that starts at `leader` is drawn open, read off the rendered pane.
+let private runShownOpen (leader: string) (model: ClientModel) : bool =
+    (markupAt (Dom.attr Dom.Hooks.terminalBlockRun ("b-" + leader)) (Support.render model)).Contains "data-fold-open=\"yes\""
+
+let private latestTests =
+    testList "What just ran is never folded away" [
+        // Three real-browser journeys found it at once: `pwd`, then `echo second`, and both
+        // went behind "ran 2 commands" — the answer just asked for, a click away, every time.
+        testCase "the newest command is never in a run" <| fun () ->
+            Expect.equal
+                (groupsOf [ doneBy byAda "1"; doneBy byAda "2" ])
+                [ "b-1"; "b-2" ]
+                "two commands, each on screen"
+
+        testCase "a running command is never in a run, and its run-mates still fold either side" <| fun () ->
+            Expect.equal
+                (groupsOf
+                    [ doneBy byAda "1"; doneBy byAda "2"; blockOf byAda "3" BlockRunning
+                      doneBy byAda "4"; doneBy byAda "5"; doneBy byAda "6" ])
+                [ "b-1+b-2"; "b-3"; "b-4+b-5"; "b-6" ]
+                "the loop still running is drawn whole"
+
+        testCase "a run keeps its key as it grows" <| fun () ->
+            // The key a fold's open state is kept under: if the next command re-keyed the run,
+            // whatever the reader opened would shut under them.
+            let before = [ doneBy byAda "1"; doneBy byAda "2"; doneBy byAda "3" ]
+            Expect.equal
+                (BlockGroup.holding terminalA (block "1") (before @ [ doneBy byAda "4" ]))
+                (BlockGroup.holding terminalA (block "1") before)
+                "the same fold before and after"
+
+        // The cases below assert a run is OPEN; this is what makes that mean something.
+        testCase "an older run nobody opened is shut" <| fun () ->
+            Expect.isFalse (runShownOpen "1" threeRan) "folded to its line"
+
+        testCase "a run someone opened stays open when the next command runs" <| fun () ->
+            let model =
+                threeRan
+                |> Support.step (FoldSetMsg (firstRun, true))
+                |> thenFolded (ranInA 4 1 8L)
+            Expect.isTrue (runShownOpen "1" model) "still open, one command longer"
+
+        testCase "a run someone opened stays open across a hand-back" <| fun () ->
+            // Live mode swaps the history for the screen and back, which rebuilt the
+            // `<details>` and shut it.
+            let model =
+                threeRan
+                |> Support.step (FoldSetMsg (firstRun, true))
+                |> thenFolded [ at 8L 8.0 (took terminalA (PeerRef ada) 40); at 9L 9.0 (released terminalA (PeerRef ada) LeaseReleased 50) ]
+            Expect.isTrue (runShownOpen "1" model) "open as it was left"
+
+        testCase "a run someone opened stays open across a preview and show in terminal" <| fun () ->
+            let model =
+                threeRan
+                |> Support.step (FoldSetMsg (firstRun, true))
+                |> Support.step (chip terminalA "3")
+                |> Support.step (ShowInTerminalMsg (terminalA, block "3"))
+            Expect.isTrue (runShownOpen "1" model) "open as it was left"
+
+        testCase "a run someone shut stays shut" <| fun () ->
+            let model =
+                threeRan
+                |> Support.step (FoldSetMsg (firstRun, true))
+                |> Support.step (FoldSetMsg (firstRun, false))
+            Expect.isFalse (runShownOpen "1" model) "shut, as they asked"
+
+        testCase "show in terminal opens the run its command is in" <| fun () ->
+            // Scrolling to a command inside a shut run scrolls to nothing, and its mark plays
+            // on an element nobody can see.
+            let model =
+                threeRan
+                |> Support.step (chip terminalA "2")
+                |> Support.step (ShowInTerminalMsg (terminalA, block "2"))
+            Expect.isTrue (runShownOpen "1" model) "the run holding it is open"
+    ]
+
 // --- Keyframes and the ranged cast (stage 3) --------------------------------------------------
 
 /// The output records of a `.cast`, in order — what a player would feed the emulator.
@@ -3622,6 +3737,7 @@ let tests =
         reloadTests
         edgeTabTests
         statusTests
+        latestTests
         pageTests
         keyframeTests
         videoTests
