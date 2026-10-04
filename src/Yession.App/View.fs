@@ -1568,13 +1568,14 @@ module View =
         | LeaseHolderGone -> Dom.Text.stretchGone
         | LeaseIdle -> Dom.Text.stretchIdle
 
-    /// How a stretch ended, said the way a reader asks it.
-    let private stretchEnding (model: ClientModel) =
+    /// How a stretch ended, said the way a reader asks it — in the `voice` of the surface it
+    /// is said on: the chat's status capitals, or the pane's caption.
+    let private stretchEnding (voice: string) (model: ClientModel) =
         function
-        | LeaseReleased -> html $"""<span class="{Style.statusFaint}">handed back</span>"""
-        | LeaseStolen by -> html $"""<span class="{Style.statusFaint}">taken over by {Entity.render model by (EntityRef.Actor by)}</span>"""
-        | LeaseHolderGone -> html $"""<span class="{Style.statusFaint}">holder left</span>"""
-        | LeaseIdle -> html $"""<span class="{Style.statusFaint}">went idle</span>"""
+        | LeaseReleased -> html $"""<span class="{voice}">handed back</span>"""
+        | LeaseStolen by -> html $"""<span class="{voice}">taken over by {Entity.render model by (EntityRef.Actor by)}</span>"""
+        | LeaseHolderGone -> html $"""<span class="{voice}">holder left</span>"""
+        | LeaseIdle -> html $"""<span class="{voice}">went idle</span>"""
 
     /// Which hold a queued command is under, and how that hold reads.
     ///
@@ -2559,7 +2560,7 @@ module View =
                         data-terminal-id="{TerminalId.value stretch.TerminalId}"
                         @click={Ev(fun _ -> dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Stretch stretch))))}>
                   <span class="{Style.chatChipText}">typed in {where} for {length}</span>
-                  <span class="shrink-0">{stretchEnding model stretch.End}</span>
+                  <span class="shrink-0">{stretchEnding Style.statusFaint model stretch.End}</span>
                 </button>"""
         // One call the agent made. No pane tab: unlike a block there is nothing recorded to
         // open — but there IS something to read: what the call was given and what it answered.
@@ -3241,20 +3242,20 @@ module View =
         let control =
             if holder = mine then
                 html $"""
-                    <button type="button" class="{Style.btnPrimary}" data-terminal-release="{TerminalId.value terminal}"
+                    <button type="button" class="{Style.bandActPrimary}" data-terminal-release="{TerminalId.value terminal}"
                             @click={Ev(fun _ -> dispatch (ReleaseTerminalMsg terminal))}>Hand it back</button>"""
             else
                 // Any peer may take it, and no permission is asked for: collaborators are
                 // trusted, so a steal needs to be VISIBLE rather than authorised — which the
                 // event log is, and this button says so plainly.
                 html $"""
-                    <button type="button" class="{Style.btn}" data-terminal-take="{TerminalId.value terminal}"
+                    <button type="button" class="{Style.bandAct}" data-terminal-take="{TerminalId.value terminal}"
                             @click={Ev(fun _ -> dispatch (TakeTerminalMsg terminal))}>Take over</button>"""
         html $"""
             <div class="{Style.terminalBandRow}" data-terminal-lease="{label}" aria-live="polite">
-              <span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>live</span>
+              <span class="{Style.paneLive}"><span class="{Style.statusDotPulse}"></span>live</span>
               <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model holder ]}"></span>
-              <span class="{Style.small}">{who} in {where}</span>
+              <span class="{Style.paneSays}">{who} in {where}</span>
               <div class="ml-auto flex items-center gap-2">{control}</div>
             </div>"""
 
@@ -3398,11 +3399,11 @@ module View =
             else
                 html $"""
                     <div class="{Style.terminalBandRow}" data-terminal-lost="{TerminalId.value terminal}" aria-live="polite">
-                      <span class="{Style.statusErr}">not marking</span>
+                      <span class="{Style.smallErr} shrink-0">not marking</span>
                       <span class="{Style.small}">{Dom.Text.terminalNotMarking}</span>
                       {detailNote "terminal-lost" [ Dom.Text.terminalNotMarkingWhy ]}
                       <div class="ml-auto flex items-center gap-2">
-                        <button type="button" class="{Style.btnPrimary}" data-terminal-rearm="{TerminalId.value terminal}"
+                        <button type="button" class="{Style.bandActPrimary}" data-terminal-rearm="{TerminalId.value terminal}"
                                 @click={Ev(fun _ -> dispatch (RearmTerminalMsg terminal))}>Re-arm</button>
                       </div>
                     </div>"""
@@ -3470,7 +3471,7 @@ module View =
         | Some (face, label, next) ->
             Some (
                 html $"""
-                <button type="button" class="{Style.btn}" data-terminal-watch="{face}"
+                <button type="button" class="{Style.paneAct}" data-terminal-watch="{face}"
                         @click={Ev(fun _ ->
                                       match next with
                                       | Some mode -> dispatch (ShowInPaneMsg mode)
@@ -3500,19 +3501,19 @@ module View =
                 | None -> html $"""{name} closed — {closed.Reason}"""
             | None -> html $"""{name} closed"""
         // The gap in the audit trail, stated as a status rather than narrated: the drop is
-        // recorded so it can be SAID, and the caps-err voice is how this design says a fact
-        // that is wrong.
+        // recorded so it can be SAID — in the voice the `all` page says it in, because it is
+        // the same fact and nothing a reader can act on (`Style.terminalGone`).
         let notKept =
             if not gone then Lit.nothing
             else
                 html $"""
-                    <span class="{Style.statusErr}"
+                    <span class="{Style.terminalGone}"
                           data-terminal-replay-gone="{TerminalId.value view.TerminalId}">{Dom.Text.recordingLost}</span>"""
         html $"""
             <section class="{Style.terminalComposer}" data-terminal-closed-band="{TerminalId.value view.TerminalId}">
               <span class="{Style.bandRail}"></span>
               <div class="{Style.terminalBandRow}">
-                <span class="{Style.statusFaint}">{closedFor}</span>
+                <span class="{Style.paneSays}">{closedFor}</span>
                 {notKept}
               </div>
             </section>"""
@@ -3615,15 +3616,16 @@ module View =
         let length = durationText (TerminalStretch.duration stretch)
         let where = Entity.terminalName model stretch.TerminalId |> Option.defaultValue stretch.Title
         let recording =
-            // The count in the metadata voice (caps, tabular figures); the raw transcript
+            // The count in the pane's caption voice, with tabular figures; the raw transcript
             // seqs are plumbing and stay out of the room.
             match stretch.Range with
             | Some (fromSeq, toSeq) ->
-                html $"""<span class="{Style.label} tabular-nums">{Dom.Text.linesRecorded (toSeq - fromSeq)}</span>"""
+                html $"""<span class="{Style.paneSays} tabular-nums">{Dom.Text.linesRecorded (toSeq - fromSeq)}</span>"""
             // Stated, not blank: a stretch with no recorded bounds is a gap in the record,
-            // and an empty player would be indistinguishable from a quiet session.
+            // and an empty player would be indistinguishable from a quiet session. Said as a
+            // lost recording is said everywhere else in the pane (`Style.terminalGone`).
             | None ->
-                html $"""<span class="{Style.statusErr}">not recorded</span>"""
+                html $"""<span class="{Style.terminalGone}">not recorded</span>"""
         // A stretch has no other read: somebody held the keyboard, and what they did is bytes
         // rather than commands. So it plays without being asked, which is what the model says
         // about it (`previewPlays`) rather than something this template decides.
@@ -3638,9 +3640,9 @@ module View =
                      never wrap, so a narrow pane gives way in the terminal's name and nowhere
                      else. -->
                 <div class="{Style.terminalQueuedRow}">
-                  <span class="{Style.chatChipWho}">{Entity.actorName model stretch.Holder}</span>
+                  <span class="{Style.paneWho}">{Entity.actorName model stretch.Holder}</span>
                   <span class="{Style.small} min-w-0 truncate">typed in {where}</span>
-                  <span class="ml-auto shrink-0 whitespace-nowrap">{stretchEnding model stretch.End}</span>
+                  <span class="ml-auto shrink-0 whitespace-nowrap">{stretchEnding Style.paneSays model stretch.End}</span>
                   <span class="{Style.small} shrink-0 whitespace-nowrap tabular-nums">{length}</span>
                 </div>
                 {recording}
@@ -3667,7 +3669,7 @@ module View =
     let private contentDownloadLink (ref: ContentRef) : TemplateResult =
         let url = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative (SessionRoute.Content ref))
         html $"""
-            <a class="{Style.btn}" href="{url}" download="{ContentName.ofRef ref}"
+            <a class="{Style.paneAct}" href="{url}" download="{ContentName.ofRef ref}"
                data-content-download="{ContentRef.value ref}">{Dom.Text.download}</a>"""
 
     let private paneContentView (ref: ContentRef) : TemplateResult =
@@ -3726,7 +3728,7 @@ module View =
                 if not view.IsOpen || Option.isSome view.Lease then []
                 else
                     [ html $"""
-                        <button type="button" class="{Style.btn}" data-terminal-take="{TerminalId.value view.TerminalId}"
+                        <button type="button" class="{Style.paneAct}" data-terminal-take="{TerminalId.value view.TerminalId}"
                                 @click={Ev(fun _ -> dispatch (TakeTerminalMsg view.TerminalId))}>{Dom.Text.typeHere}</button>""" ]
             take @ Option.toList (terminalWatchToggle dispatch model view)
 
@@ -3751,7 +3753,7 @@ module View =
                     let face = if playing then "output" else "watch"
                     let label = if playing then Dom.Text.output else Dom.Text.replay
                     [ html $"""
-                        <button type="button" class="{Style.btn}" data-pane-watch="{face}"
+                        <button type="button" class="{Style.paneAct}" data-pane-watch="{face}"
                                 @click={Ev(fun _ ->
                                               dispatch (ShowPreviewMsg { preview with Preview.Plays = not playing }))}>{label}</button>""" ]
             // The reader's OTHER question about this command: not what it printed, which
@@ -3763,7 +3765,7 @@ module View =
                 else
                     let where = Entity.terminalName model terminalId |> Option.defaultValue (TerminalId.value terminalId)
                     [ html $"""
-                        <button type="button" class="{Style.btn}" data-pane-show-in-terminal="{BlockId.value blockId}"
+                        <button type="button" class="{Style.paneAct}" data-pane-show-in-terminal="{BlockId.value blockId}"
                                 @click={Ev(fun _ ->
                                               dispatch (ShowInTerminalMsg (terminalId, blockId)))}>{Dom.Text.showIn where}</button>""" ]
             watch @ showInTerminal
@@ -3778,9 +3780,10 @@ module View =
     ///
     /// ONE control in two places — a row of the switcher, and the tab's × — rather than two
     /// look-alikes: a close and a kill that looked the same and meant opposite things is what
-    /// this replaced. `glyph` is all that differs, because a × on a tab and a stop on a row
-    /// are what each surface already says a destructive act looks like, and the faces carry
-    /// only what each place needs to sit in its line. Absent, not disabled,
+    /// this replaced. `glyph` is all that differs: a × on a tab, where it rides a name in a
+    /// row of names, and the word `kill` on a row, where the space is the row's own. It was a
+    /// square there, which is what Stop looks like — and a running command has a real Stop.
+    /// The faces carry only what each place needs to sit in its line. Absent, not disabled,
     /// where the terminal cannot be killed.
     let private killControl
         (dispatch: ClientMsg -> unit)
@@ -3850,8 +3853,8 @@ module View =
     let private terminalMark (view: TerminalView) : TemplateResult =
         let mark (token: string) (voice: string) (glyph: TemplateResult) (word: string) =
             html $"""<span class="{Style.pivotMark} {voice}" data-pane-mark="{token}"><span aria-hidden="true">{glyph}</span><span class="{Style.srOnly}">{word}</span></span>"""
-        // Hollow: the dot with nothing left in it. Not a stop square, which is what the kill
-        // beside it on the `all` page looks like.
+        // Hollow: the dot with nothing left in it. Not a stop square, which is what a running
+        // command's Stop looks like.
         if not view.IsOpen then
             mark "closed" "text-ink-faint" (html $"""<span class="{Style.statusDotHollow}"></span>""") Dom.Text.markClosed
         elif Option.isSome (Projection.runningBlock view) then
@@ -3904,10 +3907,14 @@ module View =
                     | Some holder ->
                         html $"""<span class="{Style.statusRun}" title="{Entity.actorName model holder}"><span class="{Style.statusDot}"></span></span>"""
                     | None -> Lit.nothing
-            // A hole in an audit trail is stated, in the voice reserved for a fact that is wrong.
+            // A hole in an audit trail is stated — beside the name, quietly
+            // (`Style.terminalGone`): nine closed rows of it in the error red were a column of
+            // alarms about something nobody can act on. On the NAME's line, never a line of its
+            // own: a row with no command under it would grow by one when its terminal died,
+            // and move every row beneath it.
             let gone =
                 if view.IsOpen || affords.CanReplay then Lit.nothing
-                else html $"""<span class="{Style.terminalListGone}" data-terminal-list-gone="{id}">{Dom.Text.recordingLost}</span>"""
+                else html $"""<span class="{Style.terminalGone}" data-terminal-list-gone="{id}">{Dom.Text.recordingLost}</span>"""
             let peers =
                 ClientModel.editorsInTerminal view.TerminalId model
                 |> List.map (fun (who, name) ->
@@ -3918,21 +3925,22 @@ module View =
                 if not affords.CanRewind then Lit.nothing
                 else
                     html $"""
-                        <button type="button" class="{Style.btnIconBare}" data-terminal-list-rewind="{id}"
+                        <button type="button" class="{Style.terminalListAct}" data-terminal-list-rewind="{id}"
                                 aria-label="{Dom.Text.rewindTerminal name}" title="{Dom.Text.rewindTerminal name}"
                                 @click={Ev(fun _ ->
                                               // ONE message, which states the whole face — the
                                               // `all` page left included.
                                               dispatch (RewindTerminalMsg view.TerminalId)
-                                              dispatch (MoveMsg DomMove.FocusPane))}>{Icon.rewind}</button>"""
+                                              dispatch (MoveMsg DomMove.FocusPane))}>{Dom.Text.rewind}</button>"""
             let reattach =
                 if not affords.CanReattach then Lit.nothing
                 else
                     html $"""
-                        <button type="button" class="{Style.btnIconBare}" data-terminal-reattach="{id}"
+                        <button type="button" class="{Style.terminalListAct}" data-terminal-reattach="{id}"
                                 aria-label="Attach {name} again" title="Attach {name} again"
-                                @click={Ev(fun _ -> dispatch (ReattachTerminalMsg view.TerminalId))}>{Icon.attach}</button>"""
+                                @click={Ev(fun _ -> dispatch (ReattachTerminalMsg view.TerminalId))}>{Dom.Text.reattach}</button>"""
             let nameClass = if view.IsOpen then Style.terminalListName else Style.terminalListNameClosed
+            let killWord = html $"""{Dom.Text.kill}"""
             // What it is doing or last did, under the name: nine rows of `term N` say which is
             // which, and this says which is the one you want.
             let subtitle =
@@ -3958,7 +3966,7 @@ module View =
                     </span>
                     {subtitle}
                   </span>
-                  <span class="{Style.terminalListVerbs}">{rewind}{reattach}{killControl dispatch model Style.btnIconBareDanger Style.btnKillArmed Icon.stop view}</span>
+                  <span class="{Style.terminalListVerbs}">{rewind}{reattach}{killControl dispatch model Style.terminalListKill Style.btnKillArmed killWord view}</span>
                 </div>"""
         // A file's row, in the same shape as a terminal's. Reachability is the whole point of
         // it: a file is otherwise findable only by its chip in a message, so one shared two
@@ -4316,7 +4324,7 @@ module View =
                         | _ -> Dom.Text.behindLive None
                     html $"""
                         <div class="{Style.terminalLiveFloat}">
-                          <span class="{Style.statusFaint}" data-terminal-behind="{TerminalId.value view.TerminalId}">{behind}</span>
+                          <span class="{Style.terminalBehind}" data-terminal-behind="{TerminalId.value view.TerminalId}">{behind}</span>
                         </div>"""
             // In live mode the block history gives way to the SCREEN (Plan 14, stage 6). A
             // program is running here and what it displays is not a list of commands and
@@ -4459,7 +4467,7 @@ module View =
                     <div class="{Style.terminalEmpty}">
                       <span class="font-terminal text-[28px] leading-8 text-ink-faint select-none" aria-hidden="true">$</span>
                       <div class="{Style.terminalEmptyNewCell}" @keydown={Ev shutsOnEscape}>
-                        <button type="button" class="{Style.btnPrimary}" data-terminal-new
+                        <button type="button" class="{Style.paneActPrimary}" data-terminal-new
                                 aria-haspopup="{if newAsks then "menu" else "false"}"
                                 aria-expanded="{if model.PaneMenu then "true" else "false"}"
                                 @click={Ev(fun _ -> pressingNew ())}>{Dom.Text.aNewTerminal}</button>
