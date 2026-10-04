@@ -637,7 +637,13 @@ module Client =
           /// the same terms as `ReadPosition` above. Without it, a client that replayed a
           /// terminal out of its own store would start its first read at line 0 and fetch
           /// every line it already has.
-          TranscriptReadPosition : (TerminalId -> int) option }
+          TranscriptReadPosition : (TerminalId -> int) option
+          /// Run this once the platform next draws — the browser's animation frame. Live
+          /// terminal records that arrive before then are folded together, as one message
+          /// per terminal, so a burst costs a render per FRAME rather than one per record
+          /// (`TerminalRecordsMsg`). A client that draws nothing runs it at once, which
+          /// folds each record as it arrives.
+          NextFrame : (unit -> unit) -> unit }
 
     module ConnectOptions =
         let defaults : ConnectOptions =
@@ -647,7 +653,8 @@ module Client =
               FetchTranscripts = None
               OnTerminalSnapshot = fun _ _ -> ()
               ReadPosition = None
-              TranscriptReadPosition = None }
+              TranscriptReadPosition = None
+              NextFrame = fun run -> run () }
 
     /// The HTTP event feed for `ConnectOptions.FetchEvents`: sends "events after offset X"
     /// as exactly that — a cursor (`/events/after/{n}`) — and decodes the JSONL envelopes
@@ -1236,27 +1243,57 @@ module Client =
                 | true, seq -> seq
                 | _ -> 0
 
-        let fetchTranscript (terminal: TerminalId) =
+        // The terminals with a read out, and those asked to read again while it was. ONE read
+        // per terminal at a time, for the reason the event cursor has `readInFlight`: every
+        // signal that there is more — each live record past the read position, each
+        // availability hint — used to start a read of its own, and the read position does not
+        // move until an answer lands. So a burst asked the same question once per record, all
+        // at once: `seq 100000` is ~170 records in under three seconds, and it raised ~170
+        // concurrent reads of `after/3`, each answered with a larger page, each page a fold
+        // and a render. That queue of renders held the page's main thread long enough for the
+        // link heartbeat to go unanswered (`Link`), so the Session dropped a peer that was
+        // alive — and the reconnect raised the storm again.
+        //
+        // A signal that arrives during a read is not dropped: it earns ONE more read, from
+        // wherever the first got to, once it lands. However long the burst, that is at most
+        // two reads per terminal — the one out, and the one owed.
+        let transcriptReading = System.Collections.Generic.HashSet<string> ()
+        let transcriptOwed = System.Collections.Generic.HashSet<string> ()
+
+        let rec fetchTranscript (terminal: TerminalId) =
             match options.FetchTranscripts with
             | None -> ()
             | Some fetch ->
-                let rec readFrom (fromSeq: int) =
-                    async {
-                        match! fetch terminal fromSeq with
-                        | Error _ ->
-                            // A transcript read that fails is not a session that failed: the
-                            // live leg keeps delivering, and the next availability hint
-                            // re-arms this. Parking beats spinning.
-                            return ()
-                        | Ok page ->
-                            transcriptRead.[TerminalId.value terminal] <- max (readPositionOf terminal) page.NextSeq
-                            dispatch (TerminalPageMsg (terminal, page.Records, page.Header, page.NextSeq))
-                            // `NextSeq > fromSeq` guards the one way this could spin: a
-                            // chunk that yields nothing new would otherwise be re-read for
-                            // ever at the same offset.
-                            if not page.IsEnd && page.NextSeq > fromSeq then return! readFrom page.NextSeq
-                    }
-                Async.StartImmediate (readFrom (readPositionOf terminal))
+                let key = TerminalId.value terminal
+                if transcriptReading.Contains key then transcriptOwed.Add key |> ignore
+                else
+                    transcriptReading.Add key |> ignore
+                    let rec readFrom (fromSeq: int) =
+                        async {
+                            match! fetch terminal fromSeq with
+                            | Error _ ->
+                                // A transcript read that fails is not a session that failed: the
+                                // live leg keeps delivering, and the next availability hint
+                                // re-arms this. Parking beats spinning.
+                                return ()
+                            | Ok page ->
+                                // Only news is folded: an answer that takes the reader nowhere
+                                // is lines it holds already, and a fold is a render.
+                                if TranscriptCursor.advances (readPositionOf terminal) page.NextSeq then
+                                    transcriptRead.[key] <- page.NextSeq
+                                    dispatch (TerminalPageMsg (terminal, page.Records, page.Header, page.NextSeq))
+                                // `NextSeq > fromSeq` guards the one way this could spin: a
+                                // chunk that yields nothing new would otherwise be re-read for
+                                // ever at the same offset.
+                                if not page.IsEnd && page.NextSeq > fromSeq then return! readFrom page.NextSeq
+                        }
+                    Async.StartImmediate (
+                        async {
+                            try do! readFrom (readPositionOf terminal)
+                            finally
+                                transcriptReading.Remove key |> ignore
+                                if transcriptOwed.Remove key then fetchTranscript terminal
+                        })
 
         // Presence is ONE frame with two halves, reported from two places: the caret comes from
         // an editor event, the view from the model after a render. The last of each is kept here
@@ -1285,16 +1322,43 @@ module Client =
                               Focus = reportedFocus
                               Viewing = reportedViewing }))
 
+        // Live records held for the next frame, in arrival order (`ConnectOptions.NextFrame`).
+        // What reaches the model is unchanged — the same records, keyed by the same seqs —
+        // only how many renders it takes to get there.
+        //
+        // The heartbeat is the reason this matters beyond a smoother page. A probe from the
+        // Session is a frame like any other, answered when the pump reaches it, and the pump
+        // reaches it only after every frame queued ahead of it has been dispatched. With a
+        // render per record, a burst put seconds of rendering in front of the answer — on a
+        // phone, more than the three the Session waits — and a peer that was only busy was
+        // dropped as dead. Held here, a record costs an append, and the answer goes out in
+        // the same turn the probe arrived.
+        let heldRecords = ResizeArray<TerminalId * (int * TranscriptRecord) list> ()
+        let mutable drawAsked = false
+        let releaseRecords () =
+            drawAsked <- false
+            let held = List.ofSeq heldRecords
+            heldRecords.Clear ()
+            held
+            |> List.groupBy fst
+            |> List.iter (fun (terminal, batches) -> dispatch (TerminalRecordsMsg (terminal, List.collect snd batches)))
+
         let dispatchAndConsume (msg: ClientMsg) =
-            dispatch msg
+            match msg with
+            | TerminalRecordsMsg (terminal, records) ->
+                heldRecords.Add (terminal, records)
+                if not drawAsked then
+                    drawAsked <- true
+                    options.NextFrame releaseRecords
+            | _ -> dispatch msg
             match msg with
             | TerminalAvailableMsg (terminal, length) ->
                 // The terminal-feed counterpart of `EventsAvailable`: a hint that there is
                 // more, answered by a read rather than by trusting the hint's contents.
                 if TranscriptCursor.unread (readPositionOf terminal) (AvailableLength length) then
                     fetchTranscript terminal
-            | TerminalRecordMsg (terminal, seq, _)
-                when TranscriptCursor.unread (readPositionOf terminal) (RecordAt seq) ->
+            | TerminalRecordsMsg (terminal, records)
+                when records |> List.exists (fun (seq, _) -> TranscriptCursor.unread (readPositionOf terminal) (RecordAt seq)) ->
                 // A live record at or beyond the read position means history exists that this
                 // client has not fetched — the records between where it read to and where the
                 // live stream now is. Ask for them.

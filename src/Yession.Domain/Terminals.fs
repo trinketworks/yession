@@ -52,6 +52,21 @@ module TranscriptCursor =
         | RecordAt seq -> seq >= readPosition
         | AvailableLength length -> length > readPosition
 
+    /// Does an answer that reads up to (not including) `nextSeq` take a reader at
+    /// `readPosition` anywhere? The other side of `unread`: that asks whether to read, this
+    /// asks whether what came back is news.
+    ///
+    /// An answer that does not advance holds nothing the reader lacks — the read position is
+    /// the end of a CONTIGUOUS prefix, so every line below it is already held — and folding it
+    /// anyway is a render of the whole page for nothing. Cheap once and ruinous in bulk: a
+    /// burst of output once raised one read per live record, every one asked at the same
+    /// stale position, and each answer re-rendered a page that already showed it (`seq
+    /// 100000` froze a page for minutes). The read loop asks one at a time now
+    /// (`Client.connect`); this is what keeps a duplicate that arrives anyway — from a
+    /// connection that ended with a read still out, or the `204` that says "you are
+    /// current" — from costing anything.
+    let advances (readPosition: int) (nextSeq: int) = nextSeq > readPosition
+
 /// A terminal's screen size in character cells (Plan 13, stage 2b).
 ///
 /// One size per terminal, not one per viewer. A pty has a single size and every peer is

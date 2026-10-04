@@ -5056,6 +5056,38 @@ let editorTests =
                     "the command line is held at the top, and is what is drawn there"
             }
 
+        // What a block's output costs the page. A template per line was a template instance,
+        // its markers and its text — some ten nodes a line — so `seq 100000` drew a million
+        // nodes, and every render after that walked them. Plain output is one run of text
+        // however many lines it has, so it costs a handful of nodes; this counts them, in the
+        // one place that can — the DOM a browser actually built.
+        editorCase "plain output costs a block a handful of nodes, however many lines it has" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                let! _ =
+                    await (page.WaitForSelectorAsync "#shell [data-terminal-scrollback][data-terminal-id='term-harness']")
+                do! awaitU (
+                        page.EvaluateAsync
+                            """() => window.__record('term-harness', 2, 'o',
+                                       Array.from({ length: 1500 }, (_, i) => 'line ' + (i + 1)).join('\r\n'))""")
+                let! counted =
+                    await (
+                        page.EvaluateAsync<string>
+                            """() => {
+                                 const output = document.querySelector("#shell [data-terminal-block='block-burst-running'] [data-terminal-output]")
+                                 if (!output) return 'no output drawn'
+                                 let nodes = 0
+                                 const walk = document.createTreeWalker(output, NodeFilter.SHOW_ALL)
+                                 while (walk.nextNode()) nodes++
+                                 // Anti-vacuity: the lines are really there to be counted.
+                                 return output.textContent.includes('line 1500') ? String(nodes) : 'the last line is not drawn'
+                               }""")
+                match System.Int32.TryParse counted with
+                | true, nodes ->
+                    Expect.isTrue (nodes <= 16) (sprintf "fifteen hundred plain lines drew %d nodes, not a handful" nodes)
+                | _ -> failwith counted
+            }
+
         // "Show in terminal" (Plan 25, stage 3). The reader's context question, answered with
         // text: the terminal's own history, scrolled to the command they came from. Only a
         // browser can say whether it actually SCROLLED — and whether that scroll survives the
@@ -6013,7 +6045,7 @@ let private printedInTerminal = "printed-before-the-session-died"
 ///
 /// On screen is not kept. The live leg puts a record in the model the moment it arrives, and
 /// the SAME record triggers a separate HTTP read that is what writes it to the store
-/// (`Client.fs`: `TerminalRecordMsg` / `EventsAvailable` -> fetch -> `cache.Write`), started with
+/// (`Client.fs`: `TerminalRecordsMsg` / `EventsAvailable` -> fetch -> `cache.Write`), started with
 /// `Async.StartImmediate` and awaited by nothing. So there is a window in which the assertion
 /// these cases make about the LIVE page is already true and the store behind the reload is
 /// still empty — measured at 1 run in 3 on an idle box, and wider on a loaded CI runner, where

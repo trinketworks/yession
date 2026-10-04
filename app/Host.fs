@@ -963,7 +963,19 @@ let startFull
             // terminal leases and clearing its cursor — rather than holding both for ever.
             // Wrapping here, not deeper, is what makes the relay map and the pump agree about
             // which channel this peer IS.
-            let channel = Link.supervise Link.LinkPolicy.shipped carrier
+            //
+            // A peer the heartbeat ends is SAID to have been ended, here, because from the far
+            // side it is indistinguishable from a network that dropped — and it has a cause
+            // the network does not: a page too busy to answer its pings for three seconds is
+            // alive, and was dropped anyway (`seq 100000` did it to every browser watching).
+            let channel =
+                Link.supervise
+                    { Link.LinkPolicy.shipped with
+                        Observe =
+                            function
+                            | Link.LinkDied reason -> eprintfn "[session] closed a peer link: %s" reason
+                            | Link.LinkProbed _ -> () }
+                    carrier
             let connectionId = nextConnectionId
             nextConnectionId <- nextConnectionId + 1
             let handlers : PeerSession.PeerHandlers<string> =

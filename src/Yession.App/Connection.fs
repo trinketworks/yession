@@ -64,7 +64,7 @@ module Connection =
                         // Live terminal output. Durable before it was sent, and keyed by
                         // seq, so folding it is idempotent against the history fetched
                         // over HTTP — the two legs need no coordination.
-                        dispatch (TerminalRecordMsg (terminal, seq, record))
+                        dispatch (TerminalRecordsMsg (terminal, [ seq, record ]))
                         return! pump ()
                     | Some (Terminal (TerminalTranscriptAvailable (terminal, nextSeq))) ->
                         dispatch (TerminalAvailableMsg (terminal, nextSeq))
