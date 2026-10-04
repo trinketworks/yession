@@ -36,6 +36,14 @@ stdenv.mkDerivation {
   pname = "node-pty";
   inherit version src;
 
+  # Every pty descriptor it hands back is made close-on-exec: as released, the master of each
+  # open terminal is inherited by every program this process starts afterwards — the keyboard
+  # of that terminal, in the hands of a sandboxed command. The patch header has the whole of it.
+  # Only what Nix builds carries it: `npm i -g <release-tarball>` compiles node-pty from npm's
+  # own sources, where what srt confines is still covered by `SrtSandbox.holdingOnlyItsOwn`
+  # and an unconfined child (the host backend, git, docker) is not.
+  patches = [ ./node-pty-cloexec.patch ];
+
   nativeBuildInputs = [ python3 nodejs_24 ];
 
   postUnpack = ''

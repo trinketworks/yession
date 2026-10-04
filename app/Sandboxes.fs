@@ -1257,7 +1257,8 @@ module private Pty =
                 // The child holds the far end now; this process must not, or the master never
                 // reads end-of-file and a terminal whose shell has gone looks like one that is
                 // merely quiet. Closed in the same turn it was opened in, so no other spawn can
-                // inherit it: node-pty does not make it close-on-exec.
+                // inherit it even from a node-pty that leaves it inheritable — npm's does; the
+                // one Nix builds makes both ends close-on-exec (nix/node-pty-cloexec.patch).
                 let child =
                     try spawnOnTerminal executable arguments (startIn cwd) (ChildEnv.Replacing env) pty.slave
                     finally Node.Api.fs.closeSync pty.slave
@@ -2161,31 +2162,46 @@ module SrtSandbox =
     let commandLine (executable: string) (arguments: string list) : string =
         executable :: arguments |> List.map quoteArg |> String.concat " "
 
-    /// The line a terminal's shell is started with under srt on Linux: under `setsid --ctty`,
-    /// so it takes the pty `Pty.spawnAdopting` opens for it as its controlling terminal, and
-    /// holding no descriptor but its own three.
+    /// `line`, run holding no descriptor but its own three — every command srt confines is
+    /// started this way, by `confine`'s `Wrap`, so no caller can wrap one that is not.
     ///
-    /// The second half is not tidiness. node-pty leaves the master of every pty it opens
-    /// inheritable, so a child Node spawns holds the master of every terminal this session
-    /// has open — and a master is the KEYBOARD of the shell on its far end. node-pty's own
-    /// fork closes them; Node's `spawn`, which `spawnAdopting` has to use, does not, and
-    /// bubblewrap passes what it is given through. So the shell a terminal in one sandbox
-    /// opened could type commands into a terminal in another. They are closed here, as the
-    /// first thing srt's shell does inside the sandbox, before anything the terminal runs
-    /// exists to inherit them. That shell is bash (srt's default, which this module does not
-    /// override), and bash is what can name a descriptor past 9.
+    /// bubblewrap passes whatever it inherits straight into the sandbox, so a descriptor this
+    /// process leaks to a child is one the confined program holds — and node-pty leaked the
+    /// MASTER of every terminal open at the time, which is that terminal's keyboard: a command
+    /// in one terminal typed `echo INJECTED` into another's shell, and it ran. That leak is
+    /// closed where it was made (nix/node-pty-cloexec.patch); this is the guard for the next
+    /// one, whatever it is open on, at the last point before a confined program exists to
+    /// hold it. It runs first in the shell srt starts inside the sandbox, which is bash (srt's
+    /// default, which this module does not override), and bash is what can name a descriptor
+    /// past 9.
     ///
     /// The loop carries NO redirection of its own. A compound command's `2>/dev/null` is made
     /// by saving stderr to a descriptor past 9 and restoring it afterwards — and that saved
-    /// copy is in `/proc/self/fd` too, so the loop closed it and the shell came out with its
-    /// stderr on `/dev/null`: no prompt, ever, and so no terminal that ever marked one.
-    /// Closing a descriptor that is already gone (the glob's own) is not an error to bash.
+    /// copy is in `/proc/self/fd` too, so the loop would close it and the command would come
+    /// out with its stderr on `/dev/null`. Closing a descriptor that is already gone (the
+    /// glob's own) is not an error to bash.
+    ///
+    /// Linux only, which is where the leak was measured. macOS has no `/proc` to read the list
+    /// from, and both libuv and node-pty start a child there through `posix_spawn` with
+    /// `POSIX_SPAWN_CLOEXEC_DEFAULT`, which already hands it nothing but what it was given.
+    let private holdingOnlyItsOwn (platform: Node.Base.Platform) (line: string) : string =
+        match platform with
+        | Node.Base.Platform.Darwin -> line
+        | _ ->
+            "for fd in /proc/self/fd/*; do fd=${fd##*/}; if [ \"$fd\" -gt 2 ]; then eval \"exec $fd>&-\"; fi; done; "
+            + line
+
+    /// The line a terminal's shell is started with under srt on Linux: under `setsid --ctty`,
+    /// so it takes the pty `Pty.spawnAdopting` opens for it as its controlling terminal.
+    /// Holding no descriptor but its own three, as every confined line does
+    /// (`holdingOnlyItsOwn`, which `Wrap` puts in front of this one) — which was a loop here
+    /// first, for this line alone, while every other command srt confined still held the
+    /// master of every open terminal.
     ///
     /// `--wait`, because `setsid` forks when it already leads a process group, and a parent
     /// that returned at once would end the sandbox with the shell barely started.
     let adoptingLine (setsid: string) (executable: string) (arguments: string list) : string =
-        "for fd in /proc/self/fd/*; do fd=${fd##*/}; if [ \"$fd\" -gt 2 ]; then eval \"exec $fd>&-\"; fi; done; exec "
-        + commandLine setsid ("--ctty" :: "--wait" :: executable :: arguments)
+        "exec " + commandLine setsid ("--ctty" :: "--wait" :: executable :: arguments)
 
     /// A policy as an srt configuration.
     ///
@@ -2655,7 +2671,8 @@ module SrtSandbox =
                     | None -> eprintfn "srt host: not a request, skipped: %s" line))
 
     /// One sandbox's srt manager, running in a process of its own (`Host`). What the
-    /// session holds of it: a way to confine a command line, and a way to let it go.
+    /// session holds of it: a way to confine a command line — which then runs holding only
+    /// its own three descriptors (`holdingOnlyItsOwn`) — and a way to let it go.
     type private Confiner =
         { Wrap : string -> string option -> Async<Result<string list, string>>
           /// End the host's input. It resets its manager and exits.
@@ -2707,7 +2724,7 @@ module SrtSandbox =
                             | None ->
                                 nextId <- nextId + 1
                                 pending.[nextId] <- answer
-                                send (HostWire.Wrap (nextId, command, cwd)))
+                                send (HostWire.Wrap (nextId, holdingOnlyItsOwn (platform ()) command, cwd)))
                   Close = fun () -> if Option.isNone gone then input.finish () }
             let answered (id: int) (result: Result<string list, string>) =
                 match pending.TryGetValue id with

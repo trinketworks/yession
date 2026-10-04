@@ -1,0 +1,89 @@
+Make every pty descriptor node-pty hands back close-on-exec.
+
+openpty(3), forkpty(3) and posix_openpt(3) open the master without O_CLOEXEC, and node-pty
+1.1.0 only ever sets O_NONBLOCK on it. So the master of every terminal stays open across
+exec in the embedding process, and every program it starts afterwards inherits all of them:
+a child spawned through Node's child_process (libuv closes only what it opened itself,
+which it opens close-on-exec), and the shell of the NEXT terminal node-pty forks. A master
+is the keyboard of the shell on its far end, so any of those programs could type into any
+open terminal -- and bubblewrap passes an inherited descriptor straight into a sandbox.
+Measured before this patch, from a plain Node process with one terminal open: both a
+child_process child and a second node-pty shell listed `20 -> /dev/ptmx`.
+
+FD_CLOEXEC is set on the master in both of pty.fork's branches and on both ends pty.open
+returns. pty.open's far end is handed to a child as its standard streams by whoever opened
+it, and a dup2 onto 0-2 makes copies that are inheritable whatever the original was.
+
+Set after the fact rather than at open, because openpty/forkpty take no flags. That leaves
+no window a JavaScript spawn can fall into: the flag is set before the call returns, and
+forkpty's own child closes its copy before it execs.
+
+1.2.0's betas mark descriptors close-on-exec in the CHILD of their own fork only, which
+does nothing for a child_process child; not upstreamed yet.
+
+--- a/src/unix/pty.cc
++++ b/src/unix/pty.cc
+@@ -228,6 +228,9 @@
+ static int
+ pty_nonblock(int);
+ 
++static int
++pty_cloexec(int);
++
+ #if defined(__APPLE__)
+ static char *
+ pty_getproc(int);
+@@ -375,6 +378,9 @@
+   if (pty_nonblock(master) == -1) {
+     throw Napi::Error::New(napiEnv, "Could not set master fd to nonblocking.");
+   }
++  if (pty_cloexec(master) == -1) {
++    throw Napi::Error::New(napiEnv, "Could not set master fd to close-on-exec.");
++  }
+ #else
+   int argc = argv_.Length();
+   int argl = argc + 2;
+@@ -445,6 +451,9 @@
+       if (pty_nonblock(master) == -1) {
+         throw Napi::Error::New(napiEnv, "Could not set master fd to nonblocking.");
+       }
++      if (pty_cloexec(master) == -1) {
++        throw Napi::Error::New(napiEnv, "Could not set master fd to close-on-exec.");
++      }
+   }
+ #endif
+ 
+@@ -492,6 +501,10 @@
+     throw Napi::Error::New(env, "Could not set slave fd to nonblocking.");
+   }
+ 
++  if (pty_cloexec(master) == -1 || pty_cloexec(slave) == -1) {
++    throw Napi::Error::New(env, "Could not set pty fds to close-on-exec.");
++  }
++
+   Napi::Object obj = Napi::Object::New(env);
+   obj.Set("master", Napi::Number::New(env, master));
+   obj.Set("slave", Napi::Number::New(env, slave));
+@@ -587,6 +600,22 @@
+ }
+ 
+ /**
++ * Close-on-exec FD
++ *
++ * openpty(3), forkpty(3) and posix_openpt(3) all leave the master inheritable,
++ * so without this every process the embedding program execs afterwards --
++ * through child_process, or through a later fork() here -- holds the master
++ * of every pty already open: the keyboard of each of those terminals.
++ */
++
++static int
++pty_cloexec(int fd) {
++  int flags = fcntl(fd, F_GETFD, 0);
++  if (flags == -1) return -1;
++  return fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
++}
++
++/**
+  * pty_getproc
+  * Taken from tmux.
+  */

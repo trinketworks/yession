@@ -62,10 +62,11 @@ type ForkOptions =
 
 /// Both ends of a pty `Native.open` made, as descriptors, and the far end's device name.
 ///
-/// Neither descriptor is close-on-exec and both are NON-blocking, as node-pty leaves them:
-/// what writes the master has to expect `EAGAIN`, and the far end has to be made blocking
-/// again before a program reads it as its stdin — Node's `spawn` does, for the three
-/// standard streams.
+/// Both are NON-blocking, as node-pty leaves them: what writes the master has to expect
+/// `EAGAIN`, and the far end has to be made blocking again before a program reads it as its
+/// stdin — Node's `spawn` does, for the three standard streams. Both are close-on-exec only
+/// as this repository builds node-pty (nix/node-pty-cloexec.patch); npm's leaves them
+/// inheritable, which for the master means every later child holds this terminal's keyboard.
 type [<AllowNullLiteral>] Opened =
     abstract master : int
     abstract slave : int

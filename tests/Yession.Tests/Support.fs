@@ -187,6 +187,51 @@ let runInSandbox
             return run, out.ToString (), err.ToString ()
     }
 
+// --- Who holds a terminal's keyboard ------------------------------------------------------
+
+/// A pty on `sandbox`, kept open until the case kills it — `cat` on a terminal waits for
+/// input that never comes. What it is FOR is its master, which lives in this process for as
+/// long as the terminal does: the keyboard a program started afterwards must not be holding.
+let holdTerminal (sandbox: Sandbox) : Async<PtyHandle> =
+    async {
+        match sandbox.SpawnPty with
+        | None -> return failwith "this backend opens no pty, so there is no terminal to hold"
+        | Some spawnPty ->
+            let exec = { Executable = "/bin/cat"; Arguments = []; Env = Map.empty; WorkingDirectory = None; Via = Entrypoint }
+            match! spawnPty exec 80 24 ignore with
+            | Error reason -> return failwithf "the terminal did not open: %s" reason
+            | Ok pty -> return pty
+    }
+
+/// `executable arguments` on a pty of its own, to the end, answering everything it printed.
+let runOnTerminal (sandbox: Sandbox) (executable: string) (arguments: string list) : Async<string> =
+    async {
+        match sandbox.SpawnPty with
+        | None -> return failwith "this backend opens no pty"
+        | Some spawnPty ->
+            let output = System.Text.StringBuilder ()
+            let exec = { Executable = executable; Arguments = arguments; Env = Map.empty; WorkingDirectory = None; Via = Entrypoint }
+            // Wide, so no line of the listing is wrapped across two.
+            match! spawnPty exec 400 24 (fun text -> output.Append text |> ignore) with
+            | Error reason -> return failwithf "the terminal did not open: %s" reason
+            | Ok pty ->
+                let! _ = pty.Exited
+                return output.ToString ()
+    }
+
+/// What `ls -l` makes of a process's descriptors: one line each, naming what it is open on.
+/// `/proc/self` is `ls` itself, which holds whatever the shell running it was handed.
+let descriptorListing : string list = [ "-c"; "ls -l /proc/self/fd/" ]
+
+/// The lines of a `descriptorListing` that are a pty MASTER — `/dev/ptmx`, or `/dev/pts/ptmx`
+/// where the descriptor was opened through devpts' own. A far end (`/dev/pts/3`) is not one:
+/// a terminal's own program holds its own far end as all three of its streams.
+let ptyMasters (listing: string) : string list =
+    listing.Split '\n'
+    |> Array.filter (fun line -> line.Contains "ptmx")
+    |> Array.map (fun line -> line.Trim ())
+    |> List.ofArray
+
 /// Render the client view to an HTML string for markup assertions — through the very
 /// renderer the served bootstrap uses (`Ssr`), so tests exercise the shipped SSR path.
 /// The view's `ViewActions` are no-ops (handlers fire on live browser events only).
