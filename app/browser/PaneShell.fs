@@ -110,13 +110,21 @@ let toSwitcherRow (terminal: Yession.Domain.TerminalId) : unit =
         |> focusOn)
 
 /// Into the switcher as it opens: onto the row of the terminal the pane is about (it says so
-/// with `aria-current`), else the first name in it, else its foot.
+/// with `aria-current`), else the first name in it, else its foot. A frame late, so a reader
+/// who has already moved into the switcher by then is where they meant to be, and is left
+/// there: landing them back on the current row would put their next Enter on a row they did
+/// not choose.
 let toSwitcher () : unit =
     nextFrame (fun () ->
-        find "[data-content-list] [data-terminal-list-row][aria-current=\"true\"]"
-        |> Option.orElseWith (fun () -> find "[data-content-list] [data-terminal-list-row], [data-content-list] [data-artifact-list-row]")
-        |> Option.orElseWith (fun () -> find "[data-content-list] [data-switcher-new]")
-        |> focusOn)
+        let inside =
+            match document.activeElement with
+            | null -> false
+            | active -> (active.closest "[data-content-list]").IsSome
+        if not inside then
+            find "[data-content-list] [data-terminal-list-row][aria-current=\"true\"]"
+            |> Option.orElseWith (fun () -> find "[data-content-list] [data-terminal-list-row], [data-content-list] [data-artifact-list-row]")
+            |> Option.orElseWith (fun () -> find "[data-content-list] [data-switcher-new]")
+            |> focusOn)
 
 /// Onto the switcher's door, the pane head's name. One per page.
 let toPaneSwitcher () : unit = nextFrame (fun () -> focusOn (find "[data-pane-switcher]"))
