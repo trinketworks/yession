@@ -1970,7 +1970,7 @@ let private pinTests =
             let _, effects =
                 ClientModel.update
                     (EventsPageMsg
-                        { Events = [ at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer" }) ]
+                        { Events = [ at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer"; By = None }) ]
                           LastOffset = Some (EventOffset.create 3L |> expect)
                           IsEnd = true })
                     pressed
@@ -1985,7 +1985,7 @@ let private pinTests =
             let _, effects =
                 ClientModel.update
                     (EventsPageMsg
-                        { Events = [ at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalB; Reason = "closed by a peer" }) ]
+                        { Events = [ at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalB; Reason = "closed by a peer"; By = None }) ]
                           LastOffset = Some (EventOffset.create 3L |> expect)
                           IsEnd = true })
                     pressed
@@ -1997,7 +1997,7 @@ let private pinTests =
             let _, effects =
                 ClientModel.update
                     (EventsPageMsg
-                        { Events = [ at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer" }) ]
+                        { Events = [ at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer"; By = None }) ]
                           LastOffset = Some (EventOffset.create 3L |> expect)
                           IsEnd = true })
                     listing
