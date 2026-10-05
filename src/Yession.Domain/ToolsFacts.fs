@@ -62,11 +62,11 @@ and ToolUseFinished =
 
 module McpServerNoted =
 
-    /// Two sentences for one fact, because the fact is a direction: a server arriving and a
-    /// server leaving are said to the same reader, and the reader is the agent as much as
-    /// the person, so both say what the agent can do about it.
+    /// Verb + noun, like every other headline — a server arriving and a server leaving are
+    /// said to the same reader, and the reader is the agent as much as the person, so both
+    /// say what the agent can do about it.
     let available (m: McpServerNoted) : Phrase =
-        Phrase.text (sprintf "the %s tools are now available" (McpServerName.value m.Name))
+        Phrase.text (sprintf "shared %s tools" (McpServerName.value m.Name))
 
     let unavailable (m: McpServerNoted) : Phrase =
-        Phrase.text (sprintf "the %s tools are no longer available" (McpServerName.value m.Name))
+        Phrase.text (sprintf "withdrew %s tools" (McpServerName.value m.Name))

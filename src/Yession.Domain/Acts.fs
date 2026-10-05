@@ -239,8 +239,8 @@ module Act =
         | Act.CommandRefused _ -> "refused", "command", "commands"
         | Act.GatedCommandFailed _ -> "failed", "command", "commands"
         | Act.CredentialSpent _ -> "spent", "credential", "credentials"
-        | Act.McpServerAvailable _
-        | Act.McpServerUnavailable _ -> "noted", "server", "servers"
+        | Act.McpServerAvailable _ -> "shared", "server", "servers"
+        | Act.McpServerUnavailable _ -> "withdrew", "server", "servers"
         | Act.PrWatched _ -> "watched", "pull request", "pull requests"
         | Act.PrUnwatched _ -> "unwatched", "pull request", "pull requests"
         | Act.PrTransitioned _ -> "noted", "pull request", "pull requests"
