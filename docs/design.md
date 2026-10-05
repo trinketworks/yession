@@ -327,6 +327,17 @@ lent per command and returned with it (`EnvironmentVariableRef.Lent`). The sandb
 that connection by `api`, or it refuses to start. Why it rotates, and whether that is worth it,
 is an open question in docs/GAPS.md.
 
+`${session.version}` is which build of Yession runs this session — what `--version` says and
+the UI's footer shows — answered by the session itself (`WorkSandboxes.answerSession`), so it
+needs nothing selected and works under every backend. Nothing sets it unasked; an operator who
+wants the agent to know what it is talking to threads it through a resource:
+
+```yaml
+yession-version:
+  env:
+    YESSION_SESSION_VERSION: ${session.version}
+```
+
 An operator may bind the same references in a resource's `env:`, so a sandbox selecting it is
 given them without its repo writing them (`VariableValue`, `SelectionGrant`):
 
