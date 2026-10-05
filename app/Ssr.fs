@@ -131,6 +131,11 @@ let page (sessionId: SessionId) (mount: string) (managerOrigin: string option) (
         // Said only when it is true, so the shell of a path-mounted deployment carries
         // nothing about storage at all.
         (if ephemeralStorage then sprintf "<meta name=\"%s\" content=\"1\">" Dom.ephemeralStorageMetaName else "")
+        // Which build served this, from the model the page is rendered OF — so the meta the
+        // client reads back and the footer this paint shows are one value, not two.
+        (match model.Build with
+         | Some build -> sprintf "<meta name=\"%s\" content=\"%s\">" Dom.buildMetaName (escapeAttr build)
+         | None -> "")
         "<title>Yession</title>"
         Style.headTags (asset AssetFile.``app``)
         // The replay player's sheet, linked but inert: most sessions never open a recording,

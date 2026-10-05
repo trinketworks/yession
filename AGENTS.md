@@ -265,8 +265,10 @@ already-released number (`git fetch --unshallow --tags`). `YESSION_VERSION` over
 computation — how the Nix derivations (no `.git` in their source) are told what they are.
 
 **Version reporting.** Both bins answer `--version`; a session reports its build to the Manager
-on the spawn readiness line; every process puts it on its OTel resource as `service.version`.
-That attribute is a CODE default, deliberately not part of the `OTEL_RESOURCE_ATTRIBUTES` the
+on the spawn readiness line; every process puts it on its OTel resource as `service.version`;
+and each UI says it in its footer (`Style.buildMark`) — the Manager's page from
+`Version.current`, a session's sidebar from the shell's `yession-build` meta, which the server
+renders and the browser reads back (the client bundle has no version of its own). That attribute is a CODE default, deliberately not part of the `OTEL_RESOURCE_ATTRIBUTES` the
 Manager injects into a child — env wins, so injecting it would make sessions report the
 Manager's version and hide the skew. A build that cannot know a release version says what it
 is instead — `dev` unbundled, `test` under `check`, `0.0.0-g<rev>` from Nix. Never invent a

@@ -861,6 +861,15 @@ type ClientModel =
       /// Static for the life of the page, like `Manager`: a fact about the deployment that
       /// served this document, never a message and never folded.
       EphemeralStorage : bool
+      /// Which build of Yession served this document (`Yession.Host.Version.current`), as the
+      /// shell was told it: the serving session renders it into the first paint, and the
+      /// browser reads it back off the shell. `None` when no shell said — a test harness, a
+      /// peer with no server behind it — and then the footer says nothing rather than guess.
+      ///
+      /// The SERVER's build, never the client's: the browser bundle is one of that server's
+      /// assets, so they are the same build, and the server is the one that can say which.
+      /// Static for the life of the page, like `Manager`.
+      Build : string option
       /// Whether this client can keep the history it is given (Plan 20). The store is the
       /// Cache API, which needs a secure context — loopback and every `https://` mount are
       /// one, a session reached over plain HTTP at a LAN address is not.
@@ -1798,6 +1807,7 @@ module ClientModel =
           Session = None
           Manager = None
           EphemeralStorage = false
+          Build = None
           CanKeepHistory = true
           HistoryRead = false
           Synced = (SyncedSessionState.empty CollabText.ylmish)
