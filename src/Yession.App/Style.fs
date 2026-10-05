@@ -1790,8 +1790,17 @@ module Style =
     /// the conversation above it up with it. The cost is a card taller than a short list needs,
     /// with room to spare under it; the list scrolls into that room as it grows, and nothing
     /// moves when it does.
+    ///
+    /// It RISES in rather than appearing full-grown (`animate-ask-rise`): the card is not in the
+    /// first paint — it anchors at connect (`Launch.anchor`) — so without this it popped into the
+    /// column in one frame and snapped the conversation up by its height. Growing its height from
+    /// nothing raises its top off the composer and the chat gives way over the same beat, so the
+    /// arrival reads as motion rather than a jump. `overflow-hidden` so the list inside is clipped
+    /// to the growing height instead of spilling over the chat while it rises; the off-stage pane
+    /// was already clipped by `askTrack`, and nothing else here reaches the card's edge.
     let ask =
-        cls [ "relative shrink-0 h-[60%] flex flex-col pt-6 pb-6 bg-surface"; Stroke.dividerTop ]
+        cls [ "relative shrink-0 h-[60%] flex flex-col pt-6 pb-6 bg-surface overflow-hidden"
+              "animate-ask-rise motion-reduce:animate-none"; Stroke.dividerTop ]
 
     /// The blue lead, DRAWN rather than bordered — and it has to be, because a `border-l-2`
     /// sits inside the band's padding box and would push every line in the card two pixels
