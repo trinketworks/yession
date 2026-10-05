@@ -150,22 +150,26 @@ type Screens =
       /// one left behind for a terminal nobody is in is a leak with no screen.
       Forget : TerminalId -> unit }
 
-/// `report` is told the holder's viewport size whenever it changes — the app relays it to the
-/// Session, which resizes the pty.
+/// Each terminal's viewport is MEASURED here, and only measured: the size is dispatched as a
+/// `TerminalViewportMsg`, and whether it goes on to the Session as a pty resize is the model's
+/// decision (`ClientModel.ptyResizes`), which knows who holds the lease and what was measured
+/// last. It used to be decided here, beside the measurement, where only a browser could test
+/// it — and a rule only the browser tier reaches is a rule the cheap tier never re-checks.
 ///
-/// It lives here, with the screen, rather than in the app beside the connection. The size of a
-/// screen is a fact about that screen: the element to measure is the one this already tracks,
-/// the moment to measure is a render this already runs after, and the de-duplication is about
-/// what this already knows. In the app it was also unreachable — the browser tier drives the
-/// harness, which has no copy of it — which is how the one thing it does wrong went unnoticed:
-/// it ran only from `setState`, so a splitter drag or a window resize, which change the box
-/// and dispatch nothing, never reached the pty at all.
-let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> unit) : Screens =
+/// The measuring lives here, with the screen, rather than in the app beside the connection.
+/// The element to measure is the one this already tracks, and the moment to measure is a
+/// render this already runs after. In the app it was also unreachable — the browser tier
+/// drives the harness, which has no copy of it — which is how the one thing it did wrong went
+/// unnoticed: it ran only from `setState`, so a splitter drag or a window resize, which change
+/// the box and dispatch nothing, never measured anything at all.
+let create (dispatch: ClientMsg -> unit) : Screens =
     let live = System.Collections.Generic.Dictionary<string, Live> ()
 
     /// The size each terminal's viewport was last measured at, so a render that moved nothing
-    /// says nothing — a resize is a signal to the program on the other end, and repeating it
-    /// makes a full-screen program redraw for no reason.
+    /// dispatches nothing. Not the pty's de-duplication — the model keeps the measurement and
+    /// asks for a resize only when it changed — but the render loop's: a dispatch renders, and
+    /// this runs after every render, so a measurement dispatched whether or not it moved would
+    /// ask for another render after every one.
     let measuredSize = System.Collections.Generic.Dictionary<string, int * int> ()
 
     let forget (key: string) =
@@ -193,19 +197,12 @@ let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> un
     /// callback cannot be handed one.
     let mutable latest : ClientModel option = None
 
-    /// Measure what this reader is looking at, and say so — twice, to two different places,
-    /// because the two answers are about different things.
-    ///
-    /// Into the MODEL, always: a width is a fact about this client's own window, and the
-    /// command about to be queued claims it (`PendingAct.Size`). That claim is made in BLOCK
-    /// mode, where nobody holds anything — so measuring only the holder, as this used to,
-    /// meant block mode never had a width to claim.
-    ///
-    /// Over the WIRE, only for the holder: the pty has one size while a program is drawing on
-    /// it, and every peer is watching the same screen, so a viewer with a narrower pane
-    /// scrolls rather than reshaping everyone else's terminal.
+    /// Measure what this reader is looking at, and tell the model — for every terminal, held or
+    /// not: a width is a fact about this client's own window, and the command about to be
+    /// queued claims it (`PendingAct.Size`). That claim is made in BLOCK mode, where nobody
+    /// holds anything — so measuring only the holder, as this used to, meant block mode never
+    /// had a width to claim. What reaches the pty, and only for the holder, the model decides.
     let measureSizes (boxes: Map<string, HTMLElement>) (model: ClientModel) =
-        let mine = ClientModel.me model
         for terminal in Projection.openTerminals model.Terminals do
             let key = TerminalId.value terminal.TerminalId
             match Map.tryFind key boxes |> Option.bind measure with
@@ -215,7 +212,6 @@ let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> un
                 if last <> Some (cols, rows) then
                     measuredSize.[key] <- (cols, rows)
                     dispatch (TerminalViewportMsg (terminal.TerminalId, { Cols = cols; Rows = rows }))
-                    if terminal.Lease = Some mine then report terminal.TerminalId cols rows
 
     /// One observer, re-pointed at whichever terminal the pane is showing. A box can change
     /// without the model changing — the splitter is dragged, the window is resized, the phone

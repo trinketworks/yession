@@ -404,9 +404,7 @@ type Links =
       /// Enter on a terminal command line: run it.
       SendTerminalDraft : TerminalId -> PeerId -> unit
       /// A caret moved in a body or a command line (already paced by `focusReporter`).
-      ReportFocus : Focus option -> unit
-      /// The screen this peer is typing into changed size.
-      ResizeTerminal : TerminalId -> int -> int -> unit }
+      ReportFocus : Focus option -> unit }
 
 /// Everything the render is composed of.
 type Deps =
@@ -579,8 +577,8 @@ let create (deps: Deps) : Renderer =
 
     /// The live screens (Plan 14, stage 6): one emulator per terminal this client has a
     /// snapshot for, folded forward from the records the model already holds — and the
-    /// size of the one this peer is typing into, relayed to the pty.
-    let screens = Screens.create dispatch deps.Links.ResizeTerminal
+    /// size of each terminal's box, measured into the model (which decides what reaches a pty).
+    let screens = Screens.create dispatch
 
     // The publication rule, one subscription per open terminal. Started when a terminal
     // appears and stopped when it goes, so a closed terminal's rule cannot republish a

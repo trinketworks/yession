@@ -219,6 +219,8 @@ module Client =
             | ClientEffect.ReattachTerminal terminal -> ask (ReattachTerminal terminal)
             | ClientEffect.CloseTerminal terminal -> ask (CloseTerminal terminal)
             | ClientEffect.InterruptTerminal terminal -> ask (InterruptTerminal terminal)
+            | ClientEffect.ResizeTerminal (terminal, size) ->
+                connected (fun c -> c.ResizeTerminal terminal size.Cols size.Rows)
             | ClientEffect.OpenTerminal (title, sandbox) -> ask (OpenTerminal (title, sandbox))
             | ClientEffect.InterruptTurn turn -> ask (InterruptAgentTurn turn)
             | ClientEffect.ApproveRepoCapabilities (repo, granted) -> ask (ApproveRepoCapabilities (repo, granted))
