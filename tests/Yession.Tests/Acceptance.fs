@@ -215,6 +215,7 @@ let private representativeModel : ClientModel =
       PaneOpensItself = false
       Column = Column.initial
       PaneSplit = None
+      Away = Set.empty
       ItemMenu = None
       PaneMenu = false
       Switcher = false

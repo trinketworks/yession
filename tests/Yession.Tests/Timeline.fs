@@ -2885,6 +2885,23 @@ let private tabTests =
             let html = clientOf [] |> Support.step (PaneSplitMsg (612.0, 900.0)) |> Support.render
             Expect.stringContains html (Dom.attr "aria-valuenow" "612") "the width"
 
+        // Whether a reader is following a surface's end is the document's to see; what that
+        // puts on screen is the model's (`Away`), drawn from what `Tail` reports.
+        testCase "a reader away from a surface's end is offered the way back, and one who returns is not" <| fun () ->
+            let away = clientOf [] |> Support.step (ReaderMovedMsg (TailSurface.Blocks terminalA, false))
+            let back = away |> Support.step (ReaderMovedMsg (TailSurface.Blocks terminalA, true))
+            Expect.equal
+                (Set.toList away.Away, Set.toList back.Away)
+                ([ TailSurface.Blocks terminalA ], [])
+                "away, then following again"
+
+        testCase "a surface's name in the document reads back as that surface" <| fun () ->
+            let surfaces = [ TailSurface.Conversation; TailSurface.Blocks terminalA; TailSurface.Screen terminalA ]
+            Expect.equal
+                (surfaces |> List.map (TailSurface.key >> TailSurface.ofKey))
+                (surfaces |> List.map Some)
+                "every surface, by the name it is drawn under"
+
         // The nav drawer's arrival on a phone (`ClientModel.columnOn`): one sheet over the
         // chat at a time. It SHUTS, it never opens — the drawer arriving over a pane that was
         // already shut must not bring the pane back — and it moves no focus, because the

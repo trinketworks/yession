@@ -837,6 +837,45 @@ module BlockGroup =
                 Some (key terminal leader)
             | BlockGroup.Run _ | BlockGroup.Alone _ -> None)
 
+/// A surface read from its END: what is newest is at the bottom, and a reader who is there
+/// stays there as more arrives — while one who has scrolled away is left where they are and
+/// offered the way back. The rule is the browser's (`Tail`, `app/browser`), because it is a
+/// fact about one scroll position; what is here is the NAME, which the surface and its "jump
+/// to latest" control both carry (`Dom.Hooks.tail`) so a control can say which surface it
+/// brings back, and a surface that changes what it is (blocks to a live screen) is a new one.
+[<RequireQualifiedAccess>]
+type TailSurface =
+    /// The conversation.
+    | Conversation
+    /// A terminal's block history, while it runs commands as blocks.
+    | Blocks of TerminalId
+    /// A terminal's live screen, while a program holds it.
+    | Screen of TerminalId
+
+module TailSurface =
+
+    /// The surface's name in the document. Two terminals' surfaces never share one, and
+    /// neither do one terminal's two: a reader who had scrolled up through its blocks and then
+    /// took the keyboard has not scrolled up through the screen that replaced them.
+    let key (surface: TailSurface) : string =
+        match surface with
+        | TailSurface.Conversation -> "chat"
+        | TailSurface.Blocks terminal -> "blocks:" + TerminalId.value terminal
+        | TailSurface.Screen terminal -> "screen:" + TerminalId.value terminal
+
+    /// The surface a name in the document names (`key`), or nothing for a name that is not
+    /// one.
+    let ofKey (key: string) : TailSurface option =
+        let terminal (prefix: string) =
+            if key.StartsWith prefix then TerminalId.create (key.Substring prefix.Length) |> Result.toOption
+            else None
+        if key = "chat" then Some TailSurface.Conversation
+        else
+            match terminal "blocks:", terminal "screen:" with
+            | Some id, _ -> Some (TailSurface.Blocks id)
+            | None, Some id -> Some (TailSurface.Screen id)
+            | None, None -> None
+
 /// Which of its two faces the sidebar column shows.
 [<RequireQualifiedAccess>]
 type ColumnFace =
@@ -1166,6 +1205,11 @@ type ClientModel =
       /// The split between the chat and the pane (`PaneSplit`); `None` until the browser has
       /// measured how wide the pane may be, which a server rendering the shell never does.
       PaneSplit : PaneSplit option
+      /// The surfaces read from their end whose reader has scrolled away from it — what puts
+      /// each one's "jump to latest" on screen. A surface not here is being followed, which is
+      /// where every reader arrives. WHETHER a reader moved is the document's to see (`Tail`,
+      /// in the browser); what that means for what is drawn is this.
+      Away : Set<TailSurface>
       /// Which timeline item has its actions menu open, if any. View state for the same
       /// reason the column above is: a menu one person opened is not a thing anybody else
       /// is looking at.
@@ -1273,32 +1317,6 @@ type ClientModel =
       /// The session's repos, folded from the same events the timeline's repo notes come
       /// from: what the launch surface asks to know whether the session has one.
       Repos         : Repos.ReposProjection }
-
-/// A surface read from its END: what is newest is at the bottom, and a reader who is there
-/// stays there as more arrives — while one who has scrolled away is left where they are and
-/// offered the way back. The rule is the browser's (`Tail`, `app/browser`), because it is a
-/// fact about one scroll position; what is here is the NAME, which the surface and its "jump
-/// to latest" control both carry (`Dom.Hooks.tail`) so a control can say which surface it
-/// brings back, and a surface that changes what it is (blocks to a live screen) is a new one.
-[<RequireQualifiedAccess>]
-type TailSurface =
-    /// The conversation.
-    | Conversation
-    /// A terminal's block history, while it runs commands as blocks.
-    | Blocks of TerminalId
-    /// A terminal's live screen, while a program holds it.
-    | Screen of TerminalId
-
-module TailSurface =
-
-    /// The surface's name in the document. Two terminals' surfaces never share one, and
-    /// neither do one terminal's two: a reader who had scrolled up through its blocks and then
-    /// took the keyboard has not scrolled up through the screen that replaced them.
-    let key (surface: TailSurface) : string =
-        match surface with
-        | TailSurface.Conversation -> "chat"
-        | TailSurface.Blocks terminal -> "blocks:" + TerminalId.value terminal
-        | TailSurface.Screen terminal -> "screen:" + TerminalId.value terminal
 
 /// A move only the document can make: focus, and scrolling something into view. The model says
 /// what is on screen; where the cursor is and how far the reader has scrolled are the
@@ -1676,6 +1694,8 @@ type ClientMsg =
     /// Move the split by `by` pixels from where it is — the separator's arrow keys — against
     /// the widest the chat can spare right now. Nothing to step from until the split is set.
     | PaneNudgedMsg of by: float * widest: float
+    /// The reader of a surface read from its end left that end, or came back to it.
+    | ReaderMovedMsg of TailSurface * following: bool
     /// Close the content column, and never open it: the shell's half of "on a phone, two
     /// sheets never cover the chat at once". The nav drawer and the pane are both overlays
     /// there, and opening the drawer over an open pane opened it UNDER the pane (both z-40,
@@ -1976,6 +1996,7 @@ module ClientModel =
           PaneOpensItself = false
           Column = Column.initial
           PaneSplit = None
+          Away = Set.empty
           ItemMenu = None
           PaneMenu = false
           Switcher = false
@@ -3926,6 +3947,8 @@ module ClientModel =
         | RevealSettingsMsg -> columnOn { model with Column = { model.Column with Face = ColumnFace.Settings } }
         | ViewportMsg wide -> { model with Column = { model.Column with Wide = wide } }
         | PaneSplitMsg (wanted, widest) -> { model with PaneSplit = Some (PaneSplit.within widest wanted) }
+        | ReaderMovedMsg (surface, following) ->
+            { model with Away = (if following then Set.remove surface model.Away else Set.add surface model.Away) }
         | PaneNudgedMsg (by, widest) ->
             match model.PaneSplit with
             | Some split -> { model with PaneSplit = Some (PaneSplit.within widest (float split.Width + by)) }
