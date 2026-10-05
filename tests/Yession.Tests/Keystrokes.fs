@@ -170,4 +170,22 @@ let tests =
             let held = [ chord "c"; chord "ArrowUp"; chord "Enter"; ctrl (chord "c"); alt (chord "b") ]
             for c in held do
                 Expect.equal (Keystroke.bytesOf { c with Meta = true }) None c.Key
+
+        // A phone keyboard (P3-3). Its keydown names no key and the text arrives as an
+        // insertion into the live screen's field, so the keydown must send NOTHING — or every
+        // letter typed on a phone would reach the pty twice.
+        testCase "a phone keyboard's unidentified keydown sends nothing" <| fun () ->
+            Expect.equal (Keystroke.bytesOf (chord "Unidentified")) None "the insertion is the only copy"
+
+        testCase "inserted text goes as itself" <| fun () ->
+            Expect.equal (Keystroke.ofInsertedText "ls -la") (Some "ls -la") "a word and its flags"
+
+        // Return on a phone is an inserted line break, in whichever spelling the platform
+        // chose; a pty reads Return as `\r`, the byte Enter sends.
+        testCase "an inserted line break is Return" <| fun () ->
+            Expect.equal (Keystroke.ofInsertedText "bob\n") (Some "bob\r") "a line feed"
+            Expect.equal (Keystroke.ofInsertedText "bob\r\n") (Some "bob\r") "a CRLF is one Return, not two"
+
+        testCase "nothing inserted sends nothing" <| fun () ->
+            Expect.equal (Keystroke.ofInsertedText "") None "an emptied field"
     ]

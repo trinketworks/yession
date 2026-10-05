@@ -174,6 +174,12 @@ module KeyboardComposition =
     [<Emit("$0.isComposing")>]
     let isComposing (event: Browser.Types.KeyboardEvent) : bool = jsNative
 
+    /// The same question of an `input` event (an `InputEvent`, which `Fable.Browser.Event` does
+    /// not declare): true while what the field holds is a candidate word the IME has not
+    /// committed — text a reader of the field must leave alone until `compositionend`.
+    [<Emit("$0.isComposing")>]
+    let isComposingInput (event: Browser.Types.Event) : bool = jsNative
+
 /// Asking the browser what the STYLESHEET thinks, rather than deciding it again in F#.
 ///
 /// A layout that changes at a breakpoint has two readers — the stylesheet, and whatever
