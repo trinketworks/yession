@@ -375,22 +375,6 @@ let private storeTests =
             }
     ]
 
-// What one page costs does not grow with the log behind it.
-//
-// A reader catching up asks for every page in turn, so `Read` is called once per page — and
-// both stores used to answer by walking the WHOLE log from the cursor and then discarding
-// all but the first `limit`. That is quadratic in the length of the log, per reader, per
-// cold open: a real 20,650-event session cost 208 reads averaging ten thousand copied
-// envelopes apiece, about two million of them, and roughly 1.9s of a cold open on a laptop.
-// `EventPaging.page` takes the slice instead, which it can because an envelope's offset is
-// its index.
-//
-// Pinned as a RATIO, for the reason the render budget is a count rather than a duration: an
-// absolute millisecond figure on a shared runner is the flaky test this repository warns
-// about, while "a page off a long log costs about what it costs off a short one" is the same
-// claim on every box. The bound is deliberately loose — a hundred times the log may cost ten
-// times the page and still pass — because what it exists to catch is the walk, which makes
-// it cost a hundred times.
 // What is ahead of a cursor, as addresses — the plural of the cursor, and the thing that
 // lets a catching-up client stop paying a round trip per hundred events.
 //
@@ -638,59 +622,58 @@ let private feedTests =
             }
     ]
 
+// What one page costs does not grow with the log behind it.
+//
+// A reader catching up asks for every page in turn, so `Read` is called once per page — and
+// both stores used to answer by walking the WHOLE log from the cursor and then discarding
+// all but the first `limit`. That is quadratic in the length of the log, per reader, per
+// cold open: a real 20,650-event session cost 208 reads averaging ten thousand copied
+// envelopes apiece, about two million of them, and roughly 1.9s of a cold open on a laptop.
+// `EventPaging.page` takes the slice instead, which it can because an envelope's offset is
+// its index.
+//
+// Pinned as a COUNT of the envelopes a page reads, not a duration. It was a ratio of two
+// timings, which is a duration with extra steps: fifty pages off the short log took 0ms,
+// the floor under the denominator made that 1ms, and 14ms off the long one read as 14x —
+// a release gate gone red on one scheduler hiccup. A read is what the walk multiplies, and
+// the page takes the log as a read by position for exactly this, so the number is the
+// same on every box and the walk cannot hide in it: it makes the long log's count a
+// hundred times the short one's.
 let private pagingTests =
     testList "Paging" [
-        testCaseAsync "one page costs about the same whatever the log behind it holds" <|
-            async {
-                let logOf (n: int) =
-                    let log =
-                        InMemoryEventLog.create
-                            (SessionId.create "paging" |> expect)
-                            (fun () -> DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero))
-                    async {
-                        for i in 1 .. n do
-                            let! _ =
-                                log.Append
-                                    ActorRef.System
-                                    (SessionEvent.PeerJoined
-                                        { PeerId = PeerId.create (sprintf "p-%d" i) |> expect
-                                          DisplayName = "x"
-                                          User = None })
-                            ()
-                        return log
-                    }
-                let short' = 200
-                let long' = 20_000
-                let! shortLog = logOf short'
-                let! longLog = logOf long'
-                // The FIRST page of each, which is where the walk and the slice differ most:
-                // one copies the whole log to hand back a hundred, the other copies a hundred.
-                let timeReads (log: Yession.Session.EventLog<SessionEvent>) =
-                    async {
-                        // Warm first, so neither side pays a one-off the other does not.
-                        let! _ = log.Read None 100
-                        let started = DateTimeOffset.UtcNow
-                        for _ in 1 .. 50 do
-                            let! page = log.Read None 100
-                            Expect.equal (List.length page.Events) 100 "a full page each time"
-                        return (DateTimeOffset.UtcNow - started).TotalMilliseconds
-                    }
-                let! shortMs = timeReads shortLog
-                let! longMs = timeReads longLog
-                // A floor on the denominator: 50 reads of a 200-event log can land on 0ms,
-                // and a ratio over zero is not a measurement.
-                let ratio = longMs / (max shortMs 1.0)
-                printfn
-                    "  50 pages off %d events: %.0fms; off %d events: %.0fms — %.1fx"
-                    short' shortMs long' longMs ratio
-                Expect.isTrue
-                    (ratio < 10.0)
-                    (sprintf
-                        "a page off a log %dx longer cost %.1fx as much (%.0fms against %.0fms) — \
-                         reading a page is walking the log again; see `EventPaging.page` in \
-                         `src/Yession.Session/EventLog.fs`"
-                        (long' / short') ratio longMs shortMs)
-            }
+        testCase "one page reads what it holds, whatever the log behind it holds" <| fun () ->
+            let envelope (position: int) : EventEnvelope<SessionEvent> =
+                { EventId = EventId.fresh ()
+                  SessionId = SessionId.create "paging" |> expect
+                  Offset = EventOffset.create (int64 position) |> expect
+                  Actor = ActorRef.System
+                  Timestamp = DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
+                  Event =
+                    SessionEvent.PeerJoined
+                        { PeerId = PeerId.create (sprintf "p-%d" position) |> expect
+                          DisplayName = "x"
+                          User = None } }
+            // The FIRST page, which is where the walk and the slice differ most: one reads the
+            // whole log to hand back a hundred, the other reads a hundred. The log is only its
+            // length and its reads — the envelope at a position is made when it is asked for.
+            let readsOff (length: int) =
+                let reads = ref 0
+                let page =
+                    EventPaging.page
+                        length
+                        (fun position ->
+                            reads.Value <- reads.Value + 1
+                            envelope position)
+                        None
+                        100
+                Expect.equal (List.length page.Events) 100 "a full page"
+                reads.Value
+            Expect.equal
+                [ readsOff 200; readsOff 20_000 ]
+                [ 100; 100 ]
+                "a page reads the hundred envelopes it holds, off a log of 200 and off one of \
+                 20,000 — more is reading a page by walking the log; see `EventPaging.page` in \
+                 `src/Yession.Session/EventLog.fs`"
     ]
 
 let tests =

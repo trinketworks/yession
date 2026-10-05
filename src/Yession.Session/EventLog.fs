@@ -46,20 +46,32 @@ type EventLog<'event> =
 ///
 /// A page off the end is empty rather than an error: a cursor at the head is a caller who is
 /// current, which is the ordinary steady state and not a mistake.
+///
+/// The log is handed over as its length and a READ BY POSITION, not as the list itself, so
+/// that `at` is the only way a page touches the log — and what a page costs is how many times
+/// it is called. That is a number a test can hold to the page's own length, on any box, where
+/// the wall clock it was first pinned with measured a 0ms baseline against a 14ms one and
+/// called that a regression (`EventsHttp`'s Paging).
 module EventPaging =
 
-    let page (events: ResizeArray<EventEnvelope<'event>>) (after: EventOffset option) (limit: int) : EventPage<'event> =
+    let page
+        (count: int)
+        (at: int -> EventEnvelope<'event>)
+        (after: EventOffset option)
+        (limit: int)
+        : EventPage<'event> =
         let from =
             match after with
             | Some offset -> int (EventOffset.value offset) + 1
             | None -> 0
         let from = max 0 from
-        let count = max 0 (min limit (events.Count - from))
-        let pageEvents = List.init count (fun i -> events.[from + i])
+        let taken = max 0 (min limit (count - from))
+        let pageEvents = List.init taken (fun i -> at (from + i))
         { Events = pageEvents
-          LastOffset = if count = 0 then None else Some events.[from + count - 1].Offset
+          // Off the page already read, rather than read again.
+          LastOffset = pageEvents |> List.tryLast |> Option.map (fun envelope -> envelope.Offset)
           // The page is the tail when it holds everything still available after `after`.
-          IsEnd = from + count >= events.Count }
+          IsEnd = from + taken >= count }
 
 /// An in-memory event log. Phase 1 storage; the `EventLog` interface it returns does not
 /// expose the in-memory representation, so storage is replaceable without changing callers.
@@ -120,7 +132,7 @@ module InMemoryEventLog =
                 // Under the gate so the page is deterministic against the log state observed
                 // at read time — and taken by position, which is `EventPaging.page`'s whole
                 // subject: the offset assigned two functions up IS the index.
-                return withLock gate (fun () -> EventPaging.page events after limit)
+                return withLock gate (fun () -> EventPaging.page events.Count (fun i -> events.[i]) after limit)
             }
 
         let head () : Async<EventOffset option> =

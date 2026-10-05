@@ -101,7 +101,7 @@ let openLog (path: string) (sessionId: SessionId) (clock: unit -> System.DateTim
     // index here too. `EventPaging.page` is where that rule and its cost live, shared with
     // the in-memory store, which kept an identical copy of the walk this replaces.
     let read (after: EventOffset option) (limit: int) : Async<EventPage<SessionEvent>> =
-        async { return EventPaging.page events after limit }
+        async { return EventPaging.page events.Count (fun i -> events.[i]) after limit }
 
     let head () : Async<EventOffset option> =
         async { return if events.Count = 0 then None else Some events.[events.Count - 1].Offset }
