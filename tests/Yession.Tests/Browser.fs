@@ -1943,23 +1943,24 @@ let private focusReachedPane (page: IPage) : Async<unit> =
     waitFor "focus to follow the chip into the pane" page
         "document.activeElement?.hasAttribute('data-pane-panel') === true"
 
+/// A page of events as the session sends them — one envelope a line — at the offsets given.
+let private foldBody (events: (int64 * Yession.Domain.SessionEvent) list) : string =
+    let expect r = Result.defaultWith failwith r
+    let line (offset: int64, event: Yession.Domain.SessionEvent) =
+        let envelope : Yession.Domain.EventEnvelope<Yession.Domain.SessionEvent> =
+            { EventId = Yession.Domain.EventId.fresh ()
+              SessionId = Yession.Domain.SessionId.create "harness" |> expect
+              Offset = Yession.Domain.EventOffset.create offset |> expect
+              Actor = Yession.Domain.ActorRef.Session
+              Timestamp = DateTimeOffset.UtcNow
+              Event = event }
+        Yession.Codecs.Codec.toString Events.sessionEventEnvelope envelope
+    events |> List.map line |> String.concat "\n"
+
 /// Events folded into the harness as one page, as the session would send them
 /// (`window.__fold`), at the offsets given.
 let private foldHarness (page: IPage) (events: (int64 * Yession.Domain.SessionEvent) list) : Async<unit> =
-    async {
-        let expect r = Result.defaultWith failwith r
-        let line (offset: int64, event: Yession.Domain.SessionEvent) =
-            let envelope : Yession.Domain.EventEnvelope<Yession.Domain.SessionEvent> =
-                { EventId = Yession.Domain.EventId.fresh ()
-                  SessionId = Yession.Domain.SessionId.create "harness" |> expect
-                  Offset = Yession.Domain.EventOffset.create offset |> expect
-                  Actor = Yession.Domain.ActorRef.Session
-                  Timestamp = DateTimeOffset.UtcNow
-                  Event = event }
-            Yession.Codecs.Codec.toString Events.sessionEventEnvelope envelope
-        let body = events |> List.map line |> String.concat "\n"
-        do! awaitU (page.EvaluateAsync ("body => window.__fold(body)", box body))
-    }
+    async { do! awaitU (page.EvaluateAsync ("body => window.__fold(body)", box (foldBody events))) }
 
 let private harnessTerminal (id: string) : Yession.Domain.TerminalId =
     Yession.Domain.TerminalId.create id |> Result.defaultWith failwith
@@ -3229,6 +3230,38 @@ let editorTests =
                 do! waitFor "the closed tab to be gone" page "!document.querySelector(\"#shell [data-pane-tab='terminal:term-harness']\")"
                 do! waitFor "focus to be on the tab beside it" page
                         "document.activeElement?.getAttribute('data-pane-tab') === 'terminal:term-live'"
+            }
+
+        // The keyboard a dying shell dropped is caught a frame later, and only while it is still
+        // dropped (`DomMove.IfDropped`). That verdict was read a frame before the move it
+        // allowed: a reader who put their hand on the closed tab's × in the frame between had
+        // it taken to the panel, and Enter pressed nothing — the case above went red that way.
+        // The hand goes down in the first frame after the swap, which is the frame the catch
+        // looks in, and two frames later it has to be where it was put.
+        editorCase "a hand put down the frame after a shell died is left where it was put" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-pane-tab='terminal:term-harness']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab='terminal:term-harness'][aria-selected=true]")
+                let body =
+                    foldBody
+                        [ 95L,
+                          Yession.Domain.SessionEvent.TerminalClosed
+                              { Yession.Domain.Terminals.TerminalClosed.TerminalId = harnessTerminal "term-harness"
+                                Yession.Domain.Terminals.TerminalClosed.Reason = "closed by a peer"
+                                Yession.Domain.Terminals.TerminalClosed.By = None } ]
+                // In the page, so no round trip decides which frame the hand lands in.
+                let! held =
+                    await (page.EvaluateAsync<bool> (
+                        """body => new Promise(resolve => {
+                             window.__fold(body)
+                             requestAnimationFrame(() => {
+                               const dismiss = document.querySelector("#shell [data-pane-tab-dismiss='term-harness']")
+                               dismiss.focus()
+                               requestAnimationFrame(() => requestAnimationFrame(() => resolve(document.activeElement === dismiss)))
+                             })
+                           })""", box body))
+                Expect.isTrue held "focus stays on the × it was put on"
             }
 
         // The narrowest pane the splitter allows (desktop journey, finding 8): with the strip's
