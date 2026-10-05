@@ -411,17 +411,23 @@ let private buildAssets (outDir: string) (minify: bool) =
         File.Copy (Path.Combine (repoRoot, "app", AssetFile.path file), Path.Combine (root, AssetFile.path file), true)
 
     /// A browser program: one entry of the browser project's Fable output, bundled on its own.
-    let program (entry: string) (file: AssetFile) =
+    /// `format` is what loads it: `esm` for a page's `<script type="module">`, `iife` for a
+    /// classic script — which is what a service worker is unless registered as a module.
+    let program (format: string) (entry: string) (file: AssetFile) =
         run esbuild
-            ([ sprintf "app/out/browser/%s.js" entry; "--bundle"; "--format=esm"; "--outfile=" + at file ] @ extra)
+            ([ sprintf "app/out/browser/%s.js" entry; "--bundle"; "--format=" + format; "--outfile=" + at file ] @ extra)
         |> ignore
 
     let produce (file: AssetFile) =
         match file with
-        | AssetFile.``client`` -> program "Browser" file
+        | AssetFile.``client`` -> program "esm" "Browser" file
         // The Manager page. An entry of its own in the browser project, so the page does not
         // load the session client and the client does not carry it.
-        | AssetFile.``manager-page`` -> program "ManagerPage" file
+        | AssetFile.``manager-page`` -> program "esm" "ManagerPage" file
+        // The session shell's service worker. Classic, because the client registers it as one
+        // (`register(url)`, no `type: 'module'`); the session serves it at its mount root with
+        // the build's config in front of it (`WorkerConfig`).
+        | AssetFile.``service-worker`` -> program "iife" "ServiceWorker" file
         // The shell's stylesheet scans the F# sources for composed class names; the player's is
         // its own file because the shell defers it (see `app/player.css`).
         | AssetFile.``app`` -> run tailwind ([ "-i"; "app/tailwind.css"; "-o"; at file ] @ extra) |> ignore
@@ -614,8 +620,8 @@ type Target =
     /// The server's JavaScript: `app/out/Main.js`, the Manager's entry, and `app/SessionMain.js`,
     /// a session's — with every module both import.
     | Server
-    /// The browser project's JavaScript, `app/out/browser`: the session client, and the
-    /// Manager's page programs.
+    /// The browser project's JavaScript, `app/out/browser`: the session client, its service
+    /// worker, and the Manager's page programs.
     | Client
     /// The asset set a build ships, `app/out/public/assets`: the browser programs bundled, the
     /// stylesheets, the vendored faces.

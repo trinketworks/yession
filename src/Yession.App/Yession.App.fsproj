@@ -14,6 +14,9 @@
     <Compile Include="Codecs/Reads.fs" />
     <Compile Include="Codecs/RepoPages.fs" />
     <Compile Include="Codecs/MeProbe.fs" />
+    <!-- What the service worker is served with: encoded by the Session, decoded by the
+         worker bundle. -->
+    <Compile Include="Codecs/WorkerConfig.fs" />
     <!-- What the connection panels' writes answer: both ends' reading of one reply. -->
     <Compile Include="Codecs/Panels.fs" />
     <!-- What one browser had open in one session's pane, across a reload. -->

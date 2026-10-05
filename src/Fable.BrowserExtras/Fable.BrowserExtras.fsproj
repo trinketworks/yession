@@ -2,7 +2,8 @@
 
   <!--
     Fable bindings to the browser APIs the `Fable.Browser.*` family does not cover: the
-    `ResizeObserver`, and the corner of the CSSOM the shell writes its layout through. Fable-only:
+    `ResizeObserver`, the corner of the CSSOM the shell writes its layout through, the Cache
+    API, and the scope a service worker runs in. Fable-only:
     `dotnet build` only type-checks it; the runnable JS comes from Fable. A standalone project so
     the bindings are a distinct layer, mirroring Fable.Jose and Fable.Keyring — with one
     difference worth stating, since the neighbours' names suggest otherwise: these bind browser
@@ -23,11 +24,18 @@
     <Compile Include="BrowserExtras.fs" />
     <Compile Include="PageGlobals.fs" />
     <Compile Include="EventTargets.fs" />
+    <!-- After BrowserExtras.fs, whose `CacheStorage` stores a worker reads and writes. -->
+    <Compile Include="ServiceWorkerScope.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Fable.Core" />
     <PackageReference Include="Fable.Browser.Dom" />
+    <!-- The service worker's bindings (`ServiceWorkerScope.fs`) reuse the upstream types
+         rather than restating them: the request and response a worker passes through are
+         Fable.Fetch's, and its registration is Fable.Browser.Worker's. -->
+    <PackageReference Include="Fable.Fetch" />
+    <PackageReference Include="Fable.Browser.Worker" />
   </ItemGroup>
 
 </Project>

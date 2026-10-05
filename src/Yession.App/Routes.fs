@@ -290,8 +290,8 @@ module SessionRoute =
 
     /// Where every static file sits, relative to whatever the session is mounted at.
     /// Public because the service worker keeps everything under it and nothing else
-    /// (`WebApp.serviceWorker`) — the worker and the router agreeing by inspection is
-    /// exactly what this type exists to prevent.
+    /// (`Yession.Browser.ServiceWorker`, told it by `Codecs.WorkerConfig`) — the worker and
+    /// the router agreeing by inspection is exactly what this type exists to prevent.
     let assetsPrefix = "assets/"
 
     /// Where everything the pane can show is served from. One segment for the whole content

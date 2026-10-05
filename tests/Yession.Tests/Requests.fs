@@ -285,10 +285,37 @@ let private meProbeTests =
                 "no name"
     ]
 
+// --- the service worker's config ------------------------------------------------------------
+
+let private workerConfigTests =
+    testList "the service worker's config" [
+
+        // The session encodes what only it knows about a build and the worker bundle decodes
+        // it, through the one codec the App owns. What is pinned is that the build arrives
+        // whole — its digest names the cache, so a config that lost or reordered anything would
+        // keep the wrong set, or the right set under the wrong build.
+        testCase "reads back as the config that was served" <| fun () ->
+            let config : WorkerConfig.Config =
+                { WorkerConfig.Config.Build = "AbCdEf012345"
+                  Shell = "./"
+                  Assets = "assets/"
+                  Keep = [ "./assets/AbCdEf012345/client.js"; "./assets/AbCdEf012345/app.css" ] }
+            Expect.equal (WorkerConfig.ofJson (WorkerConfig.toJson config)) (Ok config) "the same config"
+
+        // A worker that cannot read which build it belongs to must refuse to start rather than
+        // guess: a config missing its build is refused, never defaulted to a cache named for
+        // nothing.
+        testCase "a config without a build is refused" <| fun () ->
+            Expect.isError
+                (WorkerConfig.ofJson """{"shell":"./","assets":"assets/","keep":[]}""")
+                "no build, no config"
+    ]
+
 let tests =
     testList
         "Requests"
-        [ reasonTests; mcpTests; claudeTests; githubRequestTests; githubStatusTests; signallingTests; meProbeTests ]
+        [ reasonTests; mcpTests; claudeTests; githubRequestTests; githubStatusTests; signallingTests; meProbeTests
+          workerConfigTests ]
 
 // --- through the proxy the environment names ----------------------------------------------
 

@@ -134,19 +134,24 @@ let start
     let shellEtag = sprintf "\"%s\"" (contentDigest (Some bootstrapHtml))
     // The worker, computed once with the page for the same reason the page is: it is a pure
     // function of this build and this mount, and a per-request render could only drift from
-    // the document that registers it.
+    // the document that registers it. The program is the set's own (`AssetFile.service-worker`)
+    // and what this build changes goes in front of it as data — `None` where the set was never
+    // built, which is the same developer case `Assets.serve` answers for every other file.
     let serviceWorkerScript =
         let inWorker (route: SessionRoute) = RelativeUrl.inDocument DocumentBase.serviceWorker (SessionRoute.relative route)
-        WebApp.serviceWorker
-            (AssetBuild.digest assets.Build)
-            (inWorker Shell)
-            SessionRoute.assetsPrefix
-            // The set this build actually left on disk, read from the same map the server
-            // answers from. A list written by hand here would be a second thing that has to
-            // agree with the build, which is exactly what the set-wide digest exists to avoid.
-            (assets.Files
-             |> Map.toList
-             |> List.map (fun (path, _) -> inWorker (Asset (AssetBuild.digest assets.Build, path))))
+        let config : WorkerConfig.Config =
+            { WorkerConfig.Config.Build = AssetBuild.digest assets.Build
+              Shell = inWorker Shell
+              Assets = SessionRoute.assetsPrefix
+              // The set this build actually left on disk, read from the same map the server
+              // answers from. A list written by hand here would be a second thing that has to
+              // agree with the build, which is exactly what the set-wide digest exists to avoid.
+              Keep =
+                assets.Files
+                |> Map.toList
+                |> List.map (fun (path, _) -> inWorker (Asset (AssetBuild.digest assets.Build, path))) }
+        Map.tryFind (AssetFile.path AssetFile.``service-worker``) assets.Files
+        |> Option.map (fun program -> WorkerConfig.script config (program.toString BufferEncoding.Utf8))
     // Every accepted peer connection, so a stopping Host can drain them. Never pruned
     // mid-life (closePeerConnection resolves immediately for already-closed ones, and a
     // session hosts a bounded handful of peers).
@@ -388,11 +393,16 @@ let start
             // Same policy as the shell, and for the same reason one level up: this file is
             // what decides which build's assets survive offline, so a stale copy would pin a
             // client to a build that is gone. `no-cache` means revalidate, not "do not keep".
-            res.writeHead (
-                200,
-                [ ResponseHeader.ContentType "text/javascript; charset=utf-8"
-                  ResponseHeader.CacheControl CachePolicy.shell ])
-            res.``end`` serviceWorkerScript
+            match serviceWorkerScript with
+            | Some script ->
+                res.writeHead (
+                    200,
+                    [ ResponseHeader.ContentType "text/javascript; charset=utf-8"
+                      ResponseHeader.CacheControl CachePolicy.shell ])
+                res.``end`` script
+            | None ->
+                res.writeHead (404, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
+                res.``end`` "not built (run: build)"
         | Some Manifest ->
             res.writeHead (
                 200,

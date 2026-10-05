@@ -309,6 +309,12 @@ module Urls =
     [<Emit("new URL($0).pathname")>]
     let pathname (address: string) : string = jsNative
 
+    /// The origin of an absolute address — scheme, host and port, as the URL standard
+    /// serializes them. Absolute, and THROWS on what `URL` cannot parse, for the reasons
+    /// `pathname` gives.
+    [<Emit("new URL($0).origin")>]
+    let origin (address: string) : string = jsNative
+
 /// One end of a `MessageChannel`.
 [<AllowNullLiteral>]
 type MessagePort =
@@ -364,14 +370,13 @@ module EventSource =
     [<Emit("new EventSource($0)")>]
     let create (url: string) : EventSource = jsNative
 
-/// The slice of the Cache API that a READ goes through. `Fable.Browser.Dom` types none of it —
-/// it stops at the DOM, and a `Cache` belongs to the service-worker bindings this repository
-/// does not otherwise need.
+/// The slice of the Cache API this repository uses. `Fable.Browser.Dom` types none of it — it
+/// stops at the DOM — and no `Fable.Browser.*` package types it either.
 ///
-/// Only `match` and what a hit is worth asking are here. Opening a cache, enumerating its
-/// addresses and writing to it are one-liners at their call site whose answers have no
-/// structure to read; a hit has two — the body, and the header it was stored with — and that
-/// is what earns a binding.
+/// Two readers, with two shapes of answer. The page keeps answers it BUILT (`KeptResponse`)
+/// and reads them back as text (`CachedResponse`); the service worker keeps what came off the
+/// network and hands it back to the browser untouched, so its members take and give
+/// `Fable.Fetch`'s own `Response` (`ServiceWorkerScope.fs` is the rest of its side).
 [<AutoOpen>]
 module CacheStorage =
 
@@ -430,6 +435,13 @@ module CacheStorage =
         /// Keep `response` as the answer for `url`, replacing whatever was there.
         abstract put : url: string * response: KeptResponse -> JS.Promise<unit>
 
+        /// Keep a response that came off the NETWORK as the answer for `request`, replacing
+        /// whatever was there — the service worker's write, which keeps what the server said
+        /// rather than building an answer of its own. `Fable.Fetch`'s own request and response,
+        /// so what a worker fetched goes straight in.
+        [<Emit("$0.put($1, $2)")>]
+        abstract keep : request: Fetch.Types.RequestInfo * response: Fetch.Types.Response -> JS.Promise<unit>
+
     /// The page's named stores.
     [<AllowNullLiteral>]
     type Stores =
@@ -441,6 +453,15 @@ module CacheStorage =
         /// The names of every store this page holds.
         [<Emit("$0.keys()")>]
         abstract names : unit -> JS.Promise<string array>
+
+        /// Drop the store called `name`, answering whether there was one.
+        [<Emit("$0.delete($1)")>]
+        abstract drop : name: string -> JS.Promise<bool>
+
+        /// The answer ANY store holds for `request`, or nothing — a miss resolves `undefined`,
+        /// which is an answer rather than a fault.
+        [<Emit("$0.match($1)")>]
+        abstract lookup : request: Fetch.Types.RequestInfo -> JS.Promise<Fetch.Types.Response option>
 
     /// The page's stores, or nothing where this page has none: a document served insecurely
     /// has no `caches` at all, and reading the property would throw rather than answer.
