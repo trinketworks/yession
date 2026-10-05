@@ -514,22 +514,23 @@ module Style =
     /// is not a blocked one.
     let btnSendInFieldWaiting = cls [ btnInField; "text-ink-faint hover:text-ink" ]
 
-    /// The composer's verbs, as WORDS — a Metro button with its border taken off.
-    ///
-    /// `SEND →` was once the word and an arrow saying one thing twice, in a 93px bordered box
-    /// on a strip of its own; the arrow alone replaced it and said it once, correctly, while
-    /// it rode the end of the line you had just written. It stopped riding that line when the
-    /// verbs dropped onto a row of their own on a phone — and a row holding two glyphs and
-    /// the rest of the screen is room the word was only ever given up for. So the word is
-    /// back, at 13px caps, without the rectangle: the band IS the surface here, and a border
-    /// round a control standing on it is the box this design spent three revisions removing.
+    /// Send's own box — SOLID, not the word every other composer verb wears. The product's
+    /// own rule (above) is bordered for a standalone act, borderless for a verb riding the
+    /// thing it acts on, and Send is the second kind by that rule — it wore the borderless
+    /// word for three revisions on exactly that reasoning (`SEND →` once, then the word
+    /// alone). Direct design direction overrode it: a thumb on a phone finds a filled
+    /// rectangle before it finds a word's own baseline, and now that the model picker rides
+    /// this same row (`Style.modelSelect`) Send is the one control in it worth standing apart
+    /// from, not blending into. No `rounded-*` — every rectangle this product draws is
+    /// sharp-cornered (`btn`/`btnPrimary`/every bordered verb above), and a lone rounded
+    /// button would read as a different product's chrome leaking in, not as "more primary."
     ///
     /// 40px tall, which is the composer's resting line exactly (`draftInput`: a 24px line in
-    /// `py-2`) — so the pair bottom-aligns onto it with no correction, and `draftCommit`
-    /// spends no `pb` to centre them.
-    let private btnComposerWord =
-        cls [ "h-10 px-3 shrink-0 inline-flex items-center bg-transparent border-0 cursor-pointer font-ui"
-              capsLg; "transition-colors"; focusRing ]
+    /// `py-2`) — so it bottom-aligns onto that line with no correction, same as the word it
+    /// replaces, and `draftCommit` spends no `pb` to centre it.
+    let private btnComposerBox =
+        cls [ "h-10 px-3 shrink-0 inline-flex items-center justify-center cursor-pointer font-ui"
+              capsLg; "transition-colors"; Stroke.ring; focusRing ]
     /// Send's own hit area, grown past its 40px box the way `btnIconBareTouch` grows a bare
     /// icon's: an empty `::before` reaching past the glyph on three sides, a press on the
     /// pseudo-element landing on the element. Only three sides, not four — Send is the
@@ -537,11 +538,13 @@ module Style =
     /// growing left would widen onto that presence display rather than onto nothing.
     let private btnComposerSendTouch =
         "relative before:absolute before:content-[''] before:-top-1.5 before:-bottom-1.5 before:-right-1.5"
-    let btnComposerSend = cls [ btnComposerWord; btnComposerSendTouch; "text-blue hover:text-blue-up-1" ]
-    /// Waiting for something to send. The same control in the same place, at the weight of a
-    /// thing with nothing to do — never `disabled`, in either spelling: an empty composer is
-    /// not a blocked one.
-    let btnComposerSendWaiting = cls [ btnComposerWord; btnComposerSendTouch; "text-ink-faint hover:text-ink" ]
+    let btnComposerSend =
+        cls [ btnComposerBox; btnComposerSendTouch; Stroke.blue; "bg-blue text-bg hover:bg-blue-up-1 hover:border-blue-up-1" ]
+    /// Waiting for something to send. The same box in the same place, unfilled — a hairline
+    /// rectangle at the weight of a thing with nothing to do, never `disabled` in either
+    /// spelling: an empty composer is not a blocked one.
+    let btnComposerSendWaiting =
+        cls [ btnComposerBox; btnComposerSendTouch; Stroke.hair; "text-ink-faint hover:text-ink hover:border-edge" ]
     /// Chrome, not an action: the small sidebar collapse/reveal chevrons. They lean the way
     /// they travel on hover and lead further on press — the only motion chrome earns, and the
     /// reason the two directions are separate values rather than one class plus a guess.
@@ -639,6 +642,30 @@ module Style =
     /// instead of a settings column that gave it the row's full width. `shrink-0` so Send and
     /// Interrupt, packed in beside it, never squeeze it below the model names it has to show.
     let modelControlWidth = "w-28 shrink-0"
+
+    /// The model picker's own FACE, now that it stands on the composer's row rather than in a
+    /// settings column: bare — deliberately NOT the same register as Send beside it any more.
+    /// Send wears a solid box now (`btnComposerSend`), the one filled rectangle this row
+    /// draws, precisely so the picker does not have to: a bare control next to a filled one
+    /// reads, correctly, as "this is the one that matters." Riding `fieldSelect` here made
+    /// the picker a filled rectangle fighting Send for that same attention — the bordered/
+    /// filled/ringed box every settings `<select>` wears (`fieldFace`) — which is the mistake
+    /// this face still avoids, just against a different trailing neighbour now.
+    /// `appearance-none` still drops the platform caret (the mark beside it draws the one
+    /// that's left); nothing else of the field face survives.
+    let modelSelect =
+        cls [ "h-10 pl-0 pr-5 bg-transparent border-0 appearance-none cursor-pointer w-full"
+              "font-ui font-light text-ink-dim hover:text-ink transition-colors"; touchType; focusRing ]
+
+    /// Its wrapper: `modelControlWidth` for the width Send and Interrupt need it to hold to,
+    /// `relative` for the mark `modelSelectMark` sits against — the same split `fieldSelectWrapOf`
+    /// makes, kept separate because this wrapper carries none of that function's field chrome.
+    let modelSelectWrap = cls [ "relative"; modelControlWidth ]
+
+    /// The caret `appearance-none` took away, drawn at the picker's own faint weight —
+    /// `fieldSelectMark` is `text-ink-faint` too, so the two marks read as one family even
+    /// though the box behind them no longer matches.
+    let modelSelectMark = "pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-ink-faint"
 
     /// A field with a VERB at its trailing edge, built exactly as the terminal composer's is
     /// (`terminalCommandWrap` / `terminalCommandTrail`): the wrapper carries the width, the
@@ -2704,7 +2731,7 @@ module Style =
     /// (40px), so the line's centre sits 20px from the box top; a 40px control bottom-aligned
     /// on the same 40px box centres at 20px too. It used to spend `pb-1` because the controls
     /// were 32px squares and needed 4px under them to reach that centre — the correction went
-    /// out with the glyphs (`btnComposerWord`, above, is the line's own height).
+    /// out with the glyphs (`btnComposerBox`, above, is the line's own height).
     ///
     /// On a phone this row leaves the line entirely: it wants the full width
     /// (`max-md:w-full max-md:justify-end`, its buttons pushed to the trailing edge the
@@ -2756,6 +2783,35 @@ module Style =
     /// is a border-box cap and cannot clamp below its own padding, so a `pt-1` left on in the
     /// face above is 4px of band the row still owns while claiming to be gone.
     let draftCommitReady = cls [ draftCommitBase; "max-md:pt-1 max-md:max-h-12" ]
+
+    /// The model picker's own row-mate, standing beside `draftCommit`/`draftCommitReady`
+    /// rather than inside either: choosing a model has nothing to do with whether there is
+    /// a draft to send or a turn to stop, so it carries none of that pair's `max-md:` gating
+    /// — no `max-h-0`, no `opacity-0`, no transition. It was inside `draftCommitBase` for one
+    /// revision (riding `View.drafts`' `commitClass`) and that was the bug, twice over: on a
+    /// phone with an empty draft the picker was invisible along with Send, so nobody could
+    /// choose a model before writing a word; and because the row it rode DOES transition
+    /// (`max-md:transition-[max-height,opacity]`), a tap landing while that transition was
+    /// still settling opened the platform's OWN popup anchored to a rect that kept moving
+    /// under it — a native menu a phone drew in the wrong place for a reason no amount of
+    /// styling the menu itself could reach, because the bug was never the popup's.
+    /// `shrink-0` matches `draftCommitBase`'s own, so the two sit side by side on desktop
+    /// without either claiming space the other needs.
+    ///
+    /// `md:order-first`: on desktop, `draftBox`'s row (`draftBody`, this, `commitClass`, in
+    /// that document order) otherwise lands the picker pressed up against Send at the row's
+    /// trailing edge — the two controls that most need telling apart end up the two closest
+    /// together. Reordering it to the LEAD edge (the original proposal's own layout: model
+    /// beside the future `+`, Send alone at the trailing edge) puts a sentence's worth of
+    /// text between them instead. `md:` only: on a phone `draftBox` is already a column
+    /// (`max-md:flex-col`), where `order` would lift the picker above the text entirely
+    /// rather than sideways past it — a bigger move than asked for, and the one place this
+    /// row already read correctly (the picker stands flush to ITS row's own leading edge,
+    /// `draftCommitBase`'s `max-md:justify-end` pushing Send to the opposite one below it).
+    /// `md:pl-4` matches `draftInput`'s own left gutter, now that this is the row's first
+    /// thing on screen instead of a shrink-0 item that inherited its position for free.
+    let draftLead = "shrink-0 flex items-center md:order-first md:pl-4"
+
     let draftAuthor = "pl-4 pt-2 " + caps + " text-ink-faint truncate"
 
     // A draft nobody has open here: one line of it, so the composer reads as "what is being
