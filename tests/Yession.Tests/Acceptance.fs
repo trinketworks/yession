@@ -84,6 +84,8 @@ let private representativeModel : ClientModel =
       Manager = Some "http://127.0.0.1:8321"
       // Path-mounted unless a case says otherwise: the address survives a restart.
       EphemeralStorage = false
+      // Served by a build that says which it is, so the sidebar's foot carries it.
+      Build = Some "1.2.3-beta.4"
       // A representative client is one that can keep what it is given; the case that cannot
       // is the exception, and says so where it matters.
       CanKeepHistory = true
@@ -2613,6 +2615,22 @@ let private shellTests =
             Expect.isFalse
                 ((pageWith None false).Contains Dom.ephemeralStorageMetaName)
                 "absence is the good case, so the client reads false"
+
+        // The browser bundle has no version of its own; it reads the server's off the shell.
+        // The meta and the footer come from one model field, so they cannot disagree.
+        testCase "the shell says which build served it, in its meta and at the column's foot" <| fun () ->
+            let html = page None
+            Expect.isTrue
+                (html.Contains (sprintf """<meta name="%s" content="1.2.3-beta.4">""" Dom.buildMetaName))
+                "the client reads the build back off the shell"
+            Expect.isTrue
+                (html.Contains (sprintf """%s="1.2.3-beta.4">yession 1.2.3-beta.4<""" Dom.Hooks.build))
+                "and the first paint shows it"
+
+        testCase "a model with no build says nothing about one" <| fun () ->
+            let html = Yession.Host.Ssr.page sessionId "" None false assets { representativeModel with Build = None }
+            Expect.isFalse (html.Contains Dom.buildMetaName) "no tag, not an empty one"
+            Expect.isFalse (html.Contains Dom.Hooks.build) "and no footer guessing at one"
 
         // The terminals column's open state lives on `<html>`, outside the mount the client
         // re-renders, so the client cannot paint it — only the shell can, and if it does not,

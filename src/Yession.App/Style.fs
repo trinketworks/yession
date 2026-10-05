@@ -698,6 +698,17 @@ module Style =
 
     let navPivot = pivotBase
 
+    /// A column's foot: the pivot, and opposite it on the same baseline, the build. One row
+    /// so the build costs the column no height — it lives in the slack the pivot already
+    /// leaves to its right.
+    let sideFoot = "flex items-baseline justify-between gap-3 min-w-0"
+
+    /// Which build this is, as a footer says it: the faintest step of the mono face, set
+    /// rather than drawn, and never a control. Shared by the session's sidebar foot and the
+    /// Manager's page footer, so "which Yession is this" reads the same on both surfaces.
+    /// `select-all` because the one thing anybody does with it is paste it into a report.
+    let buildMark = "font-terminal text-code-sm text-ink-faint tabular-nums truncate select-all"
+
     let private pivotMarkBase =
         "block transition-[translate,color] duration-150 ease-out motion-reduce:transition-none "
         + "group-hover:text-blue group-focus-visible:text-blue"

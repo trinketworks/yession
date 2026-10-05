@@ -997,6 +997,9 @@ let private start () =
                 Session = session
                 Manager = metaContent Dom.managerMetaName
                 EphemeralStorage = (metaContent Dom.ephemeralStorageMetaName).IsSome
+                // The server's build: this bundle is one of its assets and has no version
+                // of its own to report.
+                Build = metaContent Dom.buildMetaName
                 // The one place that can answer this: the model defaults to true because the
                 // SERVER renders this shell too and has no idea what the browser can do.
                 CanKeepHistory = canKeepHistory ()

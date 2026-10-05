@@ -536,7 +536,7 @@ let private bodyTemplate
         if List.isEmpty hooks then html $""
         else html $"""<div class="pb-10">{hooksTemplate access hooks}</div>"""
     html $"""
-        <main class="flex-1 min-w-0 overflow-y-auto">
+        <main class="flex-1 min-w-0 overflow-y-auto flex flex-col">
           <!-- Sticky, and acrylic: the band floats over the registry as it scrolls under it,
                which is the one place on this page a surface sits over another. It is a BAND,
                running edge to edge of the viewport; only what is in it keeps to the rail.
@@ -545,25 +545,24 @@ let private bodyTemplate
           <header class="h-[88px] shrink-0 border-b border-hair sticky top-0 z-10 {Style.acrylic}">
             <div class="{pageRail} h-full flex items-end pb-5">
               <h1 class="{Style.lockup}"><span class="{Style.lockupMark}" aria-hidden="true">{Brand.mark}</span><span class="{Style.wordmark}">yession</span> <span class="{Style.label} pb-2">manager</span></h1>
-              <!-- The Manager's own build, in the same faint mono step the rows use for
-                   theirs. It belongs beside them because it is the same question asked of a
-                   different process, and because the Manager is the one that CANNOT roll
-                   forward on its own: it keeps the image it exec'd until something restarts
-                   it, so it is routinely the oldest thing on the page.
-                   It yields at the SAME width its rows do, though the header has room to
-                   spare: the answer here is a comparison, and a page showing one process's
-                   build while hiding every other's reads as the Manager's version banner —
-                   which is the thing that was already there to be misread. -->
-              <span class="font-terminal text-code-sm text-ink-faint tabular-nums ml-3 pb-0.5 max-xl:hidden" data-manager-build>{Version.current}</span>
             </div>
           </header>
-          <div class="{pageRail} flex flex-col">
+          <div class="{pageRail} flex-1 flex flex-col">
             <div class="pt-6 pb-10">{tableTemplate query views}</div>
             <div class="pb-10">{mcpTemplate views declarations}</div>
             <!-- Only when there are any: a deployment that declared no hook endpoints has
                  nothing to say here, and an empty table would imply a thing to fill in. -->
             {hooksSection}
           </div>
+          <!-- The Manager's own build, at the foot of the page in the same mark a session's
+               sidebar uses for its own (`Style.buildMark`). It matters because the Manager is
+               the one process that CANNOT roll forward on its own: it keeps the image it
+               exec'd until something restarts it, so it is routinely the oldest Yession
+               running. The content above is `flex-1`, so on a short page this sits at the
+               viewport's foot, and on a long one after the last section. -->
+          <footer class="{pageRail} shrink-0 pb-6">
+            <span class="{Style.buildMark}" data-manager-build>yession {Version.current}</span>
+          </footer>
         </main>"""
 
 /// `styleSheetUrl` and `programUrl` are passed in rather than read from the module below: F#

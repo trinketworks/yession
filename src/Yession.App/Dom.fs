@@ -32,6 +32,11 @@ module Dom =
     /// absence is the good deployment, exactly as with the Manager origin above.
     let ephemeralStorageMetaName = "yession-ephemeral-storage"
 
+    /// The `<meta name>` carrying which build served this shell (`ClientModel.Build`). The
+    /// client bundle has no version of its own — it is one of the server's assets — so it
+    /// reads the server's off the page. Absent, never blank, when the model has none.
+    let buildMetaName = "yession-build"
+
     /// The attribute marking the replay player's deferred stylesheet in the head, so the
     /// browser half can find it and turn it on (`Style.deferredHeadTags`, `Replay.mount`).
     /// A hook rather than a selector spelled twice, for the same reason every other one is.
@@ -78,6 +83,9 @@ module Dom =
         /// test (or the browser suite, waiting for a session to come up) can read it off.
         let connection = "data-connection"
         let displayName = "data-display-name"
+        /// Which build served this session, at the column's foot (`ClientModel.Build`); its
+        /// value is the build.
+        let build = "data-build"
         let catchUp = "data-catch-up"
         /// The same catch-up as a bar along the header's bottom edge — the one place every
         /// screen has, since the sidebar line above is behind a drawer on a phone.
@@ -1073,10 +1081,10 @@ module Dom =
         /// The rows stream's address, on the section it fills — the same rule, for the one
         /// address the script opens rather than posts to.
         let stream = "data-stream"
-        /// Which build the MANAGER is running, on the page's own header. There is no
-        /// per-session twin any more: the roster row's plumbing line was cut so the summary
-        /// could have the column, and a session's build rides the registry stream instead of
-        /// this page.
+        /// Which build the MANAGER is running, in the page's footer. There is no per-session
+        /// twin on this page: the roster row's plumbing line was cut so the summary could
+        /// have the column, and a session says its own build at the foot of its own sidebar
+        /// (`Hooks.build`).
         let managerBuild = "data-manager-build"
         /// The one line a session says about ITSELF, rendered beside its status word. The
         /// Manager stores and shows the string without learning what it means, so this hook

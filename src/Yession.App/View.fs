@@ -880,6 +880,15 @@ module View =
                   {detailNote "history-store" [ Dom.Text.historyNotKeptWhy ]}
                 </section>"""
 
+    /// Which build served this session, at the column's foot on BOTH faces — chrome that
+    /// belongs to the column like its collapse chevron, so it does not come and go as the
+    /// faces turn. Nothing at all when the shell said nothing.
+    let private buildMark (model: ClientModel) : TemplateResult =
+        match model.Build with
+        | None -> Lit.nothing
+        | Some build ->
+            html $"""<span class="{Style.buildMark}" data-build="{build}">yession {build}</span>"""
+
     let private settingsPane (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         html $"""
             <div class="{Style.settingsPane}" data-settings-panel>
@@ -892,7 +901,10 @@ module View =
               {queriesSection model.Queries}
               {historyStoreNote model}
               <div class="flex-1"></div>
-              <button type="button" class="{Style.cls [ Style.navPivot; Style.settingsLane2 ]}" aria-label="Back to session" data-settings-toggle="close" @click={Ev(fun _ -> actions.ToggleSettings ())}><span class="{Style.pivotMarkBack}">{Icon.pivotLeft}</span>back</button>
+              <div class="{Style.cls [ Style.sideFoot; Style.settingsLane2 ]}">
+                <button type="button" class="{Style.navPivot}" aria-label="Back to session" data-settings-toggle="close" @click={Ev(fun _ -> actions.ToggleSettings ())}><span class="{Style.pivotMarkBack}">{Icon.pivotLeft}</span>back</button>
+                {buildMark model}
+              </div>
             </div>"""
 
     /// The contents: every chapter in the session, and the way to reach one that is not
@@ -941,7 +953,10 @@ module View =
               {chaptersSection dispatch model}
               {environmentSection model.Environment}
               <div class="flex-1"></div>
-              <button type="button" class="{Style.cls [ Style.navPivot; Style.navLane2 ]}" data-settings-toggle="open" @click={Ev(fun _ -> actions.ToggleSettings ())}>settings<span class="{Style.pivotMarkForward}">{Icon.pivotRight}</span></button>
+              <div class="{Style.cls [ Style.sideFoot; Style.navLane2 ]}">
+                <button type="button" class="{Style.navPivot}" data-settings-toggle="open" @click={Ev(fun _ -> actions.ToggleSettings ())}>settings<span class="{Style.pivotMarkForward}">{Icon.pivotRight}</span></button>
+                {buildMark model}
+              </div>
             </div>"""
 
     /// The sidebar column: one region, two faces, and — on mobile — the scrim behind it.

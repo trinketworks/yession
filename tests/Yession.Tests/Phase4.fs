@@ -716,7 +716,7 @@ let private uiRenderTests =
                     [ { Record = uiRecord; Status = ProcessManager.NotRunning; Summary = None } ]
                     []
                     []
-            Expect.isTrue (html.Contains Dom.Manager.managerBuild) "the header carries its own hook, distinct from a row's"
+            Expect.isTrue (html.Contains Dom.Manager.managerBuild) "the footer carries its own hook, distinct from a row's"
             Expect.isTrue (html.Contains Yession.Host.Version.current) "and its own version, from the same place --version reads"
 
         testCase "a declared hook endpoint puts its secret on the page" <| fun () ->

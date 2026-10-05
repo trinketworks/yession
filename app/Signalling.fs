@@ -37,8 +37,10 @@ let private bootstrapHtml (sessionId: SessionId) (mount: string) (managerOrigin:
         | Ok peerId -> { PeerId = peerId; DisplayName = "" }
         | Error e -> failwith e
     // Seed the serving session id so the secondary identifier renders on first paint (the
-    // browser re-learns it from `PeerAccepted` once connected).
-    Ssr.page sessionId mount managerOrigin ephemeralStorage assets { ClientModel.init placeholderPeer with Session = Some sessionId }
+    // browser re-learns it from `PeerAccepted` once connected), and this process's build so
+    // the sidebar's foot says which Yession is serving.
+    Ssr.page sessionId mount managerOrigin ephemeralStorage assets
+        { ClientModel.init placeholderPeer with Session = Some sessionId; Build = Some Version.current }
 
 let private encodeUriComponent (value: string) : string = Fable.Core.JS.encodeURIComponent value
 
