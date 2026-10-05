@@ -115,3 +115,15 @@ module Keystroke =
         | "PageDown" -> Some "\u001b[6~"
         | "Delete" -> Some "\u001b[3~"
         | _ -> if k.Length = 1 then Some k else None
+
+    /// What text a field took in without a keydown that named it sends — a phone keyboard's
+    /// letters, an IME's committed word, a paste — or `None` for nothing.
+    ///
+    /// A phone keyboard does not report keys. It reports `keydown` with the key `Unidentified`
+    /// and then INSERTS what was typed into whatever field has focus, so the chord path above
+    /// sees nothing to send and the text is only ever readable as an insertion. A line break
+    /// in it is the Return key, which a pty reads as `\r` — the byte `bytesOf` sends for Enter —
+    /// whichever of the three spellings a platform inserted.
+    let ofInsertedText (text: string) : string option =
+        if text = "" then None
+        else Some (text.Replace("\r\n", "\r").Replace ("\n", "\r"))

@@ -1975,7 +1975,7 @@ let private stolenFromHarness (page: IPage) : Async<unit> =
         do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
         let! _ =
             await (page.WaitForFunctionAsync
-                """document.activeElement?.getAttribute('data-terminal-screen') === 'term-harness'""")
+                """document.activeElement?.getAttribute('data-terminal-keys') === 'term-harness'""")
         do!
             foldHarness page [
                 90L,
@@ -4080,11 +4080,11 @@ let editorTests =
                     await (page.WaitForFunctionAsync
                         (sprintf "document.querySelector(%s).textContent.includes('vim ~/notes')" "\"#shell [data-terminal-screen='term-live']\""))
 
-                // It is a Tab stop, because its whole purpose is having the keyboard.
-                do! awaitU (page.FocusAsync screen)
+                // A press on it puts the keyboard there, because its whole purpose is having it.
+                do! awaitU (page.ClickAsync screen)
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        """document.activeElement?.getAttribute('data-terminal-screen') === 'term-live'""")
+                        """document.activeElement?.getAttribute('data-terminal-keys') === 'term-live'""")
 
                 // The screen is composed by a REAL emulator in a real browser: the
                 // Session's snapshot seeds it, and the records the client already
@@ -4111,9 +4111,9 @@ let editorTests =
 
                 // Tab is SENT rather than moving focus out of the terminal mid-session, and
                 // the shift is that `preventDefault` fires for everything the terminal takes.
-                let! before = await (page.EvaluateAsync<string> "() => document.activeElement?.getAttribute('data-terminal-screen')")
+                let! before = await (page.EvaluateAsync<string> "() => document.activeElement?.getAttribute('data-terminal-keys')")
                 do! awaitU (page.Keyboard.PressAsync "Tab")
-                let! after = await (page.EvaluateAsync<string> "() => document.activeElement?.getAttribute('data-terminal-screen')")
+                let! after = await (page.EvaluateAsync<string> "() => document.activeElement?.getAttribute('data-terminal-keys')")
                 Expect.equal after before "Tab types a tab; it does not leave the terminal"
             }
         // Taking the keyboard is the whole of what live mode is, and the keyboard has to
@@ -4132,7 +4132,7 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        """document.activeElement?.getAttribute('data-terminal-screen') === 'term-harness'""")
+                        """document.activeElement?.getAttribute('data-terminal-keys') === 'term-harness'""")
 
                 // …and it is really the keyboard, not merely a focus ring: what is typed now
                 // reaches the pty rather than the composer that used to be there.
@@ -4159,7 +4159,7 @@ let editorTests =
                 do! waitFor
                         "the keyboard on the screen the lease landed on, not on the command line under it"
                         page
-                        """document.activeElement?.getAttribute('data-terminal-screen') === 'term-harness'"""
+                        """document.activeElement?.getAttribute('data-terminal-keys') === 'term-harness'"""
             }
         // The other route in, and the reason the focus move lives in the render loop rather
         // than on the press: a block that takes the screen hands its author the keyboard with
@@ -4261,10 +4261,10 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        """document.activeElement?.getAttribute('data-terminal-screen') === 'term-harness'""")
+                        """document.activeElement?.getAttribute('data-terminal-keys') === 'term-harness'""")
                 let! ring =
                     await (page.EvaluateAsync<string> """() => {
-                        const s = getComputedStyle(document.activeElement);
+                        const s = getComputedStyle(document.activeElement.closest('[data-terminal-screen]'));
                         return s.outlineStyle + ' ' + s.outlineWidth; }""")
                 Expect.equal ring "solid 2px" "the screen with the keyboard wears the ring"
             }
@@ -4274,7 +4274,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-harness'][tabindex='0']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-harness'] [data-terminal-keys]")
                 // A line typed, then the cursor moved four cells back along it.
                 do! awaitU (page.EvaluateAsync ("() => window.__snapshot('term-harness', 50, '$ echo hi\\u001b[4D', 80, 24)"))
                 do!
@@ -4282,6 +4282,99 @@ let editorTests =
                         "the caret on the o of echo"
                         page
                         "document.querySelector(\"#shell [data-terminal-screen='term-harness'] [data-terminal-caret]\")?.textContent === 'o'"
+            }
+        // A phone (P3-3). A platform raises its soft keyboard for a focused text field and for
+        // nothing else, and the live screen was a focusable div: a tap focused it, nothing came
+        // up, and the one mode that exists to be typed into could not be typed into. What is
+        // asked is what a phone needs to show a keyboard — a text field holding focus, inside
+        // the screen — because no headless browser has a keyboard to show.
+        editorCaseOnTouch 390 844 "tapping the live screen puts the keyboard in a text field" <| fun page ->
+            async {
+                do! awaitU (page.TapAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.TapAsync "#shell [data-terminal-tab='term-live']")
+                let screen = "#shell [data-terminal-screen='term-live']"
+                let! _ = await (page.WaitForSelectorAsync screen)
+                do! awaitU (page.TapAsync screen)
+                do!
+                    waitFor
+                        "a text field inside the live screen holding focus"
+                        page
+                        """document.activeElement?.tagName === 'TEXTAREA'
+                           && document.activeElement.closest("[data-terminal-screen='term-live']") !== null"""
+            }
+        // What a phone keyboard sends is mostly not keys: it INSERTS text into the focused
+        // field, with a keydown that names no key. `insertText` is exactly that event and no
+        // keydown at all, so this reaches the pty only through the insertion path — and the
+        // second insertion arriving alone is what says the field let go of the first.
+        editorCaseOnTouch 390 844 "text typed on a phone reaches the terminal as the bytes a keyboard sends" <| fun page ->
+            async {
+                do! awaitU (page.TapAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.TapAsync "#shell [data-terminal-tab='term-live']")
+                let screen = "#shell [data-terminal-screen='term-live']"
+                let! _ = await (page.WaitForSelectorAsync screen)
+                do! awaitU (page.TapAsync screen)
+                let! _ = await (page.WaitForFunctionAsync "document.activeElement?.getAttribute('data-terminal-keys') === 'term-live'")
+                do! awaitU (page.Keyboard.InsertTextAsync "bob")
+                do! awaitU (page.Keyboard.InsertTextAsync "\n")
+                let! typed = await (page.EvaluateAsync<string> "() => window.__typed || ''")
+                Expect.equal typed "bob\r" "the word once, and Return as a carriage return"
+            }
+        // The other half of putting the keyboard in a field on a press: a press that ENDS a
+        // selection is somebody copying output, and focusing a text field would take the
+        // selection out from under them.
+        editorCase "selecting output on the live screen keeps the selection" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        "document.querySelector(\"#shell [data-terminal-screen='term-live']\")?.textContent.includes('vim ~/notes') === true")
+                // Where the words are, so the drag runs across them rather than across padding.
+                let! span =
+                    await (page.EvaluateAsync<float[]>
+                        """() => {
+                             const screen = document.querySelector("#shell [data-terminal-screen='term-live']")
+                             const walker = document.createTreeWalker(screen, NodeFilter.SHOW_TEXT)
+                             let node
+                             while ((node = walker.nextNode()) && !node.textContent.includes('vim ~/notes')) {}
+                             const range = document.createRange()
+                             const at = node.textContent.indexOf('vim ~/notes')
+                             range.setStart(node, at)
+                             range.setEnd(node, at + 'vim ~/notes'.length)
+                             const r = range.getBoundingClientRect()
+                             return [r.left + 1, r.right - 1, (r.top + r.bottom) / 2]
+                           }""")
+                do! awaitU (page.Mouse.MoveAsync (float32 span.[0], float32 span.[2]))
+                do! awaitU (page.Mouse.DownAsync ())
+                do! awaitU (page.Mouse.MoveAsync (float32 span.[1], float32 span.[2], MouseMoveOptions (Steps = 5)))
+                do! awaitU (page.Mouse.UpAsync ())
+                let! selected = await (page.EvaluateAsync<string> "() => getSelection().toString()")
+                Expect.stringContains selected "notes" "what was dragged across is still selected"
+            }
+        // A phone's keyboard takes the bottom of the screen, and the command line and its Run
+        // are at the bottom of the pane. The keyboard is the viewport getting shorter under the
+        // page — what a keyboard that resizes the layout does — and what is measured is whether
+        // the line and its button are still above where it now ends.
+        editorCaseOnTouch 390 844 "the command line and its Run stay above a raised keyboard" <| fun page ->
+            async {
+                do! awaitU (page.TapAsync "#shell [data-content-toggle='show']")
+                let line = "#shell " + commandLine "term-harness"
+                let! _ = await (page.WaitForSelectorAsync line)
+                do! awaitU (page.TapAsync line)
+                do! awaitU (page.SetViewportSizeAsync (390, 544))
+                do!
+                    waitFor
+                        "the command line and Run inside a viewport 300px shorter"
+                        page
+                        (sprintf
+                            """(() => {
+                                 const line = document.querySelector("%s")
+                                 const run = line?.parentElement.querySelector('[data-terminal-send]')
+                                 return innerHeight === 544 && !!run
+                                   && line.getBoundingClientRect().bottom <= innerHeight
+                                   && run.getBoundingClientRect().bottom <= innerHeight
+                               })()"""
+                            line)
             }
         // Moving by WORD, which is most of what navigating a line you have already typed
         // means. Its own case rather than an extra assertion on the one above: that pins the
@@ -4296,10 +4389,10 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
                 let screen = "#shell [data-terminal-screen='term-live']"
                 let! _ = await (page.WaitForSelectorAsync screen)
-                do! awaitU (page.FocusAsync screen)
+                do! awaitU (page.FocusAsync (screen + " [data-terminal-keys]"))
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        """document.activeElement?.getAttribute('data-terminal-screen') === 'term-live'""")
+                        """document.activeElement?.getAttribute('data-terminal-keys') === 'term-live'""")
 
                 do! awaitU (page.Keyboard.PressAsync "Control+ArrowLeft")
                 do! awaitU (page.Keyboard.PressAsync "Alt+b")
@@ -5932,7 +6025,7 @@ let editorTests =
                 // takes the keystrokes is its screen, and that is where focus lands.
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        """document.activeElement?.getAttribute('data-terminal-screen') === 'term-live'""")
+                        """document.activeElement?.getAttribute('data-terminal-keys') === 'term-live'""")
                 return ()
             }
 

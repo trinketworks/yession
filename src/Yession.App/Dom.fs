@@ -510,6 +510,10 @@ module Dom =
         /// terminal's id; the holder's copy is the one that takes keystrokes, and every other
         /// peer's is the same screen read-only.
         let terminalScreen = "data-terminal-screen"
+        /// The text field inside the holder's live screen that takes its keys (P3-3). Its value
+        /// is the terminal's id. Only the holder's screen has one, so its presence IS "this
+        /// screen types": it is where focus goes to type into a terminal, on every device.
+        let terminalKeys = "data-terminal-keys"
         /// A terminal's one way between its two reads (Plan 14, stage 7; Plan 25, stage 3):
         /// its text — the live screen, or the blocks that ran — and its recording.
         ///

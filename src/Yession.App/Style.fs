@@ -3237,18 +3237,29 @@ module Style =
     /// the tail — and a script's `focus()` is not `:focus-visible`, so the ring the rest of the
     /// product wears painted nothing here at the one moment it was needed: a reader who had
     /// just taken the keyboard could not see where it had gone. Inset, because the screen
-    /// fills a box that ends where it does. Only the holder's copy can take focus at all.
+    /// fills a box that ends where it does. Only the holder's copy can take focus at all, and
+    /// it takes it in the field inside it (`terminalKeys`), so the ring is the screen's while
+    /// focus is WITHIN it: the field is invisible, and the screen is what has the keyboard.
     let terminalScreen =
         cls [ "group/screen flex-1 min-h-0 overflow-auto px-3 py-2 font-terminal text-code-sm leading-4"
               "whitespace-pre text-ink bg-bg"
-              "focus:outline focus:outline-2 focus:outline-blue focus:-outline-offset-2" ]
+              "focus-within:outline focus-within:outline-2 focus-within:outline-blue focus-within:-outline-offset-2" ]
+
+    /// The field the holder's live screen types through (P3-3): a real text field, because a
+    /// phone raises its keyboard for nothing else, and invisible, because the screen is what
+    /// shows what was typed. Not `display:none` or zero-sized — neither takes focus on every
+    /// platform — but one transparent pixel that gives its height back. Sticky at the screen's
+    /// foot, so focusing it never scrolls the screen off its tail and a phone pans the page to
+    /// where the newest line is. 16px, under which iOS zooms the page onto a focused field.
+    let terminalKeys =
+        "sticky bottom-0 left-0 block w-px h-px -mt-px p-0 border-0 opacity-0 bg-transparent resize-none overflow-hidden text-base caret-transparent"
 
     /// Where the screen's cursor stands (`ScreenCursor`): the cell outlined, the way a terminal
     /// draws the cursor of a window that does not have the keyboard — and filled once the
     /// screen it is on does, which only the holder's can. Ink on ground both ways round, so
     /// the character under it reads at the same contrast it had beside it.
     let terminalCaret =
-        "outline outline-1 -outline-offset-1 outline-ink-dim group-focus/screen:bg-ink group-focus/screen:text-bg group-focus/screen:outline-0"
+        "outline outline-1 -outline-offset-1 outline-ink-dim group-focus-within/screen:bg-ink group-focus-within/screen:text-bg group-focus-within/screen:outline-0"
 
     /// The DVR, which is TWO acts that were wearing one button in one band.
     ///

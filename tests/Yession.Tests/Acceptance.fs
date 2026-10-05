@@ -1179,10 +1179,15 @@ let private uiChecklistTests =
                 "and the block history gives way to it"
             // Watching is not a lesser mode; it is the ordinary one. What the holder gets in
             // addition is the keyboard.
-            Expect.isFalse (watching.Contains "role=\"application\"") "a watcher's screen takes no keystrokes"
+            let keys = Dom.attr Dom.Hooks.terminalKeys (TerminalId.value terminalId)
+            Expect.isFalse (watching.Contains keys) "a watcher's screen takes no keystrokes"
             let held = Support.render heldTerminalModel
-            Expect.isTrue (held.Contains "role=\"application\"") "the holder's does"
-            Expect.isTrue (held.Contains "tabindex=\"0\"") "and it is a Tab stop, so a keyboard can reach it"
+            // In a text field, because a phone raises its keyboard for nothing else (P3-3) —
+            // and a field is a Tab stop, so a keyboard can reach it too.
+            let at = held.IndexOf keys
+            Expect.isTrue (at >= 0) "the holder's does"
+            let tag = (held.Substring (held.LastIndexOf ('<', at) + 1)).Split(' ').[0]
+            Expect.equal tag "textarea" "in a text field"
 
         testCase "a recording the cap ate is a STATED gap, not an empty player" <| fun () ->
             // The one place stage 3d's behaviour reaches the surface. An empty player is

@@ -1108,6 +1108,29 @@ module View =
         if Option.isSome sent then e.preventDefault ()
         sent
 
+    /// What the live screen's field took in that no keydown named — a phone keyboard's letters,
+    /// an IME's committed word, a paste — sent, and the field emptied for the next. Read and
+    /// emptied in one verb, so the `input` and the `compositionend` that can both follow one
+    /// committed word cannot send it twice: whichever runs second finds nothing.
+    ///
+    /// Empty between insertions also keeps a phone's Backspace a KEY: with nothing in the field
+    /// to delete, the keyboard reports it as `Backspace` and the chord path sends it, where a
+    /// field holding text would have quietly deleted a character of it instead.
+    let private sendInserted (send: string -> unit) (field: Browser.Types.HTMLTextAreaElement) : unit =
+        let text = field.value
+        field.value <- ""
+        Keystroke.ofInsertedText text |> Option.iter send
+
+    /// A press on the holder's live screen puts the keyboard in its field — which on a phone is
+    /// what raises the soft keyboard, since a platform shows one only for a focused text field.
+    /// Not after a press that ended a selection: that reader is copying output, and focusing a
+    /// text field would take their selection away.
+    let private keysOnPress (e: Browser.Types.Event) : unit =
+        if Browser.Dom.window.getSelection().toString () = "" then
+            match (e.currentTarget :?> Browser.Types.HTMLElement).querySelector (sprintf "[%s]" Dom.Hooks.terminalKeys) with
+            | null -> ()
+            | field -> (field :?> Browser.Types.HTMLElement).focus ()
+
     /// One collaborator's title caret+selection marker: a selection highlight span and a caret
     /// bar with a name label. The browser positions all three by measurement after render (from
     /// the peer's relative positions, decoded against the title `Y.Text`); colour is fixed here.
@@ -3348,17 +3371,43 @@ module View =
         | Some holder ->
 
         if holder = mine then
-            // `tabindex="0"` and a keydown handler rather than a text input: what is being
-            // typed here is not a value, it is a byte stream, and an input would fight the
-            // program on the other end over what the "value" is. The accessible name says
-            // what it is and who has it.
+            // The keys go into a TEXT FIELD inside the screen, on every device (P3-3). It was a
+            // `tabindex="0"` div with a keydown handler, which a desktop types into and a phone
+            // cannot: a platform raises its soft keyboard only for a focused text field, and a
+            // phone keyboard reports few keys anyway — it inserts text. So the field takes both:
+            // keydowns through `keystrokeOf` as before (and prevented, so nothing it sends lands
+            // in the field), and whatever is inserted without one through `sendInserted`. It is
+            // never a value — emptied as it is read — because what is typed here is a byte
+            // stream, and a value would fight the program on the other end over what it is.
+            //
+            // One field and one way in, so nothing has to forward focus to it: the screen is not
+            // a Tab stop of its own (a focusable screen handing focus to a child was a trap that
+            // Shift-Tab could not leave), and a press on it focuses the field.
+            //
+            // Invisible but present — `display:none` takes no focus — and sticky at the screen's
+            // foot, so focusing it scrolls nothing and a phone pans its keyboard to where the
+            // newest line is. 16px, because iOS zooms the page onto a focused field set smaller.
+            // Every assist off: autocorrect rewriting `ls` into `Is` is not typing.
             html $"""
                 <div class="{Style.terminalScreen}" data-terminal-screen="{id}" data-tail="{tail}"
-                     role="application" tabindex="0" aria-label="Live terminal, you are typing here"
-                     @keydown={Ev(fun (e: Browser.Types.Event) ->
-                                     match keystrokeOf (e :?> Browser.Types.KeyboardEvent) with
-                                     | Some data -> actions.TypeIntoTerminal terminal data
-                                     | None -> ())}>{body}</div>"""
+                     role="region" aria-live="off" aria-label="Live terminal, you are typing here"
+                     @click={Ev keysOnPress}>{body}<textarea class="{Style.terminalKeys}" data-terminal-keys="{id}"
+                       aria-label="Type into the terminal" rows="1" wrap="off" inputmode="text" enterkeyhint="enter"
+                       autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"
+                       @keydown={Ev(fun (e: Browser.Types.Event) ->
+                                       let key = e :?> Browser.Types.KeyboardEvent
+                                       // An IME's keys build a word it has not committed; the word
+                                       // arrives whole at `compositionend`.
+                                       if not (isComposing key) then
+                                           match keystrokeOf key with
+                                           | Some data -> actions.TypeIntoTerminal terminal data
+                                           | None -> ())}
+                       @input={Ev(fun (e: Browser.Types.Event) ->
+                                     if not (isComposingInput e) then
+                                         sendInserted (actions.TypeIntoTerminal terminal) (e.currentTarget :?> Browser.Types.HTMLTextAreaElement))}
+                       @compositionend={Ev(fun (e: Browser.Types.Event) ->
+                                              sendInserted (actions.TypeIntoTerminal terminal) (e.currentTarget :?> Browser.Types.HTMLTextAreaElement))}
+                       ></textarea></div>"""
         else
             html $"""
                 <div class="{Style.terminalScreen}" data-terminal-screen="{id}" data-tail="{tail}"

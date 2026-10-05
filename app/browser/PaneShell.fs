@@ -87,7 +87,7 @@ let private toPane () : unit =
 /// else holds the keyboard. A closed terminal has neither, and the panel is what is left.
 /// Never nothing: focus that lands nowhere lands on `body`.
 let private toCommandLine (terminal: Yession.Domain.TerminalId) : unit =
-    find (sprintf "[data-terminal-screen=\"%s\"][tabindex=\"0\"]" (Yession.Domain.TerminalId.value terminal))
+    find (sprintf "[data-terminal-keys=\"%s\"]" (Yession.Domain.TerminalId.value terminal))
     |> Option.orElseWith (fun () ->
         find (sprintf "[data-terminal-input^=\"%s\"]:not([readonly])" (Yession.Domain.Collab.BodyKey.terminalDraftsIn terminal)))
     |> Option.orElseWith (fun () -> find "[data-pane-panel]")
@@ -213,14 +213,14 @@ let toWatchToggle () : unit =
 /// message composer because a terminal three tabs away went full-screen would be worse than
 /// the stranding it fixes.
 ///
-/// `tabindex="0"` as well as the terminal's id: the screen renders in three variants and only
-/// the holder's takes keystrokes.
+/// The screen's field (`data-terminal-keys`), not the screen: the screen renders in three
+/// variants, only the holder's takes keystrokes, and it takes them in that field.
 let toTerminalScreen (terminal: Yession.Domain.TerminalId) : unit =
     nextFrame (fun () ->
         let ownLine =
             sprintf "[data-terminal-input^=\"%s\"]" (Yession.Domain.Collab.BodyKey.terminalDraftsIn terminal)
         if stranded [ ownLine ] then
-            focusOn (find (sprintf "[data-terminal-screen=\"%s\"][tabindex=\"0\"]" (Yession.Domain.TerminalId.value terminal))))
+            focusOn (find (sprintf "[data-terminal-keys=\"%s\"]" (Yession.Domain.TerminalId.value terminal))))
 
 /// Scroll a terminal's history to one of its commands, and say which one (Plan 25, stage 3).
 ///
