@@ -3323,6 +3323,24 @@ let editorTests =
                         """document.querySelector('#shell [data-pane-block]')?.textContent.includes('total 0') === true""")
                 return ()
             }
+
+        // The session id is a thing people copy, so on a phone a press on it has to reach
+        // IT — not fall through to the title field whose box reaches down behind it, where a
+        // press could only ever edit the title. Hit-tested at the id's own centre.
+        editorCaseIn 390 844 "on a phone a press on the session id reaches the id, not the title" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-session-id]")
+                let! idPressable =
+                    await (page.EvaluateAsync<bool>
+                            """() => {
+                                 const id = document.querySelector('#shell [data-session-id]')
+                                 const r = id.getBoundingClientRect()
+                                 const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+                                 return id.contains(hit)
+                               }""")
+                Expect.isTrue idPressable "a press on the session id reaches the id, so it can be selected"
+            }
+
         // The phone (Plan 14, stage 5). Headless Chromium clamps its WINDOW to ~500px, which
         // is why a naive narrow screenshot lies; Playwright's viewport is a real CDP device
         // metrics override, so 390 here is 390. The two things this asserts are the two the

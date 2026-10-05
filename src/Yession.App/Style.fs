@@ -1302,8 +1302,8 @@ module Style =
     /// not leave room for — unless the box takes in the id under it. So it does: 44px tall,
     /// its last 20 of them padding (`pb-5`) that the id hangs in (`titleId`), and the same 20
     /// paid back to the flow (`-mb-5`), so the row lays out the 24px line it always did. The
-    /// text sits in the top 24, where it was; the fill and the ring now go round the title and
-    /// its id together, which is the thing a press there edits. `Render.placeInputCursor`'s marker
+    /// text sits in the top 24, where it was; the fill and the ring go round the title and its
+    /// id together, though a press on the id's own text is the id's, so it can be selected. `Render.placeInputCursor`'s marker
     /// subtracts the padding, so a collaborator's caret stays the height of the line.
     let titleInput =
         cls [ "w-full min-w-0 bg-transparent border-0 px-2 -mx-2 py-0 phone:h-11 phone:pb-5 phone:-mb-5"
@@ -1318,11 +1318,10 @@ module Style =
     /// made the band a stack rather than the row it now is.
     /// `mt-1` rather than the old `mt-0.5`: the title now draws a focus ring 2px outside its
     /// own box, and 2px of clearance is what keeps that ring off this line on a desktop. On a
-    /// phone the title's box takes this line in (`titleInput`), so a press on it is a press on
-    /// the title — which is why it lets presses through there.
-    let titleId =
-        "font-terminal text-code-sm text-ink-faint truncate mt-1 absolute top-full left-0 right-0 "
-        + "phone:pointer-events-none"
+    /// phone the title's box reaches down behind this line (`titleInput`), but the id still
+    /// takes the presses that land ON it: it is a thing people copy, and a press that fell
+    /// through to the field could only ever edit the title, never select the id.
+    let titleId = "font-terminal text-code-sm text-ink-faint truncate mt-1 absolute top-full left-0 right-0 select-text"
 
     /// A collaborator's selection highlight in the title: an absolutely-positioned span the
     /// browser places and sizes against the input's own box by measurement (the translucent
