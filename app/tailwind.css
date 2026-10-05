@@ -318,6 +318,13 @@
      the still mark instead. */
   --animate-breathe: breathe 2.6s ease-in-out 2.8s infinite;
   --animate-rise: rise 0.5s ease-out 2.2s 1 both;
+  /* The launch card arriving at connect (`Style.ask`). It is docked at the column's foot, so
+     growing its height from nothing raises its top edge off the composer and the chat above
+     gives way to it over the same beat — the card RISES into the column rather than popping
+     into it full-grown and snapping the conversation up in one frame. One pass on mount; the
+     card's height is fixed, so there is a definite height to grow into. `motion-reduce:animate-none`
+     on the element drops it to the plain appearance. */
+  --animate-ask-rise: ask-rise 240ms cubic-bezier(0.2, 0, 0, 1) 1;
 
   @keyframes pulse2 {
     0%, 100% { opacity: 0.25; }
@@ -338,6 +345,11 @@
   @keyframes rise {
     from { opacity: 0; translate: 0 6px; }
     to { opacity: 1; translate: 0 0; }
+  }
+  /* Only a `from`: the `to` is the card's own height (`h-[60%]`), whatever that resolves to,
+     so the grow lands exactly where the static card would stand and nothing jumps at the end. */
+  @keyframes ask-rise {
+    from { height: 0; opacity: 0; }
   }
   @keyframes reveal-line {
     0%, 55% { background-color: var(--color-surface-2); }

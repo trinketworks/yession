@@ -3718,6 +3718,17 @@ let editorTests =
                 async {
                     do! awaitU (page.EvaluateAsync "() => window.__launchOver()")
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
+                    // The card RISES in (`animate-ask-rise`), growing its height over ~240ms, and
+                    // while it does the chat's room is still changing underfoot — an item
+                    // hit-tested mid-rise can be under a card that has not finished arriving. The
+                    // promise is about where things land once it has, so wait for the entrance to
+                    // settle (finite animations only; the carets pulse forever).
+                    do! awaitU (
+                            page.EvaluateAsync
+                                """() => Promise.all(
+                                     document.getAnimations()
+                                       .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
+                                       .map(a => a.finished.catch(() => null)))""")
                     // Ground truth: the column has more than it can show, so some items start
                     // out of view and bringing them in is something the case has to do.
                     let! overflows =
@@ -3761,8 +3772,18 @@ let editorTests =
         // Only a browser settles it: the two states fold from different listings into the same
         // flex column, and whether that column holds its height across them is a fact about
         // layout the markup cannot show — the card carries `data-repo-picker` in both.
+        //
+        // Under REDUCED MOTION, which is not a loss of coverage but the point: the card RISES in
+        // on mount (`animate-ask-rise` grows its height from nothing), so measured mid-rise it is
+        // shorter than it will stand — a race, not a regression. The invariant here is the
+        // SETTLED height the card reserves, and reduced motion drops the entrance to the plain
+        // appearance so what is measured is that settled height and nothing in flight. The
+        // entrance itself is a flourish, not a promise, and is left to the eye (`frames`).
         let launchCardHoldsHeightCase width height =
-            editorCaseIn width height
+            editorCaseOn
+                (Some (BrowserNewContextOptions (
+                        ViewportSize = ViewportSize (Width = width, Height = height),
+                        ReducedMotion = ReducedMotion.Reduce)))
                 (sprintf "at %dpx the launch card keeps its height as repositories load" width) <| fun page ->
                 async {
                     let shape =
