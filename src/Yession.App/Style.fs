@@ -856,11 +856,10 @@ module Style =
     let startLinks = "mt-10 " + body
 
     // --- Workspace regions ---------------------------------------------------------------
-    // Two presentation bits live on the root <html> element, outside `#app`, so they survive
-    // every re-render and stay out of the model: `nav-alt` (toggled by [data-nav-toggle]) and
-    // `settings-open` (by [data-settings-toggle]). Default = sidebar visible on desktop,
-    // off-canvas on mobile; `nav-alt` = the inverse. Expressed with arbitrary variants so it
-    // stays plain Tailwind.
+    // Two bits live on the root <html> element, outside `#app`, so a re-render never fights the
+    // column's transition: `nav-alt` and `settings-open`, both drawn from the model's `Column`
+    // (`PaneShell.setColumn`). Default = sidebar visible on desktop, off-canvas on mobile;
+    // `nav-alt` = the inverse. Expressed with arbitrary variants so it stays plain Tailwind.
 
     /// The stylesheet's `wide` variant (app/tailwind.css), as the media query a SCRIPT asks.
     /// The shell reads `nav-alt` the opposite way on each side of this line, so the script
@@ -2849,7 +2848,7 @@ module Style =
     // --- Settings ------------------------------------------------------------------------------
     // Settings is the column's other face, not a drawer over the conversation: you go there and
     // come back, and the thing you were reading never moves. Its open state is one bit on the
-    // root <html> element (`settings-open`, toggled by [data-settings-toggle]).
+    // root <html> element (`settings-open`, drawn from the model's `Column.Face`).
 
     /// The settings face's header band: the same 88px rhythm as the nav and the main header, so
     /// the three baselines still align when the column changes face.

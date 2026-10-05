@@ -1007,7 +1007,16 @@ let private start () =
                 // BESIDE the chat here, which is what makes opening it unasked a courtesy
                 // rather than the conversation taken off the screen (P1-4). The model decides
                 // when, and whether anything else has answered first (`openOfItself`).
-                PaneOpensItself = PaneShell.onDesktop () }
+                PaneOpensItself = PaneShell.onDesktop ()
+                // The breakpoint, and a desktop collapse this browser remembered — the answer
+                // the served shell's inline script has already painted, so the first render
+                // agrees with it rather than opening the column it just shut.
+                Column =
+                    { Column.initial with
+                        Wide = PaneShell.onDesktop ()
+                        Collapsed =
+                            try Browser.WebStorage.localStorage.getItem "yession.nav" = "collapsed"
+                            with _ -> false } }
             // What this browser had open in this session's pane (P0-4), read before the first
             // render so the column comes back open in the same paint that takes over the
             // served shell. The served shell painted it shut — the server cannot see this
@@ -1091,19 +1100,10 @@ let private start () =
                     | Error _ -> ())
             |> ignore
 
-        // What the shell sends before it brings the nav column on screen (`PaneShell.bringColumnOn`).
-        let hidePane () = dispatchRef HideContentMsg
-
         // The side effects a template can't derive from the model. Send routes to the one
         // implementation in `Client.connect` (capture markdown, enqueue, seed the queue fragment).
         let actions : ViewActions =
             { SendDraft = fun peer -> connectionRef |> Option.iter (fun c -> c.SendDraft peer)
-              ToggleNav = PaneShell.toggleNav hidePane
-              // Opening the drawer shows what the stream has already said. There is nothing
-              // to re-probe: the panels have a push leg now, exactly as the query surface
-              // always did, so opening is a view change and not a round trip.
-              ToggleSettings = PaneShell.toggleSettings hidePane
-              RevealSettings = PaneShell.revealSettings hidePane
               ReportFieldSelection =
                 fun field sel ->
                     // A collaborative input's caret, turned into relative positions over the
@@ -1186,6 +1186,13 @@ let private start () =
               // Immutable at a position that never moves, so the browser cache serves a second
               // read. A keyframe that does not answer, or does not read, is not a failure: the
               // range still rebases and plays, as the naive slice.
+              // Storage is denied in a private window, and a collapse that cannot be
+              // remembered is still a collapse that works.
+              Client.Ports.Remember =
+                function
+                | Preference.NavCollapsed collapsed ->
+                    try Browser.WebStorage.localStorage.setItem ("yession.nav", (if collapsed then "collapsed" else "open"))
+                    with _ -> ()
               Client.Ports.Keyframe =
                 fun terminal seq ->
                     async {
@@ -1200,6 +1207,10 @@ let private start () =
         |> Program.run
 
         Render.attach ()
+
+        // The column is beside the chat or a drawer over it according to the stylesheet's
+        // breakpoint, which a window resized or a phone turned can cross at any time.
+        PaneShell.watchBreakpoint (fun wide -> dispatchRef (ViewportMsg wide))
 
         // The local peer's draft slot follows its body: published on the first keystroke,
         // retracted when the composer empties. Watches the body itself, so a keystroke and a

@@ -151,12 +151,15 @@ module Client =
           Retry : unit -> unit
           /// One keyframe, by terminal and the transcript line it paints. `None` is any way of
           /// not having one: the replay plays without it.
-          Keyframe : TerminalId -> int -> Async<TranscriptKeyframe option> }
+          Keyframe : TerminalId -> int -> Async<TranscriptKeyframe option>
+          /// Keep a preference for this browser's next load. Best effort: storage refused (a
+          /// private window) is a preference that works now and is not remembered.
+          Remember : Preference -> unit }
 
     module Ports =
 
         /// A client with no session to ask: every request goes nowhere.
-        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None; Ports.Panels = None; Ports.Moves = ignore; Ports.Clipboard = (fun _ -> async.Return false); Ports.Retry = ignore; Ports.Keyframe = (fun _ _ -> async.Return None) }
+        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None; Ports.Panels = None; Ports.Moves = ignore; Ports.Clipboard = (fun _ -> async.Return false); Ports.Retry = ignore; Ports.Keyframe = (fun _ _ -> async.Return None); Ports.Remember = ignore }
 
         /// A launch read, answered as the message that carries its result.
         let private launchRead (reads: LaunchReads) (dispatch: ClientMsg -> unit) (effect: LaunchEffect) : Async<unit> =
@@ -241,6 +244,7 @@ module Client =
                             dispatch (GitHubAnsweredMsg (call, answer, panels.Now ()))
                         }))
             | ClientEffect.Move move -> ports.Moves move
+            | ClientEffect.Remember preference -> ports.Remember preference
             | ClientEffect.FetchKeyframe (terminal, seq) ->
                 Async.StartImmediate (
                     async {

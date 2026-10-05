@@ -213,6 +213,7 @@ let private representativeModel : ClientModel =
       PaneRemembered = false
       HeardThrough = true
       PaneOpensItself = false
+      Column = Column.initial
       ItemMenu = None
       PaneMenu = false
       Switcher = false

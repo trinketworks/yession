@@ -2827,7 +2827,46 @@ let private tabTests =
             let _, effects = ClientModel.update ToggleContentMsg showing
             Expect.equal effects [ ClientEffect.Move DomMove.FocusPaneReopen ] "onto the reopen control"
 
-        // The nav drawer's arrival on a phone (`PaneShell.bringColumnOn`): one sheet over the
+        // The sidebar column is the model's (`Column`), and means two things: beside the chat
+        // on a desktop, where putting it away is a preference, and a drawer over the chat on a
+        // phone, where opening it is a moment.
+        testCase "collapsing the desktop column remembers it, and moves the keyboard to its reopen" <| fun () ->
+            let next, effects = ClientModel.update ToggleNavMsg (clientOf [])
+            Expect.equal
+                (Column.shown next.Column, effects)
+                (false,
+                 [ ClientEffect.Move (DomMove.FocusNavToggle false)
+                   ClientEffect.Remember (Preference.NavCollapsed true) ])
+                "put away, remembered, focus on the way back"
+
+        testCase "on a phone the nav opens a drawer over a pane put away, and remembers nothing" <| fun () ->
+            let phone =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> Support.step (ViewportMsg false)
+                |> Support.step ToggleContentMsg
+            let next, effects = ClientModel.update ToggleNavMsg phone
+            Expect.equal
+                (Column.navAlt next.Column, next.TerminalsOpen, effects)
+                (true, false, [ ClientEffect.Move (DomMove.FocusNavToggle true) ])
+                "one sheet over the chat, and no preference written"
+
+        testCase "a desktop collapse is not an open drawer when the window narrows" <| fun () ->
+            // One bit read both ways made exactly this: the column put away beside the chat
+            // reappeared as a drawer over it the moment the window crossed the line.
+            let narrowed = clientOf [] |> Support.step ToggleNavMsg |> Support.step (ViewportMsg false)
+            Expect.isFalse (Column.navAlt narrowed.Column) "no drawer over the chat"
+
+        testCase "revealing settings twice is revealing it once" <| fun () ->
+            let revealed = clientOf [] |> Support.step RevealSettingsMsg
+            let again, effects = ClientModel.update RevealSettingsMsg revealed
+            Expect.equal (again.Column.Face, effects) (ColumnFace.Settings, []) "still open, and focus left where it is"
+
+        testCase "a jump to a message from the phone's drawer puts the drawer away" <| fun () ->
+            let drawer = clientOf [] |> Support.step (ViewportMsg false) |> Support.step ToggleNavMsg
+            let jumped = drawer |> Support.step (MoveMsg (DomMove.RevealMessage (message "1")))
+            Expect.isFalse (Column.shown jumped.Column) "the message is not left behind a sheet"
+
+        // The nav drawer's arrival on a phone (`ClientModel.columnOn`): one sheet over the
         // chat at a time. It SHUTS, it never opens — the drawer arriving over a pane that was
         // already shut must not bring the pane back — and it moves no focus, because the
         // drawer arriving is what says where focus goes.

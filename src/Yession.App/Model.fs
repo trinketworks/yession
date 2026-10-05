@@ -837,6 +837,53 @@ module BlockGroup =
                 Some (key terminal leader)
             | BlockGroup.Run _ | BlockGroup.Alone _ -> None)
 
+/// Which of its two faces the sidebar column shows.
+[<RequireQualifiedAccess>]
+type ColumnFace =
+    | Workspace
+    | Settings
+
+/// The sidebar column: whether it is on screen, and which face it shows. View state, and this
+/// browser's own — a column one person collapsed is not a thing anybody else is looking at.
+///
+/// Two bits rather than one, because the column is two different things on each side of the
+/// stylesheet's breakpoint (`Style.wideMedia`): BESIDE the chat on a desktop, where hiding it
+/// is a preference and remembered, and a DRAWER over the chat on a phone, where opening it is
+/// a moment and never remembered. One bit read both ways — the root's `nav-alt`, which is how
+/// the stylesheet still says it (`Column.navAlt`) — made a desktop collapse turn into an open
+/// drawer the moment a window narrowed past the line.
+[<RequireQualifiedAccess>]
+type Column =
+    { /// Whether the stylesheet lays the column beside the chat, as this browser last heard.
+      Wide : bool
+      /// On a desktop: the reader put it away.
+      Collapsed : bool
+      /// On a phone: the drawer is open over the chat.
+      Drawer : bool
+      Face : ColumnFace }
+
+module Column =
+
+    let initial : Column =
+        { Column.Wide = true; Column.Collapsed = false; Column.Drawer = false; Column.Face = ColumnFace.Workspace }
+
+    /// Whether the column is on screen, on whichever side of the breakpoint this is.
+    let shown (column: Column) : bool = if column.Wide then not column.Collapsed else column.Drawer
+
+    /// The root's `nav-alt` class, which the stylesheet reads the opposite way on each side of
+    /// the breakpoint: collapsed on a desktop, drawer open on a phone.
+    let navAlt (column: Column) : bool = if column.Wide then column.Collapsed else column.Drawer
+
+    let hide (column: Column) : Column =
+        if column.Wide then { column with Collapsed = true } else { column with Drawer = false }
+
+/// What this browser remembers for its next load, written where the browser keeps such things
+/// (`Client.Ports.Remember`).
+[<RequireQualifiedAccess>]
+type Preference =
+    /// The desktop column was put away, or brought back.
+    | NavCollapsed of bool
+
 type ClientModel =
     { Peer          : PeerState
       Connection    : ConnectionState
@@ -1080,6 +1127,10 @@ type ClientModel =
       /// by the decision, or by anything at all moving the column first, because a person who
       /// has already opened or shut it has answered the question this was going to.
       PaneOpensItself : bool
+      /// The sidebar column (`Column`). Seeded at boot by the browser with its breakpoint and
+      /// its remembered collapse, as the served shell's one inline script already applied it
+      /// before first paint — so the first render here agrees with what is on screen.
+      Column : Column
       /// Which timeline item has its actions menu open, if any. View state for the same
       /// reason the column above is: a menu one person opened is not a thing anybody else
       /// is looking at.
@@ -1293,6 +1344,12 @@ type DomMove =
     /// composer to offer. Where a notice in the conversation column hands the keyboard when
     /// it goes from under it.
     | FocusComposer
+    /// Onto whichever control now stands where the nav toggle that was pressed went: the
+    /// column's own collapse when it is `shown`, the header's reopen when it is not.
+    | FocusNavToggle of shown: bool
+    /// Onto the settings face's counterpart control: its way back when `opened`, the way in
+    /// when not.
+    | FocusSettingsToggle of opened: bool
 
 /// Messages that drive the client model. Connection-lifecycle messages are produced by
 /// the connection driver (Connection.fs); the suffix avoids clashing with the
@@ -1568,6 +1625,17 @@ type ClientMsg =
     | ReplayCaughtUpMsg of TerminalId
     /// Open or close the content column.
     | ToggleContentMsg
+    /// The sidebar's own chevron (and the drawer's scrim): bring the column on screen or put
+    /// it away, always on its workspace face.
+    | ToggleNavMsg
+    /// Turn the column to its settings face, or back — bringing it on screen to do so.
+    | ToggleSettingsMsg
+    /// Take the reader TO settings, never back: `ToggleSettingsMsg`'s one-way sibling, for a
+    /// call to action that is on screen while settings may already be open, and must not shut
+    /// the panel it points at.
+    | RevealSettingsMsg
+    /// The stylesheet's breakpoint was crossed: the column is now beside the chat, or not.
+    | ViewportMsg of wide: bool
     /// Close the content column, and never open it: the shell's half of "on a phone, two
     /// sheets never cover the chat at once". The nav drawer and the pane are both overlays
     /// there, and opening the drawer over an open pane opened it UNDER the pane (both z-40,
@@ -1715,6 +1783,7 @@ type ClientEffect =
     /// The screen a ranged replay starts from (`ClientModel.missingKeyframe`), answered as a
     /// `TerminalKeyframeMsg`.
     | FetchKeyframe of TerminalId * seq: int
+    | Remember of Preference
     | Copy of box: string * text: string
     | RetryNow
 
@@ -1865,6 +1934,7 @@ module ClientModel =
           PaneRemembered = false
           HeardThrough = false
           PaneOpensItself = false
+          Column = Column.initial
           ItemMenu = None
           PaneMenu = false
           Switcher = false
@@ -3139,6 +3209,23 @@ module ClientModel =
     /// `settle`, after it, so the strip holds only what it may whichever message moved it;
     /// and through `openOfItself`, which waits for the line `recall` settles at and needs the
     /// model from before the message to tell whether something else moved the column first.
+    /// The pane put away — and any popover hanging in it, which does not outlive it.
+    let private paneHidden (model: ClientModel) : ClientModel =
+        { model with TerminalsOpen = false; Switcher = false; PaneMenu = false }
+
+    /// Bringing the sidebar column on screen, which every way in shares — the nav toggle,
+    /// settings, a call to action that reveals settings — so the next way in cannot open the
+    /// drawer and forget the pane.
+    ///
+    /// On a phone the drawer is one of TWO sheets over the chat, and the pane is the other, at
+    /// the same layer and later in the document: a drawer opened while the pane was up opened
+    /// UNDERNEATH it, open and holding focus and nowhere to be seen. Closing the pane first
+    /// means there is only ever one sheet, and the drawer's way back lands on the chat — which
+    /// is where the pane's goes as well.
+    let private columnOn (model: ClientModel) : ClientModel =
+        if model.Column.Wide then { model with Column = { model.Column with Collapsed = false } }
+        else paneHidden { model with Column = { model.Column with Drawer = true } }
+
     let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
         heard (reconcileLaunch (openOfItself model (settle (recall (
         match msg with
@@ -3740,6 +3827,12 @@ module ClientModel =
                 | Some key -> { model with OpenFolds = Set.add key model.OpenFolds }
                 | None -> model
             fold (ShowInPaneMsg (ReadingAt (terminal, block))) unfolded
+        // Taking somebody to a message from inside the phone's drawer lands it BEHIND the
+        // drawer: scrolled, flashed and focused under a sheet they are still looking at. So
+        // the drawer goes, here, for every jump to a message — a no-op from the timeline,
+        // where none is open, and nothing for the next surface that jumps to remember.
+        | MoveMsg (DomMove.RevealMessage _) when not model.Column.Wide ->
+            { model with Column = { model.Column with Drawer = false } }
         | MoveMsg _
         | CopyMsg _
         | RetryNowMsg -> model
@@ -3772,7 +3865,25 @@ module ClientModel =
         | ToggleContentMsg ->
             // A popover does not outlive the pane it hangs in.
             { model with TerminalsOpen = not model.TerminalsOpen; Switcher = false; PaneMenu = false }
-        | HideContentMsg -> { model with TerminalsOpen = false; Switcher = false; PaneMenu = false }
+        | HideContentMsg -> paneHidden model
+        | ToggleNavMsg ->
+            // The nav control always returns the column to its workspace face: a column that
+            // came back on settings would be a surprise.
+            let model = { model with Column = { model.Column with Face = ColumnFace.Workspace } }
+            if Column.shown model.Column then { model with Column = Column.hide model.Column }
+            else columnOn model
+        | ToggleSettingsMsg ->
+            let opening = model.Column.Face <> ColumnFace.Settings
+            let model =
+                { model with Column = { model.Column with Face = (if opening then ColumnFace.Settings else ColumnFace.Workspace) } }
+            if opening then columnOn model
+            // Closing the face on a phone closes the drawer with it. On a desktop the column
+            // stays where it was: what changed is which face it shows, not whether it is there.
+            elif not model.Column.Wide then { model with Column = { model.Column with Drawer = false } }
+            else model
+        // SET, not flipped, so pressing it twice is pressing it once.
+        | RevealSettingsMsg -> columnOn { model with Column = { model.Column with Face = ColumnFace.Settings } }
+        | ViewportMsg wide -> { model with Column = { model.Column with Wide = wide } }
         | ToggleItemMenuMsg messageId ->
             // Opening one is writing the field, so opening a second shuts the first without
             // anybody arranging it. That is the whole reason this is one slot and not a set.
@@ -4049,10 +4160,18 @@ module ClientModel =
                     match preview model with
                     | Some preview -> [ ClientEffect.Move (DomMove.FocusChat preview.Subject) ]
                     | None -> [ ClientEffect.Move DomMove.FocusPaneReopen ]
-            // No move of its own: the shell sends this as the nav drawer arrives, and the
-            // drawer's arrival puts focus on the drawer (`Browser.toggleNav`). A move here
-            // would race that one for the same keyboard.
             | HideContentMsg -> []
+            // The control pressed is the one about to disappear, so focus goes to whichever
+            // replaces it. Only a desktop's collapse is remembered: on a phone the same press
+            // opens a drawer, which is a moment, not a preference.
+            | ToggleNavMsg ->
+                [ yield ClientEffect.Move (DomMove.FocusNavToggle (Column.shown next.Column))
+                  if next.Column.Wide then yield ClientEffect.Remember (Preference.NavCollapsed next.Column.Collapsed) ]
+            | ToggleSettingsMsg -> [ ClientEffect.Move (DomMove.FocusSettingsToggle (next.Column.Face = ColumnFace.Settings)) ]
+            // Only when the face actually ARRIVED: stealing focus to a control already on screen
+            // would be the prompt reaching into a panel the reader is already in.
+            | RevealSettingsMsg when model.Column.Face <> ColumnFace.Settings ->
+                [ ClientEffect.Move (DomMove.FocusSettingsToggle true) ]
             // A chip opening a preview is the same promise: the reader was moved, so their
             // keyboard is too.
             | OpenPreviewMsg _ -> [ ClientEffect.Move (paneLanding next) ]

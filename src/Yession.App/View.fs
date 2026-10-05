@@ -37,10 +37,6 @@ type ViewActions =
       /// new queue entry, and enqueue. Imperative because the fragment content-copy (shared
       /// types can't be re-parented) can't live in the pure reducer.
       SendDraft : PeerId -> unit
-      /// Collapse or reveal the sidebar column (a presentation bit on the shell root, not
-      /// model; the browser also remembers a desktop collapse and moves focus to whichever
-      /// control replaces the one that was pressed).
-      ToggleNav : unit -> unit
       /// Broadcast the local selection in a collaborative INPUT — the session title, a
       /// chapter's name — as `(anchor, head)` UTF-16 indices (`None` = the caret left it),
       /// so collaborators see the cursor. The Browser resolves the field to the `Y.Text`
@@ -52,15 +48,6 @@ type ViewActions =
       /// to clear. Bodies do not come through here — an editor knows its own relative
       /// selection and reports it through `Links.ReportFocus`.
       ReportFieldSelection : FocusField -> (int * int) option -> unit
-      /// Turn the sidebar column to its settings face, or back (a presentation bit on the
-      /// shell root, like the nav); the browser also brings that column on screen and
-      /// re-probes the Claude status on toggle, so settings always opens fresh.
-      ToggleSettings : unit -> unit
-      /// Take the reader TO settings, never back. `ToggleSettings`'s one-way sibling, and
-      /// the difference matters for exactly one caller: the sign-in prompt over the timeline
-      /// is on screen whenever a credential needs one — including while the settings face is
-      /// already open — so a toggle there would shut the panel it is pointing at.
-      RevealSettings : unit -> unit
       /// Send a terminal composer slot: enqueue its command. Imperative for exactly the
       /// reason `SendDraft` is — the command text is a shared type the reducer cannot move.
       SendTerminalDraft : TerminalId -> PeerId -> unit
@@ -79,10 +66,7 @@ module ViewActions =
     /// are never invoked while rendering — they fire on user events in the live browser.
     let ssr : ViewActions =
         { SendDraft = ignore
-          ToggleNav = ignore
           ReportFieldSelection = fun _ _ -> ()
-          ToggleSettings = ignore
-          RevealSettings = ignore
           SendTerminalDraft = fun _ _ -> ()
           TypeIntoTerminal = fun _ _ -> ()
           ResizeTerminal = fun _ _ _ -> () }
@@ -491,7 +475,7 @@ module View =
                       <div class="{Style.noAgentPrompt}">
                         <span class="{Style.noAgentEdge}"></span>
                         <div class="{Style.noAgentBody}">
-                          <button type="button" class="{Style.cls [ Style.btnPrimary; Style.noAgentAction ]}" data-settings-toggle="prompt" data-no-agent-connect @click={Ev(fun _ -> actions.ToggleSettings ())}>Connect Claude</button>
+                          <button type="button" class="{Style.cls [ Style.btnPrimary; Style.noAgentAction ]}" data-settings-toggle="prompt" data-no-agent-connect @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>Connect Claude</button>
                         </div>
                       </div>
                     </div>"""
@@ -859,8 +843,8 @@ module View =
 
     /// Settings, as the sidebar column's OTHER FACE. Not a drawer over the conversation: you
     /// go there and come back, the timeline never moves under a scrim, and configuration keeps
-    /// the section rhythm it already had. Open state is the root element's `settings-open`
-    /// class — presentation, not model — so it survives re-renders.
+    /// the section rhythm it already had. Open state is the model's (`Column.Face`), drawn as
+    /// the root element's `settings-open` class so a re-render never fights its transition.
     ///
     /// It is laid out as the nav face's mirror: identity in the head (where the wordmark sits),
     /// the way out at the foot (where `settings ›` sits), and the column's own collapse control
@@ -894,7 +878,7 @@ module View =
             <div class="{Style.settingsPane}" data-settings-panel>
               <div class="{Style.cls [ Style.settingsHead; Style.settingsLane0 ]}">
                 <span class="{Style.settingsTitle}">settings</span>
-                <button type="button" class="{Style.navChevronBack}" aria-label="Collapse sidebar" data-nav-toggle="hide" @click={Ev(fun _ -> actions.ToggleNav ())}>{Icon.left}</button>
+                <button type="button" class="{Style.navChevronBack}" aria-label="Collapse sidebar" data-nav-toggle="hide" @click={Ev(fun _ -> dispatch ToggleNavMsg)}>{Icon.left}</button>
               </div>
               {claudeSection dispatch model.Claude}
               {githubSection actions dispatch model.Copied model.GitHub}
@@ -902,7 +886,7 @@ module View =
               {historyStoreNote model}
               <div class="flex-1"></div>
               <div class="{Style.cls [ Style.sideFoot; Style.settingsLane2 ]}">
-                <button type="button" class="{Style.navPivot}" aria-label="Back to session" data-settings-toggle="close" @click={Ev(fun _ -> actions.ToggleSettings ())}><span class="{Style.pivotMarkBack}">{Icon.pivotLeft}</span>back</button>
+                <button type="button" class="{Style.navPivot}" aria-label="Back to session" data-settings-toggle="close" @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}><span class="{Style.pivotMarkBack}">{Icon.pivotLeft}</span>back</button>
                 {buildMark model}
               </div>
             </div>"""
@@ -946,7 +930,7 @@ module View =
             <div class="{Style.navPane}">
               <div class="{Style.cls [ Style.sideHead; Style.navLane0 ]}">
                 <span class="{Style.lockup}"><span class="{Style.lockupMark}" aria-hidden="true">{Brand.mark}</span><span class="{Style.wordmark}">yession</span></span>
-                <button type="button" class="{Style.navChevronBack}" aria-label="Collapse sidebar" data-nav-toggle="hide" @click={Ev(fun _ -> actions.ToggleNav ())}>{Icon.left}</button>
+                <button type="button" class="{Style.navChevronBack}" aria-label="Collapse sidebar" data-nav-toggle="hide" @click={Ev(fun _ -> dispatch ToggleNavMsg)}>{Icon.left}</button>
               </div>
               {connectionSection dispatch model}
               {peopleSection actions dispatch model}
@@ -954,7 +938,7 @@ module View =
               {environmentSection model.Environment}
               <div class="flex-1"></div>
               <div class="{Style.cls [ Style.sideFoot; Style.navLane2 ]}">
-                <button type="button" class="{Style.navPivot}" data-settings-toggle="open" @click={Ev(fun _ -> actions.ToggleSettings ())}>settings<span class="{Style.pivotMarkForward}">{Icon.pivotRight}</span></button>
+                <button type="button" class="{Style.navPivot}" data-settings-toggle="open" @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>settings<span class="{Style.pivotMarkForward}">{Icon.pivotRight}</span></button>
                 {buildMark model}
               </div>
             </div>"""
@@ -962,7 +946,7 @@ module View =
     /// The sidebar column: one region, two faces, and — on mobile — the scrim behind it.
     let private sidebar (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         html $"""
-            <div class="{Style.scrim}" data-nav-toggle="hide" @click={Ev(fun _ -> actions.ToggleNav ())}></div>
+            <div class="{Style.scrim}" data-nav-toggle="hide" @click={Ev(fun _ -> dispatch ToggleNavMsg)}></div>
             <aside class="{Style.sidebar}">
               {navPane actions dispatch model}
               {settingsPane actions dispatch model}
@@ -989,7 +973,7 @@ module View =
     /// runs against the session, so a prompt offering it to somebody who cannot reach the
     /// session is offering a button that cannot work. The degraded strip owns that moment,
     /// and one strip at a time is what it has always promised.
-    let private signInPrompt (actions: ViewActions) (model: ClientModel) : TemplateResult =
+    let private signInPrompt (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         match model.Connection, ClientModel.signInRequired model with
         | Disconnected _, _
         | Retrying _, _
@@ -1006,7 +990,7 @@ module View =
                   </span>
                   <button type="button" class="{Style.signInPromptAction}"
                           data-signin-again data-settings-toggle="prompt"
-                          @click={Ev(fun _ -> actions.RevealSettings ())}>{Dom.Text.signInAgain}</button>
+                          @click={Ev(fun _ -> dispatch RevealSettingsMsg)}>{Dom.Text.signInAgain}</button>
                 </section>"""
 
 
@@ -1164,10 +1148,10 @@ module View =
     /// action lives — is off screen. A phone's sidebar is off-canvas by default, so without this
     /// the one prompt would be one a phone never sees; the CSS in `Style.headerNoAgent` makes the
     /// two mutually exclusive, so it is never said twice.
-    let private agentAbsence (actions: ViewActions) (claude: ClaudeViewState) : TemplateResult =
+    let private agentAbsence (dispatch: ClientMsg -> unit) (claude: ClaudeViewState) : TemplateResult =
         match claude.Status |> Option.map (fun panel -> panel.AgentAvailable) with
         | Some false ->
-            html $"""<button type="button" class="{Style.headerNoAgent}" data-settings-toggle="prompt" @click={Ev(fun _ -> actions.ToggleSettings ())}>no agent</button>"""
+            html $"""<button type="button" class="{Style.headerNoAgent}" data-settings-toggle="prompt" @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>no agent</button>"""
         | _ -> Lit.nothing
 
     /// What this session's pull requests amount to, in the header band — the same line the
@@ -1183,7 +1167,7 @@ module View =
     /// Nothing at all when nothing is owed. A session with no watches, or whose watches have
     /// all merged, gets no strip rather than an empty one: silence is what makes a line that
     /// IS there worth looking at.
-    let private prStrip (actions: ViewActions) (model: ClientModel) : TemplateResult =
+    let private prStrip (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let standings = ClientModel.prStandings model
         match PrStatus.summarize standings with
         | "" -> Lit.nothing
@@ -1194,7 +1178,7 @@ module View =
             let tone = worst |> List.fold PrStatus.worse "closed" |> PrStatus.tone |> ink
             html $"""
                 <button type="button" class="{Style.prStripIn tone}" aria-label="Pull requests"
-                        data-pr-strip @click={Ev(fun _ -> actions.ToggleSettings ())}>{line}</button>"""
+                        data-pr-strip @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>{line}</button>"""
 
     /// The way back into the content column once it is shut. Present only while it IS
     /// shut, so there are never two controls for the one column on screen at once.
@@ -1239,7 +1223,7 @@ module View =
             |> List.map (fun (who, p) -> remoteCursor model who p)
         html $"""
             <header class="{Style.header}">
-              <button type="button" class="{Style.cls [ Style.navChevronForward; Style.navReopen ]}" aria-label="Show sidebar" data-nav-toggle="show" @click={Ev(fun _ -> actions.ToggleNav ())}>{Icon.right}</button>
+              <button type="button" class="{Style.cls [ Style.navChevronForward; Style.navReopen ]}" aria-label="Show sidebar" data-nav-toggle="show" @click={Ev(fun _ -> dispatch ToggleNavMsg)}>{Icon.right}</button>
               <div class="{Style.titleWrap}">
                 <!-- `enterkeyhint="done"` because that is what the return key now does here
                      (`commitOnEnter`): it finishes with the field. A phone draws the hint on
@@ -1261,8 +1245,8 @@ module View =
                 <span class="{Style.titleId}" data-session-id>{sessionIdText}</span>
               </div>
               <div class="{Style.headerAside}">
-                {prStrip actions model}
-                {agentAbsence actions model.Claude}
+                {prStrip dispatch model}
+                {agentAbsence dispatch model.Claude}
                 {contentReopen dispatch model}
               </div>
               {catchUpBar model}
@@ -1818,7 +1802,7 @@ module View =
                 html $"""
                     {said}
                     <div class="{Style.askActions}">
-                      <button type="button" class="{Style.btnPrimary}" data-repo-picker-connect @click={Ev(fun _ -> actions.RevealSettings ())}>{Dom.Text.repoPickerConnect}</button>
+                      <button type="button" class="{Style.btnPrimary}" data-repo-picker-connect @click={Ev(fun _ -> dispatch RevealSettingsMsg)}>{Dom.Text.repoPickerConnect}</button>
                     </div>"""
             | ListingUnavailable (reason, false) ->
                 note (html $"""<span class="{Style.statusErr}" role="status" data-repo-picker-failed>{reason}</span>""")
@@ -4758,7 +4742,7 @@ module View =
             <div class="{Style.mainColumn}">
               {degradedBar actions model}
               {header actions dispatch model}
-              {signInPrompt actions model}
+              {signInPrompt dispatch model}
               {refusalNotice dispatch model RefusalMount.Chat}
               <div class="{Style.launchArea}">
                 {chat actions dispatch model}

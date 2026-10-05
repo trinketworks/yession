@@ -1455,16 +1455,7 @@ do
     // (a rewound cast that plays off its end jumps back to live) and dispatch's render needs
     // the render.
     let mutable dispatchRef : ClientMsg -> unit = ignore
-    // The nav column's moves are the app's own (`PaneShell`): on a phone the drawer and the
-    // pane are two sheets over one chat, and what keeps them from stacking is the drawer
-    // closing the pane through the model — which only a real dispatch can show.
-    let hidePane () = dispatchRef HideContentMsg
-    let actions =
-        { ViewActions.ssr with
-            TypeIntoTerminal = recordTyped
-            ToggleNav = PaneShell.toggleNav hidePane
-            ToggleSettings = PaneShell.toggleSettings hidePane
-            RevealSettings = PaneShell.revealSettings hidePane }
+    let actions = { ViewActions.ssr with TypeIntoTerminal = recordTyped }
     let shellDoc = Y.Doc.Create ()
     let shellTexts = TextRegistry shellDoc
     // Bound once rather than built inline at the render, because the draft-slot rule below
@@ -1492,7 +1483,7 @@ do
                   SendTerminalDraft = fun _ _ -> ()
                   ReportFocus = ignore
                   ResizeTerminal = recordResized } }
-    let mutable model = shellModel
+    let mutable model = { shellModel with Column = { shellModel.Column with Wide = PaneShell.onDesktop () } }
     /// What `Published.closed` reads, kept here for `typed`'s reason: the count is this
     /// instrument's output, not the place it keeps it.
     let mutable closed : string array = [||]
@@ -1532,6 +1523,7 @@ do
             | ClientEffect.Move move -> PaneShell.move move
             // No session to ask for a keyframe: the replay plays without one.
             | ClientEffect.FetchKeyframe _
+            | ClientEffect.Remember _
             | ClientEffect.Copy _
             | ClientEffect.RetryNow -> ())
         // Read back off the MODEL rather than out of the message: a measurement the reducer
@@ -1547,6 +1539,7 @@ do
         renderTimes |> Option.iter (fun times -> times.Add (now () - started))
     and render () = renderer.SetState model
     dispatchRef <- dispatch
+    PaneShell.watchBreakpoint (fun wide -> dispatch (ViewportMsg wide))
     // The publication rule the real client runs (`Browser.fs`), because without it this page
     // renders a composer that can never reach the states a composer actually has: a slot is
     // what says a draft EXISTS, and Send's weight and the verbs' row are
