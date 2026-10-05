@@ -607,20 +607,10 @@ let private mcpServers =
     | Some _ -> McpClient.create ()
     | None -> McpClient.McpConnections.none
 
-/// The acting party's GitHub token for a repo network verb: the session's explicit
-/// credential first, then the named actor's own, then the ambient `GITHUB_TOKEN` (the
-/// same last-resort idiom as the agent credential). None = anonymous — public repos
-/// still clone.
-/// The stored credential a repo verb would spend for this actor, if any.
-///
-/// Factored out so that spending one and reporting one refused cannot pick different
-/// targets. Two copies of this precedence would eventually disagree, and the way they would
-/// disagree is the worst one available: marking a credential nobody used, while the one that
-/// actually failed goes on reading as healthy.
+/// The stored credential a repo verb would spend for this actor, if any — the one rule,
+/// `GitHubConnection.spentTarget`, over what this session has heard.
 let private githubTargetFor (credentialActor: CredentialFor) : SecretId option =
-    GitHubConnection.turnTargets sessionId credentialActor
-    |> List.filter (fun target -> Map.containsKey target connectionStatus)
-    |> List.tryHead
+    GitHubConnection.spentTarget sessionId connectionStatus credentialActor
 
 /// The ambient `GITHUB_TOKEN`, the last resort of the precedence below — read in one place,
 /// so that "is there one" and "what is it" cannot answer from two.
@@ -629,26 +619,15 @@ let private ambientGitHubToken () : string option =
     | "" -> None
     | token -> Some token
 
-let private resolveGitHubToken (credentialActor: CredentialFor) : Async<string option> =
-    async {
-        let targets = githubTargetFor credentialActor |> Option.toList
-        let ambient = ambientGitHubToken
-        match connectionsClient, targets with
-        | Some client, target :: _ ->
-            match! client.Resolve target with
-            | Ok (_, value) -> return Some value
-            // A connected credential that will not resolve is a FAULT, not an absence:
-            // since the grant can now refresh, this is exactly what a refresh failure
-            // looks like. Falling back to the ambient token here made that present as
-            // "git is anonymous", which sends whoever debugs it at the wrong thing —
-            // and could silently use a different identity than the one they connected.
-            // The ambient token stays what it always was: the answer when nothing is
-            // connected at all.
-            | Error reason ->
-                eprintfn "[session %s] the connected github credential did not resolve: %s" (SessionId.value sessionId) reason
-                return None
-        | _ -> return ambient ()
-    }
+/// The acting party's GitHub token for a repo network verb, over this session's state:
+/// `GitHubConnection.tokenOver` holds the rule, so a suite runs the same one.
+let private resolveGitHubToken : CredentialFor -> Async<string option> =
+    GitHubConnection.tokenOver
+        sessionId
+        (fun () -> connectionStatus)
+        (connectionsClient |> Option.map (fun client -> client.Resolve))
+        ambientGitHubToken
+        (eprintfn "[session %s] the connected github credential did not resolve: %s" (SessionId.value sessionId))
 
 /// A repo network verb failed while spending a connected credential.
 ///

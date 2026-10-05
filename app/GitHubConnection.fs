@@ -118,6 +118,45 @@ let turnTargets (sessionId: SessionId) (credential: CredentialFor) : SecretId li
       Some { SecretId.Scope = LocalScope; SecretId.Name = secretName } ]
     |> List.choose id
 
+/// The stored credential a GitHub verb would spend for this actor: the first of its turn
+/// targets the session has heard exists. Factored out so that spending one and reporting one
+/// refused cannot pick different targets.
+let spentTarget (sessionId: SessionId) (heard: Map<SecretId, ConnectionStatus>) (actor: CredentialFor) : SecretId option =
+    turnTargets sessionId actor |> List.filter (fun target -> Map.containsKey target heard) |> List.tryHead
+
+/// The token a GitHub verb spends for this actor — `None` is anonymous, which public repos
+/// still answer. The connected credential the session has heard of first, then the ambient
+/// `GITHUB_TOKEN` (the same last-resort idiom as the agent credential).
+///
+/// Everything it reads is a parameter, so a suite composes the very resolver a session runs
+/// against what the session has heard SO FAR — which is how what a look does before the
+/// first connection frame arrives is asked, rather than inferred from timestamps.
+let tokenOver
+    (sessionId: SessionId)
+    (heard: unit -> Map<SecretId, ConnectionStatus>)
+    (resolve: (SecretId -> Async<Result<ConnectionKind * string, string>>) option)
+    (ambient: unit -> string option)
+    (unresolved: string -> unit)
+    (actor: CredentialFor)
+    : Async<string option> =
+    async {
+        match resolve, spentTarget sessionId (heard ()) actor with
+        | Some resolve, Some target ->
+            match! resolve target with
+            | Ok (_, value) -> return Some value
+            // A connected credential that will not resolve is a FAULT, not an absence:
+            // since the grant can now refresh, this is exactly what a refresh failure
+            // looks like. Falling back to the ambient token here made that present as
+            // "git is anonymous", which sends whoever debugs it at the wrong thing —
+            // and could silently use a different identity than the one they connected.
+            // The ambient token stays what it always was: the answer when nothing is
+            // connected at all.
+            | Error reason ->
+                unresolved reason
+                return None
+        | _ -> return ambient ()
+    }
+
 // --- the device flow, as data ----------------------------------------------------------
 
 /// What `POST /login/device/code` answered: the code pair and how to pace the polling.
