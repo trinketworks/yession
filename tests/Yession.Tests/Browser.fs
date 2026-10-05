@@ -4285,16 +4285,22 @@ let editorTests =
                 return ()
             }
         // The composer's promise is that it gives the conversation back the room it is not
-        // using, and on a phone the verbs are the room: they leave the line and sit below it,
-        // standing only once there is a draft for them to act on. `opacity-0` kept every
-        // pixel of that row while hiding it — 44px of invisible buttons, plus the clearance
-        // meant to land under them — so two thirds of an empty composer was band holding
-        // nothing.
+        // using, and on a phone the verbs that REACT TO CONTENT are the room: Send and
+        // Interrupt leave the line and sit below it, standing only once there is a draft or a
+        // turn for them to act on. `opacity-0` kept every pixel of that row while hiding it —
+        // 44px of invisible buttons, plus the clearance meant to land under them — so two
+        // thirds of an empty composer was band holding nothing.
         //
-        // Only a browser can tell that from a composer that is simply padded: the markup is
+        // The model picker does NOT belong to that promise (`Style.draftLead`'s own doc
+        // comment): choosing a model has nothing to do with there being a draft, so it is
+        // permanently on screen and permanently claims its own height — correctly, since the
+        // whole point of standing it outside `commitClass` was that a person can reach it
+        // BEFORE writing a word. So this case measures the content-gated row alone (Send's
+        // own parent), not the composer band as a whole, which would never collapse now.
+        //
+        // Only a browser can tell that from a row that is simply padded: the markup is
         // identical either way, and so is the row's own bounding box (clipping does not
-        // resize a child). What separates them is what stands between the line and the
-        // bottom of the band, which is a measurement.
+        // resize a child). What separates them is the row's own measured height.
         editorCaseIn 390 844 "a composer with nothing to send spends no height on its verbs" <| fun page ->
             async {
                 // Measured with motion off for the reason every geometry case here is: a
@@ -4302,14 +4308,13 @@ let editorTests =
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
                 let line = """#shell [data-draft-input] .ProseMirror"""
                 let! _ = await (page.WaitForSelectorAsync line)
-                // What is below the line, in both states. The band's bottom rather than the
-                // row's own box: a clipped child keeps its rect, so the row cannot be asked
-                // whether it is taking room — only the band it is inside can.
+                // The content-gated row's own height — Send's direct parent (`commitClass` in
+                // `View.drafts`), not the band as a whole, which also holds the permanently
+                // visible model picker (`Style.draftLead`).
                 let below =
                     """() => {
-                         const band = document.querySelector('#shell [data-draft-editor]')
-                         const line = document.querySelector('#shell [data-draft-input]')
-                         return band.getBoundingClientRect().bottom - line.getBoundingClientRect().bottom
+                         const commit = document.querySelector('#shell [data-send-draft]').parentElement
+                         return commit.getBoundingClientRect().height
                        }"""
                 let! empty = await (page.EvaluateAsync<float> below)
                 do! awaitU (page.ClickAsync line)
@@ -4317,7 +4322,7 @@ let editorTests =
                 // Send's own weight moves from waiting to ready exactly while the draft
                 // does, so its arrival is the rule having settled — the one signal here
                 // that is not a guess at a duration.
-                let! _ = await (page.WaitForSelectorAsync """#shell [data-send-draft][class~="text-blue"]""")
+                let! _ = await (page.WaitForSelectorAsync """#shell [data-send-draft][class~="bg-blue"]""")
                 let! drafted = await (page.EvaluateAsync<float> below)
                 Expect.isTrue
                     (empty < drafted && empty <= 24.0)
@@ -4342,7 +4347,7 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync line)
                 do! awaitU (page.ClickAsync line)
                 do! awaitU (page.Keyboard.TypeAsync "something to send")
-                let! _ = await (page.WaitForSelectorAsync """#shell [data-send-draft][class~="text-blue"]""")
+                let! _ = await (page.WaitForSelectorAsync """#shell [data-send-draft][class~="bg-blue"]""")
                 // The shell into the viewport first: this harness page stacks its mounts and
                 // the shell is not the top of it, so the composer sits below the fold and a
                 // hit-test in VIEWPORT coordinates answers null for a reason this case is
