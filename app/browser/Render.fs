@@ -785,6 +785,7 @@ let create (deps: Deps) : Renderer =
         // itself changes (selecting a terminal opens it).
         PaneShell.setOpen model.TerminalsOpen
         PaneShell.setColumn model.Column
+        PaneShell.setPaneSplit model.PaneSplit
         // The strip's selected tab in view when the selection moved — read off the DOM rather
         // than the model, so a tab a collaborator's `TabOpened` selected is covered too — and
         // its fade on whichever ends have tabs past them.
@@ -821,7 +822,7 @@ let create (deps: Deps) : Renderer =
 /// reader's place (`setState`), and this keeps it across the other thing that moves it, a
 /// viewport that changed size under a laid-out surface; and the split between the two columns
 /// is the reader's to set, not the theme's.
-let attach () : unit =
+let attach (dispatch: ClientMsg -> unit) : unit =
     Tail.attach ()
-    PaneShell.installPaneResize ()
+    PaneShell.installPaneResize dispatch
     PaneShell.installStrip ()

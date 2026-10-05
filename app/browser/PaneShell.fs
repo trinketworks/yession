@@ -616,28 +616,19 @@ module Memory =
         | _ -> ()
 
 /// The pane's width on desktop, as a custom property on the shell root — the same mechanism
-/// the open state uses, and for the same reasons: it is presentation, a Lit re-render must not
-/// fight it, and the model has no business holding a number of pixels.
-///
-/// The column was a fixed 420px chosen as "the width the content actually has", and measured
-/// against what a terminal actually prints it is 20 columns short of 80. Rather than guess a
-/// better constant for every screen, the split moves and is remembered.
+/// the open state uses, and for the same reason: a Lit re-render must not fight the column's
+/// transition. The width itself is the model's (`ClientModel.PaneSplit`); what is here is the
+/// measuring the model cannot do and the drawing of what it decided.
 module private Split =
 
     /// Where a reader's chosen width survives a reload. Per browser profile, like the peer id:
     /// it is a preference about this screen, not a fact about the session.
     let key = "yession:term-width"
 
-    /// Neither column can be dragged away to nothing. The pane's floor is its own; the chat's
-    /// is what bounds the pane's ceiling.
-    let minPane = 320.0
+    /// The chat's floor: what the pane's ceiling leaves it.
     let minChat = 420.0
 
     let private root = document.documentElement
-
-    let private handles () : HTMLElement list =
-        let found = document.querySelectorAll "[data-term-resize]"
-        [ for i in 0 .. found.length - 1 -> found.[i] :?> HTMLElement ]
 
     /// The ceiling is what the CHAT can spare, not what the window is: the sidebar takes 280px
     /// of the window and can be collapsed, so a bound measured against `innerWidth` let the pane
@@ -645,43 +636,14 @@ module private Split =
     /// single letter and its commands gone. Ask the two columns how wide they actually are.
     let widest () : float =
         match find "[data-content-panel]", find "[data-conversation]" with
-        | Some pane, Some chat ->
-            let spare =
-                pane.getBoundingClientRect().width + chat.getBoundingClientRect().width - minChat
-            max minPane spare
-        | _ -> max minPane (window.innerWidth - minChat)
-
-    /// Set the split, clamped, and tell everything that reports it. The separator's
-    /// `aria-valuenow` is a value assistive technology reads out, so it is written here rather
-    /// than left at whatever literal the template shipped.
-    let apply (width: float) : unit =
-        // Rounded before clamping, so a bound is a bound exactly: clamping a fraction first
-        // and rounding after could land a pixel outside one.
-        let next = width |> round |> min (widest ()) |> max minPane
-        setStyleProperty root "--term-w" (sprintf "%dpx" (int next))
-        for handle in handles () do
-            handle.setAttribute ("aria-valuenow", string (int next))
-            handle.setAttribute ("aria-valuemin", string (int minPane))
-            handle.setAttribute ("aria-valuemax", string (int (widest ())))
-        // A wider or narrower pane is a wider or narrower strip, and what fits changes with it.
-        Strip.sync ()
-        // Storage is denied in a private window, and a split that cannot be remembered is
-        // still a split that works.
-        try localStorage.setItem (key, string (int next)) with _ -> ()
-
-    /// Where the split is now, asked of the property rather than of the column — because the
-    /// column ANIMATES, and a measurement taken mid-transition is not a width anybody chose.
-    let current () : float =
-        match System.Double.TryParse (styleProperty root "--term-w" |> trimPx) with
-        | true, said when said > 0.0 -> said
-        | _ -> find "[data-content-panel]" |> Option.map (fun pane -> pane.getBoundingClientRect().width) |> Option.defaultValue minPane
+        | Some pane, Some chat -> pane.getBoundingClientRect().width + chat.getBoundingClientRect().width - minChat
+        | _ -> window.innerWidth - minChat
 
     /// The width to start at: what was remembered, else the design token, else the floor.
     ///
-    /// Seeded at install ALWAYS — not only when a width was remembered. Unseeded, `current`
-    /// had to fall back to measuring the column, and asked while the column is opening it
-    /// answers 1px (a shut pane is its own left border) or whatever the easing has reached, so
-    /// the arrow keys then step from a number that was never the split.
+    /// Seeded at install ALWAYS — not only when a width was remembered — so the arrow keys
+    /// step from a number that was the split, never from a column measured mid-transition (a
+    /// shut pane is its own 1px left border).
     let seed () : float =
         let remembered =
             try
@@ -696,7 +658,18 @@ module private Split =
                 with
             | true, width when width > 0.0 -> Some width
             | _ -> None
-        remembered |> Option.orElse token |> Option.defaultValue minPane
+        remembered |> Option.orElse token |> Option.defaultValue (float Yession.App.PaneSplit.narrowest)
+
+    let draw (split: Yession.App.PaneSplit) : unit =
+        setStyleProperty root "--term-w" (sprintf "%dpx" split.Width)
+
+/// Draw the split the model holds, once it holds one.
+let setPaneSplit (split: Yession.App.PaneSplit option) : unit = split |> Option.iter Split.draw
+
+/// Keep a width the reader chose. Denied in a private window, and a split that cannot be
+/// remembered is still a split that works.
+let rememberPaneWidth (width: int) : unit =
+    try localStorage.setItem (Split.key, string width) with _ -> ()
 
 /// Install the splitter: the pane's width becomes something the reader sets, with a pointer or
 /// with the keyboard, and keeps.
@@ -704,7 +677,7 @@ module private Split =
 /// Installed once, delegated from the document so it survives every re-render of the handle.
 /// The handle is a `separator` with a value, so the arrow keys have to move it — a splitter
 /// that only answers a drag is a control a keyboard cannot reach at all.
-let installPaneResize () : unit =
+let installPaneResize (dispatch: Yession.App.ClientMsg -> unit) : unit =
     // Which handle an event happened on, asked as "does a handle contain this": a press on
     // the grip's own children is a press on the handle. A target that is not a node at all is
     // under no handle.
@@ -715,9 +688,12 @@ let installPaneResize () : unit =
             let found = document.querySelectorAll "[data-term-resize]"
             [ for i in 0 .. found.length - 1 -> found.[i] :?> HTMLElement ]
             |> List.tryFind (fun handle -> handle.contains node)
+    let setTo (wanted: float) = dispatch (Yession.App.PaneSplitMsg (wanted, Split.widest ()))
+    let nudge (by: float) = dispatch (Yession.App.PaneNudgedMsg (by, Split.widest ()))
 
-    Split.apply (Split.seed ())
-    window.addEventListener ("resize", fun _ -> Split.apply (Split.current ()))
+    setTo (Split.seed ())
+    // A window that changed size changed what the chat can spare: the split is held to it.
+    window.addEventListener ("resize", fun _ -> nudge 0.0)
 
     document.addEventListener (
         "pointerdown",
@@ -730,10 +706,18 @@ let installPaneResize () : unit =
                 handle.focus ()
                 handle.setPointerCapture event.pointerId
                 document.documentElement.classList.add "term-resizing"
+                // One message a frame, however many moves the pointer reports in it: each
+                // message is a render, and a drag reports far faster than a screen draws.
+                let pending : float option ref = ref None
                 // The pane's edge is on the LEFT of a right-hand column, so its width is the
                 // distance from the pointer to the right of the window.
                 let move = fun (moving: Event) ->
-                    Split.apply (window.innerWidth - (moving :?> PointerEvent).clientX)
+                    let first = pending.Value.IsNone
+                    pending.Value <- Some (window.innerWidth - (moving :?> PointerEvent).clientX)
+                    if first then
+                        nextFrame (fun () ->
+                            pending.Value |> Option.iter setTo
+                            pending.Value <- None)
                 let rec finish =
                     fun (_: Event) ->
                         document.documentElement.classList.remove "term-resizing"
@@ -756,13 +740,13 @@ let installPaneResize () : unit =
                 let step = if event.shiftKey then 64.0 else 16.0
                 let moved =
                     match event.key with
-                    | "ArrowLeft" -> Some (Split.current () + step)
-                    | "ArrowRight" -> Some (Split.current () - step)
-                    | "Home" -> Some (Split.widest ())
-                    | "End" -> Some Split.minPane
+                    | "ArrowLeft" -> Some (fun () -> nudge step)
+                    | "ArrowRight" -> Some (fun () -> nudge -step)
+                    | "Home" -> Some (fun () -> setTo (Split.widest ()))
+                    | "End" -> Some (fun () -> setTo (float Yession.App.PaneSplit.narrowest))
                     | _ -> None
                 match moved with
                 | None -> ()
-                | Some width ->
-                    Split.apply width
+                | Some act ->
+                    act ()
                     event.preventDefault ())

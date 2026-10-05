@@ -1193,6 +1193,7 @@ let private start () =
                 | Preference.NavCollapsed collapsed ->
                     try Browser.WebStorage.localStorage.setItem ("yession.nav", (if collapsed then "collapsed" else "open"))
                     with _ -> ()
+                | Preference.PaneWidth width -> PaneShell.rememberPaneWidth width
               Client.Ports.Keyframe =
                 fun terminal seq ->
                     async {
@@ -1206,7 +1207,7 @@ let private start () =
         |> Program.withSetState setState
         |> Program.run
 
-        Render.attach ()
+        Render.attach (fun msg -> dispatchRef msg)
 
         // The column is beside the chat or a drawer over it according to the stylesheet's
         // breakpoint, which a window resized or a phone turned can cross at any time.
