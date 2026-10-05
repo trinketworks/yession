@@ -932,6 +932,11 @@ type ClientModel =
       /// the session ever ran: they are fetched on demand, and a range is only opened by
       /// somebody choosing to read it.
       TerminalKeyframes : Map<TerminalId * int, TranscriptKeyframe>
+      /// Keyframes this client has ASKED for, answered or not. What stops a burst of
+      /// identical requests while the first is still out, and a keyframe that did not answer
+      /// being asked again on every message after: the range still rebases and plays without
+      /// one, as the naive slice, so asking again would be a spin with nothing to gain.
+      KeyframesAsked : Set<TerminalId * int>
       /// The live SCREEN of each terminal, as this client has composed it (Plan 14, stage
       /// 6): the serialized output of an emulator fed the Process's snapshot and every
       /// record since.
@@ -1268,6 +1273,12 @@ type DomMove =
     /// keyboard (`ClientModel.keyboardSwap`) — a reader in the strip or the switcher when a
     /// shell dies is still somewhere, and is left there.
     | IfDropped of DomMove
+    /// Onto a terminal's live screen, when this peer has just become the one typing into it —
+    /// and only from a hand that is nowhere, or in that terminal's own command line, where
+    /// the keys no longer belong (`PaneShell.toTerminalScreen`).
+    | FocusTerminalScreen of TerminalId
+    /// Onto the pane's watch toggle, when the replay the hand was in has left the document.
+    | FocusWatchToggle
     /// Scroll a terminal's history to one of its commands and mark it.
     | RevealBlock of TerminalId * BlockId
     /// Scroll the conversation to one message and mark it.
@@ -1551,6 +1562,10 @@ type ClientMsg =
     /// to look it up first could look it up wrong, or forget, and the rule belongs with the
     /// state it governs.
     | RewindTerminalMsg of TerminalId
+    /// A rewound terminal's replay played off its end and caught up with the live edge: the
+    /// pane goes back to reading the terminal, and the player the reader was in leaves the
+    /// document under them.
+    | ReplayCaughtUpMsg of TerminalId
     /// Open or close the content column.
     | ToggleContentMsg
     /// Close the content column, and never open it: the shell's half of "on a phone, two
@@ -1697,6 +1712,9 @@ type ClientEffect =
     /// Ask poll `round` of the device flow begun for this scope.
     | GitHubPoll of round: int * scope: string
     | Move of DomMove
+    /// The screen a ranged replay starts from (`ClientModel.missingKeyframe`), answered as a
+    /// `TerminalKeyframeMsg`.
+    | FetchKeyframe of TerminalId * seq: int
     | Copy of box: string * text: string
     | RetryNow
 
@@ -1834,6 +1852,7 @@ module ClientModel =
           Terminals = Projection.empty
           TerminalFeeds = Map.empty
           TerminalKeyframes = Map.empty
+          KeyframesAsked = Set.empty
           TerminalScreens = Map.empty
           TerminalViewports = Map.empty
           Tabs = []
@@ -2782,10 +2801,9 @@ module ClientModel =
     /// under nobody's hand, and focus resting on `body` then is a page that has just loaded,
     /// not a control that went.
     ///
-    /// Not the edge INTO this peer's own live screen, which is `Screens.Sync`'s: the screen
-    /// takes keystrokes only once a snapshot has been painted into it, which that loop sees and
-    /// this fold does not. Not under a preview or the switcher, which cover the terminal; and
-    /// not for a kill pressed here, whose answer `killLanding` places.
+    /// Not the edge INTO this peer's own live screen, which is `leaseLanding`'s. Not under a
+    /// preview or the switcher, which cover the terminal; and not for a kill pressed here,
+    /// whose answer `killLanding` places.
     let keyboardSwap (before: ClientModel) (after: ClientModel) : DomMove option =
         let offers (model: ClientModel) (terminal: TerminalId) =
             Projection.tryFind terminal model.Terminals |> Option.map (fun view -> view.IsOpen, view.Lease)
@@ -2797,6 +2815,27 @@ module ClientModel =
             if offers before shown <> offers after shown && not live && not killed then
                 Some (DomMove.IfDropped (paneLanding after))
             else None
+        | Some _ | None -> None
+
+    /// Where the keyboard goes when this peer has just become the one typing into the terminal
+    /// on screen — onto its live screen. Taking the keyboard is the whole of what live mode IS,
+    /// and both ways into it leave focus where the keys no longer belong: pressing `take`
+    /// removes the `take` button in the render the lease arrives on, and the alt-screen flip
+    /// hands a block's author the terminal while their caret is still in its command line.
+    ///
+    /// One edge for both routes, because the flip has no press to hang it on: it is the
+    /// Session saying the mode changed, which reaches this client as a fold like any other.
+    /// Only the terminal the pane is SHOWING — a lease landing on one the reader is not looking
+    /// at has no screen in the document to focus — and only an edge: a lease already held is
+    /// not news, and moving to a terminal held all along is the reader's own move.
+    let leaseLanding (before: ClientModel) (after: ClientModel) : DomMove option =
+        let lease (model: ClientModel) (terminal: TerminalId) =
+            Projection.tryFind terminal model.Terminals
+            |> Option.filter (fun view -> view.IsOpen)
+            |> Option.bind (fun view -> view.Lease)
+        match selectedTerminal after with
+        | Some shown when lease after shown = Some (me after) && lease before shown <> Some (me before) ->
+            Some (DomMove.FocusTerminalScreen shown)
         | Some _ | None -> None
 
     /// Whether a durable actor is this client. The question every ownership rule here asks —
@@ -3664,6 +3703,7 @@ module ClientModel =
                 Switcher = false
                 TerminalsOpen = true }
         | OpenInPaneMsg mode -> fold (ShowInPaneMsg mode) model
+        | ReplayCaughtUpMsg terminal -> fold (ShowInPaneMsg (Reading terminal)) model
         | ShowPreviewMsg preview
         | OpenPreviewMsg preview ->
             // Laid over the terminal the subject belongs to, which is shown in the strip as
@@ -4040,6 +4080,8 @@ module ClientModel =
                 | Some tab -> [ ClientEffect.Move (DomMove.FocusTab tab) ]
                 | None -> [ ClientEffect.Move DomMove.FocusPivot ]
             | MoveMsg move -> [ ClientEffect.Move move ]
+            // The player the hand was in is gone; the toggle that replaces it is where it lands.
+            | ReplayCaughtUpMsg _ -> [ ClientEffect.Move DomMove.FocusWatchToggle ]
             // A deliberate send settles the view on what was just sent, whether or not the
             // sender had scrolled away while composing — the tail rule (`Tail`, in the
             // browser) only keeps a reader who was ALREADY following, which is a different
@@ -4081,4 +4123,11 @@ module ClientModel =
                 | RefusalMount.Chat -> [ ClientEffect.Move DomMove.FocusComposer ]
             | _ -> []
         let swapped = keyboardSwap model next |> Option.map ClientEffect.Move |> Option.toList
-        next, effects @ answered @ unnoticed @ swapped @ offering
+        let leased = leaseLanding model next |> Option.map ClientEffect.Move |> Option.toList
+        // Asked once per keyframe, whichever message first left the preview needing one.
+        let next, fetching =
+            match missingKeyframe next with
+            | Some key when not (Set.contains key next.KeyframesAsked) ->
+                { next with KeyframesAsked = Set.add key next.KeyframesAsked }, [ ClientEffect.FetchKeyframe key ]
+            | Some _ | None -> next, []
+        next, effects @ answered @ unnoticed @ swapped @ leased @ fetching @ offering

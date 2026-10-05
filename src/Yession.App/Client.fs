@@ -148,12 +148,15 @@ module Client =
           /// permission it may refuse, and the only place that knows whether it did.
           Clipboard : string -> Async<bool>
           /// Cut short whatever wait the connection's lifecycle is in (`ClientEffect.RetryNow`).
-          Retry : unit -> unit }
+          Retry : unit -> unit
+          /// One keyframe, by terminal and the transcript line it paints. `None` is any way of
+          /// not having one: the replay plays without it.
+          Keyframe : TerminalId -> int -> Async<TranscriptKeyframe option> }
 
     module Ports =
 
         /// A client with no session to ask: every request goes nowhere.
-        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None; Ports.Panels = None; Ports.Moves = ignore; Ports.Clipboard = (fun _ -> async.Return false); Ports.Retry = ignore }
+        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None; Ports.Panels = None; Ports.Moves = ignore; Ports.Clipboard = (fun _ -> async.Return false); Ports.Retry = ignore; Ports.Keyframe = (fun _ _ -> async.Return None) }
 
         /// A launch read, answered as the message that carries its result.
         let private launchRead (reads: LaunchReads) (dispatch: ClientMsg -> unit) (effect: LaunchEffect) : Async<unit> =
@@ -238,6 +241,13 @@ module Client =
                             dispatch (GitHubAnsweredMsg (call, answer, panels.Now ()))
                         }))
             | ClientEffect.Move move -> ports.Moves move
+            | ClientEffect.FetchKeyframe (terminal, seq) ->
+                Async.StartImmediate (
+                    async {
+                        match! ports.Keyframe terminal seq with
+                        | Some keyframe -> dispatch (TerminalKeyframeMsg (terminal, keyframe))
+                        | None -> ()
+                    })
             | ClientEffect.Copy (box, text) ->
                 Async.StartImmediate (
                     async {

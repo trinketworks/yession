@@ -163,19 +163,12 @@ type Screens =
 let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> unit) : Screens =
     let live = System.Collections.Generic.Dictionary<string, Live> ()
 
-    /// Whether this client held each terminal's lease at the last sync — the other half of the
-    /// edge below. Kept apart from `live` on purpose: the lease can land on a terminal whose
-    /// snapshot has not arrived, and an edge that only fired for terminals with an emulator
-    /// would miss exactly the terminal somebody just opened.
-    let held = System.Collections.Generic.Dictionary<string, bool> ()
-
     /// The size each terminal's viewport was last measured at, so a render that moved nothing
     /// says nothing — a resize is a signal to the program on the other end, and repeating it
     /// makes a full-screen program redraw for no reason.
     let measuredSize = System.Collections.Generic.Dictionary<string, int * int> ()
 
     let forget (key: string) =
-        held.Remove key |> ignore
         measuredSize.Remove key |> ignore
         match live.TryGetValue key with
         | true, existing ->
@@ -272,27 +265,6 @@ let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> un
             publish id entry
       Sync =
         fun model ->
-            // The keyboard follows the lease. Both ways into live mode — pressing `take`, and
-            // the alt-screen flip handing a block's author the terminal it just took over —
-            // leave focus where the keys no longer belong (`body`, or the command line the
-            // flipped command was run from), so without this the person who now owns the
-            // keyboard is typing into nothing, or into the queue.
-            //
-            // Here rather than on the `take` press because the flip has no press to hang it
-            // on: it is the Session saying the mode changed, which reaches this client
-            // as a model change like any other. One edge, both routes.
-            let mine = ClientModel.me model
-            let showing = ClientModel.selectedTerminal model
-            for terminal in Projection.openTerminals model.Terminals do
-                let key = TerminalId.value terminal.TerminalId
-                let isMine = terminal.Lease = Some mine
-                let was = match held.TryGetValue key with | true, v -> v | _ -> false
-                held.[key] <- isMine
-                // Only the terminal the pane is SHOWING: a lease landing on one the reader is
-                // not looking at has no screen in the document to focus, and the selector
-                // would otherwise find whichever live screen happened to be on it instead.
-                if isMine && not was && showing = Some terminal.TerminalId then
-                    PaneShell.toTerminalScreen terminal.TerminalId
             for terminal in Projection.openTerminals model.Terminals do
                 let key = TerminalId.value terminal.TerminalId
                 match live.TryGetValue key with
@@ -331,9 +303,8 @@ let create (dispatch: ClientMsg -> unit) (report: TerminalId -> int -> int -> un
                 |> List.map (fun t -> TerminalId.value t.TerminalId)
                 |> Set.ofList
             for stale in
-                Seq.append live.Keys held.Keys
+                live.Keys
                 |> Seq.filter (fun k -> not (Set.contains k open'))
-                |> Seq.distinct
                 |> Seq.toList do
                 forget stale
             // Last, because both read the document this render has just produced: which box

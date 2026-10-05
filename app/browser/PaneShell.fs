@@ -189,9 +189,8 @@ let private toChatItem (subject: Yession.App.PreviewSubject) : unit =
 /// No terminal id: the toggle's VALUE is the face it will show, not which terminal it is
 /// about, and the pane shows one tab at a time — so there is exactly one of these in the
 /// document and naming a terminal could only ever name it wrongly.
-let toWatchToggle () : unit =
-    nextFrame (fun () ->
-        if stranded [ "[data-pane-replay]" ] then focusOn (find "[data-terminal-watch]"))
+let private toWatchToggle () : unit =
+    if stranded [ "[data-pane-replay]" ] then focusOn (find "[data-terminal-watch]")
 
 /// Hand focus to the live screen when this peer has just become the one typing into it.
 ///
@@ -207,7 +206,7 @@ let toWatchToggle () : unit =
 /// the editor rather than into the editor. Being in THIS terminal's command line when its
 /// keyboard becomes yours is counted as stranded.
 ///
-/// The guard is what makes this safe to run from the render loop: a lease can land on a
+/// The guard is what makes this safe to run on every lease edge: a lease can land on a
 /// terminal while its holder is reading somewhere else entirely (the alt-screen flip follows
 /// the block's AUTHOR, and the agent's blocks flip too), and yanking a caret out of the
 /// message composer because a terminal three tabs away went full-screen would be worse than
@@ -215,12 +214,11 @@ let toWatchToggle () : unit =
 ///
 /// The screen's field (`data-terminal-keys`), not the screen: the screen renders in three
 /// variants, only the holder's takes keystrokes, and it takes them in that field.
-let toTerminalScreen (terminal: Yession.Domain.TerminalId) : unit =
-    nextFrame (fun () ->
-        let ownLine =
-            sprintf "[data-terminal-input^=\"%s\"]" (Yession.Domain.Collab.BodyKey.terminalDraftsIn terminal)
-        if stranded [ ownLine ] then
-            focusOn (find (sprintf "[data-terminal-keys=\"%s\"]" (Yession.Domain.TerminalId.value terminal))))
+let private toTerminalScreen (terminal: Yession.Domain.TerminalId) : unit =
+    let ownLine =
+        sprintf "[data-terminal-input^=\"%s\"]" (Yession.Domain.Collab.BodyKey.terminalDraftsIn terminal)
+    if stranded [ ownLine ] then
+        focusOn (find (sprintf "[data-terminal-keys=\"%s\"]" (Yession.Domain.TerminalId.value terminal)))
 
 /// Scroll a terminal's history to one of its commands, and say which one (Plan 25, stage 3).
 ///
@@ -512,6 +510,8 @@ and private place (asked: Yession.App.DomMove) : unit =
     | Yession.App.DomMove.RevealMessage _
     | Yession.App.DomMove.ScrollToLatest _
     | Yession.App.DomMove.JumpToLatest _ -> move asked
+    | Yession.App.DomMove.FocusTerminalScreen terminal -> toTerminalScreen terminal
+    | Yession.App.DomMove.FocusWatchToggle -> toWatchToggle ()
 
 /// The pane's open state, as a class on the shell root — the same mechanism the sidebar uses,
 /// so a Lit re-render never fights the CSS transition. A `set` rather than a toggle, because
