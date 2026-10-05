@@ -4237,6 +4237,51 @@ let private sessionBreakTests =
             Expect.stringContains html (Moment.stamp cameBack) "and the pressed one as a moment"
     ]
 
+/// A held terminal's pty follows the holder's box (`ClientModel.ptyResizes`). Measured by the
+/// browser, decided by the reducer: what is pinned here is the decision.
+let private ptyResizeTests =
+    let wide : Size = { Cols = 132; Rows = 43 }
+    let resizes (effects: ClientEffect list) =
+        effects |> List.filter (function ClientEffect.ResizeTerminal _ -> true | _ -> false)
+    let leased (holder: PeerId) = heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (took terminalA (PeerRef holder) 0) ]
+
+    testList "A held terminal's pty follows the holder's box" [
+        // The program on the other end lays its screen out to the size it is told, and the
+        // holder is the one typing into it.
+        testCase "the holder's box changing asks to resize the pty" <| fun () ->
+            let _, effects = ClientModel.update (TerminalViewportMsg (terminalA, wide)) (leased ada)
+            Expect.equal (resizes effects) [ ClientEffect.ResizeTerminal (terminalA, wide) ] "to the box the holder measured"
+
+        // Every peer watches the same screen, so a narrower pane scrolls rather than reshaping
+        // somebody else's terminal under them.
+        testCase "a viewer's box changing asks nothing of the pty" <| fun () ->
+            let _, effects = ClientModel.update (TerminalViewportMsg (terminalA, wide)) (leased bob)
+            Expect.equal (resizes effects) [] "the pty is the holder's"
+
+        // A resize is a signal to the program, and repeating one makes a full-screen program
+        // redraw for no reason.
+        testCase "a box measured at the size it already was asks nothing" <| fun () ->
+            let measured = leased ada |> Support.step (TerminalViewportMsg (terminalA, wide))
+            let _, effects = ClientModel.update (TerminalViewportMsg (terminalA, wide)) measured
+            Expect.equal (resizes effects) [] "nothing moved"
+
+        // The pty a lease arrives on is whatever size the last block or the last holder left
+        // it at; a holder whose box has not moved would otherwise type into a screen laid out
+        // for somebody else's.
+        testCase "a lease of mine arriving fits the pty to the box already measured" <| fun () ->
+            let measured =
+                heardOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> Support.step (TerminalViewportMsg (terminalA, wide))
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg
+                        { Events = [ at 2L 1.0 (took terminalA (PeerRef ada) 0) ]
+                          LastOffset = Some (EventOffset.create 2L |> expect)
+                          IsEnd = true })
+                    measured
+            Expect.equal (resizes effects) [ ClientEffect.ResizeTerminal (terminalA, wide) ] "the box the holder already has"
+    ]
+
 let tests =
     testList "Timeline and the pane (Plan 14)" [
         contentChipTests
@@ -4266,4 +4311,5 @@ let tests =
         videoTests
         readsTests
         dvrTests
+        ptyResizeTests
     ]

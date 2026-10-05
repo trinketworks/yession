@@ -1843,6 +1843,9 @@ type ClientEffect =
     /// The screen a ranged replay starts from (`ClientModel.missingKeyframe`), answered as a
     /// `TerminalKeyframeMsg`.
     | FetchKeyframe of TerminalId * seq: int
+    /// Tell the Session the size of a pty this peer holds the lease on, so the program drawing
+    /// on it lays its screen out to the box the holder is looking at (`ClientModel.ptyResizes`).
+    | ResizeTerminal of TerminalId * Size
     | Remember of Preference
     | Copy of box: string * text: string
     | RetryNow
@@ -2915,6 +2918,12 @@ module ClientModel =
     let me (model: ClientModel) : ActorRef =
         Attribution.actorFor model.Attribution.PeerUsers model.Peer.PeerId
 
+    /// Whether this peer holds the lease on an open terminal: the one question both the
+    /// keyboard's landing and the pty's size ask of a lease.
+    let private holds (model: ClientModel) (terminal: TerminalId) : bool =
+        Projection.tryFind terminal model.Terminals
+        |> Option.exists (fun view -> view.IsOpen && view.Lease = Some (me model))
+
     /// Where the keyboard goes when the terminal on screen changes what it offers one — `None`
     /// when it does not. `before` and `after` are a message's fold, either side of it.
     ///
@@ -2961,14 +2970,41 @@ module ClientModel =
     /// at has no screen in the document to focus — and only an edge: a lease already held is
     /// not news, and moving to a terminal held all along is the reader's own move.
     let leaseLanding (before: ClientModel) (after: ClientModel) : DomMove option =
-        let lease (model: ClientModel) (terminal: TerminalId) =
-            Projection.tryFind terminal model.Terminals
-            |> Option.filter (fun view -> view.IsOpen)
-            |> Option.bind (fun view -> view.Lease)
         match selectedTerminal after with
-        | Some shown when lease after shown = Some (me after) && lease before shown <> Some (me before) ->
+        | Some shown when holds after shown && not (holds before shown) ->
             Some (DomMove.FocusTerminalScreen shown)
         | Some _ | None -> None
+
+    /// The ptys this peer has to tell the Session the size of, after a message — each terminal
+    /// it holds the lease on whose viewport that message moved, or whose lease that message
+    /// brought while its viewport was already known.
+    ///
+    /// Only the holder: the pty has one size while a program is drawing on it, and every peer
+    /// is watching the same screen, so a viewer with a narrower pane scrolls rather than
+    /// reshaping everyone else's terminal. (Every peer still MEASURES — the width a queued
+    /// command claims is a block-mode fact, `PendingAct.Size` — and that measurement is what
+    /// this reads.)
+    ///
+    /// Only a CHANGE, read off `TerminalViewports` either side of the message: a resize is a
+    /// signal to the program on the other end, and repeating one makes a full-screen program
+    /// redraw for no reason. A measurement the reducer refused leaves the map as it was, so it
+    /// asks for nothing.
+    ///
+    /// And on the lease ARRIVING, because the pty it arrives on is whatever size the last
+    /// block or the last holder left it at, and a holder whose box has not moved since would
+    /// otherwise type into a screen laid out for somebody else's until they next dragged a
+    /// splitter. Every terminal held, not only the one on screen — a measurement kept for a
+    /// terminal the pane has moved off is still the truest width this reader has for it.
+    ///
+    /// A lease replayed from history asks too; that is safe rather than right by luck, because
+    /// the Session resizes a pty only for the peer holding its lease NOW (`SessionTerminals`'
+    /// `Resize`), and refuses the rest.
+    let ptyResizes (before: ClientModel) (after: ClientModel) : (TerminalId * Size) list =
+        after.TerminalViewports
+        |> Map.toList
+        |> List.filter (fun (terminal, size) ->
+            holds after terminal
+            && (not (holds before terminal) || Map.tryFind terminal before.TerminalViewports <> Some size))
 
     /// Whether a durable actor is this client. The question every ownership rule here asks —
     /// is this terminal mine, is this lease mine — with `me` as its one answer.
@@ -4319,10 +4355,11 @@ module ClientModel =
             | _ -> []
         let swapped = keyboardSwap model next |> Option.map ClientEffect.Move |> Option.toList
         let leased = leaseLanding model next |> Option.map ClientEffect.Move |> Option.toList
+        let resized = ptyResizes model next |> List.map ClientEffect.ResizeTerminal
         // Asked once per keyframe, whichever message first left the preview needing one.
         let next, fetching =
             match missingKeyframe next with
             | Some key when not (Set.contains key next.KeyframesAsked) ->
                 { next with KeyframesAsked = Set.add key next.KeyframesAsked }, [ ClientEffect.FetchKeyframe key ]
             | Some _ | None -> next, []
-        next, effects @ answered @ unnoticed @ swapped @ leased @ fetching @ offering
+        next, effects @ answered @ unnoticed @ swapped @ leased @ resized @ fetching @ offering

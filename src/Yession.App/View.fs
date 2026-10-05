@@ -56,10 +56,7 @@ type ViewActions =
       /// reply would make typing a round trip. The Session checks the lease, which
       /// is the only place it CAN be checked — a client that believes it holds one may be
       /// looking at a steal it has not seen yet.
-      TypeIntoTerminal : TerminalId -> string -> unit
-      /// Report the holder's viewport size, so the pty and the program inside it agree about
-      /// the screen (Plan 14, stage 6).
-      ResizeTerminal : TerminalId -> int -> int -> unit }
+      TypeIntoTerminal : TerminalId -> string -> unit }
 
 module ViewActions =
     /// A no-op action set for rendering the view to a string (SSR + tests). The handlers
@@ -68,8 +65,7 @@ module ViewActions =
         { SendDraft = ignore
           ReportFieldSelection = fun _ _ -> ()
           SendTerminalDraft = fun _ _ -> ()
-          TypeIntoTerminal = fun _ _ -> ()
-          ResizeTerminal = fun _ _ _ -> () }
+          TypeIntoTerminal = fun _ _ -> () }
 
 module View =
 

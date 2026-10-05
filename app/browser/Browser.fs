@@ -1123,8 +1123,6 @@ let private start () =
                     sendFocus focus
               TypeIntoTerminal =
                 fun id data -> connectionRef |> Option.iter (fun c -> c.TypeIntoTerminal id data)
-              ResizeTerminal =
-                fun id cols rows -> connectionRef |> Option.iter (fun c -> c.ResizeTerminal id cols rows)
               SendTerminalDraft =
                 fun terminal author -> connectionRef |> Option.iter (fun c -> c.SendTerminalDraft terminal author) }
 
@@ -1151,8 +1149,7 @@ let private start () =
                     { SendDraft = fun author -> connectionRef |> Option.iter (fun c -> c.SendDraft author)
                       SendTerminalDraft =
                         fun terminal author -> connectionRef |> Option.iter (fun c -> c.SendTerminalDraft terminal author)
-                      ReportFocus = sendFocus
-                      ResizeTerminal = fun id cols rows -> connectionRef |> Option.iter (fun c -> c.ResizeTerminal id cols rows) } }
+                      ReportFocus = sendFocus } }
         let setState (model: ClientModel) (dispatch: Ylmish.Program.Message<ClientMsg> -> unit) =
             dispatchRef <- fun msg -> dispatch (Ylmish.Program.Message.User msg)
             latestModel <- model

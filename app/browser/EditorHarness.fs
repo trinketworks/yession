@@ -1475,14 +1475,12 @@ do
               Root = shellHost
               Actions = actions
               Dispatch = fun msg -> dispatchRef msg
-              // No session behind this page: a draft sent and a caret reported go nowhere. A
-              // resize is the one thing read back, because whether a box that changed reached
-              // the pty at all is a question the E2E asks.
+              // No session behind this page: a draft sent and a caret reported go nowhere. (A
+              // resize is read back, but it is an effect the reducer asks for, below.)
               Links =
                 { SendDraft = ignore
                   SendTerminalDraft = fun _ _ -> ()
-                  ReportFocus = ignore
-                  ResizeTerminal = recordResized } }
+                  ReportFocus = ignore } }
     let mutable model = { shellModel with Column = { shellModel.Column with Wide = PaneShell.onDesktop () } }
     /// What `Published.closed` reads, kept here for `typed`'s reason: the count is this
     /// instrument's output, not the place it keeps it.
@@ -1491,41 +1489,44 @@ do
     /// otherwise. Timed around the whole of `render` — the view, Lit's diff, and the syncs
     /// after it — because that is the task a frame waits on when a record lands mid-scroll.
     let mutable renderTimes : ResizeArray<float> option = None
+    // What the page asked of a session, answered here because there is none — and only the
+    // take, which is what puts a screen in front of a keyboard, and a resize, which is read
+    // back because whether a box that changed reached the pty at all is a question the E2E
+    // asks. The rest go nowhere, as they would in a client whose channel has not opened.
+    let perform (effect: ClientEffect) : unit =
+        match effect with
+        | ClientEffect.TakeTerminal id -> takeRef id
+        | ClientEffect.ResizeTerminal (id, size) -> recordResized id size.Cols size.Rows
+        | ClientEffect.CloseTerminal id ->
+            closed <- Array.append closed [| TerminalId.value id |]
+            PageGlobal.set Published.closed closed
+        | ClientEffect.ReleaseTerminal _
+        | ClientEffect.InterruptTerminal _
+        | ClientEffect.RearmTerminal _
+        | ClientEffect.ReattachTerminal _
+        | ClientEffect.OpenTerminal _
+        | ClientEffect.InterruptTurn _
+        | ClientEffect.ApproveRepoCapabilities _ -> ()
+        // The listing's next page, answered here because this harness has no session to
+        // ask: a page arrives with two more rows and no cursor after it, which is what
+        // the browser tier needs in order to watch REACHING the foot bring rows in
+        // without a press. What the cursor says is the session's business; that it is
+        // carried back unread is what the harness stands in for.
+        | ClientEffect.Launch (LaunchEffect.More cursor) -> moreRef cursor
+        | ClientEffect.Launch _
+        | ClientEffect.Claude _
+        | ClientEffect.GitHub _
+        | ClientEffect.GitHubPoll _ -> ()
+        | ClientEffect.Move move -> PaneShell.move move
+        // No session to ask for a keyframe: the replay plays without one.
+        | ClientEffect.FetchKeyframe _
+        | ClientEffect.Remember _
+        | ClientEffect.Copy _
+        | ClientEffect.RetryNow -> ()
     let rec dispatch (msg: ClientMsg) : unit =
         let next, effects = ClientModel.update msg model
         model <- next
-        // What the page asked of a session, answered here because there is none — and only the
-        // take, which is what puts a screen in front of a keyboard. The rest go nowhere, as they
-        // would in a client whose channel has not opened.
-        effects
-        |> List.iter (function
-            | ClientEffect.TakeTerminal id -> takeRef id
-            | ClientEffect.CloseTerminal id ->
-                closed <- Array.append closed [| TerminalId.value id |]
-                PageGlobal.set Published.closed closed
-            | ClientEffect.ReleaseTerminal _
-            | ClientEffect.InterruptTerminal _
-            | ClientEffect.RearmTerminal _
-            | ClientEffect.ReattachTerminal _
-            | ClientEffect.OpenTerminal _
-            | ClientEffect.InterruptTurn _
-            | ClientEffect.ApproveRepoCapabilities _ -> ()
-            // The listing's next page, answered here because this harness has no session to
-            // ask: a page arrives with two more rows and no cursor after it, which is what
-            // the browser tier needs in order to watch REACHING the foot bring rows in
-            // without a press. What the cursor says is the session's business; that it is
-            // carried back unread is what the harness stands in for.
-            | ClientEffect.Launch (LaunchEffect.More cursor) -> moreRef cursor
-            | ClientEffect.Launch _
-            | ClientEffect.Claude _
-            | ClientEffect.GitHub _
-            | ClientEffect.GitHubPoll _ -> ()
-            | ClientEffect.Move move -> PaneShell.move move
-            // No session to ask for a keyframe: the replay plays without one.
-            | ClientEffect.FetchKeyframe _
-            | ClientEffect.Remember _
-            | ClientEffect.Copy _
-            | ClientEffect.RetryNow -> ())
+        effects |> List.iter perform
         // Read back off the MODEL rather than out of the message: a measurement the reducer
         // refused is not a width anything would claim, and a hook that reported it anyway
         // would say the opposite of what happened.
@@ -1556,9 +1557,11 @@ do
             model <- { model with Terminals = Projection.applyEvent model.Terminals taken }
             render ()
             // The real client folds this as an event arriving, and the reducer turns its edge
-            // into the move that puts the keyboard on the screen; this page folds it by hand,
-            // so it asks the same question of the same two models.
+            // into the move that puts the keyboard on the screen and the resize that fits the
+            // pty to it; this page folds it by hand, so it asks the same questions of the same
+            // two models.
             ClientModel.leaseLanding before model |> Option.iter PaneShell.move
+            ClientModel.ptyResizes before model |> List.iter (ClientEffect.ResizeTerminal >> perform)
     PageGlobal.set Published.snapshot (System.Action<_, _, _, _, _> (fun id seq screen cols rows ->
         match TerminalId.create id with
         | Ok terminal ->
