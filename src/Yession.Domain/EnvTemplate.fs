@@ -29,6 +29,24 @@ module ProxyValue =
     let name (value: ProxyValue) : string =
         all |> List.find (fun (_, v) -> v = value) |> fst
 
+/// What the session says about itself, by name (`${session.version}`). Answered by the session
+/// that starts the sandbox, from what it knows of its own process — never from the sandbox, and
+/// never from a connection, so it needs nothing selected and is never refused.
+[<RequireQualifiedAccess>]
+type SessionValue =
+    /// `${session.version}`: which build of Yession is running this session — what its
+    /// `--version` says, and what its UI's footer shows (`dev`, `test` or `0.0.0-g<rev>` where
+    /// a build cannot know a release number).
+    | Version
+
+module SessionValue =
+
+    /// Each, as a reference writes it after `session.`.
+    let all : (string * SessionValue) list = [ "version", SessionValue.Version ]
+
+    let name (value: SessionValue) : string =
+        all |> List.find (fun (_, v) -> v = value) |> fst
+
 /// One piece of a variable's value that is composed rather than written out.
 [<RequireQualifiedAccess>]
 type TemplatePart =
@@ -42,6 +60,9 @@ type TemplatePart =
     /// once the sandbox is admitted to it — provided into the template (`provide`) before the
     /// sandbox is built, and so never left for a backend to resolve.
     | Proxy of ProxyValue
+    /// `${session.…}`: something the session says about itself — answered into the template
+    /// (`answer`) before the sandbox is built, like a proxy value, so a backend never sees one.
+    | Session of SessionValue
 
 /// A variable's value composed from pieces, rendered by the backend once it knows what lies
 /// beneath — which for a container is only after its image has been pulled or built.
@@ -51,7 +72,7 @@ module EnvTemplate =
 
     /// The namespaces this build knows. Others are refused by name, so a reference a later
     /// build would understand is never read as text this one silently kept.
-    let private namespaces = [ "env.NAME"; "proxy.https"; "proxy.ca-file"; "proxy.ca-dir" ]
+    let private namespaces = [ "env.NAME"; "proxy.https"; "proxy.ca-file"; "proxy.ca-dir"; "session.version" ]
 
     let private isNameChar (c: char) =
         (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c = '_'
@@ -69,7 +90,7 @@ module EnvTemplate =
         let trimmed = text.Trim ()
         if trimmed.StartsWith "${" && trimmed.EndsWith ".token}" && trimmed.IndexOf '}' = trimmed.Length - 1 then
             let connection = trimmed.Substring (2, trimmed.Length - 2 - ".token}".Length)
-            if connection <> "" && connection <> "env" && connection <> "proxy" && not (connection.Contains ".") then Some connection
+            if connection <> "" && connection <> "env" && connection <> "proxy" && connection <> "session" && not (connection.Contains ".") then Some connection
             else None
         else None
 
@@ -100,6 +121,10 @@ module EnvTemplate =
                         match ProxyValue.all |> List.tryFind (fun (name, _) -> name = field) with
                         | Some (_, value) -> go (close + 1) (TemplatePart.Proxy value :: acc)
                         | None -> unknown ()
+                    | [| "session"; field |] ->
+                        match SessionValue.all |> List.tryFind (fun (name, _) -> name = field) with
+                        | Some (_, value) -> go (close + 1) (TemplatePart.Session value :: acc)
+                        | None -> unknown ()
                     // A token composed into a larger value: the one place `lent` did not
                     // already take it, so the one place it is refused.
                     | [| _; "token" |] ->
@@ -127,7 +152,8 @@ module EnvTemplate =
             match part with
             | TemplatePart.Literal text -> escape text
             | TemplatePart.Beneath name -> sprintf "${env.%s}" name
-            | TemplatePart.Proxy value -> sprintf "${proxy.%s}" (ProxyValue.name value))
+            | TemplatePart.Proxy value -> sprintf "${proxy.%s}" (ProxyValue.name value)
+            | TemplatePart.Session value -> sprintf "${session.%s}" (SessionValue.name value))
         |> String.concat ""
 
     /// What `template` asks the credential proxy for.
@@ -152,6 +178,15 @@ module EnvTemplate =
             | part :: rest -> go (part :: acc) rest
         go [] template
 
+    /// `template` with what the session says about itself written in, as text. Total: a
+    /// session always knows its own values, so there is nothing to refuse.
+    let answer (session: SessionValue -> string) (template: EnvTemplate) : EnvTemplate =
+        template
+        |> List.map (fun part ->
+            match part with
+            | TemplatePart.Session value -> TemplatePart.Literal (session value)
+            | other -> other)
+
     /// The value, given what lies beneath this sandbox's declaration. A reference to a
     /// variable nothing beneath sets contributes no text — which is what a shell's `$NAME`
     /// does, and what an author appending to a search path wants of an image that never set
@@ -165,7 +200,9 @@ module EnvTemplate =
             // Never reached with one: a proxy reference is provided into the template before
             // the sandbox is built (`provide`, in `WorkSandboxes`, which refuses the start
             // when it cannot be), so what reaches a backend holds none.
-            | TemplatePart.Proxy _ -> [])
+            | TemplatePart.Proxy _ -> []
+            // Nor with one of these: answered (`answer`, in `WorkSandboxes`) before the build.
+            | TemplatePart.Session _ -> [])
         |> List.concat
         |> String.concat ""
 

@@ -125,7 +125,7 @@ module OperatorProfile =
                 Volume (get.Required.Field "name" Decode.string, get.Required.Field "at" Decode.string)))
 
     /// A variable's value: text, or — where it carries `${` — what only the session can
-    /// supply: `${proxy.https|ca-file|ca-dir}` and `${env.NAME}` composed with text, or a
+    /// supply: `${proxy.https|ca-file|ca-dir}`, `${session.version}` and `${env.NAME}` composed with text, or a
     /// connection's token as the whole value. The same grammar a repo's declaration reads
     /// (`EnvTemplate`), so a reference means one thing wherever it is written. `$${` is a
     /// literal `${`.

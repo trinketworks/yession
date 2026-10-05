@@ -1591,6 +1591,27 @@ let private lentTokenTests =
             }
     ]
 
+let private sessionValueTests =
+    testList "what the session says about itself, asked for by name" [
+
+        // Needs no connection: a sandbox that selects nothing still learns which build it runs
+        // under, and is built with the value rather than the reference.
+        testCaseAsync "a sandbox that names the session's version is built with this build's" <|
+            async {
+                let _, proxy = fakeProxy None
+                let! sandboxes, built = registryProxied proxy []
+                let request = { Spec = { (asking "YESSION_SESSION_VERSION" "${session.version}").Spec with Uses = [] } }
+                match! sandboxes.Ensure starter None (sandbox "octo/hello:dev") request with
+                | Error e -> failwithf "should start: %s" e
+                | Ok _ ->
+                    let _, spec = built |> Seq.find (fun (name, _) -> name = "octo/hello:dev")
+                    match spec.EnvironmentVariables |> Map.tryFind "YESSION_SESSION_VERSION" with
+                    | Some (Derived template) ->
+                        Expect.equal (EnvTemplate.resolve (fun _ -> None) template) Yession.Host.Version.current "the build, written in"
+                    | other -> failwithf "expected the answered value, got %A" other
+            }
+    ]
+
 let private proxyTests =
     testList "the credential proxy, asked for by name" [
 
@@ -1889,6 +1910,7 @@ let private routeTests =
 let tests =
     testList "WorkSandboxes" [
         standingTests
+        sessionValueTests
         proxyTests
         lentTokenTests
         boundTests

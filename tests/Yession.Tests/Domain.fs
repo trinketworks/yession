@@ -2587,6 +2587,19 @@ let private configTests =
                     leaves)
                 "each value as what it is"
 
+        // The operator's way to tell an agent which build it runs under: no connection, and a
+        // `YESSION_` name, which is the operator's to give even though a repo may not.
+        testCase "a resource's env can bind what the session says about itself" <| fun () ->
+            let profile =
+                OperatorProfile.parse
+                    """{ "version": 1,
+                         "resources": { "yession-version": { "env": { "YESSION_SESSION_VERSION": "${session.version}" } } } }"""
+                |> expect
+            let leaves = ResourceProfile.grants profile.Resources [] [ ResourceName.create "yession-version" |> expect ] [] |> expect |> fst
+            Expect.isTrue
+                (List.contains (Variable ("YESSION_SESSION_VERSION", VariableValue.Composed [ TemplatePart.Session SessionValue.Version ])) leaves)
+                "a reference the session answers"
+
         // The token is lent through the proxy, so a resource binding it without the route would
         // be a variable nothing ever fills.
         testCase "a resource lending a token it does not forward by api is refused where the file is read" <| fun () ->

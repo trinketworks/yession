@@ -504,6 +504,21 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                                 if Map.containsKey variable declared then declared else Map.add variable value declared)
                             spec.EnvironmentVariables })
 
+        // What a spec asks of the session itself (`${session.version}`), answered into it from
+        // this process — after the operator's lines are bound, so a resource's reference is
+        // answered exactly as a repo's is. Needs no connection and is never refused.
+        let answerSession (spec: EnvironmentSpec) : EnvironmentSpec =
+            let session (value: SessionValue) =
+                match value with
+                | SessionValue.Version -> Version.current
+            { spec with
+                EnvironmentVariables =
+                    spec.EnvironmentVariables
+                    |> Map.map (fun _ value ->
+                        match value with
+                        | Derived template -> Derived (EnvTemplate.answer session template)
+                        | other -> other) }
+
         let provisionSelection
             (name: SandboxRef)
             (spec: EnvironmentSpec)
@@ -512,7 +527,7 @@ let create (config: WorkSandboxesConfig) : Async<WorkSandboxes> =
                 match! provisionConnections name spec with
                 | Error e -> return Error e
                 | Ok (forwarded, provision, refusedApi) ->
-                    match withBound spec forwarded with
+                    match withBound spec forwarded |> Result.map answerSession with
                     | Error e ->
                         revoke name forwarded
                         return Error e

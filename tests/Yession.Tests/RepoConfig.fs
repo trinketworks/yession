@@ -396,6 +396,34 @@ let tests =
             | Ok _ -> failwith "an unprovided reference should refuse"
             | Error e -> Expect.stringContains e "${proxy.ca-dir}" "naming it"
 
+        // The session says which build it is, so a sandbox (and the agent in it) can know what
+        // it is talking to — and the reference crosses the gate as the file wrote it.
+        testCase "a session reference reads as one and crosses the gate as written" <| fun () ->
+            // Not `YESSION_…`: that prefix is the operator's and Yession's, never a repo's.
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      BUILT_UNDER: ${session.version}\n"
+            match RepoConfig.fromText text with
+            | Error e -> failwithf "the file should decode: %s" e
+            | Ok read ->
+                let decl = read.File.Sandboxes |> Map.find (SandboxName.create "dev" |> expect)
+                Expect.equal
+                    (decl.EnvironmentVariables |> Map.tryFind "BUILT_UNDER")
+                    (Some (Yession.Domain.Sandboxes.Derived [ Yession.Domain.Sandboxes.TemplatePart.Session Yession.Domain.Sandboxes.SessionValue.Version ]))
+                    "a reference, not text"
+                Expect.equal (Yession.Session.ConfigFile.parseSandbox (Yession.Session.ConfigFile.encodeSandbox decl)) (Ok decl) "and it crosses the gate as written"
+
+        testCase "a session reference is answered with what the session says, composed in place" <| fun () ->
+            let template = Yession.Domain.Sandboxes.EnvTemplate.parse "yession/${session.version}" |> expect
+            let answered = Yession.Domain.Sandboxes.EnvTemplate.answer (fun _ -> "1.2.3-beta.4") template
+            Expect.equal (Yession.Domain.Sandboxes.EnvTemplate.resolve (fun _ -> None) answered) "yession/1.2.3-beta.4" "the build, where the file put it"
+
+        testCase "a session field this build does not know refuses the file, naming what it knows" <| fun () ->
+            let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      WHO: ${session.owner}\n"
+            match RepoConfig.fromText text with
+            | Ok _ -> failwith "should refuse"
+            | Error e ->
+                Expect.stringContains e "session.owner" "names what it did not know"
+                Expect.stringContains e "${session.version}" "and what it does"
+
         // What crosses the command gate reads back as the file said it.
         testCase "a composed value crosses the command gate as it was written" <| fun () ->
             let text = "version: 2\nsandboxes:\n  dev:\n    env:\n      PATH: ${env.PATH}:/opt/$${odd}\n"
