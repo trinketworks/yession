@@ -242,6 +242,28 @@ document.addEventListener (
                 openRows true
 )
 
+// A row opens its session in a NEW tab (`target="_blank"`), so the Manager stays where it was —
+// except where there are no tabs. In an installed app a new browsing context is a window with
+// nothing painted in it, and iOS shows it white until the page lands: pressing a stopped row
+// put a white screen in front of the opening one, while Create, which navigates in place, did
+// not. So in an installed app a row is followed in place too, as a pushed entry: Back is the
+// Manager, as it is after Create. A modified click is left alone, as on the filters above.
+document.addEventListener (
+    "click",
+    fun event ->
+        match closestTo event Dom.Manager.openLink with
+        | None -> ()
+        | Some link ->
+            let click = event :?> MouseEvent
+            if mediaMatches Dom.Manager.installedApp
+               && not (click.metaKey || click.ctrlKey || click.shiftKey || click.button <> 0.0) then
+                match attribute link "href" with
+                | Some href ->
+                    event.preventDefault ()
+                    window.location.assign href
+                | None -> ()
+)
+
 // Creating is deliberately NOT intercepted here (the reasoning is on the form itself) — but it
 // is MARKED. Between the push and the new page there is nothing on this one to show for it, so
 // the button stays down (`aria-busy`: held, filled, and saying what it is doing) until the

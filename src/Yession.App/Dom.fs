@@ -1073,6 +1073,10 @@ module Dom =
         /// `/open` route, which launches a stopped session on the way in. There is no launch
         /// hook: opening is launching.
         let openLink = "data-open"
+        /// The media query that is true where the Manager runs as an installed app — added to a
+        /// phone's home screen, its window with no tabs. The Manager page's program reads it to
+        /// open a row in place there (`ManagerPage.fs`); a test stands in for it by name.
+        let installedApp = "(display-mode: standalone)"
         let createSession = "data-create-session"
         /// The row's archive verb, and the archived row's way back. Both carry the session id.
         let archive = "data-archive"

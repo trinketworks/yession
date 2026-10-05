@@ -7703,6 +7703,64 @@ let filterTests =
 
 // --- Pressing Create (browser) ---------------------------------------------------------------
 //
+let private installedDataDir = "tests/browser/.data-installed"
+
+// A row opens its session in a new tab — except in an installed app, which has no tabs: there a
+// new browsing context is a window with nothing painted in it, and on iOS that window was white
+// in front of the opening screen whenever a stopped session was opened from its row. Create,
+// which navigates in place, never was. So in an installed app a row is followed in place.
+//
+// Chromium cannot be MADE an installed app (`display-mode` is not an emulated media feature),
+// so the page is told it is one by answering its own question — the query, by name — and
+// nothing else about `matchMedia` changes. The destination is answered here: the promise is
+// where the browser goes, not what the session does when it gets there.
+let installedAppTests =
+    testList "Opening a session from an installed Manager (browser)" [
+        testCaseAsync "a row is followed in place, not into a new window" <|
+            async {
+                if Directory.Exists installedDataDir then Directory.Delete (installedDataDir, true)
+                let manager =
+                    deployProduct
+                        "the Manager"
+                        [ "--auth"; "localhost"; "--secrets"; "ephemeral"
+                          "--port"; "0"; "--data-dir"; installedDataDir ]
+                        []
+                        (fun line -> line.Contains "management UI at")
+                try
+                    do! withContexts (fun contexts -> async {
+                        let! page = contexts.Page None
+                        page.SetDefaultTimeout 30000.0f
+                        let evidence = watching page
+                        do! reporting "installed app row" page evidence <| async {
+                        do! awaitU (page.AddInitScriptAsync (
+                                sprintf
+                                    """(() => {
+                                         const installed = %s
+                                         const asked = window.matchMedia.bind(window)
+                                         const answer = query => ({
+                                           matches: true, media: query, onchange: null,
+                                           addListener () {}, removeListener () {},
+                                           addEventListener () {}, removeEventListener () {},
+                                           dispatchEvent () { return false } })
+                                         window.matchMedia = query => query === installed ? answer(query) : asked(query)
+                                       })()"""
+                                    (System.Text.Json.JsonSerializer.Serialize Yession.App.Dom.Manager.installedApp)))
+                        do! awaitU (page.RouteAsync ("**/sessions/*/open", fun route ->
+                                route.FulfillAsync (RouteFulfillOptions (Status = 200, ContentType = "text/html", Body = "<title>opening</title>"))
+                                |> ignore))
+                        let! _ = await (page.GotoAsync (manager.At "/"))
+                        let row = sprintf "[%s]" Yession.App.Dom.Manager.openLink
+                        let! _ = await (page.WaitForSelectorAsync row)
+                        do! awaitU (page.Locator(row).First.ClickAsync ())
+                        do! waitFor "this window to have gone to the session" page """location.pathname.endsWith('/open')"""
+                        Expect.equal page.Context.Pages.Count 1 "and no second window was opened"
+                        }
+                    })
+                finally
+                    manager.Stop ()
+            }
+    ]
+
 // Create is a real form and a real POST, and the browser follows the answer into the new
 // session. Between the push and the arrival this page has nothing to show for it, so the
 // button is HELD (`aria-busy`) — and two things have to hold true of a held Create that only a
@@ -7990,6 +8048,7 @@ let mountedTests : Fable.Pyxpecto.Model.TestCase = testList "Path-mounted sessio
 let frontDoorTests : Fable.Pyxpecto.Model.TestCase = testList "Creating a session behind a front door (browser)" []
 let frontedTests : Fable.Pyxpecto.Model.TestCase = testList "A fronted deployment, for real (browser)" []
 let filterTests : Fable.Pyxpecto.Model.TestCase = testList "The management page's filters (browser)" []
+let installedAppTests : Fable.Pyxpecto.Model.TestCase = testList "Opening a session from an installed Manager (browser)" []
 let pressTests : Fable.Pyxpecto.Model.TestCase = testList "Pressing Create (browser)" []
 let openingTests : Fable.Pyxpecto.Model.TestCase = testList "The opening page (browser)" []
 
