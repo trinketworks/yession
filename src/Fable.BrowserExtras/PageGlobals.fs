@@ -41,3 +41,15 @@ module PageGlobal =
 
     /// Publish `value` under this name, replacing whatever was there.
     let set (PageGlobal name: PageGlobal<'T>) (value: 'T) : unit = assign name value
+
+    /// The statement that publishes `value` under this name, as a script's TEXT — for a
+    /// server to put in front of a program it serves, so the program reads with `tryGet` what
+    /// only the server knew. The one way this repository hands a value to a script it did not
+    /// compile per request (the service worker: `Yession.App.Codecs.WorkerConfig`).
+    ///
+    /// Strings only, and that is what keeps it data: the JSON text of a string is exactly a
+    /// JavaScript string literal (ES2019 made the two agree on U+2028 and U+2029), so both the
+    /// name and the value cross as literals `JSON.stringify` spelled, never as source anybody
+    /// wrote. Whatever structure the value has is the reader's to decode.
+    let script (PageGlobal name: PageGlobal<string>) (value: string) : string =
+        "globalThis[" + JS.JSON.stringify name + "] = " + JS.JSON.stringify value + ";\n"

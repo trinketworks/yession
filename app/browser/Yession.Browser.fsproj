@@ -3,7 +3,7 @@
   <!--
     The browser programs: Fable-compiled to app/out/browser, then each entry bundled by
     esbuild into the asset set (app/out/public/assets) — the session client (client.js),
-    and the Manager page's program.
+    the Manager page's program, and the session shell's service worker.
   -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -42,6 +42,10 @@
          here imports it. (The opening screen's program is inline: `ManagerUi.openingProgram`
          says why.) -->
     <Compile Include="ManagerPage.fs" />
+    <!-- The session shell's service worker: an entry of its own, bundled as a classic script
+         (`AssetFile.service-worker`), and the one program here that runs in no page at all.
+         Nothing imports it. -->
+    <Compile Include="ServiceWorker.fs" />
   </ItemGroup>
 
   <ItemGroup>

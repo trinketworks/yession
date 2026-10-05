@@ -26,6 +26,12 @@ type AssetFile =
     /// The Manager page's program — the fragment swaps, the rows stream, focus kept through
     /// both — bundled the same way from its own entry in the browser project.
     | ``manager-page``
+    /// The session shell's service worker, bundled from its own entry in the browser project
+    /// (`Yession.Browser.ServiceWorker`). In the set because the set is what every deployment
+    /// ships. A browser registers it from the session's mount root rather than from here, with
+    /// the build's config in front of it (`Codecs.WorkerConfig`), because a worker controls
+    /// only its own path and below.
+    | ``service-worker``
     /// The shell's stylesheet (Tailwind over `app/tailwind.css`).
     | ``app``
     /// The replay player's stylesheet, its own file because the shell defers it.
@@ -66,6 +72,7 @@ module AssetFile =
         match file with
         | AssetFile.``client`` -> "client.js", javascript
         | AssetFile.``manager-page`` -> "manager-page.js", javascript
+        | AssetFile.``service-worker`` -> "service-worker.js", javascript
         | AssetFile.``app`` -> "app.css", stylesheet
         | AssetFile.``player`` -> "player.css", stylesheet
         | AssetFile.``noto-sans-200`` -> "fonts/noto-sans-latin-200-normal.woff2", woff2
@@ -88,6 +95,7 @@ module AssetFile =
     let all =
         [ AssetFile.``client``
           AssetFile.``manager-page``
+          AssetFile.``service-worker``
           AssetFile.``app``
           AssetFile.``player``
           AssetFile.``noto-sans-200``
