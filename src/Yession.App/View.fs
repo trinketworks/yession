@@ -4692,6 +4692,7 @@ module View =
                           title="{Dom.Text.backToChat}" data-content-toggle="hide"
                           @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.right}</button>
                 </div>"""
+        let split = model.PaneSplit |> Option.defaultValue PaneSplit.unmeasured
         html $"""
             <!-- `inert` while shut: a shut pane is zero pixels wide on a desktop and off the
                  screen on a phone, and every control in it was still a Tab stop — a full cycle
@@ -4704,7 +4705,7 @@ module View =
                    in step (`PaneShell.installPaneResize`). -->
               <div class="{Style.terminalResize}" data-term-resize role="separator" tabindex="0"
                    aria-orientation="vertical" aria-label="Resize the content column"
-                   aria-valuemin="320" aria-valuenow="420" aria-valuemax="1080"></div>
+                   aria-valuemin="{PaneSplit.narrowest}" aria-valuenow="{split.Width}" aria-valuemax="{split.Widest}"></div>
               <!-- A phone's grab edge: the pivot's `›` again, for a thumb at the edge. A
                    duplicate, so out of the tree and the Tab order (`Style.paneGrabEdge`). -->
               <button type="button" class="{Style.paneGrabEdge}" tabindex="-1" aria-hidden="true"

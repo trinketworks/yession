@@ -3271,7 +3271,10 @@ let editorTests =
         editorCaseIn 1440 900 "at the narrowest pane the selected item is shown whole, chosen from either end" <| fun page ->
             async {
                 do! openManyTerminals page
-                do! awaitU (page.EvaluateAsync "() => document.documentElement.style.setProperty('--term-w', '320px')")
+                // Through the separator, as a reader narrows it: the width is the model's, and a
+                // property set by hand lasts only until the next render draws the model's again.
+                do! awaitU (page.FocusAsync "#shell [data-term-resize]")
+                do! awaitU (page.Keyboard.PressAsync "End")
                 do! waitFor "the pane to be 320px wide" page
                         "Math.round(document.querySelector('#shell [data-content-panel]').getBoundingClientRect().width) === 320"
                 let faults = ResizeArray<string> ()

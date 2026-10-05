@@ -214,6 +214,7 @@ let private representativeModel : ClientModel =
       HeardThrough = true
       PaneOpensItself = false
       Column = Column.initial
+      PaneSplit = None
       ItemMenu = None
       PaneMenu = false
       Switcher = false

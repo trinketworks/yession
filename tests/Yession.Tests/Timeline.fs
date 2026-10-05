@@ -2866,6 +2866,25 @@ let private tabTests =
             let jumped = drawer |> Support.step (MoveMsg (DomMove.RevealMessage (message "1")))
             Expect.isFalse (Column.shown jumped.Column) "the message is not left behind a sheet"
 
+        // The split between the chat and the pane is the model's (`PaneSplit`): the browser
+        // measures what the chat can spare, and the reducer holds the width to it.
+        testCase "a split is held between the pane's floor and what the chat can spare" <| fun () ->
+            Expect.equal
+                ([ PaneSplit.within 900.0 2000.0; PaneSplit.within 900.0 100.0; PaneSplit.within 200.0 600.0 ]
+                 |> List.map (fun split -> split.Width))
+                [ 900; PaneSplit.narrowest; PaneSplit.narrowest ]
+                "never wider than the chat allows, never narrower than the floor, the floor winning"
+
+        testCase "a split the reader moved is remembered, and the one seeded at boot is not" <| fun () ->
+            let seeded, atBoot = ClientModel.update (PaneSplitMsg (500.0, 900.0)) (clientOf [])
+            let _, moved = ClientModel.update (PaneNudgedMsg (16.0, 900.0)) seeded
+            Expect.equal (atBoot, moved) ([], [ ClientEffect.Remember (Preference.PaneWidth 516) ]) "only what the reader did"
+
+        testCase "the separator says the split the model holds" <| fun () ->
+            // What assistive technology reads out is the width, not a literal the template shipped.
+            let html = clientOf [] |> Support.step (PaneSplitMsg (612.0, 900.0)) |> Support.render
+            Expect.stringContains html (Dom.attr "aria-valuenow" "612") "the width"
+
         // The nav drawer's arrival on a phone (`ClientModel.columnOn`): one sheet over the
         // chat at a time. It SHUTS, it never opens — the drawer arriving over a pane that was
         // already shut must not bring the pane back — and it moves no focus, because the
