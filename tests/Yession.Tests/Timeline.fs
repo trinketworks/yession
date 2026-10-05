@@ -1575,6 +1575,16 @@ let private videoTests =
                 |> Support.step (TerminalKeyframeMsg (terminalA, { Seq = 3; Cols = 80; Rows = 24; Screen = "S" }))
             Expect.isNone (ClientModel.missingKeyframe fetched) "and not again"
 
+        // Asked by the reducer rather than by a render: a burst of messages while the first
+        // request is out, or a keyframe that never answers, must not become a request apiece.
+        testCase "the keyframe a preview needs is asked for once" <| fun () ->
+            let asked msg model =
+                let next, effects = ClientModel.update msg model
+                next, effects |> List.filter (function ClientEffect.FetchKeyframe _ -> true | _ -> false)
+            let opened, first = asked (chip terminalA "2") (withRecords (clientOf recordedTerminal))
+            let _, second = asked (MoveMsg DomMove.FocusPane) opened
+            Expect.equal (first, second) ([ ClientEffect.FetchKeyframe (terminalA, 3) ], []) "once, at the range's first line"
+
         testCase "a whole recording needs no keyframe" <| fun () ->
             // It starts at the start; its header is its keyframe.
             let model = withRecords (clientOf recordedTerminal) |> Support.step (ShowInPaneMsg (Watching terminalA))
@@ -1675,6 +1685,18 @@ let private readsTests =
 
 let private dvrTests =
     testList "Rewinding a live terminal (Plan 14, stage 7)" [
+        // The player the reader was in plays off its end and leaves the document under them:
+        // the pane goes back to the terminal, and the keyboard to the toggle that replaced it.
+        testCase "a replay that catches up hands the pane back to the terminal, and the keyboard to its toggle" <| fun () ->
+            let rewound =
+                withRecords (clientOf [ at 1L 0.0 (opened terminalA "shell") ])
+                |> Support.step (RewindTerminalMsg terminalA)
+            let next, effects = ClientModel.update (ReplayCaughtUpMsg terminalA) rewound
+            Expect.equal
+                (ClientModel.isRewound terminalA next, effects)
+                (false, [ ClientEffect.Move DomMove.FocusWatchToggle ])
+                "reading the terminal, focus on its toggle"
+
         testCase "rewinding plays what has been recorded SO FAR, and pins that length" <| fun () ->
             // A recording that grew under a reader would move the scrub bar out from under
             // them, which is the one thing rewinding exists to avoid. The terminal keeps
@@ -2764,7 +2786,8 @@ let private tabTests =
         testCase "a chip that opens a preview takes the reader to the pane" <| fun () ->
             // One message for both halves, so no chip can open a pane and leave focus behind it.
             let _, effects = ClientModel.update (chip terminalA "1") (clientOf oneBlock)
-            Expect.equal effects [ ClientEffect.Move DomMove.FocusPane ] "focus is asked to follow it"
+            let moves = effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
+            Expect.equal moves [ ClientEffect.Move DomMove.FocusPane ] "focus is asked to follow it"
 
         // Where focus lands after each act in the pane (the focus contract). Every one of these
         // takes away the control that was pressed, or puts a new surface in front of the
@@ -2968,8 +2991,10 @@ let private tabTests =
                     reading
             Expect.equal effects [ ClientEffect.Move (DomMove.IfDropped (DomMove.FocusCommandLine terminalA)) ] "no stranding"
 
-        testCase "a lease of mine arriving is not this move's: the live screen takes it" <| fun () ->
-            // `Screens.Sync` focuses the live screen once there is a screen to focus.
+        // Taking the keyboard is the whole of what live mode is, and the press that took it is
+        // gone from the render the lease arrives on — so the keyboard follows the lease, as one
+        // edge for every route in (a `take` pressed here, the alt-screen flip from the Session).
+        testCase "a lease of mine arriving lands the keyboard on the live screen" <| fun () ->
             let reading =
                 heardOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
             let _, effects =
@@ -2979,7 +3004,21 @@ let private tabTests =
                           LastOffset = Some (EventOffset.create 2L |> expect)
                           IsEnd = true })
                     reading
-            Expect.equal effects [] "nothing from the fold"
+            Expect.equal effects [ ClientEffect.Move (DomMove.FocusTerminalScreen terminalA) ] "onto the screen it now types into"
+
+        testCase "a lease of mine on a terminal the pane is not showing moves nothing" <| fun () ->
+            // No screen of it in the document to focus, and a reader somewhere else entirely.
+            let reading =
+                heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 0.5 (opened terminalB "docs") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg
+                        { Events = [ at 3L 1.0 (took terminalB (PeerRef ada) 0) ]
+                          LastOffset = Some (EventOffset.create 3L |> expect)
+                          IsEnd = true })
+                    reading
+            Expect.equal effects [] "the hand stays where it is"
 
         testCase "a terminal changing under a preview moves nothing" <| fun () ->
             // The preview covers it; nothing under the hand went.

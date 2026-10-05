@@ -197,6 +197,7 @@ let private representativeModel : ClientModel =
                 ReadThrough = 2
                 Header = Some { Width = 80; Height = 24; Timestamp = 0L } } ]
       TerminalKeyframes = Map.empty
+      KeyframesAsked = Set.empty
       TerminalScreens = Map.empty
       TerminalViewports = Map.empty
       // The terminal this client opened, as the events fold leaves it: the strip is `Tabs`

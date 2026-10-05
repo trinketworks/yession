@@ -45,9 +45,7 @@ let create (dispatch: ClientMsg -> unit) : Syncer =
         | Some replay ->
             let caughtUp =
                 replay.BehindLive
-                |> Option.map (fun terminal () ->
-                    dispatch (ShowInPaneMsg (Reading terminal))
-                    PaneShell.toWatchToggle ())
+                |> Option.map (fun terminal () -> dispatch (ReplayCaughtUpMsg terminal))
             players.[key] <- (Replay.mount el replay caughtUp, replay.Cast)
 
     { Sync =

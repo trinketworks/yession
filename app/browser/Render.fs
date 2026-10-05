@@ -406,9 +406,7 @@ type Links =
       /// A caret moved in a body or a command line (already paced by `focusReporter`).
       ReportFocus : Focus option -> unit
       /// The screen this peer is typing into changed size.
-      ResizeTerminal : TerminalId -> int -> int -> unit
-      /// A keyframe an open tab needs, by address.
-      Http : Client.HttpGet }
+      ResizeTerminal : TerminalId -> int -> int -> unit }
 
 /// Everything the render is composed of.
 type Deps =
@@ -576,32 +574,6 @@ let create (deps: Deps) : Renderer =
         for el in terminalTexts () do
             let key = el.getAttribute "data-terminal-text"
             if not (isNull (box key)) && key <> "" then setTextContent el (TerminalText.read texts key)
-
-    /// Fetch the keyframe the preview on screen needs, once (Plan 14, stage 4). A keyframe
-    /// is immutable at a position that never moves, so the browser cache serves the
-    /// second read — this set only stops a burst of identical in-flight requests while
-    /// the first one is still out.
-    let keyframesAsked = System.Collections.Generic.HashSet<string> ()
-
-    let syncKeyframes (model: ClientModel) =
-        match ClientModel.missingKeyframe model with
-        | None -> ()
-        | Some (terminal, seq) ->
-            let key = sprintf "%s@%d" (TerminalId.value terminal) seq
-            if keyframesAsked.Add key then
-                Async.StartImmediate (
-                    async {
-                        let url = Page.href (TerminalKeyframe (TerminalId.value terminal, seq))
-                        match! deps.Links.Http url with
-                        // A keyframe that does not answer is not a failure: the range
-                        // still rebases and still plays, as the naive slice. Asking
-                        // again on every render would be a spin with nothing to gain.
-                        | Error _ -> ()
-                        | Ok answer ->
-                            match Codec.fromString Transcripts.keyframe answer.Body with
-                            | Ok keyframe -> dispatch (TerminalKeyframeMsg (terminal, keyframe))
-                            | Error _ -> ()
-                    })
 
     let replays = PaneReplays.create dispatch
 
@@ -802,7 +774,6 @@ let create (deps: Deps) : Renderer =
         // measured against the just-rendered input.
         syncRichBodies ()
         syncTerminalInputs ()
-        syncKeyframes model
         replays.Sync model
         // The live screens, and the size the holder's viewport actually is. AFTER the
         // render: the fold feeds an emulator whose serialization the next render draws,

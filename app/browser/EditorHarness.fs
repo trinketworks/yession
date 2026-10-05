@@ -1484,15 +1484,14 @@ do
               Root = shellHost
               Actions = actions
               Dispatch = fun msg -> dispatchRef msg
-              // No session behind this page: a draft sent, a caret reported, a keyframe
-              // asked for go nowhere. A resize is the one thing read back, because whether
-              // a box that changed reached the pty at all is a question the E2E asks.
+              // No session behind this page: a draft sent and a caret reported go nowhere. A
+              // resize is the one thing read back, because whether a box that changed reached
+              // the pty at all is a question the E2E asks.
               Links =
                 { SendDraft = ignore
                   SendTerminalDraft = fun _ _ -> ()
                   ReportFocus = ignore
-                  ResizeTerminal = recordResized
-                  Http = fun _ -> async { return Error (Client.HttpUnreachable "the harness serves no session") } } }
+                  ResizeTerminal = recordResized } }
     let mutable model = shellModel
     /// What `Published.closed` reads, kept here for `typed`'s reason: the count is this
     /// instrument's output, not the place it keeps it.
@@ -1531,6 +1530,8 @@ do
             | ClientEffect.GitHub _
             | ClientEffect.GitHubPoll _ -> ()
             | ClientEffect.Move move -> PaneShell.move move
+            // No session to ask for a keyframe: the replay plays without one.
+            | ClientEffect.FetchKeyframe _
             | ClientEffect.Copy _
             | ClientEffect.RetryNow -> ())
         // Read back off the MODEL rather than out of the message: a measurement the reducer
@@ -1558,8 +1559,13 @@ do
             let taken =
                 SessionEvent.TerminalLeaseTaken
                     { TerminalId = id; By = ActorRef.PeerRef model.Peer.PeerId; FromSeq = 0 }
+            let before = model
             model <- { model with Terminals = Projection.applyEvent model.Terminals taken }
             render ()
+            // The real client folds this as an event arriving, and the reducer turns its edge
+            // into the move that puts the keyboard on the screen; this page folds it by hand,
+            // so it asks the same question of the same two models.
+            ClientModel.leaseLanding before model |> Option.iter PaneShell.move
     PageGlobal.set Published.snapshot (System.Action<_, _, _, _, _> (fun id seq screen cols rows ->
         match TerminalId.create id with
         | Ok terminal ->

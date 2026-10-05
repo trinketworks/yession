@@ -1152,8 +1152,7 @@ let private start () =
                       SendTerminalDraft =
                         fun terminal author -> connectionRef |> Option.iter (fun c -> c.SendTerminalDraft terminal author)
                       ReportFocus = sendFocus
-                      ResizeTerminal = fun id cols rows -> connectionRef |> Option.iter (fun c -> c.ResizeTerminal id cols rows)
-                      Http = httpGet } }
+                      ResizeTerminal = fun id cols rows -> connectionRef |> Option.iter (fun c -> c.ResizeTerminal id cols rows) } }
         let setState (model: ClientModel) (dispatch: Ylmish.Program.Message<ClientMsg> -> unit) =
             dispatchRef <- fun msg -> dispatch (Ylmish.Program.Message.User msg)
             latestModel <- model
@@ -1183,7 +1182,17 @@ let private start () =
               Client.Ports.Clipboard = writeClipboard
               // Cut short whatever wait the lifecycle is in. On a refused peer that wait is
               // indefinite by design, so this is its only way back short of a reload.
-              Client.Ports.Retry = fun () -> pokeRetry () }
+              Client.Ports.Retry = fun () -> pokeRetry ()
+              // Immutable at a position that never moves, so the browser cache serves a second
+              // read. A keyframe that does not answer, or does not read, is not a failure: the
+              // range still rebases and plays, as the naive slice.
+              Client.Ports.Keyframe =
+                fun terminal seq ->
+                    async {
+                        match! httpGet (Page.href (TerminalKeyframe (TerminalId.value terminal, seq))) with
+                        | Error _ -> return None
+                        | Ok answer -> return Codec.fromString Transcripts.keyframe answer.Body |> Result.toOption
+                    } }
             doc
             initial
         |> Client.withTimers Timer.system
