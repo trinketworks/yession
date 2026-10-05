@@ -2879,6 +2879,10 @@ type private StubGitHubApi =
       /// The rate-limit headers every reply carries: remaining, reset (epoch seconds) and
       /// the bucket they describe. `None` serves a reply with none at all.
       SetAllowance : (int * int64 * string) option -> unit
+      /// The same headers as a function of the request's `authorization` — GitHub meters
+      /// each credential, and no credential, separately, so a case about more than one
+      /// budget answers each its own.
+      SetAllowanceBy : (string option -> (int * int64 * string) option) -> unit
       Requests : ResizeArray<string * string option>
       /// Every POST it was sent, as (path, body) — what a case reads to see what GitHub was
       /// actually asked to open.
@@ -2898,11 +2902,11 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
             """{"data":{"repository":{"pullRequest":{"id":"PR_1","isDraft":false,"state":"OPEN","merged":false,"mergeStateStatus":"BLOCKED","isMergeQueueEnabled":false,"autoMergeRequest":null,"mergeQueueEntry":null}}}}"""
         let mutable mutationStatus = 200
         let mutable mutationBody = """{"data":{"clientMutationId":null}}"""
-        let mutable allowance : (int * int64 * string) option = None
+        let mutable allowanceFor : string option -> (int * int64 * string) option = fun _ -> None
         let requests = ResizeArray<string * string option> ()
         let posted = ResizeArray<string * string> ()
-        let withAllowance (pairs: (string * string) list) =
-            match allowance with
+        let withAllowance (authorization: string option) (pairs: (string * string) list) =
+            match allowanceFor authorization with
             | None -> pairs
             | Some (remaining, resets, resource) ->
                 pairs
@@ -2911,7 +2915,9 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
                     "x-ratelimit-resource", resource ]
         let handler (req: IncomingMessage) (res: ServerResponse) =
             let path = req.url.Split('?').[0]
-            requests.Add (path, Interop.headerOf req "authorization")
+            let authorization = Interop.headerOf req "authorization"
+            requests.Add (path, authorization)
+            let withAllowance = withAllowance authorization
             let refuse () =
                 res.writeNamedHead (status, withAllowance [ "content-type", "application/json" ])
                 res.``end`` """{"message":"nope"}"""
@@ -2957,7 +2963,8 @@ let private startStubGitHubApi () : Async<StubGitHubApi> =
               SetCreateReply = (fun code body -> createStatus <- code; createBody <- body)
               SetStanding = (fun body -> standing <- body)
               SetMutationReply = (fun code body -> mutationStatus <- code; mutationBody <- body)
-              SetAllowance = (fun a -> allowance <- a)
+              SetAllowance = (fun a -> allowanceFor <- fun _ -> a)
+              SetAllowanceBy = (fun f -> allowanceFor <- f)
               Requests = requests
               Posted = posted }
     }
@@ -3056,6 +3063,62 @@ let private prBudgetTests =
                 | PrWatches.PrFetchFailed (PrWatches.PrHeld until) ->
                     Expect.equal until (resets.ToUnixTimeSeconds ()) "while no credential is still held by its own"
                 | other -> failwithf "expected the anonymous look to be held, got %A" other
+            }
+    ]
+
+/// A session's pull request watching, put together from the pieces the session composes —
+/// `GitHubConnection.tokenOver` for whose credential a look spends, `GitHubPrs.fetchOver`
+/// over a ledger per credential, `PrWatches.create` — against a stub GitHub. Nothing is
+/// patched: what the session has heard of its connections is `heard`, which a case moves
+/// the way the Manager's frames would, and the clock is `now`, which it moves by hand.
+///
+/// `alice` has a GitHub connection the Manager will resolve to `token-alice`; nothing else
+/// resolves, and there is no ambient `GITHUB_TOKEN`.
+let private watchingAs
+    (stub: StubGitHubApi)
+    (heard: unit -> Map<SecretId, ConnectionStatus>)
+    (now: unit -> DateTimeOffset)
+    (readability: RecordedReadability)
+    : PrWatches.PrWatchers =
+    let alicesGitHub = { SecretId.Scope = UserScope alice; SecretId.Name = GitHubConnection.secretName }
+    let resolve (target: SecretId) =
+        async { return if target = alicesGitHub then Ok (OAuthConnection, "token-alice") else Error "not connected" }
+    let token = GitHubConnection.tokenOver sessionA heard (Some resolve) (fun () -> None) ignore
+    let fetch =
+        GitHubPrs.fetchOver stub.Url (GitHubPrs.Spending.over (Resilience.Ledgers.create ()) now Resilience.Background)
+    PrWatches.create
+        GitHubPrs.provider
+        now
+        fetch
+        token
+        (fun _ -> async { return () })
+        (fun _ _ _ _ -> async { return () })
+        (fun _ pr unreadable -> async { readability.Add (pr, unreadable) })
+
+/// What the session hears once alice's GitHub connection is in its frame.
+let private aliceConnected (at: DateTimeOffset) : Map<SecretId, ConnectionStatus> =
+    let id = { SecretId.Scope = UserScope alice; SecretId.Name = GitHubConnection.secretName }
+    Map.ofList [ id, { Id = id; Kind = OAuthConnection; Health = ConnectionUsable; UpdatedAt = at } ]
+
+/// A watch of alice's on a pull request in `prRepo`, last known open with checks running.
+let private alicesWatch (number: int) (since: DateTimeOffset) : PrWatch =
+    { Pr = PrRef.create prRepo number |> expect
+      Watcher = Principal.User alice
+      Known = { State = PrOpen; Checks = ChecksPending; WayIn = PrWayIn.Idle; Mergeable = None; Draft = false }
+      Since = since }
+
+let private prCredentialTests =
+    testList "whose credential a look spends" [
+        testCaseAsync "a watch is looked at on its watcher's connected credential" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                let now = DateTimeOffset (2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
+                let poller = watchingAs stub (fun () -> aliceConnected now) (fun () -> now) (RecordedReadability ())
+                poller.Apply [ alicesWatch 12 now ]
+                let! _ = poller.Poll ()
+                Expect.isNonEmpty stub.Requests "it looked"
+                for path, authorization in stub.Requests do
+                    Expect.equal authorization (Some "Bearer token-alice") (sprintf "%s asked as alice" path)
             }
     ]
 
@@ -4773,6 +4836,7 @@ let tests =
         Tag.needs "GitHub sign-in routes" [ Tag.Ports ] (fun () -> githubRouteTests)
         Tag.needs "Pull request endpoints" [ Tag.Ports ] (fun () -> prFetchTests)
         Tag.needs "What a look spends" [ Tag.Ports ] (fun () -> prBudgetTests)
+        Tag.needs "Whose credential a look spends" [ Tag.Ports ] (fun () -> prCredentialTests)
         Tag.needs "Opening a pull request" [ Tag.Ports ] (fun () -> prCreateTests)
         Tag.needs "Merging a pull request" [ Tag.Ports ] (fun () -> prMergeTests)
         Tag.needs "Taking a pull request back" [ Tag.Ports ] (fun () -> prUnmergeTests)
