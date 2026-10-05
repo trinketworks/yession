@@ -2806,9 +2806,13 @@ module Style =
     /// rather than sideways past it — a bigger move than asked for, and the one place this
     /// row already read correctly (the picker stands flush to ITS row's own leading edge,
     /// `draftCommitBase`'s `max-md:justify-end` pushing Send to the opposite one below it).
-    /// `md:pl-4` matches `draftInput`'s own left gutter, now that this is the row's first
-    /// thing on screen instead of a shrink-0 item that inherited its position for free.
-    let draftLead = "shrink-0 flex items-center md:order-first md:pl-4"
+    /// `pl-4` matches `draftInput`'s own left gutter, on EVERY width, not just `md:` — on a
+    /// phone `draftBox`'s `max-md:items-stretch` stretches this row to the full width same as
+    /// `draftInput` above it, and nothing else gives it a left inset: unlike `draftCommitBase`,
+    /// whose gutter comes free from its buttons' own `px-3`, this row is the model control
+    /// alone, so the row itself has to carry it. Without it the picker sits flush against the
+    /// viewport edge, outside the gutter every other line in the composer keeps.
+    let draftLead = "shrink-0 flex items-center pl-4 md:order-first"
 
     let draftAuthor = "pl-4 pt-2 " + caps + " text-ink-faint truncate"
 
