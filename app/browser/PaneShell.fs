@@ -280,124 +280,49 @@ let private rootClasses () = document.documentElement.classList
 /// whenever a scrollbar, a zoom or a rounded viewport gets between them.
 let onDesktop () : bool = mediaMatches Yession.App.Style.wideMedia
 
-/// Move focus onto the settings face's counterpart control, TWO frames on.
+/// Move focus onto the settings face's counterpart control, TWO frames on: `move` waits the
+/// first, as for every placing move, and this the second.
 ///
 /// Two, because the face that is arriving is `visibility: hidden` until the transition it just
 /// started reaches its first style flush, and `focus()` on a hidden element is a no-op — which
 /// was measured: one frame left focus on `<body>`.
 let private focusSettingsFace (selector: string) : unit =
-    nextFrame (fun () -> nextFrame (fun () -> focusFirst selector))
+    nextFrame (fun () -> focusFirst selector)
 
-// The sidebar/drawer state is one bit on the root element, outside `#app`, so it survives
-// every re-render: default = sidebar visible on desktop, off-canvas on mobile; `nav-alt`
-// = the inverse (see Style.sidebar).
-//
-// Collapsing is a PREFERENCE on desktop, so it is remembered; on mobile the same bit means
-// "the drawer is open", which is not a preference and is never stored. The stored value is
-// re-applied before first paint by the shell document's one inline script (`Ssr.page`) — here,
-// only written.
-//
-// Bringing the column ON SCREEN, which every way in shares: `nav-alt` means the opposite thing
-// on each side of the breakpoint — uncollapsed on desktop, drawer-open on a phone.
-//
-// And on a phone the drawer is one of TWO sheets over the chat. The content pane is the other,
-// at the same layer and later in the document, so a drawer opened while the pane was up opened
-// UNDERNEATH it: open, holding focus, and nowhere to be seen. Raising the drawer over the pane
-// would have worked too, and left two sheets stacked over the chat with two ways back that go
-// to different places; closing the pane first means there is only ever one, and the drawer's
-// own way back lands on the chat — which is where the pane's goes as well. The pane is the
-// model's (`HideContentMsg`), the breakpoint is the shell's, so the shell is where the two meet.
-//
-// One verb for every way the column arrives — the nav toggle, settings, a call to action that
-// reveals settings — so the next way in cannot open the drawer and forget the pane.
-let private bringColumnOn (hidePane: unit -> unit) : unit =
+/// The sidebar column (`Yession.App.Column`), as classes on the root element: outside `#app`,
+/// so a Lit re-render never fights the column's transition — the same mechanism as `setOpen`
+/// below, and like it a `set` from the model rather than a toggle. `nav-alt` means the opposite
+/// thing on each side of the breakpoint (`Column.navAlt` says which); `settings-open` chooses
+/// the face. The served shell's one inline script applies a remembered desktop collapse before
+/// first paint, and the model is seeded with the same answer, so the first call here changes
+/// nothing.
+let setColumn (column: Yession.App.Column) : unit =
     let classes = rootClasses ()
-    if onDesktop () then classes.remove "nav-alt"
-    else
-        hidePane ()
-        classes.add "nav-alt"
+    if Yession.App.Column.navAlt column then classes.add "nav-alt" else classes.remove "nav-alt"
+    if column.Face = Yession.App.ColumnFace.Settings then classes.add "settings-open"
+    else classes.remove "settings-open"
 
-// Focus is moved deliberately: the control that was pressed is the one about to disappear, so
-// it hands focus to whichever control replaces it (the header's reopen chevron, or the nav
-// head's collapse button). Skipping that strands focus on a hidden element.
-let toggleNav (hidePane: unit -> unit) () : unit =
-    let classes = rootClasses ()
-    let desktop = onDesktop ()
-    // Whether the column is SHOWN once this press lands. The bit is read against the
-    // breakpoint, because `nav-alt` means the opposite thing on each side of it.
-    let shown = not (desktop <> classes.contains "nav-alt")
-    if shown then bringColumnOn hidePane
-    elif desktop then classes.add "nav-alt"
-    else classes.remove "nav-alt"
-    // The nav control always returns the column to its workspace face — a column that
-    // reopened on settings would be a surprise, and `settings-open` is what chooses the face.
-    classes.remove "settings-open"
-    if desktop then
-        // Storage is denied in a private window, and a collapse that cannot be remembered is
-        // still a collapse that works.
-        try
-            Browser.WebStorage.localStorage.setItem ("yession.nav", (if shown then "open" else "collapsed"))
-        with _ ->
-            ()
-    nextFrame (fun () ->
-        focusFirst (if shown then "button[data-nav-toggle=\"hide\"]" else "[data-nav-toggle=\"show\"]"))
+/// Whether the stylesheet's breakpoint matches, now and each time that changes.
+let watchBreakpoint (changed: bool -> unit) : unit =
+    (mediaQuery Yession.App.Style.wideMedia).addEventListener ("change", fun change -> changed change.matches)
 
-// Settings is the sidebar column's other FACE (Style.settingsPane), not a drawer over the
-// conversation — so opening it has to bring that column on screen (`bringColumnOn`). Focus
-// follows the same rule as the nav toggle.
-let toggleSettings (hidePane: unit -> unit) () : unit =
-    let classes = rootClasses ()
-    let opening = not (classes.contains "settings-open")
-    if opening then classes.add "settings-open" else classes.remove "settings-open"
-    if opening then bringColumnOn hidePane
-    elif not (onDesktop ()) then
-        // Closing the face on a phone closes the drawer with it. On a desktop the column
-        // stays exactly where it was: what changed is which face it shows, not whether it
-        // is there.
-        classes.remove "nav-alt"
-    focusSettingsFace (if opening then "[data-settings-toggle=\"close\"]" else "[data-settings-toggle=\"open\"]")
+/// The nav toggle pressed is the one about to disappear: focus goes to whichever control
+/// replaces it — the column's collapse when it is on screen, the header's reopen when not.
+let private toNavToggle (shown: bool) : unit =
+    focusFirst (if shown then "button[data-nav-toggle=\"hide\"]" else "[data-nav-toggle=\"show\"]")
 
-// The same move, in one direction only.
-//
-// A call to action that leads to settings must never TAKE somebody there and back: the
-// prompt over the timeline is on screen whenever a credential needs signing in, including
-// while the settings face is already open, and a toggle there would shut the very panel it
-// is pointing at. The nav pivots stay toggles because a pivot is a two-way control and this
-// is not one.
-//
-// Idempotent by construction rather than by the caller checking first — `settings-open` is
-// SET, not flipped, so pressing it twice is pressing it once.
-let revealSettings (hidePane: unit -> unit) () : unit =
-    let classes = rootClasses ()
-    let wasOpen = classes.contains "settings-open"
-    classes.add "settings-open"
-    bringColumnOn hidePane
-    // Focus moves only when the face actually ARRIVED. Stealing it from whatever the reader
-    // was doing, to a control that was already on screen, would be the prompt reaching into a
-    // panel they are already reading.
-    if not wasOpen then focusSettingsFace "[data-settings-toggle=\"close\"]"
-
-/// On a phone the sidebar is a DRAWER over the conversation, so a jump made from inside it
-/// lands behind it: the message is scrolled, flashed and focused under a sheet the reader is
-/// still looking at. On a desktop the column is beside the conversation and nothing has to
-/// move, which is what the query answers.
-///
-/// `nav-alt` is the same bit `toggleNav` writes, and on a phone it means the drawer is open.
-let private closeNavDrawer () : unit =
-    if not (onDesktop ()) then
-        document.documentElement.classList.remove [| "nav-alt" |]
+/// The same rule for the settings face's pivots.
+let private toSettingsToggle (opened: bool) : unit =
+    focusSettingsFace (if opened then "[data-settings-toggle=\"close\"]" else "[data-settings-toggle=\"open\"]")
 
 /// Scroll the conversation to one message and flash it — deliberately the same two moves
 /// `revealBlock` makes: scroll it into view, then replay the reveal animation so the eye can
 /// find which line moved. A jump that only scrolled would leave a reader looking at a screen
 /// of text with no idea which of it they asked for.
 ///
-/// Getting the drawer out of the way is part of taking somebody to a message, so it happens
-/// HERE rather than at the one caller that can be inside one. It is a no-op from the timeline,
-/// where no drawer is open, and the next surface that jumps from behind one does not have to
-/// remember the rule.
+/// Getting the drawer out of the way is part of taking somebody to a message, and the model
+/// does it, in the same message that asks for this move (`MoveMsg (RevealMessage _)`).
 let revealMessage (messageId: string) : unit =
-    closeNavDrawer ()
     nextFrame (fun () ->
         find (sprintf "[data-conversation] [data-message-id=\"%s\"]" messageId)
         |> Option.iter (fun item ->
@@ -512,6 +437,8 @@ and private place (asked: Yession.App.DomMove) : unit =
     | Yession.App.DomMove.JumpToLatest _ -> move asked
     | Yession.App.DomMove.FocusTerminalScreen terminal -> toTerminalScreen terminal
     | Yession.App.DomMove.FocusWatchToggle -> toWatchToggle ()
+    | Yession.App.DomMove.FocusNavToggle shown -> toNavToggle shown
+    | Yession.App.DomMove.FocusSettingsToggle opened -> toSettingsToggle opened
 
 /// The pane's open state, as a class on the shell root — the same mechanism the sidebar uses,
 /// so a Lit re-render never fights the CSS transition. A `set` rather than a toggle, because

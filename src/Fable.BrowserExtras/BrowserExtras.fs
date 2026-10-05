@@ -195,6 +195,18 @@ module Media =
     [<Emit("window.matchMedia($0).matches")>]
     let mediaMatches (query: string) : bool = jsNative
 
+    /// What a media query's `change` event carries: whether it matches now.
+    type MediaChange =
+        abstract matches : bool
+
+    /// A media query, kept so its changes can be heard rather than polled.
+    type MediaQueryList =
+        abstract matches : bool
+        abstract addEventListener : eventType: string * listener: (MediaChange -> unit) -> unit
+
+    [<Emit("window.matchMedia($0)")>]
+    let mediaQuery (query: string) : MediaQueryList = jsNative
+
 /// The one write this repository makes to the system clipboard.
 ///
 /// `Fable.Browser.Dom`'s `Navigator` stops at the navigator's older surface, and the async

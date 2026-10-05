@@ -4651,17 +4651,18 @@ let editorTests =
         // markup says whether a drawer is over the words — the message scrolls, flashes and
         // takes the cursor either way.
         //
-        // The drawer is opened by the class the shell itself uses for it: what is under test
-        // is the jump, not the chevron. The case reads
-        // the cover BEFORE the tap as well as after, so an arrangement that stopped covering
-        // anything would fail here rather than pass by vacuity.
+        // The drawer is opened by its chevron, because the drawer is the model's: a class set
+        // by hand is one the model never heard of, and closing it would then be nothing the
+        // jump had done. The case reads the cover BEFORE the tap as well as after, so an
+        // arrangement that stopped covering anything would fail here rather than pass by
+        // vacuity.
         editorCaseIn 390 844 "a chapter reached from the phone's contents is not left behind the drawer" <| fun page ->
             async {
+                do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapters] [data-chapter-entry]")
                 let! covered =
                     await (page.EvaluateAsync<bool>
                             """() => {
-                                 document.documentElement.classList.add('nav-alt')
                                  const item = document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']")
                                  const box = item.getBoundingClientRect()
                                  const at = document.elementFromPoint(box.left + box.width / 2, box.top + 4)
@@ -6347,13 +6348,11 @@ let editorTests =
                 // Settings' own fields (the Claude/GitHub panels, the model picker moved out
                 // in Plan "dock send/model/interrupt", but a token input is still exactly
                 // this case) live behind settings, and settings lives behind the sidebar —
-                // both off-canvas on a phone until `nav-alt`/`settings-open` land on <html>
-                // (Style.fs: "Two presentation bits live on the root <html> element, outside
-                // `#app`... toggled by `[data-nav-toggle]`"/`[data-settings-toggle]`").
-                // Setting them directly is asking the same question `PaneShell`'s handlers
-                // answer by setting them: whether the settings face, once ON screen, holds a
-                // field under 16px.
-                do! awaitU (page.EvaluateAsync "() => document.documentElement.classList.add('nav-alt', 'settings-open')")
+                // both off-canvas on a phone until the column is brought on and turned to its
+                // settings face. Through the controls a person uses, because the column is the
+                // model's and a class set by hand would last only until the next render.
+                do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-settings-toggle='open']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-claude-panel]")
 
                 let! undersized =
@@ -6475,7 +6474,7 @@ let editorTests =
         // Opening the nav on a phone shows the nav. The drawer and the pane are both sheets
         // over the chat there, at one layer, and the pane is later in the document — so the
         // drawer opened while the pane was up opened UNDER it: open, holding focus, and not on
-        // the screen. Opening the drawer closes the pane first (`PaneShell.bringColumnOn`).
+        // the screen. Opening the drawer closes the pane first (`ClientModel.columnOn`).
         //
         // Pressed from the keyboard, because that is how it is reached with the pane up: the
         // pane covers the header on a phone, and the header's chevron is still a Tab stop. What

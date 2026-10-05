@@ -182,7 +182,7 @@ let connectClientWith (options: Client.ConnectOptions) (signalUrl: string) (toke
         // Made after the program, as the browser makes it, so the program reads it through a
         // getter: what a message asks of the session goes to whichever connection there is.
         let wired : Client.Connection option ref = ref None
-        let runner = Harness.run (Client.makeProgram { Client.Ports.Connection = (fun () -> wired.Value); Client.Ports.Launch = None; Client.Ports.Panels = None; Client.Ports.Moves = ignore; Client.Ports.Clipboard = (fun _ -> async.Return false); Client.Ports.Retry = ignore; Client.Ports.Keyframe = (fun _ _ -> async.Return None) } doc (ClientModel.init local))
+        let runner = Harness.run (Client.makeProgram { Client.Ports.Connection = (fun () -> wired.Value); Client.Ports.Launch = None; Client.Ports.Panels = None; Client.Ports.Moves = ignore; Client.Ports.Clipboard = (fun _ -> async.Return false); Client.Ports.Retry = ignore; Client.Ports.Keyframe = (fun _ _ -> async.Return None); Client.Ports.Remember = ignore } doc (ClientModel.init local))
         // The composer's publication rule, wired exactly as the browser wires it: the client's
         // draft slot appears when its body has content and goes when the body empties.
         DraftSlot.follow doc registry local.PeerId (user >> runner.Dispatch) |> ignore
