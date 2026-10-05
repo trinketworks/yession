@@ -1446,7 +1446,7 @@ module Style =
     /// geometry exactly — see `chatJumpToLatestRail`. None on a phone, where the grounds bleed
     /// to the screen's edges and the column they draw is the whole width.
     let chatJumpToLatestSlot =
-        "hidden absolute inset-x-0 bottom-0 z-10 pointer-events-none px-8 max-md:px-0 "
+        "absolute inset-x-0 bottom-0 z-10 pointer-events-none px-8 max-md:px-0 "
         + "pt-12 pb-4 bg-linear-to-t from-bg/90 to-transparent"
 
     /// How wide anything in the timeline is allowed to get.
@@ -3370,7 +3370,7 @@ module Style =
 
     /// That float's slot: placed where `terminalLiveFloat` stands, the corner every chat
     /// client puts the way back in, and hidden until `Tail` says the reader has left the end.
-    let terminalJumpToLatestSlot = "hidden absolute right-3 bottom-3 z-10"
+    let terminalJumpToLatestSlot = "absolute right-3 bottom-3 z-10"
 
     /// The button in it: `chatJumpToLatest`'s square, without the rail that places that one
     /// beside a reading column — a terminal has no column to stand beside.

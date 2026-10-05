@@ -823,6 +823,6 @@ let create (deps: Deps) : Renderer =
 /// viewport that changed size under a laid-out surface; and the split between the two columns
 /// is the reader's to set, not the theme's.
 let attach (dispatch: ClientMsg -> unit) : unit =
-    Tail.attach ()
+    Tail.attach dispatch
     PaneShell.installPaneResize dispatch
     PaneShell.installStrip ()

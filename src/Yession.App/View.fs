@@ -3027,7 +3027,8 @@ module View =
         html $"""
             <div class="{Style.chatRegion}">
               <section class="{Style.timeline}" data-conversation data-tail="{tail}" tabindex="-1" @click={Ev(contentOpen)}>{body}</section>
-              <div class="{Style.chatJumpToLatestSlot}" data-jump-to-latest="{tail}">
+              <div class="{Style.chatJumpToLatestSlot}" data-jump-to-latest="{tail}"
+                   ?hidden={not (Set.contains TailSurface.Conversation model.Away)}>
                 <div class="{Style.chatJumpToLatestRail}">
                   <button type="button" class="{Style.chatJumpToLatest}" aria-label="{Dom.Text.jumpToLatest}"
                           @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.JumpToLatest TailSurface.Conversation)))}>{Icon.down}</button>
@@ -4385,11 +4386,12 @@ module View =
             | PreviewSubject.Stretch stretch -> paneStretchView model preview stretch
             | PreviewSubject.Content ref -> paneContentView ref
         // The way back to a terminal's newest output, for a reader who scrolled up through
-        // it: the chat's float, over the scroller it brings back. Shown and hidden by `Tail`,
-        // which is the one place that knows whether that reader is still following.
+        // it: the chat's float, over the scroller it brings back. On screen while that reader
+        // is away from the end (`ClientModel.Away`, which `Tail` reports to).
         let jumpToLatest (surface: TailSurface) =
             html $"""
-                <div class="{Style.terminalJumpToLatestSlot}" data-jump-to-latest="{TailSurface.key surface}">
+                <div class="{Style.terminalJumpToLatestSlot}" data-jump-to-latest="{TailSurface.key surface}"
+                     ?hidden={not (Set.contains surface model.Away)}>
                   <button type="button" class="{Style.terminalJumpToLatest}" aria-label="{Dom.Text.jumpToLatestOutput}"
                           title="{Dom.Text.jumpToLatestOutput}"
                           @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.JumpToLatest surface)))}>{Icon.down}</button>

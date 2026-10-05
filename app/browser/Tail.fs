@@ -82,20 +82,26 @@ let private following (el: HTMLElement) : bool =
 let private toEnd (el: HTMLElement) : unit =
     if not (atEnd el) then el.scrollTop <- el.scrollHeight
 
-/// Show or hide each surface's "jump to latest" against whether its reader is following — the
-/// same answer the scroll is kept by, so the control is on screen exactly when the surface is
-/// not being kept at its end. The control names its surface (`Dom.Hooks.jumpToLatest`), so
-/// this walks the controls and asks after theirs.
-let private syncJumps () : unit =
-    let found = document.querySelectorAll ("[" + Dom.Hooks.jumpToLatest + "]")
-    for i in 0 .. found.length - 1 do
-        let slot = found.[i] :?> HTMLElement
-        let key = slot.getAttribute Dom.Hooks.jumpToLatest
-        let away =
-            match readers.TryGetValue key with
-            | true, reader -> not reader.Following
-            | false, _ -> false
-        if away then slot.classList.remove [| "hidden" |] else slot.classList.add [| "hidden" |]
+/// Where whether each reader is following goes: the model, which draws each surface's "jump
+/// to latest" from it (`ClientModel.Away`). Set once, by `attach`.
+let mutable private tell : ClientMsg -> unit = ignore
+
+/// What the model was last told about each surface. A surface it has not been told about is
+/// one it takes to be followed, which is where every reader arrives.
+let private told = System.Collections.Generic.Dictionary<string, bool> ()
+
+/// Tell the model about every reader whose following has changed since it was last told —
+/// the same answer the scroll is kept by, so the control is on screen exactly when the surface
+/// is not being kept at its end. Gathered first and told after, because telling renders, and
+/// a render rebuilds `readers`.
+let private report () : unit =
+    let changed =
+        [ for KeyValue (key, reader) in readers do
+              let was = match told.TryGetValue key with | true, following -> following | false, _ -> true
+              if was <> reader.Following then yield key, reader.Following ]
+    for key, following in changed do
+        told.[key] <- following
+        TailSurface.ofKey key |> Option.iter (fun surface -> tell (ReaderMovedMsg (surface, following)))
 
 /// Where each surface's reader stands, taken before a render moves anything.
 type Before = private Before of Map<string, float option>
@@ -163,7 +169,8 @@ let restore (Before positions) : unit =
             toEnd el
             readers.[key] <- { Following = true; Top = el.scrollTop }
     observe current
-    syncJumps ()
+    // A frame on rather than now: this runs at the end of a render, and telling is another.
+    window.requestAnimationFrame (fun _ -> report ()) |> ignore
 
 /// The surface a `TailSurface` names, if it is on the page.
 let private find (surface: TailSurface) : HTMLElement option =
@@ -186,7 +193,7 @@ let follow (surface: TailSurface) : HTMLElement option =
         readers.[keyOf el] <- { Following = true; Top = el.scrollTop }
         if mediaMatches "(prefers-reduced-motion: reduce)" then el.scrollTop <- el.scrollHeight
         else scrollToBottomSmooth el
-        syncJumps ())
+        report ())
     found
 
 /// The listeners that hear a READER move, bound once per page.
@@ -199,7 +206,8 @@ let follow (surface: TailSurface) : HTMLElement option =
 /// Toggle: a fold opened or shut inside a surface moves everything below it with no scroll at
 /// all. A reader who opened one is reading it, and is following the end afterwards only if
 /// the end is still where they are.
-let attach () : unit =
+let attach (dispatch: ClientMsg -> unit) : unit =
+    tell <- dispatch
     document.addEventListener (
         "scroll",
         (fun event ->
@@ -216,7 +224,7 @@ let attach () : unit =
                     elif top < was.Top - 1.0 then false
                     else was.Following
                 readers.[key] <- { Following = now; Top = top }
-                if now <> was.Following then syncJumps ()
+                if now <> was.Following then report ()
             | _ -> ()),
         true)
     document.addEventListener (
@@ -228,7 +236,7 @@ let attach () : unit =
                 | Some surface ->
                     let el = surface :?> HTMLElement
                     readers.[keyOf el] <- { Following = atEnd el; Top = el.scrollTop }
-                    syncJumps ()
+                    report ()
                 | None -> ()
             | None -> ()),
         true)
