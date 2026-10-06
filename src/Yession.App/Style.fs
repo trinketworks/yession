@@ -251,6 +251,14 @@ module Style =
     let statusDotSolid = "inline-block w-1.5 h-1.5 rounded-full bg-current"
     /// The dot with nothing in it: a state that has ENDED (a terminal that closed).
     let statusDotHollow = "inline-block w-1.5 h-1.5 rounded-full border border-current"
+    /// A live dot: a command running. It beats in COLOUR, live's green to live's dim and back
+    /// (`beat-live`), never in opacity, so it holds the 3:1 a mark owes its surface at every
+    /// frame. Still and green under reduced motion.
+    let statusDotLive = "inline-block w-1.5 h-1.5 rounded-full bg-green animate-beat-live motion-reduce:animate-none"
+    /// The settled dot with a ring round it: something has happened that the person reading
+    /// has not seen yet (`ClientModel.unseen`). An outline rather than a ring utility, so the
+    /// gap between the two is the surface it sits on, whichever that is.
+    let statusDotNews = statusDotSolid + " outline outline-1 outline-current outline-offset-[1.5px]"
 
     /// A standalone dot given its colour explicitly (`bg-green` etc. composed at the use
     /// site) for a row whose text is a DIFFERENT colour — `bg-current` would fight the

@@ -669,6 +669,14 @@ module TerminalMode =
         // watch rather than being carried into a read that has no use for it.
         | WatchingBehind (terminal, _) -> Reading terminal
 
+/// What a terminal finished while this person was not looking at it (`ClientModel.unseen`):
+/// whether everything since went through, or something did not. One person's news, never a
+/// fact about the terminal — the next person to open the session has seen none of it.
+[<RequireQualifiedAccess>]
+type Unseen =
+    | Succeeded
+    | Failed
+
 /// The pane's one face (Plan 25, stage 2; P2-1): a terminal, or a preview over one.
 ///
 /// The census of every terminal used to be a third face here (`OnList`), a destination the
@@ -1285,6 +1293,19 @@ type ClientModel =
       /// by the decision, or by anything at all moving the column first, because a person who
       /// has already opened or shut it has answered the question this was going to.
       PaneOpensItself : bool
+      /// How far through each terminal's commands this person has LOOKED: what had finished
+      /// in it the last time it was on their screen (`ClientModel.looking`). A terminal that
+      /// has finished more since is news to them (`unseen`), and says so on its tab and its
+      /// row — so a build that finished in another tab is not left looking exactly like a
+      /// terminal nobody touched.
+      ///
+      /// Kept by the fold after every message (`notice`), never by a message that remembers
+      /// to: a terminal can come on screen by a press, a reload, the pane opening itself, a
+      /// preview closing over it — and a rule each of those had to remember is a rule one of
+      /// them forgets. Per browser, like the rest of the pane, and kept across a reload with
+      /// it (`PaneMemory.Seen`): a build that finished while you were away is the one most
+      /// worth saying so about.
+      Seen : Map<TerminalId, CommandTally>
       /// The sidebar column (`Column`). Seeded at boot by the browser with its breakpoint and
       /// its remembered collapse, as the served shell's one inline script already applied it
       /// before first paint — so the first render here agrees with what is on screen.
@@ -2093,6 +2114,7 @@ module ClientModel =
           PaneRemembered = false
           HeardThrough = false
           PaneOpensItself = false
+          Seen = Map.empty
           Column = Column.initial
           PaneSplit = None
           Away = Set.empty
@@ -2299,7 +2321,8 @@ module ClientModel =
     let paneMemory (model: ClientModel) : PaneMemory =
         { PaneMemory.Tabs = model.Tabs
           PaneMemory.Selected = model.Pane |> Option.bind PaneMode.subject |> Option.map TerminalMode.terminal
-          PaneMemory.Open = model.TerminalsOpen }
+          PaneMemory.Open = model.TerminalsOpen
+          PaneMemory.Seen = model.Seen }
 
     /// A freshly loaded client, given what this browser remembered of the pane for this
     /// session. The column's open bit is applied now, because it needs nothing checked and is
@@ -2315,7 +2338,10 @@ module ClientModel =
             { model with
                 TerminalsOpen = memory.Open
                 PaneMemory = Some memory
-                PaneRemembered = true }
+                PaneRemembered = true
+                // Applied now rather than held, because it needs nothing checked: a terminal
+                // the session no longer has is simply never asked about.
+                Seen = memory.Seen }
 
     /// Whether this client has read the log through to where the session says it ends — the
     /// moment a remembered strip can be checked against what the session has. Connected,
@@ -2329,6 +2355,60 @@ module ClientModel =
     /// message has to remember to set it.
     let private heard (model: ClientModel) : ClientModel =
         if model.HeardThrough || not (readThrough model) then model else { model with HeardThrough = true }
+
+    /// The terminal this person is LOOKING at: the pane's terminal, while the pane is on screen
+    /// and nothing is laid over it — not the `all` page, not a preview. What the pane is ABOUT
+    /// (`selectedTerminal`) stays the same under both, but its output is not on screen, so a
+    /// command finishing there is as unseen as one in another tab.
+    ///
+    /// Whether the browser tab itself is in front is not known here: a person on another
+    /// window entirely is still counted as looking at what their pane shows.
+    let looking (model: ClientModel) : TerminalId option =
+        if not model.TerminalsOpen || model.Switcher || Option.isSome (preview model) then None
+        else selectedTerminal model
+
+    /// Keep `Seen` (its doc). Nothing while the log is still being REPLAYED: what arrives
+    /// then is history, and a terminal part-way through its own would be frozen half-seen.
+    /// From the message that carries the client past the read-through line, the terminal being
+    /// looked at has been seen up to now; a terminal this browser has no record of has been
+    /// seen up to wherever the history went — it is not news, and a first visit marking every
+    /// terminal that ever ran a command would be marking all of them — unless it is met AFTER
+    /// that line, when it is news itself and has been seen not at all. A remembered record
+    /// (`remembered`) is left as it was, so what finished while this person was away is news.
+    ///
+    /// Run after every message, before `heard`, so the message that crosses the line can be
+    /// told from those after it.
+    let private notice (model: ClientModel) : ClientModel =
+        if not model.HeardThrough && not (readThrough model) then model
+        else
+            let looked = looking model
+            let seen =
+                model.Terminals.Terminals
+                |> List.fold
+                    (fun (seen: Map<TerminalId, CommandTally>) view ->
+                        let terminal = view.TerminalId
+                        if looked = Some terminal then Map.add terminal (CommandTally.ofView view) seen
+                        elif Map.containsKey terminal seen then seen
+                        elif model.HeardThrough then Map.add terminal CommandTally.zero seen
+                        else Map.add terminal (CommandTally.ofView view) seen)
+                    model.Seen
+            if seen = model.Seen then model else { model with Seen = seen }
+
+    /// What a terminal has finished since this person last looked at it, if anything — its
+    /// tab's and its row's "unseen" mark. Something that FAILED in that time wins over
+    /// everything that went through, because it is the one a person has to go and read.
+    ///
+    /// Never while the log is still being replayed (`HeardThrough`): before then a remembered
+    /// terminal is part-way through its own history, and would read as news it is not.
+    let unseen (terminal: TerminalId) (model: ClientModel) : Unseen option =
+        match Projection.tryFind terminal model.Terminals with
+        | Some view when model.HeardThrough ->
+            let now = CommandTally.ofView view
+            let seen = Map.tryFind terminal model.Seen |> Option.defaultValue CommandTally.zero
+            if now.Finished <= seen.Finished then None
+            elif now.Failed > seen.Failed then Some Unseen.Failed
+            else Some Unseen.Succeeded
+        | Some _ | None -> None
 
     /// Put back what this browser remembered of the pane (P0-4), terminal by terminal as the
     /// log names them, and let go of the memory once the log has been read through. Run after
@@ -3487,7 +3567,9 @@ module ClientModel =
     /// remembered pane comes back on whichever message brings its terminals in; and through
     /// `settle`, after it, so the strip holds only what it may whichever message moved it;
     /// and through `openOfItself`, which waits for the line `recall` settles at and needs the
-    /// model from before the message to tell whether something else moved the column first.
+    /// model from before the message to tell whether something else moved the column first;
+    /// and through `notice`, last before `heard`, so what this person has looked at is
+    /// counted from wherever the message left the pane.
     /// The pane put away — and any popover hanging in it, which does not outlive it.
     let private paneHidden (model: ClientModel) : ClientModel =
         { model with TerminalsOpen = false; Switcher = false; PaneMenu = false }
@@ -3506,7 +3588,7 @@ module ClientModel =
         else paneHidden { model with Column = { model.Column with Drawer = true } }
 
     let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
-        heard (reconcileLaunch (openOfItself model (settle (recall (
+        heard (notice (reconcileLaunch (openOfItself model (settle (recall (
         match msg with
         | ConnectingMsg ->
             { model with Connection = Connecting }
@@ -4391,7 +4473,7 @@ module ClientModel =
                     Pane =
                         if selectedTerminal model = Some terminal then next |> Option.map (Reading >> OnTerminal)
                         else model.Pane }
-        )))))
+        ))))))
 
     /// A message's consequences: the next model, and what it asks of the world outside it.
     let update (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =

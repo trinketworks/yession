@@ -30,6 +30,7 @@
   --color-grey-20: color-mix(in oklab, var(--color-white) calc(var(--step-grey) * 20), var(--color-black));
   --color-blue-up-1: color-mix(in oklab, var(--color-blue), var(--color-white) calc(var(--step-tone) * 1));    /* hover: the lit side */
   --color-blue-down-5: color-mix(in oklab, var(--color-blue), var(--color-black) calc(var(--step-tone) * 5));  /* the agent avatar's ground; paint, never text */
+  --color-green-down-2: color-mix(in oklab, var(--color-green), var(--color-black) calc(var(--step-tone) * 2)); /* live's dim: the low of a live dot's beat, still 3:1 as a mark (Phase4 pins it) */
 
   /* Roles. A role picks a constant or a variant and never defines a colour, so one step
      retuned moves every role on it. The grounds climb one grey step each; the two rules sit
@@ -119,6 +120,7 @@
 
   /* --- Motion: named and timed here. The keyframes, and why each thing moves as it does, are in app/tailwind.css. --- */
   --animate-pulse2: pulse2 1.1s ease-in-out infinite;
+  --animate-beat-live: beat-live 1.1s ease-in-out infinite;
   --animate-blink: blink 1s steps(1) infinite;
   --animate-beat: beat 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
   --animate-reveal: reveal 1.6s ease-out 1;

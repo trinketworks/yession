@@ -770,7 +770,20 @@ let private reloadTests =
                 let! tabs = Gen.list (Range.linear 0 5) genTerminal
                 let! selected = Gen.option genTerminal
                 let! isOpen = Gen.bool
-                let memory = { PaneMemory.Tabs = tabs; PaneMemory.Selected = selected; PaneMemory.Open = isOpen }
+                let! seen = Gen.list (Range.linear 0 4) (gen {
+                    let! terminal = genTerminal
+                    let! finished = Gen.int32 (Range.linear 0 50)
+                    let! failed = Gen.int32 (Range.linear 0 50)
+                    return terminal, finished, failed })
+                let memory =
+                    { PaneMemory.Tabs = tabs
+                      PaneMemory.Selected = selected
+                      PaneMemory.Open = isOpen
+                      PaneMemory.Seen =
+                          seen
+                          |> List.map (fun (terminal, finished, failed) ->
+                              terminal, { CommandTally.Finished = finished; CommandTally.Failed = failed })
+                          |> Map.ofList }
                 Expect.equal
                     (Codec.fromString PaneMemory.codec (Codec.toString PaneMemory.codec memory))
                     (Ok memory)
@@ -786,7 +799,7 @@ let private reloadTests =
                 """{"tabs":["terminal:term-a","block:term-a:b-1","stretch:term-a@3","content:artifacts/chart.png/0000-ab12cd","terminal:term-b"],"pinned":["terminal:term-a","block:term-a:b-1"],"selected":"block:term-a:b-1","open":true}"""
             Expect.equal
                 (Codec.fromString PaneMemory.codec older)
-                (Ok { PaneMemory.Tabs = [ terminalA; terminalB ]; PaneMemory.Selected = None; PaneMemory.Open = true })
+                (Ok { PaneMemory.Tabs = [ terminalA; terminalB ]; PaneMemory.Selected = None; PaneMemory.Open = true; PaneMemory.Seen = Map.empty })
                 "the terminals, in order; the selection was a preview, so there is none"
 
         testCase "a remembered pane comes back open before anything has arrived" <| fun () ->
@@ -841,7 +854,7 @@ let private reloadTests =
             let model = clientOf oneBlock |> Support.step (chip terminalA "1")
             Expect.equal
                 (ClientModel.paneMemory model)
-                { PaneMemory.Tabs = [ terminalA ]; PaneMemory.Selected = Some terminalA; PaneMemory.Open = true }
+                { PaneMemory.Tabs = [ terminalA ]; PaneMemory.Selected = Some terminalA; PaneMemory.Open = true; PaneMemory.Seen = Map.empty }
                 "the strip and the terminal the preview was over"
     ]
 
@@ -1059,6 +1072,108 @@ let private statusTests =
                  (rowOf (Support.render (Support.step ToggleSwitcherMsg model))).Contains failedMark)
                 (true, true)
                 "failed, on both"
+    ]
+
+// --- What finished while you were looking elsewhere ---------------------------------------
+
+/// A browser that has read `history` through and is now hearing news: booted with what it
+/// remembered of the pane, if anything, its local store read, connected, and the log folded.
+let private hearing (memory: PaneMemory option) (history: EventEnvelope<SessionEvent> list) : ClientModel =
+    let latest = history |> List.tryLast |> Option.map (fun e -> e.Offset)
+    ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
+    |> ClientModel.remembered memory
+    |> Support.step HistoryReadMsg
+    |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest })
+    |> withPage history
+
+/// Two idle terminals, both in the strip, the pane on term-b — and the log read through, so
+/// what comes next is news.
+let private lookingAtB : ClientModel =
+    hearing None [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "shell") ]
+    |> Support.step (ShowInPaneMsg (Reading terminalA))
+    |> Support.step (ShowInPaneMsg (Reading terminalB))
+
+/// One command run to `result` in `terminal`, as news.
+let private ranTo (terminal: TerminalId) (result: CommandResult) (model: ClientModel) : ClientModel =
+    model
+    |> withPage
+        [ at 10L 10.0 (started terminal "1" byAda "make" 1)
+          at 11L 11.0 (completed terminal "1" result 3) ]
+
+let private unseenTests =
+    testList "A terminal says what it finished while you were elsewhere" [
+        // A build that finished in a terminal you were not looking at used to look exactly
+        // like a terminal nobody had touched: no mark at all, until you went to look.
+        testCase "a command that finishes in a terminal you are not looking at is news" <| fun () ->
+            let model = lookingAtB |> ranTo terminalA (CommandSucceeded 0)
+            Expect.equal (ClientModel.unseen terminalA model) (Some Unseen.Succeeded) "term-a finished; term-b was on screen"
+
+        testCase "a failure is news of its own kind" <| fun () ->
+            let model = lookingAtB |> ranTo terminalA (CommandFailed 2)
+            Expect.equal (ClientModel.unseen terminalA model) (Some Unseen.Failed) "told apart from one that went through"
+
+        testCase "looking at the terminal is what clears it" <| fun () ->
+            let model =
+                lookingAtB
+                |> ranTo terminalA (CommandFailed 2)
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+                |> Support.step (ShowInPaneMsg (Reading terminalB))
+            Expect.equal (ClientModel.unseen terminalA model) None "seen once, news no longer"
+
+        testCase "a command that finishes in the terminal you are looking at is never news" <| fun () ->
+            let model = lookingAtB |> ranTo terminalB (CommandSucceeded 0) |> Support.step (ShowInPaneMsg (Reading terminalA))
+            Expect.equal (ClientModel.unseen terminalB model) None "it finished on screen"
+
+        // The pane's terminal is still what it is ABOUT under the `all` page, but its output is
+        // not on screen, so what finishes there is as unseen as in another tab.
+        testCase "a terminal under the all page is not being looked at" <| fun () ->
+            let model = lookingAtB |> Support.step ToggleSwitcherMsg |> ranTo terminalB (CommandSucceeded 0)
+            Expect.equal (ClientModel.unseen terminalB model) (Some Unseen.Succeeded) "the list was on screen, not term-b"
+
+        testCase "a terminal in a pane put away is not being looked at" <| fun () ->
+            let model = lookingAtB |> Support.step ToggleContentMsg |> ranTo terminalB (CommandSucceeded 0)
+            Expect.equal (model.TerminalsOpen, ClientModel.unseen terminalB model) (false, Some Unseen.Succeeded) "the pane was shut"
+
+        // A first visit replays every command the session ever ran. None of it is news: a
+        // client that marked them would mark every terminal that had ever been used.
+        testCase "the history a page loads is not news" <| fun () ->
+            let model = hearing None oneBlock
+            Expect.equal (ClientModel.unseen terminalA model) None "it finished before this page existed"
+
+        // What this browser remembered (P0-4) says how far it had looked, so a build that
+        // finished while it was away is still news after the reload.
+        testCase "what finished while this browser was away is news after a reload" <| fun () ->
+            let memory = { PaneMemory.untouched with PaneMemory.Seen = Map.ofList [ terminalA, CommandTally.zero ] }
+            let model = hearing (Some memory) oneBlock
+            Expect.equal (ClientModel.unseen terminalA model) (Some Unseen.Succeeded) "it had seen nothing of term-a"
+
+        // A terminal that opened after the page did is news itself, and so is everything it
+        // runs until somebody looks — even when the open and the run arrive on one page, as
+        // they do when a reconnect catches up on what happened while the client was away.
+        testCase "a terminal opened since the page loaded has seen nothing yet" <| fun () ->
+            let model =
+                lookingAtB
+                |> withPage
+                    [ at 5L 5.0 (openedBy (PeerRef bob) terminalC "bob's")
+                      at 6L 6.0 (started terminalC "1" byBob "make" 1)
+                      at 7L 7.0 (completed terminalC "1" (CommandSucceeded 0) 3) ]
+            Expect.equal (ClientModel.unseen terminalC model) (Some Unseen.Succeeded) "bob's command finished; nobody here saw it"
+
+        // One mark for both surfaces (`View.terminalMark`), so a terminal reads the same in the
+        // row of names and the list of them.
+        testCase "an unseen failure marks the terminal's tab and its row alike" <| fun () ->
+            let model = lookingAtB |> ranTo terminalA (CommandFailed 2)
+            let mark = Dom.attr Dom.Hooks.paneMark "unseen-failed"
+            let rowOf (html: string) =
+                let list = markupAt Dom.Hooks.contentList html
+                let from = list.IndexOf (Dom.attr Dom.Hooks.terminalListRow "term-a")
+                let upto = list.IndexOf ("role=\"listitem\"", from)
+                list.Substring (from, (if upto < 0 then list.Length else upto) - from)
+            Expect.equal
+                ((markupAt (Dom.attr Dom.Hooks.terminalTab "term-a") (Support.render model)).Contains mark,
+                 (rowOf (Support.render (Support.step ToggleSwitcherMsg model))).Contains mark)
+                (true, true)
+                "unseen-failed, on both"
     ]
 
 // --- What just ran is never folded away ------------------------------------------------------
@@ -4441,6 +4556,7 @@ let tests =
         reloadTests
         edgeTabTests
         statusTests
+        unseenTests
         latestTests
         fitTests
         pageTests

@@ -149,6 +149,16 @@
   0%, 100% { opacity: 0.25; }
   50% { opacity: 1; }
 }
+/* A live dot's beat (`Style.statusDotLive`): a running command. Its COLOUR moves, between
+   live's green and live's dim, never its opacity (docs/visual-design.md, Motion) — a mark owes
+   3:1 to the surface under it at every frame, not only at the top of the beat, and the old
+   opacity pulse bottomed out at a quarter, where the running dot on the pane's near-black read
+   as no dot at all. Every colour named here is pinned to that floor by the theme-contrast
+   suite (Phase4), which reads them from this rule. */
+@keyframes beat-live {
+  0%, 100% { background-color: var(--color-green-down-2); }
+  50% { background-color: var(--color-green); }
+}
 @keyframes beat {
   0% { scale: 1; }
   45% { scale: 0.72; }

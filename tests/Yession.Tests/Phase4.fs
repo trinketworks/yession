@@ -1137,6 +1137,31 @@ let private themeContrastTests =
                     let ratio = contrast light (colour bg)
                     Expect.isTrue (ratio >= 3.0) (sprintf "seat %d's checker on --color-%s is %.2f:1 — a mark needs 3:1" seat bg ratio)
 
+        // A running mark beats, and a mark owes 3:1 at every frame, not only at the top of its
+        // beat. The old pulse faded the running blue to a quarter of itself, where on the
+        // pane's near-black it read as no dot at all. A live dot moves its COLOUR instead
+        // (docs/visual-design.md, Motion): every colour the beat passes through is read from
+        // the keyframes themselves, so retuning it is re-checked here.
+        testCase "a live dot keeps >= 3:1 on every surface at every step of its beat" <| fun () ->
+            let tokens = TestFiles.read "app/tokens.css"
+            let colour = themeColour tokens
+            let sheet = TestFiles.read "app/tailwind.css"
+            let from = sheet.IndexOf "@keyframes beat-live {"
+            Expect.isTrue (from >= 0) "the beat is declared in app/tailwind.css"
+            let body = sheet.Substring (from, sheet.IndexOf ("\n}", from) - from)
+            // Opacity would put every colour below under something translucent, and the
+            // ratios read here would be of a mark nobody sees.
+            Expect.isFalse (body.Contains "opacity") "the beat moves colour, never opacity"
+            let steps =
+                System.Text.RegularExpressions.Regex.Matches (body, @"var\(--color-([a-z0-9-]+)\)")
+                |> Seq.map (fun m -> m.Groups.[1].Value)
+                |> List.ofSeq
+            Expect.isNonEmpty steps "the beat names its colours"
+            for fg in steps do
+                for bg in [ "bg"; "panel"; "surface"; "surface-2" ] do
+                    let ratio = contrast (colour fg) (colour bg)
+                    Expect.isTrue (ratio >= 3.0) (sprintf "--color-%s on --color-%s is %.2f:1 — a mark needs 3:1" fg bg ratio)
+
         // The theme's colours are written once: a hex is a constant, and everything else is
         // made from one. A variant picked by hand — a "bright" that was its own hex — is how
         // the palette drifted from its hues before, so a new one has to arrive as a mix.
