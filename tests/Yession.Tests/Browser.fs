@@ -2759,6 +2759,40 @@ let editorTests =
                 return ()
             }
 
+        // The camera's switch names every state it can picture, and a name it offers that does
+        // not render is a picture of the state before it with the wrong caption under it. So
+        // each one is swapped in and must draw exactly one shell — a conversation, once — with
+        // nothing thrown on the way, synchronously or in the frames after. Read in the page
+        // rather than with a wait, because the question is not "does it arrive" but "did the
+        // swap itself go wrong", and a failure names the state that went wrong.
+        editorCase "every state the harness names draws one shell without an error" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation]")
+                let! names = await (page.EvaluateAsync<string[]> "() => window.__states")
+                // Anti-vacuity: an empty list walks nothing and passes.
+                Expect.isNonEmpty names "the harness names its states"
+                for name in names do
+                    let! fault =
+                        await (
+                            page.EvaluateAsync<string> (
+                                """async name => {
+                                     const faults = []
+                                     const onError = e => faults.push(String(e.error ?? e.message))
+                                     const onRejection = e => faults.push(String(e.reason))
+                                     window.addEventListener('error', onError)
+                                     window.addEventListener('unhandledrejection', onRejection)
+                                     try { window.__state(name) } catch (e) { faults.push(String(e)) }
+                                     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+                                     window.removeEventListener('error', onError)
+                                     window.removeEventListener('unhandledrejection', onRejection)
+                                     const shells = document.querySelectorAll('#shell [data-conversation]').length
+                                     if (shells !== 1) faults.push(`${shells} conversations in the shell`)
+                                     return faults.join('; ')
+                                   }""",
+                                box name))
+                    Expect.equal fault "" (sprintf "__state('%s')" name)
+            }
+
         // A reference is part of the sentence it sits in, so its name shares the line's
         // baseline with the words either side. It did not: an inline-flex box lends the
         // line its first item's baseline, the mark has none, and every `dev` on a phone

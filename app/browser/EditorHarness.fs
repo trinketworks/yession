@@ -25,6 +25,7 @@ open Yession.Domain.Terminals
 open Yession.Domain.Collab
 open Yession.App.Collab
 open Yession.Domain.Chat
+open Yession.Domain.Content
 open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
 open Yession.Domain.Access
@@ -198,6 +199,16 @@ module private Published =
     /// timeline is on the page. Only a browser can say where that prompt's button lands as its
     /// reason is opened and closed, and no session this harness talks to can spend a credential.
     let signInLost : PageGlobal<unit -> unit> = PageGlobal.named "__signInLost"
+    /// Swap the shell to one NAMED state — the camera's switch. Every hook above stands for the
+    /// question one case asks; this stands for the pictures somebody wants to look at, which
+    /// are many more than the cases and have no question each. One hook taking a name rather
+    /// than a hook per picture, so a camera can walk them all without knowing what any of
+    /// them is. A name it does not know is the CALLER'S mistake, and it says so with the
+    /// names it does know rather than drawing nothing.
+    let state : PageGlobal<string -> unit> = PageGlobal.named "__state"
+    /// Every name `__state` takes, in the order a camera would want them: what there is to
+    /// walk, published so the walker never carries a copy of the list that can go stale.
+    let states : PageGlobal<string array> = PageGlobal.named "__states"
 
 
 let private doc = Y.Doc.Create ()
@@ -1305,6 +1316,225 @@ let private launchOverModel : ClientModel =
     { launchModel with
         Conversation = { launchModel.Conversation with Recent = List.rev [ for n in 1 .. 14 -> act n ] } }
 
+// --- The named states (`__state`) --------------------------------------------------------
+//
+// Each is the shell model, or the launch model, with the one or two fields changed that the
+// state IS — built from the model's own types, so a state the model cannot hold is a state
+// this list cannot name. What they are for is LOOKING: a camera walks `__states` and takes a
+// picture of each, which is how a redesign is judged across every state at once instead of
+// across the three somebody remembered to reach by hand.
+
+/// Claude's credential needing a sign-in — what `__signInLost` swaps in, and the `sign-in-lost`
+/// state.
+let private signInLostModel : ClientModel =
+    let needing : CredentialRow option = Some { Kind = OAuthConnection; SignInRequired = Some "the refresh token has expired" }
+    { shellModel with
+        Claude =
+            { shellModel.Claude with
+                Status =
+                    Some { SessionCredential = None
+                           MineCredential = needing
+                           Owner = OwnedByUser
+                           AgentAvailable = true
+                           Models = ModelsUnknown } } }
+
+/// The fixture's two other people, so a surface that is about somebody else — a queue of
+/// several authors, a draft somebody else is writing — has somebody to be about.
+let private bravePeer : PeerId = PeerId.create "brave-owl" |> expect
+let private calmPeer : PeerId = PeerId.create "calm-otter" |> expect
+
+/// `model` with all three people known by name, as the log's `PeerJoined`s would have made
+/// them: a surface that names another person resolves the name from here.
+let private withPeople (model: ClientModel) : ClientModel =
+    { model with
+        Peers =
+            Map.ofList
+                [ model.Peer.PeerId, model.Peer.DisplayName
+                  bravePeer, "brave-owl"
+                  calmPeer, "calm-otter" ] }
+
+/// The shell's conversation without its sixteen filler lines: what the cases scroll through is
+/// what a picture of one item has to scroll past, so a state about one item draws it short.
+let private shortModel : ClientModel =
+    let filler (item: ConversationItem) = (MessageId.value item.MessageId).StartsWith "msg-filler-"
+    { shellModel with
+        Conversation = ConversationProjection.ofItems (shellModel.Conversation.Items |> List.filter (filler >> not)) }
+
+/// A Claude panel with a credential in it and the agent there to run turns.
+let private claudeConnected : ClaudePanel =
+    { SessionCredential = None
+      MineCredential = Some ({ Kind = OAuthConnection; SignInRequired = None } : CredentialRow)
+      Owner = OwnedByUser
+      AgentAvailable = true
+      Models = ModelsUnknown }
+
+let private withClaude (panel: ClaudePanel) (model: ClientModel) : ClientModel =
+    { model with Claude = { model.Claude with Status = Some panel } }
+
+/// The sidebar column on its Settings face and on screen, on whichever side of the breakpoint
+/// the page is: collapsed off on a desktop, the drawer open on a phone.
+let private inSettings (model: ClientModel) : ClientModel =
+    { model with Column = { model.Column with Face = ColumnFace.Settings; Collapsed = false; Drawer = true } }
+
+/// The pane open on `mode`.
+let private paneOn (mode: PaneMode) (model: ClientModel) : ClientModel =
+    { model with Pane = Some mode; TerminalsOpen = true }
+
+/// Something the session refused, in its own words; `fromPane` says whether it answered one of
+/// the pane's verbs, which is what decides the mount it is drawn in.
+let private refusedWith (fromPane: bool) (model: ClientModel) : ClientModel =
+    { model with
+        Refused =
+            Some
+                { Refusal.Reason = "there is no sandbox named 'octo/hello:gpu' in this session — there is octo/hello:dev and octo/hello:gate"
+                  Refusal.FromPane = fromPane
+                  Refusal.FocusedIn = None } }
+
+/// Three messages queued behind the agent by three different people, with what each says —
+/// the bodies live in the doc rather than the model, so the mount seeds them from here.
+let private queued : (QueueId * PeerId * string) list =
+    [ QueueId.create "queue-msg-1" |> expect, shellModel.Peer.PeerId, "and when that is green, open the PR"
+      QueueId.create "queue-msg-2" |> expect, bravePeer, "check the phone layout too — the pane was **clipped** last time"
+      QueueId.create "queue-msg-3" |> expect, calmPeer, "then tag the release" ]
+
+let private queueModel : ClientModel =
+    let entries =
+        queued
+        |> List.mapi (fun i (id, author, _) -> id, ({ QueueId = id; Author = author; Order = float (i + 1) } : QueuedMessage))
+    { withPeople shellModel with Synced = { shellModel.Synced with Queue = Map.ofList entries } }
+
+/// What the other two people are writing, which the mount seeds into their draft bodies.
+let private draftBodies : (PeerId * string) list =
+    [ bravePeer, "I think the **retry** belongs in the read loop, not in `Client.fs`"
+      calmPeer, "one more thing about the release notes" ]
+
+let private draftOf (peer: PeerId) : PeerId * DraftState =
+    peer, { Author = peer; QueueId = QueueId.create ("draft-" + PeerId.value peer) |> expect }
+
+/// The composer joined to brave-owl's draft: their words open, ours not started.
+let private draftJoinedModel : ClientModel =
+    { withPeople shellModel with
+        Synced = { shellModel.Synced with Drafts = Map.ofList [ draftOf bravePeer ] }
+        Composer = ComposerChoice.Joined bravePeer }
+
+/// Our own composer open, and the other two drafts collapsed above it as summaries.
+let private draftSummaryModel : ClientModel =
+    { withPeople shellModel with
+        Synced = { shellModel.Synced with Drafts = Map.ofList [ draftOf bravePeer; draftOf calmPeer ] }
+        Composer = ComposerChoice.Own }
+
+/// A terminal whose commands ended every way a command can, one of each, alternating between a
+/// person and the agent so no two consecutive ones fold into a run and every mark is on screen.
+let private statusesTerminal : TerminalId = TerminalId.create "term-statuses" |> expect
+
+let private statusesModel : ClientModel =
+    let peerId = shellModel.Peer.PeerId
+    let person = Authority.ofAuthor (Principal.Peer peerId)
+    let agent = Authority.agentFor (Principal.Peer peerId)
+    let block (i: int) (command: string) (authority: Authority) (status: BlockStatus) : Block =
+        { BlockId = BlockId.create (sprintf "block-status-%d" i) |> expect
+          QueueId = None
+          Authority = authority
+          Command = command
+          Background = false
+          FromSeq = i
+          ToSeq = (match status with BlockRunning -> None | BlockFinished _ | BlockRejected _ -> Some (i + 1))
+          Status = status
+          StoppedBy = None }
+    let blocks =
+        [ block 0 "npm run build" person (BlockFinished (CommandSucceeded 0))
+          block 1 "npm test" agent (BlockFinished (CommandFailed 1))
+          block 2 "sleep 600" person (BlockFinished CommandTimedOut)
+          block 3 "git push --force" agent (BlockRejected (ActorRef.PeerRef peerId, Some "not on main"))
+          block 4 "./scripts/missing.sh" person (BlockFinished (CommandExecutionFailed "no such file or directory"))
+          block 5 "npm run watch" agent BlockRunning ]
+    let view : TerminalView =
+        { TerminalId = statusesTerminal
+          Title = TerminalTitle.fromProse "every way a command ends"
+          OpenedBy = PeerRef peerId
+          Sandbox = Some SandboxRef.defaultRef
+          Renewable = false
+          IsOpen = true
+          Closed = None
+          Lease = None
+          IntegrationLost = false
+          Blocks = blocks
+          DroppedBytes = 0 }
+    let feed : TerminalFeed =
+        { Records =
+            Map.ofList [ for i in 0 .. 5 -> i, { At = float i; Kind = TranscriptOutput; Data = sprintf "output of command %d\r\n" i } ]
+          KnownLength = 6
+          ReadThrough = 6
+          Header = Some { Width = 80; Height = 24; Timestamp = 0L } }
+    { shellModel with
+        Terminals = ({ Terminals = shellModel.Terminals.Terminals @ [ view ] } : Projection)
+        TerminalFeeds = shellModel.TerminalFeeds |> Map.add statusesTerminal feed
+        Tabs = shellModel.Tabs @ [ statusesTerminal ] }
+    |> paneOn (PaneMode.OnTerminal (TerminalMode.Reading statusesTerminal))
+
+/// Two chapter rules with a session break between them: the short conversation, the eighth
+/// filler line back as the second chapter's opening, and the session having been away for
+/// seven hours just before it.
+let private chaptersModel : ClientModel =
+    let resumedId = MessageId.create "msg-resumed" |> expect
+    let eighth = MessageId.create "msg-filler-8" |> expect
+    let resumed : ConversationItem =
+        { MessageId = resumedId
+          Author = ActorRef.Session
+          Content =
+            ItemContent.Act (
+                Act.SessionResumed (
+                    ({ MessageId = resumedId
+                       LastHeardAt = System.DateTimeOffset (2026, 9, 12, 0, 0, 0, System.TimeSpan.Zero) } : SessionResumed),
+                    System.DateTimeOffset (2026, 9, 12, 7, 0, 0, System.TimeSpan.Zero)))
+          Status = Complete
+          Offset = EventOffset.create 17L |> expect
+          Woke = None; CausedBy = None }
+    let kept =
+        shellModel.Conversation.Items
+        |> List.filter (fun item -> not ((MessageId.value item.MessageId).StartsWith "msg-filler-") || item.MessageId = eighth)
+        |> List.collect (fun item -> if item.MessageId = eighth then [ resumed; item ] else [ item ])
+    { shellModel with Conversation = ConversationProjection.ofItems kept }
+
+/// The repository the launch states hold.
+let private launchRepo : RepoRef = RepoRef.create "octo/sandbox-runner" |> expect
+
+/// The card's branch pane, for the first row, with its branches arrived.
+let private launchBranchModel : ClientModel =
+    { launchModel with
+        Launch =
+            { launchModel.Launch with
+                Selected = Some launchRepo
+                Pane = ChoosingBranch launchRepo
+                Branches =
+                    Map.ofList
+                        [ launchRepo,
+                          BranchesLoaded
+                              { Repos.BranchPage.Names = [ "main"; "feature/caret-storm"; "fix/phone-pane"; "release/1.0" ]
+                                Repos.BranchPage.Next = None } ] } }
+
+/// The card whose listing answered "connect GitHub".
+let private launchUnavailableModel : ClientModel =
+    { launchModel with
+        Launch =
+            { launchModel.Launch with
+                Listing = ListingUnavailable ("GitHub answered 401 — connect an account to list your repositories", true)
+                More = MoreIdle } }
+
+/// The add sent and admitted: the clone is under way, so the card has stepped aside for the
+/// timeline (`Launch.committed`).
+let private launchCloningModel : ClientModel =
+    { launchModel with
+        Launch =
+            { launchModel.Launch with
+                Selected = Some launchRepo
+                Stage = Cloning { LaunchTarget.Repo = launchRepo; LaunchTarget.Branch = None } } }
+
+/// Connected, the log read through, nothing said — and the opening question already answered
+/// "none", so no card stands over the empty conversation.
+let private emptyModel : ClientModel =
+    { launchModel with Synced = { launchModel.Synced with LaunchDismissed = true } }
+
 /// What a client that has been to this session before holds when it opens it again: the
 /// event log as the kept answers of its own history store, and the one terminal's transcript
 /// as the kept answers of its transcript store. Built as EVENTS rather than as a model,
@@ -1635,19 +1865,11 @@ do
         model <- actsModel
         render ())
     PageGlobal.set Published.signInLost (fun () ->
-        let needing = Some { Kind = OAuthConnection; SignInRequired = Some "the refresh token has expired" }
-        model <-
-            { shellModel with
-                Claude =
-                    { shellModel.Claude with
-                        Status =
-                            Some { SessionCredential = None
-                                   MineCredential = needing
-                                   Owner = OwnedByUser
-                                   AgentAvailable = true
-                                   Models = ModelsUnknown } } }
+        model <- signInLostModel
         render ())
-    PageGlobal.set Published.chapterCaret (System.Action<_, _, _> (fun id anchor head ->
+    /// A collaborator's caret in chapter `id`'s name, from `anchor` to `head` — `__chapterCaret`,
+    /// and the `remote-cursor` state.
+    let chapterCaret (id: string) (anchor: int) (head: int) : unit =
         match MessageId.create id, PeerId.create "brave-owl" with
         | Ok messageId, Ok peerId ->
             let text = shellDoc.getText ("harness-chapter-name-" + id)
@@ -1662,12 +1884,152 @@ do
                       DisplayName = "brave-owl"
                       Focus = Some { Field = ChapterName messageId; Pos = { Anchor = at anchor; Head = at head } }
                       Viewing = None })
-        | _ -> ()))
+        | _ -> ()
+    PageGlobal.set Published.chapterCaret (System.Action<_, _, _> chapterCaret)
     PageGlobal.set Published.record (System.Action<_, _, _, _> (fun id seq kind data ->
         match TerminalId.create id, TranscriptKind.parse kind with
         | Ok terminal, Some kind ->
             dispatch (TerminalRecordsMsg (terminal, [ seq, { At = 0.0; Kind = kind; Data = data } ]))
         | _ -> ()))
+    // The camera's switch (`__state`). A swap keeps the breakpoint this page last measured,
+    // because the fixtures are built at a desktop's and a camera at a phone's width wants the
+    // phone's column, not one the next viewport message would have to correct.
+    let show (next: ClientModel) : unit =
+        model <- { next with Column = { next.Column with Wide = model.Column.Wide } }
+        render ()
+    // A body somebody else is writing lives in the doc, not the model, so a state that shows
+    // one writes it there first — once: the doc outlives every swap, and writing it again
+    // would write it twice.
+    let seed (key: string) (markdown: string) : unit =
+        let body = shellRegistry.Fragment key
+        if (Markdown.ofFragment body).Trim () = "" then Markdown.intoFragment markdown body
+    let connection (state: ConnectionState) () = show { shellModel with Connection = state }
+    let states : (string * (unit -> unit)) list =
+        [ "rest", (fun () -> show shellModel)
+          "disconnected", connection (Disconnected (Some "the session closed its data channel"))
+          "connecting", connection Connecting
+          "reconnecting", connection Reconnecting
+          "retrying", connection (Retrying ("the session did not answer (502 Bad Gateway)", 3))
+          "catch-up",
+          (fun () ->
+              show
+                  { shellModel with
+                      EventConsumer =
+                          { shellModel.EventConsumer with
+                              LastProcessedOffset = Some (EventOffset.create 12L |> expect)
+                              LatestKnownOffset = Some (EventOffset.create 40L |> expect)
+                              IsCatchingUp = true
+                              CatchUpIsSlow = true } })
+          "degraded",
+          (fun () ->
+              show
+                  { shellModel with
+                      EventConsumer = { shellModel.EventConsumer with Feed = FeedStalled "the history route answered 503 three times" } })
+          "session-gone",
+          (fun () ->
+              show
+                  { shellModel with
+                      Connection = Disconnected (Some "the session stopped")
+                      Manager = Some "https://yession.example" })
+          "no-agent",
+          (fun () -> show (withClaude { claudeConnected with MineCredential = None; AgentAvailable = false } shellModel))
+          "agent-thinking",
+          (fun () ->
+              show shellModel
+              liveTurn [ 40L; 41L ])
+          "agent-writing",
+          (fun () ->
+              show shellModel
+              liveTurn [ 40L; 41L; 42L ])
+          "interrupting",
+          (fun () ->
+              show shellModel
+              liveTurn [ 40L; 41L; 42L ]
+              dispatch (InterruptTurnMsg (AgentTurnId.create "turn-live" |> expect)))
+          "queue",
+          (fun () ->
+              for (id, _, body) in queued do seed (BodyKey.queued id) body
+              show queueModel)
+          "draft-joined",
+          (fun () ->
+              for (peer, body) in draftBodies do seed (BodyKey.draft peer) body
+              show draftJoinedModel)
+          "draft-summary",
+          (fun () ->
+              for (peer, body) in draftBodies do seed (BodyKey.draft peer) body
+              show draftSummaryModel)
+          "settings", (fun () -> show (inSettings shellModel))
+          "model-panel",
+          (fun () ->
+              let modelId id = ModelId.create id |> expect
+              let catalogue =
+                  ModelsLoaded
+                      [ AgentModel.create (modelId "claude-opus-4-1") "Claude Opus 4.1"
+                        AgentModel.create (modelId "claude-sonnet-4-5") "Claude Sonnet 4.5"
+                        AgentModel.create (modelId "claude-haiku-4-5") "Claude Haiku 4.5" ]
+              show
+                  { withClaude { claudeConnected with Models = catalogue } shellModel with
+                      Synced = { shellModel.Synced with Model = Some (modelId "claude-sonnet-4-5") } })
+          "claude-awaiting-code",
+          (fun () ->
+              show (
+                  inSettings
+                      { shellModel with
+                          Claude =
+                              { shellModel.Claude with
+                                  Flow = ClaudeAwaitingCode ("https://claude.ai/oauth/authorize?client_id=harness&state=harness", "mine") } }))
+          "github-awaiting-approval",
+          (fun () ->
+              show (
+                  inSettings
+                      { shellModel with
+                          GitHub =
+                              { shellModel.GitHub with
+                                  Flow = GitHubAwaitingApproval ("WDJB-MJHT", "https://github.com/login/device", "mine", 5)
+                                  Polling = PollWaiting 0 } }))
+          "sign-in-lost", (fun () -> show signInLostModel)
+          "refusal-chat", (fun () -> show (refusedWith false shellModel))
+          "refusal-pane",
+          (fun () ->
+              show (refusedWith true (paneOn (PaneMode.OnTerminal (TerminalMode.Reading harnessTerminal)) shellModel)))
+          "launch", (fun () -> show launchModel)
+          "launch-looking", (fun () -> show launchLookingModel)
+          "launch-over", (fun () -> show launchOverModel)
+          "launch-branch", (fun () -> show launchBranchModel)
+          "launch-unavailable", (fun () -> show launchUnavailableModel)
+          "launch-cloning", (fun () -> show launchCloningModel)
+          "terminal-closed",
+          (fun () ->
+              let doneId = TerminalId.create "term-done" |> expect
+              show (paneOn (PaneMode.OnTerminal (TerminalMode.Reading doneId)) { shellModel with Tabs = shellModel.Tabs @ [ doneId ] }))
+          "pane-content",
+          (fun () ->
+              let file = ContentRef.create "artifacts/release-notes.pdf" |> expect
+              show (
+                  paneOn
+                      (PaneMode.Previewing (Preview.ofSubject (PreviewSubject.Content file), Some (TerminalMode.Reading harnessTerminal)))
+                      shellModel))
+          "pane-block",
+          (fun () ->
+              let block = BlockId.create "block-harness" |> expect
+              show (
+                  paneOn
+                      (PaneMode.Previewing (Preview.ofSubject (PreviewSubject.Block (harnessTerminal, block)), Some (TerminalMode.Reading harnessTerminal)))
+                      shellModel))
+          "blocks-statuses", (fun () -> show statusesModel)
+          "chapters", (fun () -> show chaptersModel)
+          "reply", (fun () -> show shortModel)
+          "remote-cursor",
+          (fun () ->
+              show shortModel
+              chapterCaret "msg-harness" 0 5)
+          "empty", (fun () -> show emptyModel) ]
+    let named = states |> List.map fst
+    PageGlobal.set Published.states (Array.ofList named)
+    PageGlobal.set Published.state (fun name ->
+        match states |> List.tryFind (fun (known, _) -> known = name) with
+        | Some (_, swap) -> swap ()
+        | None -> failwithf "__state: no state is named '%s'; the harness names %s" name (String.concat ", " named))
     render ()
     // The shell harness drives the real render, so it gets the real page listeners too — a
     // splitter, a pinned surface or a rail that only worked in the app is one no browser-tier
