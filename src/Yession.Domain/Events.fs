@@ -183,6 +183,8 @@ type SessionEvent =
     // (`PrWatches.fs`), which is what keeps a restart from re-announcing old news.
     | PrWatched of PrWatched
     | PrUnwatched of PrUnwatched
+    /// A pull request somebody here opened — an attributed act, like a watch.
+    | PrCreated of PrCreated
     | PrTransitioned of PrTransitioned
     | PrWatchReadability of PrWatchReadability
 

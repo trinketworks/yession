@@ -872,6 +872,27 @@ module Events =
                   PrUnwatched.Pr = get.Required.Field "pr" Codec.prRef.Decode
                   PrUnwatched.Actor = get.Required.Field "actor" Codec.actor.Decode }) }
 
+    let private prCreated : Codec<PrCreated> =
+        { Encode =
+            fun (p: PrCreated) ->
+                Encode.object
+                    [ "messageId", Codec.messageId.Encode p.MessageId
+                      "pr", Codec.prRef.Encode p.Pr
+                      "title", Encode.string p.Title
+                      "head", Encode.string p.Head
+                      "base", Encode.string p.Base
+                      "draft", Encode.bool p.Draft
+                      "actor", Codec.actor.Encode p.Actor ]
+          Decode =
+            Decode.object (fun get ->
+                { PrCreated.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
+                  PrCreated.Pr = get.Required.Field "pr" Codec.prRef.Decode
+                  PrCreated.Title = get.Required.Field "title" Decode.string
+                  PrCreated.Head = get.Required.Field "head" Decode.string
+                  PrCreated.Base = get.Required.Field "base" Decode.string
+                  PrCreated.Draft = get.Required.Field "draft" Decode.bool
+                  PrCreated.Actor = get.Required.Field "actor" Codec.actor.Decode }) }
+
     let private prTransitioned : Codec<PrTransitioned> =
         { Encode =
             fun (p: PrTransitioned) ->
@@ -1482,6 +1503,8 @@ module Events =
                     Encode.object [ "type", Encode.string "prWatched"; "payload", prWatched.Encode p ]
                 | SessionEvent.PrUnwatched p ->
                     Encode.object [ "type", Encode.string "prUnwatched"; "payload", prUnwatched.Encode p ]
+                | SessionEvent.PrCreated p ->
+                    Encode.object [ "type", Encode.string "prCreated"; "payload", prCreated.Encode p ]
                 | SessionEvent.PrTransitioned p ->
                     Encode.object [ "type", Encode.string "prTransitioned"; "payload", prTransitioned.Encode p ]
                 | SessionEvent.PrWatchReadability p ->
@@ -1564,6 +1587,8 @@ module Events =
                     Decode.field "payload" prWatched.Decode |> Decode.map SessionEvent.PrWatched
                 | "prUnwatched" ->
                     Decode.field "payload" prUnwatched.Decode |> Decode.map SessionEvent.PrUnwatched
+                | "prCreated" ->
+                    Decode.field "payload" prCreated.Decode |> Decode.map SessionEvent.PrCreated
                 | "prTransitioned" ->
                     Decode.field "payload" prTransitioned.Decode |> Decode.map SessionEvent.PrTransitioned
                 | "prWatchReadability" ->

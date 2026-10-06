@@ -651,6 +651,7 @@ module ConversationProjection =
         // agent's next turn needs to be told — the news arrived through no other door.
         | SessionEvent.PrWatched p -> proj |> noted (PrWatched.messageId p) (PrWatched.actor p) (Act.PrWatched p) envelope
         | SessionEvent.PrUnwatched p -> proj |> noted p.MessageId p.Actor (Act.PrUnwatched p) envelope
+        | SessionEvent.PrCreated p -> proj |> noted p.MessageId p.Actor (Act.PrCreated p) envelope
         // Attributed to the WATCHER rather than the envelope's System: the person whose
         // watch noticed is who the news is for, and whose name it should wear.
         | SessionEvent.PrTransitioned p ->

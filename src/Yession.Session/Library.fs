@@ -72,5 +72,6 @@ module Bootstrap =
         | SessionEvent.McpServerUnavailable _ -> "mcp-server-unavailable"
         | SessionEvent.PrWatched _ -> "pr-watched"
         | SessionEvent.PrUnwatched _ -> "pr-unwatched"
+        | SessionEvent.PrCreated _ -> "pr-created"
         | SessionEvent.PrTransitioned _ -> "pr-transitioned"
         | SessionEvent.PrWatchReadability _ -> "pr-watch-readability"

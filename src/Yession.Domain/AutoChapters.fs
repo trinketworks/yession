@@ -53,6 +53,7 @@ module AutoChapters =
         | Act.McpServerAvailable _
         | Act.McpServerUnavailable _
         | Act.PrUnwatched _
+        | Act.PrCreated _
         | Act.SessionResumed _
         | Act.SessionStarted _ -> false
 
