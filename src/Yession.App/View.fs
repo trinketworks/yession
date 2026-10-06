@@ -518,25 +518,31 @@ module View =
                         </div>
                       </div>
                     </div>""")
-        // Everyone else who is here, and WHERE. The same roster row as yours and the agent's
-        // — avatar, name, right-aligned slot — so the section is one list rather than a list
-        // with an appendix, and a collaborator moving from the composer to a terminal changes
-        // the words in place without moving anything.
+        // Everyone else who is here, and WHERE when they are somewhere. The same roster row as
+        // yours and the agent's — avatar, name, right-aligned slot — so the section is one list
+        // rather than a list with an appendix, and a collaborator moving from the composer to a
+        // terminal changes the words in place without moving anything. Somebody who is simply
+        // here (reading, idle) has a row with no slot: no word is truer than a made-up place.
         let peerRows =
-            ClientModel.presentEditors model
-            |> List.map (fun (who, name, field) ->
-                let token, words = whereIs model who field
+            ClientModel.roster model
+            |> List.map (fun (who, name, at) ->
+                let slot =
+                    match at with
+                    | Some (editor, field) ->
+                        let token, words = whereIs model editor field
+                        // The slot TRUNCATES rather than holding its width: where a peer is
+                        // used to be a word or two, and a chapter's name made it a line of
+                        // somebody's message — which pushed itself, and the peer's name with
+                        // it, off the side of the sidebar. Capped at half the row because
+                        // truncation alone spends the row on the longer of the two, and the
+                        // one that has to survive is WHOSE row it is.
+                        html $"""<span class="{Style.cls [ Style.label; "ml-auto min-w-0 max-w-1/2 truncate" ]}" data-peer-at="{token}">{words}</span>"""
+                    | None -> html $""""""
                 html $"""
                     <div class="{Style.person}" data-peer-presence="{ActorRef.token who}">
                       <span class="{Style.cls [ Style.avatar; Entity.actorMark model who; Style.personAvatar ]}"></span>
                       <span class="truncate min-w-0">{name}</span>
-                      <!-- The slot TRUNCATES rather than holding its width: where a peer is
-                           used to be a word or two, and a chapter's name made it a line of
-                           somebody's message — which pushed itself, and the peer's name with
-                           it, off the side of the sidebar. Capped at half the row because
-                           truncation alone spends the row on the longer of the two, and the
-                           one that has to survive is WHOSE row it is. -->
-                      <span class="{Style.cls [ Style.label; "ml-auto min-w-0 max-w-1/2 truncate" ]}" data-peer-at="{token}">{words}</span>
+                      {slot}
                     </div>""")
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.navLane1 ]}">

@@ -993,6 +993,37 @@ module PaneSplit =
         { PaneSplit.Width = int (round wanted) |> min widest |> max narrowest
           PaneSplit.Widest = widest }
 
+/// Who is connected to this session NOW, as the log says it: how many open connections each
+/// peer has, folded from the `PeerJoined` / `PeerLeft` pair the Session appends around every
+/// peer link (`PeerSession.run`).
+///
+/// Counted rather than a set because one browser is one peer however many tabs it has open
+/// (the peer id is kept per browser), so closing one tab leaves the person here. And EMPTIED at
+/// every boot, because a process that died took its links with it without writing their
+/// `PeerLeft` — everybody still here after a restart rejoins after the boot's own event, so a
+/// join from before it describes a connection that no longer exists.
+///
+/// This is not `Presence`, which is where a peer's caret or pane is and holds only peers that
+/// are SOMEWHERE — a person reading the timeline has no entry there and is still in the room.
+/// Nor is it `Peers`, which keeps the departed so a draft's author keeps a name.
+module Here =
+
+    let empty : Map<PeerId, int> = Map.empty
+
+    let applyEvent (here: Map<PeerId, int>) (event: SessionEvent) : Map<PeerId, int> =
+        match event with
+        | PeerJoined joined ->
+            Map.add joined.PeerId ((Map.tryFind joined.PeerId here |> Option.defaultValue 0) + 1) here
+        | PeerLeft left ->
+            match Map.tryFind left.PeerId here with
+            | Some n when n > 1 -> Map.add left.PeerId (n - 1) here
+            | _ -> Map.remove left.PeerId here
+        | SessionStarted _ | SessionResumed _ -> empty
+        | _ -> here
+
+    /// Every peer with a connection open, in id order.
+    let peers (here: Map<PeerId, int>) : PeerId list = here |> Map.toList |> List.map fst
+
 /// What this browser remembers for its next load, written where the browser keeps such things
 /// (`Client.Ports.Remember`).
 [<RequireQualifiedAccess>]
@@ -1081,6 +1112,9 @@ type ClientModel =
       /// the durable log (`PeerJoined`/`PeerLeft`), so it survives a reload and names a draft's
       /// author even while that author is away. Presence is who is here NOW; this is who is who.
       Peers         : Map<PeerId, string>
+      /// Who has a connection open right now, folded from the same log (`Here`). The roster
+      /// lists everyone in it, whether or not they are editing anything.
+      Here          : Map<PeerId, int>
       /// Peer↔user attribution, the client's own copy of `Yession.Domain.Attribution`,
       /// folded from the same `PeerJoined` events the Session folds. It exists so
       /// chat can resolve a `UserRef` author to a real name — and a peer to its durable
@@ -2039,6 +2073,7 @@ module ClientModel =
           Presence = Map.empty
           Caret = None
           Peers = Map.empty
+          Here = Here.empty
           Attribution = Attribution.empty
           Composer = Unchosen
           Environment = EnvironmentNotStarted
@@ -2895,18 +2930,17 @@ module ClientModel =
     // Presence already drove the per-field overlays (a caret in a body, a dot on a draft), but
     // each of those is only visible from INSIDE the surface it is about — so a collaborator
     // typing a command in a terminal you are not looking at, or renaming the session while you
-    // read the timeline, was invisible. These three answer "where is everyone" from the model,
-    // and the roster and the terminal strip render it.
+    // read the timeline, was invisible. These answer "where is everyone" from the model, and
+    // the roster and the terminal strip render it.
     //
-    // A peer appears exactly while its caret is in a collaborative field, because that is
-    // precisely what the session knows: presence clears when the caret leaves (`Focus = None`)
-    // and when the peer goes. Listing everyone who has EVER joined (`Peers`, which deliberately
-    // keeps the departed so a draft's author still has a name) would report people who left
-    // days ago as being in the room.
+    // WHERE someone is comes from presence, and holds exactly while their caret is in a
+    // collaborative field: presence clears when the caret leaves (`Focus = None`) and when the
+    // peer goes. WHETHER someone is here is a different question with a different source —
+    // `Here`, the log's open connections — because a person reading the timeline has no caret
+    // anywhere and is still in the room. The roster (`roster`, below `userName`) asks both.
+    // Neither is `Peers`, which deliberately keeps the departed so a draft's author still has
+    // a name, and would report people who left days ago as being in the room.
 
-    /// Every peer that is somewhere collaborative right now, with its name and where —
-    /// never the local peer, who is not their own collaborator. Ordered by name so the
-    /// roster does not reshuffle when a map's internal order changes.
     /// Every connected credential that needs a person to sign in again, as
     /// `(provider, reason)` — Claude's before GitHub's, and each panel's shared scope before
     /// its session-only one, so the order on screen never depends on a map's iteration.
@@ -3155,6 +3189,61 @@ module ClientModel =
         |> Map.tryFind user
         |> Option.map (fun peer -> nameOf peer model)
         |> Option.defaultValue (UserId.value user)
+
+    /// Everybody in the room but you — one row a PERSON — and where each is, when they are
+    /// somewhere. What the sidebar's roster renders, on the desk and in the phone's drawer.
+    ///
+    /// Who is here is everyone with a connection open (`Here`) and everyone whose presence
+    /// says they are somewhere: the second is live and the log is caught up over the feed, so a
+    /// peer can be placed a moment before their join is folded, and should not be missing for
+    /// that moment. A person is who `Attribution` says a peer is — so two tabs (one peer) and
+    /// two devices of one verified user (two peers, one user) are one row, and a device of
+    /// YOURS is you, not a guest. Where they are is the first caret any of their peers has,
+    /// which is `None` for somebody simply here — the roster says nothing about where, rather
+    /// than inventing somewhere.
+    ///
+    /// The `ActorRef` beside the field is the PEER whose caret it is: a draft is written by a
+    /// peer, so "their own message" is a question about that peer, not about the person.
+    ///
+    /// Actors that are not peers (the Session, naming things) are here only while they are
+    /// editing — they never join, so presence is the only thing that says they are around.
+    /// Ordered by name so the roster does not reshuffle when a map's internal order changes.
+    let roster (model: ClientModel) : (ActorRef * string * (ActorRef * FocusField) option) list =
+        let mine = me model
+        let personOf (peer: PeerId) = Attribution.actorFor model.Attribution.PeerUsers peer
+        let caretOf (who: ActorRef) =
+            Map.tryFind who model.Presence
+            |> Option.bind (fun presence -> presence.Focus)
+            |> Option.map (fun focus -> who, focus.Field)
+        let presentPeers =
+            model.Presence
+            |> Map.toList
+            |> List.choose (fun (who, _) ->
+                match who with
+                | ActorRef.PeerRef peer -> Some peer
+                | _ -> None)
+        let people =
+            Here.peers model.Here @ presentPeers
+            |> List.distinct
+            |> List.filter (fun peer -> peer <> model.Peer.PeerId)
+            |> List.groupBy personOf
+            |> List.filter (fun (person, _) -> person <> mine)
+            |> List.map (fun (person, peers) ->
+                let name =
+                    match person with
+                    | ActorRef.UserRef user -> userName user model
+                    // A group is never empty: `groupBy` makes one only for a peer it was given.
+                    | _ -> nameOf (List.head peers) model
+                let at = peers |> List.sort |> List.tryPick (fun peer -> caretOf (ActorRef.PeerRef peer))
+                person, name, at)
+        let others =
+            model.Presence
+            |> Map.toList
+            |> List.choose (fun (who, presence) ->
+                match who with
+                | ActorRef.PeerRef _ -> None
+                | _ -> presence.Focus |> Option.map (fun focus -> who, presence.DisplayName, Some (who, focus.Field)))
+        people @ others |> List.sortBy (fun (who, name, _) -> name, ActorRef.token who)
 
     /// What the chapter at this item is called, on a surface.
     ///
@@ -3504,6 +3593,7 @@ module ClientModel =
                 freshEvents
                 |> List.map (fun e -> e.Event)
                 |> List.fold Attribution.applyEvent model.Attribution
+            let here = freshEvents |> List.fold (fun here e -> Here.applyEvent here e.Event) model.Here
             // A steal FROM this client, which only this client is told about (`Stolen`). Read
             // off the release the steal wrote rather than off the lease changing hands: a
             // hand-back and somebody else's take in one page change the holder just the same,
@@ -3681,6 +3771,7 @@ module ClientModel =
                     |> Option.filter (fun armed ->
                         Projection.tryFind armed terminals |> Option.exists (fun view -> view.IsOpen))
                 Peers = peers
+                Here = here
                 Attribution = attribution
                 EventConsumer =
                     { LastProcessedOffset = highWater
