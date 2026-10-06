@@ -3387,6 +3387,9 @@ module Style =
     /// The lines a block leaves to its recording (`TerminalFeed.shownLines`), said above the
     /// ones it shows — quiet, because nothing is missing: the recording holds every one.
     let terminalOutputElided = small
+    /// Open a block in the pane's history to all its output, or shut it: the bare verb in
+    /// words, on the output's own gutter and 44px on a phone, like Stop beside it.
+    let terminalOutputExpand = cls [ btnBare; "-ml-1 phone:min-h-11" ]
     /// The truncation notice: a stated gap in the record. Stated, because a missing audit
     /// trail is not a neutral fact — but in the pane's caption voice, in `ink-dim` rather
     /// than the error red: nobody can do anything about bytes the cap already dropped, and

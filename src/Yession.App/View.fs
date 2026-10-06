@@ -3041,27 +3041,27 @@ module View =
               </div>
             </div>"""
 
-    /// Everything a block printed, as TEXT — the cheap read of the same bytes the recording
-    /// holds, and the one both surfaces that show a block are made of.
+    /// What a block printed, as TEXT — the cheap read of the same bytes the recording holds,
+    /// and the one both surfaces that show a block are made of.
     ///
     /// One renderer, because a block opened from the chat must not be a second rendering of a
     /// block, free to drift from the first. What it prints over an EMPTY one is the whole
     /// difference between a command still running, one that printed nothing, and one that
     /// never ran at all — three facts a bare blank would flatten into one.
-    let private terminalBlockOutput (feed: TerminalFeed) (block: Block) : TemplateResult =
-        // A running block's output runs to whatever has arrived; a finished one is bounded
-        // by the range its completion event recorded — which is what makes a reload show
-        // exactly the same block as the live view did.
-        let toSeq = block.ToSeq |> Option.defaultValue (max feed.KnownLength block.FromSeq)
-        // Its last lines, never all of them (`TerminalFeed.shownLines`): the page redraws a
-        // running block per record, so what it draws must not grow with what was printed.
-        // The lines left out are SAID, above what is shown and outside it, so a copy of the
-        // output is the output and a reader is not left taking the window for the whole.
-        let elided, output = TerminalFeed.shownOutput block.FromSeq toSeq feed
-        let earlier =
-            if elided = 0 then Lit.nothing
-            else
-                html $"""<div class="{Style.terminalOutputElided}" data-terminal-output-elided="{string elided}">{Dom.Text.outputElided elided}</div>"""
+    ///
+    /// Its last `keep` lines, never all of them (`TerminalFeed.shownLines`): the page redraws
+    /// a running block per record, so what it draws must not grow with what was printed. The
+    /// lines left out are SAID by `above`, which is handed how many there were and how many
+    /// are shown and draws what stands over the output and outside it, so a copy of the
+    /// output is the output and a reader is not left taking the window for the whole.
+    let private terminalBlockOutput
+        (keep: int)
+        (above: int -> int -> TemplateResult)
+        (feed: TerminalFeed)
+        (block: Block)
+        : TemplateResult =
+        let elided, output = BlockGroup.outputOf keep feed block
+        let earlier = above elided (TerminalFeed.lineCount output)
         if output <> "" then html $"""{earlier}<div class="{Style.terminalOutput}" data-terminal-output>{ansiText output}</div>"""
         else
             match block.Status with
@@ -3073,6 +3073,47 @@ module View =
             | BlockRejected (_, reason) ->
                 let text = reason |> Option.defaultValue "did not run"
                 html $"""<div class="{Style.terminalOutputEmpty}" data-terminal-output>{text}</div>"""
+
+    /// The lines a block's output leaves to the recording, said above what is shown.
+    let private outputElidedNote (elided: int) (_shown: int) : TemplateResult =
+        if elided = 0 then Lit.nothing
+        else
+            html $"""<div class="{Style.terminalOutputElided}" data-terminal-output-elided="{string elided}">{Dom.Text.outputElided elided}</div>"""
+
+    /// One block's output in the pane's HISTORY: its last `TerminalFeed.paneLines` lines, and
+    /// above them a button that opens the block to all it prints (`TerminalFeed.shownLines`)
+    /// in place — and, once open, shuts it again. Whether it is open is the model's
+    /// (`FoldKey.Output` in `OpenFolds`), so a render that rebuilds the block rebuilds it the
+    /// way the reader left it.
+    ///
+    /// ONE button in one place for both states, so the element the reader pressed is the one
+    /// still there afterwards and focus is not stranded. What stays out when it is open
+    /// beyond what a block ever draws is said by the same note the preview uses.
+    let private terminalBlockHistoryOutput
+        (dispatch: ClientMsg -> unit)
+        (model: ClientModel)
+        (feed: TerminalFeed)
+        (terminal: TerminalId)
+        (block: Block)
+        : TemplateResult =
+        let key = FoldKey.Output (terminal, block.BlockId)
+        let opened = Set.contains key model.OpenFolds
+        let keep = if opened then TerminalFeed.shownLines else TerminalFeed.paneLines
+        let above (elided: int) (shown: int) =
+            // Capped (`elided` counts what the cap left) or open past the cap (`shown` does).
+            let total = elided + shown
+            if total <= TerminalFeed.paneLines then Lit.nothing
+            else
+                let label =
+                    if opened then Dom.Text.showFewerLines TerminalFeed.paneLines
+                    elif total > TerminalFeed.shownLines then Dom.Text.showLastLines TerminalFeed.shownLines
+                    else Dom.Text.showAllLines total
+                let note = if opened then outputElidedNote elided shown else Lit.nothing
+                html $"""
+                    <button type="button" class="{Style.terminalOutputExpand}" data-terminal-output-expand="{BlockId.value block.BlockId}"
+                            aria-expanded="{if opened then "true" else "false"}"
+                            @click={Ev(fun _ -> dispatch (ToggleFoldMsg key))}>{label}</button>{note}"""
+        terminalBlockOutput keep above feed block
 
     /// Where a player mounts: an empty host the browser shell attaches one to, keyed by what
     /// it plays — a terminal's tab key, or a preview's subject key (Plan 13, stage 3e; Plan 14,
@@ -3101,7 +3142,7 @@ module View =
         (showAuthor: bool)
         (block: Block)
         : TemplateResult =
-        let body = terminalBlockOutput feed block
+        let body = terminalBlockHistoryOutput dispatch model feed terminal block
         // Whose command this was: shown only when the answer is not the obvious one. Your own
         // commands need no attribution in your own terminal — but a command the AGENT ran, or
         // a collaborator did, is the thing a person scanning a scrollback is looking for.
@@ -3723,7 +3764,7 @@ module View =
                     let feed = ClientModel.terminalFeed terminalId model
                     html $"""
                         <div class="{Style.paneReadonly}" role="region" aria-label="Command output">
-                          {terminalBlockOutput feed block}
+                          {terminalBlockOutput TerminalFeed.shownLines outputElidedNote feed block}
                         </div>"""
             html $"""
                 <section class="{Style.paneBody}" data-pane-block="{BlockId.value blockId}">
