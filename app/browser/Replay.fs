@@ -21,6 +21,7 @@ open Fable.Core.JsInterop
 open Fable.AsciinemaPlayer
 open Fable.BrowserExtras
 open Yession.App
+open Yession.App.Codecs
 
 /// A Blob URL over the `.cast` text, so the player fetches it the way it fetches any
 /// recording. Built from what the client already has rather than from a new whole-file route:
@@ -103,7 +104,9 @@ type Mounted =
 /// mounted again by the next render.
 ///
 /// `idleTimeLimit` compresses the long gaps a terminal spends waiting for a person — an audit
-/// read of a session someone left open for an hour should not be an hour long.
+/// read of a session someone left open for an hour should not be an hour long. Its value is
+/// `TranscriptReplay`'s, because the model computes a poster on the compressed clock and has
+/// to be working from the same limit.
 ///
 /// `startAt` and `poster` are the player's own options (Plan 14, stage 4), which is why a
 /// watch entered from a chip needs no second recording: a whole-terminal cast with a start
@@ -137,7 +140,7 @@ let mount (element: Browser.Types.Element) (replay: PaneReplay) (caughtUp: (unit
                     stage
                     { Options.fit = "both"
                       Options.controls = true
-                      Options.idleTimeLimit = 2
+                      Options.idleTimeLimit = TranscriptReplay.idleTimeLimit
                       // The same face a live terminal wears. A literal here meant a recording
                       // replayed in a different typeface than the terminal beside it — invisible
                       // on a box where both fell back to the platform mono, plain on any box
@@ -145,6 +148,13 @@ let mount (element: Browser.Types.Element) (replay: PaneReplay) (caughtUp: (unit
                       Options.terminalFontFamily = "var(--font-terminal)"
                       Options.startAt = replay.StartAt
                       Options.poster = replay.Poster |> Option.map (sprintf "npt:%f") }
+            // Rests the player where the replay says it lands. A seek and not a poster with a
+            // start, because it is the one that puts the timer and the progress bar at the
+            // position as well as the screen, and play from it does not clear the screen first.
+            // A recording that fails to load already says so in the player; the seek's own
+            // rejection has nothing to add to that.
+            replay.LandedAt
+            |> Option.iter (fun seconds -> created.seek seconds |> Promise.map ignore |> Promise.catch ignore |> ignore)
             caughtUp |> Option.iter (fun handler -> created.addEventListener ("ended", handler))
             player.Value <- Some created)
     { Dispose =

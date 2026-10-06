@@ -159,6 +159,45 @@ module TranscriptReplay =
             :: merge (records |> List.sortBy fst) (markers |> List.sortBy fst)
         String.concat "\n" lines + "\n"
 
+    /// The longest quiet stretch, in seconds, a replay keeps. The player squeezes every gap in
+    /// a recording down to this as it loads (`idleTimeLimit`), so an audit read of a terminal
+    /// someone left open for an hour is not an hour long. It lives here, beside `landing`,
+    /// because the squeeze is what `landing` has to undo the arithmetic of: a position named in
+    /// the recording's own clock means a different moment on the player's.
+    let idleTimeLimit = 2
+
+    /// How far past a record a position must sit to include it. The player draws a poster from
+    /// the events strictly BEFORE its time and a start position from the events up to and
+    /// INCLUDING it, so a position asking for the screen "after that record" has to be nudged
+    /// past it. Smaller than any interval a recording can tell apart.
+    let nudge = 0.001
+
+    /// Where the recording's time `at` falls on the clock the player runs on, once it has
+    /// squeezed every gap longer than `idleTimeLimit` — which it does over EVERY event in the
+    /// cast, chapter markers included, so `times` are the times of all of them, and `at` should
+    /// be the time of one of them.
+    ///
+    /// The player takes `startAt` in the recording's own clock and maps it itself, but takes
+    /// `seek` and `poster` — and reports every position and duration — on the squeezed one. A
+    /// caller that names a moment to the player, or needs to know how much playing lies between
+    /// two of them, has to speak the squeezed clock too.
+    let playerClock (times: float list) (at: float) : float =
+        let squeezed =
+            times
+            |> List.sort
+            |> List.takeWhile (fun time -> time <= at)
+            |> List.fold
+                (fun (previous, shift) time ->
+                    let surplus = time - previous - float idleTimeLimit
+                    time, (if surplus > 0.0 then shift + surplus else shift))
+                (0.0, 0.0)
+            |> snd
+        at - squeezed
+
+    /// The player's position for a replay to rest on the screen as it stood after the record at
+    /// `at`: the player's clock, nudged past the record so the record itself is drawn.
+    let landing (times: float list) (at: float) : float = playerClock times at + nudge
+
     /// The `.cast` text for a header and the records under it, in sequence order.
     ///
     /// Gaps are simply absent rather than filled: a record the client never fetched, or one

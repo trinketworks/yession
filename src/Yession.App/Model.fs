@@ -779,6 +779,13 @@ type PaneReplay =
       /// in full context, without slicing anything. In the recording's own clock: the player
       /// maps it onto the compressed one itself.
       StartAt : float option
+      /// Where the player rests until somebody presses play, in seconds on ITS clock — the
+      /// one it reports positions and durations in, with the idle gaps squeezed out
+      /// (`TranscriptReplay.landing` computes one). The screen, the timer and the progress bar
+      /// all say so, and pressing play carries on from there. A seek rather than a `Poster` and
+      /// a `StartAt` because those two are not on one clock, and a still at a position the
+      /// start does not reach is a screen that goes blank the moment play is pressed.
+      LandedAt : float option
       /// The time whose frame becomes the still shown before anyone presses play.
       ///
       /// Fed by replaying events while `time < poster`, so a poster asking for the frame at
@@ -2744,7 +2751,11 @@ module ClientModel =
     /// that record — one frame early, in the still whose whole job is to be the last thing
     /// that happened. Smaller than any interval a recording can distinguish, so it can never
     /// reach into the next record.
-    let private posterNudge = 0.001
+    let private posterNudge = TranscriptReplay.nudge
+
+    /// How many seconds of playing a rewind leaves between where it lands and the pin, at
+    /// least — on the player's clock, so dead air a replay skips does not count towards it.
+    let private rewindSpan = 5.0
 
     /// What a preview's player should be handed (Plan 14, stage 4) — a block's range of its
     /// terminal's recording, or a stretch's. `None` for a file, which is drawn, not played.
@@ -2774,7 +2785,12 @@ module ClientModel =
                 |> Option.map (fun (fromSeq, toSeq) ->
                     { Cast = rangedCastFrom header feed model terminal fromSeq toSeq
                       StartAt = None
-                      Poster = None
+                      LandedAt = None
+                      // The first frame, so a block has a face before anyone presses play: with no
+                      // poster the player stays blank until it is asked to play. The range is
+                      // rebased to its own zero and starts from its keyframe, so this is the
+                      // screen the command began on.
+                      Poster = Some posterNudge
                       BehindLive = None })
             | PreviewSubject.Stretch stretch ->
                 match stretch.Range with
@@ -2786,6 +2802,7 @@ module ClientModel =
                     Some
                         { Cast = rangedCastFrom header feed model stretch.TerminalId fromSeq toSeq
                           StartAt = None
+                          LandedAt = None
                           // A still of the FINAL screen, so the item has a face before anyone
                           // presses play. It costs nothing extra: the player builds it by
                           // replaying internally to that time.
@@ -2819,17 +2836,53 @@ module ClientModel =
                 match pin with
                 | Some length -> feed.Records |> Map.toList |> List.filter (fun (seq, _) -> seq < length)
                 | None -> feed.Records |> Map.toList
-            // A rewind lands AT the pinned edge, not at the recording's start: "rewind"
-            // on an hour-old terminal must not mean "restart from the beginning". The
-            // still is the screen as it stood at the pin — visually the live screen the
-            // reader just left — and the scrub bar is how they go back from there.
-            let pinnedEdge =
-                pin |> Option.bind (fun _ -> records |> List.tryLast |> Option.map (fun (_, r) -> r.At))
+            // A rewind goes back a little, and plays forward from there until it catches the
+            // reader up with the pin. The pin is the END of what this cast holds, so landing on
+            // it leaves nothing to play: the player answers a press of play at the end of a
+            // recording by starting it over from zero, which put the reader back at the top of
+            // an hour-old terminal with nothing to say where they were. Landing at the end was
+            // the first design — the still being the live screen they just left, and the scrub
+            // bar the way back from there — but a control named for watching a terminal from a
+            // moment ago has to be one that plays, and that needs a moment ago.
+            //
+            // How far back: to the start of the latest command that leaves a few seconds of
+            // playing to the pin, so the reader begins on a command rather than mid-screen and
+            // the replay is long enough to be one. A terminal with no such command — one that
+            // has run none, or whose shell does not mark them — goes back by the same few
+            // seconds to the latest record that leaves them, and one too short for either lands
+            // on its first record, which is its start.
+            //
+            // The player is sent there with a seek (`LandedAt`), which puts the screen, the timer
+            // and the progress bar at the one position, so pressing play carries on from the
+            // frame that was showing rather than clearing it.
+            let times = (records |> List.map (fun (_, r) -> r.At)) @ (markers |> List.map fst)
+            let landed =
+                pin
+                |> Option.bind (fun length ->
+                    let clock = TranscriptReplay.playerClock times
+                    let recorded = records |> List.map (fun (_, r) -> r.At)
+                    let roomToPlay at =
+                        match List.tryLast recorded with
+                        | Some edge -> clock edge - clock at >= rewindSpan
+                        | None -> false
+                    let startsOfCommands =
+                        Projection.tryFind terminal model.Terminals
+                        |> Option.map (fun view ->
+                            view.Blocks
+                            |> List.filter (fun block -> block.FromSeq < length)
+                            |> List.sortBy (fun block -> block.FromSeq)
+                            |> List.choose (fun block -> timeOf block.FromSeq))
+                        |> Option.defaultValue []
+                    [ startsOfCommands; recorded ]
+                    |> List.tryPick (fun candidates -> candidates |> List.filter roomToPlay |> List.tryLast)
+                    |> Option.orElse (List.tryHead recorded))
+                |> Option.map (TranscriptReplay.landing times)
             Some
                 { Cast = TranscriptReplay.castWithMarkers header records markers
+                  LandedAt = landed
                   StartAt =
-                    match pinnedEdge with
-                    | Some at -> Some at
+                    match landed with
+                    | Some _ -> None
                     | None ->
                         // A watch entered from one of this terminal's blocks starts at
                         // that command. The block's line is looked up HERE rather than
@@ -2844,7 +2897,7 @@ module ClientModel =
                             Projection.tryFind terminal model.Terminals
                             |> Option.bind (fun view -> view.Blocks |> List.tryFind (fun b -> b.BlockId = blockId)))
                         |> Option.bind (fun block -> timeOf block.FromSeq)
-                  Poster = pinnedEdge |> Option.map (fun at -> at + posterNudge)
+                  Poster = None
                   BehindLive = pin |> Option.map (fun _ -> terminal) }
 
     /// The player a mount in the pane is keyed to — the hook a mount carries, read back

@@ -2184,6 +2184,9 @@ let private rewoundTall (page: IPage) : Async<unit> =
 
 let [<Literal>] private rewoundMount = "#shell [data-pane-replay='terminal:term-live']"
 
+/// What a rewound terminal's player has drawn, as the page's text.
+let private rewoundText = sprintf "() => document.querySelector(%s)?.textContent ?? ''" (System.Text.Json.JsonSerializer.Serialize rewoundMount)
+
 /// A rewound terminal's player draws all of its terminal inside the region it is mounted in:
 /// scaled to that region's width AND its height, so no column runs off the side of the pane and
 /// no line runs under the command row. The 25-rewind finding was both at once — a player scaled
@@ -2194,6 +2197,35 @@ let private rewoundReplayFits (width: int) (height: int) =
         async {
             do! rewoundTall page
             do! replayFitsWithin "the rewound terminal to fit inside its region" page rewoundMount
+        }
+
+/// A rewound player's own timer and progress bar read a position that is neither the start nor
+/// the end: the time elapsed is on screen (hit-tested at its centre, as the controls are) and
+/// past zero, and the bar's filled part is some of it and not all of it.
+let private rewoundSaysWhere (width: int) (height: int) =
+    editorCaseIn width height (sprintf "a rewound player says how far in it is, against its length, at %dx%d" width height) <| fun page ->
+        async {
+            do! rewoundTall page
+            let read =
+                sprintf
+                    """() => {
+                         const host = document.querySelector(%s)
+                         const elapsed = host?.querySelector('.ap-time-elapsed')
+                         const filled = host?.querySelector('.ap-gutter-full')
+                         if (!elapsed || !filled) return null
+                         const box = elapsed.getBoundingClientRect()
+                         const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+                         const fraction = Number((filled.style.transform.match(/scaleX\(([0-9.]+)\)/) ?? [])[1])
+                         const [m, s] = elapsed.textContent.split(':').map(Number)
+                         return { shown: !!hit && elapsed.contains(hit), seconds: m * 60 + s, fraction }
+                       }"""
+                    (System.Text.Json.JsonSerializer.Serialize rewoundMount)
+            let held = sprintf "() => { const r = (%s)(); return !!r && r.shown && r.seconds > 0 && r.fraction > 0 && r.fraction < 1 }" read
+            match! waitFor "the rewound player's timer to be on screen, past the start and short of the end" page held |> Async.Catch with
+            | Choice1Of2 () -> ()
+            | Choice2Of2 e ->
+                let! got = await (page.EvaluateAsync<string> (sprintf "() => JSON.stringify((%s)())" read))
+                failwithf "%s\n  what the timer and bar read: %s" e.Message got
         }
 
 /// What is painted at the centre of a player's control bar and of each of its buttons, and
@@ -3516,6 +3548,20 @@ let editorTests =
                     await (page.WaitForFunctionAsync
                         """document.querySelector('#shell [data-pane-block]')?.textContent.includes('total 0') === true""")
                 return ()
+            }
+
+        // A block's recording shows the screen the command began on before anybody presses
+        // play. Without a poster the player draws nothing until it is asked to play, so the
+        // preview a reader opened to watch a command was a black box with a button on it.
+        editorCase "a block's replay shows its first frame before play" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
+                do! awaitU (page.ClickAsync "#shell [data-chat-block]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-block] [data-terminal-output]")
+                do! awaitU (page.ClickAsync "#shell [data-pane-watch]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-replay] .ap-overlay-start")
+                do! waitFor "the block's replay to show the screen its command began on" page
+                        """document.querySelector('#shell [data-pane-replay]')?.textContent.includes('before the command') === true"""
             }
 
         // The session id is a thing people copy, so on a phone a press on it has to reach
@@ -5990,10 +6036,10 @@ let editorTests =
         // The DVR (Plan 14, stage 7). What only a browser can answer: that rewinding a LIVE
         // terminal really mounts a player over what it has recorded so far — the same player
         // and the same cast a finished terminal's replay uses, which is what "rewound like
-        // live TV, through the same mechanism" has to mean — that it lands ON the pinned
-        // edge rather than at the recording's start, that focus survives the control swap,
+        // live TV, through the same mechanism" has to mean — that it lands a moment ago rather
+        // than at the recording's start or its end, that focus survives the control swap,
         // and that playing off the pinned end catches the reader back up to live by itself.
-        editorCase "a live terminal rewinds to its pinned edge, and playing off it catches back up" <| fun page ->
+        editorCase "a live terminal rewinds to a moment ago, and playing off its pinned end catches back up" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
@@ -6011,11 +6057,15 @@ let editorTests =
                     await (page.WaitForFunctionAsync
                         """document.activeElement?.getAttribute('data-terminal-watch') === 'live'""")
 
-                // It lands AT the pinned edge: the poster is the screen as it stood at the
-                // pin, shown before anyone presses play — not a blank player parked at 0:00.
+                // It lands a moment ago: the screen as it stood there, shown before anyone
+                // presses play — not a blank player parked at 0:00, and not the pinned end, which
+                // has nothing after it to play.
                 let! _ =
                     await (page.WaitForFunctionAsync
                         """document.querySelector("#shell [data-pane-replay='terminal:term-live']")?.textContent.includes('earlier output') === true""")
+                let! landed = await (page.EvaluateAsync<string> rewoundText)
+                Expect.stringContains landed "line 3" "the screen as it stood at the landing"
+                Expect.isFalse (landed.Contains "line 7") "which is short of the pin: there is something left to play"
 
                 // Playing off the pinned end IS catching up: the player's `ended` drops the
                 // rewind by itself. Nobody pressed anything, so this is the one case that
@@ -6035,6 +6085,43 @@ let editorTests =
                 let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-pane-replay='terminal:term-live']")""")
                 return ()
             }
+
+        // What a press of play does to a rewind. The recording ends at the pin, so a rewind
+        // that landed AT the pin had nothing to play and the player answered by starting over
+        // from zero: the screen emptied and the reader was at the top of the terminal with
+        // nothing saying how they got there. Sampled from just before the press, because the
+        // fault is a frame — a screen that is gone for a moment and back — which no wait on the
+        // end state can see.
+        editorCase "pressing play on a rewind carries on from where it landed" <| fun page ->
+            async {
+                do! rewoundTall page
+                let! _ = await (page.WaitForSelectorAsync (rewoundMount + " .ap-overlay-start"))
+                let sample =
+                    sprintf
+                        """async () => {
+                             const seen = []
+                             const read = () => (document.querySelector(%s)?.textContent ?? '')
+                             const timer = setInterval(() => seen.push(read()), 25)
+                             await new Promise(r => setTimeout(r, 100))
+                             document.querySelector(%s + ' .ap-overlay-start').click()
+                             await new Promise(r => setTimeout(r, 700))
+                             clearInterval(timer)
+                             return JSON.stringify(seen)
+                           }"""
+                        (System.Text.Json.JsonSerializer.Serialize rewoundMount)
+                        (System.Text.Json.JsonSerializer.Serialize rewoundMount)
+                let! seen = await (page.EvaluateAsync<string> sample)
+                let frames = System.Text.Json.JsonSerializer.Deserialize<string list> seen
+                let without = frames |> List.filter (fun frame -> not (frame.Contains "line 3"))
+                Expect.isEmpty without "every frame, before and after the press, holds the screen it landed on"
+            }
+
+        // Where the reader is, against how long the recording is. The player's own timer and
+        // progress bar say so, but they read the position they were TOLD — a rewind that put
+        // its screen at the landing with a poster left them at 00:00 over an empty bar until
+        // the first press — so this asks what they read, not where the screen is.
+        rewoundSaysWhere 1440 900
+        rewoundSaysWhere 390 844
 
         // The same rewind, as a reader sees it: inside the pane rather than off its edges,
         // with its transport on show. At both anchors, because a phone's panel is narrow and a
