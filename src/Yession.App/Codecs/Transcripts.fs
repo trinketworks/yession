@@ -108,6 +108,26 @@ module Transcripts =
 /// means the replay rides the browser's HTTP cache rather than a second whole-file route.
 module TranscriptReplay =
 
+    /// A record as the player has to be handed it to DRAW it.
+    ///
+    /// The player feeds its terminal `"o"` events and nothing else: an `"i"` it only reports to
+    /// listeners, and an `"e"` it does not know at all. Every other fold of a transcript draws
+    /// all three — the Session's emulator, a peer's live screen, and so every keyframe — and the
+    /// `"i"` is not a keystroke log: it is the one rendering of a block's command, written by
+    /// the Session where a pty would have echoed the line, because the shell's own echo of the
+    /// line it was really handed is not recorded (`Marks.lineFor`). Handed over as recorded, a
+    /// replay of a terminal that ran its commands as blocks drew their output run together with
+    /// no command between them, and dropped whatever a piped block wrote to stderr — a screen
+    /// that matched neither the terminal it replays nor the keyframe a ranged replay starts on.
+    ///
+    /// So the code changes and nothing else does: the same bytes, at the same time, drawn the
+    /// way every other reader of this transcript already draws them. Nothing is added that the
+    /// recording does not hold. A resize stays a resize.
+    let drawn (record: TranscriptRecord) : TranscriptRecord =
+        match record.Kind with
+        | TranscriptInput | TranscriptStderr -> { record with Kind = TranscriptOutput }
+        | TranscriptOutput | TranscriptResize -> record
+
     /// The `.cast` text for a header, the records under it, and CHAPTER MARKERS spliced in
     /// as asciicast's own `"m"` events (Plan 25, stage 1).
     ///
@@ -144,8 +164,10 @@ module TranscriptReplay =
             [ Encode.float at; Encode.string "m"; Encode.string label ]
             |> Encode.list
             |> Encode.toString 0
+        // Every record as the player draws it (`drawn`), so no cast handed to one can leave a
+        // command out.
         let recordLine (record: TranscriptRecord) =
-            Codec.toString Transcripts.line (TranscriptRecordLine record)
+            Codec.toString Transcripts.line (TranscriptRecordLine (drawn record))
         let rec merge (records: (int * TranscriptRecord) list) (markers: (float * string) list) =
             match records, markers with
             | [], [] -> []
@@ -224,8 +246,8 @@ module TranscriptReplay =
     ///   * **Times are rebased** to the range's first record, because asciicast times are
     ///     relative to the start of the file — without this a block forty minutes in makes
     ///     the player idle for forty minutes before its first frame.
-    ///   * Records outside the range are dropped, and INPUT records are kept: what someone
-    ///     typed is part of a stretch of live mode, and a pty echoes it anyway.
+    ///   * Records outside the range are dropped, and INPUT records are kept: a block's range
+    ///     opens on its command line, which is an input record (`drawn`).
     ///
     /// With no keyframe (a recording written before they existed) the range still rebases
     /// and still plays; it is the naive slice, approximately right for command output and

@@ -3005,12 +3005,89 @@ let editorTests =
                 // position the player honours puts this text on screen as fast as it can
                 // start, while one that lands short of the gap could only reach it after the
                 // gap has played out in real time.
+                // The terminal's text, not the mount's: a chapter's label on the bar names the
+                // same command from the moment the recording loads, wherever it landed.
                 let! _ =
                     await (page.WaitForFunctionAsync (
-                        "document.querySelector('#replay-gappy').textContent.includes('second')",
+                        "document.querySelector('#replay-gappy .ap-term-text').textContent.includes('second')",
                         null,
                         PageWaitForFunctionOptions (Timeout = 10_000f)))
                 return ()
+            }
+
+        // A block's command is recorded as its input record — the shell's echo is not kept —
+        // and the player draws only output. Handed over as recorded, a replay ran one command's
+        // output into the next with nothing between them to say which was which.
+        editorCase "a replay draws the command a block ran on the screen" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#replay .ap-overlay-start")
+                do! awaitU (page.ClickAsync "#replay .ap-overlay-start")
+                // Its output first, so the screen has been drawn when the command is looked for;
+                // the terminal's text rather than the mount's, which also holds the chapter's label.
+                do! waitFor "the recording's output on the screen" page
+                        "document.querySelector('#replay .ap-term-text').textContent.includes('total 0')"
+                let! screen = await (page.EvaluateAsync<string> "() => document.querySelector('#replay .ap-term-text').textContent")
+                Expect.stringContains screen "ls -la" "the command, on the screen above what it printed"
+            }
+
+        // Each command's chapter is a mark on the bar, labelled with the command. The player draws
+        // a label on one line centred on its mark, however long the command, so a `for` loop's
+        // ran off both sides of a phone and named nothing that was left on it.
+        editorCaseOnTouch 390 844 "every chapter's label names its command and stays on a phone's screen" <| fun page ->
+            async {
+                do! awaitU (page.EvaluateAsync "() => window.__chapters()")
+                do! waitFor "the three chapters on the bar" page
+                        "document.querySelectorAll('#replay-chapters .ap-marker-container').length === 3"
+                do! awaitU (page.EvaluateAsync "() => document.querySelector('#replay-chapters').scrollIntoView()")
+                let! labels =
+                    await (page.EvaluateAsync<string[]> """() =>
+                        [...document.querySelectorAll('#replay-chapters .ap-marker-container .ap-tooltip')].map(label => {
+                            const box = label.getBoundingClientRect()
+                            const inside = box.left >= 0 && box.right <= window.innerWidth
+                            const whole = label.scrollWidth <= label.clientWidth
+                            return label.textContent + (inside ? '' : ' [off the screen]') + (whole ? '' : ' [cut off]')
+                        })""")
+                Expect.equal
+                    (labels |> Array.map (fun label -> label.Substring (label.IndexOf " - " + 3)))
+                    [| "echo one"; "for i in 1 2 3; do echo \"step $i\"; sleep 1; done"; "echo three" |]
+                    "each label names its command, none of them off the screen or cut off"
+            }
+
+        editorCaseOnTouch 390 844 "pressing a chapter's mark moves the replay to that command" <| fun page ->
+            async {
+                do! awaitU (page.EvaluateAsync "() => window.__chapters()")
+                do! waitFor "the three chapters on the bar" page
+                        "document.querySelectorAll('#replay-chapters .ap-marker-container').length === 3"
+                do! awaitU (page.EvaluateAsync "() => document.querySelector('#replay-chapters').scrollIntoView()")
+                // The last mark's own centre, and only if a press there lands on it: a mark another
+                // is drawn over is not one a thumb can press.
+                let! centre =
+                    await (page.EvaluateAsync<float[]> """() => {
+                        const marks = document.querySelectorAll('#replay-chapters .ap-marker-container')
+                        const mark = marks[marks.length - 1]
+                        const box = mark.getBoundingClientRect()
+                        const x = box.left + box.width / 2, y = box.top + box.height / 2
+                        return mark.contains(document.elementFromPoint(x, y)) ? [x, y] : []
+                    }""")
+                Expect.equal centre.Length 2 "the last chapter's mark is the thing under its own centre"
+                do! awaitU (page.Touchscreen.TapAsync (float32 centre.[0], float32 centre.[1]))
+                // Resting at the start, the second command's last line is only on the screen once
+                // the replay has moved past it — which, paused, only a seek can do.
+                do! waitFor "the replay to move to the last command" page
+                        "document.querySelector('#replay-chapters .ap-term-text').textContent.includes('step 3')"
+            }
+
+        editorCase "the keyboard moves a replay from chapter to chapter" <| fun page ->
+            async {
+                do! awaitU (page.EvaluateAsync "() => window.__chapters()")
+                do! waitFor "the three chapters on the bar" page
+                        "document.querySelectorAll('#replay-chapters .ap-marker-container').length === 3"
+                // The terminal's text is what Tab reaches in a player; its keys are the player's.
+                do! awaitU (page.FocusAsync "#replay-chapters .ap-term-text")
+                do! awaitU (page.Keyboard.PressAsync "]")
+                do! awaitU (page.Keyboard.PressAsync "]")
+                do! waitFor "the replay to move on two chapters" page
+                        "document.querySelector('#replay-chapters .ap-term-text').textContent.includes('step 3')"
             }
 
         // A reference is part of the sentence it sits in, so its name shares the line's

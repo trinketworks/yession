@@ -3181,7 +3181,19 @@ module Style =
     /// and a tall, narrow recording fitted to a short panel came out narrower than its own
     /// control bar: the bar's last button ran past the player's edge and was clipped away. The
     /// room either side of the terminal is the player's own ground, so it reads as letterboxing.
-    let replayStage = "h-full min-h-24 [&_.ap-player]:min-w-full [&_.ap-term]:mx-auto"
+    ///
+    /// A chapter's label — the command that began there, over its mark on the bar — is at most
+    /// two lines of a narrow measure, cut short with an ellipsis. The player draws it on one
+    /// line however long the command, centred on its mark, so a `for` loop's label ran off
+    /// both sides of a phone and off the right of a desktop pane, clipped to a middle that
+    /// named nothing. Narrow enough that a mark anywhere on a phone's bar keeps its label on
+    /// the screen; two lines so the command is still recognisable there. The wrap is `!`
+    /// because the player's sheet sets `nowrap` outside any cascade layer, which beats every
+    /// utility in one whatever its specificity.
+    let replayStage =
+        "h-full min-h-24 [&_.ap-player]:min-w-full [&_.ap-term]:mx-auto "
+        + "[&_.ap-tooltip]:w-max [&_.ap-tooltip]:max-w-48 [&_.ap-tooltip]:whitespace-normal! "
+        + "[&_.ap-tooltip]:wrap-anywhere [&_.ap-tooltip]:line-clamp-2"
     /// A stretch's facts, above whatever renders its recording.
     let paneFacts = "shrink-0 flex flex-col gap-1 px-3 py-3 " + Stroke.dividerBottom
     /// A read-only tab's verbs, under whatever it is showing: the way to the recording, and
