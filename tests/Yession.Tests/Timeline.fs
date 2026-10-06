@@ -3303,6 +3303,34 @@ let private tabTests =
             let jumped = drawer |> Support.step (MoveMsg (DomMove.RevealMessage (message "1")))
             Expect.isFalse (Column.shown jumped.Column) "the message is not left behind a sheet"
 
+        // The sidebar's environment lists the session's terminals, and on a phone the sidebar is
+        // the drawer: a terminal chosen there opens the pane, which is the OTHER sheet, so the
+        // drawer goes — one sheet over the chat, and it is the one asked for (`drawerShut`).
+        testCase "a terminal opened from the phone's drawer puts the drawer away" <| fun () ->
+            let drawer =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> Support.step (ViewportMsg false)
+                |> Support.step ToggleNavMsg
+            let chosen = drawer |> Support.step (OpenInPaneMsg (Reading terminalA))
+            Expect.equal
+                (Column.shown chosen.Column, chosen.TerminalsOpen)
+                (false, true)
+                "the pane is up and the drawer is not under it"
+
+        testCase "the way to every terminal from the phone's drawer puts the drawer away" <| fun () ->
+            let drawer = clientOf [] |> Support.step (ViewportMsg false) |> Support.step ToggleNavMsg
+            let all = drawer |> Support.step OpenAllMsg
+            Expect.equal
+                (Column.shown all.Column, all.Switcher, all.TerminalsOpen)
+                (false, true, true)
+                "the `all` page is up and the drawer is not under it"
+
+        // Pressed from a column that cannot see the pane, so it SETS: a second press from a
+        // page already on `all` leaves it there, where a toggle would have taken it away.
+        testCase "going to every terminal twice is going once" <| fun () ->
+            let all = clientOf [] |> Support.step OpenAllMsg |> Support.step OpenAllMsg
+            Expect.isTrue all.Switcher "still on the `all` page"
+
         // The split between the chat and the pane is the model's (`PaneSplit`): the browser
         // measures what the chat can spare, and the reducer holds the width to it.
         testCase "a split is held between the pane's floor and what the chat can spare" <| fun () ->

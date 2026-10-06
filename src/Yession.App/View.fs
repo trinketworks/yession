@@ -553,6 +553,53 @@ module View =
               {approvalPrompts}
             </section>"""
 
+    /// Something still under way, said by a beating dot; the word is for screen readers. Live,
+    /// so green: blue is never a status (docs/visual-design.md, Colour).
+    let private runningDot =
+        html $"""<span class="{Style.statusOk}"><span class="{Style.statusDotLive}"></span><span class="{Style.srOnly}">{Dom.Text.blockRunning}</span></span>"""
+
+    /// A terminal's state, as a small mark beside its name: running, its last command failed,
+    /// or closed — and nothing at all for one that is open, idle and fine, which is most of
+    /// them. ONE vocabulary for the pivot, the `all` page and the sidebar's environment, so a
+    /// terminal reads the same in the row of names and in each list of them: the pulse is the running block's own
+    /// (`runningDot`), a failure the same dot standing still in the error red, and a closed
+    /// terminal the dot hollowed out. A mark beside the name, never a
+    /// box round it or a word in caps after it — a row of names is what a reader scans — and
+    /// each says itself to a screen reader.
+    ///
+    /// And what is NEWS to the person reading (`ClientModel.unseen`): a terminal that finished
+    /// something since they last looked at it wears the settled dot with a ring round it — in
+    /// ink when all of it went through, because a finished thing is a record and not live, and
+    /// in the error red when something did not, because that is the newest wrong thing. Without it a build that
+    /// finished in another tab looked exactly like a terminal nobody had touched. The ring
+    /// goes when they look, and a failure then settles to the plain red dot it always wore —
+    /// so an unseen failure is the louder of the two, never the quieter. Running and closed
+    /// still win: what a terminal is doing now is the first thing to say about it.
+    let private terminalMark (model: ClientModel) (view: TerminalView) : TemplateResult =
+        let mark (token: string) (voice: string) (glyph: TemplateResult) (word: string) =
+            html $"""<span class="{Style.pivotMark} {voice}" data-pane-mark="{token}"><span aria-hidden="true">{glyph}</span><span class="{Style.srOnly}">{word}</span></span>"""
+        let news = html $"""<span class="{Style.statusDotNews}"></span>"""
+        // Hollow: the dot with nothing left in it. Not a stop square, which is what a running
+        // command's Stop looks like.
+        if not view.IsOpen then
+            mark "closed" "text-ink-faint" (html $"""<span class="{Style.statusDotHollow}"></span>""") Dom.Text.markClosed
+        elif Option.isSome (Projection.runningBlock view) then
+            html $"""<span class="{Style.pivotMark}" data-pane-mark="running">{runningDot}</span>"""
+        else
+            match ClientModel.unseen view.TerminalId model with
+            | Some Unseen.Failed -> mark "unseen-failed" "text-err" news Dom.Text.markUnseenFailed
+            | Some Unseen.Succeeded -> mark "unseen-ok" "text-ink" news Dom.Text.markUnseenOk
+            | None ->
+                match view.Blocks |> List.tryLast |> Option.map (fun block -> block.Status) with
+                | Some (BlockFinished (CommandFailed _ | CommandTimedOut | CommandExecutionFailed _))
+                // A solid dot in the error red, not the block's own cross: beside a name in a row
+                // whose selected item wears a × that KILLS, a red × read as a second kill.
+                | Some (BlockRejected _) ->
+                    mark "failed" "text-err" (html $"""<span class="{Style.statusDotSolid}"></span>""") Dom.Text.markFailed
+                | Some (BlockFinished (CommandSucceeded _))
+                | Some BlockRunning
+                | None -> Lit.nothing
+
     let private environmentStatus =
         function
         | EnvironmentNotStarted -> Style.statusFaint, html $"""not started"""
@@ -561,11 +608,54 @@ module View =
         | EnvironmentFailed _ -> Style.statusErr, html $"""failed"""
         | EnvironmentDown -> Style.statusFaint, html $"""stopped"""
 
-    let private environmentSection (status: EnvironmentStatus) : TemplateResult =
+    /// How many terminals the environment lists before it hands the rest to the pane's `all`
+    /// page. A CAP rather than a column that scrolls: on a phone this column is a drawer, and
+    /// a list that grew with the session pushed `settings` off the bottom of it — the one way
+    /// to settings — behind a scroll nobody knew was there. Five 44px rows and the way to
+    /// the rest fit under the roster on a 390x844 screen; the `all` page is already the
+    /// complete list, with every verb, so the rest is one press away rather than a second
+    /// copy of it.
+    let private environmentTerminalCap = 5
+
+    /// The environment: whether it is up, and what is running in it — the session's open
+    /// terminals, each the way into the pane on it.
+    ///
+    /// An entry is `OpenInPaneMsg` with the read the `all` page's row would choose
+    /// (`ClientModel.chosenRead`), so a terminal is reached ONE way whichever list it was
+    /// picked from; on a phone that message also shuts the drawer (`drawerShut`). A CLOSED
+    /// terminal is not listed: this says what is running, and a recording is the `all` page's
+    /// to offer. Nothing open, nothing listed — the status row is the whole section.
+    let private environmentSection (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+        let status = model.Environment
         let statusClass, statusInner = environmentStatus status
+        let entry (view: TerminalView) =
+            html $"""
+                <button type="button" class="{Style.terminalEntry}"
+                        data-environment-terminal="{TerminalId.value view.TerminalId}"
+                        @click={Ev(fun _ -> dispatch (OpenInPaneMsg (ClientModel.chosenRead view.TerminalId model)))}>
+                  <span class="truncate min-w-0">{TerminalName.display model.Terminals view}</span>{terminalMark model view}
+                </button>"""
+        let terminals =
+            match ClientModel.terminalRows model |> List.filter (fun view -> view.IsOpen) with
+            | [] -> Lit.nothing
+            | live ->
+                let shown = List.truncate environmentTerminalCap live
+                let more =
+                    match List.length live - List.length shown with
+                    | 0 -> Lit.nothing
+                    | rest ->
+                        html $"""
+                            <button type="button" class="{Style.terminalEntry}"
+                                    data-environment-more="{rest}" aria-label="{Dom.Text.moreTerminals rest}"
+                                    @click={Ev(fun _ -> dispatch OpenAllMsg)}>{Dom.Text.moreShort rest}</button>"""
+                html $"""
+                    <div class="flex flex-col" data-environment-terminals>
+                      {shown |> List.map entry}{more}
+                    </div>"""
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.navLane2 ]}" data-environment="{environmentLabel status}">
               <div class="{Style.sideRow}"><span class="{Style.label}">environment</span><span class="{statusClass}">{statusInner}</span></div>
+              {terminals}
             </section>"""
 
     /// What the non-session sign-in scope actually reaches here. On a deployment that
@@ -948,7 +1038,7 @@ module View =
               {connectionSection dispatch model}
               {peopleSection actions dispatch model}
               {chaptersSection dispatch model}
-              {environmentSection model.Environment}
+              {environmentSection dispatch model}
               <div class="flex-1"></div>
               <div class="{Style.cls [ Style.sideFoot; Style.navLane2 ]}">
                 <button type="button" class="{Style.navPivot}" data-settings-toggle="open" @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>settings<span class="{Style.pivotMarkForward}">{Icon.pivotRight}</span></button>
@@ -1584,11 +1674,6 @@ module View =
         List.ofSeq pieces
 
     let private ansiText (text: string) : TemplateResult list = ansiLines (Ansi.parse text) None
-
-    /// Something still under way, said by a beating dot; the word is for screen readers. Live,
-    /// so green: blue is never a status (docs/visual-design.md, Colour).
-    let private runningDot =
-        html $"""<span class="{Style.statusOk}"><span class="{Style.statusDotLive}"></span><span class="{Style.srOnly}">{Dom.Text.blockRunning}</span></span>"""
 
     /// How a block went, as its HOOKS spell it: four tokens for six outcomes, because what a
     /// hook is asked is whether it went, not how.
@@ -4041,48 +4126,6 @@ module View =
         elif (ClientModel.affordances view model).ScreenIsTheRead || Option.isSome view.Lease then TerminalRead.Screen
         else TerminalRead.Blocks
 
-    /// A terminal's state, as a small mark beside its name: running, its last command failed,
-    /// or closed — and nothing at all for one that is open, idle and fine, which is most of
-    /// them. ONE vocabulary for the pivot and the `all` page, so a terminal reads the same in
-    /// the row of names and in the list of them: the pulse is the running block's own
-    /// (`runningDot`), a failure the same dot standing still in the error red, and a closed
-    /// terminal the dot hollowed out. A mark beside the name, never a
-    /// box round it or a word in caps after it — a row of names is what a reader scans — and
-    /// each says itself to a screen reader.
-    ///
-    /// And what is NEWS to the person reading (`ClientModel.unseen`): a terminal that finished
-    /// something since they last looked at it wears the settled dot with a ring round it — in
-    /// ink when all of it went through, because a finished thing is a record and not live, and
-    /// in the error red when something did not, because that is the newest wrong thing. Without it a build that
-    /// finished in another tab looked exactly like a terminal nobody had touched. The ring
-    /// goes when they look, and a failure then settles to the plain red dot it always wore —
-    /// so an unseen failure is the louder of the two, never the quieter. Running and closed
-    /// still win: what a terminal is doing now is the first thing to say about it.
-    let private terminalMark (model: ClientModel) (view: TerminalView) : TemplateResult =
-        let mark (token: string) (voice: string) (glyph: TemplateResult) (word: string) =
-            html $"""<span class="{Style.pivotMark} {voice}" data-pane-mark="{token}"><span aria-hidden="true">{glyph}</span><span class="{Style.srOnly}">{word}</span></span>"""
-        let news = html $"""<span class="{Style.statusDotNews}"></span>"""
-        // Hollow: the dot with nothing left in it. Not a stop square, which is what a running
-        // command's Stop looks like.
-        if not view.IsOpen then
-            mark "closed" "text-ink-faint" (html $"""<span class="{Style.statusDotHollow}"></span>""") Dom.Text.markClosed
-        elif Option.isSome (Projection.runningBlock view) then
-            html $"""<span class="{Style.pivotMark}" data-pane-mark="running">{runningDot}</span>"""
-        else
-            match ClientModel.unseen view.TerminalId model with
-            | Some Unseen.Failed -> mark "unseen-failed" "text-err" news Dom.Text.markUnseenFailed
-            | Some Unseen.Succeeded -> mark "unseen-ok" "text-ink" news Dom.Text.markUnseenOk
-            | None ->
-                match view.Blocks |> List.tryLast |> Option.map (fun block -> block.Status) with
-                | Some (BlockFinished (CommandFailed _ | CommandTimedOut | CommandExecutionFailed _))
-                // A solid dot in the error red, not the block's own cross: beside a name in a row
-                // whose selected item wears a × that KILLS, a red × read as a second kill.
-                | Some (BlockRejected _) ->
-                    mark "failed" "text-err" (html $"""<span class="{Style.statusDotSolid}"></span>""") Dom.Text.markFailed
-                | Some (BlockFinished (CommandSucceeded _))
-                | Some BlockRunning
-                | None -> Lit.nothing
-
     /// The `all` page (Plan 20, stage 0; P2-2): every terminal the session has ever had, with
     /// every verb one of them affords, and every file shared into it — the pivot's first item,
     /// and the pane's body while it is selected.
@@ -4164,13 +4207,7 @@ module View =
                 match TerminalName.subtitle view with
                 | "" -> Lit.nothing
                 | command -> html $"""<span class="{Style.terminalListSubtitle}" title="{command}">{command}</span>"""
-            // Choosing the terminal the pane is already about keeps the read it is in — a
-            // rewind, a scroll position — as its tab does; any other is read from its text.
-            let mode =
-                model.Pane
-                |> Option.bind PaneMode.subject
-                |> Option.filter (fun mode -> TerminalMode.terminal mode = view.TerminalId)
-                |> Option.defaultValue (Reading view.TerminalId)
+            let mode = ClientModel.chosenRead view.TerminalId model
             html $"""
                 <div class="{Style.terminalListRow}" role="listitem">
                   <span class="min-w-0 flex-1 flex flex-col">
