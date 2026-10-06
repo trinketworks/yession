@@ -3497,15 +3497,12 @@ module View =
                           title="{name}" data-terminal-draft-editor="{ActorRef.token editor}"></span>""")
         // What a send does NOW, said on the control rather than left for the queue card to
         // explain afterwards. While somebody holds the keyboard the session holds the queue,
-        // so the press queues and says for whom it waits. Behind the live edge it still RUNS —
-        // being rewound is this reader's view, not the terminal's state — and the title says
-        // where it will be seen. `hasCommand` is untouched: whether there is anything to send
-        // is one question, what sending does is another.
+        // so the press queues and says for whom it waits. `hasCommand` is untouched: whether
+        // there is anything to send is one question, what sending does is another.
         let sendName, sendWhen =
             match lease with
             | Some holder when holder = ClientModel.me model -> Dom.Text.queue, Dom.Text.runsOnHandBack None
             | Some holder -> Dom.Text.queue, Dom.Text.runsOnHandBack (Some (Entity.actorName model holder))
-            | None when ClientModel.isRewound terminal model -> Dom.Text.run, Dom.Text.runsBehindLive
             | None -> Dom.Text.run, ""
         // Someone else mid-command: their live text, read-only here. Watching a collaborator
         // type a command is the same affordance as watching them type a message, which is
@@ -3539,7 +3536,22 @@ module View =
                 terminalStolenNotice dispatch model terminal holder
             | Some holder, _ -> terminalLeaseBar dispatch model terminal holder
             | None, _ -> Lit.nothing
-        let commandLines =
+        let rewoundBar =
+            html $"""
+                <div class="{Style.terminalBandRow}" data-terminal-rewound="{TerminalId.value terminal}">
+                  <span class="{Style.paneSays}">{Dom.Text.watchingRecording}</span>
+                  <div class="ml-auto flex items-center gap-2">
+                    <button type="button" class="{Style.bandActPrimary}" data-terminal-rewound-live
+                            aria-label="{Dom.Text.backToLive}" title="{Dom.Text.backToLive}"
+                            @click={Ev(fun _ ->
+                                          // The terminal toggle's own `live` press, then focus
+                                          // onto that toggle: this bar leaves the document
+                                          // with the rewind, and the hand was in it.
+                                          dispatch (ShowInPaneMsg (Reading terminal))
+                                          dispatch (MoveMsg DomMove.FocusWatchToggle))}>{Dom.Text.live}</button>
+                  </div>
+                </div>"""
+        let commandInput =
             html $"""
                     <div>
                       {others |> List.map peerDraft}
@@ -3568,6 +3580,13 @@ module View =
                         </div>
                       </div>
                     </div>"""
+        // A reader behind the live edge is watching a recording, and a line to type a command
+        // into under it reads as if what they type happens in what they watch. It is
+        // replaced, not disabled: a disabled field is still a field, and a person types into
+        // it. What they had written is a `Y.Text` root, not this input, so it is waiting when
+        // the input comes back. The queue and the lease bar stay — they are about the
+        // terminal, which goes on running.
+        let commandLines = if ClientModel.isRewound terminal model then rewoundBar else commandInput
         // Named, not shown as a stall. The queue is held because a command written here could
         // not be bounded — we would not know when it started or finished — and saying that is
         // the difference between a terminal that looks broken and one that says what to do.
@@ -3640,7 +3659,7 @@ module View =
                 // Back to the text, where there is text to go back to.
                 if List.isEmpty view.Blocks then None else Some ("output", Dom.Text.output, Some (Reading terminal))
             elif view.IsOpen then
-                if feed.KnownLength > 0 then Some ("watch", Dom.Text.replay, None) else None
+                if feed.KnownLength > 0 then Some ("watch", Dom.Text.rewindAct, None) else None
             elif ClientModel.terminalPlayable terminal model then Some ("watch", Dom.Text.replay, Some (Watching terminal))
             else None
         match offer with
@@ -4577,10 +4596,9 @@ module View =
             html $"""
                 {above}
                 {if not view.IsOpen then terminalClosedBand model view
-                 // Behind the live edge the terminal is still live, and still takes commands:
-                 // rewinding is where this reader is LOOKING, not something the terminal is
-                 // doing. The composer stays under the recording, and its Run says where what
-                 // it runs will be seen.
+                 // Behind the live edge the terminal is still live and its queue and lease
+                 // still stand, but this reader is watching a recording: the composer says so
+                 // where the command line would be (`terminalComposer`).
                  else terminalComposer actions dispatch model view.TerminalId}"""
         // Somewhere new to put something — the menu the pivot's `+` hangs. A MENU and not a
         // section of a list, which is what this was and what made it unreadable: a row that
@@ -4741,7 +4759,9 @@ module View =
                 line "preview" (html $"""<span class="min-w-0 truncate" data-pane-preview-meta>{meta}</span>""")
             | None, Some terminal ->
                 match Projection.tryFind terminal model.Terminals with
-                | Some view when terminalRead model view <> TerminalRead.Blocks ->
+                // Not while rewound: the recording under the reader is a moment ago, and the
+                // newest command and its status are the live terminal's, which it is not.
+                | Some view when terminalRead model view <> TerminalRead.Blocks && not (ClientModel.isRewound terminal model) ->
                     let latest = Projection.runningBlock view |> Option.orElse (List.tryLast view.Blocks)
                     match latest with
                     | Some block ->
