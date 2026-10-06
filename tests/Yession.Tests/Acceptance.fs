@@ -2062,6 +2062,38 @@ let private uiChecklistTests =
             // octo/hello" pair under it spends two lines of a narrow lane saying one thing.
             Expect.isFalse (record.Contains ">repo<") "the naming column is not also a labelled pair"
 
+        // A record is the lane's whole answer about its subject, so a label with a dash under
+        // it reads as something missing rather than as nothing to report. The sandbox that
+        // nobody declared was the case: "declared by" over "—".
+        let recordWithAbsent () =
+            let model =
+                { representativeModel with
+                    Queries =
+                        { representativeModel.Queries with
+                            Values =
+                                representativeModel.Queries.Values
+                                |> Map.add
+                                    "repos"
+                                    (RowsOf
+                                        [ [ "repo", CellText "octo/hello"
+                                            "branch", CellText "main"
+                                            "checks", CellStatus ("checks red", ToneBad)
+                                            "dirty", CellAbsent ] ]) } }
+            let html = Support.render model
+            let start = html.IndexOf "data-query-row=\"octo/hello\""
+            Expect.isTrue (start > 0) "the record renders"
+            html.Substring (start, html.IndexOf ("</dl>", start) - start)
+
+        testCase "a record leaves out the fact it has nothing to say about" <| fun () ->
+            Expect.isFalse
+                ((recordWithAbsent ()).Contains ">uncommitted changes<")
+                "no label is drawn over a dash"
+
+        testCase "a record keeps the facts it does have when one is left out" <| fun () ->
+            let record = recordWithAbsent ()
+            Expect.isTrue (record.Contains ">branch<") "the branch is still labelled"
+            Expect.isTrue (record.Contains ">checks<") "and so are the checks"
+
         // The one pending act, at both mount points (Plan 15, stage 3c). What is worth
         // pinning is that the CHAT carries the terminal's pending commands too: the whole
         // claim of this stage is that reading what the agent is about to run is the same act

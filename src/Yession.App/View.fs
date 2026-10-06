@@ -816,10 +816,21 @@ module View =
                 let named = name |> Option.map (cellAt row) |> Option.defaultValue CellAbsent
                 let shell = if index = 0 then Style.queryRecord else Style.queryRecordAfter
                 let key = name |> Option.map (fun column -> column.Key) |> Option.defaultValue ""
+                // A fact the row has nothing to say about is left out rather than drawn as a
+                // label over a dash: a record is the lane's whole answer about its subject,
+                // and a label with no value reads as something missing instead of as
+                // nothing to report. (A `Fields` answer keeps its dashes — there the
+                // columns ARE the answer, and an absent one is worth seeing.)
+                let present =
+                    rest
+                    |> List.filter (fun column ->
+                        match cellAt row column with
+                        | CellAbsent -> false
+                        | _ -> true)
                 html $"""
                     <div class="{shell}" data-query-row="{QueryCell.describe named}">
                       <span class="{Style.queryRecordName}" data-query-cell="{key}" data-query-tone="{toneHook named}">{QueryCell.describe named}</span>
-                      <dl class="{Style.queryFields}">{pairs row rest}</dl>
+                      <dl class="{Style.queryFields}">{pairs row present}</dl>
                     </div>"""
             html $"""<div class="{Style.queryRecords}">{rows |> List.mapi record}</div>"""
         // A value that does not match its declared shape never reaches here — the registry
