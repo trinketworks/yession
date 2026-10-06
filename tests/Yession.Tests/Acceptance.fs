@@ -329,9 +329,18 @@ let private withChapters (ids: string list) : ClientModel =
                     |> Map.ofList } }
 
 /// The representative terminal, with its one fixture block replaced by whatever a case
-/// wants to assert the pane's grouping fold against (`terminalBlockRun`).
+/// wants to assert the pane's grouping fold against (`terminalBlockRun`) — and a transcript
+/// in which each of them printed more than the pane draws whole, so every block but the
+/// newest is earlier history and only who ran what decides the grouping.
 let private runModelWith (blocks: Block list) : ClientModel =
+    let overflowing =
+        { Records =
+            Map.ofList [ 0, { At = 0.0; Kind = TranscriptOutput; Data = String.replicate (BlockGroup.unfoldedLines + 1) "line\n" } ]
+          KnownLength = 1
+          ReadThrough = 1
+          Header = None }
     { representativeModel with
+        TerminalFeeds = Map.add terminalId overflowing representativeModel.TerminalFeeds
         Terminals =
             { representativeModel.Terminals with
                 Terminals =
@@ -340,8 +349,8 @@ let private runModelWith (blocks: Block list) : ClientModel =
                         if t.TerminalId = terminalId then { t with Blocks = blocks } else t) } }
 
 /// One block for a grouping case: `n` only tells its command and its id apart from its
-/// run-mates, never its order — `FromSeq`/`ToSeq` carry no real transcript, because the
-/// grouping fold reads only `Authority` and `Status`.
+/// run-mates, never its order — `FromSeq`/`ToSeq` point every block at the one long record
+/// `runModelWith` gives the terminal.
 let private runBlock (authority: Authority) (n: int) (status: BlockStatus) : Block =
     { BlockId = BlockId.create (sprintf "block-run-%d" n) |> expect
       QueueId = None
@@ -1113,7 +1122,7 @@ let private uiChecklistTests =
             Expect.isTrue
                 (html.Contains (Dom.attr Dom.Hooks.terminalBlockRun "block-run-1"))
                 "the fold is keyed by the FIRST block in it"
-            Expect.isTrue (html.Contains "ran 3 commands") "the header counts every command inside"
+            Expect.isTrue (html.Contains "ran 3 earlier commands") "the header counts every command inside"
             for n in 1 .. 3 do
                 Expect.isTrue
                     (html.Contains (Dom.attr Dom.Hooks.terminalBlock (sprintf "block-run-%d" n)))

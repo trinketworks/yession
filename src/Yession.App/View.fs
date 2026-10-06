@@ -3175,11 +3175,12 @@ module View =
             </article>"""
 
     /// One fold over a run of commands one actor ran back to back in this terminal — "ran N
-    /// commands", with the same ✓/✗/running tally the chat's task card wears, collapsed to
-    /// one line until pressed. A native `<details>`, so the fold arrives keyboard-operable and
-    /// announced, rather than a second fold mechanism borrowed from the chat. Its mark is the
-    /// chevron every other fold in the product turns, not an ellipsis: `…` at the end of a
-    /// line reads as a menu, and what is behind this is the commands, not choices.
+    /// earlier commands", with the same ✓/✗/running tally the chat's task card wears,
+    /// collapsed to one line until pressed. A native `<details>`, so the fold arrives
+    /// keyboard-operable and announced, rather than a second fold mechanism borrowed from the
+    /// chat. Its mark is the chevron every other fold in the product turns, not an ellipsis:
+    /// `…` at the end of a line reads as a menu, and what is behind this is the commands, not
+    /// choices.
     ///
     /// Which runs exist is `BlockGroup.ofBlocks`'s to say; whether one is open is the
     /// model's (`OpenFolds`), bound onto the element and told back by its `toggle`, so a
@@ -3206,7 +3207,9 @@ module View =
         // No running count: a running command is never in a run (`BlockGroup.ofBlocks`).
         let done' = count tally.Done (html $"""<span class="{Style.statusOk}">{Icon.checkSm} {tally.Done}</span>""")
         let counts = html $"""<span class="{Style.terminalBlockRunCounts}">{failed}{done'}</span>"""
-        let commands = if tally.Commands = 1 then "1 command" else sprintf "%d commands" tally.Commands
+        // EARLIER commands: a run is only ever history older than what the pane draws whole
+        // (`BlockGroup.ofBlocks`), and the line says so rather than reading as everything.
+        let commands = if tally.Commands = 1 then "1 earlier command" else sprintf "%d earlier commands" tally.Commands
         let runAuthor = Authority.author leader.Authority
         let author =
             if ClientModel.isMine runAuthor model then Lit.nothing
@@ -4409,7 +4412,7 @@ module View =
                 // many. On a closed one there is no command line, and the symbol is the only
                 // thing left to say the surface is a terminal that ran nothing.
                 if not (List.isEmpty view.Blocks) then
-                    BlockGroup.ofBlocks view.Blocks
+                    BlockGroup.ofBlocks feed view.Blocks
                     |> List.map (function
                         | BlockGroup.Alone block -> terminalBlockView dispatch model feed view.TerminalId true block
                         | BlockGroup.Run (leader, rest) -> terminalBlockRun dispatch model feed view.TerminalId leader rest)

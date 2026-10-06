@@ -5759,7 +5759,7 @@ let editorTests =
                 return ()
             }
 
-        // The same press, for a command that is behind a shut run ("ran 2 commands"). It
+        // The same press, for a command that is behind a shut run ("ran 2 earlier commands"). It
         // landed on the terminal with everything folded: nothing scrolled to, nothing marked,
         // the promise of the button broken. Only a browser can see the run open, the command
         // inside the scroller's box and its mark playing.
