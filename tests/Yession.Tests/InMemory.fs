@@ -464,8 +464,8 @@ let tests =
                 // deliberately: opening is what makes the chapter owed a name, and a caret
                 // arriving after that would be a different rule (stopping) than this one
                 // (not starting).
-                b.Connection.ReportPresence (
-                    Some { Field = ChapterName item.MessageId; Pos = { Anchor = "AQI="; Head = "AQI=" } })
+                b.Runner.Dispatch (
+                    user (CaretMovedMsg (Some { Field = ChapterName item.MessageId; Pos = { Anchor = "AQI="; Head = "AQI=" } })))
                 do! a.Runner.WaitFor (fun m -> Map.containsKey (PeerRef b.Hello.PeerId) m.Presence)
                 a.Runner.Dispatch (user (ToggleChapterMsg item.MessageId))
                 // It IS owed, and it IS asked — so the only thing left that can stop the
@@ -647,7 +647,7 @@ let tests =
                 let! b = connectInMemoryClient host "bob" "Bob"
                 // Ada's caret is in the title; the Host relays the presence frame to Bob.
                 let titleFocus : Focus = { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } }
-                a.Connection.ReportPresence (Some titleFocus)
+                a.Runner.Dispatch (user (CaretMovedMsg (Some titleFocus)))
                 do! b.Runner.WaitFor (fun m -> Map.containsKey (PeerRef a.Hello.PeerId) m.Presence)
                 Expect.equal
                     (Map.tryFind (PeerRef a.Hello.PeerId) (b.Runner.Model ()).Presence |> Option.bind (fun c -> c.Focus))
@@ -655,7 +655,7 @@ let tests =
                     "B sees A's title caret with the reported anchor/head"
                 // Ada moves into her own draft body: the field changes, and it still relays.
                 let bodyFocus : Focus = { Field = DraftBody a.Hello.PeerId; Pos = { Anchor = "BQY="; Head = "BQY=" } }
-                a.Connection.ReportPresence (Some bodyFocus)
+                a.Runner.Dispatch (user (CaretMovedMsg (Some bodyFocus)))
                 do! b.Runner.WaitFor (fun m ->
                         Map.tryFind (PeerRef a.Hello.PeerId) m.Presence |> Option.bind (fun c -> c.Focus) = Some bodyFocus)
                 Expect.equal

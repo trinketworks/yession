@@ -1475,12 +1475,13 @@ do
               Root = shellHost
               Actions = actions
               Dispatch = fun msg -> dispatchRef msg
-              // No session behind this page: a draft sent and a caret reported go nowhere. (A
-              // resize is read back, but it is an effect the reducer asks for, below.)
+              // No session behind this page: a draft sent goes nowhere. A caret reported reaches
+              // the model as it does in the app (`Browser.fs`); the presence that asks for goes
+              // nowhere either, below.
               Links =
                 { SendDraft = ignore
                   SendTerminalDraft = fun _ _ -> ()
-                  ReportFocus = ignore } }
+                  ReportFocus = Render.focusReporter (fun focus -> dispatchRef (CaretMovedMsg focus)) } }
     let mutable model = { shellModel with Column = { shellModel.Column with Wide = PaneShell.onDesktop () } }
     /// What `Published.closed` reads, kept here for `typed`'s reason: the count is this
     /// instrument's output, not the place it keeps it.
@@ -1501,6 +1502,7 @@ do
             closed <- Array.append closed [| TerminalId.value id |]
             PageGlobal.set Published.closed closed
         | ClientEffect.ReleaseTerminal _
+        | ClientEffect.SendPresence _
         | ClientEffect.InterruptTerminal _
         | ClientEffect.RearmTerminal _
         | ClientEffect.ReattachTerminal _

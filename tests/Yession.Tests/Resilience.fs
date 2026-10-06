@@ -1398,27 +1398,41 @@ let private releaseTests =
         testCaseAsync "presence reported before the handshake waits for it, and is not lost" <|
             async {
                 // The browser holds the connection the moment `connect` returns — BEFORE `Run`
-                // has sent the hello — and reports what the pane shows on every render. So a
-                // presence frame can be asked for while the channel has said nothing yet, and
-                // the hello has to stay the first thing on the wire: the Session reads
-                // an unannounced peer's frame as a peer it does not know, and the connection
-                // dies there, which presents as a browser that never reaches Connected.
+                // has sent the hello — and a caret can move at any time. So presence can be asked
+                // for while the channel has said nothing yet, and the hello has to stay the first
+                // thing on the wire: the Session reads an unannounced peer's frame as a peer it
+                // does not know, and the connection dies there, which presents as a browser that
+                // never reaches Connected.
+                //
+                // WHEN to send is the model's rule (`ClientModel.presenceToSend`), pinned in the
+                // cheap tier beside it. This is the composition around it: the program, `perform`
+                // and the connection, wired as the browser wires them, so a rule that is right in
+                // the model still has to reach the wire in the right order.
                 let doc = Y.Doc.Create ()
                 let local = peer "ada" "Ada"
                 let clientEnd, serverEnd = Yession.Session.InMemoryChannel.createPair<string> ()
                 let channel, sent = recordingOver clientEnd
+                let wired : Client.Connection option ref = ref None
+                let runner =
+                    Harness.run (
+                        Client.makeProgram
+                            { Client.Ports.offline with Client.Ports.Connection = fun () -> wired.Value }
+                            doc
+                            (ClientModel.init local))
                 let connection =
                     Client.connect
                         Client.ConnectOptions.defaults
-                        (fun () -> ClientModel.init local)
+                        runner.Model
                         doc
                         (BodyRegistry doc)
                         (TextRegistry doc)
                         { PeerId = local.PeerId; DisplayName = "Ada"; Token = "t" }
-                        ignore
+                        (user >> runner.Dispatch)
                         channel
-                // Reported before anything runs, which is exactly what a render does.
-                connection.ReportViewing (Some (ViewingTerminal (TerminalId.create "term-1" |> expect)))
+                wired.Value <- Some connection
+                // Reported before anything runs, which is exactly what an editor can do.
+                let caret : Focus = { Field = Title; Pos = { Anchor = "AQI="; Head = "AQI=" } }
+                runner.Dispatch (user (CaretMovedMsg (Some caret)))
                 Async.StartImmediate connection.Run
 
                 do! waitUntil "the connection announces itself" (fun () -> sent.Count > 0)
@@ -1429,8 +1443,8 @@ let private releaseTests =
                     (sent |> Seq.exists (function Presence _ -> true | _ -> false))
                     "presence jumped the handshake — the peer had not been announced yet"
 
-                // Accepted: the view reported while the channel was coming up is stated, rather
-                // than waiting for a pane change that may never come. Presence has no keepalive.
+                // Accepted: the caret reported while the channel was coming up is stated, rather
+                // than waiting for a move that may never come. Presence has no keepalive.
                 do!
                     serverEnd.Send (
                         Control (
@@ -1440,13 +1454,10 @@ let private releaseTests =
                                   LatestOffset = None }))
                 do! waitUntil "the accepted connection states what it was told" (fun () ->
                     sent |> Seq.exists (function Presence _ -> true | _ -> false))
-                let viewing =
+                let focus =
                     sent
-                    |> Seq.pick (function Presence p -> Some p.Viewing | _ -> None)
-                Expect.equal
-                    viewing
-                    (Some (ViewingTerminal (TerminalId.create "term-1" |> expect)))
-                    "the flushed frame carried the view that was reported before the handshake"
+                    |> Seq.pick (function Presence p -> Some p.Focus | _ -> None)
+                Expect.equal focus (Some caret) "the flushed frame carried the caret that was reported before the handshake"
             }
     ]
 

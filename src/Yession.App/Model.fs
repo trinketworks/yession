@@ -1024,6 +1024,12 @@ type ClientModel =
       /// and it never joined as a peer. `Peers` below stays peer-keyed: it is a fold of who
       /// has connected, which is a different question with a different answer.
       Presence      : Map<ActorRef, RemotePresence>
+      /// Where THIS peer's own caret is, as its editors last reported it (`CaretMovedMsg`):
+      /// the half of its presence the model cannot derive. The other half, what it has open,
+      /// is `viewing`. Kept here rather than beside the connection so one rule can say when
+      /// either half is told to everyone else (`presenceToSend`), and so a caret reported
+      /// before there is a channel is still known when one is accepted.
+      Caret         : Focus option
       /// Every peer this session has seen, with the display name it joined under — folded from
       /// the durable log (`PeerJoined`/`PeerLeft`), so it survives a reload and names a draft's
       /// author even while that author is away. Presence is who is here NOW; this is who is who.
@@ -1464,6 +1470,10 @@ type ClientMsg =
     /// A remote peer's cursor moved (or cleared) in the title — ephemeral presence folded
     /// into `Presence`, never into the synced state.
     | RemotePresenceMsg of PresencePayload
+    /// This peer's caret+selection moved, or left every collaborative field (`None`). Paced by
+    /// whoever reports it — once a frame at most in the browser (`Render.focusReporter`) — so a
+    /// burst of keystrokes is one message, not one per key.
+    | CaretMovedMsg of Focus option
     /// Ensure the draft slot keyed by `PeerId` exists (author only), carrying the queue key it
     /// will become when anyone sends it. The body is a rich-text `Y.XmlFragment` anchored by the
     /// codec once the slot exists, so the editor has a synced fragment to bind — the client
@@ -1846,6 +1856,9 @@ type ClientEffect =
     /// Tell the Session the size of a pty this peer holds the lease on, so the program drawing
     /// on it lays its screen out to the box the holder is looking at (`ClientModel.ptyResizes`).
     | ResizeTerminal of TerminalId * Size
+    /// Tell everyone else where this peer is: its caret and what it has open, both halves on
+    /// one frame (`ClientModel.presenceToSend`).
+    | SendPresence of focus: Focus option * viewing: ViewRef option
     | Remember of Preference
     | Copy of box: string * text: string
     | RetryNow
@@ -1977,6 +1990,7 @@ module ClientModel =
               MissingBefore = None }
           Agent = { ActiveTurn = None; Quiet = None; Interrupting = None }
           Presence = Map.empty
+          Caret = None
           Peers = Map.empty
           Attribution = Attribution.empty
           Composer = Unchosen
@@ -3006,6 +3020,37 @@ module ClientModel =
             holds after terminal
             && (not (holds before terminal) || Map.tryFind terminal before.TerminalViewports <> Some size))
 
+    /// What this peer tells everyone else about where it is, read off the model either side of
+    /// a message: its caret (`Caret`) and what it has open (`viewing`), or `None` when there is
+    /// nothing to say.
+    ///
+    /// Presence is ONE frame with two halves, learned in different places at different moments
+    /// — a caret from an editor event, a view from whatever moved the pane — and both always
+    /// leave together, so restating either never erases the other: a peer that stops typing
+    /// while still reading an artifact must not vanish from the pane it has open, and a peer
+    /// that closes the pane must not lose its caret.
+    ///
+    /// Only a CHANGE: the model moves on every keystroke, and a pane that has not moved tells a
+    /// collaborator nothing. Presence is relayed last-write-wins with no keepalive, so a repeat
+    /// buys nothing.
+    ///
+    /// Nothing while the connection is anything but `Connected`, because the first frame on a
+    /// channel has to be the hello (`Connection.run`): the Session reads an unannounced peer's
+    /// frame as a peer it does not know. What changed meanwhile is not dropped — it is in the
+    /// model — and is RESTATED on acceptance, as is whatever was told to a channel that has
+    /// since gone (a reconnect passes through `Reconnecting`): a peer that opened a pane while
+    /// the channel was still coming up is viewing it just as much as one who opened it after,
+    /// and presence has no keepalive, so a frame nobody sent is a peer nobody sees. An
+    /// acceptance with nothing to restate sends nothing: a peer that left was cleared
+    /// everywhere when it went.
+    let presenceToSend (before: ClientModel) (after: ClientModel) : (Focus option * ViewRef option) option =
+        let caret, view = after.Caret, viewing after
+        match before.Connection, after.Connection with
+        | Connected, Connected when before.Caret <> caret || viewing before <> view -> Some (caret, view)
+        | Connected, _ -> None
+        | _, Connected when caret.IsSome || view.IsSome -> Some (caret, view)
+        | _ -> None
+
     /// Whether a durable actor is this client. The question every ownership rule here asks —
     /// is this terminal mine, is this lease mine — with `me` as its one answer.
     let isMine (actor: ActorRef) (model: ClientModel) : bool =
@@ -3651,6 +3696,7 @@ module ClientModel =
                             { DisplayName = payload.DisplayName; Focus = focus; Viewing = viewing }
                             model.Presence
                 { model with Presence = presence }
+        | CaretMovedMsg focus -> { model with Caret = focus }
         | EnsureDraftMsg (peerId, queueId) ->
             // Materialise the slot keyed by `peerId` (author only) if absent, so the codec
             // anchors its body fragment and the editor can bind. Idempotent — and the queue key
@@ -4356,10 +4402,11 @@ module ClientModel =
         let swapped = keyboardSwap model next |> Option.map ClientEffect.Move |> Option.toList
         let leased = leaseLanding model next |> Option.map ClientEffect.Move |> Option.toList
         let resized = ptyResizes model next |> List.map ClientEffect.ResizeTerminal
+        let present = presenceToSend model next |> Option.map ClientEffect.SendPresence |> Option.toList
         // Asked once per keyframe, whichever message first left the preview needing one.
         let next, fetching =
             match missingKeyframe next with
             | Some key when not (Set.contains key next.KeyframesAsked) ->
                 { next with KeyframesAsked = Set.add key next.KeyframesAsked }, [ ClientEffect.FetchKeyframe key ]
             | Some _ | None -> next, []
-        next, effects @ answered @ unnoticed @ swapped @ leased @ resized @ fetching @ offering
+        next, effects @ answered @ unnoticed @ swapped @ leased @ resized @ present @ fetching @ offering
