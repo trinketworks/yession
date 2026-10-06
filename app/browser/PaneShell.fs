@@ -369,11 +369,18 @@ let jumpToLatest (surface: Yession.App.TailSurface) : unit =
 let private toItemActions (messageId: string) : unit =
     focusOn (find (sprintf "[data-item-actions=\"%s\"]" messageId))
 
-/// Onto the door the menu of new things hangs from: the strip's `+`, or the empty pane's
-/// button when the pane is empty — the strip offers no `+` then (P1-4), and the empty pane's
-/// press is the same act. At most one of the two is on the page, so each is found by its hook.
+/// Onto the door the menu of new things hangs from: the strip's `+`, the empty pane's button
+/// when the pane is empty — the strip offers no `+` then (P1-4), and the empty pane's press is
+/// the same act — or, on a phone, the `all` page's, which stands in for the `+` there.
+///
+/// The SHOWN one. A screen offers one door, but over the `all` page the document holds two —
+/// the `+` and the page's, each hidden by the stylesheet wherever the other shows — and a
+/// `display: none` control takes no focus, so the first in the document would strand it.
 let private toPaneNew () : unit =
-    find "[data-pane-new]" |> Option.orElseWith (fun () -> find "[data-terminal-new]") |> focusOn
+    let doors = document.querySelectorAll "[data-pane-new], [data-terminal-new]"
+    [ for i in 0 .. doors.length - 1 -> doors.[i] :?> HTMLElement ]
+    |> List.tryFind (fun door -> door.getBoundingClientRect().width > 0.0)
+    |> focusOn
 
 /// Onto the message composer's field — this peer's own, the one that is not read-only — or,
 /// where no composer is on offer, the session's title: the first control of the column a
