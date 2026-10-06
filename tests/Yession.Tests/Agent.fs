@@ -1037,7 +1037,7 @@ let private prTransitioned transition =
           Transition = transition
           State = PrMerged
           Checks = ChecksGreen
-          Watcher = prWatcher; OccurredAt = None }
+          Watcher = prWatcher; OccurredAt = None; Title = None }
 
 let private prUnwatched =
     SessionEvent.PrUnwatched

@@ -509,7 +509,10 @@ type PrTransitioned =
       Watcher : Principal
       /// When it happened at the provider, where the provider says (`PrTimes.occurredAt`).
       /// Part of the `WatchChanged` contract every watched change keeps.
-      OccurredAt : DateTimeOffset option }
+      OccurredAt : DateTimeOffset option
+      /// What the pull request was called when the change was seen, so a reader can say
+      /// WHICH one changed without a query. `None` on a log written before it was recorded.
+      Title : string option }
 
 /// A watched pull request stopped being readable, and why — or can be read again. Recorded
 /// on the CHANGE, so an outage is two events however many looks it spans, and what the
