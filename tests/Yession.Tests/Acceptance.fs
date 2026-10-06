@@ -1021,15 +1021,16 @@ let private uiChecklistTests =
             // The other half, so the case above cannot pass on a control that always says Queue.
             Expect.equal (sendName (Support.render representativeModel)) Dom.Text.run "a free terminal runs"
 
-        testCase "behind live, the composer is still there and still runs" <| fun () ->
-            // Rewinding is where this reader is looking, not something the terminal is doing:
-            // it is still live, still takes commands, and runs them now.
+        testCase "behind live, nothing offers to run a command — the bar offers live instead" <| fun () ->
+            // This case used to say the opposite: that rewinding is only where the reader is
+            // looking, so the line stays and its Run still runs. A line under a recording
+            // reads as typing into the recording, so it is replaced (`terminalRewound`); the
+            // terminal still runs, and the way back to it is the bar's press.
             let rewound = Support.step (RewindTerminalMsg terminalId) representativeModel
             Expect.isTrue (ClientModel.isRewound terminalId rewound) "the fixture is behind live"
-            Expect.equal
-                (sendName (Support.render rewound))
-                Dom.Text.run
-                "a command line, whose send runs"
+            let html = Support.render rewound
+            Expect.isFalse (html.Contains (Dom.attr Dom.Hooks.terminalSend (PeerId.value ada))) "no Run to press"
+            Expect.isTrue (html.Contains Dom.Hooks.terminalRewoundLive) "and the way back is offered"
 
         testCase "a queued command in a leased terminal says it waits for the TERMINAL" <| fun () ->
             // A queue that said only *pending* would leave the hold looking like a stall;

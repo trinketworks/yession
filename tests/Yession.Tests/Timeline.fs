@@ -1890,6 +1890,14 @@ let private readsTests =
                 "and played when asked"
     ]
 
+/// A terminal that is still open and has run commands — what a rewind is FROM.
+let private liveWithBlocks =
+    recordedTerminal |> List.filter (fun e -> match e.Event with SessionEvent.TerminalClosed _ -> false | _ -> true)
+
+/// That terminal, rewound by this client.
+let private rewoundWithBlocks () : ClientModel =
+    withRecords (clientOf liveWithBlocks) |> Support.step (RewindTerminalMsg terminalA)
+
 let private dvrTests =
     testList "Rewinding a live terminal (Plan 14, stage 7)" [
         // The player the reader was in plays off its end and leaves the document under them:
@@ -2038,6 +2046,53 @@ let private dvrTests =
             Expect.isFalse
                 (html.Contains (Dom.attr Dom.Hooks.terminalScreen "term-a"))
                 "and the live screen gives way to it while you are behind"
+
+        // A rewound reader is watching a recording, and nothing about the pane may look live
+        // (D3). These four are one promise seen from four places, each arranged alone.
+        testCase "a rewound terminal draws no command line, and says it is a recording instead" <| fun () ->
+            let html = Support.render (rewoundWithBlocks ())
+            Expect.isFalse
+                (html.Contains (Dom.attr Dom.Hooks.terminalInput (BodyKey.terminalDraft terminalA ada)))
+                "nothing to type a command into under a recording"
+            Expect.isTrue
+                (html.Contains (Dom.attr Dom.Hooks.terminalRewound "term-a"))
+                "the bar that stands where it was"
+
+        testCase "the rewound bar offers the way back to live, and it is the terminal's own live press" <| fun () ->
+            let back = ShowInPaneMsg (Reading terminalA)
+            let next, _ = ClientModel.update back (rewoundWithBlocks ())
+            Expect.isFalse (ClientModel.isRewound terminalA next) "the press ends the rewind"
+            Expect.isTrue
+                ((Support.render (rewoundWithBlocks ())).Contains Dom.Hooks.terminalRewoundLive)
+                "and the bar carries it"
+
+        testCase "back on live, the command line returns and the draft slot was never touched" <| fun () ->
+            let slot = { Terminal = terminalA; Author = ada; QueueId = QueueId.create "queue-d" |> expect }
+            let drafted = rewoundWithBlocks ()
+            let drafted = { drafted with Synced = { drafted.Synced with TerminalDrafts = Map.ofList [ (terminalA, ada), slot ] } }
+            let live = Support.step (ShowInPaneMsg (Reading terminalA)) drafted
+            let html = Support.render live
+            Expect.isTrue
+                (html.Contains (Dom.attr Dom.Hooks.terminalInput (BodyKey.terminalDraft terminalA ada)))
+                "the line is back"
+            Expect.isFalse (html.Contains Dom.Hooks.terminalRewound) "and the bar is gone"
+            Expect.equal (ClientModel.terminalDrafts terminalA live) [ ada ] "the draft slot rode out the rewind"
+
+        testCase "a rewound terminal does not show its newest command as if it were live" <| fun () ->
+            // The pane's one line under the pivot says what a terminal is running or last ran.
+            // Behind the edge that is the live terminal's answer, not the recording's. The
+            // control: a CLOSED terminal's recording, which is not behind anything, still says it.
+            let subtitle = Dom.attr Dom.Hooks.paneSubtitle "terminal"
+            let closedPlaying =
+                withRecords (clientOf recordedTerminal) |> Support.step (ShowInPaneMsg (Watching terminalA))
+            Expect.isTrue ((Support.render closedPlaying).Contains subtitle) "a recording says what last ran"
+            Expect.isFalse ((Support.render (rewoundWithBlocks ())).Contains subtitle) "a rewind does not"
+
+        testCase "the rewind has one word on every surface: the footer says what the all page row says" <| fun () ->
+            let live = withRecords (clientOf liveWithBlocks)
+            let footer = textAt (Dom.attr Dom.Hooks.terminalWatch "watch") (Support.render live)
+            let row = textAt (Dom.attr Dom.Hooks.terminalListRewind "term-a") (Support.render (Support.step ToggleSwitcherMsg live))
+            Expect.equal (footer.ToLowerInvariant ()) (row.ToLowerInvariant ()) "one word for one act"
 
         testCase "a CLOSED terminal is not rewindable — it is simply a recording" <| fun () ->
             let closed =

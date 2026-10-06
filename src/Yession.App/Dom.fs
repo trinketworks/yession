@@ -542,6 +542,13 @@ module Dom =
         /// How far behind live the rewound reader is, growing as the terminal keeps
         /// printing under them.
         let terminalBehind = "data-terminal-behind"
+        /// The bar that stands where a rewound terminal's command line was, saying the reader
+        /// is watching a recording. Its VALUE is the terminal; it is present exactly while
+        /// `ClientModel.isRewound` is true for it, and the command line is absent exactly then.
+        let terminalRewound = "data-terminal-rewound"
+        /// That bar's way back to the live terminal: the same press as the `live` face of
+        /// `terminalWatch`, beside the recording rather than at the foot of the pane.
+        let terminalRewoundLive = "data-terminal-rewound-live"
         /// The SWITCHER (Plan 20, stage 0; P2-2): everything this pane can show — every
         /// terminal the session has ever had with every verb one of them affords, and every
         /// file shared into it — as the pivot's `all` page (`paneSwitcher`). It has been the
@@ -833,9 +840,23 @@ module Dom =
         let typeHere = "Type here"
         /// The one control between a terminal's two reads (`terminalWatch`): its recording,
         /// the text it ran, and the live edge. Named after what the reader gets.
+        ///
+        /// Two words for two acts, and each act has ONE word on every surface it is on.
+        /// Going back from a terminal that is still LIVE is a rewind — the `all` page's verb
+        /// (`rewind`), its accessible name (`rewindTerminal`), this control's face while the
+        /// terminal runs (`rewindAct`), and the way back is `live`. A recording of something
+        /// that has ENDED — a closed terminal, a command's output — has no live edge to be
+        /// behind, so it is a replay, and the way back is `output`.
         let replay = "Replay"
+        /// The footer control's face on a terminal that is still live: what it does is
+        /// `RewindTerminalMsg`, and the row on the `all` page says the same word (`rewind`).
+        let rewindAct = "Rewind"
         let output = "Output"
         let live = "Live"
+        /// The rewound reader's bar, where the command line was: what they are looking at,
+        /// said as what it is. The way out is `backToLive`.
+        let watchingRecording = "Watching a recording"
+        let backToLive = "Back to live"
         /// The list's rewind, named for its terminal: watching it from a moment ago.
         let rewindTerminal (title: string) = "Rewind " + title
         /// The `all` page's row verbs, as the words they are drawn as — the accessible names
@@ -953,9 +974,6 @@ module Dom =
             match holder with
             | Some name -> sprintf "Runs when %s hands the terminal back" name
             | None -> "Runs when you hand the terminal back"
-        /// A command line under a recording: what runs, runs on the live terminal now, and is
-        /// seen by going back to it.
-        let runsBehindLive = "Runs now, on the live terminal"
         /// A queued command that will run as soon as the terminal is free.
         let queuedReady = "ready"
         /// A queued command held because a peer is typing in its terminal (Plan 13, stage

@@ -5914,6 +5914,37 @@ let editorTests =
         rewoundReplayControlsInReach 1440 900
         rewoundReplayControlsInReach 390 844
 
+        // A rewound reader is watching a recording, and the pane must not look live (D3): the
+        // command line is not there to type into, a bar says so and offers the way back, and
+        // what was half-written is waiting when they return. The draft is a `Y.Text` root and
+        // the line an input bound to it after every render — so that it SURVIVES the input
+        // leaving the document and coming back is a claim only a browser can check.
+        editorCase "a rewound terminal swaps its command line for a way back to live, and the draft waits" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
+                let line = "#shell " + commandLine "term-live"
+                let! _ = await (page.WaitForSelectorAsync line)
+                do! awaitU (page.ClickAsync line)
+                do! awaitU (page.Keyboard.TypeAsync "git sta")
+                do! waitCommandLine page line "git sta"
+
+                do! awaitU (page.ClickAsync "#shell [data-terminal-watch='watch']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-rewound='term-live']")
+                let! onScreen = await (page.EvaluateAsync<int> ("""() => document.querySelectorAll("#shell [data-terminal-input]:not([readonly])").length"""))
+                Expect.equal onScreen 0 "no command line to type into while watching a recording"
+
+                // The bar's own press is the way back, and it hands focus on to the toggle
+                // that replaces it rather than stranding it on `body`.
+                do! awaitU (page.ClickAsync "#shell [data-terminal-rewound-live]")
+                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-terminal-rewound]")""")
+                do! waitCommandLine page line "git sta"
+                do! waitFor
+                        "focus on the toggle that replaced the bar"
+                        page
+                        """document.activeElement?.getAttribute('data-terminal-watch') === 'watch'"""
+            }
+
         // A long output keeps its command in view. Measured with `seq 1 300`: the block's
         // command line scrolled out of the top of the scrollback and the screen was numbers,
         // with nothing on it to say what had printed them. Only a browser can settle this —
