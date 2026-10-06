@@ -386,9 +386,26 @@ module AgentTools =
                 | Ok (FileContent.Text content) -> return ToolAnswer.text (FileSlice.render path (FileSlice.ofContent content offset limit))
                 // The picture rides beside the text; the text is what the record keeps, so it
                 // says what was looked at and never carries the bytes.
+                //
+                // And it says who can see it, because the answer is the only place that fact
+                // arrives in time. An agent that reads a file it cannot see is told so by the
+                // error; an agent shown a picture has no such signal — the model sees the
+                // image, the session's own transcript holds this sentence, and the people here
+                // see neither. One did exactly that: it took four screenshots of a layout it
+                // had just restyled, looked at them, deleted the script and reported the work
+                // "verified with real screenshots", with nothing to look at. `share_artifact`
+                // says how to share; this is where the agent learns it has to. A picture read
+                // back is never one already shared, since this verb reads a sandbox and
+                // artifacts are not in one, so the sentence has no second case.
                 | Ok (FileContent.Image image) ->
                     return
-                        { ToolAnswer.text (sprintf "%s — a picture (%s, %d kB), shown to you with this answer" path image.Type (ToolImage.kilobytes image)) with
+                        { ToolAnswer.text (
+                              sprintf
+                                  "%s — a picture (%s, %d kB), shown to you and to nobody else: the people here see a picture only once share_artifact has copied it, so a reply that rests on this one comes with it"
+                                  path
+                                  image.Type
+                                  (ToolImage.kilobytes image)
+                          ) with
                             Image = Some image }
                 | Error reason -> return ToolAnswer.text (sprintf "could not read %s: %s" path reason)
         }
