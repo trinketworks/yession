@@ -535,12 +535,9 @@ first's.
   functions or a typed vocabulary over the roots an app declares (copy a fragment, clear a
   text); which origin they carry, given the binding filters its own echoes by origin and
   these roots sit outside the binding; and whether this is a new `Program` combinator or a
-  change to `Options`. The second half of the same step needs no Ylmish change but waits for
-  the first, because it lives in the same closure: `Client.connect` keeps its own mutable
-  state beside the model (the read cursor `lastProcessed`, `latestKnown`, `readInFlight`;
-  presence's `reportedFocus`, `reportedViewing`, `presenceAllowed`), and `dispatchAndConsume`
-  reads messages after dispatching them to decide reads the reducer should be asking for as
-  effects.
+  change to `Options`. (The rest of what `Client.connect` once decided beside the model — the
+  read cursor, the reads out, presence — is the reducer's now: `ClientModel.reads` and
+  `presenceToSend` ask for it as effects, and the connection only carries them out.)
 - **One WIP draft per client, co-editable by any peer** (Plan 03): drafts are keyed by author
   (`Map<PeerId, DraftState>`), so each client owns at most one — structurally, not by a runtime
   cap. Any peer may co-edit any slot, and any co-editor may send it: the entry is attributed to

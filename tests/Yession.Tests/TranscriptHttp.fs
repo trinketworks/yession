@@ -386,8 +386,8 @@ let private storeTests =
 
 // --- What a client asks for -----------------------------------------------------------------
 //
-// The read loop over the feed (`Client.connect`): when a terminal's transcript is read, and
-// what is done with the answer. A burst of output is the case that matters — `seq 100000` is
+// The read loop over the feed — decided by `ClientModel.update`, carried out by
+// `Client.connect` — when a terminal's transcript is read, and what is done with the answer. A burst of output is the case that matters — `seq 100000` is
 // some 170 records in under three seconds — because each record is a signal that there is
 // more, and a loop that answered every signal with a read of its own put ~170 reads of the
 // same position on the wire at once and rendered every answer.
@@ -395,7 +395,7 @@ let private storeTests =
 /// A feed that answers nothing until told to: every read it was asked for, in order, with the
 /// position it was asked from and the hand that settles it.
 let private heldFeed () =
-    let asked = ResizeArray<int * (Result<Client.TranscriptFetch.TranscriptPage, Client.FeedFault> -> unit)> ()
+    let asked = ResizeArray<int * (Result<TranscriptPage, Client.FeedFault> -> unit)> ()
     let feed : Client.TranscriptFetch.TranscriptFeed =
         fun _ fromSeq -> Async.FromContinuations (fun (answer, _, _) -> asked.Add (fromSeq, answer))
     feed, asked
@@ -404,7 +404,7 @@ let private outputAt (seq: int) : TranscriptRecord =
     { At = 0.0; Kind = TranscriptOutput; Data = sprintf "line %d\r\n" seq }
 
 /// A complete page of lines `[fromSeq, toSeq)` — the tail, as a `204`-free answer says.
-let private pageOf (fromSeq: int) (toSeq: int) : Client.TranscriptFetch.TranscriptPage =
+let private pageOf (fromSeq: int) (toSeq: int) : TranscriptPage =
     { Records = [ for seq in fromSeq .. toSeq - 1 -> seq, outputAt seq ]
       Header = None
       NextSeq = toSeq
@@ -416,8 +416,8 @@ type private Reader =
     { Session : FrameChannel<string>
       /// Each live fold, as how many records it carried.
       Folds : ResizeArray<int>
-      /// The read position each folded page took the model to.
-      Pages : ResizeArray<int>
+      /// The client's model as it stands.
+      Model : unit -> ClientModel
       /// The availability hints it was given, in order.
       Hints : ResizeArray<int> }
 
@@ -426,27 +426,33 @@ type private Reader =
 /// the client's own store — and `0` is a client that holds nothing.
 let private readingThrough (feed: Client.TranscriptFetch.TranscriptFeed) (readThrough: int) =
     let doc = Y.Doc.Create ()
-    let runner = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "reader" "Reader")))
+    // The reads the model asks for go to the connection, as the browser wires them.
+    let wired : Client.Connection option ref = ref None
+    let runner =
+        Harness.run (
+            Client.makeProgram
+                { Client.Ports.offline with Client.Ports.Connection = fun () -> wired.Value }
+                doc
+                (ClientModel.init (peer "reader" "Reader")))
     runner.Dispatch (user (TerminalReadThroughMsg (terminal, readThrough)))
     let clientEnd, serverEnd = Yession.Session.InMemoryChannel.createPair<string> ()
-    let reader = { Session = serverEnd; Folds = ResizeArray (); Pages = ResizeArray (); Hints = ResizeArray () }
+    let reader = { Session = serverEnd; Folds = ResizeArray (); Model = runner.Model; Hints = ResizeArray () }
     let dispatch (msg: ClientMsg) =
         match msg with
         | TerminalRecordsMsg (_, live) -> reader.Folds.Add (List.length live)
-        | TerminalPageMsg (_, _, _, readThrough) -> reader.Pages.Add readThrough
         | TerminalAvailableMsg (_, length) -> reader.Hints.Add length
         | _ -> ()
         runner.Dispatch (user msg)
     let connection =
         Client.connect
             { Client.ConnectOptions.defaults with FetchTranscripts = Some feed }
-            runner.Model
             doc
             (BodyRegistry doc)
             (TextRegistry doc)
             { PeerId = PeerId.create "reader" |> expect; DisplayName = "Reader"; Token = "t" }
             dispatch
             clientEnd
+    wired.Value <- Some connection
     Async.StartImmediate connection.Run
     reader
 
@@ -489,19 +495,29 @@ let private readLoopTests =
 
         testCaseAsync "an answer that takes the reader nowhere is not folded" <|
             async {
-                // The `204` — "you are current" — arrives as a page of no lines ending where it
-                // began. It holds nothing, and a fold is a render of the whole page.
+                // An answer that ends where the reader already is holds nothing it lacks: the
+                // `204` — "you are current" — as a page of no lines, or lines below the read
+                // position, as a read left out by a connection that has since ended brings
+                // back. Folding it is a pass of the whole page for nothing.
+                //
+                // This used to assert that no page message was DISPATCHED, when the connection
+                // decided what to fold. The model decides now, and every answer reaches it, so
+                // the invariant is said where it lives: the terminal's feed is what it was.
+                // Answered with lines, so that a fold would show — the `204`'s empty page
+                // changes nothing whether it is folded or not.
                 let feed, asked = heldFeed ()
                 let reader = readingThrough feed 10
                 do! reader.Session.Send (Terminal (TerminalRecord (terminal, 10, outputAt 10)))
                 do! waitUntil "the client to ask" (fun () -> asked.Count = 1)
+                let held = ClientModel.terminalFeed terminal (reader.Model ())
                 let _, answer = asked.[0]
-                answer (Ok (pageOf 10 10))
-                // Settled by the next signal being answered: the read that held the slot has
-                // finished, so whatever it was going to fold, it has.
-                do! reader.Session.Send (Terminal (TerminalRecord (terminal, 11, outputAt 11)))
-                do! waitUntil "the next read" (fun () -> asked.Count = 2)
-                Expect.equal (List.ofSeq reader.Pages) [] "nothing folded for an answer that held nothing"
+                answer (Ok (pageOf 7 10))
+                do! waitUntil "the read to settle" (fun () ->
+                    not (Map.containsKey terminal (reader.Model ()).TranscriptReads))
+                Expect.equal
+                    (ClientModel.terminalFeed terminal (reader.Model ()))
+                    held
+                    "nothing folded for an answer that took the reader nowhere"
             }
     ]
 

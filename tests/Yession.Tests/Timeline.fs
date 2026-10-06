@@ -4792,6 +4792,198 @@ let private presenceTests =
             Expect.equal (told effects) [ Some caret, reading ] "both halves, again"
     ]
 
+// --- What the read loop asks for ---------------------------------------------------------
+//
+// The read loop's decisions (`ClientModel.reads`), pure: what a message asks to be read next,
+// and what an answer settles. The connection only carries a read out and hands the answer
+// back under the number it was asked with, so every rule is here, a fold away from a test.
+
+let private readLoopTests =
+    let offset (n: int64) = EventOffset.create n |> expect
+    let accepted (latest: int64 option) =
+        ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest |> Option.map offset }
+    /// The log from `first` through `last`, as one page.
+    let pageOf (first: int64) (last: int64) (isEnd: bool) : EventPage<SessionEvent> =
+        { Events = [ for n in first .. last -> at n (float n) (sent (string n) "said") ]
+          LastOffset = Some (offset last)
+          IsEnd = isEnd }
+    let eventReads (effects: ClientEffect list) =
+        effects |> List.choose (function ClientEffect.ReadEvents (_, after) -> Some after | _ -> None)
+    let fresh = ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
+    /// Step, and hand back the number of the one event read the step asked for.
+    let askingEvents (msg: ClientMsg) (model: ClientModel) : ClientModel * int =
+        let next, effects = ClientModel.update msg model
+        next, effects |> List.pick (function ClientEffect.ReadEvents (read, _) -> Some read | _ -> None)
+    /// Accepted onto a log that runs to `latest`, with nothing read: one read out.
+    let readingEvents (latest: int64) = askingEvents (accepted (Some latest)) fresh
+
+    let output : TranscriptRecord = { At = 0.0; Kind = TranscriptOutput; Data = "line\r\n" }
+    let live (seq: int) = TerminalRecordsMsg (terminalA, [ seq, output ])
+    /// Lines `[fromSeq, toSeq)` of terminal A's transcript.
+    let linesOf (fromSeq: int) (toSeq: int) (isEnd: bool) : TranscriptPage =
+        { Records = [ for seq in fromSeq .. toSeq - 1 -> seq, output ]; Header = None; NextSeq = toSeq; IsEnd = isEnd }
+    let transcriptReads (effects: ClientEffect list) =
+        effects |> List.choose (function ClientEffect.ReadTranscript (terminal, _, fromSeq) -> Some (terminal, fromSeq) | _ -> None)
+    let askingTranscript (msg: ClientMsg) (model: ClientModel) : ClientModel * int =
+        let next, effects = ClientModel.update msg model
+        next, effects |> List.pick (function ClientEffect.ReadTranscript (_, read, _) -> Some read | _ -> None)
+    /// A live record at line 0 of a terminal nothing has been read of: one read out, from 0.
+    let readingTranscript () = askingTranscript (live 0) fresh
+
+    testList "What the read loop asks for" [
+        // --- The event log ---
+        testCase "acceptance onto a log the model is behind asks for it from where the model has read" <| fun () ->
+            let _, effects = ClientModel.update (accepted (Some 2L)) fresh
+            Expect.equal (eventReads effects) [ None ] "one read, from the start"
+
+        testCase "acceptance onto a log the model has read through asks for nothing" <| fun () ->
+            let caughtUp = fresh |> Support.step (EventsPageMsg (pageOf 0L 2L true))
+            let _, effects = ClientModel.update (accepted (Some 2L)) caughtUp
+            Expect.equal (eventReads effects) [] "nothing past what is read"
+
+        testCase "a hint while caught up asks for nothing" <| fun () ->
+            // Caught up by a page folded outright, so that nothing on the way here was asked
+            // the question this case asks.
+            let caughtUp = fresh |> Support.step (EventsPageMsg (pageOf 0L 2L true))
+            let _, effects = ClientModel.update (EventsAvailableMsg (offset 2L)) caughtUp
+            Expect.equal (eventReads effects) [] "nothing past what is read"
+
+        testCase "a hint while a read is out asks for nothing" <| fun () ->
+            let reading, _ = readingEvents 2L
+            let _, effects = ClientModel.update (EventsAvailableMsg (offset 5L)) reading
+            Expect.equal (eventReads effects) [] "one read out at a time"
+
+        testCase "a page that is not the end asks for the next, from where it reached" <| fun () ->
+            // Asked whatever the model believes is ahead: the page knows more than the hint did.
+            let reading, read = readingEvents 1L
+            let _, effects = ClientModel.update (EventsReadMsg (read, Ok (pageOf 0L 1L false))) reading
+            Expect.equal (eventReads effects) [ Some (offset 1L) ] "the next page"
+
+        testCase "a last page that leaves the model behind asks again" <| fun () ->
+            // The log grew while the read was out: the hint that said so found a read out.
+            let reading, read = readingEvents 1L
+            let behind = reading |> Support.step (EventsAvailableMsg (offset 5L))
+            let _, effects = ClientModel.update (EventsReadMsg (read, Ok (pageOf 0L 1L true))) behind
+            Expect.equal (eventReads effects) [ Some (offset 1L) ] "still behind, so read on"
+
+        testCase "a last page that catches the model up asks for nothing" <| fun () ->
+            let reading, read = readingEvents 1L
+            let _, effects = ClientModel.update (EventsReadMsg (read, Ok (pageOf 0L 1L true))) reading
+            Expect.equal (eventReads effects) [] "caught up"
+
+        // A failure has already spent the feed's retries; asking again at once is the
+        // unbounded spin `reads` describes.
+        testCase "a failed read parks: it asks for nothing" <| fun () ->
+            let reading, read = readingEvents 5L
+            let _, effects = ClientModel.update (EventsReadMsg (read, Error "unreachable")) reading
+            Expect.equal (eventReads effects) [] "parked until something says there is more"
+
+        testCase "the next hint after a failed read asks again, from where reading stopped" <| fun () ->
+            let reading, read = readingEvents 5L
+            let parked = reading |> Support.step (EventsReadMsg (read, Error "unreachable"))
+            let _, effects = ClientModel.update (EventsAvailableMsg (offset 6L)) parked
+            Expect.equal (eventReads effects) [ None ] "re-armed"
+
+        testCase "acceptance forgets a read the last connection had out, and asks for itself" <| fun () ->
+            let reading, _ = readingEvents 5L
+            let _, effects = ClientModel.update (accepted (Some 5L)) reading
+            Expect.equal (eventReads effects) [ None ] "the old read will never be answered over this channel"
+
+        testCase "an answer that arrives after the connection was lost asks for nothing" <| fun () ->
+            let reading, read = readingEvents 5L
+            let lost = reading |> Support.step DisconnectedMsg
+            let _, effects = ClientModel.update (EventsReadMsg (read, Ok (pageOf 0L 1L false))) lost
+            Expect.equal (eventReads effects) [] "there is no connection to ask over"
+
+        testCase "an answer to a read the last connection asked leaves the new connection's read out" <| fun () ->
+            let reading, stale = readingEvents 5L
+            let again, _ = askingEvents (accepted (Some 5L)) (reading |> Support.step DisconnectedMsg)
+            let _, effects = ClientModel.update (EventsReadMsg (stale, Ok (pageOf 0L 1L false))) again
+            Expect.equal (eventReads effects) [] "the new read is still out, so nothing more is asked"
+
+        testCase "an answer to a read since forgotten is still folded" <| fun () ->
+            let reading, stale = readingEvents 5L
+            let again = reading |> Support.step DisconnectedMsg |> Support.step (accepted (Some 5L))
+            let folded = again |> Support.step (EventsReadMsg (stale, Ok (pageOf 0L 1L false)))
+            Expect.equal folded.EventConsumer.LastProcessedOffset (Some (offset 1L)) "the events are the events"
+
+        // --- A terminal's transcript ---
+        testCase "a live record past the read position asks for the transcript from it" <| fun () ->
+            let _, effects = ClientModel.update (live 0) fresh
+            Expect.equal (transcriptReads effects) [ terminalA, 0 ] "read from where the model has read"
+
+        testCase "a live record while a read is out asks for nothing" <| fun () ->
+            let reading, _ = readingTranscript ()
+            let _, effects = ClientModel.update (live 1) reading
+            Expect.equal (transcriptReads effects) [] "one read per terminal"
+
+        testCase "signals during a read are owed exactly one read, however many arrive" <| fun () ->
+            let reading, read = readingTranscript ()
+            let burst = [ 1 .. 50 ] |> List.fold (fun model seq -> Support.step (live seq) model) reading
+            let _, effects = ClientModel.update (TranscriptReadMsg (terminalA, read, Some (linesOf 0 20 true))) burst
+            Expect.equal (transcriptReads effects) [ terminalA, 20 ] "one more read, from where the first got to"
+
+        testCase "an owed read, once answered, asks for nothing more" <| fun () ->
+            let reading, read = readingTranscript ()
+            let owing = reading |> Support.step (live 1)
+            let owed, again = askingTranscript (TranscriptReadMsg (terminalA, read, Some (linesOf 0 1 true))) owing
+            let _, effects = ClientModel.update (TranscriptReadMsg (terminalA, again, Some (linesOf 1 2 true))) owed
+            Expect.equal (transcriptReads effects) [] "the debt is paid"
+
+        testCase "a page that is not the end and advanced continues from where it reached" <| fun () ->
+            let reading, read = readingTranscript ()
+            let _, effects = ClientModel.update (TranscriptReadMsg (terminalA, read, Some (linesOf 0 100 false))) reading
+            Expect.equal (transcriptReads effects) [ terminalA, 100 ] "the next page"
+
+        testCase "a page that is not the end but did not advance asks for nothing" <| fun () ->
+            // Re-reading the same offset for ever is the one way this loop could spin.
+            let reading, read = readingTranscript ()
+            let _, effects = ClientModel.update (TranscriptReadMsg (terminalA, read, Some (linesOf 0 0 false))) reading
+            Expect.equal (transcriptReads effects) [] "no progress, no next read"
+
+        testCase "an answer that advances the read position is folded" <| fun () ->
+            let reading, read = readingTranscript ()
+            let folded = reading |> Support.step (TranscriptReadMsg (terminalA, read, Some (linesOf 0 3 true)))
+            Expect.equal (ClientModel.terminalFeed terminalA folded).ReadThrough 3 "read through the page"
+
+        testCase "an answer that takes the reader nowhere folds nothing" <| fun () ->
+            // Lines below the read position, as a read from a connection that has since ended
+            // brings back: held already, so the feed is what it was.
+            let replayed = fresh |> Support.step (TerminalReadThroughMsg (terminalA, 10))
+            let reading, read = askingTranscript (live 10) replayed
+            let answered = reading |> Support.step (TranscriptReadMsg (terminalA, read, Some (linesOf 7 10 true)))
+            Expect.equal (ClientModel.terminalFeed terminalA answered) (ClientModel.terminalFeed terminalA reading) "nothing folded"
+
+        testCase "a failed transcript read parks: it asks for nothing" <| fun () ->
+            let reading, read = readingTranscript ()
+            let _, effects = ClientModel.update (TranscriptReadMsg (terminalA, read, None)) reading
+            Expect.equal (transcriptReads effects) [] "parked until the next signal"
+
+        testCase "the next signal after a failed transcript read asks again" <| fun () ->
+            let reading, read = readingTranscript ()
+            let parked = reading |> Support.step (TranscriptReadMsg (terminalA, read, None))
+            let _, effects = ClientModel.update (live 1) parked
+            Expect.equal (transcriptReads effects) [ terminalA, 0 ] "re-armed, from where reading stopped"
+
+        testCase "acceptance forgets the transcript reads the last connection had out" <| fun () ->
+            let reading, _ = readingTranscript ()
+            let again = reading |> Support.step (accepted None)
+            let _, effects = ClientModel.update (live 1) again
+            Expect.equal (transcriptReads effects) [ terminalA, 0 ] "a signal asks, rather than waiting on a read nobody will answer"
+
+        testCase "a transcript answer that arrives after the connection was lost asks for nothing" <| fun () ->
+            let reading, read = readingTranscript ()
+            let lost = reading |> Support.step (live 1) |> Support.step DisconnectedMsg
+            let _, effects = ClientModel.update (TranscriptReadMsg (terminalA, read, Some (linesOf 0 1 true))) lost
+            Expect.equal (transcriptReads effects) [] "nothing owed survives the connection it was owed on"
+
+        testCase "a transcript answer to a read the last connection asked leaves the new read out" <| fun () ->
+            let reading, stale = readingTranscript ()
+            let again, _ = askingTranscript (live 1) (reading |> Support.step (accepted None))
+            let _, effects = ClientModel.update (TranscriptReadMsg (terminalA, stale, Some (linesOf 0 100 false))) again
+            Expect.equal (transcriptReads effects) [] "the new read is still out"
+    ]
+
 let tests =
     testList "Timeline and the pane (Plan 14)" [
         contentChipTests
@@ -4826,4 +5018,5 @@ let tests =
         dvrTests
         ptyResizeTests
         presenceTests
+        readLoopTests
     ]
