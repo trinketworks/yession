@@ -378,8 +378,12 @@ let private withTerminals (terminals: (string * BlockStatus option * bool) list)
             IsOpen = isOpen
             Closed = (if isOpen then None else Some { TerminalId = terminal; Reason = "closed by a peer"; By = Some (PeerRef bob) })
             Blocks = last |> Option.map (runBlock (Authority.ofAuthor (Principal.Peer ada)) 1) |> Option.toList }
+    let views = List.map view terminals
     { representativeModel with
-        Terminals = { representativeModel.Terminals with Terminals = List.map view terminals } }
+        Terminals = { representativeModel.Terminals with Terminals = views }
+        // Each one looked at since it last finished something, so its mark is its state and
+        // not news (`ClientModel.unseen`): the cases here are about what a terminal is doing.
+        Seen = views |> List.map (fun v -> v.TerminalId, Codecs.CommandTally.ofView v) |> Map.ofList }
 
 /// The markup of one terminal's entry under the sidebar's environment, if it is listed: from
 /// its hook to the end of its button, so what a case reads off it is that entry's and not the
