@@ -1471,15 +1471,17 @@ module View =
                     {author}
                     <div class="{Style.draftInput}" data-rich-body="{BodyKey.draft target}" data-rich-readonly="false" data-draft-input="{PeerId.value target}"></div>
                   </div>
-                  <div class="{Style.draftLead}">
-                    {modelControl dispatch model}
-                  </div>
-                  <div class="{commitClass}">
-                    <span class="{Style.draftEditors}">{editors target}</span>
-                    {interruptControl dispatch model}
-                    <button type="button" class="{sendClass}" aria-keyshortcuts="Control+Enter"
-                            title="{Dom.Text.composerKeys}"
-                            data-send-draft="{PeerId.value target}" @click={Ev(fun _ -> actions.SendDraft target)}>send</button>
+                  <div class="{Style.draftActionsRow}">
+                    <div class="{Style.draftLead}">
+                      {modelControl dispatch model}
+                    </div>
+                    <div class="{commitClass}">
+                      <span class="{Style.draftEditors}">{editors target}</span>
+                      {interruptControl dispatch model}
+                      <button type="button" class="{sendClass}" aria-keyshortcuts="Control+Enter"
+                              title="{Dom.Text.composerKeys}"
+                              data-send-draft="{PeerId.value target}" @click={Ev(fun _ -> actions.SendDraft target)}>send</button>
+                    </div>
                   </div>
                 </article>"""
         // "New message" only says something when you are in someone else's draft: it is the way

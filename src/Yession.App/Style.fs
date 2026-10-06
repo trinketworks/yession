@@ -2733,12 +2733,16 @@ module Style =
     /// were 32px squares and needed 4px under them to reach that centre — the correction went
     /// out with the glyphs (`btnComposerBox`, above, is the line's own height).
     ///
-    /// On a phone this row leaves the line entirely: it wants the full width
-    /// (`max-md:w-full max-md:justify-end`, its buttons pushed to the trailing edge the
-    /// way they sit on desktop) and it sits BELOW the text (`draftBox`'s `max-md:flex-col`
-    /// puts it there in document order). A row that was always there spent a band of every
-    /// phone screen on a control a thumb reaches once per message, so it comes and goes —
-    /// and WHAT it comes and goes with is the whole of this bug's story.
+    /// On a phone this row leaves the line entirely, same as before, but no longer owns a
+    /// full line of its own: it shares one with the model picker (`draftActionsRow`, below)
+    /// rather than stacking under it as a second line — `max-md:w-full max-md:justify-end`
+    /// used to push its buttons to the far edge of a line THIS row had entirely to itself;
+    /// now the picker is the other half of that line, so sizing to its own content and
+    /// letting the row's `justify-between` do the push is what keeps it at the trailing
+    /// edge without claiming width the picker needs. It sits BELOW the text (`draftBox`'s
+    /// `max-md:flex-col` puts it there in document order). A row that was always there
+    /// spent a band of every phone screen on a control a thumb reaches once per message, so
+    /// it comes and goes — and WHAT it comes and goes with is the whole of this bug's story.
     ///
     /// It used to be `group-focus-within`, and that could not work. `focus-within` is false
     /// the instant focus leaves the composer, and pressing a button is how focus leaves: on
@@ -2766,7 +2770,7 @@ module Style =
     /// collapsed composer, and a gap no markup test can tell from an empty one.
     let private draftCommitBase =
         cls [ "shrink-0 flex items-center gap-1 pr-1"
-              "max-md:w-full max-md:justify-end max-md:overflow-hidden"
+              "max-md:overflow-hidden"
               "max-md:transition-[max-height,opacity] max-md:duration-150"
               // `max-md:` on the reduced-motion variant too, and not for symmetry: Tailwind
               // orders the stylesheet by variant, so a bare `motion-reduce:transition-none`
@@ -2815,6 +2819,28 @@ module Style =
     /// alone, so the row itself has to carry it. Without it the picker sits flush against the
     /// viewport edge, outside the gutter every other line in the composer keeps.
     let draftLead = "shrink-0 flex items-center pl-4 md:order-first"
+
+    /// The picker (`draftLead`) and Send's row (`draftCommit`/`draftCommitReady`) ride
+    /// together as ONE line on a phone, not two: `draftBox`'s `max-md:flex-col` makes every
+    /// direct child its own row, and the two used to be siblings there, so "Provider's
+    /// default" sat on a line by itself with SEND stacked on a second line under it —
+    /// readable, but not the "dock at the bottom" the picker and Send were both asked for.
+    /// Wrapping them in one element makes them ONE child of that column, hence one row.
+    ///
+    /// `md:contents`: above `md`, this wrapper must get entirely out of the way rather than
+    /// become a fourth flex item — `draftBox` there is a plain row of `draftBody`, `draftLead`
+    /// (reordered to the front by its own `md:order-first`) and the commit row as three
+    /// direct siblings, and `draftLead`'s reordering only makes sense among THOSE three. A
+    /// wrapper that stayed a real box at `md:` would turn that into `draftBody` beside a
+    /// two-item box, and reordering inside the box could no longer put the picker ahead of
+    /// `draftBody` — exactly what `draftLead`'s own `md:order-first` is for. `display:
+    /// contents` removes the wrapper's own box without touching its children: they rejoin
+    /// `draftBox`'s flex context directly, so desktop is unchanged by this wrapper existing.
+    ///
+    /// `max-md:justify-between` is what used to be `draftCommitBase`'s own `justify-end` on
+    /// a line it had to itself: with the picker as the row's other half now, pushing Send to
+    /// the trailing edge is this shared row's job, not the commit box's.
+    let draftActionsRow = "max-md:flex max-md:items-center max-md:w-full max-md:justify-between md:contents"
 
     let draftAuthor = "pl-4 pt-2 " + caps + " text-ink-faint truncate"
 
