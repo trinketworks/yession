@@ -30,9 +30,8 @@ type ChapterMark<'Text> =
 /// itself. The one this product runs is `AutoChapters.policy`; changing how the session
 /// divides itself is an edit there and nowhere else.
 ///
-/// A record rather than a bare function because it is expected to grow — what a guess is
-/// drawn from is the next question a refined strategy will want to answer — and a field added
-/// to a record is a compile error at every policy, which is the list of places to decide.
+/// A record because it grows, and a field added to a record is a compile error at every
+/// policy, which is the list of places to decide.
 [<RequireQualifiedAccess>]
 type ChapterPolicy =
     { /// Whether a chapter opens at this item by NATURE. Handed what came BEFORE it, newest
@@ -40,7 +39,12 @@ type ChapterPolicy =
       /// only grows, so a policy that cannot see forward is one whose chapter, once open,
       /// stays open as the session goes on — rather than one that moves under a reader as
       /// they scroll.
-      OpensByNature : ConversationItem list -> ConversationItem -> bool }
+      OpensByNature : ConversationItem list -> ConversationItem -> bool
+      /// What a chapter at this item is called until somebody names it, when the policy has
+      /// words for it — `None` leaves it to the mechanism's own guess, the item's first line.
+      /// Whatever it answers is fitted to the one line a rule holds by the mechanism, so a
+      /// policy cannot write a guess the rule cannot show.
+      Guess : ConversationItem -> string option }
 
 /// Where a chapter opens in a conversation: the MECHANISM.
 ///
@@ -121,7 +125,13 @@ module Chapters =
     /// A GUESS, and the only one. It stands until something better is written over it — by the
     /// person reading, or by whatever answers `summaryAsk` below — and `unwritten` is what says
     /// a chapter is still wearing it.
-    let defaultName (item: ConversationItem) : string = cutToLimit (headline (ConversationItem.headline item))
+    ///
+    /// The policy's words first, where it has any for this item; the fitting is the same
+    /// either way.
+    let defaultName (policy: ChapterPolicy) (item: ConversationItem) : string =
+        match policy.Guess item with
+        | Some guess -> cutToLimit (headline guess)
+        | None -> cutToLimit (headline (ConversationItem.headline item))
 
     /// The verdict at one item, given what came before it: a person's, or the policy's.
     let private verdict
@@ -179,9 +189,14 @@ module Chapters =
     /// is: a chapter the policy opened has no entry at all until somebody touches
     /// it, so a surface reading the map on its own would draw a rule with nothing written on
     /// it — and the next surface would have to remember the same rule.
-    let name (text: CollabText<'Text>) (chapters: Map<MessageId, ChapterMark<'Text>>) (item: ConversationItem) : string =
+    let name
+        (text: CollabText<'Text>)
+        (policy: ChapterPolicy)
+        (chapters: Map<MessageId, ChapterMark<'Text>>)
+        (item: ConversationItem)
+        : string =
         match text.ToString (written text chapters item) with
-        | "" -> defaultName item
+        | "" -> defaultName policy item
         | said -> said
 
     /// Open a chapter here, or close the one that is open.
@@ -205,7 +220,7 @@ module Chapters =
         let named =
             match chapters |> Map.tryFind item.MessageId with
             | Some mark when text.ToString mark.Name <> "" -> mark.Name
-            | _ -> text.OfString (defaultName item)
+            | _ -> text.OfString (defaultName policy item)
         chapters |> Map.add item.MessageId { Opens = not (opens policy chapters items item); Name = named }
 
     /// Call the chapter here something else.
@@ -243,10 +258,15 @@ module Chapters =
     ///
     /// A chapter the policy opened has no entry at all until somebody touches it,
     /// and that is unwritten too.
-    let unwritten (text: CollabText<'Text>) (chapters: Map<MessageId, ChapterMark<'Text>>) (item: ConversationItem) : bool =
+    let unwritten
+        (text: CollabText<'Text>)
+        (policy: ChapterPolicy)
+        (chapters: Map<MessageId, ChapterMark<'Text>>)
+        (item: ConversationItem)
+        : bool =
         match text.ToString (written text chapters item) with
         | "" -> true
-        | said -> said = defaultName item
+        | said -> said = defaultName policy item
 
     /// The stretch a chapter covers: from the item it opens at, up to wherever the next
     /// chapter begins. What a reader takes it to mean, and so what naming it has to read.

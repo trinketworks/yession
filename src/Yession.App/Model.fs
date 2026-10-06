@@ -3071,7 +3071,7 @@ module ClientModel =
     /// on a message that has said nothing yet, and a control named by an empty string is a
     /// control a screen reader announces as "button".
     let chapterName (model: ClientModel) (item: ConversationItem) : string =
-        match Chapters.name CollabText.ylmish model.Synced.Chapters item with
+        match Chapters.name CollabText.ylmish AutoChapters.policy model.Synced.Chapters item with
         | "" -> Dom.Text.unnamedChapter
         | said -> said
 
