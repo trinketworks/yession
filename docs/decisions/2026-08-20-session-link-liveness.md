@@ -2,7 +2,7 @@
 
 > Decided 2026-08-20 · Supersedes nothing · Related:
 > [src/Yession.Domain/Link.fs](../../src/Yession.Domain/Link.fs),
-> [design.md](../design.md) §2.3 "Transport",
+> [technical-design.md](../technical-design.md) §2.3 "Transport",
 > [src/Yession.Domain/Resilience.fs](../../src/Yession.Domain/Resilience.fs) — the history
 > feed's policy, whose injected-clock shape this mirrors on the other leg
 

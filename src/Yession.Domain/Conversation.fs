@@ -11,7 +11,7 @@ open Yession.Domain.Sandboxes
 /// The conversation is a *projection* of the event log — never read from Yjs/draft state.
 /// The projection type and its fold live in the shared Domain library because both the
 /// Session and the App derive the conversation the same way.
-/// See docs/design.md §1 "Reactive" and §2.2.
+/// See docs/technical-design.md §1 "Reactive" and §2.2.
 
 type ConversationItemStatus =
     | Complete

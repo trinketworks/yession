@@ -5,7 +5,7 @@ open System
 /// Shared identity vocabulary. Every type below uses a private constructor; construct
 /// values through the companion module's `create` smart constructor so validation and
 /// normalisation always run, and read the underlying value with `value`.
-/// See docs/design.md §6.
+/// See docs/technical-design.md §6.
 
 [<AutoOpen>]
 module private IdString =

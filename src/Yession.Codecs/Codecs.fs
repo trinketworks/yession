@@ -42,7 +42,7 @@ module Strict =
 
 /// A paired encoder/decoder for a single domain type. Serialization is an explicit
 /// boundary concern: codecs are written by hand so private constructors are honoured and
-/// the wire format never leaks into application logic. See docs/design.md §1 (Types
+/// the wire format never leaks into application logic. See docs/technical-design.md §1 (Types
 /// first) and §6.
 type Codec<'a> =
     { Encode : 'a -> JsonValue

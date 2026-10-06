@@ -137,7 +137,7 @@ failure into an archaeology dig.
 remembered to ask first is not an invariant — it is a convention with a good reputation, and
 the next caller has not read it.
 
-`design.md` §1 says composition happens at the top. This is the other half of that sentence:
+`technical-design.md` §1 says composition happens at the top. This is the other half of that sentence:
 what composes at the top must have nothing left to DECIDE. A composition root that computes —
 a bound, a fallback, a refusal, a subtraction — has taken a decision out of the only place it
 could be tested cheaply and put it where no test can reach.

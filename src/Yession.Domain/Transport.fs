@@ -9,7 +9,7 @@ open Yession.Domain.Terminals
 /// the Session and the App; the actual WebRTC/HTTP carrier is an
 /// adapter that implements a frame channel over these types. State-sync payloads are
 /// opaque to the transport (owned by the Ylmish sync boundary in Step 05), hence the
-/// `'State` type parameter. See docs/design.md §2.3.
+/// `'State` type parameter. See docs/technical-design.md §2.3.
 
 /// Commands are how clients ask for durable facts the CRDT cannot express. Drafting,
 /// sending (enqueueing), editing, reordering, and deleting are all pure CRDT writes —
@@ -126,7 +126,7 @@ type StateFrame<'State> = StateSync of 'State
 /// rather than given a leg of its own.
 ///
 /// The alternative considered and rejected was SSE-out/POST-in per terminal. Three
-/// reasons it loses here: `design.md` §5 makes WebRTC the session transport and HTTP
+/// reasons it loses here: `technical-design.md` §5 makes WebRTC the session transport and HTTP
 /// bootstrap-only; N terminals across M tabs runs into the browser's six-connections-
 /// per-origin cap, because a locally served session has no TLS and therefore no HTTP/2
 /// multiplexing; and every byte would take a server round trip on a channel that is

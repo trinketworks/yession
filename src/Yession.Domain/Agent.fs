@@ -14,7 +14,7 @@ open Yession.Domain.Repos
 /// turn against the *projection-derived* conversation — never Yjs/draft state — and the
 /// response comes back as streamed chunks plus a final result, which the Process turns
 /// into events. The runner is a capability so the real Claude Agent SDK adapter and a
-/// deterministic scripted runner are interchangeable (docs/design.md §1 "Capabilities
+/// deterministic scripted runner are interchangeable (docs/technical-design.md §1 "Capabilities
 /// are scoped, not ambient", "Verification is automated end-to-end").
 
 /// One resumption, both ends of the gap it names: when the session came back, and when the
