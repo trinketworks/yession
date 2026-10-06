@@ -616,10 +616,7 @@ module Client =
 
     /// How a connection consumes the event log (Step 07).
     type ConnectOptions =
-        { /// Resume consumption after this offset (the model's `LastProcessedOffset`
-          /// when reconnecting); `None` reads from the beginning.
-          ResumeAfter : EventOffset option
-          /// Events per `ReadEventsAfter` request.
+        { /// Events per `ReadEventsAfter` request.
           PageSize : int
           /// When given, event pages are fetched through this feed instead of
           /// `ReadEventsAfter` frames — the browser passes its cursor-addressed HTTP
@@ -636,25 +633,6 @@ module Client =
           /// peer, a test — ignores it and loses nothing, because the transcript is the
           /// record and this is only the view.
           OnTerminalSnapshot : TerminalId -> TranscriptKeyframe -> unit
-          /// How far the MODEL has consumed the log. When given, this — not the read
-          /// loop's own bookkeeping — is what "how far have we got" means.
-          ///
-          /// One source of truth, because two drift. The loop's private cursor advances
-          /// when a page ARRIVES; the model's advances when the page is FOLDED. Anything
-          /// that discards a fold — a decode failure keeping the current model, a
-          /// reconnect onto a restored replica — moves them apart, and a loop reading its
-          /// own cursor then believes it is up to date while the model is missing events
-          /// nothing will ever offer again.
-          ///
-          /// Asking the model instead makes that unrepresentable: a model that lost a
-          /// fold is visibly behind, so the next hint re-reads it. The fold is
-          /// offset-gated, so a re-read costs a round trip and changes nothing else.
-          ReadPosition : (unit -> EventOffset option) option
-          /// How far the MODEL has read one terminal's transcript, for the same reason and on
-          /// the same terms as `ReadPosition` above. Without it, a client that replayed a
-          /// terminal out of its own store would start its first read at line 0 and fetch
-          /// every line it already has.
-          TranscriptReadPosition : (TerminalId -> int) option
           /// Run this once the platform next draws — the browser's animation frame. Live
           /// terminal records that arrive before then are folded together, as one message
           /// per terminal, so a burst costs a render per FRAME rather than one per record
@@ -664,13 +642,10 @@ module Client =
 
     module ConnectOptions =
         let defaults : ConnectOptions =
-            { ResumeAfter = None
-              PageSize = 100
+            { PageSize = 100
               FetchEvents = None
               FetchTranscripts = None
               OnTerminalSnapshot = fun _ _ -> ()
-              ReadPosition = None
-              TranscriptReadPosition = None
               NextFrame = fun run -> run () }
 
     /// The HTTP event feed for `ConnectOptions.FetchEvents`: sends "events after offset X"
@@ -1152,8 +1127,22 @@ module Client =
     /// has already exhausted its resilience policy) parks the loop and reports
     /// `FeedStalled` — it never masquerades as an empty page. The doc listener is registered
     /// before the pump starts so no local update can be missed.
+    ///
+    /// `model` is how far consumption has got — of the event log and of each terminal's
+    /// transcript — and what is known to exist beyond it. It is the ONLY answer: the loop
+    /// keeps no cursor of its own, because two drift. A private cursor advances when a page
+    /// ARRIVES; the model's advances when the page is FOLDED. Anything that discards a fold —
+    /// a decode failure keeping the current model, a reconnect onto a restored replica —
+    /// moves them apart, and a loop reading its own cursor then believes it is up to date
+    /// while the model is missing events nothing will ever offer again. Asking the model
+    /// makes that unrepresentable: a model that lost a fold is visibly behind, so the next
+    /// hint re-reads it, and the fold is offset-gated, so a re-read costs a round trip and
+    /// changes nothing else. The same holds one feed over: a client that replayed a terminal
+    /// out of its own store resumes where that got to, not at line 0. And a reconnect needs
+    /// no offset handed to it — the model already says where it got to.
     let connect
         (options: ConnectOptions)
+        (model: unit -> ClientModel)
         (doc: Y.Doc)
         (registry: BodyRegistry)
         (texts: TextRegistry)
@@ -1177,20 +1166,13 @@ module Client =
         let onResponse (requestId: RequestId) (result: SessionCommandResult) =
             dispatch (CommandAnsweredMsg (requestId, result))
 
-        // The consumption loop's own read position (seeded for reconnect catch-up).
-        let mutable lastProcessed : EventOffset option = options.ResumeAfter
-        let mutable latestKnown : EventOffset option = None
         let mutable readInFlight : RequestId option = None
 
-        // Where consumption has actually got to. The model's answer when the composition
-        // gave one; the loop's own bookkeeping otherwise (a peer with no model behind it).
-        let readCursor () =
-            match options.ReadPosition with
-            | Some position -> position ()
-            | None -> lastProcessed
+        let readCursor () = (model ()).EventConsumer.LastProcessedOffset
 
         let behind () =
-            match latestKnown, readCursor () with
+            let consumer = (model ()).EventConsumer
+            match consumer.LatestKnownOffset, consumer.LastProcessedOffset with
             | Some latest, Some processed -> EventOffset.value latest > EventOffset.value processed
             | Some _, None -> true
             | None, _ -> false
@@ -1217,8 +1199,6 @@ module Client =
 
         and onEventsPage (requestId: RequestId) (page: EventPage<SessionEvent>) =
             if readInFlight = Some requestId then readInFlight <- None
-            lastProcessed <- EventOffset.maxOption lastProcessed page.LastOffset
-            latestKnown <- EventOffset.maxOption latestKnown page.LastOffset
             dispatch (EventsPageMsg page)
             // A non-final page means more events already exist beyond this one.
             if not page.IsEnd && Option.isNone readInFlight then request ()
@@ -1239,26 +1219,14 @@ module Client =
             // timeline that never filled.
             dispatch (EventFeedMsg (FeedStalled (FeedFault.describe fault)))
 
-        // How far a contiguous HTTP read has got through each terminal's transcript. Held
-        // here rather than read back off the model for the same reason `lastProcessed` is:
-        // the read loop must not depend on a model update having been folded yet.
-        //
-        // Only HTTP reads advance it. A live record at a higher seq is still folded into
-        // the model — it is keyed by seq, so it lands wherever it belongs — but it does not
-        // prove the records BEFORE it have arrived, and treating it as if it did is how a
-        // client ends up with a hole it will never fetch.
-        let transcriptRead = System.Collections.Generic.Dictionary<string, int> ()
-
-        // Where this terminal's transcript has actually been read to. The model's answer when
-        // the composition gave one; the loop's own bookkeeping otherwise (a peer with no model
-        // behind it) — the same two sources, for the same reason, as the event cursor above.
+        // Where this terminal's transcript has been read to — the model's `ReadThrough`, for
+        // the reason the event cursor is the model's (see `connect`). Only a contiguous HTTP
+        // read moves it. A live record at a higher seq is still folded into the model — it
+        // is keyed by seq, so it lands wherever it belongs — but it does not prove the
+        // records BEFORE it have arrived, and treating it as if it did is how a client ends
+        // up with a hole it will never fetch.
         let readPositionOf (terminal: TerminalId) =
-            match options.TranscriptReadPosition with
-            | Some position -> position terminal
-            | None ->
-                match transcriptRead.TryGetValue (TerminalId.value terminal) with
-                | true, seq -> seq
-                | _ -> 0
+            (ClientModel.terminalFeed terminal (model ())).ReadThrough
 
         // The terminals with a read out, and those asked to read again while it was. ONE read
         // per terminal at a time, for the reason the event cursor has `readInFlight`: every
@@ -1297,7 +1265,6 @@ module Client =
                                 // Only news is folded: an answer that takes the reader nowhere
                                 // is lines it holds already, and a fold is a render.
                                 if TranscriptCursor.advances (readPositionOf terminal) page.NextSeq then
-                                    transcriptRead.[key] <- page.NextSeq
                                     dispatch (TerminalPageMsg (terminal, page.Records, page.Header, page.NextSeq))
                                 // `NextSeq > fromSeq` guards the one way this could spin: a
                                 // chunk that yields nothing new would otherwise be re-read for
@@ -1385,7 +1352,7 @@ module Client =
                 // getting it wrong at this call site is the bug that shipped a terminal whose
                 // output never reached the store. See `Yession.Domain.Terminals`.
                 fetchTranscript terminal
-            | ConnectedMsg accepted ->
+            | ConnectedMsg _ ->
                 // The client's half of the initial full-state exchange: state restored
                 // from local persistence (Step 20) — or carried across a reconnect —
                 // predates the update listener, so push it explicitly. Full-state
@@ -1397,10 +1364,8 @@ module Client =
                 // nobody sees.
                 presenceAllowed <- true
                 if reportedFocus.IsSome || reportedViewing.IsSome then sendPresence ()
-                latestKnown <- EventOffset.maxOption latestKnown accepted.LatestOffset
                 requestIfBehind ()
-            | EventsAvailableMsg latest ->
-                latestKnown <- EventOffset.maxOption latestKnown (Some latest)
+            | EventsAvailableMsg _ ->
                 requestIfBehind ()
             | _ -> ()
 
@@ -1516,12 +1481,10 @@ module Client =
               /// site, so an `Error` here is SETTLED — the lifecycle's job is to report it,
               /// never to try again in a little while.
               Open : unit -> Async<Result<'channel, ChannelFault>>
-              /// Run one session to completion over the channel, resuming event consumption
-              /// after the given offset and routing every message through the supplied
-              /// dispatch. Returns when the channel closes.
-              Serve : EventOffset option -> (ClientMsg -> unit) -> 'channel -> Async<unit>
-              /// How far event consumption has got — where a reconnect resumes from.
-              ReadPosition : unit -> EventOffset option
+              /// Run one session to completion over the channel, routing every message
+              /// through the supplied dispatch. Returns when the channel closes. Where event
+              /// consumption resumes is the model's to say (`connect`), not the lifecycle's.
+              Serve : (ClientMsg -> unit) -> 'channel -> Async<unit>
               /// Wait before the next attempt, and say whether to make one.
               ///
               /// `Some delay` is the supervised schedule. `None` is "wait to be asked" — the
@@ -1605,7 +1568,7 @@ module Client =
         /// That is also why this cannot spin. Every path either succeeds, backs off, or waits
         /// for a human, and the only unbounded one is bounded by a minute.
         let run (supervision: Resilience.Schedule) (ports: Ports<'channel>) : Async<unit> =
-            let rec attempt (announce: bool) (failures: int) (resumeAfter: EventOffset option) =
+            let rec attempt (announce: bool) (failures: int) =
                 async {
                     // Announce an attempt that follows a park: until a channel exists the model
                     // would read `Disconnected`, and opening one costs a handshake. Neither a
@@ -1618,7 +1581,7 @@ module Client =
                         let attempts = failures + 1
                         ports.Dispatch (RetryingMsg (ChannelFault.describe fault, attempts))
                         match! ports.WaitBeforeRetry (supervision attempts) with
-                        | true -> return! attempt false attempts resumeAfter
+                        | true -> return! attempt false attempts
                         | false -> return ()
                     | Ok channel ->
                         // Acceptance is learned from the message that carries it, as it passes.
@@ -1628,14 +1591,14 @@ module Client =
                             | ConnectedMsg _ -> accepted <- true
                             | _ -> ()
                             ports.Dispatch msg
-                        do! ports.Serve resumeAfter observing channel
+                        do! ports.Serve observing channel
                         if accepted then
                             // A session that worked resets the backoff: the next failure is
                             // this client's first, not the continuation of an old streak.
-                            return! attempt false 0 (ports.ReadPosition ())
+                            return! attempt false 0
                         else
                             match! ports.WaitBeforeRetry None with
-                            | true -> return! attempt true 0 resumeAfter
+                            | true -> return! attempt true 0
                             | false -> return ()
                 }
-            attempt true 0 None
+            attempt true 0

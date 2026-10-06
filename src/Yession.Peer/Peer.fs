@@ -187,9 +187,8 @@ let connectClientWith (options: Client.ConnectOptions) (signalUrl: string) (toke
         // draft slot appears when its body has content and goes when the body empties.
         DraftSlot.follow doc registry local.PeerId (user >> runner.Dispatch) |> ignore
         let hello = { PeerId = local.PeerId; DisplayName = name; Token = token }
-        // The model is what "how far have we consumed" means (see `ConnectOptions`).
-        let options = { options with ReadPosition = Some (fun () -> (runner.Model ()).EventConsumer.LastProcessedOffset) }
-        let connection = Client.connect options doc registry texts hello (user >> runner.Dispatch) channel
+        // The model is what "how far have we consumed" means (see `Client.connect`).
+        let connection = Client.connect options runner.Model doc registry texts hello (user >> runner.Dispatch) channel
         wired.Value <- Some connection
         Async.StartImmediate connection.Run
         do! runner.WaitFor (fun m -> m.Connection = Connected)

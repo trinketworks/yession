@@ -18,6 +18,7 @@ open Yession.Domain.Terminals
 open Yession.App
 open Yession.Host
 open Yession.Tests.Support
+open Yession.Peer
 open Yession.App.Codecs
 open Yession.App.Collab
 open Yession.Domain.Link
@@ -420,13 +421,17 @@ type private Reader =
       Hints : ResizeArray<int> }
 
 /// A client connected over an in-memory pair and reading this terminal's transcript through
-/// `feed`, drawing whenever `nextFrame` runs what it is handed.
+/// `feed`, drawing whenever `nextFrame` runs what it is handed. `readThrough` is where its
+/// model already holds the terminal to — a replay out of the client's own store — and `0`
+/// is a client that holds nothing.
 let private readingEvery
     (nextFrame: (unit -> unit) -> unit)
     (feed: Client.TranscriptFetch.TranscriptFeed)
-    (position: (TerminalId -> int) option)
+    (readThrough: int)
     =
     let doc = Y.Doc.Create ()
+    let runner = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "reader" "Reader")))
+    runner.Dispatch (user (TerminalReadThroughMsg (terminal, readThrough)))
     let clientEnd, serverEnd = Yession.Session.InMemoryChannel.createPair<string> ()
     let reader = { Session = serverEnd; Folds = ResizeArray (); Pages = ResizeArray (); Hints = ResizeArray () }
     let dispatch (msg: ClientMsg) =
@@ -435,12 +440,13 @@ let private readingEvery
         | TerminalPageMsg (_, _, _, readThrough) -> reader.Pages.Add readThrough
         | TerminalAvailableMsg (_, length) -> reader.Hints.Add length
         | _ -> ()
+        runner.Dispatch (user msg)
     let connection =
         Client.connect
             { Client.ConnectOptions.defaults with
                 FetchTranscripts = Some feed
-                TranscriptReadPosition = position
                 NextFrame = nextFrame }
+            runner.Model
             doc
             (BodyRegistry doc)
             (TextRegistry doc)
@@ -451,7 +457,7 @@ let private readingEvery
     reader
 
 /// The same client on a platform that draws nothing, so each record is folded as it arrives.
-let private readingThrough feed position = readingEvery (fun run -> run ()) feed position
+let private readingThrough feed readThrough = readingEvery (fun run -> run ()) feed readThrough
 
 /// The Session printing `count` records live, from line 1.
 let private burst (serverEnd: FrameChannel<string>) (count: int) =
@@ -469,7 +475,7 @@ let private readLoopTests =
                 // waiting behind every one of those renders.
                 let frames = ResizeArray<unit -> unit> ()
                 let feed, _ = heldFeed ()
-                let reader = readingEvery frames.Add feed None
+                let reader = readingEvery frames.Add feed 0
                 do! burst reader.Session 50
                 // A hint sent after the burst, on the same ordered channel: once the client has
                 // been handed it, every record ahead of it has been handed over too.
@@ -482,7 +488,7 @@ let private readLoopTests =
         testCaseAsync "a burst of live records keeps one transcript read out, not one per record" <|
             async {
                 let feed, asked = heldFeed ()
-                let reader = readingThrough feed None
+                let reader = readingThrough feed 0
                 do! burst reader.Session 50
                 do! waitUntil "the client to see the whole burst" (fun () -> Seq.sum reader.Folds = 50)
                 Expect.equal asked.Count 1 "fifty signals that there is more, one read"
@@ -494,7 +500,7 @@ let private readLoopTests =
                 // is owed one more, asked once the first has landed — from its end, so nothing
                 // is read twice.
                 let feed, asked = heldFeed ()
-                let reader = readingThrough feed None
+                let reader = readingThrough feed 0
                 do! burst reader.Session 50
                 do! waitUntil "the client to see the whole burst" (fun () -> Seq.sum reader.Folds = 50)
                 let _, answer = asked.[0]
@@ -508,7 +514,7 @@ let private readLoopTests =
                 // The `204` — "you are current" — arrives as a page of no lines ending where it
                 // began. It holds nothing, and a fold is a render of the whole page.
                 let feed, asked = heldFeed ()
-                let reader = readingThrough feed (Some (fun _ -> 10))
+                let reader = readingThrough feed 10
                 do! reader.Session.Send (Terminal (TerminalRecord (terminal, 10, outputAt 10)))
                 do! waitUntil "the client to ask" (fun () -> asked.Count = 1)
                 let _, answer = asked.[0]

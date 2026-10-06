@@ -1005,7 +1005,8 @@ type private Lifecycle =
       DropSession : unit -> Async<unit>
       /// How many times a transport was opened.
       Opens : unit -> int
-      /// The resume offset each served session was started with, in order.
+      /// Where each served session's first event read asked from, in order — the resume
+      /// offset as the wire sees it, since nothing hands the connection one any more.
       Resumes : unit -> EventOffset option list
       /// Make the CURRENT session's transport go half-open: still open, carrying nothing.
       /// The failure the heartbeat exists for, and the one a closed channel cannot express.
@@ -1057,23 +1058,33 @@ let private startLifecycle (host: Host.SessionHost) (token: string) (id: string)
                         return Ok (Link.supervise (linkPolicy clock (ResizeArray ())) carrier)
                     }
               Serve =
-                fun resumeAfter dispatch channel ->
+                fun dispatch channel ->
                     async {
-                        resumes.Value <- resumes.Value @ [ resumeAfter ]
+                        let asked = ref false
+                        let reading =
+                            { channel with
+                                Send =
+                                    fun frame ->
+                                        match frame with
+                                        | EventLog (ReadEventsAfter (_, after, _)) when not asked.Value ->
+                                            asked.Value <- true
+                                            resumes.Value <- resumes.Value @ [ after ]
+                                        | _ -> ()
+                                        channel.Send frame }
                         let connection =
                             Client.connect
-                                { Client.ConnectOptions.defaults with ResumeAfter = resumeAfter }
+                                Client.ConnectOptions.defaults
+                                runner.Model
                                 doc
                                 registry
                                 (TextRegistry doc)
                                 hello
                                 dispatch
-                                channel
+                                reading
                         live.Value <- Some connection
                         do! connection.Run
                         live.Value <- None
                     }
-              ReadPosition = fun () -> (runner.Model ()).EventConsumer.LastProcessedOffset
               Dispatch = record })
     { Runner = runner
       Say =
@@ -1218,8 +1229,7 @@ let private lifecycleTests =
                                     opens.Value <- opens.Value + 1
                                     return Error Client.ChannelTimedOut
                                 }
-                          Serve = fun _ _ _ -> async { failwith "must not serve a channel it never opened" }
-                          ReadPosition = fun () -> None
+                          Serve = fun _ _ -> async { failwith "must not serve a channel it never opened" }
                           // Three failures is enough to show it keeps going and to read the
                           // schedule off; a real client stops when the page does.
                           WaitBeforeRetry =
@@ -1296,7 +1306,7 @@ let private lifecycleTests =
                         (Client.SessionLifecycle.supervision (fun () -> 0.0))
                         { Open = fun () -> async { return Ok () }
                           Serve =
-                            fun _ dispatch _ ->
+                            fun dispatch _ ->
                                 async {
                                     serves.Value <- serves.Value + 1
                                     if serves.Value = 1 then
@@ -1307,7 +1317,6 @@ let private lifecycleTests =
                                         // Refused this time: no schedule can help, so it parks.
                                         dispatch (RejectedMsg "peer token expired")
                                 }
-                          ReadPosition = fun () -> None
                           WaitBeforeRetry =
                             fun delay ->
                                 async {
@@ -1353,6 +1362,7 @@ let private releaseTests =
                 let connection =
                     Client.connect
                         Client.ConnectOptions.defaults
+                        (fun () -> ClientModel.init local)
                         doc
                         registry
                         (TextRegistry doc)
@@ -1400,6 +1410,7 @@ let private releaseTests =
                 let connection =
                     Client.connect
                         Client.ConnectOptions.defaults
+                        (fun () -> ClientModel.init local)
                         doc
                         (BodyRegistry doc)
                         (TextRegistry doc)
