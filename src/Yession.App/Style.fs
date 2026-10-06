@@ -641,7 +641,14 @@ module Style =
     /// The model picker's own width, now that it rides the composer's row (`View.modelControl`)
     /// instead of a settings column that gave it the row's full width. `shrink-0` so Send and
     /// Interrupt, packed in beside it, never squeeze it below the model names it has to show.
-    let modelControlWidth = "w-28 shrink-0"
+    ///
+    /// `w-28` (112px) was too narrow for the control's OWN default label, "Provider's
+    /// default" — a native `<select>` does not ellipsize an overflowing option, it hard-clips
+    /// the text at the box edge, so the row read "Provider's de" with the caret crammed
+    /// against it. `w-40` (160px) is sized to that longest label, which is also longer than
+    /// any catalogue model name (`ModelCatalogue`) seen in testing — fixing the label fixes
+    /// every shorter option too.
+    let modelControlWidth = "w-40 shrink-0"
 
     /// The model picker's own FACE, now that it stands on the composer's row rather than in a
     /// settings column: bare — deliberately NOT the same register as Send beside it any more.
