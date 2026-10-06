@@ -156,8 +156,8 @@ module Naming =
             |> List.choose (fun item ->
                 let subject = NamingSubject.Chapter item.MessageId
                 let last = Map.tryFind subject settled
-                let held = Chapters.name text chapters item
-                if not (Chapters.unwritten text chapters item || ours last held) then None
+                let held = Chapters.name text AutoChapters.policy chapters item
+                if not (Chapters.unwritten text AutoChapters.policy chapters item || ours last held) then None
                 elif finished last Chapters.ReadItems then None
                 else
                     let covered = Chapters.reading AutoChapters.policy chapters items item

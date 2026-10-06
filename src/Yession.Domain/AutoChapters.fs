@@ -1,5 +1,8 @@
 namespace Yession.Domain.Chat
 
+open Yession.Domain
+open Yession.Domain.Prs
+
 // Where the session divides itself when nobody asked it to: the chapters' POLICY, and only
 // that. `Chapters` is the mechanism it is handed to — a person's verdict per message and its
 // precedence, what a chapter covers, what it is called — and none of that is decided here.
@@ -13,57 +16,45 @@ namespace Yession.Domain.Chat
 /// stays open however the session goes on.
 module AutoChapters =
 
-    /// Whether this act opens a chapter BY NATURE — one nobody had to ask for.
-    ///
-    /// A rule over the act rather than a flag set at every fold arm, for the reason the
-    /// prose is: the act knows. What is notable is deliberately a short list — a transcript
-    /// where everything opens a chapter has none.
+    /// The pull request an act is a milestone of, and the words that milestone is called by:
+    /// opening one, and its merge. Nothing else opens a chapter by itself — a transcript where
+    /// every check and every queue entry opens one has none — and the two are the ends of the
+    /// story a pull request tells.
     ///
     /// Acts only, and that is load-bearing beyond this file: a chapter opened by nature has
     /// no entry in the doc, so it is never named by a model (`Naming.owed`) and wears its
-    /// guess for good. An act note is a sentence already written short, so that is right for
-    /// these; a policy that opened chapters at messages would want that line moved too.
-    let rec private notable (act: Act) : bool =
+    /// guess for good. These guesses are written to be kept; a policy that opened chapters at
+    /// messages would want that line moved too.
+    let rec private milestone (act: Act) : (string * PrRef * string option) option =
         match act with
-        | Act.Noticed (_, inner) -> notable inner
-        // Where the waiting began, and the news that follows it — unlike the unwatch, which
-        // is where the story stops being told rather than a place worth coming back to.
-        | Act.PrWatched _
-        | Act.PrTransitioned _ -> true
-        // Worth seeing when it FAILED: a sandbox whose setup never ran is a sandbox the next
-        // command pays for in full, and that is the case somebody should be told loudly.
-        | Act.SandboxSetupQueued q -> q.Problem.IsSome
-        | Act.RepoAdded _
-        | Act.RepoRemoved _
-        | Act.RepoBranchSwitched _
-        | Act.RepoCapabilitiesChanged _
-        | Act.RepoCapabilitiesApproved _
-        | Act.RepoConfigRefused _
-        | Act.RepoConfigWarned _
-        | Act.SandboxStarting _
-        | Act.SandboxStarted _
-        | Act.SandboxStartFailed _
-        | Act.SandboxStopped _
-        | Act.ShellProfileSet _
-        | Act.FileChanged _
-        | Act.ArtifactShared _
-        | Act.CommandRefused _
-        | Act.GatedCommandFailed _
-        | Act.CredentialSpent _
-        | Act.McpServerAvailable _
-        | Act.McpServerUnavailable _
-        | Act.PrUnwatched _
-        | Act.PrCreated _
-        | Act.SessionResumed _
-        | Act.SessionStarted _ -> false
+        | Act.Noticed (_, inner) -> milestone inner
+        | Act.PrCreated p -> Some ("Opened", p.Pr, Some p.Title)
+        | Act.PrTransitioned p when p.Transition = PrTransition.Merged -> Some ("Merged", p.Pr, p.Title)
+        | _ -> None
+
+    let private actOf (item: ConversationItem) : Act option =
+        match item.Content with
+        | ItemContent.Act act -> Some act
+        | ItemContent.Message _
+        | ItemContent.Stopped _ -> None
 
     /// Today's rule reads the item alone; what came before it (`_before`, newest first) is
     /// there for the rule that wants it — a long silence, the first thing said after a
     /// stretch of the agent's own work.
     let private opensByNature (_before: ConversationItem list) (item: ConversationItem) : bool =
-        match item.Content with
-        | ItemContent.Act act -> notable act
-        | ItemContent.Message _
-        | ItemContent.Stopped _ -> false
+        actOf item |> Option.bind milestone |> Option.isSome
 
-    let policy : ChapterPolicy = { ChapterPolicy.OpensByNature = opensByNature }
+    /// "Opened PR #1234 Add feature", "Merged PR #1234 Add feature": the deed first, then the
+    /// number a person says aloud, then what it is about. The repository is left off — a
+    /// session's pull requests are nearly always one repository's, and the rule has 48
+    /// characters to spend. A merge seen before transitions carried a title says the number
+    /// alone rather than inventing one.
+    let private guess (item: ConversationItem) : string option =
+        actOf item
+        |> Option.bind milestone
+        |> Option.map (fun (deed, pr, title) ->
+            match title with
+            | Some title -> sprintf "%s PR #%d %s" deed pr.Number title
+            | None -> sprintf "%s PR #%d" deed pr.Number)
+
+    let policy : ChapterPolicy = { ChapterPolicy.OpensByNature = opensByNature; ChapterPolicy.Guess = guess }

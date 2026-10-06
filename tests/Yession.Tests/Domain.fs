@@ -157,7 +157,7 @@ let private isAct (item: ConversationItem) : bool =
     | ItemContent.Stopped _ -> false
 
 /// Two acts for the cases that need one of each and do not care which: an ordinary one,
-/// and one that opens a chapter by nature (`Act.notable`).
+/// and one the chapter tests' own policy opens by nature.
 let private ordinaryAct : Act =
     Act.RepoRemoved
         { MessageId = MessageId.create "act-ordinary" |> expect
@@ -1116,7 +1116,9 @@ let private chapterTests =
     /// A policy written for these cases rather than the product's, so what they pin is the
     /// MECHANISM — a verdict's precedence, a stretch, a name — and a change to which acts
     /// open chapters by themselves (`AutoChapters`) cannot turn any of them red.
-    let policy : ChapterPolicy = { ChapterPolicy.OpensByNature = fun _ item -> item.MessageId = notable.MessageId }
+    let policy : ChapterPolicy =
+        { ChapterPolicy.OpensByNature = fun _ item -> item.MessageId = notable.MessageId
+          ChapterPolicy.Guess = fun _ -> None }
     /// What somebody's verdict alone looks like, without a name over it — the shape a doc
     /// written before chapters had names decodes to, and the one an auto-chapter keeps.
     let verdict (item: ConversationItem) (opens: bool) =
@@ -1160,7 +1162,8 @@ let private chapterTests =
         testCase "the policy is shown what came before an item, newest first, and nothing after" <| fun () ->
             let shown = System.Collections.Generic.List<string * string list> ()
             let watching : ChapterPolicy =
-                { ChapterPolicy.OpensByNature =
+                { ChapterPolicy.Guess = (fun _ -> None)
+                  ChapterPolicy.OpensByNature =
                     fun before item ->
                         shown.Add (MessageId.value item.MessageId, before |> List.map (fun i -> MessageId.value i.MessageId))
                         false }
@@ -1179,12 +1182,12 @@ let private chapterTests =
         // message a person wrote as its subject, whether or not they meant to.
         testCase "a message is named by its first line" <| fun () ->
             let message = itemSaying "m" (ItemContent.Message "Do both ends.\nUpstream so it fails loudly.")
-            Expect.equal (Chapters.defaultName message) "Do both ends." "the first line, and only it"
+            Expect.equal (Chapters.defaultName policy message) "Do both ends." "the first line, and only it"
 
         testCase "a long first line is cut on a word boundary, and says it was cut" <| fun () ->
             let message =
                 itemSaying "m" (ItemContent.Message "Upstream: capture under pipefail and refuse an empty result")
-            let name = Chapters.defaultName message
+            let name = Chapters.defaultName policy message
             Expect.isTrue (name.EndsWith "…") (sprintf "a cut name says so, got %s" name)
             Expect.isFalse (name.Contains "resul…") "and the cut falls between words, not inside one"
 
@@ -1193,13 +1196,13 @@ let private chapterTests =
         testCase "a short act headline is its whole name" <| fun () ->
             let act =
                 itemSaying "a" (ItemContent.Act notableAct)
-            Expect.equal (Chapters.defaultName act) "default could not start its setup" "nothing to cut"
+            Expect.equal (Chapters.defaultName policy act) "default could not start its setup" "nothing to cut"
 
         // The guess reads the line's WORDS. A line that opens with markdown opens with
         // punctuation that says how it is set, not what it says.
         testCase "a line that opens with markdown is named by what it says" <| fun () ->
             let bulleted = itemSaying "b" (ItemContent.Message "- ship the guard first")
-            Expect.equal (Chapters.defaultName bulleted) "ship the guard first" "the bullet is not the name"
+            Expect.equal (Chapters.defaultName policy bulleted) "ship the guard first" "the bullet is not the name"
 
         // The name belongs to the SESSION from the moment the chapter does, so every peer
         // reads the same words — and the person who wants to change them has something to
@@ -1220,14 +1223,14 @@ let private chapterTests =
 
         testCase "a name somebody wrote is what the chapter is called" <| fun () ->
             let chapters = Map.ofList [ said.MessageId, { Opens = true; Name = Ylmish.Text.ofString "The decision" } ]
-            Expect.equal (Chapters.name Yession.App.Collab.CollabText.ylmish chapters said) "The decision" "theirs, not the guess"
+            Expect.equal (Chapters.name Yession.App.Collab.CollabText.ylmish policy chapters said) "The decision" "theirs, not the guess"
 
         // The case the fallback exists for: an act that opens a chapter by nature has no
         // entry at all until somebody touches it, and a decoded doc written before names
         // has an entry with nothing in it. Both read as the guess.
         testCase "a chapter nobody has named is called what the message says" <| fun () ->
-            Expect.equal (Chapters.name Yession.App.Collab.CollabText.ylmish Map.empty said) "something happened" "no entry, still a name"
-            Expect.equal (Chapters.name Yession.App.Collab.CollabText.ylmish (verdict said true) said) "something happened" "an empty name, still a name"
+            Expect.equal (Chapters.name Yession.App.Collab.CollabText.ylmish policy Map.empty said) "something happened" "no entry, still a name"
+            Expect.equal (Chapters.name Yession.App.Collab.CollabText.ylmish policy (verdict said true) said) "something happened" "an empty name, still a name"
 
         // Renaming is not a way to divide the session: what it writes down is the verdict the
         // item already carried, so naming a chapter that opened by itself leaves it open.
@@ -1242,17 +1245,17 @@ let private chapterTests =
         // standing behind it. `toggle` seeds the guess, so a chapter has words from the
         // moment it exists — "has it got a name yet" is not a question about emptiness.
         testCase "a chapter still wearing the guess is unwritten" <| fun () ->
-            Expect.isTrue (Chapters.unwritten Yession.App.Collab.CollabText.ylmish (Chapters.toggle Yession.App.Collab.CollabText.ylmish policy [ said ] said Map.empty) said) "the guess is not a name"
+            Expect.isTrue (Chapters.unwritten Yession.App.Collab.CollabText.ylmish policy (Chapters.toggle Yession.App.Collab.CollabText.ylmish policy [ said ] said Map.empty) said) "the guess is not a name"
 
         testCase "a chapter somebody named is not" <| fun () ->
             let chapters = Chapters.rename policy [ said ] said (Ylmish.Text.ofString "Where it was settled") Map.empty
-            Expect.isFalse (Chapters.unwritten Yession.App.Collab.CollabText.ylmish chapters said) "theirs, and nothing may type over it"
+            Expect.isFalse (Chapters.unwritten Yession.App.Collab.CollabText.ylmish policy chapters said) "theirs, and nothing may type over it"
 
         // An act that opens a chapter by nature has no entry at all until somebody touches
         // it. That is the commonest unwritten chapter there is, and a test of the map alone
         // would miss every one of them.
         testCase "a chapter nobody has touched is unwritten" <| fun () ->
-            Expect.isTrue (Chapters.unwritten Yession.App.Collab.CollabText.ylmish Map.empty notable) "no entry, no name"
+            Expect.isTrue (Chapters.unwritten Yession.App.Collab.CollabText.ylmish policy Map.empty notable) "no entry, no name"
 
         // --- What a chapter covers --------------------------------------------------------
 
@@ -1470,6 +1473,32 @@ let private prWatchTests =
     let transitioned transition state checks : SessionEvent =
         PrTransitioned
             { MessageId = msg "t1"; Pr = pr; Transition = transition; State = state; Checks = checks; Watcher = Principal.Peer ada; OccurredAt = None; Title = None }
+    let created title : SessionEvent =
+        SessionEvent.PrCreated
+            { MessageId = msg "c1"; Pr = pr; Title = title; Head = "topic"; Base = "master"; Draft = false; Actor = PeerRef ada }
+    /// A pull request's whole story as the timeline tells it: opened, watched, a red check,
+    /// merged (with the title the look read), and the watch let go.
+    let prStory : SessionEvent list =
+        [ created "Add feature"
+          PrWatched.create (msg "w1") (Authority.ofAuthor (Principal.Peer ada)) pr (snapshotOf PrOpen ChecksPending None)
+          |> expect
+          |> SessionEvent.PrWatched
+          SessionEvent.PrTransitioned
+            { MessageId = msg "w2"; Pr = pr; Transition = PrTransition.ChecksFailed; State = PrOpen; Checks = ChecksRed
+              Watcher = Principal.Peer ada; OccurredAt = None; Title = Some "Add feature" }
+          SessionEvent.PrTransitioned
+            { MessageId = msg "w3"; Pr = pr; Transition = PrTransition.Merged; State = PrMerged; Checks = ChecksGreen
+              Watcher = Principal.Peer ada; OccurredAt = None; Title = Some "Add feature" }
+          SessionEvent.PrUnwatched { MessageId = msg "w4"; Pr = pr; Actor = PeerRef ada } ]
+    let enveloped (events: SessionEvent list) =
+        events
+        |> List.mapi (fun i event ->
+            { EventId = EventId.fresh ()
+              SessionId = SessionId.create "pr-session" |> expect
+              Offset = EventOffset.create (int64 (i + 1)) |> expect
+              Actor = ActorRef.Session
+              Timestamp = DateTimeOffset (2026, 8, 27, 10, 0, 0, TimeSpan.Zero)
+              Event = event })
     /// The projection folds ENVELOPES, because when a watch last moved is the envelope's
     /// timestamp and nothing in a payload says it. Minute-apart stamps, so a test can tell
     /// which event a `Since` came from.
@@ -1915,33 +1944,49 @@ let private prWatchTests =
                 (List.replicate 3 (EntityRef.Pr pr))
                 "each note points at the pull request"
 
-        // Which acts arrive on the rail without anybody asking. Deliberately a short list:
-        // a transcript where everything opens a chapter has none. A watch and its news do because
-        // a watch is the reason somebody is waiting; the unwatch is not, because it is where
-        // the story stops being told rather than a place worth coming back to.
-        testCase "a watch and its news are chapters; letting it go is not" <| fun () ->
-            let notable = AutoChapters.policy.OpensByNature []
-            let envelopes =
-                [ PrWatched.create (msg "w1") (Authority.ofAuthor (Principal.Peer ada)) pr (snapshotOf PrOpen ChecksPending None)
-                  |> expect
-                  |> SessionEvent.PrWatched
-                  SessionEvent.PrTransitioned
-                    { MessageId = msg "w2"
-                      Pr = pr
-                      Transition = PrTransition.Merged
-                      State = PrMerged
-                      Checks = ChecksGreen
-                      Watcher = Principal.Peer ada; OccurredAt = None; Title = None }
-                  SessionEvent.PrUnwatched { MessageId = msg "w3"; Pr = pr; Actor = PeerRef ada } ]
-                |> List.mapi (fun i event ->
-                    { EventId = EventId.fresh ()
-                      SessionId = SessionId.create "pr-session" |> expect
-                      Offset = EventOffset.create (int64 (i + 1)) |> expect
-                      Actor = ActorRef.Session
-                      Timestamp = DateTimeOffset (2026, 8, 27, 10, 0, 0, TimeSpan.Zero)
-                      Event = event })
-            let proj, _ = ConversationProjection.applyEvents None envelopes ConversationProjection.empty
-            Expect.equal (proj.Items |> List.map notable) [ true; true; false ] "watched, its news, then let go"
+        // Which acts open a chapter without anybody asking: the two ends of the story a pull
+        // request tells, and nothing between. A transcript where every check, queue entry and
+        // watch opens one has none.
+        testCase "opening a pull request and its merge are chapters; nothing between them is" <| fun () ->
+            let proj, _ = ConversationProjection.applyEvents None (enveloped prStory) ConversationProjection.empty
+            Expect.equal
+                (proj.Items |> List.map (AutoChapters.policy.OpensByNature []))
+                [ true; false; false; true; false ]
+                "opened, watched, checks failed, merged, let go"
+
+        testCase "a chapter at an opening is called what was opened" <| fun () ->
+            let proj, _ = ConversationProjection.applyEvents None (enveloped prStory) ConversationProjection.empty
+            Expect.equal
+                (Chapters.defaultName AutoChapters.policy (List.head proj.Items))
+                "Opened PR #12 Add feature"
+                "the deed, the number, the title"
+
+        testCase "a chapter at a merge is called what was merged" <| fun () ->
+            let proj, _ = ConversationProjection.applyEvents None (enveloped prStory) ConversationProjection.empty
+            Expect.equal
+                (Chapters.defaultName AutoChapters.policy (List.item 3 proj.Items))
+                "Merged PR #12 Add feature"
+                "the deed, the number, the title"
+
+        // Every merge logged before transitions carried a title.
+        testCase "a merge whose title was never recorded is called by its number" <| fun () ->
+            let proj, _ =
+                ConversationProjection.applyEvents
+                    None
+                    (enveloped [ transitioned PrTransition.Merged PrMerged ChecksGreen ])
+                    ConversationProjection.empty
+            Expect.equal (Chapters.defaultName AutoChapters.policy (List.head proj.Items)) "Merged PR #12" "no title invented"
+
+        // The rule holds one line; a long title is the policy's words, and the mechanism's cut.
+        testCase "a long title is cut to the line a chapter rule holds" <| fun () ->
+            let long = String.replicate 12 "words "
+            let proj, _ =
+                ConversationProjection.applyEvents
+                    None
+                    (enveloped [ created long ])
+                    ConversationProjection.empty
+            let name = Chapters.defaultName AutoChapters.policy (List.head proj.Items)
+            Expect.isTrue (name.Length <= Chapters.Limit + 1 && name.EndsWith "…") (sprintf "cut, and says so: %s" name)
 
         testCase "a PrTransitioned on the wire is the shape it will always be" <| fun () ->
             // Pinned as a literal, not round-tripped: what a durable log needs is that the
@@ -3437,7 +3482,7 @@ let private namingTests =
         // nobody chose.
         testCase "a chapter still wearing its guess is owed a name" <| fun () ->
             let item = saying "m" "run tests"
-            let chapters = Map.ofList [ opened item (Chapters.defaultName item) ]
+            let chapters = Map.ofList [ opened item (Chapters.defaultName AutoChapters.policy item) ]
             Expect.equal
                 (chaptersOwed Map.empty chapters [ item ] |> List.map (fun job -> job.Subject))
                 [ subjectOf item ]
@@ -3493,7 +3538,14 @@ let private namingTests =
         // note is a sentence somebody already wrote short.
         testCase "a chapter no doc entry opens is not a subject" <| fun () ->
             let act =
-                { saying "n" "PR octo/hello#12 merged" with Content = ItemContent.Act notableAct }
+                { saying "n" "PR octo/hello#12 opened" with
+                    Content =
+                        ItemContent.Act (
+                            Act.PrCreated
+                                { MessageId = MessageId.create "n" |> expect
+                                  Pr = PrRef.create (RepoRef.create "octo/hello" |> expect) 12 |> expect
+                                  Title = "Add feature"; Head = "topic"; Base = "master"; Draft = false
+                                  Actor = ActorRef.Agent }) }
             Expect.isTrue (Chapters.opens AutoChapters.policy Map.empty [ act ] act) "it does open a chapter"
             Expect.equal (chaptersOwed Map.empty Map.empty [ act ]) [] "and it is still not named"
 
@@ -3507,7 +3559,7 @@ let private namingTests =
         // reached yet.
         testCase "a mark with no message behind it is not a subject" <| fun () ->
             let item = saying "m" "run tests"
-            let chapters = Map.ofList [ opened item (Chapters.defaultName item) ]
+            let chapters = Map.ofList [ opened item (Chapters.defaultName AutoChapters.policy item) ]
             Expect.equal (chaptersOwed Map.empty chapters []) [] "nothing to read, so nothing to ask"
 
         // A second ask exists to let the model KEEP the name, and it cannot keep a name it
@@ -3526,7 +3578,7 @@ let private namingTests =
         // the part is about.
         testCase "a first ask is not anchored to the guess" <| fun () ->
             let item = saying "m" "run tests"
-            let chapters = Map.ofList [ opened item (Chapters.defaultName item) ]
+            let chapters = Map.ofList [ opened item (Chapters.defaultName AutoChapters.policy item) ]
             match chaptersOwed Map.empty chapters [ item ] with
             | [ job ] -> Expect.isFalse (job.Ask.Task.Contains "run tests") "nothing to keep, so nothing to anchor to"
             | other -> failwithf "expected one job, got %A" other
@@ -3578,7 +3630,7 @@ let private namingTests =
         // Recording the LOSS is what tells the next pass the subject is somebody else's now.
         testCase "a write that lost its race is settled to what stands, not to what was said" <| fun () ->
             let item = saying "m" "run tests"
-            let chapters = Map.ofList [ opened item (Chapters.defaultName item) ]
+            let chapters = Map.ofList [ opened item (Chapters.defaultName AutoChapters.policy item) ]
             match chaptersOwed Map.empty chapters [ item ] with
             | [ job ] ->
                 let fact = Naming.settle job None "What they typed instead"
