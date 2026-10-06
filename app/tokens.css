@@ -88,6 +88,7 @@
      size cannot drift from its line. */
   --text-label: 11px;    --text-label--line-height: 16px;
   --text-small: 13px;    --text-small--line-height: 16px;
+  --text-note: 13px;     --text-note--line-height: 20px;  /* small type with room to wrap */
   --text-body: 15px;     --text-body--line-height: 24px;
   --text-pivot: 19px;    --text-pivot--line-height: 24px;
   --text-heading: 28px;  --text-heading--line-height: 32px;
@@ -96,12 +97,25 @@
   --text-code-sm: 11px;  --text-code-sm--line-height: 16px;
   --text-touch: 16px;    /* not a step: the size under which iOS zooms a focused field and stays zoomed (`Style.touchType`) */
   --tracking-caps: 0.16em;  /* the caps voice's one tracking */
+  --tracking-display: -0.01em;   /* display type's tracking, a hair close */
+  --tracking-wordmark: -0.02em;  /* the wordmark's, tighter again */
 
   /* --- Structure: lengths that layouts must agree on, so they compose a name rather than repeat a number. --- */
   --spacing-control: 32px;  /* every button, field and select — a row is things of one height */
   --spacing-band: 88px;     /* the header band every head shares, so baselines align across the hairline */
   --spacing-side: 280px;    /* the sidebar column */
   --spacing-term: 420px;    /* the terminals column: 80 columns of mono */
+  --spacing-touch: 44px;    /* the touch target: what a control grows to on a phone */
+  --spacing-bar: 48px;      /* the degraded bar's height on a phone, which the content clears */
+  --spacing-measure: 38rem; /* the reading column's measure */
+
+  /* --- Layers: stacking order, low to high (`z-ground`, `z-floating`, `z-overlay`; the
+     utilities are in app/tailwind.css, since Tailwind has no theme namespace for z-index).
+     Ground is sticky heads and lead bars; floating is anything over a scroller or pinned
+     beside it; overlay is the scrim, backdrops and menus, over all of them. --- */
+  --layer-ground: 10;
+  --layer-floating: 30;
+  --layer-overlay: 50;
 
   /* --- Motion: named and timed here. The keyframes, and why each thing moves as it does, are in app/tailwind.css. --- */
   --animate-pulse2: pulse2 1.1s ease-in-out infinite;
