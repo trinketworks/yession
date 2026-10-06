@@ -3619,6 +3619,9 @@ module View =
             match view.Closed with
             | Some closed ->
                 match closed.By with
+                // The viewer is told "you killed term 3": the generated name that stands in
+                // for them everywhere else on the screen reads, here, as somebody else.
+                | Some who when who = ClientModel.me model -> html $"""{Dom.Text.youKilled} {name}"""
                 | Some (UserRef _ | PeerRef _ | ActorRef.Agent as who) ->
                     html $"""{name} {Dom.Text.killedBy} {Entity.render model who (EntityRef.Actor who)}"""
                 | Some (ActorRef.Session | ActorRef.System | ActorRef.Configured _)
