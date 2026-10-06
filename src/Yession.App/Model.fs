@@ -1662,26 +1662,28 @@ type ClientMsg =
     /// queries there are: a message per query would be a message per FUTURE query too.
     | QueryFrameMsg of QueryFrame
     // --- Terminals (Plan 13) ---------------------------------------------------------
-    /// Transcript records that arrived live over the data channel — every one that landed
-    /// for this terminal within one frame, in arrival order. Keyed by seq, so folding them
-    /// is idempotent against the same records arriving in a page below.
+    /// Transcript records for this terminal, in arrival order — live off the data channel,
+    /// one per pty read, or a page's worth folded through here by `TerminalPageMsg`. Keyed
+    /// by seq, so folding them is idempotent against the same records arriving in a page
+    /// below.
     ///
-    /// A LIST, for the reason `TerminalPageMsg` is one: a message is a render. A record is
-    /// one pty read, and a burst is many reads a second — `seq 100000` sent some 170 in under
-    /// three seconds — so one message per record was one full render per record, queued
-    /// faster than a phone could draw them, with the link's heartbeat waiting in the same
-    /// queue behind them until the Session gave the peer up for dead. The read loop
-    /// (`Client.connect`) gathers what arrives within a frame into one of these.
+    /// The fold is an insert and nothing else, and has to stay that cheap: a burst is many
+    /// reads a second — `seq 100000` sent some 170 in under three seconds — each one its own
+    /// message, ahead of the link's heartbeat in the same queue. What keeps a burst from
+    /// costing a RENDER per record is the render itself, which draws at most once a frame
+    /// (`Render.setState`, in the browser).
     | TerminalRecordsMsg of TerminalId * records: (int * TranscriptRecord) list
     /// A PAGE of a terminal's transcript — fetched over HTTP, or replayed from what this
     /// device kept: its records, the header when the page carried line 0, and how far the
-    /// contiguous prefix now reaches. ONE message for the whole page, deliberately, because a
-    /// message is a render: this used to be one record message per record plus the two
-    /// after, so a reopen replayed a session's kept 2,138 lines as 2,176 full re-renders of
-    /// the page — 9.9s of the main thread on a laptop, minutes on a phone, during which no
+    /// contiguous prefix now reaches. ONE message for the whole page, deliberately: this used
+    /// to be one record message per record plus the two after, and back when every message
+    /// was a render, a reopen replayed a session's kept 2,138 lines as 2,176 full re-renders
+    /// of the page — 9.9s of the main thread on a laptop, minutes on a phone, during which no
     /// tap landed and the `/me` probe that would have said "session stopped" never ran. The
-    /// fold is exactly the three it replaced, in the order they were dispatched; what
-    /// changes is how often the view is asked to draw.
+    /// render now draws at most once a frame (`Render.setState`), but a message per line is
+    /// still a pass of the whole update loop per line. The fold is exactly the three it
+    /// replaced, in the order they were dispatched; what changes is how often anything is
+    /// asked to happen.
     | TerminalPageMsg of
         TerminalId * records: (int * TranscriptRecord) list * header: TranscriptHeader option * readThrough: int
     /// A terminal's transcript is this long. A hint that triggers a read, never data.

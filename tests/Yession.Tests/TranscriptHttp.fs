@@ -284,11 +284,13 @@ let private storeTests =
                 Expect.equal readThrough 5 "one past the last line kept"
             }
 
-        // A message is a render. A replay that said one thing per record re-drew the whole
-        // page per record — thousands of times on a reopen — and a phone sat frozen through
-        // it. Per kept ANSWER would not do either: a terminal watched live keeps one answer
-        // per record. What is pinned is that a terminal's whole contiguous run is folded as
-        // ONE message, so the renders a replay costs is the number of terminals.
+        // A replay that said one thing per record re-drew the whole page per record, back
+        // when a message was a render — thousands of times on a reopen — and a phone sat
+        // frozen through it; the render draws once a frame now, but a message per record is
+        // still a pass of the update loop per record. Per kept ANSWER would not do either: a
+        // terminal watched live keeps one answer per record. What is pinned is that a
+        // terminal's whole contiguous run is folded as ONE message, so the passes a replay
+        // costs is the number of terminals.
         testCaseAsync "a replay is one message per terminal, however many answers and lines it kept" <|
             async {
                 let store = storeOf [ terminal, [ answerOf 0 3; answerOf 3 2 ] ]
@@ -412,8 +414,7 @@ let private pageOf (fromSeq: int) (toSeq: int) : Client.TranscriptFetch.Transcri
 /// which is how a case plays the Session.
 type private Reader =
     { Session : FrameChannel<string>
-      /// Each live fold, as how many records it carried — a fold is a message, and a
-      /// message is a render.
+      /// Each live fold, as how many records it carried.
       Folds : ResizeArray<int>
       /// The read position each folded page took the model to.
       Pages : ResizeArray<int>
@@ -421,14 +422,9 @@ type private Reader =
       Hints : ResizeArray<int> }
 
 /// A client connected over an in-memory pair and reading this terminal's transcript through
-/// `feed`, drawing whenever `nextFrame` runs what it is handed. `readThrough` is where its
-/// model already holds the terminal to — a replay out of the client's own store — and `0`
-/// is a client that holds nothing.
-let private readingEvery
-    (nextFrame: (unit -> unit) -> unit)
-    (feed: Client.TranscriptFetch.TranscriptFeed)
-    (readThrough: int)
-    =
+/// `feed`. `readThrough` is where its model already holds the terminal to — a replay out of
+/// the client's own store — and `0` is a client that holds nothing.
+let private readingThrough (feed: Client.TranscriptFetch.TranscriptFeed) (readThrough: int) =
     let doc = Y.Doc.Create ()
     let runner = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "reader" "Reader")))
     runner.Dispatch (user (TerminalReadThroughMsg (terminal, readThrough)))
@@ -443,9 +439,7 @@ let private readingEvery
         runner.Dispatch (user msg)
     let connection =
         Client.connect
-            { Client.ConnectOptions.defaults with
-                FetchTranscripts = Some feed
-                NextFrame = nextFrame }
+            { Client.ConnectOptions.defaults with FetchTranscripts = Some feed }
             runner.Model
             doc
             (BodyRegistry doc)
@@ -456,9 +450,6 @@ let private readingEvery
     Async.StartImmediate connection.Run
     reader
 
-/// The same client on a platform that draws nothing, so each record is folded as it arrives.
-let private readingThrough feed readThrough = readingEvery (fun run -> run ()) feed readThrough
-
 /// The Session printing `count` records live, from line 1.
 let private burst (serverEnd: FrameChannel<string>) (count: int) =
     async {
@@ -468,23 +459,10 @@ let private burst (serverEnd: FrameChannel<string>) (count: int) =
 
 let private readLoopTests =
     testList "What a client asks for" [
-        testCaseAsync "live records that arrive between two frames are folded as one message" <|
-            async {
-                // A message is a render. A burst is many pty reads a second, and folding each
-                // as its own message drew the page once per read — with the link's heartbeat
-                // waiting behind every one of those renders.
-                let frames = ResizeArray<unit -> unit> ()
-                let feed, _ = heldFeed ()
-                let reader = readingEvery frames.Add feed 0
-                do! burst reader.Session 50
-                // A hint sent after the burst, on the same ordered channel: once the client has
-                // been handed it, every record ahead of it has been handed over too.
-                do! reader.Session.Send (Terminal (TerminalTranscriptAvailable (terminal, 51)))
-                do! waitUntil "the burst and the hint behind it to reach the client" (fun () -> reader.Hints.Count = 1)
-                for draw in List.ofSeq frames do draw ()
-                Expect.equal (List.ofSeq reader.Folds) [ 50 ] "fifty records, one frame, one fold"
-            }
-
+        // "A burst of live records costs one render per frame, not one per record" used to be
+        // pinned here, when the connection held records for a frame itself. Drawing is the
+        // render's business, so the rule moved there (`Render.setState`) and so did its case:
+        // the shell harness's, in the browser tier (`Browser.fs`), where renders are counted.
         testCaseAsync "a burst of live records keeps one transcript read out, not one per record" <|
             async {
                 let feed, asked = heldFeed ()

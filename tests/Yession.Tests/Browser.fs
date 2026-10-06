@@ -2502,6 +2502,24 @@ let private blocksFilled (page: IPage) : Async<unit> =
         do! twoFrames page
     }
 
+/// Fifty records of live output into the harness terminal, one message each and all in one
+/// turn, as a burst off the data channel lands — then the frame after them, and what `andThen`
+/// reads off the page once it is there. The frame waited for is registered after every render
+/// the burst asked for, so whatever the burst was owed has been drawn by the time it runs.
+let private afterBurst (page: IPage) (andThen: string) : Async<string> =
+    await (
+        page.EvaluateAsync<string> (
+            sprintf
+                """async () => {
+                     const before = globalThis.__yessionRenders ?? 0
+                     for (let seq = 2; seq < 52; seq++)
+                       window.__record('term-harness', seq, 'o', 'burst-mark ' + seq + '\r\n')
+                     await new Promise(done => requestAnimationFrame(() => done()))
+                     const renders = (globalThis.__yessionRenders ?? 0) - before
+                     return String(%s)
+                   }"""
+                andThen))
+
 /// Whether the "jump to latest" over a surface is on screen and is what is painted at its own
 /// centre, so a control that is present, shown and buried does not count.
 let private jumpOffered (key: string) =
@@ -4689,6 +4707,59 @@ let editorTests =
         // it: this is the real `@xterm/headless` composing a real screen, and what is asserted
         // is where the text ended up — which no rendered string holds.
         //
+        // The page draws at most once a frame (`Render.setState`). A burst of pty output is a
+        // message per read, and a render per message put seconds of drawing in front of the
+        // link's heartbeat on a phone — a busy peer dropped as dead. These used to be one case
+        // in the cheap tier, when the CONNECTION held records for a frame; the rule is the
+        // render's now, and renders are only countable where there is a page.
+        testList "The page draws at most once a frame" [
+            editorCase "a burst of live records costs a render per frame, not one per record" <| fun page ->
+                async {
+                    do! twoFrames page
+                    let! renders = afterBurst page "renders"
+                    // The frame the burst landed in, drawn as the first record arrived, and the
+                    // next, drawn with the other forty-nine.
+                    Expect.isTrue
+                        (int renders <= 2)
+                        (sprintf "fifty records across one frame boundary drew %s times; at most two" renders)
+                }
+            editorCase "the last record of a burst is on the page by the next frame" <| fun page ->
+                async {
+                    do! paneOnBlocks page
+                    let! shown =
+                        afterBurst
+                            page
+                            "document.querySelector(\"#shell [data-tail='blocks:term-harness']\").textContent.includes('burst-mark 51')"
+                    Expect.equal shown "true" "the record the frame's render was owed is drawn, not the one that asked first"
+                }
+            // A frame later is a frame of latency nobody should pay for one keystroke's worth of
+            // change. So the case dispatches from inside a frame in which nothing has been drawn
+            // yet, and reads the page back in the same breath: a page drawn whenever the next
+            // frame comes would read "not yet".
+            editorCase "a lone message is on the page before the call that dispatched it returns" <| fun page ->
+                async {
+                    do! paneOnBlocks page
+                    let! answer =
+                        await (
+                            page.EvaluateAsync<string>
+                                """async () => {
+                                     for (let tries = 0; tries < 60; tries++) {
+                                       const seen = globalThis.__yessionRenders ?? 0
+                                       const answer = await new Promise(done => requestAnimationFrame(() => {
+                                         // A render since the last look may still have its frame
+                                         // open; look again a frame on.
+                                         if ((globalThis.__yessionRenders ?? 0) !== seen) return done(null)
+                                         window.__record('term-harness', 2, 'o', 'lone-mark\r\n')
+                                         const surface = document.querySelector("#shell [data-tail='blocks:term-harness']")
+                                         done(surface.textContent.includes('lone-mark') ? 'on the page' : 'not yet')
+                                       }))
+                                       if (answer !== null) return answer
+                                     }
+                                     return 'the page drew on every one of sixty frames, so none was quiet to ask in'
+                                   }""")
+                    Expect.equal answer "on the page" "a message into an undrawn frame is drawn at once"
+                }
+        ]
         // `ESC[500G` is how a program asks for the last column, whatever that is. The
         // serializer answers with the gap it measured — `ESC[39C` on a 40-column screen,
         // `ESC[99C` on a 100-column one — so this reads the width straight off the rendered

@@ -1301,11 +1301,7 @@ let private start () =
                     // A terminal's screen seeds this client's emulator. The transcript stays
                     // the record; this is the view, and a peer that arrives mid-session gets
                     // one frame instead of every byte the terminal ever printed.
-                    OnTerminalSnapshot = fun id keyframe -> renderer.Screens.Snapshot id keyframe
-                    // A burst of live output is folded a frame at a time, not a record at a
-                    // time: the frame is when the page draws, so a render between two frames
-                    // is one nobody sees.
-                    NextFrame = Render.raf }
+                    OnTerminalSnapshot = fun id keyframe -> renderer.Screens.Snapshot id keyframe }
             let openChannel () = connectChannel (absolute (Page.href Signal))
 
             // The session leg. The RULES — announce, open, serve, and come back only for a

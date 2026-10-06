@@ -1314,7 +1314,8 @@ let private launchOverModel : ClientModel =
 /// event log as the kept answers of its own history store, and the one terminal's transcript
 /// as the kept answers of its transcript store. Built as EVENTS rather than as a model,
 /// because what the open scenario measures is the fold — every kept answer is a message, and
-/// every message is a render — and a model built by hand has no fold to measure.
+/// how many renders those messages cost is the question — and a model built by hand has no
+/// fold to measure.
 ///
 /// The conversation is the `Replies` shape: a person and the agent taking turns, the agent
 /// in the same prose `replyBody` gives the shell model — STREAMED, a delta every few words,
@@ -1543,8 +1544,12 @@ do
             |> Option.iter (fun size -> recordViewport terminal size.Cols size.Rows)
         | _ -> ()
         let started = now ()
+        let rendersBefore = Render.renders ()
         render ()
-        renderTimes |> Option.iter (fun times -> times.Add (now () - started))
+        // Only a call that DREW is a render's time: the render draws at most once a frame, and
+        // a model that came after the frame's render is drawn at the frame's end, untimed here.
+        if Render.renders () <> rendersBefore then
+            renderTimes |> Option.iter (fun times -> times.Add (now () - started))
     and render () = renderer.SetState model
     dispatchRef <- dispatch
     PaneShell.watchBreakpoint (fun wide -> dispatch (ViewportMsg wide))
@@ -1714,6 +1719,9 @@ do
         let scrolledFrom = surface.scrollTop
         let times = ResizeArray<float> ()
         renderTimes <- Some times
+        // Counted rather than taken from `times`: a render owed to a frame's end is a render,
+        // and it is not one `dispatch` timed.
+        let rendersAtBegin = Render.renders ()
         let frames = ResizeArray<float> ()
         let mutable running = true
         let mutable lastFrame = now ()
@@ -1742,7 +1750,9 @@ do
                 running <- false
                 Browser.Dom.window.clearInterval interval
                 renderTimes <- None
-                scrollReport (frames.ToArray ()) (times.ToArray ()) times.Count sent scrolledFrom (conversation ()).scrollTop)))
+                scrollReport
+                    (frames.ToArray ()) (times.ToArray ()) (Render.renders () - rendersAtBegin) sent
+                    scrolledFrom (conversation ()).scrollTop)))
     PageGlobal.set Published.benchScrollSent (fun () -> sentSoFar ())
     PageGlobal.set Published.benchScrollEnd (fun () ->
         match finish with
