@@ -1192,15 +1192,17 @@ type ClientModel =
       /// and there are no pins: a terminal here is always kept, and a preview never needs to
       /// be.
       ///
-      /// A LIST rather than a set, because the order tabs sit in is the order they arrived
-      /// and a set would re-order them on any change. LOCAL to this client, never synced:
-      /// what one person has open is not what another is working on.
+      /// A LIST rather than a set, held in the order the terminals OPENED (`withTab`), so a
+      /// tab has one place in the strip for its whole life. LOCAL to this client, never
+      /// synced: what one person has open is not what another is working on.
       ///
-      /// What closes one is its terminal CLOSING — at once if it is not the one selected, and
-      /// when the reader selects another if it is (`settle`), so a tab never vanishes at the
-      /// moment the thing in it finishes. Or `close_tab`, for one not on screen. There is no
-      /// way to drop a tab and leave its terminal running (P2-2): a tab's × is the kill, so
-      /// the strip never says a terminal is gone while it is still running somewhere.
+      /// What takes one out is the READER: a terminal that closes keeps its tab, in its
+      /// place, wearing its closed mark, until they put it away (`DismissTabMsg`). Or
+      /// `close_tab`, for one not on screen. Nothing else — not choosing another tab, not a
+      /// preview over it, not a reload (`PaneMemory`) — so a tab never blinks out or comes
+      /// back somewhere else (F2). There is no way to drop a tab and leave its terminal
+      /// running (P2-2): a running tab's × is the kill, so the strip never says a terminal
+      /// is gone while it is still running somewhere.
       Tabs          : TerminalId list
       /// How many terminals this client has ASKED for and not yet been shown.
       ///
@@ -1909,14 +1911,15 @@ type ClientMsg =
     /// whatever was armed before it; `None` is sent by the wait (`armedMs`), by Escape on the
     /// armed control, and by focus leaving it.
     | ArmKillMsg of TerminalId option
-    /// Put a CLOSED terminal's tab away: the × a closed item wears in place of its kill.
+    /// Put a CLOSED terminal's tab away: the × a closed item wears in place of its kill, and
+    /// Delete on any closed item.
     ///
-    /// A closed tab stays while it is the one on screen (`settle`), so the thing a reader was
-    /// looking at does not vanish as it finishes — which left it there with no way to say
-    /// "done with this" short of choosing another. This is that, and only for a terminal that
-    /// has closed: the refusal is HERE rather than in the control, so no route can drop the
-    /// tab of a terminal still running somewhere (P2-2). The pane moves on to the tab beside
-    /// it, or to nothing.
+    /// A closed tab stays in the strip until this (`ClientModel.Tabs`), so the thing a reader
+    /// was working with does not vanish as it finishes. This is the one way to say "done with
+    /// this", and only for a terminal that has closed: the refusal is HERE rather than in the
+    /// control, so no route can drop the tab of a terminal still running somewhere (P2-2).
+    /// The pane moves on to the tab beside it, or to nothing. Put away, it stays away until
+    /// the reader opens that terminal again.
     | DismissTabMsg of TerminalId
     /// Ask the session to cancel the running agent turn (Step 17). The outcome arrives as
     /// events: `AgentTurnInterrupted` on success, or nothing if the turn already finished.
@@ -2243,13 +2246,25 @@ module ClientModel =
         |> List.filter (fun (_, presence) -> presence.Focus |> Option.exists (fun f -> f.Field = DraftBody peer))
         |> List.map (fun (editor, presence) -> editor, presence.DisplayName)
 
-    /// The strip with this terminal in it, appended if it is not already there.
+    /// The strip with this terminal in it, in the slot the order terminals OPENED in gives
+    /// it (`order`, the projection's) — ahead of the first tab that opened after it — if it
+    /// is not already there.
     ///
-    /// Appended rather than moved to the front: a strip that re-orders under a reader is the
-    /// thing the order was a list for in the first place. ONE adder, because every way a
-    /// terminal gets into the strip has to agree about what "already there" means.
-    let opened (terminal: TerminalId) (tabs: TerminalId list) : TerminalId list =
-        if List.contains terminal tabs then tabs else tabs @ [ terminal ]
+    /// Never moved, and never moving another: a strip that re-orders under a reader is the
+    /// thing the order was a list for in the first place. And by opening order rather than at
+    /// the end, so a terminal put away and opened again comes back where it stood rather than
+    /// after everything opened since (F2). ONE adder, because every way a terminal gets into
+    /// the strip has to agree about what "already there" means and where "there" is.
+    let withTab (order: TerminalId list) (terminal: TerminalId) (tabs: TerminalId list) : TerminalId list =
+        if List.contains terminal tabs then tabs
+        else
+            let rank (id: TerminalId) = List.tryFindIndex (fun t -> t = id) order
+            match rank terminal with
+            | None -> tabs @ [ terminal ]
+            | Some mine ->
+                match tabs |> List.tryFindIndex (fun tab -> rank tab |> Option.exists (fun theirs -> theirs > mine)) with
+                | Some before -> List.insertAt before terminal tabs
+                | None -> tabs @ [ terminal ]
 
     /// A terminal's tab, as its DOM hooks carry it — the terminal's prose spelling
     /// (`ViewRef.said`), which is also how a remembered strip writes it down (`PaneMemory`).
@@ -2269,7 +2284,7 @@ module ClientModel =
     /// The choice is the read SHOWING, or the one a preview is laid over (`PaneMode.subject`):
     /// the strip, the head and presence answer "which terminal am I working with", which a
     /// preview does not change. A choice naming a CLOSED terminal survives while its tab does —
-    /// it is how the switcher opens a recording.
+    /// which is until the reader puts it away — and it is how the switcher opens a recording.
     let selectedTerminal (model: ClientModel) : TerminalId option =
         let exists (terminal: TerminalId) = Projection.tryFind terminal model.Terminals |> Option.isSome
         match model.Pane |> Option.bind PaneMode.subject |> Option.map TerminalMode.terminal with
@@ -2296,23 +2311,22 @@ module ClientModel =
             | Some _ | None -> Some (Reading terminal)
         | None -> current
 
-    /// The strip held to what it is (P2-1): terminals the session has, that are still open —
-    /// and the one the pane is about, even once it has closed.
+    /// The strip held to what it is (P2-1): terminals the session has.
     ///
     /// Run after every message, like `recall`, because the rule is about the STATE and not
-    /// about which message changed it: a terminal closing, the reader choosing another, a
-    /// remembered strip coming back are each a way for a closed terminal to stop being the one
-    /// on screen, and a rule each of them had to remember is a rule one of them forgets. So a
-    /// tab never vanishes at the moment the thing in it finishes — the reader is looking at it
-    /// — and it leaves as soon as they look elsewhere. The list is the door to every recording.
+    /// about which message changed it. A terminal CLOSING is not a reason to leave: it used
+    /// to be — a closed tab went at once unless it was selected, and when the reader chose
+    /// another if it was — and on a phone that read as tabs blinking in and out, and one
+    /// coming back after everything else when a chip laid a preview over it (F2). A closed
+    /// tab stays where it stood until the reader puts it away (`DismissTabMsg`).
     let private settle (model: ClientModel) : ClientModel =
-        let selected = selectedTerminal model
-        let keeps (terminal: TerminalId) =
-            match Projection.tryFind terminal model.Terminals with
-            | Some view -> view.IsOpen || selected = Some terminal
-            | None -> false
+        let keeps (terminal: TerminalId) = Projection.tryFind terminal model.Terminals |> Option.isSome
         if List.forall keeps model.Tabs then model
         else { model with Tabs = model.Tabs |> List.filter keeps }
+
+    /// The order terminals OPENED in, which is the strip's order (`withTab`).
+    let private openOrder (terminals: Projection) : TerminalId list =
+        terminals.Terminals |> List.map (fun view -> view.TerminalId)
 
     /// What this browser should remember of the pane — what a reload must give back (P0-4).
     /// The CHOICE rather than `selectedTerminal`'s resolution of it: with nothing chosen the
@@ -2430,7 +2444,8 @@ module ClientModel =
     /// strip they had is the answer to which of those they wanted. A terminal the session does
     /// not have (yet) has no tab; the memory is held until the log has been read through, so
     /// one named on a later page is not lost, and one the session no longer has is gone for
-    /// good once it has. A closed one that is not the selection is dropped by `settle`.
+    /// good once it has. A closed one comes back closed, where it stood: it was never put
+    /// away, so a reload does not put it away either (F2).
     ///
     /// What this person has done SINCE loading wins over what they had: a terminal chosen
     /// before the log had arrived stays chosen, and stays in the strip. The choice this
@@ -2444,7 +2459,7 @@ module ClientModel =
                 |> List.distinct
             let tabs =
                 match model.Pane |> Option.bind PaneMode.subject |> Option.map TerminalMode.terminal with
-                | Some chosen -> opened chosen restored
+                | Some chosen -> withTab (openOrder model.Terminals) chosen restored
                 | None -> restored
             let pane =
                 match model.Pane with
@@ -2894,18 +2909,15 @@ module ClientModel =
     /// the order they are looking at after it. With no other row, the killed terminal's own: a
     /// closed terminal keeps its row, as its recording, and that row is where the hand is.
     ///
-    /// Pressed on the STRIP: the selected tab stays, closed, until the reader chooses another
-    /// (`settle`), so a kill of it lands on its own tab — the hand is already there. Any other
-    /// tab leaves the strip at once, and its neighbour takes the focus it had.
+    /// Pressed on the STRIP: a tab stays, closed, until the reader puts it away
+    /// (`ClientModel.Tabs`), so a kill lands on the killed terminal's own tab — the hand is
+    /// already there, and that tab's × is now the one that puts it away.
     let killLanding (model: ClientModel) (killed: TerminalId) : DomMove =
         if model.Switcher then
             let rows = terminalRows model |> List.map (fun view -> view.TerminalId)
             successor rows killed |> Option.defaultValue killed |> DomMove.FocusSwitcherRow
-        elif selectedTerminal model = Some killed then DomMove.FocusTab killed
-        else
-            match successor model.Tabs killed with
-            | Some next -> DomMove.FocusTab next
-            | None -> DomMove.FocusPane
+        elif List.contains killed model.Tabs then DomMove.FocusTab killed
+        else DomMove.FocusPane
 
     /// Whether a key press is the switcher's shortcut (P2-2): Ctrl+` (⌘` on a Mac — either
     /// modifier, because a page cannot know which keyboard it is under). By the key's
@@ -3756,11 +3768,23 @@ module ClientModel =
             // its choice and the strip drew it back as a tab it no longer was — and is said
             // here now that the strip draws only `Tabs`.
             let showing = model.Pane |> Option.bind PaneMode.subject |> Option.map TerminalMode.terminal
+            // Each in the slot its opening gives it (`withTab`), which for a terminal that has
+            // just arrived is the end.
+            //
+            // A page of HISTORY (`HeardThrough`) is not a terminal closing under anybody: it
+            // closed while this client was not here, and a strip rebuilt from the log with no
+            // memory to say otherwise (`recall`) would otherwise be every terminal this person
+            // ever opened. So a replay keeps only what still runs, or what is on screen — and a
+            // closed tab this person had not put away comes back from the memory, which `recall`
+            // applies after this. News of a close leaves the tab where it is (`settle`).
             let tabs =
-                (model.Tabs @ opened)
-                |> List.distinct
+                opened
+                |> List.fold (fun tabs terminal -> withTab (openOrder terminals) terminal tabs) model.Tabs
                 |> List.filter (fun terminal ->
-                    showing = Some terminal || not (Set.contains (ViewingTerminal terminal) closed))
+                    showing = Some terminal
+                    || (not (Set.contains (ViewingTerminal terminal) closed)
+                        && (model.HeardThrough
+                            || Projection.tryFind terminal terminals |> Option.exists (fun view -> view.IsOpen))))
             // Being SHOWN the terminal you pressed for, which is the whole of what the press
             // promised. A tab in the strip is not that: `selectedTerminal` keeps the stored
             // choice while what it names still exists, and the terminal you were on still
@@ -4149,7 +4173,7 @@ module ClientModel =
             // can be about, so a terminal shown with no tab would be a pane showing something
             // the strip has no name for.
             { model with
-                Tabs = opened (TerminalMode.terminal mode) model.Tabs
+                Tabs = withTab (openOrder model.Terminals) (TerminalMode.terminal mode) model.Tabs
                 Pane = Some (OnTerminal mode)
                 Switcher = false
                 TerminalsOpen = true }
@@ -4165,12 +4189,23 @@ module ClientModel =
             // ONE preview: this replaces whatever preview was up, and what it was laid over
             // carries across, so six chips tapped are one preview over the terminal the
             // reader was on, and back returns to that terminal where they left it.
+            //
+            // Except a CLOSED terminal with no tab: the reader put it away (`DismissTabMsg`),
+            // or never had it, and a chip is a glance at one of its commands rather than
+            // asking for the recording back — which it used to do, at the END of the strip
+            // (F2). That preview is laid over whatever is up, as a file's is, and the strip
+            // is left exactly as it was. The list is where a recording is opened again.
             let current = model.Pane |> Option.bind PaneMode.subject
-            let under = underFor preview.Subject current
+            let putAway =
+                PreviewSubject.terminal preview.Subject
+                |> Option.exists (fun terminal ->
+                    not (List.contains terminal model.Tabs)
+                    && Projection.tryFind terminal model.Terminals |> Option.exists (fun view -> not view.IsOpen))
+            let under = if putAway then current else underFor preview.Subject current
             { model with
                 Tabs =
                     match under with
-                    | Some mode -> opened (TerminalMode.terminal mode) model.Tabs
+                    | Some mode -> withTab (openOrder model.Terminals) (TerminalMode.terminal mode) model.Tabs
                     | None -> model.Tabs
                 Pane = Some (Previewing (preview, under))
                 Switcher = false
@@ -4223,7 +4258,7 @@ module ClientModel =
             //
             // And watching opens the tab, as every way to a terminal does.
             { model with
-                Tabs = opened terminal model.Tabs
+                Tabs = withTab (openOrder model.Terminals) terminal model.Tabs
                 Pane = Some (OnTerminal (WatchingBehind (terminal, length)))
                 Switcher = false
                 TerminalsOpen = true }

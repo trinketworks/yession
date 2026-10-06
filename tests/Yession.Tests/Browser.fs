@@ -3327,8 +3327,9 @@ let editorTests =
         // painted at each control's centre, so one present but covered is not a door, and one
         // a reader can see is — which is the only count that means anything to them.
         //
-        // The empty pane is reached the way a reader reaches it: every terminal ends, the one
-        // on screen stays (`settle`), and its × puts it away.
+        // The empty pane is reached the way a reader reaches it: every terminal ends, each
+        // tab stays where it stood, closed, and the reader puts them away one × at a time —
+        // each landing the pane on the next, until there is nothing left to be on.
         editorCase "at most one way to make a terminal is on screen in the pane, in every state" <| fun page ->
             async {
                 let doors (state: string) =
@@ -3361,8 +3362,11 @@ let editorTests =
                 do! foldHarness page
                         [ for i, id in List.indexed [ "term-harness"; "term-live"; "term-more-0"; "term-more-1"; "term-more-2"; "term-more-3" ] ->
                               95L + int64 i, closed id ]
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab-dismiss]")
-                do! awaitU (page.ClickAsync "#shell [data-pane-tab-dismiss]")
+                for left in 5 .. -1 .. 0 do
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab-dismiss]")
+                    do! awaitU (page.ClickAsync "#shell [data-pane-tab-dismiss]")
+                    do! waitFor (sprintf "%d tabs left" left) page
+                            (sprintf "document.querySelectorAll('#shell [data-terminal-closed-tab]').length === %d" left)
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-new]")
                 let! empty = doors "an empty pane"
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
@@ -3372,8 +3376,8 @@ let editorTests =
                 Expect.equal seen (seen |> List.map (fun said -> said.Substring (0, said.LastIndexOf ':') + ": 1")) "one door in each"
             }
 
-        // A closed tab stays while it is the one on screen (`settle`), and had no way to be put
-        // away (desktop journey, finding 16): its × does that now. Pressed from the keyboard,
+        // A closed tab stays until it is put away (F2; desktop journey, finding 16): its × does
+        // that. Pressed from the keyboard,
         // because the × leaves the document with its tab, and the floor says focus goes to what
         // replaced it — the tab beside it — rather than to `body`.
         editorCase "putting a closed tab away lands focus on the tab beside it" <| fun page ->
@@ -6237,8 +6241,9 @@ let editorTests =
         // The same door from the EMPTY pane (P1-4), where the strip offers no `+` and the
         // empty pane's own button is the one way to make something — so the menu hangs from
         // that button, and Escape hands the cursor back to it rather than to a `+` that is not
-        // on the page. The harness's strip is emptied by its terminals ending: a tab has no
-        // close of its own (P2-1), and a closed terminal nobody is looking at leaves the strip.
+        // on the page. The harness's pane is emptied by its terminals ending with none of them
+        // chosen: their closed tabs stay in the strip (F2), and a pane with nothing chosen
+        // lands only on a terminal that still runs (`ClientModel.selectedTerminal`).
         editorCase "the empty pane's door opens the menu under itself, and gives focus back when it shuts" <| fun page ->
             async {
                 let closed (id: string) =
