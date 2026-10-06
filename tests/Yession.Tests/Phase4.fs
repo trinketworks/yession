@@ -949,7 +949,7 @@ let private uiRenderTests =
     ]
 
 // --- WCAG 2.0 AA floor (AGENTS.md "UI baseline"): theme contrast, pinned by test ---------
-// The tokens live in app/tailwind.css (@theme); every text colour must keep >= 4.5:1
+// The tokens live in app/tokens.css (@theme); every text colour must keep >= 4.5:1
 // against every surface it can sit on. Computed here exactly as WCAG 2.0 defines it.
 
 let private parseHex (s: string) : float = Fable.Core.JS.parseInt s 16
@@ -964,11 +964,13 @@ let private channels (hex: string) : float * float * float =
     let channel (i: int) = parseHex (h.Substring (i, 2)) / 255.0
     channel 1, channel 3, channel 5
 
-/// A declaration's value as `app/tailwind.css` writes it: `--name: value;`.
+/// A declaration's value as the stylesheet writes it: `--name: value;`. Over whatever css the
+/// case read — the tokens alone for a theme question, the tokens and the sheet for a
+/// utility's own variable.
 let private declared (css: string) (name: string) : string =
     let marker = sprintf "--%s:" name
     match css.IndexOf marker with
-    | -1 -> failwithf "--%s is not declared in app/tailwind.css" name
+    | -1 -> failwithf "--%s is not declared in the css this case read" name
     | start ->
         let from = start + marker.Length
         css.Substring(from, css.IndexOf (';', from) - from).Trim ()
@@ -1103,7 +1105,7 @@ let private brandTests =
 let private themeContrastTests =
     testList "Theme contrast (WCAG 2.0 AA floor)" [
         testCase "every text colour keeps >= 4.5:1 on every surface" <| fun () ->
-            let colour = themeColour (TestFiles.read "app/tailwind.css")
+            let colour = themeColour (TestFiles.read "app/tokens.css")
             // The terminal palette (Plan 13) is text like any other: output sits on the
             // same surfaces, so it answers to the same floor. Listing all sixteen is the
             // point — raw ANSI would fail here, which is why the theme names its own.
@@ -1127,8 +1129,8 @@ let private themeContrastTests =
         testCase "a person's checker keeps >= 3:1 on every surface" <| fun () ->
             // A mark, not text: WCAG 2.1's non-text floor is 3:1, and it is the checker's light
             // tone that draws its shape — the dark one is the shadow between its squares.
-            let colour = themeColour (TestFiles.read "app/tailwind.css")
-            let css = TestFiles.read "app/tailwind.css"
+            let colour = themeColour (TestFiles.read "app/tokens.css")
+            let css = TestFiles.read "app/tokens.css"
             for seat in 0 .. Style.seats - 1 do
                 let light = resolve css (Style.humanColour seat)
                 for bg in [ "bg"; "panel"; "surface"; "surface-2" ] do
@@ -1139,7 +1141,7 @@ let private themeContrastTests =
         // made from one. A variant picked by hand — a "bright" that was its own hex — is how
         // the palette drifted from its hues before, so a new one has to arrive as a mix.
         testCase "the only colours written as hex are the constants and the terminal's palette" <| fun () ->
-            let css = TestFiles.read "app/tailwind.css"
+            let css = TestFiles.read "app/tokens.css"
             let constants = set [ "black"; "white"; "blue"; "green"; "red" ]
             let isPerson (name: string) = name.StartsWith "person-"
             let written =
@@ -1151,7 +1153,7 @@ let private themeContrastTests =
                     (sprintf "--color-%s is a hex; make it a variant of a constant, or a role pointing at one" name)
 
         testCase "inverse text on filled (active) buttons keeps >= 4.5:1" <| fun () ->
-            let colour = themeColour (TestFiles.read "app/tailwind.css")
+            let colour = themeColour (TestFiles.read "app/tokens.css")
             for fill in [ "blue"; "green"; "err"; "ink" ] do
                 let ratio = contrast (colour "bg") (colour fill)
                 Expect.isTrue (ratio >= 4.5) (sprintf "text-bg on bg-%s is %.2f:1 — the AA floor is 4.5:1" fill ratio)
@@ -1183,12 +1185,15 @@ let private peopleMarkTests =
         testCase "the blue band holds every blue the agent is drawn in" <| fun () ->
             // The band is only a rule about the agent while the agent is inside it: retune the
             // blue out of it and this says so, rather than the case below going vacuous.
-            let colour = themeColour (TestFiles.read "app/tailwind.css")
+            let colour = themeColour (TestFiles.read "app/tokens.css")
             for token in [ "blue"; "blue-up-1"; "blue-down-5" ] do
                 Expect.isTrue (inBlueBand (colour token)) (sprintf "--color-%s (%s) is outside the blue band %A" token (colour token) blueBand)
 
         testCase "no person's checker is drawn in the agent's blue" <| fun () ->
-            let css = TestFiles.read "app/tailwind.css"
+            // The shade is the `checker` utility's own variable, declared beside the utility in
+            // the sheet and mixed from the tokens — so this reads both, which is what a browser
+            // resolving it does.
+            let css = TestFiles.read "app/tokens.css" + "\n" + TestFiles.read "app/tailwind.css"
             for seat in 0 .. Style.seats - 1 do
                 let light, dark = seatTones css seat
                 for tone in [ light; dark ] do
@@ -1199,7 +1204,7 @@ let private peopleMarkTests =
         // type in the agent's blue. Many seeds, because which one lands where is the hash's
         // business; that none of them can is the rule.
         testCase "no person's caret is drawn in the agent's blue" <| fun () ->
-            let css = TestFiles.read "app/tailwind.css"
+            let css = TestFiles.read "app/tokens.css"
             let model = ClientModel.init { PeerId = PeerId.create "peer-caret" |> expect; DisplayName = "Grace" }
             for i in 0 .. 199 do
                 let who = PeerRef (PeerId.create (sprintf "peer-%d" i) |> expect)
@@ -1236,7 +1241,7 @@ let private peopleMarkTests =
         // and one person at 14px. The floor is a distance in OKLab, the space whose distances
         // are what an eye reads as difference.
         testCase "no two people's colours can be mistaken for each other" <| fun () ->
-            let css = TestFiles.read "app/tailwind.css"
+            let css = TestFiles.read "app/tokens.css"
             let lab seat = toOklab (channels (resolve css (Style.humanColour seat)))
             for a in 0 .. Style.seats - 1 do
                 for b in a + 1 .. Style.seats - 1 do

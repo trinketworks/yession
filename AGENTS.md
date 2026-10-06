@@ -216,7 +216,7 @@ WCAG 2.0 AA is the floor for every surface, not a follow-up:
 
 - **Contrast**: text ≥ 4.5:1 against the surface it actually sits on (3:1 only ≥ 24px, or
   ≥ 19px bold). Check every surface a token touches, not just black — the cheap-tier
-  theme-contrast test (Phase4) pins the tokens in `app/tailwind.css`.
+  theme-contrast test (Phase4) pins the tokens in `app/tokens.css`.
 - **Keyboard**: every action is a real `<a>`/`<button>`/`<input>` (no click-only
   elements), operable by Tab/Enter/Space, with a visible focus state. A DOM swap that
   replaces the focused element must refocus its replacement, never strand focus.
