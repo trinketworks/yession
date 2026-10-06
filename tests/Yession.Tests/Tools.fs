@@ -960,6 +960,20 @@ let private readingFiles (files: Map<string, string>) =
                               } } }
     (fun (args: string) -> registry.Invoke (call "yession" "read_file" args)), asked
 
+/// One PNG, a pixel of it, and `read_file` over a sandbox that answers with it however it is
+/// asked. The bytes are shared because what the two cases below ask about is the ANSWER.
+let private onePixelPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+let private readingAPicture () =
+    let image = ToolImage.ofBase64 onePixelPng |> expect
+    let registry =
+        AgentTools.registry
+            { AgentCapabilities.none with
+                Files =
+                    { AgentCapabilities.none.Files with
+                        Read = fun _ _ -> async { return Ok (FileContent.Image image) } } }
+    image, (fun () -> registry.Invoke (call "yession" "read_file" """{"path":"shot.png"}"""))
+
 let private fileTests =
     testList "read_file" [
 
@@ -967,18 +981,24 @@ let private fileTests =
         // only describe by its NAME was a screenshot it described without seeing (NR5KB8B5).
         testCaseAsync "a picture comes back as the picture, and the record keeps only what it was" <|
             async {
-                let image = ToolImage.ofBase64 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" |> expect
-                let registry =
-                    AgentTools.registry
-                        { AgentCapabilities.none with
-                            Files =
-                                { AgentCapabilities.none.Files with
-                                    Read = fun _ _ -> async { return Ok (FileContent.Image image) } } }
-                match! registry.Invoke (call "yession" "read_file" """{"path":"shot.png"}""") with
+                let image, read = readingAPicture ()
+                match! read () with
                 | Error e -> failwith e
                 | Ok answer ->
                     Expect.equal answer.Image (Some image) "the model is shown the picture"
-                    Expect.isFalse (answer.Text.Contains "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==") "and the text the log keeps carries no bytes"
+                    Expect.isFalse (answer.Text.Contains onePixelPng) "and the text the log keeps carries no bytes"
+            }
+
+        // The other half of that: a model shown a picture has no signal that nobody else was
+        // (S2AJDBFBW91CNA6YRE1MGCDR44 reported a restyled layout "verified with real
+        // screenshots" and shared none of the four). So the answer carries the verb that
+        // would share it — the one thing the agent has to do and could not otherwise know.
+        testCaseAsync "a picture says it was shown to the agent alone, and names what shares it" <|
+            async {
+                let _, read = readingAPicture ()
+                match! read () with
+                | Error e -> failwith e
+                | Ok answer -> Expect.stringContains answer.Text "share_artifact" "the answer names the verb that would show it to the people here"
             }
 
         // An image block that is not the image it claims to be is a request the model API
