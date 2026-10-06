@@ -6197,6 +6197,10 @@ let editorTests =
         editorCase "Delete on a tab arms its kill, and Delete again kills it" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                // Opening the pane lands focus in it a frame later (`paneLanding`). Focus put on
+                // the tab before then is taken back by that landing, and the Deletes go to
+                // wherever it put the keyboard — so the hand moves only once the pane has landed.
+                do! twoFrames page
                 do! awaitU (page.FocusAsync "#shell [data-pane-tab='terminal:term-harness']")
                 do! awaitU (page.Keyboard.PressAsync "Delete")
                 let! _ = await (page.WaitForSelectorAsync "#shell [role='tablist'] [data-terminal-close='term-harness'][data-terminal-close-armed='true']")
