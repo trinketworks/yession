@@ -2546,6 +2546,49 @@ let private atItsEnd (key: string) =
            })()"""
         (tailSurface key)
 
+/// Show the pane and wait until it stands at the width the separator says — the column animates
+/// open, and a measurement taken while it travels is of a width it was for one frame.
+let private paneOpenAndSettled (page: IPage) : Async<unit> =
+    async {
+        do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+        do! waitFor "the pane to stand at the width its separator says" page
+                """(() => {
+                     const pane = document.querySelector('#shell [data-content-panel]')
+                     const said = Number(document.querySelector('#shell [data-term-resize]').getAttribute('aria-valuenow'))
+                     return Math.abs(pane.getBoundingClientRect().width - said) <= 1
+                   })()"""
+    }
+
+/// On a desktop with room to spare, a pane nobody sized takes what the chat's reading column
+/// leaves: the conversation keeps its full measure, the pane is never under its floor, and the
+/// only strip between them is the chat's own gutter. Read as ONE layout — three numbers that
+/// are the same promise, so a red one prints all three.
+let private paneTakesTheRoom (page: IPage) : Async<unit> =
+    async {
+        do! paneOpenAndSettled page
+        let! layout =
+            await (page.EvaluateAsync<string>
+                    """() => {
+                         const chat = document.querySelector('#shell [data-conversation]')
+                         const pane = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
+                         const groups = [...chat.querySelectorAll('[data-message-author]')]
+                         const right = Math.max(...groups.map(g => g.getBoundingClientRect().right))
+                         const column = Math.max(...groups.map(g => g.getBoundingClientRect().width))
+                         const measure = parseFloat(getComputedStyle(groups[0]).maxWidth)
+                         const gutter = parseFloat(getComputedStyle(chat).paddingRight)
+                         const gap = pane.left - right
+                         return JSON.stringify({
+                           chatAtMeasure: column >= measure - 1,
+                           gapIsTheGutter: gap <= gutter + 1,
+                           paneAtItsFloor: pane.width >= 420,
+                           column, measure, gap, gutter, pane: pane.width })
+                       }""")
+        Expect.stringContains
+            layout
+            "\"chatAtMeasure\":true,\"gapIsTheGutter\":true,\"paneAtItsFloor\":true"
+            "the chat keeps its measure, the pane takes the rest and is never under its floor"
+    }
+
 let editorTests =
     testList "Editor rendering (browser)" [
         editorCase "Markdown typed in the rich editor renders formatted and round-trips to Markdown" <| fun page ->
@@ -4291,6 +4334,42 @@ let editorTests =
                     await (page.EvaluateAsync<string>
                             "() => document.querySelector('#shell [data-session-title]').value")
                 Expect.stringContains title "on a phone" "the committed title is the one that was typed"
+            }
+        // A pane nobody has sized is laid out by the room the chat leaves (`PaneSplit.resolve`).
+        // Only a browser can say the boxes land where that arithmetic means them to: the
+        // stylesheet draws the measure and the gutter, the model sizes the pane, and the two
+        // agreeing is a fact about a laid-out page. Two screens, because the strip the pane was
+        // leaving grew with the screen — 100px at 1440, 580px at 1920.
+        editorCaseIn 1440 900 "at 1440 a pane nobody sized takes the room the chat's reading column leaves" paneTakesTheRoom
+        editorCaseIn 1920 1080 "at 1920 a pane nobody sized takes the room the chat's reading column leaves" paneTakesTheRoom
+        // And a width the reader chose is theirs: the screen growing is room the default would
+        // take, and a pane somebody sized does not take it.
+        editorCaseIn 1440 900 "a pane the reader sized keeps its width when the window grows" <| fun page ->
+            async {
+                do! paneOpenAndSettled page
+                do! awaitU (page.FocusAsync "#shell [data-term-resize]")
+                do! awaitU (page.Keyboard.PressAsync "End")
+                do! awaitU (page.Keyboard.PressAsync "ArrowLeft")
+                do! twoFrames page
+                let! chosen =
+                    await (page.EvaluateAsync<float>
+                            "() => Number(document.querySelector('#shell [data-term-resize]').getAttribute('aria-valuenow'))")
+                do! awaitU (page.SetViewportSizeAsync (1920, 1080))
+                do! twoFrames page
+                // Waited for on the PIXELS meeting the separator again, then read: a pane that
+                // grew would settle too, at the default's width rather than the reader's.
+                do! waitFor "the pane to settle after the resize" page
+                        """(() => {
+                             const pane = document.querySelector('#shell [data-content-panel]')
+                             const said = Number(document.querySelector('#shell [data-term-resize]').getAttribute('aria-valuenow'))
+                             return innerWidth === 1920 && Math.abs(pane.getBoundingClientRect().width - said) <= 1
+                           })()"""
+                let! width =
+                    await (page.EvaluateAsync<float>
+                            "() => document.querySelector('#shell [data-content-panel]').getBoundingClientRect().width")
+                Expect.isTrue
+                    (abs (width - chosen) <= 1.0)
+                    (sprintf "the width the reader chose (%.0f), not the room the screen has (now %.0f)" chosen width)
             }
         // The split between the two columns is the reader's to set. What is pinned is the
         // PROMISE, not the geometry: that the divider can be moved without a pointer at all.

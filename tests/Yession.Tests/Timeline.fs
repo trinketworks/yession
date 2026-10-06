@@ -2990,6 +2990,10 @@ let private listTests =
 
 // --- Tabs, pins, and the preview slot (Plan 20, stage 1) ------------------------------------
 
+/// The pane's width once the window is measured at `window`.
+let private paneWidthAt (window: float) (model: ClientModel) : int option =
+    model |> Support.step (PaneWindowMsg window) |> ClientModel.paneSplit |> Option.map (fun split -> split.Width)
+
 let private tabTests =
     testList "Tabs are terminals; the chat opens previews (P2-1)" [
 
@@ -3340,15 +3344,53 @@ let private tabTests =
                 [ 900; PaneSplit.narrowest; PaneSplit.narrowest ]
                 "never wider than the chat allows, never narrower than the floor, the floor winning"
 
-        testCase "a split the reader moved is remembered, and the one seeded at boot is not" <| fun () ->
-            let seeded, atBoot = ClientModel.update (PaneSplitMsg (500.0, 900.0)) (clientOf [])
-            let _, moved = ClientModel.update (PaneNudgedMsg (16.0, 900.0)) seeded
+        testCase "a split the reader moved is remembered, and the one put back at boot is not" <| fun () ->
+            let measured = clientOf [] |> Support.step (PaneWindowMsg 1440.0)
+            let kept, atBoot = ClientModel.update (PaneKeptMsg 500.0) measured
+            let _, moved = ClientModel.update (PaneNudgedMsg 16.0) kept
             Expect.equal (atBoot, moved) ([], [ ClientEffect.Remember (Preference.PaneWidth 516) ]) "only what the reader did"
 
         testCase "the separator says the split the model holds" <| fun () ->
             // What assistive technology reads out is the width, not a literal the template shipped.
-            let html = clientOf [] |> Support.step (PaneSplitMsg (612.0, 900.0)) |> Support.render
+            let html =
+                clientOf [] |> Support.step (PaneWindowMsg 1440.0) |> Support.step (PaneSplitMsg 612.0) |> Support.render
             Expect.stringContains html (Dom.attr "aria-valuenow" "612") "the width"
+
+        // Until somebody sizes it, the pane takes the room the chat's reading column does not
+        // use: the chat keeps its full measure and the pane has the rest, never under its floor.
+        testCase "a pane nobody sized takes what the chat's reading column does not use" <| fun () ->
+            Expect.equal
+                ([ 1440.0; 1920.0 ] |> List.map (fun window -> paneWidthAt window (clientOf [])))
+                [ Some (1440 - PaneSplit.side - PaneSplit.chatReadable)
+                  Some (1920 - PaneSplit.side - PaneSplit.chatReadable) ]
+                "the window, less the sidebar, less the chat at its full measure"
+
+        testCase "a pane nobody sized keeps its floor where the chat has nothing to spare" <| fun () ->
+            Expect.equal (paneWidthAt 1280.0 (clientOf [])) (Some PaneSplit.natural) "the floor, as before it grew"
+
+        testCase "putting the sidebar away gives its room to a pane nobody sized" <| fun () ->
+            let collapsed = clientOf [] |> Support.step ToggleNavMsg
+            Expect.equal
+                (paneWidthAt 1440.0 collapsed)
+                (Some (1440 - PaneSplit.chatReadable))
+                "the sidebar's width goes to the pane, the chat keeping its measure"
+
+        testCase "a width the reader chose holds as the window grows" <| fun () ->
+            let chosen = clientOf [] |> Support.step (PaneWindowMsg 1440.0) |> Support.step (PaneSplitMsg 500.0)
+            Expect.equal (paneWidthAt 1920.0 chosen) (Some 500) "the reader's width, not the room's"
+
+        testCase "the split's lengths are the stylesheet's" <| fun () ->
+            // The model lays out columns the stylesheet draws, so the two have to agree on how
+            // wide those are, or the default lands a pane over the chat's measure, or short of it.
+            let tokens = TestFiles.read "app/tokens.css"
+            Expect.equal
+                ([ "--spacing-side"; "--spacing-term"; "--spacing-measure" ]
+                 |> List.map (fun token ->
+                     let found = System.Text.RegularExpressions.Regex.Match (tokens, token + @":\s*([0-9.]+)(px|rem);")
+                     let value = float found.Groups.[1].Value
+                     if found.Groups.[2].Value = "rem" then int (value * 16.0) else int value))
+                [ PaneSplit.side; PaneSplit.natural; PaneSplit.chatReadable - 2 * 32 ]
+                "the sidebar, the pane's floor and the reading measure"
 
         // Whether a reader is following a surface's end is the document's to see; what that
         // puts on screen is the model's (`Away`), drawn from what `Tail` reports.
