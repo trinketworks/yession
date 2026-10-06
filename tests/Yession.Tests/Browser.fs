@@ -5171,10 +5171,11 @@ let editorTests =
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
                 do! awaitU (page.ClickAsync "#shell [data-chapter-name='msg-filler-8']")
-                // To the end of whatever the heuristic guessed, so this adds rather than
-                // replacing — an edit against the text the session holds is what the field is
-                // for, and appending is the edit most likely to expose a diff computed against
-                // the wrong side.
+                // To the end of what the field holds, so this adds rather than replacing — an
+                // edit against the text the session holds is what the field is for, and
+                // appending is the edit most likely to expose a diff computed against the
+                // wrong side. (A chapter nobody has named holds nothing, so the first words
+                // typed here ARE its name.)
                 do! awaitU (page.Keyboard.PressAsync "End")
                 do! awaitU (page.Keyboard.TypeAsync " — settled")
                 let! kept =
@@ -5197,6 +5198,15 @@ let editorTests =
         editorCaseIn 1440 900 "a collaborator's caret in a chapter's name stands in that name" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
+                // A name to be IN. The rule of a chapter nobody has named is a plain divider
+                // with an empty field, and a caret at index 3 and at index 9 of nothing are
+                // the same place — so somebody names it first, as a person would.
+                do! awaitU (page.ClickAsync "#shell [data-chapter-name='msg-filler-8']")
+                do! awaitU (page.Keyboard.TypeAsync "Where it was settled")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """document.querySelector("#shell [data-chapter-name='msg-filler-8']")
+                             ?.value === 'Where it was settled'""")
                 do! awaitU (page.EvaluateAsync "() => window.__chapterCaret('msg-filler-8', 3, 3)")
                 // Waited for by EXISTENCE, not visibility: a bare caret is a zero-width
                 // highlight with the caret bar inside it, which every "is it visible" check

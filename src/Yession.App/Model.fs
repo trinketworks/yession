@@ -3391,6 +3391,19 @@ module ClientModel =
         | "" -> Dom.Text.unnamedChapter
         | said -> said
 
+    /// What a chapter's DIVIDER in the timeline says: the name somebody chose, and nothing
+    /// for a chapter still wearing the guess.
+    ///
+    /// The guess is the opening message's own words (`Chapters.defaultName`), and the divider
+    /// stands directly above that message — so printing it there says the same sentence twice,
+    /// one line apart. A name only earns the divider once it says something the message under
+    /// it does not: a person's, or the model's. The list of chapters keeps `chapterName`,
+    /// guess and all, because there a name is how one entry is told from the next and no
+    /// message is beside it.
+    let chapterRuleName (model: ClientModel) (item: ConversationItem) : string =
+        if Chapters.unwritten CollabText.ylmish model.Synced.Chapters item then ""
+        else chapterName model item
+
     /// What the chapter at this message is called, for a surface that has an id and not the
     /// item — presence, which reports a `MessageId` because that is what identifies a chapter
     /// on the wire.
