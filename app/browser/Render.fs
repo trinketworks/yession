@@ -5,7 +5,9 @@ module Yession.Browser.Render
 // — the pinned surfaces' scroll kept across the diff, the rich editors mounted on their body
 // hosts, the terminal command lines bound to their roots, the keyframes the open tabs need,
 // the replays and live screens folded forward, the rail measured, the slot rules and the
-// catch-up timer started and stopped, collaborators' carets overlaid.
+// catch-up timer started and stopped, collaborators' carets overlaid. And WHEN: at most once a
+// frame however many models arrive in it, and less often than that while the client is
+// catching up (`setState`).
 //
 // Its own module, and before `Browser.fs`, because two entry points drive it: the app, and
 // the host-free shell harness the `Browser`-tier E2E and the `bench` scroll scenario run
@@ -38,11 +40,11 @@ open Yession.App.Codecs
 
 // How many times the whole view has been rendered since this document loaded.
 //
-// A render is the unit of cost on this page. Elmish calls `setState` once per message, and
-// each call re-renders the entire view and reads the scroll positions back out of layout
-// (`Tail.before`) — so the question "is reopening a session expensive?" is really "how many
-// renders does it take?", and that is a COUNT: the same number on a laptop and on a phone,
-// unlike every millisecond a test could measure instead.
+// A render is the unit of cost on this page. Each one re-renders the entire view and reads
+// the scroll positions back out of layout (`Tail.before`) — so the question "is reopening a
+// session expensive?" is really "how many renders does it take?", and that is a COUNT: the
+// same number on a laptop and on a phone, unlike every millisecond a test could measure
+// instead.
 //
 // Published rather than inferred. A test can already see the cost indirectly — hook
 // `document.querySelectorAll`, watch `Tail.before` go past, count the calls — and that
@@ -207,13 +209,19 @@ let private placeInputCursor (field: string) (peer: string) (anchor: int) (head:
                 | null -> ()
                 | bar -> setStyleProperty (bar :?> Browser.Types.HTMLElement) "left" (px (xOf head - loX))
 
-let internal raf (f: unit -> unit) : unit =
+let private raf (f: unit -> unit) : unit =
     Browser.Dom.window.requestAnimationFrame (fun _ -> f ()) |> ignore
 
 // The render hold's clock: how long since the last render (see `setState`). What waits on the
 // model's own state is the model's to declare (`ClientModel.timers`); what needs pacing is
 // paced by the frame (`raf`).
 let private now () : float = Browser.Performance.performance.now ()
+
+// How long a render waits for an animation frame before it stops waiting (see `setState`). A
+// page that is on screen draws sixty times a second, so this never fires there; it is the
+// frame of a page in a background tab, which draws none, and a browser that throttles a
+// hidden page's timers to once a second makes it that anyway.
+let private hiddenFrameMs = 1000
 
 // --- Rich-text editor mount ------------------------------------------------------------
 // The view renders empty `[data-rich-body="<key>"]` hosts; the editor is mounted imperatively
@@ -420,7 +428,9 @@ type Deps =
 
 /// The render, and the two things beside it that need what it keeps.
 type Renderer =
-    { /// The page for this model. Everything above happens, in order, synchronously.
+    { /// The page for this model: drawn now when this frame has not been drawn yet, and
+      /// otherwise at the frame's end, as whichever model is latest by then (`setState`).
+      /// A render is everything above, in order, synchronously.
       SetState : ClientModel -> unit
       /// The terminal command lines re-bound and re-valued — on a doc update as well as a
       /// render, because a command line is a root the Ylmish codec does not carry.
@@ -680,20 +690,6 @@ let create (deps: Deps) : Renderer =
                 | _ -> ()
             | None -> ()
 
-    // Render the Lit view on every model change. Lit diffs into the root, so the focused
-    // textarea and its caret survive; only the timeline scroll is restored by hand.
-    //
-    // Every model change but one: a page that lands while the client is still CATCHING UP.
-    // A cold open reads the whole log a page per round trip from the oldest, and the
-    // conversation is pinned to its foot, so every page rendered was a picture of history
-    // the reader never asked for, scrolling past under their eye — 116 of them on a session
-    // of 97 items, forty-nine thousand pixels of words moving. None of them is the tail,
-    // and the tail is what an open is for. So a render that would show a client still
-    // behind is HELD, and one render is made at most every `ClientModel.catchUpQuietMs` while that
-    // lasts — a long catch-up still shows its progress and its indicator — and the render
-    // that shows the client caught up is immediate, whatever the hold. A send puts a client
-    // one event behind itself for a round trip, and the page that answers it lands caught
-    // up, so live traffic renders as it did; what is paced is a client that STAYS behind.
     // The picker's foot, and the watch on it. Re-bound when the ELEMENT changes — Lit keeps
     // the same node across renders while the foot is drawn, so that is once when the listing
     // gains a page to come and once when it runs out.
@@ -740,28 +736,99 @@ let create (deps: Deps) : Renderer =
                 pressed.preventDefault ()
                 dispatch ToggleSwitcherMsg)
 
+    // Render the Lit view on a model change. Lit diffs into the root, so the focused
+    // textarea and its caret survive; only the timeline scroll is restored by hand.
+    //
+    // Not on EVERY model change, for two reasons, and both are decided here rather than by
+    // whoever dispatches: Elmish calls `setState` once per message, so a rule about how often
+    // the page is drawn that lived with a sender would be one the next sender has not heard of.
+    //
+    // At most once a frame. The first model in a frame renders at once, so a keystroke, a
+    // click, a lone message is on the page before the call that dispatched it returns, as it
+    // always was. Any model after it in the same frame is only REMEMBERED (`latest`), and the
+    // frame's end renders whichever is latest by then — one render, however many models came.
+    // A render nobody sees is not drawn: a burst of pty output is many reads a second, a
+    // message each, and a render per message put seconds of rendering in front of whatever
+    // was queued behind them. The link's heartbeat was. The Session asks "are you there" as a
+    // frame like any other, answered when the pump reaches it, and on a phone a burst put more
+    // than the three seconds the Session waits in front of the answer — a peer that was only
+    // busy, dropped as dead. Folded here, a record costs its fold and nothing more, and the
+    // answer goes out in the turn the probe arrived. (The connection used to hold live records
+    // for a frame itself, which put a rule about drawing in the one module that draws nothing,
+    // and left every other burst — a page of events, a storm of presence — a render apiece.)
+    //
+    // A frame ends at the next animation frame, or after `hiddenFrameMs`, whichever is first.
+    // A page in a background tab has no animation frames at all, and a render owed to one
+    // would never come — but a tab nobody is looking at still has a TITLE somebody is, and
+    // the title is how a pull request that merged or stalled reaches them (`tabTitle`). On a
+    // page anybody can see, the animation frame always wins.
+    //
+    // And while the client is still CATCHING UP, less often than that. A cold open reads the
+    // whole log a page per round trip from the oldest, and the conversation is pinned to its
+    // foot, so every page rendered was a picture of history the reader never asked for,
+    // scrolling past under their eye — 116 of them on a session of 97 items, forty-nine
+    // thousand pixels of words moving. None of them is the tail, and the tail is what an open
+    // is for. So a render that would show a client still behind is HELD, and one render is
+    // made at most every `ClientModel.catchUpQuietMs` while that lasts — a long catch-up still
+    // shows its progress and its indicator — and the render that shows the client caught up
+    // is the next one the frame allows, whatever the hold. A send puts a client one event
+    // behind itself for a round trip, and the page that answers it lands caught up, so live
+    // traffic renders as it did; what is paced is a client that STAYS behind.
+    //
+    // The two never both answer for one model. A model the hold takes cancels whatever the
+    // frame was owed (the hold's own timer will draw `latest`, which is newer); a model the
+    // hold lets through cancels the hold's timer. Either way what is drawn is `latest`, never
+    // the model that happened to ask, so a render that arrives late cannot draw a page older
+    // than one already asked for.
+    //
+    // A focus move (`PaneShell.move`) waits a frame for the render it needs, and still gets
+    // it: an owed render is drawn by the frame callback the PREVIOUS render registered, which
+    // is ahead of any callback registered since, a move's included.
     let mutable renderedAt = -infinity
     let mutable held = 0
+    // The frame the last render is waiting out, by number, or 0 once it is over. By number
+    // because each frame is ended by whichever of two callbacks comes first, and the other
+    // must not end a frame that began after it was asked for.
+    let mutable frames = 0
+    let mutable frameOpen = 0
+    // A model came during the open frame and was not drawn: the frame's end draws `latest`.
+    let mutable owed = false
     let rec setState (model: ClientModel) =
+        latest <- Some model
         let since = now () - renderedAt
         if model.EventConsumer.IsCatchingUp && since < float ClientModel.catchUpQuietMs then
-            latest <- Some model
+            owed <- false
             if held = 0 then
                 held <-
                     JS.setTimeout
                         (fun () ->
                             held <- 0
-                            latest |> Option.iter render)
+                            draw ())
                         (ClientModel.catchUpQuietMs - int since)
         else
             if held <> 0 then
                 JS.clearTimeout held
                 held <- 0
-            render model
+            draw ()
+    // `latest`, now if this frame has not been drawn yet, at its end if it has.
+    and draw () =
+        if frameOpen <> 0 then owed <- true
+        else latest |> Option.iter render
+    and frameEnds (frame: int) =
+        if frameOpen = frame then
+            frameOpen <- 0
+            if owed then
+                owed <- false
+                latest |> Option.iter render
     and render (model: ClientModel) =
         renderedAt <- now ()
         countRender ()
         latest <- Some model
+        frames <- frames + 1
+        let frame = frames
+        frameOpen <- frame
+        raf (fun () -> frameEnds frame)
+        JS.setTimeout (fun () -> frameEnds frame) hiddenFrameMs |> ignore
         // Where each reader of a surface read from its end stands, before anything moves
         // them; put back at the END of this render (`Tail`), after every sync below has
         // finished changing heights.

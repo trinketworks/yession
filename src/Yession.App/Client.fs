@@ -629,21 +629,14 @@ module Client =
           /// 14, stage 6). The browser seeds its emulator; a client with none — a headless
           /// peer, a test — ignores it and loses nothing, because the transcript is the
           /// record and this is only the view.
-          OnTerminalSnapshot : TerminalId -> TranscriptKeyframe -> unit
-          /// Run this once the platform next draws — the browser's animation frame. Live
-          /// terminal records that arrive before then are folded together, as one message
-          /// per terminal, so a burst costs a render per FRAME rather than one per record
-          /// (`TerminalRecordsMsg`). A client that draws nothing runs it at once, which
-          /// folds each record as it arrives.
-          NextFrame : (unit -> unit) -> unit }
+          OnTerminalSnapshot : TerminalId -> TranscriptKeyframe -> unit }
 
     module ConnectOptions =
         let defaults : ConnectOptions =
             { PageSize = 100
               FetchEvents = None
               FetchTranscripts = None
-              OnTerminalSnapshot = fun _ _ -> ()
-              NextFrame = fun run -> run () }
+              OnTerminalSnapshot = fun _ _ -> () }
 
     /// The HTTP event feed for `ConnectOptions.FetchEvents`: sends "events after offset X"
     /// as exactly that — a cursor (`/events/after/{n}`) — and decodes the JSONL envelopes
@@ -1276,35 +1269,8 @@ module Client =
                                 if transcriptOwed.Remove key then fetchTranscript terminal
                         })
 
-        // Live records held for the next frame, in arrival order (`ConnectOptions.NextFrame`).
-        // What reaches the model is unchanged — the same records, keyed by the same seqs —
-        // only how many renders it takes to get there.
-        //
-        // The heartbeat is the reason this matters beyond a smoother page. A probe from the
-        // Session is a frame like any other, answered when the pump reaches it, and the pump
-        // reaches it only after every frame queued ahead of it has been dispatched. With a
-        // render per record, a burst put seconds of rendering in front of the answer — on a
-        // phone, more than the three the Session waits — and a peer that was only busy was
-        // dropped as dead. Held here, a record costs an append, and the answer goes out in
-        // the same turn the probe arrived.
-        let heldRecords = ResizeArray<TerminalId * (int * TranscriptRecord) list> ()
-        let mutable drawAsked = false
-        let releaseRecords () =
-            drawAsked <- false
-            let held = List.ofSeq heldRecords
-            heldRecords.Clear ()
-            held
-            |> List.groupBy fst
-            |> List.iter (fun (terminal, batches) -> dispatch (TerminalRecordsMsg (terminal, List.collect snd batches)))
-
         let dispatchAndConsume (msg: ClientMsg) =
-            match msg with
-            | TerminalRecordsMsg (terminal, records) ->
-                heldRecords.Add (terminal, records)
-                if not drawAsked then
-                    drawAsked <- true
-                    options.NextFrame releaseRecords
-            | _ -> dispatch msg
+            dispatch msg
             match msg with
             | TerminalAvailableMsg (terminal, length) ->
                 // The terminal-feed counterpart of `EventsAvailable`: a hint that there is

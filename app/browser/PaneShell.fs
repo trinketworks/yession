@@ -713,8 +713,11 @@ let installPaneResize (dispatch: Yession.App.ClientMsg -> unit) : unit =
                 handle.focus ()
                 handle.setPointerCapture event.pointerId
                 document.documentElement.classList.add "term-resizing"
-                // One message a frame, however many moves the pointer reports in it: each
-                // message is a render, and a drag reports far faster than a screen draws.
+                // One message a frame, however many moves the pointer reports in it: a drag
+                // reports far faster than a screen draws, and each message measures the
+                // columns (`Split.widest`) and remembers the width it lands on. The render
+                // already draws once a frame (`Render.setState`); this is the measuring and
+                // the remembering.
                 let pending : float option ref = ref None
                 // The pane's edge is on the LEFT of a right-hand column, so its width is the
                 // distance from the pointer to the right of the window.

@@ -3943,7 +3943,7 @@ module View =
                         @click={Ev(fun (e: Browser.Types.Event) ->
                                       // Not the tab's press too: a × is not a way to select.
                                       e.stopPropagation ()
-                                      ClientModel.killPress view.TerminalId model |> Option.iter dispatch)}
+                                      dispatch (KillPressedMsg view.TerminalId))}
                         @keydown={Ev(fun (e: Browser.Types.Event) ->
                                       if armed && (e :?> Browser.Types.KeyboardEvent).key = "Escape" then
                                           // Escape here is about the arming, and only that: the
@@ -4366,11 +4366,8 @@ module View =
                     activate ()
                 elif pressed.key = "Delete" then
                     // On a closed one there is nothing to kill, and Delete is its ×: put away.
-                    let press = if view.IsOpen then ClientModel.killPress terminal model else Some (DismissTabMsg terminal)
-                    press
-                    |> Option.iter (fun press ->
-                        pressed.preventDefault ()
-                        dispatch press)
+                    pressed.preventDefault ()
+                    dispatch (if view.IsOpen then KillPressedMsg terminal else DismissTabMsg terminal)
                 elif pressed.key = "Escape" && model.KillArmed = Some terminal then
                     pressed.stopPropagation ()
                     dispatch (ArmKillMsg None)

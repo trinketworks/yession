@@ -444,10 +444,12 @@ let tests =
                               { Ratio.Name = "scroll.render.slope"; Ratio.Unit = "x"; Ratio.Value = scrollSlope
                                 Ratio.Over = sprintf "%d/%d items" (List.max conversationSizes) (List.min conversationSizes) }
                               // Renders per record that arrived while the conversation was
-                              // being flung. A COUNT, so it is the same on every box: one today,
-                              // because each record is dispatched and each dispatch renders.
-                              // Holding renders while a surface scrolls is the change that
-                              // would move it, and this is where that change would show.
+                              // being flung. A COUNT: at most one, because the render draws at
+                              // most once a frame and a record that lands in a frame already
+                              // drawn waits for the next — under one only when records come
+                              // faster than frames. Holding renders while a surface scrolls is
+                              // the change that would move it further, and this is where that
+                              // change would show.
                               { Ratio.Name = "scroll.renders"; Ratio.Unit = "x"
                                 Ratio.Value = (Seq.sum rendersPerRecord) / float rendersPerRecord.Count
                                 Ratio.Over = sprintf "%d records at %dms" streamRecords streamEveryMs } ]
