@@ -1063,8 +1063,9 @@ let private statusTests =
 
 // --- What just ran is never folded away ------------------------------------------------------
 
-/// One block for a grouping case, by Ada unless said otherwise. Its transcript range is
-/// nothing real: grouping reads the author, the status and the order, and nothing else.
+/// One block for a grouping case, by Ada unless said otherwise. Its transcript range is the
+/// one record `overflowing` holds, shared by every block: what these cases are about is who
+/// ran what and how it went, so what each printed is made too long to be what decides.
 let private blockOf (authority: Authority) (n: string) (status: BlockStatus) : Block =
     { BlockId = block n
       QueueId = None
@@ -1078,12 +1079,24 @@ let private blockOf (authority: Authority) (n: string) (status: BlockStatus) : B
 
 let private doneBy (authority: Authority) (n: string) = blockOf authority n (BlockFinished (CommandSucceeded 0))
 
+/// `n` lines of output, as one record.
+let private linesOfOutput (n: int) : TranscriptRecord =
+    { At = 0.0; Kind = TranscriptOutput; Data = String.replicate n "line\r\n" }
+
+/// A transcript whose one record is more than the pane draws whole — every block that reads
+/// it is earlier history the moment a newer one exists.
+let private overflowing : TerminalFeed =
+    TerminalFeed.withRecord 0 (linesOfOutput (BlockGroup.unfoldedLines + 1)) TerminalFeed.empty
+
 /// Each group as the blocks in it — a run joined with `+` — so a whole layout is one line.
-let private groupsOf (blocks: Block list) : string list =
-    BlockGroup.ofBlocks blocks
+let private groupsIn (feed: TerminalFeed) (blocks: Block list) : string list =
+    BlockGroup.ofBlocks feed blocks
     |> List.map (function
         | BlockGroup.Alone b -> BlockId.value b.BlockId
         | BlockGroup.Run (leader, rest) -> leader :: rest |> List.map (fun b -> BlockId.value b.BlockId) |> String.concat "+")
+
+/// The layout when nothing fits but the newest, so the grouping rules are all that decide it.
+let private groupsOf (blocks: Block list) : string list = groupsIn overflowing blocks
 
 /// Ada running `count` commands one after another in term-a, each finished before the next,
 /// from transcript offset `from` — and the pane on that terminal.
@@ -1095,8 +1108,16 @@ let private ranInA (first: int) (count: int) (from: int64) : EventEnvelope<Sessi
         yield at (offset + 1L) (float offset + 0.5) (completed terminalA (string n) (CommandSucceeded 0) (10 * n + 5)) ]
 
 /// Three commands in term-a, the pane on it: the first two are a run, the third stands alone.
+/// Each printed more than the pane draws whole — at the transcript offset `ranInA` starts it
+/// at, for the first nine — so the first two are earlier history.
 let private threeRan : ClientModel =
-    clientOf (at 1L 0.0 (opened terminalA "shell") :: ranInA 1 3 2L)
+    let model = clientOf (at 1L 0.0 (opened terminalA "shell") :: ranInA 1 3 2L)
+    let feed =
+        [ 1 .. 9 ]
+        |> List.fold
+            (fun feed n -> TerminalFeed.withRecord (10 * n) (linesOfOutput (BlockGroup.unfoldedLines + 1)) feed)
+            (ClientModel.terminalFeed terminalA model)
+    { model with TerminalFeeds = Map.add terminalA feed model.TerminalFeeds }
     |> Support.step (ShowInPaneMsg (Reading terminalA))
 
 let private firstRun = FoldKey.Commands (terminalA, block "1")
@@ -1128,8 +1149,8 @@ let private latestTests =
             // whatever the reader opened would shut under them.
             let before = [ doneBy byAda "1"; doneBy byAda "2"; doneBy byAda "3" ]
             Expect.equal
-                (BlockGroup.holding terminalA (block "1") (before @ [ doneBy byAda "4" ]))
-                (BlockGroup.holding terminalA (block "1") before)
+                (BlockGroup.holding terminalA (block "1") overflowing (before @ [ doneBy byAda "4" ]))
+                (BlockGroup.holding terminalA (block "1") overflowing before)
                 "the same fold before and after"
 
         // The cases below assert a run is OPEN; this is what makes that mean something.
@@ -1175,6 +1196,57 @@ let private latestTests =
                 |> Support.step (chip terminalA "2")
                 |> Support.step (ShowInTerminalMsg (terminalA, block "2"))
             Expect.isTrue (runShownOpen "1" model) "the run holding it is open"
+    ]
+
+// --- Only what does not fit is folded --------------------------------------------------------
+
+/// Ada's commands, oldest first, each printing the given number of lines — command `n` at
+/// transcript offset `n`, so each reads its own output — and the transcript they printed.
+let private printing (lines: int list) : Block list * TerminalFeed =
+    let blocks =
+        lines
+        |> List.mapi (fun i _ ->
+            { blockOf byAda (string (i + 1)) (BlockFinished (CommandSucceeded 0)) with
+                FromSeq = i + 1
+                ToSeq = Some (i + 2) })
+    let feed =
+        lines
+        |> List.mapi (fun i n -> i + 1, n)
+        |> List.fold (fun feed (seq, n) -> TerminalFeed.withRecord seq (linesOfOutput n) feed) TerminalFeed.empty
+    blocks, feed
+
+let private fitTests =
+    testList "Only what does not fit is folded" [
+        // Six short commands in one terminal were one "ran 5 commands" line over the sixth,
+        // with five-sixths of the pane empty: everything a person did a minute ago was a
+        // click away, and all of it would have fitted.
+        testCase "a short history is drawn whole" <| fun () ->
+            let blocks, feed = printing [ 1; 1; 1; 1; 1; 1 ]
+            Expect.equal (groupsIn feed blocks) [ "b-1"; "b-2"; "b-3"; "b-4"; "b-5"; "b-6" ] "six commands, none folded"
+
+        testCase "a long history folds where the pane runs out" <| fun () ->
+            // The history drawn whole fills the budget only with its oldest block, which the
+            // top of a full pane cuts through: the cut is where the room is, not a count of
+            // commands. Something is folded, or the case says nothing.
+            let blocks, feed = printing (List.replicate 30 1)
+            let groups = BlockGroup.ofBlocks feed blocks
+            let lines (bs: Block list) = bs |> List.sumBy (BlockGroup.linesOf feed)
+            let whole = groups |> List.choose (function BlockGroup.Alone b -> Some b | BlockGroup.Run _ -> None)
+            let folded = groups |> List.exists (function BlockGroup.Run _ -> true | BlockGroup.Alone _ -> false)
+            Expect.equal
+                (folded, lines (List.tail whole) < BlockGroup.unfoldedLines, lines whole >= BlockGroup.unfoldedLines)
+                (true, true, true)
+                "folded, and what is whole fills the pane only with its oldest"
+
+        testCase "a command too long to fit is drawn whole, and what came before it folds" <| fun () ->
+            // The pane is full of its output, cut at the top the way a terminal's screen is;
+            // what is above that is a click away rather than three hundred lines up.
+            let blocks, feed = printing [ 1; 1; 300; 1; 1 ]
+            Expect.equal (groupsIn feed blocks) [ "b-1+b-2"; "b-3"; "b-4"; "b-5" ] "the long one and the two after it, whole"
+
+        testCase "a newest command too long to fit is drawn whole, and folds what came before" <| fun () ->
+            let blocks, feed = printing [ 1; 1; 300 ]
+            Expect.equal (groupsIn feed blocks) [ "b-1+b-2"; "b-3" ] "the newest, whole, under the fold"
     ]
 
 // --- Keyframes and the ranged cast (stage 3) --------------------------------------------------
@@ -4370,6 +4442,7 @@ let tests =
         edgeTabTests
         statusTests
         latestTests
+        fitTests
         pageTests
         outputWindowTests
         keyframeTests

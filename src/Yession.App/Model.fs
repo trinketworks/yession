@@ -772,7 +772,7 @@ module FoldKey =
         | FoldKey.Commands (terminal, leader) -> "commands-" + TerminalId.value terminal + "-" + BlockId.value leader
 
 /// How a terminal's history is drawn: each block on its own, or a run of them under one
-/// "ran n commands" fold — the pane's version of the chat's task card.
+/// "ran n earlier commands" fold — the pane's version of the chat's task card.
 [<RequireQualifiedAccess>]
 type BlockGroup =
     /// One block, drawn whole.
@@ -786,27 +786,74 @@ module BlockGroup =
     /// The key a run's fold keeps its open state under.
     let key (terminal: TerminalId) (leader: Block) : FoldKey = FoldKey.Commands (terminal, leader.BlockId)
 
-    /// Group a terminal's blocks (oldest first) for the pane.
+    /// How many lines of a terminal's history the pane draws before it folds the rest: about
+    /// what the pane holds at full height, on a desktop and on a phone alike.
     ///
-    /// Consecutive blocks from one actor fold together, never past somebody else's command,
-    /// and never a group of one: a disclosure around a single command hides the only thing
-    /// the row has to say behind a click.
+    /// A count of LINES rather than of commands, because what a fold is for is what does not
+    /// fit — six one-line commands fit, one `seq 1 300` does not — and rather than a measured
+    /// height, because a measured rule needs a browser to say what it decided and this one
+    /// needs a model. What it does not see is wrapping: a phone wraps a long line a desktop
+    /// does not, and is left with a little more history unfolded than its screen holds, which
+    /// the pane scrolls through from its end like any other.
+    let unfoldedLines = 40
+
+    /// The lines one block takes in the pane: its command line and the gap under it, then
+    /// what it shows of its output (`TerminalFeed.shownOutput`, so the budget counts what is
+    /// DRAWN, not what was printed) — at least one line, since a block with none says so —
+    /// and the note above them when some were left to the recording.
+    let linesOf (feed: TerminalFeed) (block: Block) : int =
+        // The range `terminalBlockOutput` draws: a running block's runs to whatever has arrived.
+        let toSeq = block.ToSeq |> Option.defaultValue (max feed.KnownLength block.FromSeq)
+        let elided, output = TerminalFeed.shownOutput block.FromSeq toSeq feed
+        // A line ends at `\n`, and a trailing partial line is a line (`TerminalFeed.lastLines`).
+        let shown =
+            if output = "" then 0
+            else (output |> Seq.filter (fun c -> c = '\n') |> Seq.length) + (if output.EndsWith "\n" then 0 else 1)
+        2 + max 1 shown + (if elided > 0 then 1 else 0)
+
+    /// Group a terminal's blocks (oldest first) for the pane, given what they printed.
     ///
-    /// And never the NEWEST block, nor one still RUNNING. A run used to take everything its
-    /// actor ran, so from the second command on what had just happened went behind a shut
-    /// fold with everything before it: `pwd`, then `echo second`, and neither answer was on
-    /// screen; a running loop's output was hidden from everyone watching it. What just
-    /// happened, and what is happening, is what a person reads a terminal FOR — the fold is
-    /// for what they have already read. A running block splits a run rather than sitting
-    /// inside one, so its run-mates fold either side of it.
+    /// Only what does not fit folds. Read from the newest back, blocks are drawn whole until
+    /// `unfoldedLines` have been: everything before that is EARLIER history, and only earlier
+    /// history folds. The block the budget runs out INSIDE is drawn whole too — it is the one
+    /// the top of a full pane cuts through, partly on screen, the way a terminal's own top
+    /// line cuts a command's output — so a reader at the end has a pane's worth of history in
+    /// front of them, and a `seq 1 300` three commands back fills it rather than folding away
+    /// and leaving the pane empty above two short commands.
+    ///
+    /// Every command used to fold except the newest, so six short commands were one "ran 5
+    /// commands" line over one command and a pane five-sixths empty — a person had to open the
+    /// fold to see what they did a minute ago, which was all there was room for.
+    ///
+    /// Within earlier history, consecutive blocks from one actor fold together, never past
+    /// somebody else's command, and never a group of one: a disclosure around a single
+    /// command hides the only thing the row has to say behind a click.
+    ///
+    /// And never the NEWEST block, nor one still RUNNING, whatever it printed. A run used to
+    /// take everything its actor ran, so from the second command on what had just happened
+    /// went behind a shut fold with everything before it: `pwd`, then `echo second`, and
+    /// neither answer was on screen; a running loop's output was hidden from everyone watching
+    /// it. What just happened, and what is happening, is what a person reads a terminal FOR —
+    /// the fold is for what they have already read. The newest is drawn even when it alone
+    /// overflows the budget, and a running block splits a run rather than sitting inside one,
+    /// so its run-mates fold either side of it.
     ///
     /// That the first block keys a run is what keeps a fold a reader opened open: a run
-    /// grows at its END (the block that was newest joins once another arrives), so its first
+    /// grows at its END (a block joins as newer ones push it out of the budget), so its first
     /// block is stable for as long as the run is.
-    let ofBlocks (blocks: Block list) : BlockGroup list =
-        let newest = List.tryLast blocks |> Option.map (fun b -> b.BlockId)
+    let ofBlocks (feed: TerminalFeed) (blocks: Block list) : BlockGroup list =
+        // The blocks drawn whole as the latest history: each, newest first, while the lines
+        // drawn after it still leave room. Walked newest-first and stopped once the room is
+        // gone, so only what the pane could show is ever measured.
+        let latest =
+            let rec walk (spent: int) (kept: Set<BlockId>) (newestFirst: Block list) =
+                match newestFirst with
+                | block :: older when spent < unfoldedLines ->
+                    walk (spent + linesOf feed block) (Set.add block.BlockId kept) older
+                | _ -> kept
+            walk 0 Set.empty (List.rev blocks)
         let foldable (block: Block) =
-            Some block.BlockId <> newest
+            not (Set.contains block.BlockId latest)
             && (match block.Status with
                 | BlockRunning -> false
                 | BlockFinished _ | BlockRejected _ -> true)
@@ -830,8 +877,8 @@ module BlockGroup =
 
     /// The fold a block is behind, if it is behind one — what "show in terminal" has to
     /// open before there is anything on screen to scroll to.
-    let holding (terminal: TerminalId) (block: BlockId) (blocks: Block list) : FoldKey option =
-        ofBlocks blocks
+    let holding (terminal: TerminalId) (block: BlockId) (feed: TerminalFeed) (blocks: Block list) : FoldKey option =
+        ofBlocks feed blocks
         |> List.tryPick (function
             | BlockGroup.Run (leader, rest) when leader.BlockId = block || rest |> List.exists (fun b -> b.BlockId = block) ->
                 Some (key terminal leader)
@@ -3965,7 +4012,8 @@ module ClientModel =
             let behind =
                 model.Terminals.Terminals
                 |> List.tryFind (fun view -> view.TerminalId = terminal)
-                |> Option.bind (fun view -> BlockGroup.holding terminal block view.Blocks)
+                |> Option.bind (fun view ->
+                    BlockGroup.holding terminal block (terminalFeed terminal model) view.Blocks)
             let unfolded =
                 match behind with
                 | Some key -> { model with OpenFolds = Set.add key model.OpenFolds }
