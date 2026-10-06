@@ -2741,7 +2741,7 @@ let private prPollTests =
                           Transition = PrTransition.ChecksPassed
                           State = PrOpen
                           Checks = ChecksGreen
-                          Watcher = ada; OccurredAt = None }) ]
+                          Watcher = ada; OccurredAt = None; Title = None }) ]
                 |> List.fold PrWatchesProjection.applyEvent PrWatchesProjection.empty
             let poller =
                 pollerOver fixedNow (scriptedFetch []).Fetch (RecordedTransitions ()) (ResizeArray ())

@@ -903,7 +903,8 @@ module Events =
                       "state", prState.Encode p.State
                       "checks", checksRollup.Encode p.Checks
                       "watcher", Codec.principal.Encode p.Watcher
-                      "occurredAt", Encode.option Codec.timestamp.Encode p.OccurredAt ]
+                      "occurredAt", Encode.option Codec.timestamp.Encode p.OccurredAt
+                      "title", Encode.option Encode.string p.Title ]
           Decode =
             Decode.object (fun get ->
                 { PrTransitioned.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
@@ -914,7 +915,10 @@ module Events =
                   PrTransitioned.Watcher = get.Required.Field "watcher" Codec.principal.Decode
                   // Absent on every change recorded before the source's time was read, which
                   // reads as not knowing it — never as having happened when it was written.
-                  PrTransitioned.OccurredAt = get.Optional.Field "occurredAt" Codec.timestamp.Decode }) }
+                  PrTransitioned.OccurredAt = get.Optional.Field "occurredAt" Codec.timestamp.Decode
+                  // Absent on every change recorded before the title was carried: not known,
+                  // rather than called nothing.
+                  PrTransitioned.Title = get.Optional.Field "title" Decode.string }) }
 
     let private prWatchReadability : Codec<PrWatchReadability> =
         { Encode =

@@ -1018,7 +1018,8 @@ Async.StartImmediate (
                                           Watcher = watcher
                                           // When it happened, where GitHub says — the half of
                                           // `WatchChanged` only the look that found it knows.
-                                          OccurredAt = PrTransition.occurredAt snapshot.Times transition })
+                                          OccurredAt = PrTransition.occurredAt snapshot.Times transition
+                                          Title = Some snapshot.Title })
                             ()
                 }
             prWatchers <-

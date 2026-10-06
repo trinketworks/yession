@@ -554,7 +554,7 @@ let private frameSerializationTests =
                       Transition = PrTransition.ChecksFailed
                       State = PrOpen
                       Checks = ChecksRed
-                      Watcher = Principal.Peer peerId; OccurredAt = Some (DateTimeOffset (2026, 9, 25, 8, 0, 0, TimeSpan.Zero)) }
+                      Watcher = Principal.Peer peerId; OccurredAt = Some (DateTimeOffset (2026, 9, 25, 8, 0, 0, TimeSpan.Zero)); Title = None }
                   // Both halves of an outage: why it could not be read, and that it can again.
                   SessionEvent.PrWatchReadability
                     { MessageId = messageId
@@ -633,7 +633,7 @@ let private frameSerializationTests =
                           Transition = t
                           State = PrOpen
                           Checks = ChecksGreen
-                          Watcher = Principal.Peer (PeerId.create "ada" |> expect); OccurredAt = None }
+                          Watcher = Principal.Peer (PeerId.create "ada" |> expect); OccurredAt = None; Title = None }
                 Expect.equal (Codec.fromString Events.sessionEvent (Codec.toString Events.sessionEvent event) |> expect) event "round-trip"
 
         testCase "a watch recorded before drafts were read decodes as not a draft" <| fun () ->
@@ -671,7 +671,7 @@ let private frameSerializationTests =
                           Transition = t
                           State = PrOpen
                           Checks = ChecksGreen
-                          Watcher = Principal.Peer (PeerId.create "ada" |> expect); OccurredAt = None }
+                          Watcher = Principal.Peer (PeerId.create "ada" |> expect); OccurredAt = None; Title = None }
                 Expect.equal (Codec.fromString Events.sessionEvent (Codec.toString Events.sessionEvent event) |> expect) event "round-trip"
 
         testCase "a MessageSent persisted before Phase 3 (no queueId field) still decodes" <| fun () ->
@@ -1403,7 +1403,7 @@ let private watchChangedTests =
               State = PrMerged
               Checks = ChecksGreen
               Watcher = ada
-              OccurredAt = occurredAt }
+              OccurredAt = occurredAt; Title = None }
     let recorded (offset: int64) (event: SessionEvent) : EventEnvelope<SessionEvent> =
         { EventId = EventId.fresh ()
           SessionId = SessionId.create "watch-session" |> expect
@@ -1469,7 +1469,7 @@ let private prWatchTests =
         |> PrWatched
     let transitioned transition state checks : SessionEvent =
         PrTransitioned
-            { MessageId = msg "t1"; Pr = pr; Transition = transition; State = state; Checks = checks; Watcher = Principal.Peer ada; OccurredAt = None }
+            { MessageId = msg "t1"; Pr = pr; Transition = transition; State = state; Checks = checks; Watcher = Principal.Peer ada; OccurredAt = None; Title = None }
     /// The projection folds ENVELOPES, because when a watch last moved is the envelope's
     /// timestamp and nothing in a payload says it. Minute-apart stamps, so a test can tell
     /// which event a `Since` came from.
@@ -1931,7 +1931,7 @@ let private prWatchTests =
                       Transition = PrTransition.Merged
                       State = PrMerged
                       Checks = ChecksGreen
-                      Watcher = Principal.Peer ada; OccurredAt = None }
+                      Watcher = Principal.Peer ada; OccurredAt = None; Title = None }
                   SessionEvent.PrUnwatched { MessageId = msg "w3"; Pr = pr; Actor = PeerRef ada } ]
                 |> List.mapi (fun i event ->
                     { EventId = EventId.fresh ()
@@ -1961,6 +1961,17 @@ let private prWatchTests =
                 (SessionEvent.PrCreated
                     { MessageId = msg "c1"; Pr = pr; Title = "Add feature"; Head = "topic"; Base = "master"; Draft = false; Actor = ActorRef.Agent })
                 "the durable form decodes to the event"
+
+        // The older PrTransitioned line above, with no title, still decodes — to not knowing it.
+        testCase "a PrTransitioned carrying its title is the shape it will always be" <| fun () ->
+            let pinned =
+                """{"type":"prTransitioned","payload":{"messageId":"t1","pr":{"repo":"octo/hello","number":12},"transition":"merged","state":"merged","checks":"green","watcher":{"kind":"peer","peerId":"ada"},"title":"Add feature"}}"""
+            Expect.equal
+                (Codec.fromString Events.sessionEvent pinned |> expect)
+                (match transitioned PrTransition.Merged PrMerged ChecksGreen with
+                 | SessionEvent.PrTransitioned p -> SessionEvent.PrTransitioned { p with Title = Some "Add feature" }
+                 | other -> other)
+                "the title comes back as written"
     ]
 
 // Who is behind an act (Plan 20). The type exists because these three were loose fields
