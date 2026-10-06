@@ -4026,7 +4026,10 @@ let private prWatchVerbTests =
                 | Ok said -> failwithf "expected a refusal, got %s" said
             }
 
-        testCaseAsync "a merge done at once watches nothing" <|
+        // A merge done at once leaves nothing after it for a watch to see, so the watch is
+        // begun from a look taken BEFORE it. Its baseline is the open pull request, and the
+        // poller's next look reports the merge as the transition it is.
+        testCaseAsync "a merge done at once is watched from before it, so the merge is seen" <|
             async {
                 let! stub = startStubGitHubApi ()
                 stub.SetStanding
@@ -4034,8 +4037,14 @@ let private prWatchVerbTests =
                 let service, log, _ = serviceOver stub
                 let! outcome = service.Merge agentForAda prOne Squash
                 Expect.equal outcome (Ok "octo/hello#12 merged") "done"
-                let! events = eventsOf log
-                Expect.isEmpty events "there is nothing left for a watch to see"
+                match! eventsOf log with
+                | [ SessionEvent.PrWatched started ] ->
+                    let merged = { PrWatched.initial started with State = PrMerged }
+                    Expect.equal
+                        (PrTransitions.detect (PrTransitions.knownOf (PrWatched.initial started)) merged)
+                        [ PrTransition.Merged ]
+                        "the next look sees the merge"
+                | events -> failwithf "expected one watch, got %A" events
             }
 
         testCaseAsync "unwatching records the stop; unwatching what is not watched refuses" <|
