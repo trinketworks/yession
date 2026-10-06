@@ -465,8 +465,10 @@ let private run () =
         let out : string = nodePath?resolve (Cli.valueOf outOption args |> Option.defaultValue "frames") |> unbox
         let still = Cli.isSet stillOption args
         let page = Cli.valueOf pageOption args
-        // A desktop is a width, not a flag: what changes at 600px is that the page is laid out
-        // for a pointer that can hover, and below it for a finger that cannot.
+        // A desktop is the stylesheet's `wide` screen: not a phone. The question is asked once,
+        // where `@custom-variant phone` in app/tailwind.css asks it (width < 48rem = 768px, OR
+        // height <= 500px), so a phone turned on its side (844x390) gets a finger, as the real
+        // device does, and not the mouse a width rule gave it. `--desktop` is just 1280x800.
         let width, height =
             match Cli.valueOf sizeOption args with
             | Some size ->
@@ -474,7 +476,7 @@ let private run () =
                 | [| (true, w); (true, h) |] -> w, h
                 | _ -> abort (sprintf "--size %s: want WIDTHxHEIGHT, e.g. 390x844" size)
             | None -> if Cli.isSet desktopOption args then 1280, 800 else 390, 844
-        let desktop = width >= 600
+        let desktop = not (width < 768 || height <= 500)
         fs?rmSync (out, createObj [ "recursive" ==> true; "force" ==> true ]) |> ignore
         fs?mkdirSync ((if still then out else joinTwo out "frames"), createObj [ "recursive" ==> true ]) |> ignore
 
