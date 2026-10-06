@@ -850,7 +850,7 @@ let create (deps: Deps) : Renderer =
         // itself changes (selecting a terminal opens it).
         PaneShell.setOpen model.TerminalsOpen
         PaneShell.setColumn model.Column
-        PaneShell.setPaneSplit model.PaneSplit
+        PaneShell.setPaneSplit (ClientModel.paneSplit model)
         // The strip's selected tab in view when the selection moved — read off the DOM rather
         // than the model, so a tab a collaborator's `TabOpened` selected is covered too — and
         // its fade on whichever ends have tabs past them.

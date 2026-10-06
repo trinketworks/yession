@@ -2959,10 +2959,12 @@ module Style =
     /// stay the same mental model. The old 92vw left a sliver of chat showing beside it,
     /// which reads as a dialog: something you get rid of rather than somewhere you are.
     /// On desktop the width is a CUSTOM PROPERTY the shell root carries, not the token — the
-    /// token is its default. 420px was picked as "the width the content actually has" and is
-    /// 20 columns short of the 80 a terminal prints; rather than guess a better number for
-    /// everybody, the split is draggable and remembered (`PaneShell.installPaneResize`). The
-    /// transition is suppressed while dragging, or the column chases the pointer a frame late.
+    /// token is only the first paint's. 420px was picked as "the width the content actually
+    /// has" and is 20 columns short of the 80 a terminal prints; rather than guess a better
+    /// number for everybody, the split is laid out by the model — a pane nobody sized takes the
+    /// room the chat's reading column leaves (`PaneSplit.resolve`) — and is draggable and
+    /// remembered (`PaneShell.installPaneResize`). The transition is suppressed while dragging,
+    /// or the column chases the pointer a frame late.
     let contentPanel =
         "relative w-term wide:w-[var(--term-w,var(--spacing-term))] shrink-0 bg-panel h-full overflow-hidden z-40 flex flex-col "
         + Stroke.dividerLeft + " "

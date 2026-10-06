@@ -53,11 +53,6 @@ let private focusOn (element: HTMLElement option) : unit =
 let private reflow (element: HTMLElement) : unit = element.offsetWidth |> ignore
 
 
-/// A CSS length as a number, with the unit dropped. `getPropertyValue` answers `"420px"` for a
-/// property set in pixels and `""` for one that is not set at all, and both have to become "no
-/// number I can use" rather than a parse that quietly succeeds at zero.
-let private trimPx (value: string) : string = value.Trim().Replace ("px", "")
-
 /// Whether focus has been left nowhere it can act from — on `body`, or nowhere at all — or
 /// inside something that is on its way out of the document.
 ///
@@ -624,48 +619,28 @@ module Memory =
 
 /// The pane's width on desktop, as a custom property on the shell root — the same mechanism
 /// the open state uses, and for the same reason: a Lit re-render must not fight the column's
-/// transition. The width itself is the model's (`ClientModel.PaneSplit`); what is here is the
-/// measuring the model cannot do and the drawing of what it decided.
+/// transition. The width itself is the model's (`ClientModel.paneSplit`), bounds and default
+/// included; what is here is the measuring the model cannot do and the drawing of what it
+/// decided.
 module private Split =
 
     /// Where a reader's chosen width survives a reload. Per browser profile, like the peer id:
     /// it is a preference about this screen, not a fact about the session.
     let key = "yession:term-width"
 
-    /// The chat's floor: what the pane's ceiling leaves it.
-    let minChat = 420.0
-
     let private root = document.documentElement
 
-    /// The ceiling is what the CHAT can spare, not what the window is: the sidebar takes 280px
-    /// of the window and can be collapsed, so a bound measured against `innerWidth` let the pane
-    /// grow to 932px on a 1440 screen and left the conversation 228px — its title truncated to a
-    /// single letter and its commands gone. Ask the two columns how wide they actually are.
-    let widest () : float =
-        match find "[data-content-panel]", find "[data-conversation]" with
-        | Some pane, Some chat -> pane.getBoundingClientRect().width + chat.getBoundingClientRect().width - minChat
-        | _ -> window.innerWidth - minChat
+    /// How wide the window is, for the shell that fills it: the root's own width, which leaves
+    /// out a scrollbar the shell does not lay out under.
+    let windowWidth () : float = root.clientWidth
 
-    /// The width to start at: what was remembered, else the design token, else the floor.
-    ///
-    /// Seeded at install ALWAYS — not only when a width was remembered — so the arrow keys
-    /// step from a number that was the split, never from a column measured mid-transition (a
-    /// shut pane is its own 1px left border).
-    let seed () : float =
-        let remembered =
-            try
-                match System.Double.TryParse (localStorage.getItem key) with
-                | true, width when width > 0.0 -> Some width
-                | _ -> None
-            with _ -> None
-        let token =
-            match
-                System.Double.TryParse
-                    (computedProperty root "--spacing-term" |> trimPx)
-                with
+    /// The width this browser kept from an earlier visit, if it kept one.
+    let kept () : float option =
+        try
+            match System.Double.TryParse (localStorage.getItem key) with
             | true, width when width > 0.0 -> Some width
             | _ -> None
-        remembered |> Option.orElse token |> Option.defaultValue (float Yession.App.PaneSplit.narrowest)
+        with _ -> None
 
     let draw (split: Yession.App.PaneSplit) : unit =
         setStyleProperty root "--term-w" (sprintf "%dpx" split.Width)
@@ -695,12 +670,17 @@ let installPaneResize (dispatch: Yession.App.ClientMsg -> unit) : unit =
             let found = document.querySelectorAll "[data-term-resize]"
             [ for i in 0 .. found.length - 1 -> found.[i] :?> HTMLElement ]
             |> List.tryFind (fun handle -> handle.contains node)
-    let setTo (wanted: float) = dispatch (Yession.App.PaneSplitMsg (wanted, Split.widest ()))
-    let nudge (by: float) = dispatch (Yession.App.PaneNudgedMsg (by, Split.widest ()))
+    let setTo (wanted: float) = dispatch (Yession.App.PaneSplitMsg wanted)
+    let nudge (by: float) = dispatch (Yession.App.PaneNudgedMsg by)
 
-    setTo (Split.seed ())
-    // A window that changed size changed what the chat can spare: the split is held to it.
-    window.addEventListener ("resize", fun _ -> nudge 0.0)
+    // The window is measured at install, so the model has a split to draw — and the arrow keys
+    // a width to step from — before anybody touches the separator; never a column measured
+    // mid-transition (a shut pane is its own 1px left border).
+    dispatch (Yession.App.PaneWindowMsg (Split.windowWidth ()))
+    Split.kept () |> Option.iter (fun width -> dispatch (Yession.App.PaneKeptMsg width))
+    // A window that changed size changed what the two columns share: the model lays the split
+    // out again, growing a pane nobody sized and holding one somebody did.
+    window.addEventListener ("resize", fun _ -> dispatch (Yession.App.PaneWindowMsg (Split.windowWidth ())))
 
     document.addEventListener (
         "pointerdown",
@@ -752,7 +732,8 @@ let installPaneResize (dispatch: Yession.App.ClientMsg -> unit) : unit =
                     match event.key with
                     | "ArrowLeft" -> Some (fun () -> nudge step)
                     | "ArrowRight" -> Some (fun () -> nudge -step)
-                    | "Home" -> Some (fun () -> setTo (Split.widest ()))
+                    // The window is wider than any split, so this asks for the widest there is.
+                    | "Home" -> Some (fun () -> setTo (Split.windowWidth ()))
                     | "End" -> Some (fun () -> setTo (float Yession.App.PaneSplit.narrowest))
                     | _ -> None
                 match moved with

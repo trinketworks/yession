@@ -4863,7 +4863,7 @@ module View =
                           title="{Dom.Text.backToChat}" data-content-toggle="hide"
                           @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.right}</button>
                 </div>"""
-        let split = model.PaneSplit |> Option.defaultValue PaneSplit.unmeasured
+        let split = ClientModel.paneSplit model |> Option.defaultValue PaneSplit.unmeasured
         html $"""
             <!-- `inert` while shut: a shut pane is zero pixels wide on a desktop and off the
                  screen on a phone, and every control in it was still a Tab stop — a full cycle

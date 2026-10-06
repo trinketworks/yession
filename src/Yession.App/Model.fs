@@ -1042,27 +1042,53 @@ module Column =
     let hide (column: Column) : Column =
         if column.Wide then { column with Collapsed = true } else { column with Drawer = false }
 
-/// The split between the chat and the pane on a desktop: the pane's width, as the reader set
-/// it, and the widest it may be — which is what the CHAT can spare, measured by the browser,
-/// because the sidebar beside them can be collapsed and a bound against the window let the
-/// pane grow until the conversation was a single letter wide.
+/// The split between the chat and the pane on a desktop: the pane's width, and the widest it
+/// may be — which is what the CHAT can spare, because the sidebar beside them can be collapsed
+/// and a bound against the window let the pane grow until the conversation was a single letter
+/// wide.
 ///
 /// The column was a fixed 420px chosen as "the width the content actually has", and measured
-/// against what a terminal prints it was 20 columns short of 80. Rather than guess a better
-/// constant for every screen, the split moves and is remembered.
+/// against what a terminal prints it was 20 columns short of 80. So the split moves and is
+/// remembered — and until somebody moves it, it is not a constant either (`PaneSplit.resolve`).
 [<RequireQualifiedAccess>]
 type PaneSplit = { Width : int; Widest : int }
 
+/// What the split is made from: how wide the window is, as the browser last measured it, and
+/// the width the reader chose, if they have. The split itself is derived (`PaneSplit.resolve`),
+/// so a window that changes size, or a sidebar that is put away, moves a pane nobody sized and
+/// holds one somebody did — and neither is a write anybody has to remember to make.
+[<RequireQualifiedAccess>]
+type PaneRoom = { Window : int option; Chosen : int option }
+
+module PaneRoom =
+
+    /// Nothing measured and nothing chosen: a server rendering the shell, or the first paint.
+    let unmeasured : PaneRoom = { PaneRoom.Window = None; PaneRoom.Chosen = None }
+
 module PaneSplit =
 
-    /// Neither column can be dragged away to nothing: this is the pane's floor, and the chat's
-    /// is what the browser takes off before it says how wide the pane may be.
+    /// Neither column can be dragged away to nothing: this is the pane's floor.
     let narrowest = 320
 
+    /// The chat's floor: the pane is never wider than what leaves the chat this much.
+    let chatFloor = 420
+
+    /// The pane's width when nobody has set one and the screen has no room to spare: the design
+    /// token (`--spacing-term`), and the floor a pane nobody sized grows from.
+    let natural = 420
+
+    /// What the chat's reading column takes at its full measure: `Style.readingColumn`'s 38rem
+    /// (`--spacing-measure`, 608px) and the 32px the timeline keeps either side of it
+    /// (`Style.timeline`). A chat wider than this is an empty strip beside the conversation.
+    let chatReadable = 608 + 2 * 32
+
+    /// The sidebar's width on a desktop (`--spacing-side`), while it is beside the chat.
+    let side = 280
+
     /// What the separator says before the browser has measured anything — a server rendering
-    /// the shell, or the first paint: the design token's width (`--spacing-term`), and a ceiling
-    /// the browser's first measurement replaces.
-    let unmeasured : PaneSplit = { PaneSplit.Width = 420; PaneSplit.Widest = 1080 }
+    /// the shell, or the first paint: the design token's width, and a ceiling the browser's
+    /// first measurement replaces.
+    let unmeasured : PaneSplit = { PaneSplit.Width = natural; PaneSplit.Widest = 1080 }
 
     /// The split at `wanted`, within the floor and `widest`. Rounded before clamping, so a
     /// bound is a bound exactly: clamping a fraction first and rounding after could land a
@@ -1071,6 +1097,22 @@ module PaneSplit =
         let widest = max narrowest (int (round widest))
         { PaneSplit.Width = int (round wanted) |> min widest |> max narrowest
           PaneSplit.Widest = widest }
+
+    /// The split a window this wide lays out. The chat and the pane share what the sidebar
+    /// leaves; the pane may take all of it but the chat's floor. A width the reader chose is
+    /// held to that. A pane nobody sized takes what the chat's reading column does not use —
+    /// the chat stays at its full measure and the remainder is the pane's, never less than its
+    /// own floor — because a chat column wider than what it reads in is a blank strip beside
+    /// the conversation while the terminal, usually the busiest thing on the screen, wraps.
+    ///
+    /// The sidebar is the model's to know rather than the browser's to measure: it animates
+    /// shut, and a measurement taken while it travels is a width it was for one frame.
+    let resolve (column: Column) (window: int) (chosen: int option) : PaneSplit =
+        let shared = if column.Wide && not column.Collapsed then window - side else window
+        let widest = float (shared - chatFloor)
+        match chosen with
+        | Some chosen -> within widest (float chosen)
+        | None -> within widest (float (max natural (shared - chatReadable)))
 
 /// Who is connected to this session NOW, as the log says it: how many open connections each
 /// peer has, folded from the `PeerJoined` / `PeerLeft` pair the Session appends around every
@@ -1392,9 +1434,10 @@ type ClientModel =
       /// its remembered collapse, as the served shell's one inline script already applied it
       /// before first paint — so the first render here agrees with what is on screen.
       Column : Column
-      /// The split between the chat and the pane (`PaneSplit`); `None` until the browser has
-      /// measured how wide the pane may be, which a server rendering the shell never does.
-      PaneSplit : PaneSplit option
+      /// What the split between the chat and the pane is made from (`PaneRoom`); the split
+      /// itself is `ClientModel.paneSplit`, and there is none until the browser has measured
+      /// the window, which a server rendering the shell never does.
+      PaneRoom : PaneRoom
       /// The surfaces read from their end whose reader has scrolled away from it — what puts
       /// each one's "jump to latest" on screen. A surface not here is being followed, which is
       /// where every reader arrives. WHETHER a reader moved is the document's to see (`Tail`,
@@ -1897,11 +1940,16 @@ type ClientMsg =
     | RevealSettingsMsg
     /// The stylesheet's breakpoint was crossed: the column is now beside the chat, or not.
     | ViewportMsg of wide: bool
-    /// Set the split: the width wanted, and the widest the chat can spare right now.
-    | PaneSplitMsg of wanted: float * widest: float
-    /// Move the split by `by` pixels from where it is — the separator's arrow keys — against
-    /// the widest the chat can spare right now. Nothing to step from until the split is set.
-    | PaneNudgedMsg of by: float * widest: float
+    /// The reader set the split: the width wanted, held to what the chat can spare.
+    | PaneSplitMsg of wanted: float
+    /// The reader moved the split by `by` pixels from where it is — the separator's arrow
+    /// keys. Nothing to step from until the window has been measured.
+    | PaneNudgedMsg of by: float
+    /// The browser measured the window: at boot, and whenever it changes size.
+    | PaneWindowMsg of width: float
+    /// The width this browser kept from an earlier visit, put back at boot. The reader's own
+    /// choice, so it holds like one — but not a new one, so it is not written back.
+    | PaneKeptMsg of width: float
     /// The reader of a surface read from its end left that end, or came back to it.
     | ReaderMovedMsg of TailSurface * following: bool
     /// Close the content column, and never open it: the shell's half of "on a phone, two
@@ -2232,7 +2280,7 @@ module ClientModel =
           PaneOpensItself = false
           Seen = Map.empty
           Column = Column.initial
-          PaneSplit = None
+          PaneRoom = PaneRoom.unmeasured
           Away = Set.empty
           ItemMenu = None
           PaneMenu = false
@@ -2450,6 +2498,12 @@ module ClientModel =
     /// The order terminals OPENED in, which is the strip's order (`withTab`).
     let private openOrder (terminals: Projection) : TerminalId list =
         terminals.Terminals |> List.map (fun view -> view.TerminalId)
+
+    /// The split between the chat and the pane this browser lays out (`PaneSplit.resolve`);
+    /// `None` until the window has been measured.
+    let paneSplit (model: ClientModel) : PaneSplit option =
+        model.PaneRoom.Window
+        |> Option.map (fun window -> PaneSplit.resolve model.Column window model.PaneRoom.Chosen)
 
     /// What this browser should remember of the pane — what a reload must give back (P0-4).
     /// The CHOICE rather than `selectedTerminal`'s resolution of it: with nothing chosen the
@@ -3788,6 +3842,16 @@ module ClientModel =
     let private drawerShut (model: ClientModel) : ClientModel =
         if model.Column.Wide then model else { model with Column = { model.Column with Drawer = false } }
 
+    /// The reader chose a width. What is kept is what the screen then shows — `wanted` held to
+    /// what the chat can spare — so a drag past the end is a choice of the end. Before the
+    /// window is measured there is nothing to hold it to, and it is kept as asked.
+    let private choosing (wanted: float) (model: ClientModel) : ClientModel =
+        let width =
+            match model.PaneRoom.Window with
+            | Some window -> (PaneSplit.resolve model.Column window (Some (int (round wanted)))).Width
+            | None -> int (round wanted)
+        { model with PaneRoom = { model.PaneRoom with Chosen = Some width } }
+
     let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
         heard (notice (reconcileLaunch (openOfItself model (settle (recall (
         match msg with
@@ -4485,13 +4549,15 @@ module ClientModel =
         // SET, not flipped, so pressing it twice is pressing it once.
         | RevealSettingsMsg -> columnOn { model with Column = { model.Column with Face = ColumnFace.Settings } }
         | ViewportMsg wide -> { model with Column = { model.Column with Wide = wide } }
-        | PaneSplitMsg (wanted, widest) -> { model with PaneSplit = Some (PaneSplit.within widest wanted) }
+        | PaneSplitMsg wanted -> choosing wanted model
         | ReaderMovedMsg (surface, following) ->
             { model with Away = (if following then Set.remove surface model.Away else Set.add surface model.Away) }
-        | PaneNudgedMsg (by, widest) ->
-            match model.PaneSplit with
-            | Some split -> { model with PaneSplit = Some (PaneSplit.within widest (float split.Width + by)) }
+        | PaneNudgedMsg by ->
+            match paneSplit model with
+            | Some split -> choosing (float split.Width + by) model
             | None -> model
+        | PaneWindowMsg width -> { model with PaneRoom = { model.PaneRoom with Window = Some (int (round width)) } }
+        | PaneKeptMsg width -> { model with PaneRoom = { model.PaneRoom with Chosen = Some (int (round width)) } }
         | ToggleItemMenuMsg messageId ->
             // Opening one is writing the field, so opening a second shuts the first without
             // anybody arranging it. That is the whole reason this is one slot and not a set.
@@ -4911,12 +4977,12 @@ module ClientModel =
             | ToggleNavMsg ->
                 [ yield ClientEffect.Move (DomMove.FocusNavToggle (Column.shown next.Column))
                   if next.Column.Wide then yield ClientEffect.Remember (Preference.NavCollapsed next.Column.Collapsed) ]
-            // A width the reader moved is kept; the one the browser seeded at boot, from what it
-            // had kept, is not written back.
+            // A width the reader moved is kept; the one the browser put back at boot, from what it
+            // had kept, is not written back, and nor is a window that changed size.
             | PaneSplitMsg _
             | PaneNudgedMsg _ ->
-                match model.PaneSplit, next.PaneSplit with
-                | Some was, Some split when was.Width <> split.Width -> [ ClientEffect.Remember (Preference.PaneWidth split.Width) ]
+                match next.PaneRoom.Chosen with
+                | Some width when model.PaneRoom.Chosen <> Some width -> [ ClientEffect.Remember (Preference.PaneWidth width) ]
                 | _ -> []
             | ToggleSettingsMsg -> [ ClientEffect.Move (DomMove.FocusSettingsToggle (next.Column.Face = ColumnFace.Settings)) ]
             // Only when the face actually ARRIVED: stealing focus to a control already on screen
