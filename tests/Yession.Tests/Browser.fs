@@ -3053,7 +3053,9 @@ let editorTests =
         // The arrow walk moves FOCUS, and a focused tab past the edge — or under the fade that
         // says more tabs lie past it — is a keyboard user walking blind. Walked end to end, from
         // the selected tab at the far right back Home and then right again, so every step that
-        // brings a tab in from either side is asked.
+        // brings a tab in from either side is asked. Over EVERY item of the walk — `all` is one
+        // too, outside the strip, and asked nothing — so the order the pivot puts them in is
+        // not something this case has to know; that every tab was reached is.
         editorCase "keyboard focus never rests past the strip's edge or under its fade" <| fun page ->
             async {
                 do! openManyTerminals page
@@ -3071,17 +3073,23 @@ let editorTests =
                              const s = strip.getBoundingClientRect()
                              const before = strip.scrollLeft > 1
                              const after = strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1
+                             if (!strip.contains(document.activeElement)) return 'outside'
                              const t = document.activeElement.getBoundingClientRect()
                              const left = s.left + (before ? %f : 0), right = s.right - (after ? %f : 0)
                              return (t.left >= left - 0.5 && t.right <= right + 0.5)
                                ? '' : `${document.activeElement.getAttribute('data-pane-tab')} at ${t.left}..${t.right}, shown ${left}..${right}`
                            }"""
                         Yession.App.TabStrip.edge Yession.App.TabStrip.edge
+                let! items = await (page.EvaluateAsync<int> "() => document.querySelectorAll('#shell [data-pane-pivot] [role=tab]').length")
                 let faults = ResizeArray<string> ()
-                for key in "Home" :: List.replicate (count - 1) "ArrowRight" do
+                let mutable reached = 0
+                for key in "Home" :: List.replicate (items - 1) "ArrowRight" do
                     do! awaitU (page.Keyboard.PressAsync key)
-                    let! fault = await (page.EvaluateAsync<string> placed)
-                    if fault <> "" then faults.Add (sprintf "after %s: %s" key fault)
+                    match! await (page.EvaluateAsync<string> placed) with
+                    | "outside" -> ()
+                    | "" -> reached <- reached + 1
+                    | fault -> reached <- reached + 1; faults.Add (sprintf "after %s: %s" key fault)
+                Expect.equal reached count "the walk reached every tab in the strip"
                 Expect.equal (String.concat "; " faults) "" "every tab focus lands on is shown clear of the strip's edges"
             }
 
@@ -3403,6 +3411,78 @@ let editorTests =
                         "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
                 let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-chat-block') === true""")
                 return ()
+            }
+
+        // A phone's strip shows a ROW of tabs. It showed under two: `all`, a `+` and the way
+        // back shared its line, and the selected tab's × spent a whole thumb's width in flow —
+        // so the strip was 252px, the selected tab half of it, and each neighbour was cut to a
+        // letter by the fade. Counted the way a reader sees it: tabs whose WHOLE box lies
+        // inside the strip's, with more tabs than it can show, the last one selected (the
+        // newest, which is where a reader usually is) and names the length a session gives
+        // them (`term 4`).
+        editorCaseIn 390 844 "on a phone the strip shows at least three whole tabs" <| fun page ->
+            async {
+                let untitled (id: string) =
+                    Yession.Domain.SessionEvent.TerminalOpened
+                        { Yession.Domain.Terminals.TerminalOpened.TerminalId = harnessTerminal id
+                          Yession.Domain.Terminals.TerminalOpened.OpenedBy =
+                            Yession.Domain.ActorRef.PeerRef (Yession.Domain.PeerId.create "ada" |> Result.defaultWith failwith)
+                          Yession.Domain.Terminals.TerminalOpened.Title = Yession.Domain.Terminals.TerminalTitle.fallback
+                          Yession.Domain.Terminals.TerminalOpened.Sandbox = None
+                          Yession.Domain.Terminals.TerminalOpened.Renewable = false }
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                let! before = await (page.EvaluateAsync<int> "() => document.querySelectorAll('#shell [data-pane-strip] [role=tab]').length")
+                do! foldHarness page [ for i in 0 .. 5 -> 80L + int64 i, untitled (sprintf "term-phone-%d" i) ]
+                do! waitFor "six more tabs in the strip" page
+                        (sprintf "document.querySelectorAll('#shell [data-pane-strip] [role=tab]').length === %d" (before + 6))
+                do! awaitU (page.EvaluateAsync "() => document.querySelector('#shell [data-pane-strip] [role=tab]:last-child').click()")
+                do! waitFor "the last tab to be selected" page
+                        "document.querySelector('#shell [data-pane-strip] [role=tab]:last-child')?.getAttribute('aria-selected') === 'true'"
+                do! awaitU (
+                        page.EvaluateAsync
+                            """() => Promise.all(
+                                 document.getAnimations()
+                                   .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
+                                   .map(a => a.finished.catch(() => null)))""")
+                let! overflows = await (page.EvaluateAsync<bool> stripOverflows)
+                Expect.isTrue overflows "the strip holds more tabs than it shows, or this proves nothing"
+                let! whole =
+                    await (page.EvaluateAsync<string>
+                        """() => {
+                             const s = document.querySelector('#shell [data-pane-strip]').getBoundingClientRect()
+                             return JSON.stringify([...document.querySelectorAll('#shell [data-pane-strip] [role=tab]')]
+                               .filter(t => { const r = t.getBoundingClientRect(); return r.left >= s.left - 0.5 && r.right <= s.right + 0.5 })
+                               .map(t => t.textContent.trim()))
+                           }""")
+                let whole = System.Text.Json.JsonSerializer.Deserialize<string array> whole
+                Expect.isTrue (whole.Length >= 3) (sprintf "three whole tabs or more, got %A" whole)
+            }
+
+        // The room came partly from the `+`, which a phone's row no longer carries — and making
+        // a terminal is still a press away: the `all` page, the door to everything, offers it.
+        // Counted by what is painted at each door's centre, so the `+` the stylesheet hides
+        // is not one, and exactly one is: this is the one state the phone's pane had a door in
+        // before, and it must still have one, not two.
+        editorCaseIn 390 844 "on a phone the all page offers the one way to make a terminal" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                do! awaitU (
+                        page.EvaluateAsync
+                            """() => Promise.all(
+                                 document.getAnimations()
+                                   .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
+                                   .map(a => a.finished.catch(() => null)))""")
+                let! doors =
+                    await (page.EvaluateAsync<int> """() => [...document.querySelectorAll(
+                        '#shell [data-content-panel] [data-pane-new], #shell [data-content-panel] [data-terminal-new]')]
+                        .filter(e => {
+                            const r = e.getBoundingClientRect()
+                            if (!r.width || !r.height) return false
+                            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+                            return hit !== null && e.contains(hit) }).length""")
+                Expect.equal doors 1 "one door to a new terminal on the all page"
             }
 
         // The focus contract (where the keyboard goes after an act in the pane). Each of these
@@ -5964,6 +6044,27 @@ let editorTests =
                 return ()
             }
 
+        // And from a phone's `all` page, whose door stands in for the `+` there. Over that page
+        // the document holds both doors — the `+` hidden by the stylesheet, the page's shown —
+        // so the cursor handed back has to go to the one on the screen: a `display: none`
+        // control takes no focus, and a hand-back to the first door in the document left it on
+        // `body`.
+        editorCaseIn 390 844 "on a phone the all page's door opens the menu, and gives focus back when it shuts" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                let door = "#shell [data-content-list] [data-terminal-new]"
+                let! _ = await (page.WaitForSelectorAsync door)
+                do! awaitU (page.Locator(door).PressAsync "Enter")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-pane-new-menu]")
+                do! awaitU (page.Locator("#shell [data-content-list] [data-sandbox-new]").First.FocusAsync ())
+
+                do! awaitU (page.Keyboard.PressAsync "Escape")
+                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-pane-new-menu]")""")
+                do! waitFor "focus back on the page's door" page
+                        (sprintf "document.activeElement?.matches(%s) === true" (System.Text.Json.JsonSerializer.Serialize door))
+            }
+
         // The menu fits the screen it is on. Only a browser can answer it and the markup is
         // innocent either way: the menu's entries carry what a repo's file says its sandbox is
         // FOR, which is a whole sentence — 170 characters in this repository's own
@@ -5975,11 +6076,16 @@ let editorTests =
         // move, where staying on the screen is the promise. The long descriptions live in the
         // harness fixture, because the version of this that shipped broken was green against
         // a fixture that said "day-to-day work".
+        //
+        // A phone's door is the `all` page's (the pivot's `+` is a desktop control there), so
+        // the menu measured is the one hung from it — scoped to the page, because the hidden
+        // `+` carries a hidden copy that measures nothing and would fit any screen.
         editorCaseIn 375 812 "the menu of things to open fits the phone it is on" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-pane-new]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-new-menu]")
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                do! awaitU (page.ClickAsync "#shell [data-content-list] [data-terminal-new]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-pane-new-menu]")
 
                 // The note is what can push it wide, so a fixture that stopped carrying a long
                 // one would make this pass over nothing. A NAME can push it too, by about
@@ -5988,19 +6094,19 @@ let editorTests =
                 // name with its end cut off.
                 let! longestNote =
                     await (page.EvaluateAsync<int> """() => Math.max(0, ...[...document.querySelectorAll(
-                        "#shell [data-pane-new-menu] [role='menuitem']")].map(e => e.textContent.trim().length))""")
+                        "#shell [data-content-list] [data-pane-new-menu] [role='menuitem']")].map(e => e.textContent.trim().length))""")
                 Expect.isTrue
                     (longestNote > 90)
                     (sprintf "an entry says what its sandbox is for, at length; longest is %d" longestNote)
 
                 let! fits =
                     await (page.EvaluateAsync<bool> """() => {
-                        const m = document.querySelector("#shell [data-pane-new-menu]").getBoundingClientRect();
+                        const m = document.querySelector("#shell [data-content-list] [data-pane-new-menu]").getBoundingClientRect();
                         return m.left >= 0 && m.right <= window.innerWidth;
                     }""")
                 let! box =
                     await (page.EvaluateAsync<string> """() => {
-                        const m = document.querySelector("#shell [data-pane-new-menu]").getBoundingClientRect();
+                        const m = document.querySelector("#shell [data-content-list] [data-pane-new-menu]").getBoundingClientRect();
                         return `left ${Math.round(m.left)}, right ${Math.round(m.right)}, in a ${window.innerWidth}px screen`;
                     }""")
                 Expect.isTrue fits (sprintf "the menu is on the screen: %s" box)

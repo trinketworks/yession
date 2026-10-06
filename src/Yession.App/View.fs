@@ -3986,7 +3986,7 @@ module View =
             | None -> Lit.nothing
 
     /// The `all` page (Plan 20, stage 0; P2-2): every terminal the session has ever had, with
-    /// every verb one of them affords, and every file shared into it — the pivot's last item,
+    /// every verb one of them affords, and every file shared into it — the pivot's first item,
     /// and the pane's body while it is selected.
     ///
     /// It has been the pane's other face behind a toggle nobody could read, and then a boxed
@@ -4004,7 +4004,11 @@ module View =
     /// Lists of rows rather than a `listbox`: a row carries its verbs, and a listbox's options
     /// may hold no controls. The name is the row's own button; the arrows walk the names
     /// (`TabStrip.walkRows`), Tab reaches the verbs.
-    let private allPage (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
+    ///
+    /// `door` is the phone's way to make a terminal: the pivot's `+` is a desktop control
+    /// (`Style.terminalTabNewCell`), so on a phone this page — the door to everything — carries
+    /// the press instead, at its head.
+    let private allPage (dispatch: ClientMsg -> unit) (model: ClientModel) (door: TemplateResult) : TemplateResult =
         let selected = ClientModel.selectedTerminal model
         let row (view: TerminalView) =
             let id = TerminalId.value view.TerminalId
@@ -4147,6 +4151,7 @@ module View =
                  id="{Dom.panePanelId}" aria-labelledby="{Dom.paneTabId allKey}" data-pane-panel="{allKey}">
               <div class="{Style.allPage}" data-content-list aria-label="{Dom.Text.terminalsAndFiles}"
                    @keydown={Ev(walk)}>
+                {door}
                 {section "terminals" (terminals |> List.map row)}
                 {section "files" (artifacts |> List.map artifactRow)}
                 {empty}
@@ -4222,7 +4227,7 @@ module View =
             // page's row kill (`killControl`), so the two arm the same slot.
             let kill =
                 if on || model.KillArmed = Some view.TerminalId then
-                    killControl dispatch model Style.terminalTabKill Style.terminalTabKillArmed Icon.close view
+                    killControl dispatch model Style.pivotTabKill Style.terminalTabKillArmed Icon.close view
                 else Lit.nothing
             let key = ClientModel.tabKey view.TerminalId
             let id = TerminalId.value view.TerminalId
@@ -4264,7 +4269,7 @@ module View =
                 else
                     let label = Dom.Text.dismissTab name
                     html $"""
-                        <button type="button" class="{Style.terminalTabKill}" data-pane-tab-dismiss="{id}"
+                        <button type="button" class="{Style.pivotTabKill}" data-pane-tab-dismiss="{id}"
                                 aria-label="{label}" title="{label}"
                                 @click={Ev(fun (e: Browser.Types.Event) ->
                                               // Not the item's press too: a × is not a way to select.
@@ -4368,9 +4373,11 @@ module View =
                           @click={Ev(fun (e: Browser.Types.Event) ->
                                         e.stopPropagation ()
                                         dispatch ClosePreviewMsg)}>{Icon.close}</button></div>"""
-        // `all`, the pivot's last item: the door to every terminal and file, as a page. A real
-        // button, because it carries nothing of its own — and pressed while it is up it does
-        // nothing, as a selected tab pressed again does; Escape is the way back.
+        // `all`, the pivot's FIRST item: the door to every terminal and file, as a page. A
+        // real button, because it carries nothing of its own — and pressed while it is up it
+        // does nothing, as a selected tab pressed again does; Escape is the way back. It leads
+        // the row, outside the scroller, so it is in one place however many tabs follow it —
+        // and first in the document too, so the arrow walk meets it where the eye does.
         let allItem =
             html $"""
                 <button type="button" role="tab" class="{if onAll then Style.pivotItemOn else Style.pivotItem}"
@@ -4542,16 +4549,34 @@ module View =
                 </div>"""
         // Escape shuts the menu wherever focus is inside it, and hands focus back to the door
         // it hangs from — on the wrapper, so it fires from an entry, and on the door itself.
+        //
+        // And it is SPENT here. The pane's own Escape (below) steps back off `all`, and it
+        // asks whether the menu is open — but the close above re-renders before the key
+        // reaches it, so it asked the new model, found no menu, and took the `all` page away
+        // from under the door focus was being handed back to.
         let shutsOnEscape (e: Browser.Types.Event) =
             let key = (e :?> Browser.Types.KeyboardEvent).key
             if key = "Escape" && model.PaneMenu then
+                e.stopPropagation ()
                 dispatch ClosePaneMenuMsg
                 dispatch (MoveMsg DomMove.FocusPaneNew)
+        // The `all` page's door, on a phone only: there the pivot's row is the tabs' room,
+        // and a `+` in it cost the strip a tab. The same press as the `+`, with its menu hung
+        // under it, and hidden wherever the `+` is shown — so a screen still holds one door.
+        let allDoor =
+            html $"""
+                <div class="{Style.allNewCell}" @keydown={Ev shutsOnEscape}>
+                  <button type="button" class="{Style.allNew}" data-terminal-new
+                          aria-haspopup="{if newAsks then "menu" else "false"}"
+                          aria-expanded="{if model.PaneMenu then "true" else "false"}"
+                          @click={Ev(fun _ -> pressingNew ())}>{Dom.Text.aNewTerminal}</button>
+                  {if model.PaneMenu then newMenu Style.allNewMenu else Lit.nothing}
+                </div>"""
         let body () =
             match previewing, selected with
             // `all`, over whatever the pane was showing — which stays selected under it, to go
             // back to.
-            | _ when onAll -> allPage dispatch model
+            | _ when onAll -> allPage dispatch model allDoor
             // A preview, laid over the selected terminal: the thing itself. Not the terminal's
             // composer — the reader is reading, not typing, and its close restores it.
             //
@@ -4657,6 +4682,9 @@ module View =
         // In every state but the empty pane (P1-4), whose own button is this same press;
         // offering both put two New terminal controls on one screen, and a reader has to work
         // out that they are one act.
+        //
+        // And on a desktop only (`Style.terminalTabNewCell`): on a phone this row is the tabs'
+        // room, and the `all` page carries the press there instead (`allDoor`).
         let newCell =
             if empty then Lit.nothing
             else
@@ -4675,17 +4703,17 @@ module View =
                 <div class="{Style.panePivotRow}">
                   <div class="{Style.panePivotList}" role="tablist" aria-label="{Dom.Text.paneItems}" data-pane-pivot
                        @keydown={Ev(fun (e: Browser.Types.Event) ->
-                                        // The arrow walk, over every item — the tabs, a preview,
-                                        // `all`. Delete is each tab's own (it arms that tab's
+                                        // The arrow walk, over every item — `all`, the tabs, a
+                                        // preview. Delete is each tab's own (it arms that tab's
                                         // kill), because it needs the terminal.
                                         moveTabFocus (e :?> Browser.Types.KeyboardEvent))}>
+                    {allItem}
                     <div class="{Style.panePivotScroller}" data-pane-strip>
                       {tabs |> List.map tabItem}
                       {match previewing with
                        | Some preview -> previewItem preview
                        | None -> Lit.nothing}
                     </div>
-                    {allItem}
                   </div>
                   {newCell}
                   <button type="button" class="{Style.navChevronForward}" aria-label="{Dom.Text.backToChat}"

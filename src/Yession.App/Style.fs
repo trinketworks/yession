@@ -2987,16 +2987,16 @@ module Style =
     /// places with, so the hierarchy read upside down and there were two ways to make a
     /// terminal. Now every name is in one row, in the type the shell uses for places
     /// (`navPivot`'s face, a size up), the selected one in full ink and the rest in the
-    /// faintest ink the floor admits; `all` ends it, then the one `+`, then the way back to the
-    /// chat. Nothing in it is boxed.
+    /// faintest ink the floor admits; `all` leads it, then the tabs, then — on a desktop — the
+    /// one `+`, then the way back to the chat. Nothing in it is boxed.
     ///
     /// On a phone every control in it is a thumb's 44 (`phone:min-h-11` on each).
     let panePivotRow = "shrink-0 flex items-center gap-1 pl-1.5 pr-3 pt-2 phone:pt-1 phone:pr-1"
-    /// The tablist: the scroller of tabs, then `all`, which stays put at the scroller's end
-    /// however many tabs it holds — a door to every terminal that scrolled away with them
-    /// would be no door. `min-w-0` so the scroller is what gives way when the names outgrow
-    /// the row.
-    let panePivotList = "flex-1 min-w-0 flex items-center"
+    /// The tablist: `all`, then the scroller of tabs. `all` stays put at the row's head however
+    /// many tabs follow it — a door to every terminal that scrolled away with them would be no
+    /// door, and one that moved along every time a tab opened would be a door to hunt for.
+    /// `min-w-0` so the scroller is what gives way when the names outgrow the row.
+    let panePivotList = "flex-1 min-w-0 flex items-center gap-1"
     /// The tabs' own scroll box, and nothing else that moves.
     ///
     /// When names run past an end, that end fades (`TabStrip.hidden`, written by the browser
@@ -3005,8 +3005,12 @@ module Style =
     /// 1.5rem, which `TabStrip.edge` keeps a revealed tab clear of. No scrollbar: a pivot is
     /// panned, and a bar under 22px type would be the one line in the head. Nothing a tab
     /// paints may leave this box, which is why tabs wear `focusRingInset`.
+    ///
+    /// On a phone the tabs sit a step closer (`gap-1`; each item's own padding still parts
+    /// the names by 16px): the row there is 390px for `all`, the tabs and the way back, and
+    /// at `gap-2` it showed under two of them.
     let panePivotScroller =
-        cls [ "min-w-0 flex items-center gap-2 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        cls [ "min-w-0 flex items-center gap-2 phone:gap-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               "data-[pane-strip-hidden=end]:[mask-image:linear-gradient(to_right,#000_calc(100%_-_1.5rem),transparent)]"
               "data-[pane-strip-hidden=start]:[mask-image:linear-gradient(to_left,#000_calc(100%_-_1.5rem),transparent)]"
               "data-[pane-strip-hidden=both]:[mask-image:linear-gradient(to_right,transparent,#000_1.5rem,#000_calc(100%_-_1.5rem),transparent)]" ]
@@ -3043,11 +3047,21 @@ module Style =
     /// The same, armed: the kill's armed face, sat the same way, so arming it grows the item
     /// sideways and never the row downwards.
     let terminalTabKillArmed = cls [ btnKillArmed; "self-center phone:min-h-11 phone:-my-2.5" ]
+    /// The × a TERMINAL's tab wears — its kill, or a closed one's dismiss: `terminalTabKill`,
+    /// pulled in sideways on a phone as it already is up and down (`-mx-2`). The glyph is a
+    /// third of its 44px box, and the rest, in flow, made the selected tab 140px wide — half
+    /// the strip. The box is still the thumb's 44 and still on top of what it overlaps, which
+    /// is its own tab's padding and the gap after it, never a neighbour.
+    let pivotTabKill = cls [ terminalTabKill; "phone:-mx-2" ]
     /// The pivot's one way to make something: a `+` in the pivot's own type, unboxed, faint at
     /// rest like every item not chosen. The cell is the positioning context its menu hangs
     /// from, outside the scroller, because a menu hung inside an `overflow-x-auto` box is
     /// clipped to that box.
-    let terminalTabNewCell = "relative shrink-0 flex items-center"
+    ///
+    /// A DESKTOP control. On a phone the row is 390px for `all`, the tabs and the way back,
+    /// and a 44px `+` in it was a tab the strip could not show; there the `all` page carries
+    /// the same press (`allNewCell`), and exactly one of the two is ever on screen.
+    let terminalTabNewCell = "relative shrink-0 flex items-center phone:hidden"
     let terminalTabNew =
         cls [ "shrink-0 w-8 h-8 phone:w-11 phone:h-11 grid place-items-center bg-transparent border-0 cursor-pointer p-0"
               "font-ui font-extralight text-[26px] leading-none text-ink-faint hover:text-ink transition-colors"; focusRing ]
@@ -3153,7 +3167,7 @@ module Style =
 
     // --- The `all` page: the switcher (Plan 20, stage 0; P2-2) ------------------------------
 
-    /// The `all` page: the pane's body while the pivot's last item is selected. It has been
+    /// The `all` page: the pane's body while the pivot's first item is selected. It has been
     /// the pane's other face and then a bordered popover hung under the head, with dots, a
     /// divider under every row and a foot that made terminals; it is a page now, the way a
     /// Zune list is a page — names in large light type down the left, no rule between them,
@@ -3230,6 +3244,20 @@ module Style =
     /// The empty pane: the terminal's own symbol, display-sized, over the one press that
     /// fills it — a thumb's height on a phone, like every press in this column.
     let terminalEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center phone:[&_button]:min-h-11"
+
+    /// The `all` page's way to make a terminal, at its head — on a phone only, the other half
+    /// of `terminalTabNewCell`: the `+` is a desktop control, and the two are one press, so
+    /// each is hidden wherever the other shows. The empty pane's own act in look (blue, the
+    /// pivot's size), not a row: a row that MAKES a thing drawn like one that SELECTS one is
+    /// what the old switcher's foot was removed for. The cell is what its menu hangs from,
+    /// left-aligned under it as the page is.
+    let allNewCell = "wide:hidden relative self-start px-3 pb-2"
+    let allNew = cls [ paneActPrimary; "min-h-11" ]
+    let allNewMenu =
+        cls [ "absolute left-3 top-full z-30 py-1 select-none bg-panel text-left"
+              "min-w-[14rem]"
+              Stroke.ring
+              Stroke.hair ]
 
     /// What a section of the page is called: the pivot's lowercase, small, faint. The rows
     /// are the content, and a heading that competed with them would make a page of three
