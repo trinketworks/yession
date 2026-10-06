@@ -573,6 +573,49 @@ first's.
   instead. Below `xl` the summary yields too (the column is 100px there), so a phone gets this
   answer from the tab title.
 
+## Visual design
+
+`docs/visual-design.md` is the doctrine, and it was written after the code. Where the two
+disagree, the document wins (its "Deciding" section) and the disagreement is recorded here
+until the code is brought to it. Each entry names the rule and the sites.
+
+- **Three rounded rectangles, against a form rule that has none.** The doctrine's form is two
+  primitives — a sharp rectangle and a round point — and a rounded rectangle is neither.
+  `Style.remoteCursor` wears `rounded-sm` (`Style.fs`), and the tool-output box under
+  `monoOut` wears a bare `rounded`. The status dots (`rounded-full`) are points and are
+  correct. Fix: drop the two radii, and say in each comment which primitive the thing is.
+- **Three `disabled:` faces, against a state rule that has none.** The doctrine says a
+  control with nothing to do yet is not `disabled`: it stays in focus order and its border
+  carries the waiting. `Style.fs` says the same twice, in so many words — and then wears
+  `disabled:*` on three controls: the launch card's rows (`askRowButton`), its commit
+  button (`askStart`, "disabled until something is held — and looks it") and
+  `btnInterrupt`. Either the rule admits a case — a control that CANNOT act, as opposed to
+  one with nothing to act on — and says so, or the three move to the waiting face. Nothing
+  yet says which.
+- **The touch target is a literal, not a token.** The doctrine names "the touch target" as part
+  of the floor. `Style.fs` spells it as `phone:min-h-11`, `phone:w-11 phone:h-11` and `h-12`
+  at some two dozen sites, with no `--spacing-*` token behind it, so the one number every phone
+  control must agree on is the one number nothing holds. Fix: a `--spacing-touch` token in
+  `app/tokens.css`, and the sites compose it.
+- **Density has no rule.** The doctrine says height is spent on content, not chrome, and
+  `Style.fs` reasons about one composer's height ad hoc. No row height, no cap on chrome per
+  surface, and no stated way to choose compact over roomy. The rule is still to be found.
+- **Layering has no scale.** `z-10`, `z-30` and the rest are written inline where each surface
+  needed one. The doctrine says depth is said by blur over something real; it does not say
+  how many layers there are or which surface sits on which. Three named layers (ground,
+  floating, overlay) would cover every current use, and would let a new surface pick rather
+  than count.
+- **Empty states, waits and icon-versus-word have no rule.** Each has one or two reasoned
+  cases in `Style.fs` or `tailwind.css` (the wordless empty chat, the breathing mark instead
+  of a spinner, the arrow that replaced `SEND →`) and no statement that generalises them. The
+  doctrine leaves empty states ungoverned on purpose; waits and icon-versus-word it does not
+  address at all.
+- **The skill and the stylesheet disagreed about the breakpoint.** `ui-exploration/SKILL.md`
+  named `max-md` = 768px and two anchors; `tailwind.css` had already said that width alone was
+  the wrong question and named 844×390 as the case that broke. The skill now says three
+  anchors and the `phone:`/`wide:` pair; the browser tier has three cases at 844×390 and should
+  have one per shell surface.
+
 ## Agent
 
 - **A bare `start_work_sandbox` beside a repo-declared name mints a decoy.** Sandbox

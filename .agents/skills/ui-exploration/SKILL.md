@@ -5,9 +5,9 @@ description: How to inspect and iterate on Yession's UI (the manager page, a ses
 
 # UI exploration
 
-Style code is not the UI. Reading `Style.fs` tells you what was *intended*; only a
-rendered page tells you what a user gets. This skill is the loop: boot the real thing,
-picture it honestly, look at the picture, measure what surprises you, fix, repeat.
+Style code is not the UI. `docs/visual-design.md` says what the design is for, and
+`Style.fs` says what was *intended*; only a rendered page tells you what a user gets. This
+skill is the loop: boot the real thing, picture it honestly, look at the picture, measure what surprises you, fix, repeat.
 
 ## The camera
 
@@ -62,16 +62,22 @@ emulation; check with `--measure "document.activeElement.matches(':focus')"`.
 
 ## The loop
 
-1. **Picture both anchors.** 1440×900 and 390×844 at least; widths between them only where a
-   breakpoint sits (`max-md` = 768px).
+1. **Picture three anchors.** 1440×900, 390×844 and 844×390. The shell's one breakpoint asks
+   *is this screen a phone?*, and a phone on its side is still a phone — the `phone:`/`wide:`
+   pair in `app/tailwind.css` answers by height as well as width, and 844×390 is the case that
+   was wrong when only width answered. Widths between the anchors only where a reading-column
+   rule sits (`max-md` = 768px).
 
 2. **Look at the pictures.** Open `still.png` with your file reader — it shows images — and
    actually look. Never describe a picture you have not looked at. A checklist that catches
    real defects: Is anything clipped or off-canvas? Does hierarchy match importance (is the
    thing a person scans for in the biggest, brightest type)? Do left edges align on one
    rail? Are actions reachable and anchored? Is there an empty state? Does it hold the
-   AGENTS.md "UI baseline" (WCAG 2.0 AA contrast, keyboard operability, visible focus)? The
-   design language's rules live in the `Style.fs` header comment.
+   AGENTS.md "UI baseline" (WCAG 2.0 AA contrast, keyboard operability, visible focus)? Does
+   it hold `docs/visual-design.md` — one filled verb per surface, borders only on fields and
+   buttons, state worn at rest? That document is the doctrine, and its "Deciding" section is
+   the order to settle a disagreement in; read it BEFORE changing a surface, not after a
+   picture surprises you. The values it names are `app/tokens.css`.
 
 3. **Measure, don't guess.** When a picture surprises you, ask the live page rather than
    theorising from CSS. `--measure` is evaluated in the page after it settles, awaited, and
