@@ -470,7 +470,9 @@ module Dom =
         let paneTabDismiss = "data-pane-tab-dismiss"
         /// A terminal's state mark beside its name, on the pivot and the `all` page alike
         /// (`View.terminalMark`): `running`, `failed` (its last command did not succeed) or
-        /// `closed`. Absent for an open terminal that is idle and fine.
+        /// `closed` — or, for a terminal that finished something since THIS person last looked
+        /// at it (`ClientModel.unseen`), `unseen-ok` or `unseen-failed`. Absent for an open
+        /// terminal that is idle and fine, and has nothing new.
         let paneMark = "data-pane-mark"
         /// What the preview is, and which terminal it belongs to — its subtitle.
         let panePreviewMeta = "data-pane-preview-meta"
@@ -918,6 +920,10 @@ module Dom =
         /// A closed terminal's × on its pivot item: put its tab away.
         let dismissTab (terminal: string) = sprintf "Put away %s" terminal
         let markFailed = "last command failed"
+        /// A terminal that finished something since this person last looked at it
+        /// (`ClientModel.unseen`): all of it went through, or something did not.
+        let markUnseenOk = "finished since you looked"
+        let markUnseenFailed = "failed since you looked"
         /// The pivot's last item: everything, as a page. Lowercase, as every pivot word is.
         let all = "all"
         /// Its title: what it does, and the key that does it too.

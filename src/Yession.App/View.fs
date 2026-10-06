@@ -1574,9 +1574,10 @@ module View =
 
     let private ansiText (text: string) : TemplateResult list = ansiLines (Ansi.parse text) None
 
-    /// Something still under way, said by a pulsing dot; the word is for screen readers.
+    /// Something still under way, said by a beating dot; the word is for screen readers. Live,
+    /// so green: blue is never a status (docs/visual-design.md, Colour).
     let private runningDot =
-        html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotOnly}"></span><span class="{Style.srOnly}">{Dom.Text.blockRunning}</span></span>"""
+        html $"""<span class="{Style.statusOk}"><span class="{Style.statusDotLive}"></span><span class="{Style.srOnly}">{Dom.Text.blockRunning}</span></span>"""
 
     /// How a block went, as its HOOKS spell it: four tokens for six outcomes, because what a
     /// hook is asked is whether it went, not how.
@@ -3974,9 +3975,19 @@ module View =
     /// terminal the dot hollowed out. A mark beside the name, never a
     /// box round it or a word in caps after it — a row of names is what a reader scans — and
     /// each says itself to a screen reader.
-    let private terminalMark (view: TerminalView) : TemplateResult =
+    ///
+    /// And what is NEWS to the person reading (`ClientModel.unseen`): a terminal that finished
+    /// something since they last looked at it wears the settled dot with a ring round it — in
+    /// ink when all of it went through, because a finished thing is a record and not live, and
+    /// in the error red when something did not, because that is the newest wrong thing. Without it a build that
+    /// finished in another tab looked exactly like a terminal nobody had touched. The ring
+    /// goes when they look, and a failure then settles to the plain red dot it always wore —
+    /// so an unseen failure is the louder of the two, never the quieter. Running and closed
+    /// still win: what a terminal is doing now is the first thing to say about it.
+    let private terminalMark (model: ClientModel) (view: TerminalView) : TemplateResult =
         let mark (token: string) (voice: string) (glyph: TemplateResult) (word: string) =
             html $"""<span class="{Style.pivotMark} {voice}" data-pane-mark="{token}"><span aria-hidden="true">{glyph}</span><span class="{Style.srOnly}">{word}</span></span>"""
+        let news = html $"""<span class="{Style.statusDotNews}"></span>"""
         // Hollow: the dot with nothing left in it. Not a stop square, which is what a running
         // command's Stop looks like.
         if not view.IsOpen then
@@ -3984,15 +3995,19 @@ module View =
         elif Option.isSome (Projection.runningBlock view) then
             html $"""<span class="{Style.pivotMark}" data-pane-mark="running">{runningDot}</span>"""
         else
-            match view.Blocks |> List.tryLast |> Option.map (fun block -> block.Status) with
-            | Some (BlockFinished (CommandFailed _ | CommandTimedOut | CommandExecutionFailed _))
-            // A solid dot in the error red, not the block's own cross: beside a name in a row
-            // whose selected item wears a × that KILLS, a red × read as a second kill.
-            | Some (BlockRejected _) ->
-                mark "failed" "text-err" (html $"""<span class="{Style.statusDotSolid}"></span>""") Dom.Text.markFailed
-            | Some (BlockFinished (CommandSucceeded _))
-            | Some BlockRunning
-            | None -> Lit.nothing
+            match ClientModel.unseen view.TerminalId model with
+            | Some Unseen.Failed -> mark "unseen-failed" "text-err" news Dom.Text.markUnseenFailed
+            | Some Unseen.Succeeded -> mark "unseen-ok" "text-ink" news Dom.Text.markUnseenOk
+            | None ->
+                match view.Blocks |> List.tryLast |> Option.map (fun block -> block.Status) with
+                | Some (BlockFinished (CommandFailed _ | CommandTimedOut | CommandExecutionFailed _))
+                // A solid dot in the error red, not the block's own cross: beside a name in a row
+                // whose selected item wears a × that KILLS, a red × read as a second kill.
+                | Some (BlockRejected _) ->
+                    mark "failed" "text-err" (html $"""<span class="{Style.statusDotSolid}"></span>""") Dom.Text.markFailed
+                | Some (BlockFinished (CommandSucceeded _))
+                | Some BlockRunning
+                | None -> Lit.nothing
 
     /// The `all` page (Plan 20, stage 0; P2-2): every terminal the session has ever had, with
     /// every verb one of them affords, and every file shared into it — the pivot's first item,
@@ -4089,7 +4104,7 @@ module View =
                       <button type="button" class="{nameClass}" data-terminal-list-row="{id}"
                               aria-current="{if selected = Some view.TerminalId then "true" else "false"}"
                               @click={Ev(fun _ -> dispatch (OpenInPaneMsg mode))}>{name}</button>
-                      {terminalMark view}{holder}{gone}
+                      {terminalMark model view}{holder}{gone}
                       <span class="{Style.terminalTabPeers}">{peers}</span>
                     </span>
                     {subtitle}
@@ -4258,16 +4273,16 @@ module View =
                                title="{name}" data-terminal-tab-peer="{ActorRef.token who}"></span>"""))
                 @ viewerDots (editors |> List.map fst) view.TerminalId
             // Its state (`terminalMark`), so a terminal you are not showing still says it is
-            // busy, that its last command failed, or that it has closed — and a build that
-            // finished in another tab stops saying so without anybody going to look.
+            // busy, that its last command failed, or that it has closed — and that a build in
+            // it finished while you were elsewhere, until you go and look.
             // No box at all for nobody: an empty box in a flex row still takes its gap.
             let peers =
                 if List.isEmpty peers then Lit.nothing
                 else html $"""<span class="{Style.terminalTabPeers}">{peers}</span>"""
             let mark =
                 if view.IsOpen && Option.isSome (Projection.runningBlock view) then
-                    html $"""<span class="{Style.pivotMark}" data-terminal-tab-running>{terminalMark view}</span>"""
-                else terminalMark view
+                    html $"""<span class="{Style.pivotMark}" data-terminal-tab-running>{terminalMark model view}</span>"""
+                else terminalMark model view
             // A closed item's ×, where an open one's kill was: nothing is left to end, so it
             // puts the tab away (`DismissTabMsg`) — the way to be done with a terminal that
             // finished while you were looking at it, without choosing another first.

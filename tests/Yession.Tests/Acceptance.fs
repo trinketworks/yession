@@ -215,6 +215,7 @@ let private representativeModel : ClientModel =
       PaneRemembered = false
       HeardThrough = true
       PaneOpensItself = false
+      Seen = Map.empty
       Column = Column.initial
       PaneSplit = None
       Away = Set.empty
