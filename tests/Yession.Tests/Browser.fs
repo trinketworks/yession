@@ -6542,15 +6542,19 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
                 let entry = "#shell [data-environment-terminals] [data-environment-terminal='term-live']"
-                let! _ = await (page.WaitForSelectorAsync entry)
+                // WAITED for, not read once: the column is in the document whether or not the
+                // drawer is open — shut, it is only translated off the side — so the entry's
+                // selector matches at once, while the drawer is still sliding in over its
+                // transition. A single read raced that slide and lost on a slower runner.
                 let! covered =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
+                    await (page.WaitForFunctionAsync
+                            """(() => {
                                  const box = document.querySelector('#shell aside').getBoundingClientRect()
+                                 if (box.left < 0) return false
                                  const at = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
                                  return !!at?.closest('aside')
-                               }""")
-                Expect.isTrue covered "the drawer is up, which is where the environment sits on a phone"
+                               })()""")
+                Expect.isNotNull covered "the drawer is up, which is where the environment sits on a phone"
 
                 do! awaitU (page.ClickAsync entry)
                 let! shown =
