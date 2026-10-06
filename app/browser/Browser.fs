@@ -1320,18 +1320,6 @@ let private start () =
                     // the record; this is the view, and a peer that arrives mid-session gets
                     // one frame instead of every byte the terminal ever printed.
                     OnTerminalSnapshot = fun id keyframe -> renderer.Screens.Snapshot id keyframe
-                    // The model is the read position (see `ConnectOptions.ReadPosition`):
-                    // `latestModel` is kept current by `setState`, so a fold rolled back by
-                    // a racing doc update is visibly behind and gets re-read.
-                    ReadPosition = Some (fun () -> latestModel.EventConsumer.LastProcessedOffset)
-                    // Same rule one feed over: a client that just replayed a terminal out of
-                    // its own store must resume where that got to, not at line 0.
-                    TranscriptReadPosition =
-                        Some (fun terminal ->
-                            latestModel.TerminalFeeds
-                            |> Map.tryFind terminal
-                            |> Option.map (fun feed -> feed.ReadThrough)
-                            |> Option.defaultValue 0)
                     // A burst of live output is folded a frame at a time, not a record at a
                     // time: the frame is when the page draws, so a render between two frames
                     // is one nobody sees.
@@ -1346,7 +1334,7 @@ let private start () =
                     (Client.SessionLifecycle.supervision jsRandom)
                     { Open = openChannel
                       Serve =
-                        fun resumeAfter dispatch carrier ->
+                        fun dispatch carrier ->
                             async {
                                 // Supervised at the transport boundary, exactly as the event
                                 // feed's resilience policy is composed here and nowhere else:
@@ -1367,7 +1355,12 @@ let private start () =
                                         carrier
                                 let connection =
                                     Client.connect
-                                        { options with ResumeAfter = resumeAfter }
+                                        options
+                                        // The model is the read position (see `connect`):
+                                        // `latestModel` is kept current by `setState`, so a
+                                        // fold rolled back by a racing doc update is visibly
+                                        // behind and gets re-read.
+                                        (fun () -> latestModel)
                                         doc
                                         registry
                                         texts
@@ -1378,7 +1371,6 @@ let private start () =
                                 do! connection.Run
                                 connectionRef <- None
                             }
-                      ReadPosition = fun () -> latestModel.EventConsumer.LastProcessedOffset
                       // Always `true`: a page that is still open is a client that still wants
                       // its session. The lifecycle ends when the page does.
                       WaitBeforeRetry = waitBeforeRetry

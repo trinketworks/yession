@@ -647,10 +647,7 @@ let connectInMemoryClientVia
         DraftSlot.follow doc registry local.PeerId (user >> runner.Dispatch) |> ignore
         let hello = { PeerId = local.PeerId; DisplayName = name; Token = host.MintPeerToken () }
         let dispatch = user >> runner.Dispatch
-        let options =
-            { makeOptions dispatch with
-                ReadPosition = Some (fun () -> (runner.Model ()).EventConsumer.LastProcessedOffset) }
-        let connection = Client.connect options doc registry texts hello dispatch clientEnd
+        let connection = Client.connect (makeOptions dispatch) runner.Model doc registry texts hello dispatch clientEnd
         wired.Value <- Some connection
         Async.StartImmediate connection.Run
         do! runner.WaitFor (fun m -> m.Connection = Connected)
@@ -670,12 +667,8 @@ let connectInMemoryClient : Host.SessionHost -> string -> string -> Async<Client
 let reconnectClient (signalUrl: string) (client: Client) : Async<Client> =
     async {
         let! channel = WebRtc.connect signalUrl
-        let options =
-            { Client.ConnectOptions.defaults with
-                ResumeAfter = (client.Runner.Model ()).EventConsumer.LastProcessedOffset
-                PageSize = 2
-                ReadPosition = Some (fun () -> (client.Runner.Model ()).EventConsumer.LastProcessedOffset) }
-        let connection = Client.connect options client.Doc client.Registry client.Texts client.Hello (user >> client.Runner.Dispatch) channel
+        let options = { Client.ConnectOptions.defaults with PageSize = 2 }
+        let connection = Client.connect options client.Runner.Model client.Doc client.Registry client.Texts client.Hello (user >> client.Runner.Dispatch) channel
         Async.StartImmediate connection.Run
         do! client.Runner.WaitFor (fun m -> m.Connection = Connected)
         return { client with Connection = connection; Channel = channel }
