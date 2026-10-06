@@ -854,6 +854,10 @@ module Dom =
         let recordingLost = "recording lost"
         /// Who closed a terminal, when it was somebody — the band draws them after this.
         let killedBy = "killed by"
+        /// The same, when the one who closed it is the person reading: the band is saying it
+        /// to them, and a name they picked nothing of is a stranger's. The word is the one the
+        /// lease bar already uses for the viewer.
+        let youKilled = "you killed"
         /// How many lines a stretch's recording holds.
         let linesRecorded (n: int) = if n = 1 then "1 line recorded" else sprintf "%d lines recorded" n
         /// A preview's close, naming what it closes. It says PREVIEW, because "close" on its

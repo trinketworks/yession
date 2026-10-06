@@ -739,6 +739,26 @@ let private namingTests =
                 (textAt (Dom.attr Dom.Hooks.terminalClosedBand (TerminalId.value terminalA)) (Support.render model))
                 "brave-owl"
                 "the band says who killed it"
+
+        // The same band, read by the person who pressed kill: their own generated name beside
+        // it is how somebody else would be told, so they are told it was them.
+        testCase "a terminal the viewer killed says so on its closed band" <| fun () ->
+            let model =
+                clientOf
+                    [ at 1L 0.0 (opened terminalA "build")
+                      at 2L 1.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer"; By = Some (PeerRef ada) }) ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let band = textAt (Dom.attr Dom.Hooks.terminalClosedBand (TerminalId.value terminalA)) (Support.render model)
+            Expect.isTrue (band.Contains Dom.Text.youKilled) "the band says you killed it"
+
+        testCase "a terminal the viewer killed does not name them as somebody else" <| fun () ->
+            let model =
+                clientOf
+                    [ at 1L 0.0 (opened terminalA "build")
+                      at 2L 1.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer"; By = Some (PeerRef ada) }) ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let band = textAt (Dom.attr Dom.Hooks.terminalClosedBand (TerminalId.value terminalA)) (Support.render model)
+            Expect.isFalse (band.Contains Dom.Text.killedBy) "no 'killed by' over their own name"
     ]
 
 // --- What the pane had, across a reload (P0-4) ----------------------------------------------
