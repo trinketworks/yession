@@ -98,12 +98,18 @@ let names (artifactsDir: string) : (string * ArtifactRef) list =
 let pathOf (artifactsDir: string) (ref: ArtifactRef) : string =
     sprintf "%s/%s/%s" artifactsDir (ArtifactRef.name ref) (ArtifactRef.leaf ref)
 
+/// The latest version under a name, as the directory stands right now. One function because
+/// three readers ask it — the route resolving a bare address, a share minting the next
+/// version, and the reader below — and "latest" must not come to mean three things.
+let latestOf (artifactsDir: string) (name: string) : ArtifactRef option =
+    ArtifactRef.latest (versions artifactsDir name)
+
 /// The version a share of `name` by `actor` would mint: the first when the name is new, the
 /// one after the latest when it is not. Never an address that already holds bytes — an
 /// artifact is immutable, and "update" means another version, not other bytes.
 let nextVersion (artifactsDir: string) (name: string) (actor: ActorRef) : Result<ArtifactRef, string> =
     let stamp = ArtifactStamp.ofActor actor
-    match ArtifactRef.latest (versions artifactsDir name) with
+    match latestOf artifactsDir name with
     | None -> ArtifactRef.first name stamp
     | Some latest -> ArtifactRef.next stamp latest
 
@@ -236,6 +242,64 @@ let private serveVersion (artifactsDir: string) (ref: ArtifactRef) (res: ServerR
         file.onError (fun _ -> res.destroy ())
         file.pipe res
 
+/// The version an address points at NOW: itself when it names one, the latest when it names
+/// a name. The refusal is read by an agent, so it says what to do instead.
+let resolve (artifactsDir: string) (ref: ContentRef) : Result<ArtifactRef, string> =
+    match ArtifactAddress.ofContent ref with
+    | Error why -> Error why
+    | Ok (ArtifactAddress.Version version) -> Ok version
+    | Ok (ArtifactAddress.Name name) ->
+        match latestOf artifactsDir name with
+        | Some latest -> Ok latest
+        | None -> Error (sprintf "nothing is shared here under the name '%s' — the artifacts query lists what there is" name)
+
+/// One artifact for a reader that is not a browser: its text, or — for a picture — the
+/// picture, so an agent can look at what it shared rather than describe it from its name.
+///
+/// Read HERE rather than through a sandbox, which is the whole reason this exists beside
+/// `SessionFiles.Read`: the store is the session's own directory, no sandbox has it mounted
+/// for reading, and the one that shares into it gets a bind mount open for the length of one
+/// copy (`Sandboxes.artifactsVisibleAt`). Nothing a sandbox could be asked would answer this.
+///
+/// The SIZE is checked before the bytes are, because both paths below hold the whole file in
+/// this process while `serveVersion` beside them pipes it. The cap is whatever the
+/// destination imposes — what a model may be shown, or what a window can be cut from — so the
+/// refusal quotes the limit the caller actually hit rather than a number of this verb's own.
+let read (artifactsDir: string) (ref: ContentRef) : Async<Result<FileContent, string>> =
+    async {
+        match resolve artifactsDir ref with
+        | Error why -> return Error why
+        | Ok version ->
+            let path = pathOf artifactsDir version
+            let name = ArtifactRef.name version
+            let said = ArtifactRef.url version
+            match (if containedIn artifactsDir path then sizeOf path else None) with
+            | None -> return Error (sprintf "%s is an address this session does not hold bytes for" said)
+            | Some bytes ->
+                let picture = FileContent.namedAsPicture name
+                let cap = if picture then int64 ToolImage.maxBytes else int64 SessionFiles.maxChars
+                if bytes > cap then
+                    return
+                        Error (
+                            sprintf
+                                "%s is %s, past the %s this can carry back — it is served whole at %s"
+                                name
+                                (ContentSize.render bytes)
+                                (ContentSize.render cap)
+                                said)
+                elif picture then
+                    match Fs.readBase64 path with
+                    | Error why -> return Error (sprintf "could not read %s: %s" said why)
+                    | Ok encoded ->
+                        match ToolImage.ofBase64 encoded with
+                        | Ok image -> return Ok (FileContent.Image image)
+                        | Error why -> return Error (sprintf "%s is not a picture you can be shown: %s" name why)
+                else
+                    match Fs.readTextSafely path with
+                    | Error why -> return Error (sprintf "could not read %s: %s" said why)
+                    | Ok text -> return Ok (FileContent.Text text)
+    }
+
 /// The session's content surface: everything the pane can show, by path.
 ///
 /// Cookie-gated, exactly as the query stream is, and for the same reason — an artifact is
@@ -255,19 +319,21 @@ let routes (auth: SessionAuth.Auth) (artifactsDir: string) (mount: string) : Inc
                 res.writeHead (401, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
                 res.``end`` "unauthorized"
             else
-                match ContentRef.segments ref with
+                // Which kind of address this is, is `ArtifactAddress`'s to say — one parse,
+                // shared with the reader below, so a spelling the agent may read back is
+                // never one this surface would have refused. The content root has one
+                // directory in it so far, and a `repos/…` path is a real address this build
+                // cannot serve yet: it 404s like any other refusal.
+                match ArtifactAddress.ofContent ref with
                 // A pinned version: these bytes, for good.
-                | [ _; _; _ ] ->
-                    match ArtifactRef.ofContent ref with
-                    | Ok version -> serveVersion artifactsDir version res
-                    | Error _ -> notFound res
+                | Ok (ArtifactAddress.Version version) -> serveVersion artifactsDir version res
                 // The NAME, which resolves to whatever is latest — and answers with a redirect
                 // to the address that holds it rather than with the bytes. The cursor-and-range
                 // shape the event log and the transcripts already use: what a client keeps is
                 // an address whose bytes cannot change under it, and what moves is never
                 // cached. An `<img>` follows this without knowing versions exist.
-                | [ root; name ] when root = ArtifactRef.root ->
-                    match ArtifactRef.latest (versions artifactsDir name) with
+                | Ok (ArtifactAddress.Name name) ->
+                    match latestOf artifactsDir name with
                     | Some latest ->
                         let target = RelativeUrl.under mount (SessionRoute.relative (SessionRoute.Content (ArtifactRef.content latest)))
                         res.writeHead (
@@ -276,9 +342,7 @@ let routes (auth: SessionAuth.Auth) (artifactsDir: string) (mount: string) : Inc
                               ResponseHeader.CacheControl CachePolicy.contentLatest ])
                         res.``end`` ""
                     | None -> notFound res
-                // The content root has one directory in it so far. A `repos/…` path is a real
-                // address this build cannot serve yet, and it 404s like any other.
-                | _ -> notFound res
+                | Error _ -> notFound res
             true
         | Some _
         | None -> false
@@ -291,6 +355,9 @@ type SessionArtifacts =
       /// own name when none is given), and record the act. The answer is the fact that went on
       /// the log, so a caller never has to re-derive the address it minted.
       Share : ActorRef -> SandboxRef -> string -> string option -> Async<Result<ArtifactShared, string>>
+      /// One artifact back, by its address — the text, or the picture. The sibling of
+      /// `Share`, and the only way anything that is not a browser reads this store.
+      Read : ContentRef -> Async<Result<FileContent, string>>
       /// The versions of one name, oldest first.
       Versions : string -> ArtifactRef list
       /// Every name, with its latest version.
@@ -334,6 +401,7 @@ let weighed (sandbox: SandboxRef) (path: string) (code: int, out: string, err: s
 
 let unavailable : SessionArtifacts =
     { SessionArtifacts.Share = fun _ _ _ _ -> async { return Error "this session has nowhere to keep artifacts" }
+      SessionArtifacts.Read = fun _ -> async { return Error "this session has no artifacts to read" }
       SessionArtifacts.Versions = fun _ -> []
       SessionArtifacts.Names = fun () -> [] }
 
@@ -490,5 +558,6 @@ let create
         }
 
     { SessionArtifacts.Share = share
+      SessionArtifacts.Read = read artifactsDir
       SessionArtifacts.Versions = versions artifactsDir
       SessionArtifacts.Names = fun () -> names artifactsDir }

@@ -320,6 +320,35 @@ module ArtifactRef =
     let latest (refs: ArtifactRef list) : ArtifactRef option =
         refs |> List.sortBy (fun r -> r.Seq, ArtifactStamp.value r.Stamp) |> List.tryLast
 
+/// What an artifact address NAMES, which is two different promises inside one address space:
+/// a version's own path holds those bytes for good, and a bare name holds whatever is latest
+/// under it — so the second answer can change under a reader and the first cannot.
+///
+/// One type over both because every reader of an address has to tell them apart, and none of
+/// them should do it by counting the slashes. The content route redirects one and serves the
+/// other; the store reads either.
+[<RequireQualifiedAccess>]
+type ArtifactAddress =
+    /// This version, these bytes.
+    | Version of ArtifactRef
+    /// This name, whatever is latest under it when somebody asks.
+    | Name of name: string
+
+module ArtifactAddress =
+
+    /// Which of the two a content path is. Refuses in the words a reader needs, because an
+    /// agent writing an address by hand is who reads this and has to get it right next try.
+    let ofContent (ref: ContentRef) : Result<ArtifactAddress, string> =
+        match ContentRef.segments ref with
+        | [ root; name; leaf ] when root = ArtifactRef.root ->
+            ArtifactRef.ofLeaf name leaf |> Result.map ArtifactAddress.Version
+        | [ root; name ] when root = ArtifactRef.root -> Ok (ArtifactAddress.Name name)
+        | _ ->
+            Error (
+                sprintf
+                    "'%s' is not an artifact: file:///artifacts/<name> is whatever is latest under that name, and file:///artifacts/<name>/<version> is one version for good"
+                    (ContentRef.value ref))
+
 /// What a piece of content is CALLED, and what the pane can make of it — one answer, for every
 /// surface that names a path.
 ///

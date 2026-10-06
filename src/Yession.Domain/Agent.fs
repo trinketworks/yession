@@ -1,6 +1,7 @@
 namespace Yession.Domain.Agent
 
 open Yession.Domain
+open Yession.Domain.Content
 open Yession.Domain.Prs
 open Yession.Domain.Sandboxes
 
@@ -926,12 +927,31 @@ type FileCapabilities =
 /// propose one that already holds other bytes, and an artifact is immutable.
 type ShareArtifact = SandboxRef -> string -> string option -> Async<Result<CommandOutcome, string>>
 
-/// what a turn may do to the session's artifacts. One verb, because LISTING them is the
-/// `artifacts` query — one declaration, two audiences, as `list_repos` stopped being a tool
-/// to become one.
+/// Read one artifact back, by the address everyone here already holds: its text, or — for a
+/// picture — the picture, so an agent can LOOK at what it shared instead of describing it
+/// from the name.
+///
+/// Separate from `ReadFile` rather than a path it could take, because they are two address
+/// spaces: a sandbox path means whatever that sandbox's filesystem says, and an artifact
+/// address means this session's store. One verb over both would have to guess which kind of
+/// thing it had been handed, and would answer the wrong one for a repo that has an
+/// `artifacts/` directory of its own.
+///
+/// The store resolves the address (`ArtifactAddress`), so a bare name is a legal argument and
+/// means the latest — the caller never lists versions to read the one it just shared.
+type ReadArtifact = ContentRef -> Async<Result<FileContent, string>>
+
+/// What a turn may do to the session's artifacts: share one, and read one back. LISTING them
+/// is the `artifacts` query — one declaration, two audiences, as `list_repos` stopped being a
+/// tool to become one.
+///
+/// Sharing is a command and reading is not. A share puts bytes in front of everyone and a
+/// sentence on the timeline, so it passes the gate; a read reaches only what has already been
+/// shared, which is to say nothing the agent could not already have.
 [<RequireQualifiedAccess>]
 type ArtifactCapabilities =
-    { Share : ShareArtifact }
+    { Share : ShareArtifact
+      Read : ReadArtifact }
 
 /// Put something in front of the people here: it appears in the side pane, in reach. `focus`
 /// is the one thing that moves a reader — it makes this the tab their pane is showing — and
@@ -1046,7 +1066,8 @@ module AgentCapabilities =
               FileCapabilities.Search = fun _ _ _ _ -> async { return Error "no file capability" }
               FileCapabilities.Find = fun _ _ _ -> async { return Error "no file capability" } }
           Artifacts =
-            { ArtifactCapabilities.Share = fun _ _ _ -> async { return Error "no artifact capability" } }
+            { ArtifactCapabilities.Share = fun _ _ _ -> async { return Error "no artifact capability" }
+              ArtifactCapabilities.Read = fun _ -> async { return Error "no artifact capability" } }
           Tabs =
             { TabCapabilities.Open = fun _ _ -> async { return Error "no pane capability" }
               TabCapabilities.Close = fun _ -> async { return Error "no pane capability" } }

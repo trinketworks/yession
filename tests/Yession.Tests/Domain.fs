@@ -3862,6 +3862,23 @@ let private artifactTests =
                 Expect.isError (ArtifactRef.ofLeaf "chart.png" bad) (sprintf "'%s' is not a version" bad)
             Expect.isError (ArtifactRef.ofContent (ContentRef.create "repos/octo/hello/README.md" |> expect)) "another directory of the content root is not an artifact"
 
+        // Which of the two promises an address makes, since the one that moves and the one
+        // that cannot are told apart by nothing but their shape. Every reader of an address
+        // asks this — the content route, and the store the agent reads through.
+        testCase "an address is either one version for good or a name whose latest moves" <| fun () ->
+            let said (raw: string) = ContentRef.create raw |> expect |> ArtifactAddress.ofContent
+            Expect.equal (said "file:///artifacts/chart.png/0012-7f2a91") (Ok (ArtifactAddress.Version (chart 12))) "a leaf pins a version"
+            Expect.equal (said "artifacts/chart.png") (Ok (ArtifactAddress.Name "chart.png")) "and a bare name is the name, resolved when asked"
+            for outside in [ "repos/octo/hello/README.md"; "artifacts/chart.png/0012-7f2a91/extra"; "artifacts" ] do
+                Expect.isError (said outside) (sprintf "'%s' is not either of them" outside)
+
+        testCase "an address that is not either kind says what the two kinds are" <| fun () ->
+            match ContentRef.create "repos/octo/hello/README.md" |> expect |> ArtifactAddress.ofContent with
+            | Error said ->
+                Expect.stringContains said "file:///artifacts/<name>" "the spelling that moves"
+                Expect.stringContains said "<version>" "and the one that does not"
+            | Ok other -> failwithf "expected a refusal, got %A" other
+
         testCase "an artifact is named, not placed, and its versions are bounded" <| fun () ->
             Expect.isError (ArtifactRef.create "sub/chart.png" 0 stamp) "a name with a slash would choose a layout this type owns"
             Expect.isError (ArtifactRef.create ".hidden" 0 stamp) "and a dotfile is refused with the dot-segments"

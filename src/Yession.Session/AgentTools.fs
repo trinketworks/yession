@@ -20,6 +20,7 @@ open Yession.Domain.Prs
 open Yession.Domain.Files
 open Yession.Domain.Terminals
 open Yession.Domain.Tools
+open Yession.Domain.Content
 
 #if FABLE_COMPILER
 open Thoth.Json
@@ -408,6 +409,42 @@ module AgentTools =
                           ) with
                             Image = Some image }
                 | Error reason -> return ToolAnswer.text (sprintf "could not read %s: %s" path reason)
+        }
+
+    /// One artifact, by the address everyone here already holds. `readFile`'s sibling, and
+    /// separate from it because a sandbox path and a content address are two address spaces:
+    /// one verb over both would have to guess which it was handed, and would guess wrong for
+    /// a checkout that has an `artifacts/` directory of its own.
+    ///
+    /// The picture's sentence says the OPPOSITE of `readFile`'s, and that is the mechanism
+    /// rather than a nicety: between the two answers an agent can tell a screenshot only it
+    /// has seen from one the people here are looking at, without the rule being written
+    /// anywhere it has to remember.
+    let private readArtifact
+        (capabilities: AgentCapabilities)
+        (raw: string)
+        (offset: int option)
+        (limit: int option)
+        : Async<ToolAnswer> =
+        async {
+            match ContentRef.create raw with
+            | Error why -> return ToolAnswer.text why
+            | Ok ref ->
+                let said = ContentRef.url ref
+                match! capabilities.Artifacts.Read ref with
+                | Ok (FileContent.Text content) ->
+                    return ToolAnswer.text (FileSlice.render said (FileSlice.ofContent content offset limit))
+                | Ok (FileContent.Image image) ->
+                    return
+                        { ToolAnswer.text (
+                              sprintf
+                                  "%s — a picture (%s, %d kB), shown to you; it is shared, so the people here can see it already"
+                                  said
+                                  image.Type
+                                  (ToolImage.kilobytes image)
+                          ) with
+                            Image = Some image }
+                | Error reason -> return ToolAnswer.text (sprintf "could not read %s: %s" said reason)
         }
 
     /// An edit is a command: the gate's answer is rendered by the one renderer every gated
@@ -893,6 +930,22 @@ module AgentTools =
                   return path, name, sandbox
                })
               (fun (path, name, sandbox) -> ok (shareArtifact capabilities path name sandbox))
+
+          // Read-only, and declared beside the verb it is the other half of rather than with
+          // the file readers: what it reaches is the session's own store, which no sandbox
+          // path names and which `read_file` therefore cannot be asked for.
+          (let descriptor, body =
+              tool
+                  "read_artifact"
+                  "Read something shared here: look at a picture, read a report. The other half of share_artifact — these are the SESSION's files, not any sandbox's, so read_file cannot reach them and this reaches nothing else. Takes an address as the artifacts query and share_artifact answer with it: \"file:///artifacts/<name>\" is whatever is latest under that name, and \"file:///artifacts/<name>/<version>\" is one version's bytes for good. A picture comes back as the picture itself, for you to look at. Text comes back a page at a time like read_file, and the answer says which `offset` reads on."
+                  (toolArgs {
+                      let! artifact = ToolArgs.text "artifact" "the address, e.g. \"file:///artifacts/chart.png\" — the artifacts query lists what there is"
+                      and! offset = ToolArgs.integerOption "offset" "the first line to read, 1-based; omit for the top. Nothing to a picture"
+                      and! limit = ToolArgs.integerOption "limit" "how many lines; omit for 2000. Nothing to a picture"
+                      return artifact, offset, limit
+                   })
+                  (fun (artifact, offset, limit) -> answered (readArtifact capabilities artifact offset limit))
+           { descriptor with ReadOnly = true }, body)
 
           tool
               "open_tab"

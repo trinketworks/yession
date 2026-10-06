@@ -30,6 +30,19 @@ let ensureDir (path: string) : unit = Files.mkdirp path
 
 let readText (path: string) : string = fs.readFileSync (path, "utf8")
 
+/// The same, and the same for the bytes, for a caller that must ANSWER a failed read rather
+/// than die of it — a surface reading a file somebody else put there, where "there is no such
+/// file" and "it is not readable" are two of its answers. The pair is here rather than at
+/// either caller so neither has to decide what `fs` throwing means.
+let readTextSafely (path: string) : Result<string, string> =
+    try Ok (readText path) with e -> Error e.Message
+
+/// Base64, which is the form a picture has to be in to be shown to a model
+/// (`ToolImage.ofBase64`). Node decodes the file and re-encodes it; a caller that must not
+/// hold the file at all streams it instead.
+let readBase64 (path: string) : Result<string, string> =
+    try Ok (fs.readFileSync (path, "base64")) with e -> Error e.Message
+
 /// Move a path. Within one filesystem this is atomic, which is what lets a thing be built
 /// out of sight and then APPEAR whole — the guarantee `writeTextAtomic` below leans on for
 /// a file, and the repo manager's clone leans on for a directory.
