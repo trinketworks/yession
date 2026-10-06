@@ -1035,9 +1035,6 @@ let private start () =
         // plain-text roots the terminal composers live in (Plan 13), resolved the same way.
         let registry = BodyRegistry doc
         let texts = TextRegistry doc
-        // Kept current by `setState`: the read positions are read off it rather than out of
-        // a message.
-        let mutable latestModel = initial
         // A caret moved: told to the model once per frame, which decides whether and when it
         // reaches anybody (`ClientModel.presenceToSend`).
         let sendFocus = Render.focusReporter (fun focus -> dispatchRef (CaretMovedMsg focus))
@@ -1135,7 +1132,6 @@ let private start () =
                       ReportFocus = sendFocus } }
         let setState (model: ClientModel) (dispatch: Ylmish.Program.Message<ClientMsg> -> unit) =
             dispatchRef <- fun msg -> dispatch (Ylmish.Program.Message.User msg)
-            latestModel <- model
             renderer.SetState model
 
         let launchReads : Client.LaunchReads =
@@ -1334,11 +1330,6 @@ let private start () =
                                 let connection =
                                     Client.connect
                                         options
-                                        // The model is the read position (see `connect`):
-                                        // `latestModel` is kept current by `setState`, so a
-                                        // fold rolled back by a racing doc update is visibly
-                                        // behind and gets re-read.
-                                        (fun () -> latestModel)
                                         doc
                                         registry
                                         texts

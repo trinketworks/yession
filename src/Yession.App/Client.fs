@@ -92,10 +92,15 @@ module Client =
           /// Discard a terminal composer slot by emptying its command line, which retracts
           /// the slot through the same publication rule that typing published it with.
           DiscardTerminalDraft : TerminalId -> PeerId -> unit
-          /// Catch a terminal's transcript up from where this client has read to. Safe to
-          /// call repeatedly: records fold by sequence number, so a re-read costs bytes and
-          /// changes nothing.
-          FetchTranscript : TerminalId -> unit }
+          /// One read of the event log after this offset, under the model's read number: one
+          /// fetch over the HTTP feed when there is one, else one `ReadEventsAfter` frame. The
+          /// answer comes back as `EventsReadMsg` under the same number. WHETHER to read is the
+          /// model's (`ClientModel.reads`); this only reads.
+          ReadEvents : int -> EventOffset option -> unit
+          /// One read of a terminal's transcript from this line, under the model's read
+          /// number, answered as `TranscriptReadMsg`. One fetch, never a loop: whether to read
+          /// on is the model's, as for `ReadEvents`.
+          ReadTranscript : TerminalId -> int -> int -> unit }
 
     /// The launch surface's reads (`LaunchEffect`): GETs answered by the session on this
     /// person's own credential. Each is total — a failure is an answer the surface shows, not
@@ -218,6 +223,8 @@ module Client =
             | ClientEffect.ResizeTerminal (terminal, size) ->
                 connected (fun c -> c.ResizeTerminal terminal size.Cols size.Rows)
             | ClientEffect.SendPresence (focus, viewing) -> connected (fun c -> c.SendPresence focus viewing)
+            | ClientEffect.ReadEvents (read, after) -> connected (fun c -> c.ReadEvents read after)
+            | ClientEffect.ReadTranscript (terminal, read, fromSeq) -> connected (fun c -> c.ReadTranscript terminal read fromSeq)
             | ClientEffect.OpenTerminal (title, sandbox) -> ask (OpenTerminal (title, sandbox))
             | ClientEffect.InterruptTurn turn -> ask (InterruptAgentTurn turn)
             | ClientEffect.ApproveRepoCapabilities (repo, granted) -> ask (ApproveRepoCapabilities (repo, granted))
@@ -442,23 +449,6 @@ module Client =
     /// every record's sequence number is its LINE index — which is what keeps a fetched
     /// answer and a live frame talking about the same thing.
     module TranscriptFetch =
-
-        /// One fetched page: the records it carried with their sequence numbers, and
-        /// whether the transcript continues past it.
-        type TranscriptPage =
-            { Records : (int * TranscriptRecord) list
-              /// The transcript's own header, when this page carried it (line 0, so the
-              /// answer from a client with nothing yet, and no other). Kept rather than
-              /// discarded because the replay view (Plan 13, stage 3e) rebuilds a `.cast`
-              /// from these records, and a `.cast` without its header is not one — the
-              /// recorded width and height are what make a replay come out the shape the
-              /// terminal actually was.
-              Header : TranscriptHeader option
-              /// One past the last line this page covered.
-              NextSeq : int
-              /// A capped answer means the server had more to give; anything shorter — a
-              /// `204`, which arrives here as no lines at all — is the transcript's tail.
-              IsEnd : bool }
 
         type TranscriptFeed = TerminalId -> int -> Async<Result<TranscriptPage, FeedFault>>
 
@@ -1107,32 +1097,16 @@ module Client =
     /// Wire a connected channel to the client's doc and the event log: locally-originated
     /// doc updates (the Ylmish binding's writes) are sent as `State` frames, inbound
     /// `State` payloads are applied to the doc, command responses are correlated back to
-    /// their drafts, and the handshake/lifecycle frames drive `dispatch`.
+    /// their drafts, and the handshake/lifecycle frames drive `dispatch`. The doc listener is
+    /// registered before the pump starts so no local update can be missed.
     ///
-    /// Event consumption is read-only and offset-driven: `EventsAvailable` hints (and the
-    /// accepted handshake's latest offset) only trigger `ReadEventsAfter` requests; the
-    /// returned pages are the source of truth and are folded into the model as
-    /// `EventsPageMsg`. One read is in flight at a time; a non-final page immediately
-    /// requests the next. A read that FAILS (only possible over a `FetchEvents` feed, which
-    /// has already exhausted its resilience policy) parks the loop and reports
-    /// `FeedStalled` — it never masquerades as an empty page. The doc listener is registered
-    /// before the pump starts so no local update can be missed.
-    ///
-    /// `model` is how far consumption has got — of the event log and of each terminal's
-    /// transcript — and what is known to exist beyond it. It is the ONLY answer: the loop
-    /// keeps no cursor of its own, because two drift. A private cursor advances when a page
-    /// ARRIVES; the model's advances when the page is FOLDED. Anything that discards a fold —
-    /// a decode failure keeping the current model, a reconnect onto a restored replica —
-    /// moves them apart, and a loop reading its own cursor then believes it is up to date
-    /// while the model is missing events nothing will ever offer again. Asking the model
-    /// makes that unrepresentable: a model that lost a fold is visibly behind, so the next
-    /// hint re-reads it, and the fold is offset-gated, so a re-read costs a round trip and
-    /// changes nothing else. The same holds one feed over: a client that replayed a terminal
-    /// out of its own store resumes where that got to, not at line 0. And a reconnect needs
-    /// no offset handed to it — the model already says where it got to.
+    /// The reads of the event log and of each terminal's transcript are carried out here
+    /// (`ReadEvents`, `ReadTranscript`) and DECIDED nowhere here: when to read, from where, and
+    /// what an answer settles are the model's (`ClientModel.reads`), which asks for each read
+    /// as an effect and is handed every answer back as a message. This keeps no read state of
+    /// its own beyond pairing a frame's request id with the read it carries.
     let connect
         (options: ConnectOptions)
-        (model: unit -> ClientModel)
         (doc: Y.Doc)
         (registry: BodyRegistry)
         (texts: TextRegistry)
@@ -1156,154 +1130,36 @@ module Client =
         let onResponse (requestId: RequestId) (result: SessionCommandResult) =
             dispatch (CommandAnsweredMsg (requestId, result))
 
-        let mutable readInFlight : RequestId option = None
+        // The event reads asked over frames, by the request id each went out under. A frame
+        // carries a fresh id — minting one is this side's job, not the model's — and its
+        // answer comes back carrying only that, so this is what says which read it answers.
+        let mutable framesAsked : Map<RequestId, int> = Map.empty
 
-        let readCursor () = (model ()).EventConsumer.LastProcessedOffset
+        let onEventsPage (requestId: RequestId) (page: EventPage<SessionEvent>) =
+            match Map.tryFind requestId framesAsked with
+            | Some read ->
+                framesAsked <- Map.remove requestId framesAsked
+                dispatch (EventsReadMsg (read, Ok page))
+            // Nothing this connection asked: folded, and nothing is settled by it.
+            | None -> dispatch (EventsPageMsg page)
 
-        let behind () =
-            let consumer = (model ()).EventConsumer
-            match consumer.LatestKnownOffset, consumer.LastProcessedOffset with
-            | Some latest, Some processed -> EventOffset.value latest > EventOffset.value processed
-            | Some _, None -> true
-            | None, _ -> false
-
-        // `request` delivers fetched pages back through `onEventsPage`, which may in
-        // turn request the next page — hence the mutual recursion.
-        let rec request () =
-            let requestId = RequestId.fresh ()
-            readInFlight <- Some requestId
-            let after = readCursor ()
-            match options.FetchEvents with
-            | Some fetch ->
-                Async.StartImmediate (
-                    async {
-                        match! fetch after with
-                        | Ok page -> onEventsPage requestId page
-                        | Error fault -> onFeedFault requestId fault
-                    })
-            | None ->
-                Async.StartImmediate (channel.Send (EventLog (ReadEventsAfter (requestId, after, options.PageSize))))
-
-        and requestIfBehind () =
-            if Option.isNone readInFlight && behind () then request ()
-
-        and onEventsPage (requestId: RequestId) (page: EventPage<SessionEvent>) =
-            if readInFlight = Some requestId then readInFlight <- None
-            dispatch (EventsPageMsg page)
-            // A non-final page means more events already exist beyond this one.
-            if not page.IsEnd && Option.isNone readInFlight then request ()
-            else requestIfBehind ()
-
-        and onFeedFault (requestId: RequestId) (fault: FeedFault) =
-            if readInFlight = Some requestId then readInFlight <- None
-            // The feed's policy has already spent its retries by the time this is reached, so
-            // do NOT re-request here: park, and re-arm on the next availability hint or
-            // reconnect. The read position is untouched, so the re-arm resumes exactly where
-            // consumption stopped.
-            //
-            // This is the seam that used to fail silently. A failed fetch became an empty
-            // FINAL page, which advanced nothing; `behind ()` therefore stayed true and the
-            // loop re-requested immediately — an unbounded spin, one request per round trip,
-            // with no log line and nothing in the model. Drafts, title, and presence kept
-            // syncing over the data channel the whole time, so the only symptom was a
-            // timeline that never filled.
-            dispatch (EventFeedMsg (FeedStalled (FeedFault.describe fault)))
-
-        // Where this terminal's transcript has been read to — the model's `ReadThrough`, for
-        // the reason the event cursor is the model's (see `connect`). Only a contiguous HTTP
-        // read moves it. A live record at a higher seq is still folded into the model — it
-        // is keyed by seq, so it lands wherever it belongs — but it does not prove the
-        // records BEFORE it have arrived, and treating it as if it did is how a client ends
-        // up with a hole it will never fetch.
-        let readPositionOf (terminal: TerminalId) =
-            (ClientModel.terminalFeed terminal (model ())).ReadThrough
-
-        // The terminals with a read out, and those asked to read again while it was. ONE read
-        // per terminal at a time, for the reason the event cursor has `readInFlight`: every
-        // signal that there is more — each live record past the read position, each
-        // availability hint — used to start a read of its own, and the read position does not
-        // move until an answer lands. So a burst asked the same question once per record, all
-        // at once: `seq 100000` is ~170 records in under three seconds, and it raised ~170
-        // concurrent reads of `after/3`, each answered with a larger page, each page a fold
-        // and a render. That queue of renders held the page's main thread long enough for the
-        // link heartbeat to go unanswered (`Link`), so the Session dropped a peer that was
-        // alive — and the reconnect raised the storm again.
-        //
-        // A signal that arrives during a read is not dropped: it earns ONE more read, from
-        // wherever the first got to, once it lands. However long the burst, that is at most
-        // two reads per terminal — the one out, and the one owed.
-        let transcriptReading = System.Collections.Generic.HashSet<string> ()
-        let transcriptOwed = System.Collections.Generic.HashSet<string> ()
-
-        let rec fetchTranscript (terminal: TerminalId) =
-            match options.FetchTranscripts with
-            | None -> ()
-            | Some fetch ->
-                let key = TerminalId.value terminal
-                if transcriptReading.Contains key then transcriptOwed.Add key |> ignore
-                else
-                    transcriptReading.Add key |> ignore
-                    let rec readFrom (fromSeq: int) =
-                        async {
-                            match! fetch terminal fromSeq with
-                            | Error _ ->
-                                // A transcript read that fails is not a session that failed: the
-                                // live leg keeps delivering, and the next availability hint
-                                // re-arms this. Parking beats spinning.
-                                return ()
-                            | Ok page ->
-                                // Only news is folded: an answer that takes the reader nowhere
-                                // is lines it holds already, and a fold is a render.
-                                if TranscriptCursor.advances (readPositionOf terminal) page.NextSeq then
-                                    dispatch (TerminalPageMsg (terminal, page.Records, page.Header, page.NextSeq))
-                                // `NextSeq > fromSeq` guards the one way this could spin: a
-                                // chunk that yields nothing new would otherwise be re-read for
-                                // ever at the same offset.
-                                if not page.IsEnd && page.NextSeq > fromSeq then return! readFrom page.NextSeq
-                        }
-                    Async.StartImmediate (
-                        async {
-                            try do! readFrom (readPositionOf terminal)
-                            finally
-                                transcriptReading.Remove key |> ignore
-                                if transcriptOwed.Remove key then fetchTranscript terminal
-                        })
-
-        let dispatchAndConsume (msg: ClientMsg) =
-            dispatch msg
+        let dispatchAndPush (msg: ClientMsg) =
             match msg with
-            | TerminalAvailableMsg (terminal, length) ->
-                // The terminal-feed counterpart of `EventsAvailable`: a hint that there is
-                // more, answered by a read rather than by trusting the hint's contents.
-                if TranscriptCursor.unread (readPositionOf terminal) (AvailableLength length) then
-                    fetchTranscript terminal
-            | TerminalRecordsMsg (terminal, records)
-                when records |> List.exists (fun (seq, _) -> TranscriptCursor.unread (readPositionOf terminal) (RecordAt seq)) ->
-                // A live record at or beyond the read position means history exists that this
-                // client has not fetched — the records between where it read to and where the
-                // live stream now is. Ask for them.
-                //
-                // Which comparison that is belongs to `TranscriptCursor`, not here: the index
-                // vs count distinction that decides it is carried by `TranscriptSignal`, and
-                // getting it wrong at this call site is the bug that shipped a terminal whose
-                // output never reached the store. See `Yession.Domain.Terminals`.
-                fetchTranscript terminal
             | ConnectedMsg _ ->
                 // The client's half of the initial full-state exchange: state restored
                 // from local persistence (Step 20) — or carried across a reconnect —
                 // predates the update listener, so push it explicitly. Full-state
-                // updates are idempotent, so this is always safe.
+                // updates are idempotent, so this is always safe. Ahead of the dispatch, so
+                // it still leaves ahead of the read the acceptance asks for.
                 Async.StartImmediate (channel.Send (State (StateSync (DocSync.fullState doc))))
-                requestIfBehind ()
-            | EventsAvailableMsg _ ->
-                requestIfBehind ()
             | _ -> ()
+            dispatch msg
 
         { Run =
             async {
                 try
                     do!
-                        Connection.run hello dispatchAndConsume (DocSync.applyRemote doc) onResponse onEventsPage options.OnTerminalSnapshot channel
+                        Connection.run hello dispatchAndPush (DocSync.applyRemote doc) onResponse onEventsPage options.OnTerminalSnapshot channel
                 // However the pump ends — the channel closing, a fault, cancellation — the
                 // doc stops feeding it.
                 finally stopSending ()
@@ -1395,7 +1251,39 @@ module Client =
                 doc.transact ((fun _ ->
                     TerminalText.clear texts (BodyKey.terminalDraft terminal author)
                     dispatch (DiscardTerminalDraftMsg (terminal, author))), null)
-          FetchTranscript = fetchTranscript }
+          ReadEvents =
+            fun read after ->
+                match options.FetchEvents with
+                | Some fetch ->
+                    Async.StartImmediate (
+                        async {
+                            let! answer = fetch after
+                            dispatch (EventsReadMsg (read, answer |> Result.mapError FeedFault.describe))
+                        })
+                | None ->
+                    let requestId = RequestId.fresh ()
+                    framesAsked <- Map.add requestId read framesAsked
+                    Async.StartImmediate (channel.Send (EventLog (ReadEventsAfter (requestId, after, options.PageSize))))
+          ReadTranscript =
+            fun terminal read fromSeq ->
+                match options.FetchTranscripts with
+                | Some fetch ->
+                    Async.StartImmediate (
+                        async {
+                            // Answered however the read ends, a throw included: an answer
+                            // that never comes is a read the model believes is out until
+                            // the connection does.
+                            let! answer = fetch terminal fromSeq |> Async.Catch
+                            let page =
+                                match answer with
+                                | Choice1Of2 (Ok page) -> Some page
+                                | Choice1Of2 (Error _) | Choice2Of2 _ -> None
+                            dispatch (TranscriptReadMsg (terminal, read, page))
+                        })
+                // A client with no HTTP leg has only what arrives live, and says so at once:
+                // a read nobody can answer is one that failed, which settles it — rather than
+                // one the model would believe was out until the connection ended.
+                | None -> dispatch (TranscriptReadMsg (terminal, read, None)) }
 
     /// The session leg's lifecycle: open a transport, serve one session over it, and decide
     /// whether to come back. The outermost layer of the client, and the last one that was only

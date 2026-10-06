@@ -167,7 +167,11 @@ type Client =
       Texts : TextRegistry
       Channel : FrameChannel<string>
       Doc : Y.Doc
-      Hello : PeerHelloPayload }
+      Hello : PeerHelloPayload
+      /// Point what the program asks of the session — a command, presence, a read — at this
+      /// connection: the browser's `connectionRef`. A client that reconnects over a new one
+      /// says so here, or its reads go on being asked of a channel that has gone.
+      Wire : Client.Connection -> unit }
 
 /// Connect one full client with explicit options: WebRTC channel, its own Yjs doc, the
 /// withYlmish program, and the connection driver. Resolves once the model reaches
@@ -187,12 +191,11 @@ let connectClientWith (options: Client.ConnectOptions) (signalUrl: string) (toke
         // draft slot appears when its body has content and goes when the body empties.
         DraftSlot.follow doc registry local.PeerId (user >> runner.Dispatch) |> ignore
         let hello = { PeerId = local.PeerId; DisplayName = name; Token = token }
-        // The model is what "how far have we consumed" means (see `Client.connect`).
-        let connection = Client.connect options runner.Model doc registry texts hello (user >> runner.Dispatch) channel
+        let connection = Client.connect options doc registry texts hello (user >> runner.Dispatch) channel
         wired.Value <- Some connection
         Async.StartImmediate connection.Run
         do! runner.WaitFor (fun m -> m.Connection = Connected)
-        return { Runner = runner; Connection = connection; Registry = registry; Texts = texts; Channel = channel; Doc = doc; Hello = hello }
+        return { Runner = runner; Connection = connection; Registry = registry; Texts = texts; Channel = channel; Doc = doc; Hello = hello; Wire = fun c -> wired.Value <- Some c }
     }
 
 /// `connectClientWith` under the default options (frame-based event reads).

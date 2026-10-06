@@ -62,7 +62,7 @@ module TranscriptCursor =
     /// burst of output once raised one read per live record, every one asked at the same
     /// stale position, and each answer re-rendered a page that already showed it (`seq
     /// 100000` froze a page for minutes). The read loop asks one at a time now
-    /// (`Client.connect`); this is what keeps a duplicate that arrives anyway — from a
+    /// (`ClientModel.reads`); this is what keeps a duplicate that arrives anyway — from a
     /// connection that ended with a read still out, or the `204` that says "you are
     /// current" — from costing anything.
     let advances (readPosition: int) (nextSeq: int) = nextSeq > readPosition

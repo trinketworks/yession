@@ -84,7 +84,12 @@ type EventConsumerState =
       /// the offset the fill has to start from — which is why any page off the network
       /// clears it. Reported as feed health, it flashed a red "history paused" over every
       /// cold open with an out-of-order store, moments before the first page fixed it.
-      MissingBefore       : EventOffset option }
+      MissingBefore       : EventOffset option
+      /// The event read this client has out, by its number (`ClientModel.ReadsAsked`), or
+      /// `None` when nothing is out. At most one at a time (`ClientModel.reads`), and only the
+      /// answer that carries this number settles it — so an answer from a connection that has
+      /// since ended neither clears a read the next one asked nor asks one of its own.
+      Reading             : int option }
 
 /// How far one message the agent is writing has got: the message, and how much of its body
 /// has arrived. Every delta is text, so a body only ever grows while it streams, and two
@@ -422,6 +427,30 @@ type TerminalFeed =
       /// The replay rebuilds a `.cast` from these records, and the recorded width and height
       /// are what make it come out the shape the terminal actually was.
       Header : TranscriptHeader option }
+
+/// One fetched page of a terminal's transcript (Plan 13): the records it carried with their
+/// sequence numbers, and whether the transcript continues past it.
+type TranscriptPage =
+    { Records : (int * TranscriptRecord) list
+      /// The transcript's own header, when this page carried it (line 0, so the
+      /// answer from a client with nothing yet, and no other). Kept rather than
+      /// discarded because the replay view (Plan 13, stage 3e) rebuilds a `.cast`
+      /// from these records, and a `.cast` without its header is not one — the
+      /// recorded width and height are what make a replay come out the shape the
+      /// terminal actually was.
+      Header : TranscriptHeader option
+      /// One past the last line this page covered.
+      NextSeq : int
+      /// A capped answer means the server had more to give; anything shorter — a
+      /// `204`, which arrives here as no lines at all — is the transcript's tail.
+      IsEnd : bool }
+
+/// A transcript read this client has out for one terminal (`ClientEffect.ReadTranscript`):
+/// its number (`ClientModel.ReadsAsked`), the line it asked from, and whether a signal that
+/// there is more arrived while it was out — which earns ONE more read once it lands
+/// (`ClientModel.reads`).
+[<RequireQualifiedAccess>]
+type TranscriptRead = { Read : int; From : int; Owed : bool }
 
 module TerminalFeed =
 
@@ -1175,6 +1204,15 @@ type ClientModel =
       /// because it arrives on a different leg: facts fold from the event log, bytes
       /// stream from the transcript.
       TerminalFeeds : Map<TerminalId, TerminalFeed>
+      /// The transcript reads this client has out, one per terminal at most (`reads`).
+      /// Beside the feeds rather than in them: a feed is what the transcript SAYS, and this is
+      /// what the connection is doing about it, which a new connection starts afresh.
+      TranscriptReads : Map<TerminalId, TranscriptRead>
+      /// How many reads — of the event log or of a transcript — this client has ever asked
+      /// for, so each read is asked under a number no other has carried and its answer can be
+      /// told from one that belongs to a read since forgotten. Never reset: across a reconnect
+      /// is exactly where the two would otherwise meet.
+      ReadsAsked : int
       /// Keyframes this client has fetched, keyed by terminal and the transcript line each
       /// paints (Plan 14, stage 3). One per range this client has opened, not one per block
       /// the session ever ran: they are fetched on demand, and a range is only opened by
@@ -1566,7 +1604,15 @@ type ClientMsg =
     | EventsAvailableMsg of latestOffset: EventOffset
     /// A read-only event page from the Session (Step 07): the conversation is
     /// built by folding pages through the shared projection; offsets track progress.
+    ///
+    /// A page that answers no read this client has out — one the connection cannot match to
+    /// a request. Folded, and decides nothing: what to read next is `EventsReadMsg`'s.
     | EventsPageMsg of EventPage<SessionEvent>
+    /// The answer to event read `read` (`ClientEffect.ReadEvents`): a page, folded exactly as
+    /// `EventsPageMsg` is, or the reason the read failed — which is settled, because the feed's
+    /// resilience policy has already spent its retries by the time a failure gets here. What
+    /// is read next is decided from it (`ClientModel.reads`).
+    | EventsReadMsg of read: int * Result<EventPage<SessionEvent>, string>
     /// A page this client had already been given and kept (Plan 20): replayed out of its own
     /// store at boot, before any network read and without a session.
     ///
@@ -1746,6 +1792,10 @@ type ClientMsg =
         TerminalId * records: (int * TranscriptRecord) list * header: TranscriptHeader option * readThrough: int
     /// A terminal's transcript is this long. A hint that triggers a read, never data.
     | TerminalAvailableMsg of TerminalId * length: int
+    /// The answer to transcript read `read` (`ClientEffect.ReadTranscript`): the page, or
+    /// `None` for a read that failed. Folded as `TerminalPageMsg` only when it takes the read
+    /// position somewhere; what is read next is decided from it (`ClientModel.reads`).
+    | TranscriptReadMsg of TerminalId * read: int * TranscriptPage option
     /// A contiguous prefix of a terminal's transcript has been read through this seq.
     | TerminalReadThroughMsg of TerminalId * seq: int
     /// The transcript's header, from the chunk that carried line 0 (Plan 13, stage 3e).
@@ -2007,6 +2057,12 @@ type ClientEffect =
     /// Tell everyone else where this peer is: its caret and what it has open, both halves on
     /// one frame (`ClientModel.presenceToSend`).
     | SendPresence of focus: Focus option * viewing: ViewRef option
+    /// Read the event log after this offset, under read number `read` — one fetch or one
+    /// frame, answered as `EventsReadMsg` carrying the same number (`ClientModel.reads`).
+    | ReadEvents of read: int * after: EventOffset option
+    /// Read a terminal's transcript from this line, under read number `read`, answered as
+    /// `TranscriptReadMsg` carrying the same number (`ClientModel.reads`).
+    | ReadTranscript of TerminalId * read: int * fromSeq: int
     | Remember of Preference
     | Copy of box: string * text: string
     | RetryNow
@@ -2135,7 +2191,8 @@ module ClientModel =
               // Nothing has failed yet; the first read decides.
               Feed = FeedLive
               // Nothing has been looked at yet; the replay decides.
-              MissingBefore = None }
+              MissingBefore = None
+              Reading = None }
           Agent = { ActiveTurn = None; Quiet = None; Interrupting = None }
           Presence = Map.empty
           Caret = None
@@ -2146,6 +2203,8 @@ module ClientModel =
           Environment = EnvironmentNotStarted
           Terminals = Projection.empty
           TerminalFeeds = Map.empty
+          TranscriptReads = Map.empty
+          ReadsAsked = 0
           TerminalKeyframes = Map.empty
           KeyframesAsked = Set.empty
           TerminalScreens = Map.empty
@@ -3659,6 +3718,10 @@ module ClientModel =
             { model with Connection = Retrying (reason, failures) }
         | EventsAvailableMsg latest ->
             { model with EventConsumer = withLatestKnown (Some latest) model.EventConsumer }
+        // An answer is folded whichever read it answers — the fold is offset-gated, so a late
+        // one costs nothing — and what it settles is `reads`' to decide, below.
+        | EventsReadMsg (_, Ok page) -> fold (EventsPageMsg page) model
+        | EventsReadMsg (_, Error reason) -> fold (EventFeedMsg (FeedStalled reason)) model
         // One fold, reached by two messages. The events are the same events and the
         // projection is the same projection; what differs is what arriving PROVED, and that
         // is `Feed`, decided below rather than in here.
@@ -3946,7 +4009,9 @@ module ClientModel =
                       MissingBefore =
                         match msg with
                         | EventsPageMsg _ -> None
-                        | _ -> model.EventConsumer.MissingBefore } }
+                        | _ -> model.EventConsumer.MissingBefore
+                      // What the read loop has out is `reads`' to settle, not a page's.
+                      Reading = model.EventConsumer.Reading } }
         | LocalHistoryGapMsg resumesAt ->
             { model with EventConsumer = { model.EventConsumer with MissingBefore = Some resumesAt } }
         | HistoryReadMsg -> { model with HistoryRead = true }
@@ -4179,6 +4244,12 @@ module ClientModel =
             { model with
                 TerminalFeeds =
                     Map.add terminal { feed with KnownLength = max feed.KnownLength length } model.TerminalFeeds }
+        // Only news is folded: an answer that takes the reader nowhere is lines it holds
+        // already, and a fold is a pass of the whole update loop over the page for nothing.
+        | TranscriptReadMsg (terminal, _, Some page)
+            when TranscriptCursor.advances (terminalFeed terminal model).ReadThrough page.NextSeq ->
+            fold (TerminalPageMsg (terminal, page.Records, page.Header, page.NextSeq)) model
+        | TranscriptReadMsg _ -> model
         | TerminalHeaderMsg (terminal, header) ->
             let feed = terminalFeed terminal model
             { model with TerminalFeeds = Map.add terminal { feed with Header = Some header } model.TerminalFeeds }
@@ -4555,9 +4626,142 @@ module ClientModel =
                         else model.Pane }
         ))))))
 
+    /// The read loop's decisions: what a message, once folded, asks to be read next — of the
+    /// event log and of each terminal's transcript — and what it settles of the reads out.
+    /// The connection only carries the reads out (`ClientEffect.ReadEvents`,
+    /// `ClientEffect.ReadTranscript`) and hands each answer back under the number it was
+    /// asked with.
+    ///
+    /// Event consumption is read-only and offset-driven: `EventsAvailable` hints (and the
+    /// accepted handshake's latest offset) only trigger reads; the returned pages are the
+    /// source of truth. One read is out at a time; a non-final page immediately asks for the
+    /// next, and a final one asks again only while the model is still behind. A read that
+    /// FAILS (only possible over an HTTP feed, which has already exhausted its resilience
+    /// policy) parks the loop and reports `FeedStalled` — it never masquerades as an empty
+    /// page.
+    ///
+    /// Where each read starts is the model's read position, taken as the read is asked — the
+    /// event log's `LastProcessedOffset`, a terminal's `ReadThrough` — and nothing else: the
+    /// loop keeps no cursor of its own, because two drift. A private cursor advances when a
+    /// page ARRIVES; the model's advances when the page is FOLDED. Anything that discards a
+    /// fold — a decode failure keeping the current model, a reconnect onto a restored replica
+    /// — moves them apart, and a loop reading its own cursor then believes it is up to date
+    /// while the model is missing events nothing will ever offer again. Asking the model
+    /// makes that unrepresentable: a model that lost a fold is visibly behind, so the next
+    /// hint re-reads it, and the fold is offset-gated, so a re-read costs a round trip and
+    /// changes nothing else. The same holds one feed over: a client that replayed a terminal
+    /// out of its own store resumes where that got to, not at line 0. And a reconnect needs
+    /// no offset handed to it — the model already says where it got to.
+    ///
+    /// A connection is accepted (`ConnectedMsg`) or lost (`DisconnectedMsg`) with whatever
+    /// it had out forgotten: what the old channel was asked it will never answer, and what the
+    /// old HTTP reads answer late is folded — the fold cannot be hurt by it — but carries a
+    /// number nothing is waiting on, so it neither settles a read the new connection asked nor
+    /// asks one of its own. A new connection starts with nothing out, as it always has.
+    let private reads (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =
+        // Each read under a number no read before it carried (`ReadsAsked`).
+        let numbered (model: ClientModel) = model.ReadsAsked + 1, { model with ReadsAsked = model.ReadsAsked + 1 }
+        let askEvents (model: ClientModel) =
+            let read, model = numbered model
+            { model with EventConsumer = { model.EventConsumer with Reading = Some read } },
+            [ ClientEffect.ReadEvents (read, model.EventConsumer.LastProcessedOffset) ]
+        // Behind, and nothing out: the one state in which a hint is worth a read.
+        let askEventsIfBehind (model: ClientModel) =
+            if model.EventConsumer.Reading.IsNone
+               && isBehind model.EventConsumer.LastProcessedOffset model.EventConsumer.LatestKnownOffset then
+                askEvents model
+            else model, []
+        let askTranscript (terminal: TerminalId) (fromSeq: int) (owed: bool) (model: ClientModel) =
+            let read, model = numbered model
+            { model with
+                TranscriptReads =
+                    Map.add terminal { TranscriptRead.Read = read; TranscriptRead.From = fromSeq; TranscriptRead.Owed = owed } model.TranscriptReads },
+            [ ClientEffect.ReadTranscript (terminal, read, fromSeq) ]
+        // Where this terminal's transcript has been read to — the model's `ReadThrough`. Only
+        // a contiguous HTTP read moves it. A live record at a higher seq is still folded into
+        // the model — it is keyed by seq, so it lands wherever it belongs — but it does not
+        // prove the records BEFORE it have arrived, and treating it as if it did is how a
+        // client ends up with a hole it will never fetch.
+        let readPositionOf (terminal: TerminalId) = (terminalFeed terminal model).ReadThrough
+        // ONE read per terminal at a time, for the reason the event log has one: every signal
+        // that there is more — each live record past the read position, each availability
+        // hint — used to start a read of its own, and the read position does not move until an
+        // answer lands. So a burst asked the same question once per record, all at once: `seq
+        // 100000` is ~170 records in under three seconds, and it raised ~170 concurrent reads
+        // of `after/3`, each answered with a larger page, each page a fold and a render. That
+        // queue of renders held the page's main thread long enough for the link heartbeat to
+        // go unanswered (`Link`), so the Session dropped a peer that was alive — and the
+        // reconnect raised the storm again.
+        //
+        // A signal that arrives during a read is not dropped: it earns ONE more read, from
+        // wherever the first got to, once it lands. However long the burst, that is at most
+        // two reads per terminal — the one out, and the one owed.
+        let signalled (terminal: TerminalId) =
+            match Map.tryFind terminal model.TranscriptReads with
+            | Some out -> { model with TranscriptReads = Map.add terminal { out with Owed = true } model.TranscriptReads }, []
+            | None -> askTranscript terminal (readPositionOf terminal) false model
+        let forgotten (model: ClientModel) =
+            { model with
+                EventConsumer = { model.EventConsumer with Reading = None }
+                TranscriptReads = Map.empty }
+        match msg with
+        | ConnectedMsg _ -> askEventsIfBehind (forgotten model)
+        | DisconnectedMsg -> forgotten model, []
+        | EventsAvailableMsg _ -> askEventsIfBehind model
+        | EventsReadMsg (read, answer) when model.EventConsumer.Reading = Some read ->
+            let settled = { model with EventConsumer = { model.EventConsumer with Reading = None } }
+            match answer with
+            // A non-final page means more events already exist beyond this one.
+            | Ok page when not page.IsEnd -> askEvents settled
+            | Ok _ -> askEventsIfBehind settled
+            // The feed's policy has already spent its retries by the time this is reached, so
+            // do NOT re-request here: park, and re-arm on the next availability hint or
+            // reconnect. The read position is untouched, so the re-arm resumes exactly where
+            // consumption stopped.
+            //
+            // This is the seam that used to fail silently. A failed fetch became an empty
+            // FINAL page, which advanced nothing; "behind" therefore stayed true and the loop
+            // re-requested immediately — an unbounded spin, one request per round trip, with
+            // no log line and nothing in the model. Drafts, title, and presence kept syncing
+            // over the data channel the whole time, so the only symptom was a timeline that
+            // never filled.
+            | Error _ -> settled, []
+        // The terminal-feed counterpart of `EventsAvailable`: a hint that there is more,
+        // answered by a read rather than by trusting the hint's contents.
+        | TerminalAvailableMsg (terminal, length)
+            when TranscriptCursor.unread (readPositionOf terminal) (AvailableLength length) ->
+            signalled terminal
+        // A live record at or beyond the read position means history exists that this client
+        // has not fetched — the records between where it read to and where the live stream now
+        // is. Ask for them.
+        //
+        // Which comparison that is belongs to `TranscriptCursor`, not here: the index vs count
+        // distinction that decides it is carried by `TranscriptSignal`, and getting it wrong at
+        // this call site is the bug that shipped a terminal whose output never reached the
+        // store. See `Yession.Domain.Terminals`.
+        | TerminalRecordsMsg (terminal, records)
+            when records |> List.exists (fun (seq, _) -> TranscriptCursor.unread (readPositionOf terminal) (RecordAt seq)) ->
+            signalled terminal
+        | TranscriptReadMsg (terminal, read, answer) ->
+            match Map.tryFind terminal model.TranscriptReads with
+            | Some out when out.Read = read ->
+                match answer with
+                // `NextSeq > From` guards the one way this could spin: a chunk that yields
+                // nothing new would otherwise be re-read for ever at the same offset.
+                | Some page when not page.IsEnd && page.NextSeq > out.From ->
+                    askTranscript terminal page.NextSeq out.Owed model
+                // Settled — at the tail, or failed. A transcript read that fails is not a
+                // session that failed: the live leg keeps delivering, and the next
+                // availability hint re-arms this. Parking beats spinning. What was owed is
+                // asked now, from wherever this read got to.
+                | _ when out.Owed -> askTranscript terminal (readPositionOf terminal) false model
+                | _ -> { model with TranscriptReads = Map.remove terminal model.TranscriptReads }, []
+            | _ -> model, []
+        | _ -> model, []
+
     /// A message's consequences: the next model, and what it asks of the world outside it.
     let private apply (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =
-        let next = fold msg model
+        let next, reading = reads msg (fold msg model)
         // The launch surface's listing is asked for by whichever message first offers it:
         // anchoring happens once in a client's life on a session, so this asks once, and
         // the surface has no mount of its own to ask from.
@@ -4710,7 +4914,7 @@ module ClientModel =
             | Some key when not (Set.contains key next.KeyframesAsked) ->
                 { next with KeyframesAsked = Set.add key next.KeyframesAsked }, [ ClientEffect.FetchKeyframe key ]
             | Some _ | None -> next, []
-        next, effects @ answered @ unnoticed @ swapped @ leased @ resized @ present @ fetching @ offering
+        next, effects @ answered @ unnoticed @ swapped @ leased @ resized @ present @ fetching @ offering @ reading
 
     /// A message and the effects it asks for. A kill's press is resolved here, against the
     /// model as it stands, into the press it is (`killPress`) — then applied like any other.

@@ -149,7 +149,8 @@ let private representativeModel : ClientModel =
           // screen for the checklist. A brief one is deliberately silent (`CatchUpIsSlow`).
           CatchUpIsSlow = true
           Feed = FeedLive
-          MissingBefore = None }
+          MissingBefore = None
+          Reading = None }
       Agent = { ActiveTurn = Some turnId; Quiet = None; Interrupting = None }
       Presence =
         Map.ofList
@@ -198,6 +199,8 @@ let private representativeModel : ClientModel =
                 KnownLength = 2
                 ReadThrough = 2
                 Header = Some { Width = 80; Height = 24; Timestamp = 0L } } ]
+      TranscriptReads = Map.empty
+      ReadsAsked = 0
       TerminalKeyframes = Map.empty
       KeyframesAsked = Set.empty
       TerminalScreens = Map.empty

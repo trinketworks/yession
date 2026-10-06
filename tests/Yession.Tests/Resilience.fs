@@ -7,10 +7,10 @@ module Yession.Tests.Resilience
 // is down" is a value the test chooses rather than a server it has to kill and a race it has
 // to win. Everything on either side of that function is production code — the real
 // `EventFetch.overHttp` (URL scheme, chunk math, JSONL codec), the real resilience policy
-// that ships in the browser, the real `Client.connect` read loop, the real `ClientModel`, and
-// the real Session host on the other end of an in-memory channel. That combination —
-// durable history over HTTP, collaborative state over the data channel — is precisely the one
-// the browser runs, and the one no existing suite covered.
+// that ships in the browser, the real read loop (decided by `ClientModel`, carried out by
+// `Client.connect`), and the real Session host on the other end of an in-memory channel.
+// That combination — durable history over HTTP, collaborative state over the data channel —
+// is precisely the one the browser runs, and the one no existing suite covered.
 //
 // What these pin:
 //   * a failed read is REPORTED, not silently turned into an empty final page (which is what
@@ -1025,12 +1025,15 @@ let private startLifecycle (host: Host.SessionHost) (token: string) (id: string)
     let doc = Y.Doc.Create ()
     let local = peer id name
     let registry = BodyRegistry doc
-    let runner = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init local))
+    // What the program asks of the session — the event reads among it — goes to whichever
+    // session is being served, as the browser's `connectionRef` does.
+    let live : Client.Connection option ref = ref None
+    let runner =
+        Harness.run (Client.makeProgram { Client.Ports.offline with Client.Ports.Connection = fun () -> live.Value } doc (ClientModel.init local))
     let hello = { PeerId = local.PeerId; DisplayName = name; Token = token }
     let opens = ref 0
     let resumes = ref []
     let serverEnd : FrameChannel<string> option ref = ref None
-    let live : Client.Connection option ref = ref None
     // The link is supervised here exactly as the browser supervises it, on a clock this test
     // owns — so a half-open transport is noticed by the production rule, on demand.
     let clock = TestClock ()
@@ -1074,7 +1077,6 @@ let private startLifecycle (host: Host.SessionHost) (token: string) (id: string)
                         let connection =
                             Client.connect
                                 Client.ConnectOptions.defaults
-                                runner.Model
                                 doc
                                 registry
                                 (TextRegistry doc)
@@ -1362,7 +1364,6 @@ let private releaseTests =
                 let connection =
                     Client.connect
                         Client.ConnectOptions.defaults
-                        (fun () -> ClientModel.init local)
                         doc
                         registry
                         (TextRegistry doc)
@@ -1422,7 +1423,6 @@ let private releaseTests =
                 let connection =
                     Client.connect
                         Client.ConnectOptions.defaults
-                        runner.Model
                         doc
                         (BodyRegistry doc)
                         (TextRegistry doc)

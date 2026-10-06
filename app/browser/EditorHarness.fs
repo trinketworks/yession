@@ -1526,6 +1526,10 @@ do
         | ClientEffect.GitHub _
         | ClientEffect.GitHubPoll _ -> ()
         | ClientEffect.Move move -> PaneShell.move move
+        // No session to read from: the pages this harness shows it hands in itself, as the
+        // messages a read's answer would be.
+        | ClientEffect.ReadEvents _
+        | ClientEffect.ReadTranscript _
         // No session to ask for a keyframe: the replay plays without one.
         | ClientEffect.FetchKeyframe _
         | ClientEffect.Remember _
@@ -1899,7 +1903,7 @@ do
     //
     // The same person on a phone whose store holds none of this session — a first visit, an
     // evicted store, a hole the replay stopped at. Everything comes over the network, a page
-    // at a time from the oldest: the read loop (`Client.connect`) asks from its cursor, folds
+    // at a time from the oldest: the read loop (`ClientModel.reads`) asks from its cursor, folds
     // the answer, and asks again until the page it folded was the end. Measured on the home
     // deployment against that same session of 97 items: eleven thousand events, 116 pages,
     // 116 renders, and the conversation pinned to its foot the whole way — 65 frames on

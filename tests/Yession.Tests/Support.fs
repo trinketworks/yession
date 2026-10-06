@@ -647,11 +647,11 @@ let connectInMemoryClientVia
         DraftSlot.follow doc registry local.PeerId (user >> runner.Dispatch) |> ignore
         let hello = { PeerId = local.PeerId; DisplayName = name; Token = host.MintPeerToken () }
         let dispatch = user >> runner.Dispatch
-        let connection = Client.connect (makeOptions dispatch) runner.Model doc registry texts hello dispatch clientEnd
+        let connection = Client.connect (makeOptions dispatch) doc registry texts hello dispatch clientEnd
         wired.Value <- Some connection
         Async.StartImmediate connection.Run
         do! runner.WaitFor (fun m -> m.Connection = Connected)
-        return { Runner = runner; Connection = connection; Registry = registry; Texts = texts; Channel = clientEnd; Doc = doc; Hello = hello }
+        return { Runner = runner; Connection = connection; Registry = registry; Texts = texts; Channel = clientEnd; Doc = doc; Hello = hello; Wire = fun c -> wired.Value <- Some c }
     }
 
 /// `connectInMemoryClientVia` with options that do not depend on dispatch.
@@ -668,7 +668,10 @@ let reconnectClient (signalUrl: string) (client: Client) : Async<Client> =
     async {
         let! channel = WebRtc.connect signalUrl
         let options = { Client.ConnectOptions.defaults with PageSize = 2 }
-        let connection = Client.connect options client.Runner.Model client.Doc client.Registry client.Texts client.Hello (user >> client.Runner.Dispatch) channel
+        let connection = Client.connect options client.Doc client.Registry client.Texts client.Hello (user >> client.Runner.Dispatch) channel
+        // What the program asks of the session now goes over the new channel — the reads that
+        // catch it up first among them.
+        client.Wire connection
         Async.StartImmediate connection.Run
         do! client.Runner.WaitFor (fun m -> m.Connection = Connected)
         return { client with Connection = connection; Channel = channel }
