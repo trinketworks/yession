@@ -2087,8 +2087,10 @@ module Style =
     /// bleed; the gutter is where `fold` puts the arrow.
     let chatToolRun = cls [ itemGround; readingColumn; foldRow; "max-md:pl-4" ]
     /// "used n tools" — the chip voice, on its line; also the "used" before a lone call's
-    /// name.
-    let chatToolRunText = "font-light text-small leading-[inherit] text-ink-dim truncate min-w-0"
+    /// name. On its OWN step's line box, not the row's: Noto Sans's tall ascender on the
+    /// row's 20px box sat its x-height 2px below the arrow's centre, while the task card's
+    /// "ran n commands" (`chatChipText`, the same step) sat on it.
+    let chatToolRunText = "font-light text-small text-ink-dim truncate min-w-0"
     /// The calls, unfolding beneath the run's line. The body spans both columns
     /// (`foldBodyWide*`), so each call lays its own gutter and its arrow lands on the run's
     /// rail — no stepping back out of anything.
@@ -2099,17 +2101,18 @@ module Style =
     /// are a tap away rather than crammed onto the line: the line is the tool and how it
     /// went, and everything else is under it.
     let chatToolItem = cls [ foldRow; "py-0.5" ]
-    /// The call's line: tool, then outcome. The words sit on the BASELINE, so a prose "used"
-    /// and a mono name — two steps with two line-heights — read as one line rather than each
-    /// centring in its own box. The line is ONE of the row's (`h-[1lh]`), which is what keeps
-    /// it a line: a baseline-aligned ICON hangs its whole height below the text's baseline
-    /// and would otherwise grow the box a couple of pixels, taking the outcome's glyph — and
-    /// the arrow measured against this line — off it. The outcome centres itself instead
-    /// (`chatToolStatus`), the one thing on the line that is not a word.
+    /// The call's line: tool, then outcome. Everything on it sits on the BASELINE, so a prose
+    /// "used", a mono name and the outcome — three steps with three line-heights — read as
+    /// one line rather than each centring in its own box. The line is ONE of the row's
+    /// (`h-[1lh]`), which is what keeps it a line: a baseline-aligned ICON hangs below the
+    /// text's baseline and would otherwise grow the box, taking the arrow measured against
+    /// this line off it.
     let chatToolCall = "flex items-baseline gap-2 h-[1lh] text-ink-dim"
-    /// The outcome at the end of the call's line: a glyph, so it centres on the line rather
-    /// than standing on its baseline.
-    let chatToolStatus = "shrink-0 self-center flex items-center"
+    /// The outcome at the end of the call's line, on the baseline with the words — where the
+    /// task card's counts stand (`chatTaskCounts`, the same shape); a centred box put this
+    /// one a pixel below them. A FLEX box, so the mark brings its own line and not this
+    /// one's inherited strut, which would sink the whole line's baseline.
+    let chatToolStatus = "flex items-baseline shrink-0"
     /// `namespace/name` — mono, because it is an identifier and reads as one.
     /// `namespace/name` — mono, because it is an identifier and reads as one, and on the
     /// ROW's line box (`leading-[inherit]`) rather than its own step's: the row states the
