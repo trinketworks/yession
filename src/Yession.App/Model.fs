@@ -3401,7 +3401,7 @@ module ClientModel =
     /// guess and all, because there a name is how one entry is told from the next and no
     /// message is beside it.
     let chapterRuleName (model: ClientModel) (item: ConversationItem) : string =
-        if Chapters.unwritten CollabText.ylmish model.Synced.Chapters item then ""
+        if Chapters.unwritten CollabText.ylmish AutoChapters.policy model.Synced.Chapters item then ""
         else chapterName model item
 
     /// What the chapter at this message is called, for a surface that has an id and not the

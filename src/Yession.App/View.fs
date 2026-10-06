@@ -2836,6 +2836,7 @@ module View =
                   <input type="text" class="{Style.chapterName}"
                          data-chapter-name="{MessageId.value item.MessageId}"
                          aria-label="{Dom.Text.chapterNameLabel}"
+                         placeholder="{Dom.Text.chapterNamePlaceholder}"
                          autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
                          enterkeyhint="done"
                          value="{named}"

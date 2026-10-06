@@ -5185,6 +5185,44 @@ let editorTests =
                 Expect.isNotNull kept "what was typed is what the rule says, after the render that followed it"
                 return ()
             }
+        // The divider of a chapter nobody has named shows no name — the opening message is
+        // right under it — so the empty field is how it still invites one. The invitation
+        // is a promise only a painted page can settle: the placeholder is a pseudo-element
+        // whose ink is whatever the cascade resolves, so the markup carries the attribute
+        // identically whether it shows at rest, never, or only for a pointer. It must be
+        // absent at rest (a clean line), and present for the keyboard's focus, which has no
+        // hover to stand in for it.
+        editorCaseIn 1440 900 "an unnamed chapter's field offers a name only when focused or hovered" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
+                let probe =
+                    """() => {
+                         const field = document.querySelector("#shell [data-chapter-name='msg-filler-8']")
+                         const ink = getComputedStyle(field, '::placeholder').color
+                         return JSON.stringify({
+                           empty: field.value === '',
+                           offered: field.placeholder.length > 0,
+                           shown: ink !== 'rgba(0, 0, 0, 0)' && ink !== 'transparent' })
+                       }"""
+                let read () =
+                    async {
+                        let! report = await (page.EvaluateAsync<string> probe)
+                        use doc = System.Text.Json.JsonDocument.Parse report
+                        let flag (name: string) = doc.RootElement.GetProperty(name).GetBoolean ()
+                        return flag "empty", flag "offered", flag "shown"
+                    }
+                // Away from the field, and not focused: the line is clean.
+                do! awaitU (page.Mouse.MoveAsync (700.0f, 10.0f))
+                let! empty, offered, atRest = read ()
+                Expect.isTrue (empty && offered) "the field is empty and has something to offer, so the next two readings mean something"
+                Expect.isFalse atRest "at rest the divider shows no placeholder"
+                // The keyboard's own way in: focus with no pointer over the field.
+                do! awaitU (page.FocusAsync "#shell [data-chapter-name='msg-filler-8']")
+                do! awaitU (page.Mouse.MoveAsync (700.0f, 10.0f))
+                let! _, _, focused = read ()
+                Expect.isTrue focused "keyboard focus on the empty field shows the placeholder"
+                return ()
+            }
         // A collaborator's caret in that same name. Nothing in the markup can settle where a
         // marker LANDS: it is absolutely positioned by measurement after the render, so a
         // marker placed against the wrong box, or against a stylesheet's idea of the field,

@@ -629,6 +629,11 @@ module Dom =
         /// What the field on a rule is, for a reader who cannot see the rule it sits on. The
         /// name itself is the value, so the label says what KIND of thing it is.
         let chapterNameLabel = "Chapter name"
+
+        /// What an empty name field offers, shown only under the pointer or the keyboard's
+        /// focus: a chapter nobody has named shows no name on its divider, and this is how
+        /// the divider still says it can be given one.
+        let chapterNamePlaceholder = "name this chapter"
         /// The break's label says how long the session was away; its accessible name and its
         /// tooltip say the whole of what pressing it does, because the visible words are a
         /// duration and a duration does not announce that it is a control.
