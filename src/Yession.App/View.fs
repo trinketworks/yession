@@ -2906,7 +2906,7 @@ module View =
                 </div>"""
         let chapterRule (item: ConversationItem) =
             let held = Chapters.written CollabText.ylmish model.Synced.Chapters item
-            let named = ClientModel.chapterName model item
+            let named = ClientModel.chapterRuleName model item
             // Only peers whose caret is in THIS chapter's name get a marker here, the way the
             // header takes the title's. A name is a field like any other, and a marker in the
             // wrong one is a collaborator apparently standing somewhere they are not.
@@ -2921,6 +2921,7 @@ module View =
                   <input type="text" class="{Style.chapterName}"
                          data-chapter-name="{MessageId.value item.MessageId}"
                          aria-label="{Dom.Text.chapterNameLabel}"
+                         placeholder="{Dom.Text.chapterNamePlaceholder}"
                          autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
                          enterkeyhint="done"
                          value="{named}"

@@ -5171,10 +5171,11 @@ let editorTests =
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
                 do! awaitU (page.ClickAsync "#shell [data-chapter-name='msg-filler-8']")
-                // To the end of whatever the heuristic guessed, so this adds rather than
-                // replacing — an edit against the text the session holds is what the field is
-                // for, and appending is the edit most likely to expose a diff computed against
-                // the wrong side.
+                // To the end of what the field holds, so this adds rather than replacing — an
+                // edit against the text the session holds is what the field is for, and
+                // appending is the edit most likely to expose a diff computed against the
+                // wrong side. (A chapter nobody has named holds nothing, so the first words
+                // typed here ARE its name.)
                 do! awaitU (page.Keyboard.PressAsync "End")
                 do! awaitU (page.Keyboard.TypeAsync " — settled")
                 let! kept =
@@ -5182,6 +5183,44 @@ let editorTests =
                         """document.querySelector("#shell [data-chapter-name='msg-filler-8']")
                              ?.value.endsWith(' — settled') === true""")
                 Expect.isNotNull kept "what was typed is what the rule says, after the render that followed it"
+                return ()
+            }
+        // The divider of a chapter nobody has named shows no name — the opening message is
+        // right under it — so the empty field is how it still invites one. The invitation
+        // is a promise only a painted page can settle: the placeholder is a pseudo-element
+        // whose ink is whatever the cascade resolves, so the markup carries the attribute
+        // identically whether it shows at rest, never, or only for a pointer. It must be
+        // absent at rest (a clean line), and present for the keyboard's focus, which has no
+        // hover to stand in for it.
+        editorCaseIn 1440 900 "an unnamed chapter's field offers a name only when focused or hovered" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
+                let probe =
+                    """() => {
+                         const field = document.querySelector("#shell [data-chapter-name='msg-filler-8']")
+                         const ink = getComputedStyle(field, '::placeholder').color
+                         return JSON.stringify({
+                           empty: field.value === '',
+                           offered: field.placeholder.length > 0,
+                           shown: ink !== 'rgba(0, 0, 0, 0)' && ink !== 'transparent' })
+                       }"""
+                let read () =
+                    async {
+                        let! report = await (page.EvaluateAsync<string> probe)
+                        use doc = System.Text.Json.JsonDocument.Parse report
+                        let flag (name: string) = doc.RootElement.GetProperty(name).GetBoolean ()
+                        return flag "empty", flag "offered", flag "shown"
+                    }
+                // Away from the field, and not focused: the line is clean.
+                do! awaitU (page.Mouse.MoveAsync (700.0f, 10.0f))
+                let! empty, offered, atRest = read ()
+                Expect.isTrue (empty && offered) "the field is empty and has something to offer, so the next two readings mean something"
+                Expect.isFalse atRest "at rest the divider shows no placeholder"
+                // The keyboard's own way in: focus with no pointer over the field.
+                do! awaitU (page.FocusAsync "#shell [data-chapter-name='msg-filler-8']")
+                do! awaitU (page.Mouse.MoveAsync (700.0f, 10.0f))
+                let! _, _, focused = read ()
+                Expect.isTrue focused "keyboard focus on the empty field shows the placeholder"
                 return ()
             }
         // A collaborator's caret in that same name. Nothing in the markup can settle where a
@@ -5197,6 +5236,15 @@ let editorTests =
         editorCaseIn 1440 900 "a collaborator's caret in a chapter's name stands in that name" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
+                // A name to be IN. The rule of a chapter nobody has named is a plain divider
+                // with an empty field, and a caret at index 3 and at index 9 of nothing are
+                // the same place — so somebody names it first, as a person would.
+                do! awaitU (page.ClickAsync "#shell [data-chapter-name='msg-filler-8']")
+                do! awaitU (page.Keyboard.TypeAsync "Where it was settled")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """document.querySelector("#shell [data-chapter-name='msg-filler-8']")
+                             ?.value === 'Where it was settled'""")
                 do! awaitU (page.EvaluateAsync "() => window.__chapterCaret('msg-filler-8', 3, 3)")
                 // Waited for by EXISTENCE, not visibility: a bare caret is a zero-width
                 // highlight with the caret bar inside it, which every "is it visible" check

@@ -2249,12 +2249,18 @@ module Style =
     /// `truncate` rather than wrap: a rule is one line, and a name long enough to wrap has
     /// stopped being a name. `touchType` because a keyboard is coming, and a phone zooms into
     /// anything under 16px it focuses and never zooms back out.
+    ///
+    /// The placeholder of a chapter nobody has named is invisible at rest — the divider is a
+    /// clean line until somebody reaches for it — and `ink-faint` under the pointer or the
+    /// keyboard's focus, which is when an invitation to name it is wanted. Ink and not
+    /// opacity, so the contrast floor holds on the lifted surface it appears over.
     let chapterName =
         // `-ml-1.5` takes the padding back out on the left, so the WORDS start on the content
         // column's edge and only the lifted surface reaches into the gutter.
         cls [ "col-start-2 -ml-1.5 min-w-0 bg-transparent border-0 px-1.5 py-0.5"
               "hover:bg-surface-2 focus:bg-surface-2 transition-colors"; focusRing
               "font-ui font-light text-small text-ink-dim focus:text-ink truncate"
+              "placeholder:text-transparent hover:placeholder:text-ink-faint focus:placeholder:text-ink-faint"
               touchType ]
 
     /// What a person can DO to one item, behind an ellipsis at its top-right.

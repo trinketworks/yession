@@ -2028,6 +2028,61 @@ let private uiChecklistTests =
             Expect.equal (ClientModel.chapterName named item) "Where it was settled" "theirs, not a second guess"
             Expect.isTrue ((Support.render named).Contains "Where it was settled") "and it is on the page"
 
+        // The divider stands directly above the message it opens, so a name that is only that
+        // message's own words (`Chapters.defaultName`) says one sentence twice, a line apart.
+        // The rule of a chapter somebody named keeps its name; one still wearing the guess is a
+        // plain divider, and the contents — where nothing sits beside an entry — keep the guess.
+        let ruleOf (messageId: string) (html: string) =
+            let start = html.IndexOf (Dom.attr Dom.Hooks.chapterRule messageId)
+            Expect.isTrue (start >= 0) "the rule renders"
+            html.Substring (start, html.IndexOf ("</div>", start) - start)
+
+        testCase "a rule over a chapter nobody named does not repeat its opening message" <| fun () ->
+            Expect.isFalse
+                ((ruleOf "msg-1" (Support.render (withChapters [ "msg-1" ]))).Contains "ship it")
+                "the guess is the message under the rule, so the rule leaves it unsaid"
+
+        // `Chapters.toggle` writes the guess into the session when a chapter is made, so a
+        // chapter somebody opened by hand holds written words from its first moment. Words
+        // that are still exactly the guess are not a name.
+        testCase "a rule over a chapter holding only the guess does not repeat it either" <| fun () ->
+            let model = withChapters [ "msg-1" ]
+            let seeded =
+                { model with
+                    Synced =
+                        { model.Synced with
+                            Chapters =
+                                model.Synced.Chapters
+                                |> Map.add
+                                    (MessageId.create "msg-1" |> expect)
+                                    { Opens = true; Name = Ylmish.Text.ofString "ship it" } } }
+            Expect.isFalse
+                ((ruleOf "msg-1" (Support.render seeded)).Contains "ship it")
+                "the seeded guess is still the guess"
+
+        testCase "a rule over a chapter somebody named wears that name" <| fun () ->
+            let model = withChapters [ "msg-1" ]
+            let named =
+                { model with
+                    Synced =
+                        { model.Synced with
+                            Chapters =
+                                model.Synced.Chapters
+                                |> Map.add
+                                    (MessageId.create "msg-1" |> expect)
+                                    { Opens = true; Name = Ylmish.Text.ofString "Where it was settled" } } }
+            Expect.isTrue
+                ((ruleOf "msg-1" (Support.render named)).Contains "Where it was settled")
+                "a name that says more than the message does belongs on the rule"
+
+        testCase "the contents still name a chapter nobody named by its guess" <| fun () ->
+            let html = Support.render (withChapters [ "msg-1" ])
+            let start = html.IndexOf (Dom.attr Dom.Hooks.chapterEntry "msg-1")
+            Expect.isTrue (start >= 0) "the entry renders"
+            Expect.isTrue
+                (html.Substring(start, html.IndexOf ("</button>", start) - start).Contains "ship it")
+                "an entry with no message beside it needs the guess to be told apart"
+
         // A chapter can sit on a message that has not said anything yet — a turn that started
         // and wrote nothing. A control named by an empty string is announced as "button".
         testCase "a chapter on a message with nothing in it still names its control" <| fun () ->
