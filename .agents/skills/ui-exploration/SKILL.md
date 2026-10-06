@@ -52,8 +52,9 @@ only when `vw` is the width you asked for; `overflowX: true` (or `docW > vw`) is
 phone user cannot scroll back from, which is a reachability bug, not a cosmetic one.
 
 **Hover that never happens.** Tailwind wraps every `hover:` utility in `(hover: hover)`, and
-a headless browser's answer is whatever its host's is. The camera gives a desktop width a
-mouse and a phone width a finger, and prints `hover` so you can see which you got. A hover
+a headless browser's answer is whatever its host's is. The camera gives a `wide` screen (the
+stylesheet's `phone:` variant negated: width >= 768 and height > 500) a mouse, and a phone, a
+sideways one included, a finger, and prints `hover` so you can see which you got. A hover
 picture is only a hover picture when `hover` is `true`.
 
 **Focus that never applies.** A headless page is not the frontmost window, so `:focus`
