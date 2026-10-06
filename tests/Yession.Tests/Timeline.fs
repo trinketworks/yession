@@ -837,6 +837,25 @@ let private reloadTests =
             let model = reloaded (remembering [ terminalB ]) [ events ]
             Expect.equal (stripKeys model) [ "terminal:term-b" ] "only the tab that was open"
 
+        // A closed tab stays until it is put away (F2), and a reload is not putting it away:
+        // the remembered strip holds it, and the log's having it closed does not take it out.
+        testCase "a closed tab that was not put away comes back from a reload, where it stood" <| fun () ->
+            let events =
+                [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "shell")
+                  at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer"; By = None }) ]
+            let model = reloaded (remembering [ terminalA; terminalB ]) [ events ]
+            Expect.equal (stripKeys model) [ "terminal:term-a"; "terminal:term-b" ] "closed, and still first"
+
+        // With nothing remembered the strip is rebuilt from the log, which reopens every
+        // terminal this person ever opened. What closed while they were away is history, not a
+        // tab they had in front of them: the list is where it is.
+        testCase "a log replayed with nothing remembered brings back only what still runs" <| fun () ->
+            let model =
+                heardOf
+                    [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "shell")
+                      at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "closed by a peer"; By = None }) ]
+            Expect.equal (stripKeys model) [ "terminal:term-b" ] "the running one"
+
         testCase "a restored tab for a terminal the session does not have is dropped after the first page" <| fun () ->
             let model = reloaded (remembering [ terminalA; TerminalId.create "term-gone" |> expect ]) [ oneBlock ]
             Expect.equal (stripKeys model) [ "terminal:term-a" ] "the tab onto nothing is gone"
@@ -2719,8 +2738,8 @@ let private listTests =
             let model = clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (closedNow terminalA) ]
             Expect.isNone (ClientModel.killPress terminalA model) "nothing left to end"
 
-        // A closed tab stays while it is the one on screen (`settle`), and had no way to be
-        // put away short of choosing another (desktop journey, finding 16). Its × does that.
+        // A closed tab stays until it is put away (F2; desktop journey, finding 16). Its ×
+        // does that, and Delete on it.
         testCase "a closed terminal's tab can be put away, and the pane moves to the tab beside it" <| fun () ->
             let model =
                 clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
@@ -2729,6 +2748,14 @@ let private listTests =
                 |> fun model -> withPage [ at 3L 2.0 (closedNow terminalA) ] model
                 |> Support.step (DismissTabMsg terminalA)
             Expect.equal (model.Tabs, ClientModel.selectedTerminal model) ([ terminalB ], Some terminalB) "gone, and on its neighbour"
+
+        testCase "a closed tab that is not on screen can be put away, and the pane stays" <| fun () ->
+            let model =
+                heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalB))
+                |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
+                |> Support.step (DismissTabMsg terminalA)
+            Expect.equal (model.Tabs, ClientModel.selectedTerminal model) ([ terminalB ], Some terminalB) "gone, and nothing moved"
 
         testCase "a running terminal's tab cannot be put away" <| fun () ->
             // Only a kill ends a tab that holds something running (P2-2); the refusal is the
@@ -2991,22 +3018,76 @@ let private tabTests =
                 |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
             Expect.equal (stripKeys model) [ "terminal:term-a"; "terminal:term-b" ] "not taken from under the reader"
 
-        testCase "a closed terminal leaves the strip when another is chosen" <| fun () ->
-            // Which is also what a recording opened from the list does: the list is the door
-            // to every recording, and the strip is what is running plus what is on screen.
+        // "a closed terminal leaves the strip when another is chosen" and "a terminal that
+        // closes unselected leaves the strip at once" were here (P2-1). On a phone that rule
+        // read as tabs blinking in and out — the one closed a moment ago gone as soon as the
+        // reader looked at another, and back again after everything else when a chip laid a
+        // preview over it (F2). A closed tab now keeps its place until the reader puts it away.
+        testCase "a closed terminal's tab keeps its place when another is chosen" <| fun () ->
             let model =
-                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
-                |> Support.step (ShowInPaneMsg (Reading terminalA))
-                |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
+                heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs"); at 3L 2.0 (opened terminalC "tests") ]
                 |> Support.step (ShowInPaneMsg (Reading terminalB))
-            Expect.equal (stripKeys model) [ "terminal:term-b" ] "gone once the reader looked elsewhere"
+                |> thenFolded [ at 4L 3.0 (closedNow terminalB) ]
+                |> Support.step (ShowInPaneMsg (Reading terminalC))
+            Expect.equal (stripKeys model) [ "terminal:term-a"; "terminal:term-b"; "terminal:term-c" ] "where it stood"
 
-        testCase "a terminal that closes unselected leaves the strip at once" <| fun () ->
+        testCase "a terminal that closes unselected keeps its place" <| fun () ->
             let model =
-                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
+                heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs"); at 3L 2.0 (opened terminalC "tests") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalC))
+                |> thenFolded [ at 4L 3.0 (closedNow terminalB) ]
+            Expect.equal (stripKeys model) [ "terminal:term-a"; "terminal:term-b"; "terminal:term-c" ] "where it stood"
+
+        testCase "a chip of a closed terminal's command selects its tab where it stands" <| fun () ->
+            let model =
+                heardOf
+                    [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (started terminalA "1" byAda "ls" 1)
+                      at 3L 2.0 (opened terminalB "logs"); at 4L 3.0 (opened terminalC "tests") ]
+                |> thenFolded [ at 5L 4.0 (closedNow terminalA) ]
+                |> Support.step (ShowInPaneMsg (Reading terminalC))
+                |> Support.step (chip terminalA "1")
+            Expect.equal
+                (stripKeys model, ClientModel.selectedTerminal model)
+                ([ "terminal:term-a"; "terminal:term-b"; "terminal:term-c" ], Some terminalA)
+                "the preview is over its own tab, which did not move"
+
+        // The way back from a preview is the tab it is laid over, beside it. That used to hold
+        // because the tab came to the END of the strip with the preview (F2); now the tab stays
+        // where it stood, so the preview's item goes to it.
+        testCase "a preview's item sits right after the tab it is laid over" <| fun () ->
+            let model =
+                heardOf
+                    [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (started terminalA "1" byAda "ls" 1)
+                      at 3L 2.0 (opened terminalB "logs") ]
+                |> Support.step (chip terminalA "1")
+            let pivot = markupAt Dom.Hooks.panePivot (Support.render model)
+            let where (hook: string) = pivot.IndexOf hook
+            let a, preview, b =
+                where (Dom.attr Dom.Hooks.paneTab "terminal:term-a"), where Dom.Hooks.panePreviewTab, where (Dom.attr Dom.Hooks.paneTab "terminal:term-b")
+            Expect.isTrue (a >= 0 && a < preview && preview < b) (sprintf "term-a at %d, the preview at %d, term-b at %d" a preview b)
+
+        testCase "a chip of a closed terminal that was put away does not bring its tab back" <| fun () ->
+            let model =
+                heardOf
+                    [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (started terminalA "1" byAda "ls" 1)
+                      at 3L 2.0 (opened terminalB "logs") ]
                 |> Support.step (ShowInPaneMsg (Reading terminalB))
-                |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
-            Expect.equal (stripKeys model) [ "terminal:term-b" ] "only what is running, and what is on screen"
+                |> thenFolded [ at 4L 3.0 (closedNow terminalA) ]
+                |> Support.step (DismissTabMsg terminalA)
+                |> Support.step (chip terminalA "1")
+            Expect.equal
+                (stripKeys model, model.Pane)
+                ([ "terminal:term-b" ], Some (Previewing (Preview.ofSubject (PreviewSubject.Block (terminalA, block "1")), Some (Reading terminalB))))
+                "a glance, laid over the terminal I was on"
+
+        testCase "a terminal put away and opened again from the list comes back in its place" <| fun () ->
+            let model =
+                heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs"); at 3L 2.0 (opened terminalC "tests") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalB))
+                |> thenFolded [ at 4L 3.0 (closedNow terminalB) ]
+                |> Support.step (DismissTabMsg terminalB)
+                |> Support.step (OpenInPaneMsg (Reading terminalB))
+            Expect.equal (stripKeys model) [ "terminal:term-a"; "terminal:term-b"; "terminal:term-c" ] "between the two it opened between"
 
         testCase "a closed terminal is still in the list" <| fun () ->
             let model =
@@ -3331,8 +3412,8 @@ let private tabTests =
             Expect.equal effects [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusSwitcherRow terminalA)) ] "onto the row above"
 
         testCase "a kill of the selected tab lands on its own tab" <| fun () ->
-            // The selected tab stays, closed, until the reader chooses another (`settle`), and
-            // the hand that pressed its × is already there.
+            // The tab stays, closed, until the reader puts it away, and the hand that pressed
+            // its × is already there.
             let rows = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
             let pressed =
                 clientOf rows
@@ -3348,12 +3429,15 @@ let private tabTests =
                     pressed
             Expect.equal effects [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusTab terminalB)) ] "onto its own tab"
 
-        testCase "a kill of a tab that is not selected lands on its neighbour" <| fun () ->
-            // Delete on a focused tab the reader had walked to: it leaves the strip at once, and
-            // the tab that takes its place takes the focus.
+        // "a kill of a tab that is not selected lands on its neighbour" was here, while a tab
+        // that closed unselected left the strip at once. It stays now (F2), closed, where it
+        // stood.
+        testCase "a kill of a tab that is not selected lands on its own tab" <| fun () ->
+            // Delete on a focused tab the reader had walked to: the hand is on that tab, and
+            // the tab is still there.
             let rows = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
             let pressed =
-                clientOf rows
+                heardOf rows
                 |> Support.step (ShowInPaneMsg (Reading terminalA))
                 |> Support.step (ShowInPaneMsg (Reading terminalB))
                 |> Support.step (CloseTerminalMsg terminalA)
@@ -3364,7 +3448,7 @@ let private tabTests =
                           LastOffset = Some (EventOffset.create 3L |> expect)
                           IsEnd = true })
                     pressed
-            Expect.equal effects [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusTab terminalB)) ] "onto the tab beside it"
+            Expect.equal effects [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusTab terminalA)) ] "onto its own tab"
 
         testCase "a terminal somebody else ends moves no focus" <| fun () ->
             let rows = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
@@ -3752,8 +3836,10 @@ let private tabTests =
 
         // The strip's whole contract, asked of every history of the acts that move a pane,
         // exhaustively to a small depth, and after every step: it holds terminals the session
-        // has, each still running or the one on screen, each once — and a preview, which is
-        // what used to break it, can be up through all of it without ever being one of them.
+        // has, each once, in the order they opened — and a preview, which is what used to
+        // break it, can be up through all of it without ever being one of them. "Each still
+        // running or the one on screen" was part of it until a closed tab kept its place (F2);
+        // the order is what says now that nothing moves.
         testCase "the strip holds only terminals" <| fun () ->
             let chart = Content.ContentRef.create "artifacts/chart.png/0000-ab12cd" |> expect
             let ids = [ terminalA; terminalB; terminalC ]
@@ -3786,19 +3872,20 @@ let private tabTests =
                   "the agent shows a file", (fun s ->
                       page [ SessionEvent.TabOpened { TabOpened.Ref = ViewingFile chart; TabOpened.Focus = true } ] s)
                   "the agent takes it back", (fun s -> page [ SessionEvent.TabClosed { TabClosed.Ref = ViewingFile chart } ] s)
-                  "switcher", (fun (m, n, c) -> Support.step ToggleSwitcherMsg m, n, c) ]
+                  "switcher", (fun (m, n, c) -> Support.step ToggleSwitcherMsg m, n, c)
+                  "put away", (fun (m, n, c) -> Support.step (DismissTabMsg (latest c)) m, n, c) ]
             let rec walk (depth: int) (path: string list) (state: ClientModel * int64 * int) =
                 let model, _, _ = state
-                let selected = ClientModel.selectedTerminal model
+                let openOrder = ClientModel.terminalRows model |> List.map (fun view -> view.TerminalId)
                 let fault =
                     if List.distinct model.Tabs <> model.Tabs then Some "holds a terminal twice"
+                    elif openOrder |> List.filter (fun terminal -> List.contains terminal model.Tabs) <> model.Tabs then
+                        Some "is not in the order its terminals opened"
                     else
                         model.Tabs
                         |> List.tryPick (fun terminal ->
                             match Projection.tryFind terminal model.Terminals with
                             | None -> Some (sprintf "holds %s, which the session does not have" (TerminalId.value terminal))
-                            | Some view when not view.IsOpen && selected <> Some terminal ->
-                                Some (sprintf "holds %s, closed and not on screen" (TerminalId.value terminal))
                             | Some _ -> None)
                 match fault with
                 | Some said ->
@@ -3807,7 +3894,9 @@ let private tabTests =
                 if depth > 0 then
                     for name, step in steps do
                         walk (depth - 1) (name :: path) (step state)
-            walk 4 [] (clientOf [ at 1L 0.0 (sent "1" "hello") ], 2L, 0)
+            // From a client that has read the log through, so every close in a walk is NEWS —
+            // the case that keeps a closed tab (F2), and so the one whose order can go wrong.
+            walk 4 [] (heardOf [ at 1L 0.0 (sent "1" "hello") ], 2L, 0)
 
         testCase "unattributed, I am still my peer" <| fun () ->
             // `--auth localhost` verifies nobody, so the log says `PeerRef` and the answer has

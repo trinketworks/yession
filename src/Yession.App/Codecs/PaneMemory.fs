@@ -68,7 +68,8 @@ module CommandTally =
 /// counts everything the log replays as already looked at — what a reload did before.
 [<RequireQualifiedAccess>]
 type PaneMemory =
-    { /// The strip, left to right — what `ClientModel.Tabs` held.
+    { /// The strip, left to right — what `ClientModel.Tabs` held, closed tabs not yet put
+      /// away among them (F2).
       Tabs : TerminalId list
       /// The terminal the pane was about, if one had been chosen.
       Selected : TerminalId option

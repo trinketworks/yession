@@ -4263,7 +4263,7 @@ module View =
     /// The tabs are `Tabs` and nothing else: terminals this client opened. Every other
     /// terminal the session has is reached through `all`. A tab's × is its terminal's kill
     /// (P2-2) — there is no way to drop a tab and leave its terminal running — and a closed
-    /// one leaves the pivot once the reader is looking at another (`ClientModel.settle`).
+    /// one keeps its place, closed, until the reader puts it away with its × (F2).
     /// What the chat opens is a PREVIEW (P2-1), laid over the terminal it belongs to, with an
     /// item of its own kind in the pivot: one at a time, slanted, with its own close.
     let private contentPane (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
@@ -4358,8 +4358,8 @@ module View =
                     html $"""<span class="{Style.pivotMark}" data-terminal-tab-running>{terminalMark model view}</span>"""
                 else terminalMark model view
             // A closed item's ×, where an open one's kill was: nothing is left to end, so it
-            // puts the tab away (`DismissTabMsg`) — the way to be done with a terminal that
-            // finished while you were looking at it, without choosing another first.
+            // puts the tab away (`DismissTabMsg`) — the one way a closed tab leaves the strip,
+            // and Delete on the item is the same press from the keyboard.
             // On the selected item only, as the kill is: under a preview the terminal's item is
             // the way back to it, and a × beside the preview's own × read as one control twice.
             let dismiss =
@@ -4794,6 +4794,18 @@ module View =
                               @click={Ev(fun _ -> pressingNew ())}>+</button>
                       {if model.PaneMenu then newMenu Style.paneNewMenu else Lit.nothing}
                     </div>"""
+        // The preview's item sits right after the tab it is laid over — the way back is the
+        // item beside it — and at the end only over nothing. That tab keeps its own place in
+        // the strip (F2), so the preview goes to it rather than it coming to the preview.
+        let strip =
+            let over = model.Pane |> Option.bind PaneMode.subject |> Option.map TerminalMode.terminal
+            match previewing with
+            | Some preview when tabs |> List.exists (fun view -> Some view.TerminalId = over) ->
+                tabs
+                |> List.collect (fun view ->
+                    if Some view.TerminalId = over then [ tabItem view; previewItem preview ] else [ tabItem view ])
+            | Some preview -> (tabs |> List.map tabItem) @ [ previewItem preview ]
+            | None -> tabs |> List.map tabItem
         let pivot =
             html $"""
                 <div class="{Style.panePivotRow}">
@@ -4805,10 +4817,7 @@ module View =
                                         moveTabFocus (e :?> Browser.Types.KeyboardEvent))}>
                     {allItem}
                     <div class="{Style.panePivotScroller}" data-pane-strip>
-                      {tabs |> List.map tabItem}
-                      {match previewing with
-                       | Some preview -> previewItem preview
-                       | None -> Lit.nothing}
+                      {strip}
                     </div>
                   </div>
                   {newCell}
