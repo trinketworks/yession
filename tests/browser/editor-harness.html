@@ -26,13 +26,20 @@
     <!-- The replay of a recorded terminal mounts here (Plan 13, stage 3e): the same
          `asciinema-player` binding the client uses, driven by a `.cast` the client's own
          rebuild produced. -->
-    <div id="replay"></div>
+    <!-- Both replay hosts are given a HEIGHT, as the pane's read-only region gives its
+         player one: the player scales its terminal to fit its box in both directions
+         (`Replay.mount`), and a box whose height is its content has nothing to fit. This one
+         is the page's FIRST player, and narrow for its 80x24 recording, so the terminal is
+         scaled to the width — which is where a character cell measured wrong shows, as
+         columns running off the right-hand side. Both are kept short: the shell below them
+         is in the page's flow, and cases on a phone hit-test it where the viewport ends. -->
+    <div id="replay" style="width: 16rem; height: 14rem"></div>
     <!-- A second recording, this one with a long idle gap in it and a chapter on the far
          side (Plan 25, stage 1). The mount above cannot fail the way the real pane failed:
          its recording has no dead air to compress and its one chapter sits at t=0, so a
          chapter list on the wrong clock still looks right. This one answers whether
          chapters and a start position ride the SAME clock as the records. -->
-    <div id="replay-gappy"></div>
+    <div id="replay-gappy" style="height: 12rem"></div>
     <!-- Two peers converging on ONE body, relayed in this page: no WebRTC, no Session
          Process, no native addon. `#peer-a` is the author's editable composer, `#peer-b` the
          read-only mirror a co-editor sees. `window.__caretStorm(true)` pushes presence

@@ -1471,7 +1471,7 @@ module Style =
     /// free for its actions handle (`itemGround`'s `pr-8`), which no message's words enter.
     let chatJumpToLatestRail = cls [ readingColumn; "max-md:max-w-none relative h-8" ]
 
-    /// The button on that rail: the chat's twin of `terminalLiveFloat`'s solid ground —
+    /// The button on that rail: the chat's twin of `terminalJumpToLatest`'s solid ground —
     /// opaque so it reads over whatever is scrolling under it, no rounded corners because
     /// this product draws none (see `itemGround`).
     ///
@@ -3140,6 +3140,18 @@ module Style =
     /// One name for one box. It had two, and the second was reached for by whichever surface
     /// its author happened to be reading.
     let paneReadonly = "flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 px-3 py-3"
+    /// What a replay player is mounted into, inside its read-only region (`Replay.mount`): the
+    /// region's whole height, because the player scales its terminal to fit the box it is given
+    /// in BOTH directions and a box with no height of its own gives it nothing to fit. Never
+    /// shorter than the player's control bar plus a few lines, so a region squeezed to a sliver
+    /// scrolls rather than handing the player a height it would scale to below zero.
+    ///
+    /// The player itself spans the region's width whatever its terminal does, with the terminal
+    /// centred in it. Left to itself the player is exactly as wide as the terminal it scaled,
+    /// and a tall, narrow recording fitted to a short panel came out narrower than its own
+    /// control bar: the bar's last button ran past the player's edge and was clipped away. The
+    /// room either side of the terminal is the player's own ground, so it reads as letterboxing.
+    let replayStage = "h-full min-h-24 [&_.ap-player]:min-w-full [&_.ap-term]:mx-auto"
     /// A stretch's facts, above whatever renders its recording.
     let paneFacts = "shrink-0 flex flex-col gap-1 px-3 py-3 " + Stroke.dividerBottom
     /// A read-only tab's verbs, under whatever it is showing: the way to the recording, and
@@ -3411,28 +3423,30 @@ module Style =
         cls [ "self-start flex items-center gap-2 bg-transparent border-0 cursor-pointer px-0 py-1"
               "font-terminal text-code-sm text-ink-faint hover:text-ink transition-colors"; focusRing ]
 
-    /// Coming back is TRANSIENT — it exists only while you are behind the live edge — and it
-    /// is about where you are in the scroll, so it floats over the scroller. The same slot
-    /// every chat client puts "jump to latest" in, for the same reason.
+    /// Coming back is TRANSIENT — it exists only while you are behind the live edge. How far
+    /// behind is said on a line of its own UNDER the player, starting on the pane's rail like
+    /// every other line of text in it.
     ///
-    /// A status line, not a box: what floats here is a fact (how far behind live), and a
-    /// bordered box around a fact reads as a control nobody can press. The surface ground
-    /// stays, so it reads over whatever is playing under it.
-    let terminalLiveFloat =
-        "absolute right-3 bottom-3 z-10 flex items-center gap-3 px-3 py-1.5 bg-surface"
+    /// Under it rather than over it. It floated in that corner, and the corner of a player is
+    /// its control bar: the fact sat on top of the bar's last buttons, so the words were
+    /// unreadable and the buttons unpressable. In the flow, the player fits itself to what is
+    /// left (`Replay.mount`) and the two never meet.
+    ///
+    /// A status line, not a box: what stands here is a fact (how far behind live), and a
+    /// bordered box around a fact reads as a control nobody can press.
+    let terminalBehindLine = "shrink-0 flex items-center gap-3 px-3 pb-2"
     /// What it says: how far behind, as a caption (`paneSays`'s voice).
     let terminalBehind = "font-ui font-light text-small text-ink-dim"
-    /// The rewound read is a player, not a scroller, so it has no scroll box of its own to
-    /// float over — this is the positioned region the way back hangs in.
-    let terminalReplayRegion = "relative flex-1 min-h-0 flex flex-col"
+    /// The rewound read: the player's region, and under it how far behind live it is.
+    let terminalReplayRegion = "flex-1 min-h-0 flex flex-col"
 
     /// The region a terminal's text — its blocks, or its live screen — scrolls in, and its
     /// "jump to latest" floats over: `chatRegion`'s reason, since the scroller cannot be the
     /// positioned ancestor of something that must not scroll away with it.
     let terminalTailRegion = "relative flex-1 min-h-0 flex flex-col"
 
-    /// That float's slot: placed where `terminalLiveFloat` stands, the corner every chat
-    /// client puts the way back in, and hidden until `Tail` says the reader has left the end.
+    /// That float's slot: the corner every chat client puts the way back in, and hidden until
+    /// `Tail` says the reader has left the end.
     let terminalJumpToLatestSlot = "absolute right-3 bottom-3 z-10"
 
     /// The button in it: `chatJumpToLatest`'s square, without the rail that places that one
