@@ -4,7 +4,7 @@ namespace Yession.App
 /// emit and the tests assert on, defined once. Views (`View`, `ManagerUi`) compose these
 /// into markup; the E2E suites and the browser shell's delegation bind to the same names —
 /// so a hook is renamed in exactly one place. No behaviour lives here, only the shared
-/// vocabulary (docs/design.md §1: the markup is a total function of the model, and the
+/// vocabulary (docs/technical-design.md §1: the markup is a total function of the model, and the
 /// hooks are its stable surface).
 module Dom =
 

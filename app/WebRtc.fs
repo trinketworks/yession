@@ -4,7 +4,7 @@ module Yession.Host.WebRtc
 // data channel, plus the offer/answer signalling primitives. The connection is
 // established with a non-trickle exchange — each side waits for ICE gathering to complete
 // (an event), then exchanges a single complete SDP — so there are no candidate-timing
-// races and nothing depends on sleeps. See docs/design.md §2.3.
+// races and nothing depends on sleeps. See docs/technical-design.md §2.3.
 
 open Fable.Core
 open Fable.Core.JsInterop

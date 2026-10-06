@@ -7,7 +7,7 @@ open Yession.Domain.Terminals
 
 /// Collaborative session state shapes shared by the Session and the App.
 /// These are the model shapes only; the Yjs/Ylmish encoding that keeps them in
-/// sync lives in the App (`Yession.App.Collab`, Collab/Sync.fs). See docs/design.md §2.2 and Plan 01.
+/// sync lives in the App (`Yession.App.Collab`, Collab/Sync.fs). See docs/technical-design.md §2.2 and Plan 01.
 
 /// A client's work-in-progress draft: the WIP tail, not yet queued. Keyed by its
 /// `Author` in `SyncedSessionState.Drafts`, so each client owns at most one — the cap is

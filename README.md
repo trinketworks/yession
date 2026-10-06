@@ -28,7 +28,7 @@ A handful of constraints drive the whole design:
 - **Verification is automated end to end.** Manual testing doesn't count.
 
 The full reasoning, and the invariants that have to survive code review, are in
-[docs/design.md](docs/design.md).
+[docs/technical-design.md](docs/technical-design.md).
 
 ### Components
 

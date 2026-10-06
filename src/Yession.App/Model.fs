@@ -18,7 +18,7 @@ open Yession.App.Codecs
 /// The App Elmish model and update loop shell. It holds a single typed
 /// snapshot of what the client knows: the local peer, connection state, synced
 /// collaborative state, the conversation projection, the event-consumer read position,
-/// and the agent view state. See docs/design.md §2.1, §2.3.
+/// and the agent view state. See docs/technical-design.md §2.1, §2.3.
 
 type ConnectionState =
     /// Not connected and not trying. Carries WHY whenever the client knows — a rejected
@@ -42,7 +42,7 @@ type PeerState = { PeerId : PeerId; DisplayName : string }
 /// channel. Deliberately separate from `ConnectionState`: either leg can be down while the
 /// other works, and neither takes the client with it. Collaborative state is CRDT state in a
 /// local doc, so a dead feed costs history, not the ability to read, write, or send
-/// (docs/design.md §1, local-first).
+/// (docs/technical-design.md §1, local-first).
 type FeedHealth =
     /// The last read succeeded — history is current.
     | FeedLive

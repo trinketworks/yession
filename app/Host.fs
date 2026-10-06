@@ -2,7 +2,7 @@ module Yession.Host.Host
 
 // The Session host: owns the event log and accepts WebRTC peer connections,
 // running the token-gated peer-session handshake for each. This is the composition root
-// for the running process (design.md §1 "Composition at the top", §2.1).
+// for the running process (technical-design.md §1 "Composition at the top", §2.1).
 
 open System
 open Yjs

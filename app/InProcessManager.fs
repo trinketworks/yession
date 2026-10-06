@@ -5,7 +5,7 @@ namespace Yession.Host
 // The product's Manager launches each Session as its own OS process (`ProcessManager`); this
 // one is what the tests launch through. Either way the Manager owns launch — a Session never
 // self-starts with host authority — and keeps the registry of what it launched. See
-// docs/design.md §3.
+// docs/technical-design.md §3.
 
 open System
 open Yession.Domain

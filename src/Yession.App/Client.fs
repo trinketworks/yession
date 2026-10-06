@@ -14,7 +14,7 @@ open Yession.App.Codecs
 /// Composition of the App: the Elmish program bound to a Yjs document through
 /// the Ylmish sync boundary, and the wiring of a connected `FrameChannel` to that
 /// document. The Elmish model stays the single typed snapshot; only `ClientModel.Synced`
-/// crosses into the doc (docs/design.md §1 "Ylmish is the sync boundary").
+/// crosses into the doc (docs/technical-design.md §1 "Ylmish is the sync boundary").
 module Client =
 
     /// Decode direction: read the synced state out of the doc, carrying every other

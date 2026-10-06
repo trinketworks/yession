@@ -4,7 +4,7 @@ open Yession.Domain
 
 /// Session launch vocabulary (Step 10). The Manager owns process launch: a
 /// Session is started by the Manager, never directly, establishing the authority
-/// boundary later steps delegate scoped capabilities across (docs/design.md §3).
+/// boundary later steps delegate scoped capabilities across (docs/technical-design.md §3).
 
 [<RequireQualifiedAccess>]
 type SessionLaunchRequest =

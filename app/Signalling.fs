@@ -7,7 +7,7 @@ module Yession.Host.Signalling
 // (`/events/{first}-{last}`, `/terminals/{t}/{first}-{last}`), whose bounds do not move — so
 // those bytes are the same for ever and a client can keep them, the growing tail included.
 // Everything interactive stays
-// on the data channel (design.md §2.3). `/signal` accepts a peer's offer and returns the
+// on the data channel (technical-design.md §2.3). `/signal` accepts a peer's offer and returns the
 // Session's answer; the established data channel becomes a session `FrameChannel`.
 
 open Fable.Core.JsInterop

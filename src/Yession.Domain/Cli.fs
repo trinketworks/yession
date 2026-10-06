@@ -24,7 +24,7 @@ module Yession.Domain.Cli
 //     | Error e -> Interop.rejectValue cli e
 //
 // A refusal reached that way is a decision taken in the composition root, which is the one
-// place a cheap test cannot go (`design.md` §1, and AGENTS.md on colocation). So an option
+// place a cheap test cannot go (`technical-design.md` §1, and AGENTS.md on colocation). So an option
 // carries its own vocabulary: `parsedValue` takes the reader that says what the value MEANS,
 // the parse runs it, and `valueOf` answers with the thing itself — an `AuthenticationStrategy`
 // rather than a string somebody still has to interpret. The readers already existed and

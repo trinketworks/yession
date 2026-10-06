@@ -1,7 +1,7 @@
 namespace Yession.Domain
 
 /// A page of events read from the log. The page is the unit of deterministic, offset-based
-/// reads. See docs/design.md §1.
+/// reads. See docs/technical-design.md §1.
 type EventPage<'event> =
     { Events     : EventEnvelope<'event> list
       LastOffset : EventOffset option

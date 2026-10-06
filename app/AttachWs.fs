@@ -16,7 +16,7 @@ module Yession.Host.AttachWs
 // party can implement the other end.
 //
 // It breaks the repo's SSE-only streak, and that is fine. This is session ↔ local provider,
-// like the control RPC — not the session transport `design.md` pins.
+// like the control RPC — not the session transport `technical-design.md` pins.
 //
 // The wire:
 //   * BINARY frames are data, in both directions. No framing of ours.
