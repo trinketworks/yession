@@ -2152,6 +2152,14 @@ let private multiplayerTests =
         testCase "the core prompt tells the agent the name people address it by" <| fun () ->
             Expect.stringContains AgentTurn.systemPrompt "@agent" "the address a message for it carries"
 
+        // The static strategy is the one composition there is today: a section left out of it
+        // is a rule the agent never reads, and nothing else would notice.
+        testCase "the static strategy carries every section, in order" <| fun () ->
+            let positions =
+                SystemPrompt.sections |> List.map (fun section -> AgentTurn.systemPrompt.IndexOf section.Text)
+            Expect.all positions (fun at -> at >= 0) "every section is in the core"
+            Expect.equal positions (List.sort positions) "and in the order they are declared"
+
         testCase "a peer is named in the transcript by the name it joined under" <| fun () ->
             let prompt = promptWith (people [ joined ada "swift-heron" None ]) (PeerRef ada)
             Expect.stringContains prompt "swift-heron: hi agent" "the line wears the name, not the id"

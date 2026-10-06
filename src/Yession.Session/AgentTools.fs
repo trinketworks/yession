@@ -36,6 +36,20 @@ module AgentTools =
     [<Literal>]
     let Namespace = "yession"
 
+    /// The names of the tools the system prompt steers by. One spelling for the descriptor
+    /// and the prompt, so renaming a tool cannot leave the prompt naming one that is gone.
+    module ToolName =
+        [<Literal>]
+        let ExecuteCommand = "execute_command"
+        [<Literal>]
+        let ReadFile = "read_file"
+        [<Literal>]
+        let EditFile = "edit_file"
+        [<Literal>]
+        let WriteFile = "write_file"
+        [<Literal>]
+        let StartWorkSandbox = "start_work_sandbox"
+
     /// One outcome, rendered as tool text (Plan 13, stage 3b).
     ///
     /// Every case says WHICH state it is in, and the wording is load-bearing rather than
@@ -701,7 +715,7 @@ module AgentTools =
     /// The verbs: everything that is written out rather than generated.
     let private verbs (capabilities: AgentCapabilities) : (ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>)) list =
         [ tool
-            "execute_command"
+            ToolName.ExecuteCommand
             "Run a shell command in a session terminal — the only way to run anything, seen by everyone and on the record. Not for reading or editing files: use read_file and edit_file, which record WHICH file, unless a dedicated tool genuinely cannot do it — avoid cat, sed, awk, head, tail, grep -n and heredocs here. `sandbox`: a named work sandbox (start_work_sandbox); omit for the default one. `terminal`: a terminal from open_terminal, to run beside something long (each terminal runs one command at a time). For anything long-running pass background: true — it returns a handle at once, you end your turn, and you're woken when it finishes; otherwise it waits and hands back a check_pending handle if the command outlasts the wait. No stdin unless stdin: true (readers get EOF), so pass flags, not prompts. Scratch under $TMPDIR; /tmp is denied. Rewriting a file, write the new content before deleting the old — a delete-then-write can be refused halfway. Read the answer: it says which happened."
             (toolArgs {
                 let! command = ToolArgs.text "command" "the shell command line to run, e.g. \"npm test -- --watch=false\""
@@ -854,7 +868,7 @@ module AgentTools =
           // file, which is the whole point of it over `sed -n` in a terminal.
           (let descriptor, body =
               tool
-                  "read_file"
+                  ToolName.ReadFile
                   "Read a file, or a window of it, numbered by line. Prefer this over cat/sed/head/tail in execute_command: it's on the record as a read of THIS file, and the people here see what you looked at. Paths are as a terminal in that sandbox would take them — relative to where its terminals start (the checkout, once add_repo and set_shell_profile have run), or absolute. Every answer says which lines it covers of how many; a long file comes back a page at a time, and the answer says which `offset` reads on. Lines longer than 2000 characters are cut. A picture (.png, .jpg, .gif, .webp) comes back as the picture itself, for you to look at — so look before you describe one."
                   (toolArgs {
                       let! path = ToolArgs.text "path" "the file, e.g. \"src/Program.fs\", \"$TMPDIR/out.log\" — a checkout's path is the one the repos query gives"
@@ -894,7 +908,7 @@ module AgentTools =
            { descriptor with ReadOnly = true }, body)
 
           tool
-              "edit_file"
+              ToolName.EditFile
               "Replace one exact piece of text in a file with another. Prefer this over sed/awk/heredocs in execute_command: the change is on the record as an edit of THIS file, and the people here see what changed. Read the file first (read_file) and quote `old_string` exactly as it appears — whitespace and indentation included, without the line numbers. It must match ONCE: if it matches more, add surrounding lines until it is unique, or pass replace_all: true to change every occurrence. Answers with what changed, or why nothing did. Paths as read_file takes them."
               (toolArgs {
                   let! path = ToolArgs.text "path" "the file to edit, as read_file names it"
@@ -908,7 +922,7 @@ module AgentTools =
                   ok (editFile capabilities path oldText newText replaceAll sandbox))
 
           tool
-              "write_file"
+              ToolName.WriteFile
               "Write a whole file: create it, or replace everything in it. For a change inside an existing file use edit_file, which records what changed; this records that the file was written. Directories on the way are created. Paths as read_file takes them."
               (toolArgs {
                   let! path = ToolArgs.text "path" "the file to write, as read_file names it"
@@ -1031,7 +1045,7 @@ module AgentTools =
               (inspectRepo capabilities.Repos.Diff >> ok)
 
           tool
-              "start_work_sandbox"
+              ToolName.StartWorkSandbox
               "Ensure a named work sandbox exists for this session, and return it. Returns the running one unchanged when there is one — safe to call every time. What a sandbox is, and which connections (\"github\" lets git push from a terminal) it forwards, is what its repo's yession.yaml or the operator declared for it; each command run there spends the credentials of whoever's turn it is."
               (ToolArgs.text "name" "the sandbox name, e.g. \"default\" or \"test\"; a repo's is \"owner/repo:name\"")
               (fun name -> ok (startWorkSandbox capabilities name))
