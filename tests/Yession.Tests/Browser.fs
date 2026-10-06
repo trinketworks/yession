@@ -3642,6 +3642,37 @@ let editorTests =
                 Expect.equal doors 1 "one door to a new terminal on the all page"
             }
 
+        // The phone pane's left edge says it is the way back: a mark a person can SEE on the
+        // screen, and one whose press lands on the handle that closes the pane. A mark that
+        // measured zero, hung off the screen, or sat under another element would render the
+        // same string as one that works, so this measures it and hit-tests its centre.
+        editorCaseIn 390 844 "on a phone the pane's edge shows a mark that presses as the way back" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-chat-block]")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """(() => {
+                             const r = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
+                             return r.left <= 1 && Math.round(r.width) === window.innerWidth
+                           })()""")
+                let! shape =
+                    await (page.EvaluateAsync<float[]> """() => {
+                        const edge = document.querySelector('#shell [data-pane-grab-edge]')
+                        const mark = edge.querySelector('svg').getBoundingClientRect()
+                        const hit = document.elementFromPoint(mark.left + mark.width / 2, mark.top + mark.height / 2)
+                        return [mark.width, mark.height, mark.left, mark.right, window.innerWidth, edge.contains(hit) ? 1 : 0, mark.top + mark.height / 2]
+                    }""")
+                Expect.isTrue (shape.[0] > 0.0 && shape.[1] > 0.0) "the mark has a size"
+                Expect.isTrue (shape.[2] >= 0.0 && shape.[3] <= shape.[4]) "and is on the screen"
+                Expect.equal shape.[5] 1.0 "and what is painted at its centre is the handle, so pressing the mark presses it"
+                // Pressed where it is drawn, and the pane goes back off the screen.
+                do! awaitU (page.Mouse.ClickAsync (float32 (shape.[2] + shape.[0] / 2.0), float32 shape.[6]))
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
+                return ()
+            }
+
         // The focus contract (where the keyboard goes after an act in the pane). Each of these
         // removes the control that was pressed or puts a surface in front of the reader, and
         // what only a browser can say is where focus actually ENDED — the model can name a

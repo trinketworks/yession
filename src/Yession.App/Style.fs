@@ -2979,15 +2979,18 @@ module Style =
     /// Out of the accessibility tree and the Tab order (`aria-hidden`, `tabindex=-1`): it is a
     /// duplicate, and a reader of the tree should meet the way back once. Which is also why it
     /// may be 6px wide — WCAG 2.5.8 excepts a target whose act an equivalent control on the
-    /// same screen offers at full size, and the head's is 44.
+    /// same screen offers at full size, and the head's is 44. Its mark is wider than that and
+    /// hangs over the pane's gutter, where no words sit; being the button's own child it is
+    /// pressable all the way across.
     ///
     /// The splitter's place on a desktop (`terminalResize`); the two never share a screen.
     let paneGrabEdge =
         cls [ "wide:hidden absolute left-0 inset-y-0 w-1.5 z-50 p-0 border-0 bg-transparent cursor-pointer"
               "flex items-center"; focusRing ]
-    /// Its mark: a short rule in the faint ink, midway down the edge — a handle, not a
-    /// divider, which the pane's own border already is on a desktop.
-    let paneGrabMark = "block h-10 " + Stroke.lead + " " + Stroke.faint
+    /// Its mark: the head's own `›` (`Icon.right`) in the faint ink, midway down the edge.
+    /// The same glyph as the control it duplicates, so the edge reads as the way back to the
+    /// chat rather than as a bare rule with no meaning (which is what a short bar was).
+    let paneGrabMark = "block text-ink-faint"
 
     /// The column's head: a PIVOT, the one row this pane is navigated by (Zune's own idiom,
     /// which the rest of the shell already speaks: big light words, no boxes).
