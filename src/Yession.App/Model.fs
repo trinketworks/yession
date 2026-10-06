@@ -4934,6 +4934,12 @@ module ClientModel =
                 match preview model with
                 | Some preview -> [ ClientEffect.Move (DomMove.FocusChat preview.Subject) ]
                 | None -> []
+            // The preview's way back (`‹ term 2`, in the line under the strip) is the press of
+            // its terminal's own tab — but unlike the tab it leaves the document with the
+            // preview, under the hand that pressed it. So the keyboard lands where the pane now
+            // does, if it was dropped; pressed on the tab itself, it stays on the tab.
+            | ShowInPaneMsg _ when Option.isSome (preview model) && not model.Switcher ->
+                [ ClientEffect.Move (DomMove.IfDropped (paneLanding next)) ]
             | ShowInTerminalMsg (terminal, block) ->
                 [ ClientEffect.Move (DomMove.RevealBlock (terminal, block)); ClientEffect.Move DomMove.FocusPane ]
             // Into the list as the page opens, and back onto the item it was laid over as it

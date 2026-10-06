@@ -127,7 +127,7 @@ let private toSwitcher () : unit =
         |> Option.orElseWith (fun () -> find "[data-pane-switcher]")
         |> focusOn
 
-/// Onto the pivot's selected item, once the `all` page has gone: the terminal or preview it
+/// Onto the pivot's selected item, once the `all` page has gone: the terminal it
 /// was laid over. With nothing under it the pane is empty, and its press is what is there.
 let private toPivot () : unit =
     find "[data-pane-pivot] [role=\"tab\"][aria-selected=\"true\"]"

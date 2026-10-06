@@ -3059,10 +3059,6 @@ module Style =
               "motion-reduce:transition-none"; focusRingInset ]
     let pivotItem = cls [ pivotItemBase; "text-ink-faint hover:text-ink" ]
     let pivotItemOn = cls [ pivotItemBase; "text-ink" ]
-    /// A preview's item (P2-1): the same type, slanted — a glance at something the chat
-    /// opened, laid over the terminal beside it, and never mistaken for one of the terminals.
-    /// The fault the last preview was removed for was looking exactly like a tab.
-    let pivotItemPreview = cls [ pivotItemBase; "italic text-ink" ]
     /// A pivot item's name: as much of it as fits, and an ellipsis for the rest — capped so
     /// that at the narrowest pane the splitter allows, the selected item and its × still fit
     /// beside `all` whole. The `all` page writes the name out in full.
@@ -3110,6 +3106,26 @@ module Style =
         "shrink-0 flex items-center gap-2 min-w-0 px-3 pb-2 font-ui text-small text-ink-faint"
     /// A command inside it, in the terminal's own face, cut short rather than wrapped.
     let panePivotSubtitleCommand = "min-w-0 truncate font-terminal text-code-sm text-ink-dim"
+    /// A preview's line under the pivot (F3) — `‹ term 2 / $ seq 1 40 ×`: the way back to the
+    /// terminal it is laid over, its name, and its close. The preview is a layer OF that
+    /// terminal, whose tab stays selected in the strip; as an item of its own in the strip it
+    /// was a sibling that looked like one more tab, and on a phone it cost the strip one of
+    /// the three tabs it has room for. The same caption's place and size as the subtitle it
+    /// stands in for, with the name in full ink because it is what is on screen.
+    let panePreviewHead = "shrink-0 flex items-center gap-1.5 min-w-0 px-3 pb-2 font-ui text-small"
+    /// Its way back: the terminal's name after a `‹`, an act in `ink-dim` brightening under
+    /// the hand, a thumb's 44 tall on a phone. Capped, so a long terminal name leaves the
+    /// preview's own name the room.
+    let panePreviewBack =
+        cls [ "shrink-0 max-w-[40%] inline-flex items-center gap-1 bg-transparent border-0 cursor-pointer p-0 phone:min-h-11"
+              "font-ui text-small text-ink-dim hover:text-ink transition-colors"; focusRing ]
+    /// What parts the way back from the name: a mark, not a word.
+    let panePreviewSep = "shrink-0 text-ink-faint select-none"
+    /// The preview's name, cut short rather than pushing its close off the line.
+    let panePreviewName = "min-w-0 truncate text-ink"
+    /// Its close: a bare ×, neutral rather than red — closing a preview ends nothing — and a
+    /// thumb's 44 on a phone.
+    let panePreviewClose = cls [ btnIconBare; "phone:min-w-11 phone:min-h-11" ]
 
     /// The pane's verbs, as WORDS in the shell's own type — `settings ›`'s voice rather than a
     /// button's. Lowercase and light, no rectangle: the pivot over them is names in light type

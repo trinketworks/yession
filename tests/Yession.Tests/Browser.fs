@@ -2057,6 +2057,20 @@ let private openManyTerminals (page: IPage) : Async<unit> =
 let private stripOverflows =
     """() => { const s = document.querySelector('#shell [data-pane-strip]'); return s.scrollWidth > s.clientWidth + 1 }"""
 
+/// A chip in the chat pressed, and the preview it opens settled on screen — the column's
+/// opening animation finished, so what is measured is where things land, not where they pass.
+let private previewSettled (page: IPage) : Async<unit> =
+    async {
+        do! awaitU (page.ClickAsync "#shell [data-chat-block]")
+        let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview]")
+        do! awaitU (
+                page.EvaluateAsync
+                    """() => Promise.all(
+                         document.getAnimations()
+                           .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
+                           .map(a => a.finished.catch(() => null)))""")
+    }
+
 /// Whether the element an expression names lies wholly inside the strip's box, sideways.
 let private insideStrip (element: string) =
     sprintf
@@ -6437,9 +6451,8 @@ let editorTests =
                 do! waitFor "focus to be back on the chip" page "document.activeElement?.hasAttribute('data-chat-block') === true"
             }
 
-        // The preview's way back used to be a "‹ back to term 1" row of its own under the
-        // head; the pivot puts the terminal's own item beside the preview's, and the preview's
-        // close on its item is what hands focus back to where it was opened from.
+        // The preview's close, in the line under the pivot that names it (F3), is what hands
+        // focus back to where it was opened from — the same act as Escape.
         editorCase "a preview's close returns focus to the chip" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
@@ -6448,6 +6461,67 @@ let editorTests =
                 do! awaitU (page.Locator("#shell [data-pane-preview-close]").First.PressAsync "Enter")
                 do! waitFor "the preview to be gone" page "!document.querySelector('#shell [data-pane-preview]')"
                 do! waitFor "focus to be back on the chip" page "document.activeElement?.hasAttribute('data-chat-block') === true"
+            }
+
+        // A preview is a layer OF its terminal, not a tab beside it (F3). It used to have an
+        // item of its own in the strip — `$ seq 1 40`, slanted, with its own × — so the strip
+        // mixed two kinds of thing that looked alike, a phone's strip with room for three tabs
+        // spent one on it, and it stayed there over the `all` page. At a phone's width, where
+        // the room is the cost.
+        editorCaseIn 390 844 "on a phone, a preview leaves the strip to the terminals and all" <| fun page ->
+            async {
+                do! previewSettled page
+                let! items =
+                    await (page.EvaluateAsync<string[]>
+                            """() => [...document.querySelectorAll('#shell [data-pane-pivot] [role=tab]')]
+                                 .map(t => t.hasAttribute('data-pane-switcher') ? 'all'
+                                         : (t.getAttribute('data-pane-tab') ?? '').startsWith('terminal:') ? 'terminal'
+                                         : t.outerHTML.slice(0, 120))""")
+                Expect.isTrue (Array.contains "terminal" items) "the terminal under the preview is in the strip"
+                let others = items |> Array.filter (fun item -> item <> "all" && item <> "terminal")
+                Expect.isEmpty others (sprintf "every tab in the strip is a terminal or all; also: %s" (String.Join (" | ", others)))
+            }
+
+        // Measured where a thumb lands: each one's centre hit-tested, so a name clipped to
+        // nothing or a control under something else is not "reachable" — and the two presses
+        // a thumb's 44 each, the floor the strip's own items hold.
+        editorCaseIn 390 844 "on a phone, a preview's name, its way back and its close are on the screen" <| fun page ->
+            async {
+                do! previewSettled page
+                let! faults =
+                    await (page.EvaluateAsync<string[]>
+                            """() => [['name', '[data-pane-preview-name]', 0], ['back', '[data-pane-preview-back]', 44], ['close', '[data-pane-preview-close]', 44]]
+                                 .flatMap(([what, sel, floor]) => {
+                                   const e = document.querySelector('#shell ' + sel)
+                                   if (!e) return [what + ': not rendered']
+                                   const r = e.getBoundingClientRect()
+                                   const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+                                   const faults = []
+                                   if (!r.width || !r.height || hit === null || !e.contains(hit)) faults.push(what + ': not on screen')
+                                   if (r.right > window.innerWidth + 0.5) faults.push(what + ': past the edge')
+                                   if (r.width < floor - 0.5 || r.height < floor - 0.5) faults.push(`${what}: ${Math.round(r.width)}x${Math.round(r.height)}`)
+                                   return faults
+                                 })""")
+                Expect.isEmpty faults (sprintf "the name is visible and both presses are 44px targets: %s" (String.Join (", ", faults)))
+            }
+
+        // The `all` page is over the preview AND its terminal, so the head that names the
+        // preview goes with the rest of what it covers. Asked of the pane's own text rather
+        // than of a hook, because the fault was the preview's name shown by another surface (a
+        // strip item) than the one that names it now.
+        editorCaseIn 390 844 "on a phone, the all page does not show the preview it is over" <| fun page ->
+            async {
+                do! previewSettled page
+                let! name = await (page.EvaluateAsync<string> "() => document.querySelector('#shell [data-pane-preview-name]').textContent.trim()")
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                let! shown =
+                    await (page.EvaluateAsync<bool> (
+                            """name => [...document.querySelectorAll('#shell [data-content-panel] *')]
+                                 .filter(e => e.children.length === 0 && e.textContent.includes(name))
+                                 .some(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 })""",
+                            box name))
+                Expect.isFalse shown (sprintf "%s is not on the all page" name)
             }
 
         // The strip's door (Plan 20, stage 1), and the whole point of the shape: it opens a
