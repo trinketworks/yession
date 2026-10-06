@@ -1952,6 +1952,15 @@ let private prWatchTests =
                 (Codec.fromString Events.sessionEvent pinned |> expect)
                 (transitioned PrTransition.Merged PrMerged ChecksGreen)
                 "the durable form decodes to the event"
+
+        testCase "a PrCreated on the wire is the shape it will always be" <| fun () ->
+            let pinned =
+                """{"type":"prCreated","payload":{"messageId":"c1","pr":{"repo":"octo/hello","number":12},"title":"Add feature","head":"topic","base":"master","draft":false,"actor":{"kind":"agent"}}}"""
+            Expect.equal
+                (Codec.fromString Events.sessionEvent pinned |> expect)
+                (SessionEvent.PrCreated
+                    { MessageId = msg "c1"; Pr = pr; Title = "Add feature"; Head = "topic"; Base = "master"; Draft = false; Actor = ActorRef.Agent })
+                "the durable form decodes to the event"
     ]
 
 // Who is behind an act (Plan 20). The type exists because these three were loose fields

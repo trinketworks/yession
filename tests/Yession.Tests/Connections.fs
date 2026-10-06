@@ -3928,20 +3928,34 @@ let private prWatchVerbTests =
             async {
                 let! stub = startStubGitHubApi ()
                 let service, _, _ = serviceOver stub
-                let! outcome = service.Create adasCredential topicDraft
+                let! outcome = service.Create adaHerself topicDraft
                 Expect.equal outcome (Ok "opened octo/hello#7 — \"Add feature\", topic into master") "the number, and the work it names"
             }
 
-        // Nothing to project: what this verb made lives at the provider, and the act line the
-        // gate writes is what says who asked for it. A watch is the thing that needs a
-        // baseline in the log, and opening one is not watching it.
-        testCaseAsync "opening one records no event of its own" <|
+        // Opening one is a place in the session worth coming back to, so it is a fact of its
+        // own — what was opened, and who asked. It is not a watch: nothing else is recorded.
+        testCaseAsync "opening one records that it was opened, by whoever asked" <|
             async {
                 let! stub = startStubGitHubApi ()
                 let service, log, _ = serviceOver stub
-                let! _ = service.Create adasCredential topicDraft
+                let! _ = service.Create adaHerself topicDraft
                 let! events = eventsOf log
-                Expect.isEmpty events "nothing was recorded, and nothing is watched"
+                Expect.equal
+                    (events |> List.map (function
+                        | SessionEvent.PrCreated p -> Some (PrRef.render p.Pr, p.Title, p.Actor)
+                        | _ -> None))
+                    [ Some ("octo/hello#7", "Add feature", Authority.author adaHerself) ]
+                    "one opening, and nothing else"
+            }
+
+        testCaseAsync "asking for one already open records nothing" <|
+            async {
+                let! stub = startStubGitHubApi ()
+                stub.SetOpenList """[{"number":4}]"""
+                let service, log, _ = serviceOver stub
+                let! _ = service.Create adaHerself topicDraft
+                let! events = eventsOf log
+                Expect.isEmpty events "nothing was opened"
             }
 
         testCaseAsync "opening one that is already open reports it rather than refusing" <|
@@ -3949,7 +3963,7 @@ let private prWatchVerbTests =
                 let! stub = startStubGitHubApi ()
                 stub.SetOpenList """[{"number":4}]"""
                 let service, _, _ = serviceOver stub
-                let! outcome = service.Create adasCredential topicDraft
+                let! outcome = service.Create adaHerself topicDraft
                 Expect.equal
                     outcome
                     (Ok "octo/hello#4 is already open from topic into master — nothing was created")
@@ -3963,7 +3977,7 @@ let private prWatchVerbTests =
                     422
                     """{"message":"Validation Failed","errors":[{"message":"No commits between master and topic"}]}"""
                 let service, _, _ = serviceOver stub
-                match! service.Create adasCredential topicDraft with
+                match! service.Create adaHerself topicDraft with
                 | Error said -> Expect.stringContains said "No commits between master and topic" "github's own words"
                 | Ok said -> failwithf "expected a refusal, got %s" said
             }

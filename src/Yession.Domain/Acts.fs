@@ -55,6 +55,7 @@ type Act =
     | McpServerUnavailable of McpServerNoted
     | PrWatched of PrWatched
     | PrUnwatched of PrUnwatched
+    | PrCreated of PrCreated
     | PrTransitioned of PrTransitioned
     /// Any act that reports a watched thing changing (`WatchChanged`), noticed well after it
     /// happened at the source. A wrapper rather than a field on every act, because lateness
@@ -98,6 +99,7 @@ module Act =
         | Act.McpServerUnavailable m -> McpServerNoted.unavailable m
         | Act.PrWatched p -> PrWatched.phrase p
         | Act.PrUnwatched p -> PrUnwatched.phrase p
+        | Act.PrCreated p -> PrCreated.phrase p
         | Act.PrTransitioned p -> PrTransitioned.phrase p
         | Act.SessionResumed (r, at) -> SessionResumed.phrase at r
         | Act.SessionStarted _ -> SessionStarted.phrase
@@ -135,6 +137,7 @@ module Act =
         | Act.McpServerUnavailable _
         | Act.PrWatched _
         | Act.PrUnwatched _
+        | Act.PrCreated _
         | Act.PrTransitioned _
         | Act.SessionResumed _
         | Act.SessionStarted _ -> []
@@ -177,6 +180,7 @@ module Act =
         | Act.CommandRefused c -> CommandRefused.particulars c
         | Act.GatedCommandFailed c -> GatedCommandFailed.particulars c
         | Act.PrWatched p -> PrWatched.particulars p
+        | Act.PrCreated p -> PrCreated.particulars p
         | Act.CredentialSpent g -> GitCredentialSpent.particulars g
         | Act.ArtifactShared a -> ArtifactShared.particulars a
         | Act.ShellProfileSet p -> ShellProfileSet.particulars p
@@ -243,6 +247,7 @@ module Act =
         | Act.McpServerUnavailable _ -> "withdrew", "server", "servers"
         | Act.PrWatched _ -> "watched", "pull request", "pull requests"
         | Act.PrUnwatched _ -> "unwatched", "pull request", "pull requests"
+        | Act.PrCreated _ -> "opened", "pull request", "pull requests"
         | Act.PrTransitioned _ -> "noted", "pull request", "pull requests"
         | Act.SessionResumed _ -> "resumed", "session", "sessions"
         | Act.SessionStarted _ -> "started", "session", "sessions"

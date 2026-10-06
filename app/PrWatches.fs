@@ -441,13 +441,13 @@ type PrService =
       /// because there would be nobody to keep looking as and nobody to wake.
       Watch : Authority -> PrRef -> Async<Result<string, string>>
       Unwatch : ActorRef -> PrRef -> Async<Result<string, string>>
-      /// Open one, on the credential of whoever's turn it is — the only argument, because
-      /// this records no event of its own: what it makes lives at the provider, and the act
-      /// line the gate writes is what says who asked for it.
+      /// Open one, on the credential of whoever's turn it is, and record that it was opened
+      /// (`PrCreated`) under whoever asked — the whole `Authority` for that reason, as
+      /// `Watch` takes it. One that already exists records nothing: nothing was opened.
       ///
       /// Nothing is watched as a result. Watching is a decision about what this session will
       /// keep saying, and the number this hands back is what `Watch` takes.
-      Create : CredentialFor -> PrDraft -> Async<Result<string, string>>
+      Create : Authority -> PrDraft -> Async<Result<string, string>>
       /// Merge one, on the credential of whoever's turn it is: armed to merge when its checks
       /// pass, queued, or merged now — whichever the provider says applies. Records no event
       /// of its own, for `Create`'s reason: the act line the gate writes says who asked, and
@@ -577,19 +577,34 @@ let service
                         return Ok (sprintf "%s unwatched" (PrRef.render pr))
             }
       Create =
-        fun credential draft ->
+        fun authority draft ->
             async {
-                let! token = resolveToken credential
+                let! token = resolveToken (Authority.credential authority)
                 match! openPr token draft with
                 | PrOpened pr ->
-                    return
-                        Ok (
-                            sprintf
-                                "opened %s — \"%s\", %s into %s"
-                                (PrRef.render pr)
-                                draft.Title
-                                draft.Head
-                                draft.Base)
+                    let actor = Authority.author authority
+                    match mintId () with
+                    | Error e -> return Error e
+                    | Ok messageId ->
+                        do!
+                            append
+                                actor
+                                (SessionEvent.PrCreated
+                                    { MessageId = messageId
+                                      Pr = pr
+                                      Title = draft.Title
+                                      Head = draft.Head
+                                      Base = draft.Base
+                                      Draft = draft.Draft
+                                      Actor = actor })
+                        return
+                            Ok (
+                                sprintf
+                                    "opened %s — \"%s\", %s into %s"
+                                    (PrRef.render pr)
+                                    draft.Title
+                                    draft.Head
+                                    draft.Base)
                 // Nothing was created, and the answer is the number of the one that already
                 // exists — which is the point of asking again rather than an apology for it.
                 | PrAlreadyOpen pr ->

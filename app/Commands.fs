@@ -380,11 +380,10 @@ let dispatch (services: CommandServices) : CommandDispatch =
                         // Re-made from the encoded arguments rather than carried: the gate is
                         // the boundary the act crosses, and a draft assembled on the far side
                         // of it is one this side validated again. Nothing is published here —
-                        // no watch begins, no event is appended, so there is no query whose
-                        // answer this changed.
+                        // no watch begins, so there is no query whose answer this changed.
                         match PrDraft.create repo head onto title body (draft = "true") with
                         | Error e -> return Error e
-                        | Ok drafted -> return! service.Create (Authority.credential invocation.Authority) drafted
+                        | Ok drafted -> return! service.Create invocation.Authority drafted
             }
 
           mergePrTool,

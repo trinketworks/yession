@@ -474,6 +474,24 @@ type PrUnwatched =
       Pr : PrRef
       Actor : ActorRef }
 
+/// Somebody in the session OPENED a pull request (`create_pr`). Recorded on its own rather
+/// than left to the gate's tool line, because opening one is a place in the session worth
+/// coming back to and a tool line is not a fact anything can fold: what was opened, from
+/// which branch, and what it was called at the moment it was.
+///
+/// Only an opening that MADE something. Asking again for one already open answers with its
+/// number and records nothing, because nothing happened.
+type PrCreated =
+    { MessageId : MessageId
+      Pr : PrRef
+      /// The title it was opened with. The provider's to change afterwards; this is what it
+      /// was called when it was made.
+      Title : string
+      Head : string
+      Base : string
+      Draft : bool
+      Actor : ActorRef }
+
 /// The session OBSERVED a watched pull request change. Appended by the Process under
 /// `ActorRef.System` — nobody in the session did it — while the payload names whose
 /// watch noticed, because the projection reads events, not envelopes, and "whose news
@@ -506,6 +524,16 @@ type PrWatchReadability =
       Unreadable : string option }
 
 // --- What each pull-request act SAYS (see RepoFacts.fs for why prose lives beside the event) ---
+
+module PrCreated =
+
+    let phrase (p: PrCreated) : Phrase = [ Segment.Text "PR "; Segment.Ref (EntityRef.Pr p.Pr); Segment.Text " opened" ]
+
+    /// What it was called and where it goes, which the headline holds back so a list of
+    /// openings reads as a list of numbers first.
+    let particulars (p: PrCreated) : Phrase list =
+        [ Phrase.text (
+              sprintf "\"%s\", %s into %s%s" p.Title p.Head p.Base (if p.Draft then ", as a draft" else "")) ]
 
 module PrUnwatched =
 
