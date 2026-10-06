@@ -243,6 +243,20 @@
   vertical-align: calc((1ex - var(--mark-round)) / 2);
 }
 
+/* The three layers (`--layer-*`, tokens.css): z-index has no theme namespace in Tailwind v4, so
+   each layer is a utility over its token. Nothing wears them yet. */
+@utility z-ground {
+  z-index: var(--layer-ground);
+}
+
+@utility z-floating {
+  z-index: var(--layer-floating);
+}
+
+@utility z-overlay {
+  z-index: var(--layer-overlay);
+}
+
 @utility bg-grad {
   background-image: linear-gradient(90deg, var(--color-blue), var(--color-green));
 }
