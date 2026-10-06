@@ -4296,11 +4296,12 @@ let editorTests =
                 // transition started. It passed twice and failed the third time, which is worse
                 // than not having been written.
                 //
-                // The separator's value is the state the shell actually owns: the keydown
-                // handler sets it synchronously, so there is nothing to wait for and nothing to
-                // race. It is also the thing this test is ABOUT — what a keyboard user is told
-                // the split is. That the pixels follow it is asserted once at the end, where
-                // the target is known and the wait is therefore deterministic.
+                // The separator's value is the state the shell actually owns, drawn from the
+                // model by the frame after the key that moved it (the page draws at most once a
+                // frame, `Render.setState`), so each press is read a frame on rather than raced.
+                // It is also the thing this test is ABOUT — what a keyboard user is told the
+                // split is. That the pixels follow it is asserted once at the end, where the
+                // target is known and the wait is therefore deterministic.
                 let value () =
                     page.EvaluateAsync<float>
                         "() => Number(document.querySelector('#shell [data-term-resize]').getAttribute('aria-valuenow'))"
@@ -4337,11 +4338,13 @@ let editorTests =
                 // regression. What has to hold is that a keyboard can move the split at all,
                 // and that the second press undoes the first.
                 do! awaitU (page.Keyboard.PressAsync "ArrowLeft")
+                do! twoFrames page
                 let! moved = await (value ())
                 Expect.isTrue
                     (abs (moved - before) > 1.0)
                     (sprintf "an arrow key must move the split (was %f, still %f)" before moved)
                 do! awaitU (page.Keyboard.PressAsync "ArrowRight")
+                do! twoFrames page
                 let! back = await (value ())
                 Expect.isTrue
                     (abs (back - before) < abs (moved - before))
