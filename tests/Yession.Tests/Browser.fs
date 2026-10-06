@@ -4960,6 +4960,28 @@ let editorTests =
                 Expect.isNotNull uncovered "the drawer stood aside, so the chapter is on the screen"
                 return ()
             }
+        // The contents' entries on a phone are touch targets, so each is one row at the 44px
+        // floor and the stack adds nothing between them: a gap on top of a full-height entry
+        // read as two chapters a hand apart. Measured rather than read from the markup, since
+        // a row's height is what its padding, its line and the stack's gap add up to.
+        editorCaseIn 390 844 "on a phone the contents' entries are single 44px rows with nothing between them" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapters] [data-chapter-entry]")
+                let! shape =
+                    await (page.EvaluateAsync<float[]> """() => {
+                        const boxes = [...document.querySelectorAll('#shell [data-chapters] [data-chapter-entry]')]
+                            .map(el => el.getBoundingClientRect())
+                        const heights = boxes.map(b => b.height)
+                        const gaps = boxes.slice(1).map((b, at) => b.top - boxes[at].bottom)
+                        return [boxes.length, Math.min(...heights), Math.max(...heights), Math.max(...gaps)]
+                    }""")
+                Expect.isTrue (shape.[0] >= 2) "the harness has more than one chapter, so there is a gap to measure"
+                Expect.isTrue (shape.[1] >= 44.0) (sprintf "every entry is a thumb's 44px, the shortest is %.1f" shape.[1])
+                Expect.isTrue (shape.[2] < 50.0) (sprintf "and none is taller than one row, the tallest is %.1f" shape.[2])
+                Expect.isTrue (shape.[3] <= 1.0) (sprintf "with no gap between neighbours, the widest is %.1f" shape.[3])
+                return ()
+            }
         // A page that lands with the client still behind is not a picture anybody asked for:
         // a cold open reads the log from the oldest a page per round trip, pinned to its
         // foot, and every page rendered was history scrolling past under the eye (116 on a

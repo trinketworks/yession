@@ -923,7 +923,7 @@ module View =
             html $"""
                 <section class="{Style.cls [ Style.sideSection; Style.navLane1 ]}" data-chapters>
                   <span class="{Style.label}">chapters</span>
-                  {chapters |> List.map entry}
+                  <div class="{Style.chapterEntries}">{chapters |> List.map entry}</div>
                 </section>"""
 
     /// The workspace face of the column: identity, sync health, membership, environment, log.
