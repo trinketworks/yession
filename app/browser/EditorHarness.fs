@@ -252,6 +252,7 @@ do
         replayHost
         { Cast = cast
           StartAt = None
+          LandedAt = None
           Poster = None
           BehindLive = None }
         None
@@ -281,6 +282,7 @@ do
         gappyReplayHost
         { Cast = gappy
           StartAt = Some 30.0
+          LandedAt = None
           Poster = None
           BehindLive = None }
         None
@@ -1155,9 +1157,16 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                   { Records =
                       Map.ofList
                           [ 0, { At = 0.0; Kind = TranscriptOutput; Data = "earlier output\r\n" }
-                            1, { At = 0.2; Kind = TranscriptOutput; Data = "vim ~/notes\r\n" } ]
-                    KnownLength = 2
-                    ReadThrough = 2
+                            1, { At = 0.2; Kind = TranscriptOutput; Data = "vim ~/notes\r\n" }
+                            // A minute of nothing, then output a moment apart: a recording long
+                            // enough for a rewind to land somewhere other than its start, and
+                            // with the dead air the player squeezes, which is what the position
+                            // it lands on has to be worked out through.
+                            yield!
+                              [ for n in 0 .. 7 ->
+                                  2 + n, { At = 60.0 + 1.5 * float n; Kind = TranscriptOutput; Data = sprintf "line %d\r\n" n } ] ]
+                    KnownLength = 10
+                    ReadThrough = 10
                     // Recorded TALL and narrow — the shape of a terminal opened on a phone, and
                     // the one a panel runs out of height for before width. An 80x24 recording
                     // fits a pane whichever way the player is scaled, so a rewind of one could
@@ -1171,6 +1180,10 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     Header = Some { Width = 80; Height = 24; Timestamp = 0L } } ]
         // SHUT to begin with, like a fresh client: the phone case is about what happens when
         // a chip brings the pane on screen, which is nothing to watch if it is already there.
+        // The screen the harness block's command began on — what a replay of that block rests
+        // on before anybody presses play.
+        TerminalKeyframes =
+            Map.ofList [ (terminalId, 0), ({ Seq = 0; Cols = 80; Rows = 24; Screen = "before the command\r\n" } : TranscriptKeyframe) ]
         TerminalScreens = Map.ofList [ liveId, { LiveScreen.Text = "\u001b[32mvim ~/notes\u001b[0m"; LiveScreen.Cursor = None } ]
         // The two terminals this peer opened, as tabs — which is what the fold would have
         // made of them (Plan 20, stage 1). Set by hand because this model is BUILT rather

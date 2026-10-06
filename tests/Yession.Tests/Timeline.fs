@@ -1577,6 +1577,19 @@ let private withRecords (model: ClientModel) =
     |> List.fold (fun m (seq, record) -> Support.step (TerminalRecordsMsg (terminalA, [ seq, record ])) m) model
     |> Support.step (TerminalHeaderMsg (terminalA, baseHeader))
 
+/// The same terminal still open, with its two commands: the only kind there is to rewind.
+let private liveRecordedTerminal =
+    recordedTerminal |> List.filter (fun e -> match e.Event with SessionEvent.TerminalClosed _ -> false | _ -> true)
+
+/// `withRecords`, with twelve seconds of the second command's output after the gap: a
+/// recording long enough for a rewind to have somewhere to go back to.
+let private withLongRecords (model: ClientModel) =
+    [ 1, { At = 10.0; Kind = TranscriptOutput; Data = "building\r\n" }
+      2, { At = 11.0; Kind = TranscriptOutput; Data = "done\r\n" } ]
+    @ [ for n in 0 .. 11 -> 3 + n, { At = 40.0 + float n; Kind = TranscriptOutput; Data = sprintf "step %d\r\n" n } ]
+    |> List.fold (fun m (seq, record) -> Support.step (TerminalRecordsMsg (terminalA, [ seq, record ])) m) model
+    |> Support.step (TerminalHeaderMsg (terminalA, baseHeader))
+
 /// A page of transcript is one message and one render (`TerminalPageMsg`); what has to hold
 /// is that it leaves the model exactly where the same lines arriving one at a time would.
 let private pageTests =
@@ -2041,22 +2054,62 @@ let private dvrTests =
                     model
             Expect.equal (castAt stillGrowing) (castAt model) "the recording under the reader is unchanged"
 
-        testCase "rewinding lands AT the pinned edge, not at the recording's start" <| fun () ->
-            // "Rewind" on an hour-old terminal must not mean "restart from the beginning".
-            // Like live TV it lands on the moment the reader left — the still of the pinned
-            // screen, visually the live screen they were just watching — and the scrub bar
-            // is how they go back from there.
-            let before = withRecords (clientOf [ at 1L 0.0 (opened terminalA "shell"); at 2L 1.0 (took terminalA (PeerRef bob) 1) ])
+        testCase "rewinding goes back to the last command with room to play, not to the pin" <| fun () ->
+            // The pin is the END of the cast, and a player told to play from the end of its
+            // recording starts it over from zero — which is what a rewind did to an hour-old
+            // terminal. So the reader lands at the start of a command and plays forward from
+            // there until they catch up (`BehindLive`).
+            let before = withRecords (clientOf liveRecordedTerminal)
             (match ClientModel.terminalReplay terminalA before with
              | Some replay -> Expect.isNone replay.BehindLive "an un-rewound cast's end really is the end"
              | None -> failwith "the header is known, so there is a recording")
-            match ClientModel.terminalReplay terminalA (Support.step (RewindTerminalMsg terminalA) before) with
+            match ClientModel.terminalReplay terminalA (Support.step (RewindTerminalMsg terminalA) (withLongRecords (clientOf liveRecordedTerminal))) with
             | Some replay ->
-                Expect.equal replay.StartAt (Some 43.5) "starts at the last pinned record's time"
-                // Nudged past that record: the still is the screen the reader was just
-                // watching, and a poster landing ON the pinned time paints the one before it.
-                Expect.equal replay.Poster (Some 43.501) "whose frame is the still shown before play"
+                // Past the second command's first record (at 40.0), so that record is drawn.
+                Expect.floatClose Accuracy.high (Option.get replay.LandedAt) 5.001 "rests at the second command, on the player's clock"
                 Expect.equal replay.BehindLive (Some terminalA) "and playing off this end means the reader caught up"
+            | None -> failwith "the header is known, so there is a recording"
+
+        testCase "a rewind goes back no further than the latest command with room to play" <| fun () ->
+            // 8.5 seconds of playing in all, and only the first command leaves the five a
+            // rewind keeps between where it lands and the pin; the second leaves 3.5. Going
+            // back to the first is as far as a short recording lets it, and it is not the pin.
+            let model = Support.step (RewindTerminalMsg terminalA) (withRecords (clientOf liveRecordedTerminal))
+            match ClientModel.terminalReplay terminalA model with
+            | Some replay -> Expect.floatClose Accuracy.high (Option.get replay.LandedAt) 2.001 "the first command, at 10.0 — 2.0 once the gap before it is squeezed"
+            | None -> failwith "the header is known, so there is a recording"
+
+        testCase "a rewind is placed on the player's clock, not the recording's" <| fun () ->
+            // The player reads `startAt` in the recording's clock but every position it is
+            // told or shows in its own, with each gap longer than the idle limit squeezed to
+            // it. 29 seconds of dead air precede the second command, 8 + 27 are cut before it,
+            // so 40.0 on the recording's clock is 5.0 on the player's. The same number for both
+            // would rest the player on a screen from a later part of the recording.
+            let model = Support.step (RewindTerminalMsg terminalA) (withLongRecords (clientOf liveRecordedTerminal))
+            match ClientModel.terminalReplay terminalA model with
+            | Some replay ->
+                Expect.floatClose Accuracy.high (Option.get replay.LandedAt) 5.001 "40.0 is 5.0 there, past it by a nudge"
+                Expect.isNone replay.StartAt "and nothing else is asking the player to start somewhere"
+                Expect.isNone replay.Poster "or to paint a still of somewhere else"
+            | None -> failwith "the header is known, so there is a recording"
+
+        testCase "a rewind of a terminal with no command in it lands on its first record" <| fun () ->
+            // Nothing to anchor a moment ago to, and a start of "nothing" would show a blank
+            // screen until somebody pressed play.
+            let model =
+                withRecords (clientOf [ at 1L 0.0 (opened terminalA "shell") ])
+                |> Support.step (RewindTerminalMsg terminalA)
+            match ClientModel.terminalReplay terminalA model with
+            | Some replay ->
+                Expect.floatClose Accuracy.high (Option.get replay.LandedAt) 2.001 "the first record, at 10.0"
+            | None -> failwith "the header is known, so there is a recording"
+
+        testCase "a block's recording has a first frame to show before play" <| fun () ->
+            // Without a poster the player draws nothing until play is pressed, so a block
+            // offered as a replay showed a blank screen.
+            let model = withRecords (clientOf recordedTerminal)
+            match ClientModel.previewReplay (PreviewSubject.Block (terminalA, block "1")) model with
+            | Some replay -> Expect.isSome replay.Poster "a still, so the player is not blank"
             | None -> failwith "the header is known, so there is a recording"
 
         testCase "the surface says how far behind the reader is, and it grows" <| fun () ->

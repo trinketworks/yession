@@ -17,6 +17,11 @@ type [<AllowNullLiteral>] Player =
     /// The player's own events, by name: `"ended"` when playback ran off the end of the
     /// cast, `"play"`, `"pause"`, and the rest of its vocabulary.
     abstract addEventListener : name: string * handler: (unit -> unit) -> unit
+    /// Move to a position, in seconds on the player's own clock (the one it shows, with idle
+    /// gaps squeezed out), whatever it is doing. Called on a player that has not loaded yet it
+    /// loads, then rests there — the screen, the timer and the progress bar all at that
+    /// position, and a press of play carrying on from it. The answer is whether it moved.
+    abstract seek : seconds: float -> JS.Promise<bool>
 
 /// The options the replay view sets, of the many the player takes. An option left out here
 /// is one this repository never sets; an optional one is the player's default when `None`,
