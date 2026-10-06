@@ -5242,7 +5242,7 @@ let private shownOutputTests =
             // The bound itself, at the size that broke it: what reaches a render is
             // `shownLines` lines whatever was printed, and the rest is a number.
             let feed = TerminalFeed.withRecord 0 { At = 0.0; Kind = TranscriptOutput; Data = numbered 100000 } TerminalFeed.empty
-            let elided, shown = TerminalFeed.shownOutput 0 1 feed
+            let elided, shown = TerminalFeed.shownOutput TerminalFeed.shownLines 0 1 feed
             Expect.equal
                 (elided, shown.Split('\n').Length - 1)
                 (100000 - TerminalFeed.shownLines, TerminalFeed.shownLines)

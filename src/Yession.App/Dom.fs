@@ -361,6 +361,10 @@ module Dom =
         /// How many of a block's earlier lines the page leaves to the recording
         /// (`TerminalFeed.shownLines`); its value is the count. Absent when it shows them all.
         let terminalOutputElided = "data-terminal-output-elided"
+        /// The button on a block in the pane's history that opens it to all it prints, or shuts
+        /// it again (`FoldKey.Output`); its value is the block's id. Absent when the block
+        /// prints no more than the history shows of any.
+        let terminalOutputExpand = "data-terminal-output-expand"
         let terminalTruncated = "data-terminal-truncated"
         let terminalInput = "data-terminal-input"
         /// The READ half of the same `Y.Text` roots `terminalInput` writes: a mount that shows
@@ -798,6 +802,13 @@ module Dom =
         let outputElided (lines: int) =
             if lines = 1 then "1 earlier line is in the recording"
             else sprintf "%d earlier lines are in the recording" lines
+        /// Open a capped block to everything the page draws of it. `total` is how many lines it
+        /// printed.
+        let showAllLines (total: int) = sprintf "show all %d lines" total
+        /// The same, for a block that printed more than any block draws: only the last `shown`.
+        let showLastLines (shown: int) = sprintf "show last %d lines" shown
+        /// Shut an opened block back to the `shown` lines the history gives each.
+        let showFewerLines (shown: int) = sprintf "show only last %d lines" shown
         // Terminal block/queue status tokens (Plan 13).
         let blockRunning = "running"
         let blockOk = "ok"

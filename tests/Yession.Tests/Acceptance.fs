@@ -1119,8 +1119,10 @@ let private uiChecklistTests =
                         [ runBlock agent 1 (BlockFinished (CommandSucceeded 0))
                           runBlock agent 2 (BlockFinished (CommandFailed 1))
                           runBlock agent 3 (BlockFinished (CommandSucceeded 0))
-                          // The newest stays out of the fold (`BlockGroup.ofBlocks`).
-                          runBlock agent 4 (BlockFinished (CommandSucceeded 0)) ])
+                          // The newest two stay out of the fold (`BlockGroup.ofBlocks`): each
+                          // is a share of the pane, and two of them fill it.
+                          runBlock agent 4 (BlockFinished (CommandSucceeded 0))
+                          runBlock agent 5 (BlockFinished (CommandSucceeded 0)) ])
             Expect.isTrue
                 (html.Contains (Dom.attr Dom.Hooks.terminalBlockRun "block-run-1"))
                 "the fold is keyed by the FIRST block in it"

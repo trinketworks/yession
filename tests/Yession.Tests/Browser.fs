@@ -5896,6 +5896,9 @@ let editorTests =
                         page.EvaluateAsync
                             """() => window.__record('term-harness', 2, 'o',
                                        Array.from({ length: 300 }, (_, i) => 'line ' + (i + 1)).join('\r\n'))""")
+                // The history draws a block's last lines until it is opened, so a block tall
+                // enough to scroll through is an OPENED one: ask for all of it.
+                do! awaitU (page.ClickAsync "#shell [data-terminal-block=block-burst-running] [data-terminal-output-expand]")
                 // Scroll until the middle of that output is at the top of the scrollback.
                 let! _ =
                     await (

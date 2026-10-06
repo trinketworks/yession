@@ -1083,8 +1083,10 @@ let private doneBy (authority: Authority) (n: string) = blockOf authority n (Blo
 let private linesOfOutput (n: int) : TranscriptRecord =
     { At = 0.0; Kind = TranscriptOutput; Data = String.replicate n "line\r\n" }
 
-/// A transcript whose one record is more than the pane draws whole — every block that reads
-/// it is earlier history the moment a newer one exists.
+/// A transcript whose one record is more than the pane's history draws of any block
+/// (`TerminalFeed.paneLines`) — what a block costs the fold budget is then its cap, and that
+/// is a share of it rather than the whole: two of them fill the budget, so every block but
+/// the newest TWO is earlier history. (`aLongBlockIsAShareOfThePane` pins the premise.)
 let private overflowing : TerminalFeed =
     TerminalFeed.withRecord 0 (linesOfOutput (BlockGroup.unfoldedLines + 1)) TerminalFeed.empty
 
@@ -1095,7 +1097,7 @@ let private groupsIn (feed: TerminalFeed) (blocks: Block list) : string list =
         | BlockGroup.Alone b -> BlockId.value b.BlockId
         | BlockGroup.Run (leader, rest) -> leader :: rest |> List.map (fun b -> BlockId.value b.BlockId) |> String.concat "+")
 
-/// The layout when nothing fits but the newest, so the grouping rules are all that decide it.
+/// The layout when nothing fits but the newest two, so the grouping rules are all that decide it.
 let private groupsOf (blocks: Block list) : string list = groupsIn overflowing blocks
 
 /// Ada running `count` commands one after another in term-a, each finished before the next,
@@ -1107,11 +1109,12 @@ let private ranInA (first: int) (count: int) (from: int64) : EventEnvelope<Sessi
         yield at offset (float offset) (started terminalA (string n) byAda (sprintf "echo %d" n) (10 * n))
         yield at (offset + 1L) (float offset + 0.5) (completed terminalA (string n) (CommandSucceeded 0) (10 * n + 5)) ]
 
-/// Three commands in term-a, the pane on it: the first two are a run, the third stands alone.
-/// Each printed more than the pane draws whole — at the transcript offset `ranInA` starts it
-/// at, for the first nine — so the first two are earlier history.
-let private threeRan : ClientModel =
-    let model = clientOf (at 1L 0.0 (opened terminalA "shell") :: ranInA 1 3 2L)
+/// Four commands in term-a, the pane on it: the first two are a run, the other two stand alone.
+/// Each printed more than the pane's history draws of one — at the transcript offset `ranInA`
+/// starts it at, for the first nine — so the newest two fill the pane and the first two are
+/// earlier history.
+let private fourRan : ClientModel =
+    let model = clientOf (at 1L 0.0 (opened terminalA "shell") :: ranInA 1 4 2L)
     let feed =
         [ 1 .. 9 ]
         |> List.fold
@@ -1140,42 +1143,43 @@ let private latestTests =
             Expect.equal
                 (groupsOf
                     [ doneBy byAda "1"; doneBy byAda "2"; blockOf byAda "3" BlockRunning
-                      doneBy byAda "4"; doneBy byAda "5"; doneBy byAda "6" ])
-                [ "b-1+b-2"; "b-3"; "b-4+b-5"; "b-6" ]
+                      doneBy byAda "4"; doneBy byAda "5"; doneBy byAda "6"
+                      doneBy byAda "7"; doneBy byAda "8" ])
+                [ "b-1+b-2"; "b-3"; "b-4+b-5+b-6"; "b-7"; "b-8" ]
                 "the loop still running is drawn whole"
 
         testCase "a run keeps its key as it grows" <| fun () ->
             // The key a fold's open state is kept under: if the next command re-keyed the run,
             // whatever the reader opened would shut under them.
-            let before = [ doneBy byAda "1"; doneBy byAda "2"; doneBy byAda "3" ]
+            let before = [ doneBy byAda "1"; doneBy byAda "2"; doneBy byAda "3"; doneBy byAda "4" ]
             Expect.equal
-                (BlockGroup.holding terminalA (block "1") overflowing (before @ [ doneBy byAda "4" ]))
+                (BlockGroup.holding terminalA (block "1") overflowing (before @ [ doneBy byAda "5" ]))
                 (BlockGroup.holding terminalA (block "1") overflowing before)
                 "the same fold before and after"
 
         // The cases below assert a run is OPEN; this is what makes that mean something.
         testCase "an older run nobody opened is shut" <| fun () ->
-            Expect.isFalse (runShownOpen "1" threeRan) "folded to its line"
+            Expect.isFalse (runShownOpen "1" fourRan) "folded to its line"
 
         testCase "a run someone opened stays open when the next command runs" <| fun () ->
             let model =
-                threeRan
+                fourRan
                 |> Support.step (FoldSetMsg (firstRun, true))
-                |> thenFolded (ranInA 4 1 8L)
+                |> thenFolded (ranInA 5 1 10L)
             Expect.isTrue (runShownOpen "1" model) "still open, one command longer"
 
         testCase "a run someone opened stays open across a hand-back" <| fun () ->
             // Live mode swaps the history for the screen and back, which rebuilt the
             // `<details>` and shut it.
             let model =
-                threeRan
+                fourRan
                 |> Support.step (FoldSetMsg (firstRun, true))
-                |> thenFolded [ at 8L 8.0 (took terminalA (PeerRef ada) 40); at 9L 9.0 (released terminalA (PeerRef ada) LeaseReleased 50) ]
+                |> thenFolded [ at 10L 10.0 (took terminalA (PeerRef ada) 50); at 11L 11.0 (released terminalA (PeerRef ada) LeaseReleased 60) ]
             Expect.isTrue (runShownOpen "1" model) "open as it was left"
 
         testCase "a run someone opened stays open across a preview and show in terminal" <| fun () ->
             let model =
-                threeRan
+                fourRan
                 |> Support.step (FoldSetMsg (firstRun, true))
                 |> Support.step (chip terminalA "3")
                 |> Support.step (ShowInTerminalMsg (terminalA, block "3"))
@@ -1183,7 +1187,7 @@ let private latestTests =
 
         testCase "a run someone shut stays shut" <| fun () ->
             let model =
-                threeRan
+                fourRan
                 |> Support.step (FoldSetMsg (firstRun, true))
                 |> Support.step (FoldSetMsg (firstRun, false))
             Expect.isFalse (runShownOpen "1" model) "shut, as they asked"
@@ -1192,7 +1196,7 @@ let private latestTests =
             // Scrolling to a command inside a shut run scrolls to nothing, and its mark plays
             // on an element nobody can see.
             let model =
-                threeRan
+                fourRan
                 |> Support.step (chip terminalA "2")
                 |> Support.step (ShowInTerminalMsg (terminalA, block "2"))
             Expect.isTrue (runShownOpen "1" model) "the run holding it is open"
@@ -1238,15 +1242,34 @@ let private fitTests =
                 (true, true, true)
                 "folded, and what is whole fills the pane only with its oldest"
 
-        testCase "a command too long to fit is drawn whole, and what came before it folds" <| fun () ->
-            // The pane is full of its output, cut at the top the way a terminal's screen is;
-            // what is above that is a click away rather than three hundred lines up.
-            let blocks, feed = printing [ 1; 1; 300; 1; 1 ]
-            Expect.equal (groupsIn feed blocks) [ "b-1+b-2"; "b-3"; "b-4"; "b-5" ] "the long one and the two after it, whole"
+        testCase "a command too long to fit is drawn at its cap, and what came before it folds" <| fun () ->
+            // A command counts what the pane DRAWS of it (`TerminalFeed.paneLines`), not what
+            // it printed: three hundred lines are one cap's worth, so the pane is full of the
+            // last three long ones and what is above that is a click away.
+            let blocks, feed = printing [ 1; 1; 1; 300; 300; 300; 1 ]
+            Expect.equal
+                (groupsIn feed blocks)
+                [ "b-1+b-2+b-3+b-4"; "b-5"; "b-6"; "b-7" ]
+                "the pane's worth ends inside the third from the end, which the top of the pane cuts through"
 
-        testCase "a newest command too long to fit is drawn whole, and folds what came before" <| fun () ->
-            let blocks, feed = printing [ 1; 1; 300 ]
-            Expect.equal (groupsIn feed blocks) [ "b-1+b-2"; "b-3" ] "the newest, whole, under the fold"
+        testCase "a newest command too long to fit is drawn at its cap, and folds what came before" <| fun () ->
+            let blocks, feed = printing [ 1; 1; 300; 300 ]
+            Expect.equal (groupsIn feed blocks) [ "b-1+b-2"; "b-3"; "b-4" ] "the newest two, capped, under the fold"
+
+        testCase "a long command costs the fold budget what it draws, not what it printed" <| fun () ->
+            let blocks, feed = printing [ 300; 3000 ]
+            Expect.equal
+                (blocks |> List.map (BlockGroup.linesOf feed))
+                (List.replicate 2 (2 + TerminalFeed.paneLines + 1))
+                "its command line, its cap, and the control that opens the rest — however much it printed"
+
+        testCase "a long block is a share of the pane, so a history of them still fills it" <| fun () ->
+            // The premise `overflowing` and the cases that read it stand on.
+            let blocks, feed = printing [ 300 ]
+            let cost = BlockGroup.linesOf feed (List.head blocks)
+            Expect.isTrue
+                (cost < BlockGroup.unfoldedLines && 2 * cost >= BlockGroup.unfoldedLines)
+                "one does not fill the budget and two do"
     ]
 
 // --- Keyframes and the ranged cast (stage 3) --------------------------------------------------
@@ -1454,6 +1477,68 @@ let private outputWindowTests =
             Expect.isFalse
                 ((Support.render model).Contains Dom.Hooks.terminalOutputElided)
                 "nothing was left out, so nothing says it was"
+    ]
+
+/// A block in the pane's HISTORY draws a bounded share of what it printed
+/// (`TerminalFeed.paneLines`), and the rest opens in place on request. The window is
+/// `TerminalFeed.lastLines`'s and the budget `BlockGroup.linesOf`'s, tested beside the fold;
+/// this is the pane saying so, which is the half a reader sees.
+let private historyOutputTests =
+    // One line per row, each its own token so a count of them is a count of the lines drawn.
+    let printing (events: EventEnvelope<SessionEvent> list) (printed: int) : ClientModel =
+        clientOf events
+        |> Support.step (
+            TerminalRecordsMsg (
+                terminalA,
+                [ 1,
+                  { At = 0.0
+                    Kind = TranscriptOutput
+                    Data = String.concat "" [ for n in 1 .. printed -> sprintf "row-%04d\r\n" n ] } ]))
+        |> Support.step (ShowInPaneMsg (Reading terminalA))
+    let paneBlock (model: ClientModel) : string =
+        markupAt (Dom.attr Dom.Hooks.terminalBlock "b-1") (Support.render model)
+    let rowsDrawn (html: string) : int = (html.Split ([| "row-" |], System.StringSplitOptions.None)).Length - 1
+    let expand = ToggleFoldMsg (FoldKey.Output (terminalA, block "1"))
+    let running =
+        [ at 1L 0.0 (opened terminalA "build")
+          at 2L 1.0 (started terminalA "1" byAda "ls -la" 1) ]
+
+    testList "A block's output, in the pane's history" [
+        testCase "a block that printed more than the history draws shows the end of it" <| fun () ->
+            let html = paneBlock (printing oneBlock 300)
+            Expect.equal
+                (rowsDrawn html, html.Contains "row-0300", html.Contains "row-0001")
+                (TerminalFeed.paneLines, true, false)
+                "the cap's worth of lines, the last of them the last printed"
+
+        testCase "a running block follows the same cap" <| fun () ->
+            Expect.equal (rowsDrawn (paneBlock (printing running 300))) TerminalFeed.paneLines "capped while it runs"
+
+        testCase "a block capped offers to open" <| fun () ->
+            let html = paneBlock (printing oneBlock 300)
+            Expect.stringContains html (Dom.attr Dom.Hooks.terminalOutputExpand "b-1") "a control on that block"
+
+        testCase "a block that fits the cap offers nothing to open" <| fun () ->
+            let html = paneBlock (printing oneBlock TerminalFeed.paneLines)
+            Expect.isFalse (html.Contains Dom.Hooks.terminalOutputExpand) "nothing is left out, so nothing opens"
+
+        testCase "opening a block draws everything it printed" <| fun () ->
+            let html = paneBlock (printing oneBlock 300 |> Support.step expand)
+            Expect.equal (rowsDrawn html, html.Contains "row-0001") (300, true) "all three hundred, in place"
+
+        testCase "an opened block keeps its control, to shut it again" <| fun () ->
+            let model = printing oneBlock 300 |> Support.step expand
+            Expect.stringContains (paneBlock model) (Dom.attr Dom.Hooks.terminalOutputExpand "b-1") "still there"
+
+        testCase "shutting an opened block draws the cap again" <| fun () ->
+            let html = paneBlock (printing oneBlock 300 |> Support.step expand |> Support.step expand)
+            Expect.equal (rowsDrawn html) TerminalFeed.paneLines "back to the cap"
+
+        testCase "opening a block does not open the preview's read of it" <| fun () ->
+            // The preview is how the whole of a block is read; it keeps drawing all the page
+            // draws of one, with or without the pane's cap.
+            let model = printing oneBlock 300 |> Support.step (chip terminalA "1")
+            Expect.equal (rowsDrawn (Support.render model |> markupAt Dom.Hooks.paneBlock)) 300 "all of it"
     ]
 
 let private videoTests =
@@ -4445,6 +4530,7 @@ let tests =
         fitTests
         pageTests
         outputWindowTests
+        historyOutputTests
         keyframeTests
         videoTests
         readsTests

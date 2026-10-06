@@ -514,10 +514,28 @@ module TerminalFeed =
                 i <- text.IndexOf ('\n', i + 1)
             elided, text.Substring cut
 
-    /// What a block shows of a range's output — its last `shownLines` lines — and how many
-    /// lines before them it leaves to the recording.
-    let shownOutput (fromSeq: int) (toSeq: int) (feed: TerminalFeed) : int * string =
-        outputText fromSeq toSeq feed |> lastLines shownLines
+    /// How many of its last lines a block shows in the pane's HISTORY until a reader asks for
+    /// the rest: a block is one command in a list of them, and a list one command can fill is
+    /// not a history. Drawn whole, `seq 1 300` was about five thousand pixels of scroll that
+    /// pushed every other command out of reach.
+    ///
+    /// Twenty is about half a pane at full height (`BlockGroup.unfoldedLines` is the whole
+    /// of one), so a command that prints a page still shows what it ended on beside the one
+    /// before it. The END, because that is where a terminal's output is read from: the last
+    /// lines are what the command left on screen. The rest is one control away, in place.
+    let paneLines = 20
+
+    /// The lines of `text`, counted as `lastLines` reads them: a line ends at `\n`, and a
+    /// trailing partial line is a line.
+    let lineCount (text: string) : int =
+        if text = "" then 0
+        else (text |> Seq.filter (fun c -> c = '\n') |> Seq.length) + (if text.EndsWith "\n" then 0 else 1)
+
+    /// What a block shows of a range's output — its last `keep` lines, never more than
+    /// `shownLines` — and how many lines before them it leaves out. The preview wants all the
+    /// page draws (`shownLines`); the pane's history wants `paneLines` unless asked for more.
+    let shownOutput (keep: int) (fromSeq: int) (toSeq: int) (feed: TerminalFeed) : int * string =
+        outputText fromSeq toSeq feed |> lastLines (min keep shownLines)
 
 /// Something opened from the chat to READ, laid over the terminal it belongs to (P2-1): one
 /// command and what it printed, one stretch of somebody holding a terminal's keyboard, or one
@@ -759,6 +777,9 @@ type FoldKey =
     /// rebuilt the element — a hand-back, a preview laid over the terminal and taken down, a
     /// lone block becoming a run — shut what the reader had opened.
     | Commands of TerminalId * BlockId
+    /// One block's output in the pane's history, shown past `TerminalFeed.paneLines`. Open is
+    /// the reader having asked for it, and it is that block's alone.
+    | Output of TerminalId * BlockId
 
 module FoldKey =
 
@@ -770,6 +791,7 @@ module FoldKey =
         | FoldKey.ToolCall id -> "call-" + ToolUseId.value id
         | FoldKey.Task id -> "task-" + AgentTurnId.value id
         | FoldKey.Commands (terminal, leader) -> "commands-" + TerminalId.value terminal + "-" + BlockId.value leader
+        | FoldKey.Output (terminal, block) -> "output-" + TerminalId.value terminal + "-" + BlockId.value block
 
 /// How a terminal's history is drawn: each block on its own, or a run of them under one
 /// "ran n earlier commands" fold — the pane's version of the chat's task card.
@@ -797,19 +819,32 @@ module BlockGroup =
     /// the pane scrolls through from its end like any other.
     let unfoldedLines = 40
 
-    /// The lines one block takes in the pane: its command line and the gap under it, then
-    /// what it shows of its output (`TerminalFeed.shownOutput`, so the budget counts what is
-    /// DRAWN, not what was printed) — at least one line, since a block with none says so —
-    /// and the note above them when some were left to the recording.
-    let linesOf (feed: TerminalFeed) (block: Block) : int =
-        // The range `terminalBlockOutput` draws: a running block's runs to whatever has arrived.
+    /// What a block's output is, as far as the page draws it: its last `keep` lines
+    /// (`TerminalFeed.shownOutput`) over the range the block covers, and how many came before
+    /// them. One read for the view and for the fold budget below, so what the budget counts is
+    /// what is drawn.
+    let outputOf (keep: int) (feed: TerminalFeed) (block: Block) : int * string =
+        // A running block's output runs to whatever has arrived; a finished one is bounded
+        // by the range its completion event recorded — which is what makes a reload show
+        // exactly the same block as the live view did.
         let toSeq = block.ToSeq |> Option.defaultValue (max feed.KnownLength block.FromSeq)
-        let elided, output = TerminalFeed.shownOutput block.FromSeq toSeq feed
-        // A line ends at `\n`, and a trailing partial line is a line (`TerminalFeed.lastLines`).
-        let shown =
-            if output = "" then 0
-            else (output |> Seq.filter (fun c -> c = '\n') |> Seq.length) + (if output.EndsWith "\n" then 0 else 1)
-        2 + max 1 shown + (if elided > 0 then 1 else 0)
+        TerminalFeed.shownOutput keep block.FromSeq toSeq feed
+
+    /// The rows an output takes: its lines, and at least one — a block with none draws a
+    /// line saying so (`…` while it runs, "no output" once it is over), which is the one the
+    /// view's empty cases are.
+    let rowsOf (output: string) : int = max 1 (TerminalFeed.lineCount output)
+
+    /// The lines one block takes in the pane: its command line and the gap under it, then
+    /// what it shows of its output with the pane's history cap on (`TerminalFeed.paneLines`,
+    /// so the budget counts what is DRAWN, not what was printed), and the control above them
+    /// when some were left out.
+    ///
+    /// The cap, not whatever a reader has opened: expanding a block must not move the others
+    /// into a fold under their hands, nor change which block keys a run.
+    let linesOf (feed: TerminalFeed) (block: Block) : int =
+        let elided, output = outputOf TerminalFeed.paneLines feed block
+        2 + rowsOf output + (if elided > 0 then 1 else 0)
 
     /// Group a terminal's blocks (oldest first) for the pane, given what they printed.
     ///
