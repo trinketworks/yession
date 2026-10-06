@@ -3293,6 +3293,36 @@ let editorTests =
                 do! Wait.until "the replay to move on two chapters" (fun () -> Read.text page "#replay-chapters .ap-term-text") (Option.exists (fun t -> t.Contains "step 3"))
             }
 
+        // The camera's switch names every state it can picture, and a name it offers that does
+        // not render is a picture of the state before it with the wrong caption under it. So
+        // each one is swapped in and must draw exactly one shell — a conversation, once — with
+        // nothing thrown on the way, and a failure names the state that went wrong rather than
+        // the wait that gave up on it.
+        //
+        // Two kinds of wrong, caught two ways. A swap that throws throws back through the call
+        // that made it, so `Harness.run1` carries it. A swap whose RENDER throws does not: Lit
+        // finishes an update a microtask later, and what it threw arrives as an unhandled
+        // rejection — a page error on this side — so those are kept as they land and read
+        // after each state, never inferred from a timeout.
+        editorCase "every state the harness names draws one shell without an error" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation]")
+                let errors = ResizeArray<string> ()
+                page.PageError.Add (fun e -> lock errors (fun () -> errors.Add e))
+                let thrown () = lock errors (fun () -> String.concat "; " errors)
+                let! names = Harness.held page HarnessPage.states
+                // Anti-vacuity: an empty list walks nothing and passes.
+                Expect.isNonEmpty names "the harness names its states"
+                for name in names do
+                    do! Harness.run1 page HarnessPage.state name
+                    // Two frames: one for the render the swap asks for, one for it to have
+                    // landed — and for whatever it threw on the way to have been reported.
+                    do! Probe.frames page 2
+                    Expect.equal (thrown ()) "" (sprintf "__state('%s') drew without an error" name)
+                    let! shells = Read.count page "#shell [data-conversation]"
+                    Expect.equal shells 1 (sprintf "__state('%s') draws one conversation" name)
+            }
+
         // A reference is part of the sentence it sits in, so its name shares the line's
         // baseline with the words either side. It did not: an inline-flex box lends the
         // line its first item's baseline, the mark has none, and every `dev` on a phone
