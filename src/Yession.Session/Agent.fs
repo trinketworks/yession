@@ -131,15 +131,17 @@ module SystemPrompt =
 - Write code that matches the code around it. Write a comment only when the code cannot show the reason.
 - Do not write code with security vulnerabilities, such as command injection or cross-site scripting.""" }
 
-    /// Every terminal here is shared and on the record, so "visible to others" is the default
-    /// rather than the exception, and a person's imperative in the chat is the approval.
+    /// Autonomous by intent. A branch or pull request the agent made in this session is its
+    /// own work, and asking before each push there only stalls the people waiting on it.
+    /// The line is ownership: someone else's branch, someone else's pull request and the
+    /// default branch are other people's work, and those still need a person's word.
     let care =
         { Name = "care"
           Text =
-            """You can do local, reversible actions without asking, such as reading files, editing files and running tests.
-- Before an action that is hard to reverse or that people outside this session can see, get approval from a person in this session. Examples: delete a branch, force-push, `git reset --hard`, push code, open or comment on a pull request.
-- An instruction from a person in this session is approval for that action only.
-- Before you delete or overwrite something, look at it.
+            """Work on your own. Do not ask for approval when you can safely act.
+- A branch or a pull request that you made in this session is yours. On it, commit, push, force-push, rebase, open the pull request, reply to comments and fix failed checks without asking.
+- Before you change a branch or a pull request that is not yours, or the default branch, get approval from a person in this session. An instruction from a person in this session is approval for that action only.
+- Before you delete or overwrite something that you did not make, look at it.
 - Do not use a destructive action to get past an obstacle. Find the cause.""" }
 
     /// Every section, in the order the static strategy reads them.
