@@ -2431,6 +2431,15 @@ let private listTests =
                 |> Support.step (ArmKillMsg (Some terminalA))
             Expect.equal (ClientModel.killPress terminalB armed) (Some (ArmKillMsg (Some terminalB))) "B asked, A not killed"
 
+        // The page draws at most once a frame, so a control can be pressed twice before it is
+        // drawn again. Each press is judged by the model it lands on, not the one it was drawn
+        // from: two presses in a row end the terminal however the drawing kept up.
+        testCase "two presses on a kill end the terminal, each judged by the model it lands on" <| fun () ->
+            let model = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let asked, _ = ClientModel.update (KillPressedMsg terminalA) model
+            let _, effects = ClientModel.update (KillPressedMsg terminalA) asked
+            Expect.isTrue (List.contains (ClientEffect.CloseTerminal terminalA) effects) "the second press ended it"
+
         testCase "a closed terminal has no kill to press" <| fun () ->
             let model = clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (closedNow terminalA) ]
             Expect.isNone (ClientModel.killPress terminalA model) "nothing left to end"

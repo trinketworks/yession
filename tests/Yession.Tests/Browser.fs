@@ -327,6 +327,10 @@ let internal reporting (label: string) (page: IPage) (ev: Evidence) (body: Async
                                          connection: document.querySelector('[data-connection]')?.getAttribute('data-connection') ?? null,
                                          conversation: document.querySelector('[data-conversation]')?.textContent?.slice(0, 200) ?? null,
                                          degraded: document.querySelector('[data-degraded]')?.getAttribute('data-degraded') ?? null,
+                                         // Where the keyboard is: a keyboard case that fails
+                                         // has either pressed the wrong thing or pressed into
+                                         // nothing, and only this tells which.
+                                         focused: document.activeElement?.outerHTML?.slice(0, 160) ?? null,
                                          // What this client KEPT, by store and entry count. An
                                          // offline page renders out of these, so a store that is
                                          // absent or empty is the difference between "the replay
@@ -6021,6 +6025,9 @@ let editorTests =
                         page.EvaluateAsync
                             """() => window.__record('term-harness', 2, 'o',
                                        Array.from({ length: 1500 }, (_, i) => 'line ' + (i + 1)).join('\r\n'))""")
+                // Drawn by the frame's end, not necessarily before the call returns: the page
+                // draws at most once a frame (`Render.setState`).
+                do! twoFrames page
                 let! counted =
                     await (
                         page.EvaluateAsync<string>

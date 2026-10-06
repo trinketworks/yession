@@ -1886,6 +1886,12 @@ type ClientMsg =
     /// request of the session only when the terminal HAS a running block, which is decided
     /// here, from the model, rather than at either control (`update`).
     | InterruptTerminalMsg of TerminalId
+    /// A terminal's kill was pressed — the strip's ×, Delete on its tab, a row's kill in the
+    /// switcher. What the press MEANS, arming or ending, is `ClientModel.killPress` asked of
+    /// the model as it is when the press lands, not of the one the control was last drawn
+    /// from: the page draws at most once a frame, so a second press inside the frame that
+    /// armed it would otherwise be judged by a picture that had not caught up.
+    | KillPressedMsg of TerminalId
     /// Arm (`Some`) or take back the arming (`None`) of a terminal's kill. `Some` replaces
     /// whatever was armed before it; `None` is sent by the wait (`armedMs`), by Escape on the
     /// armed control, and by focus leaving it.
@@ -4381,6 +4387,8 @@ module ClientModel =
         // hand goes next (`KillPending`).
         // The armed slot is spent by the press that confirms it.
         | CloseTerminalMsg terminal -> { model with KillPending = Some terminal; KillArmed = None }
+        // Never reaches a fold: `update` turns it into the press it is first.
+        | KillPressedMsg _ -> model
         | ArmKillMsg next -> { model with KillArmed = next }
         | DismissTabMsg terminal ->
             match Projection.tryFind terminal model.Terminals with
@@ -4396,7 +4404,7 @@ module ClientModel =
         )))))
 
     /// A message's consequences: the next model, and what it asks of the world outside it.
-    let update (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =
+    let private apply (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =
         let next = fold msg model
         // The launch surface's listing is asked for by whichever message first offers it:
         // anchoring happens once in a client's life on a session, so this asks once, and
@@ -4551,3 +4559,13 @@ module ClientModel =
                 { next with KeyframesAsked = Set.add key next.KeyframesAsked }, [ ClientEffect.FetchKeyframe key ]
             | Some _ | None -> next, []
         next, effects @ answered @ unnoticed @ swapped @ leased @ resized @ present @ fetching @ offering
+
+    /// A message and the effects it asks for. A kill's press is resolved here, against the
+    /// model as it stands, into the press it is (`killPress`) — then applied like any other.
+    let update (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =
+        match msg with
+        | KillPressedMsg terminal ->
+            match killPress terminal model with
+            | Some press -> apply press model
+            | None -> model, []
+        | _ -> apply msg model
