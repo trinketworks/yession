@@ -3330,6 +3330,13 @@ module View =
     /// Which runs exist is `BlockGroup.ofBlocks`'s to say; whether one is open is the
     /// model's (`OpenFolds`), bound onto the element and told back by its `toggle`, so a
     /// render that rebuilds the `<details>` rebuilds it the way the reader left it.
+    ///
+    /// A press on its line goes to the model FIRST rather than letting the `<details>` open
+    /// itself: the render that opens it is then the one `Tail` keeps the reader's place across
+    /// (from a pointer, what follows the run stays where it was and the earlier commands appear
+    /// above it; from the keyboard, the line itself stays and they appear below it). Opened
+    /// natively, the history jumped a frame before anything could put it back. Enter and Space
+    /// on the line are presses too, and the line keeps the keyboard.
     let private terminalBlockRun
         (dispatch: ClientMsg -> unit)
         (model: ClientModel)
@@ -3346,6 +3353,9 @@ module View =
         let toggled (e: Browser.Types.Event) =
             let isOpen = (e.currentTarget :?> Browser.Types.Element).hasAttribute "open"
             if isOpen <> opened then dispatch (FoldSetMsg (key, isOpen))
+        let pressed (e: Browser.Types.Event) =
+            e.preventDefault ()
+            dispatch (FoldSetMsg (key, not opened))
         let tally = blocks |> List.map (fun b -> TaskCard.stateOf b.Status) |> TaskCard.tally
         let count n inner = if n = 0 then Lit.nothing else inner
         let failed = count tally.Failed (html $"""<span class="{Style.statusErr}">{Icon.crossSm} {tally.Failed}</span>""")
@@ -3365,7 +3375,7 @@ module View =
         html $"""
             <article class="{Style.terminalBlock}" data-terminal-block-run="{BlockId.value leader.BlockId}">
               <details class="group" ?open={opened} @toggle={Ev toggled} data-fold-open="{if opened then "yes" else "no"}">
-                <summary class="{Style.terminalBlockRunSummary}">
+                <summary class="{Style.terminalBlockRunSummary}" @click={Ev pressed}>
                   {author}
                   <span class="{Style.terminalCommandText}">ran {commands}</span>
                   {counts}
@@ -4624,7 +4634,7 @@ module View =
                           <div class="{Style.terminalScrollback}" data-terminal-scrollback
                                data-terminal-id="{TerminalId.value view.TerminalId}"
                                data-tail="{TailSurface.key (TailSurface.Blocks view.TerminalId)}">
-                            <div class="{Style.terminalStream}">
+                            <div class="{Style.terminalStream}" data-tail-entries>
                               {truncated}
                               {blocks}
                             </div>
