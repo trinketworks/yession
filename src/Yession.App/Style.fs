@@ -6,8 +6,13 @@ open Yession.Domain.Terminals
 /// The client's visual language, authored entirely in F# by composing Tailwind's own
 /// utility classes into typed, named values. Tailwind supplies the utilities; F# supplies
 /// the composition; the TOKENS — palette, type ramp, caps tracking, structural spacing,
-/// fonts, keyframes — live in the `@theme` block of `app/tailwind.css`, and nothing here
-/// carries a raw hex or a structural pixel count that has a token.
+/// fonts, motion — are `app/tokens.css`, and nothing here carries a raw hex or a structural
+/// pixel count that has a token.
+///
+/// The DOCTRINE — what the design is, the rules, and the order they are settled in — is
+/// `docs/visual-design.md`, and it is written once, there. This file composes it: each value
+/// below says which rule it is spending and why, and a value this file wants that the
+/// doctrine does not admit is a question for the doctrine, not a local exception.
 ///
 /// The design is Metro / Zune (pre-Windows 8) worn by a Slack/Cursor workspace anatomy.
 /// Zune's own panorama — horizontal surfaces you pan between — was considered for the whole
@@ -19,17 +24,7 @@ open Yession.Domain.Terminals
 /// pane's row of what it holds (`panePivotRow`), which IS a set of surfaces side by side, one
 /// at a time, which is what a pivot was for.
 ///
-/// The rules that keep it coherent:
-///
-///   Type grid — everything sits on a 4px baseline rhythm, as paired size/line tokens:
-///     label 11/16 · small 13/16 · body 15/24 · pivot 19/24 · heading 28/32 ·
-///     wordmark 32/36 (px), plus the mono pair code 12/16 · code-sm 11/16.
-///   The sidebar wordmark and the main header share one band (`h-band`, items-end,
-///   common bottom padding) so their baselines align across the hairline.
-///
-///   Affordance — statuses are TEXT (colored caps, at most a small dot; never filled,
-///   never boxed). Buttons are bordered Metro rectangles (transparent; hover brightens
-///   the border; press fills solid). Nothing else carries a border.
+/// What is this file's own, rather than the doctrine's:
 ///
 ///   Strokes — every border in the product is composed from the `Stroke` vocabulary
 ///   below (width, tone, and what interaction does to it) into a handful of phrases —
@@ -38,10 +33,6 @@ open Yession.Domain.Terminals
 ///   `Stroke`, and none at all in the views. The two remaining literals are variant-
 ///   PREFIXED (`md:[.nav-alt_&]:border-r-0`), undoing a column's divider while it is
 ///   shut: the variant is part of the class name, so there is no token to compose.
-///
-///   Colour — technocool: blue is interactive and the agent's voice; green is live/ok
-///   and the human pulse. People are identified by tiny square display pics, not name
-///   colours. The blue→green gradient appears exactly ONCE: the composer's focus edge.
 module Style =
 
     /// Join utility groups into a class attribute value.

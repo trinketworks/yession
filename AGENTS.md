@@ -212,6 +212,11 @@ Python one. Both go ONE way: nothing in the product may reference an example.
 
 ## UI baseline
 
+The visual design has a doctrine, `docs/visual-design.md`, and it is read BEFORE a surface is
+changed: what the product looks like, why, and the order to settle a disagreement in. Its
+values are `app/tokens.css`, short on purpose. The floor below is the part of it that is never
+traded.
+
 WCAG 2.0 AA is the floor for every surface, not a follow-up:
 
 - **Contrast**: text ≥ 4.5:1 against the surface it actually sits on (3:1 only ≥ 24px, or
