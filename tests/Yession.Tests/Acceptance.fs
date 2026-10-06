@@ -2429,6 +2429,18 @@ let private paneActionsTests =
                 |> Support.step (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Stretch stretch)))
                 |> Support.render
             Expect.isFalse (html.Contains Dom.Hooks.paneActions) "no row"
+
+        // On a phone the pane's left edge is a second way back to the chat, drawn for a thumb
+        // already at the edge. The head's `›` is the named control, so the edge is a duplicate:
+        // out of the accessibility tree and the Tab order, or a screen reader meets "back to
+        // the chat" twice and a keyboard stops on it twice.
+        testCase "the pane's edge handle is a duplicate the accessibility tree does not meet" <| fun () ->
+            let html = Support.render representativeModel
+            let hook = html.IndexOf "data-pane-grab-edge"
+            Expect.isTrue (hook > 0) "the handle renders"
+            let tag = html.Substring (html.LastIndexOf ("<button", hook), hook - html.LastIndexOf ("<button", hook))
+            Expect.stringContains tag "aria-hidden=\"true\"" "hidden from the tree"
+            Expect.stringContains tag "tabindex=\"-1\"" "and out of the Tab order"
     ]
 
 // The offer to bring a stopped session back (Plan 11). It replaces the connection status

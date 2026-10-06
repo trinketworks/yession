@@ -4741,7 +4741,7 @@ module View =
                    duplicate, so out of the tree and the Tab order (`Style.paneGrabEdge`). -->
               <button type="button" class="{Style.paneGrabEdge}" tabindex="-1" aria-hidden="true"
                       aria-label="{Dom.Text.backToChat}" data-pane-grab-edge
-                      @click={Ev(fun _ -> dispatch ToggleContentMsg)}><span class="{Style.paneGrabMark}"></span></button>
+                      @click={Ev(fun _ -> dispatch ToggleContentMsg)}><span class="{Style.paneGrabMark}">{Icon.right}</span></button>
               <!-- Escape anywhere in the pane steps back one item: off `all` to what it was
                    laid over, or a preview down, as its close does — but not while the menu is
                    open over it, whose own Escape is about the menu and runs first, on the
