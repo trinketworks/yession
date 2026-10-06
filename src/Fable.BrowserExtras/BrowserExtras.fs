@@ -135,6 +135,49 @@ module Css =
     [<Emit("getComputedStyle($0).getPropertyValue($1)")>]
     let computedProperty (element: Browser.Types.HTMLElement) (name: string) : string = jsNative
 
+/// The CSSOM's side of a `<link rel="stylesheet">`: the sheet it loaded, and the media that
+/// sheet answers to.
+///
+/// Wanted for one difference from the `media` ATTRIBUTE, which `Fable.Browser.Dom` already
+/// types. Changing the attribute re-evaluates the sheet asynchronously — measured in Chromium,
+/// a box laid out in the same task as the change is laid out WITHOUT the sheet, however hard
+/// the caller forces a style recalculation. Changing the sheet's own media list takes effect
+/// at once, so code that turns a sheet on and then measures under it has to go this way.
+[<AllowNullLiteral>]
+type StyleSheetMedia =
+    /// The media list as text — `"all"`, `"not all"`. Writable, and a write applies now.
+    abstract mediaText : string with get, set
+
+[<AllowNullLiteral>]
+type LinkedStyleSheet =
+    abstract media : StyleSheetMedia
+
+module StyleSheets =
+
+    /// The sheet a `<link>` loaded, or `null` while it has not — a link's sheet exists only
+    /// once its bytes have arrived and parsed, so `null` is "not yet" (or "failed"), and the
+    /// link's `load` and `error` events are which.
+    [<Emit("$0.sheet")>]
+    let ofLink (link: Browser.Types.HTMLLinkElement) : LinkedStyleSheet = jsNative
+
+/// One face out of `document.fonts`. Nothing about it is read: what a caller wants from a
+/// load is that it has HAPPENED.
+type FontFace = interface end
+
+/// `document.fonts` — the page's font loading, which `Fable.Browser.Dom` does not type.
+///
+/// A web font is fetched when something first renders in it, not when its `@font-face` is
+/// parsed. So until then text measured in that family is measured in its FALLBACK, and code
+/// that sizes anything off a measurement has to ask for the face first.
+module Fonts =
+
+    /// `document.fonts.load(font)`: fetch every face the CSS `font` shorthand names — a size
+    /// and a family list, `"15px 'Monaspace Neon', monospace"` — and resolve once they have
+    /// arrived, with the faces that matched (none, when nothing in the list is a web font).
+    /// Rejects only on a shorthand that does not parse.
+    [<Emit("document.fonts.load($0)")>]
+    let load (font: string) : JS.Promise<FontFace array> = jsNative
+
 /// Scrolling something into view, where the ALIGNMENT matters.
 ///
 /// `Browser.Dom`'s `scrollIntoView ()` takes no options and therefore always aligns to the

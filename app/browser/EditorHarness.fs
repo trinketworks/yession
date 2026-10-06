@@ -1158,7 +1158,12 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                             1, { At = 0.2; Kind = TranscriptOutput; Data = "vim ~/notes\r\n" } ]
                     KnownLength = 2
                     ReadThrough = 2
-                    Header = Some { Width = 80; Height = 24; Timestamp = 0L } }
+                    // Recorded TALL and narrow — the shape of a terminal opened on a phone, and
+                    // the one a panel runs out of height for before width. An 80x24 recording
+                    // fits a pane whichever way the player is scaled, so a rewind of one could
+                    // not show a player fitted to the width alone pushing its last lines and
+                    // its control bar out of the bottom of the panel.
+                    Header = Some { Width = 40; Height = 60; Timestamp = 0L } }
                   doneId,
                   { Records = Map.ofList [ 0, { At = 0.0; Kind = TranscriptOutput; Data = "installed\r\n" } ]
                     KnownLength = 1

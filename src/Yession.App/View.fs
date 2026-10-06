@@ -4455,7 +4455,7 @@ module View =
                             Dom.Text.behindLive (Some (durationText (System.TimeSpan.FromSeconds seconds)))
                         | _ -> Dom.Text.behindLive None
                     html $"""
-                        <div class="{Style.terminalLiveFloat}">
+                        <div class="{Style.terminalBehindLine}">
                           <span class="{Style.terminalBehind}" data-terminal-behind="{TerminalId.value view.TerminalId}">{behind}</span>
                         </div>"""
             // In live mode the block history gives way to the SCREEN (Plan 14, stage 6). A

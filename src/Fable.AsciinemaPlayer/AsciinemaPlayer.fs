@@ -25,9 +25,16 @@ type [<AllowNullLiteral>] Player =
 /// `startAt` and `poster` are in the RECORDING's clock — the player maps them onto the
 /// idle-compressed one itself. `poster` is one of the player's poster forms, `"npt:<t>"`
 /// being the one used here.
+///
+/// `fit` is one of `"width"`, `"height"`, `"both"` — scale the terminal to the element's
+/// width, to its height, or to whichever of the two runs out first — and `"none"`. `controls`
+/// is the player's `true`/`false` half of `true | false | "auto"`: `false` draws no control
+/// bar, `true` keeps it on show, and the `"auto"` this binding cannot say (and the player
+/// defaults to) shows it only for two seconds after a mouse moves over the player.
 [<RequireQualifiedAccess>]
 type Options =
     { fit : string
+      controls : bool
       idleTimeLimit : int
       terminalFontFamily : string
       startAt : float option

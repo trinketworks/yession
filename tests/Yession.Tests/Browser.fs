@@ -2117,6 +2117,128 @@ let private signInButtonHoldsStill (width: int) (height: int) =
             Expect.equal opened closed "the button's offset and size in the prompt (left,top,width,height)"
         }
 
+/// Where a mounted player's terminal is against the box it was mounted into and against its
+/// own control bar, as `[top, bottom, left, right]` for each — read when a fit check fails, so
+/// a red case says by how much and on which side rather than only that a wait ran out.
+let private replayBoxes (mount: string) =
+    sprintf
+        """() => {
+             const host = document.querySelector(%s)
+             const box = el => { const r = el.getBoundingClientRect(); return [r.top, r.bottom, r.left, r.right].map(Math.round) }
+             const term = host && host.querySelector('.ap-term')
+             const bar = host && host.querySelector('.ap-control-bar')
+             return JSON.stringify({ host: host && box(host), term: term && box(term), bar: bar && box(bar) })
+           }"""
+        (System.Text.Json.JsonSerializer.Serialize mount)
+
+/// Whether every line and every column of a mounted player's terminal is where a reader can
+/// see it: inside the box it was mounted into, and its LINES clear of the player's own control
+/// bar. `.ap-term` is the terminal as the player drew it, so this is the drawn size, not the one
+/// the player computed — and the two part company exactly when the player measured its
+/// character cell wrong, which shows as columns running off the side and the last line sliding
+/// under the bar. Its lines, not its box: the box ends in a margin of the terminal's own ground
+/// (its bottom border), which the bar's top rule overlaps by design.
+let private replayFits (mount: string) =
+    sprintf
+        """() => {
+             const host = document.querySelector(%s)
+             const term = host && host.querySelector('.ap-term')
+             if (!term) return false
+             const bar = host.querySelector('.ap-control-bar')
+             const h = host.getBoundingClientRect(), t = term.getBoundingClientRect()
+             return t.width > 0 && t.height > 0
+               && t.top >= h.top - 0.5 && t.bottom <= h.bottom + 0.5
+               && t.left >= h.left - 0.5 && t.right <= h.right + 0.5
+               && (!bar || t.bottom - parseFloat(getComputedStyle(term).borderBottomWidth) <= bar.getBoundingClientRect().top + 0.5)
+           }"""
+        (System.Text.Json.JsonSerializer.Serialize mount)
+
+/// Wait for a mounted player to fit its box, and fail saying where it is when it never does.
+let private replayFitsWithin (what: string) (page: IPage) (mount: string) : Async<unit> =
+    async {
+        match! waitFor what page (replayFits mount) |> Async.Catch with
+        | Choice1Of2 () -> ()
+        | Choice2Of2 e ->
+            let! boxes = await (page.EvaluateAsync<string> (replayBoxes mount))
+            failwithf "%s\n  where they are [top, bottom, left, right]: %s" e.Message boxes
+    }
+
+/// The harness's live terminal, rewound. Its recording is TALL and narrow (40x60, the shape a
+/// terminal opened on a phone has), which is the one a panel runs out of HEIGHT for before
+/// width — an 80x24 recording fits a pane either way, so it could not show a player sized to
+/// the width alone pushing its last lines, and its control bar, out of the bottom of the panel.
+let private rewoundTall (page: IPage) : Async<unit> =
+    async {
+        do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+        do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
+        let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
+        do! awaitU (page.ClickAsync "#shell [data-terminal-watch='watch']")
+        // Landed: the still at the pin is up, so the player has its recording's size.
+        do! waitFor "the rewound terminal to show the screen at its pin" page
+                """document.querySelector("#shell [data-pane-replay='terminal:term-live']")?.textContent.includes('earlier output') === true"""
+    }
+
+let [<Literal>] private rewoundMount = "#shell [data-pane-replay='terminal:term-live']"
+
+/// A rewound terminal's player draws all of its terminal inside the region it is mounted in:
+/// scaled to that region's width AND its height, so no column runs off the side of the pane and
+/// no line runs under the command row. The 25-rewind finding was both at once — a player scaled
+/// to the width alone, by a cell measured before its stylesheet applied, 37px too wide and 60px
+/// too tall for its panel.
+let private rewoundReplayFits (width: int) (height: int) =
+    editorCaseIn width height (sprintf "a rewound terminal plays inside its region at %dx%d" width height) <| fun page ->
+        async {
+            do! rewoundTall page
+            do! replayFitsWithin "the rewound terminal to fit inside its region" page rewoundMount
+        }
+
+/// What is painted at the centre of a player's control bar and of each of its buttons, and
+/// whether it is that control — `[]` when there is no bar. The predicate below is this report
+/// asking "all of them?", and a failing case prints it, so a red run says WHICH control was
+/// covered and by what rather than only that a wait ran out.
+let private replayControlsReport (mount: string) =
+    sprintf
+        """() => {
+             const host = document.querySelector(%s)
+             const bar = host && host.querySelector('.ap-control-bar')
+             if (!bar) return []
+             return [bar, ...bar.querySelectorAll('button')].map(el => {
+               const r = el.getBoundingClientRect()
+               const hit = r.width > 0 && r.height > 0
+                 ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+                 : null
+               return { control: el.getAttribute('class') ?? el.tagName,
+                        opacity: getComputedStyle(el).opacity,
+                        box: [r.top, r.bottom, r.left, r.right].map(Math.round),
+                        reached: !!hit && el.contains(hit),
+                        painted: hit ? hit.outerHTML.slice(0, 80) : null }
+             })
+           }"""
+        (System.Text.Json.JsonSerializer.Serialize mount)
+
+/// A rewound terminal's transport — play and pause, the timeline, the player's own buttons —
+/// is on show, and what is painted at the centre of the bar and of each of its buttons is that
+/// control. Measured, not looked for: the bar was in the document all along, at no opacity
+/// until a mouse moved over it, and under the command row where no mouse could reach.
+let private rewoundReplayControlsInReach (width: int) (height: int) =
+    editorCaseIn width height (sprintf "a rewound terminal's player controls are on show and in reach at %dx%d" width height) <| fun page ->
+        async {
+            do! rewoundTall page
+            let report = replayControlsReport rewoundMount
+            let all =
+                sprintf
+                    """async () => {
+                         const controls = await (%s)()
+                         return controls.length > 1 && controls.every(c => c.reached && c.opacity === '1')
+                       }"""
+                    report
+            match! waitFor "the rewound player's controls to be on show, each painted where it stands" page all |> Async.Catch with
+            | Choice1Of2 () -> ()
+            | Choice2Of2 e ->
+                let! controls = await (page.EvaluateAsync<string> (sprintf "async () => JSON.stringify(await (%s)())" report))
+                failwithf "%s\n  the controls: %s" e.Message controls
+        }
+
 /// A side column shutting and opening again, with reduced motion asked for, starts no
 /// transition. The column is toggled by the class on `<html>` that the real client sets
 /// (`nav-alt` for the sidebar, `term-closed` for the terminals), so what is counted is the
@@ -2737,6 +2859,18 @@ let editorTests =
                     await (page.WaitForFunctionAsync
                         "document.querySelectorAll('#replay .ap-marker').length === 1")
                 return ()
+            }
+
+        // The first player a page mounts is the one that turns the player's stylesheet on, and
+        // the player measures its character cell once, as it is created. Turned on through the
+        // link's `media` attribute that measurement ran before the sheet applied — in the
+        // page's proportional face, with none of the sheet's borders — and every recording it
+        // played came out a ninth wider than its host, its right-hand columns clipped away.
+        // `#replay` is that first mount here, as the first rewind of a session is in the app.
+        editorCase "the first replay on a page is measured under its own stylesheet, and fits its host" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#replay .ap-player")
+                do! replayFitsWithin "the page's first replay to fit inside its host" page "#replay"
             }
 
         // The same player over a recording with DEAD AIR in it (Plan 25, stage 1) — the shape
@@ -5718,6 +5852,14 @@ let editorTests =
                 let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-pane-replay='terminal:term-live']")""")
                 return ()
             }
+
+        // The same rewind, as a reader sees it: inside the pane rather than off its edges,
+        // with its transport on show. At both anchors, because a phone's panel is narrow and a
+        // desktop's is short, and a player fitted on one side only fails on the other.
+        rewoundReplayFits 1440 900
+        rewoundReplayFits 390 844
+        rewoundReplayControlsInReach 1440 900
+        rewoundReplayControlsInReach 390 844
 
         // A long output keeps its command in view. Measured with `seq 1 300`: the block's
         // command line scrolled out of the top of the scrollback and the screen was numbers,
