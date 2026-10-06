@@ -198,6 +198,11 @@ module private Published =
     /// timeline is on the page. Only a browser can say where that prompt's button lands as its
     /// reason is opened and closed, and no session this harness talks to can spend a credential.
     let signInLost : PageGlobal<unit -> unit> = PageGlobal.named "__signInLost"
+    /// Swap in the shell with nothing connected to run the agent, so the roster's row for an
+    /// absent agent is on the page. Its geometry and its touch target are what only a laid-out
+    /// page can say, and the shell this harness starts in has not heard from the credential
+    /// stream, which draws no row for the agent at all.
+    let noAgent : PageGlobal<unit -> unit> = PageGlobal.named "__noAgent"
 
 
 let private doc = Y.Doc.Create ()
@@ -1674,6 +1679,18 @@ do
                                    MineCredential = needing
                                    Owner = OwnedByUser
                                    AgentAvailable = true
+                                   Models = ModelsUnknown } } }
+        render ())
+    PageGlobal.set Published.noAgent (fun () ->
+        model <-
+            { shellModel with
+                Claude =
+                    { shellModel.Claude with
+                        Status =
+                            Some { SessionCredential = None
+                                   MineCredential = None
+                                   Owner = OwnedByUser
+                                   AgentAvailable = false
                                    Models = ModelsUnknown } } }
         render ())
     PageGlobal.set Published.chapterCaret (System.Action<_, _, _> (fun id anchor head ->

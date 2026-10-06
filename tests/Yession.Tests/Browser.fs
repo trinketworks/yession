@@ -7108,6 +7108,51 @@ let editorTests =
                         (sprintf "these controls are under 44px on a phone: %s" (String.Join (", ", all)))
                 }
 
+        // The roster's row for an agent nobody has connected. It once stacked a full-width
+        // boxed button under the row, taking the roster's second slot for good; now the verb
+        // rides the row it acts on. Three promises, each only a laid-out page can keep: the
+        // verb stands INSIDE the agent's own row (never hanging under it), it is what opens
+        // settings, and on a phone it is a thumb's height.
+        let noAgentRow (page: IPage) =
+            async {
+                do! awaitU (page.EvaluateAsync "() => window.__noAgent()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-presence='absent'] [data-no-agent-connect]")
+                return ()
+            }
+        editorCaseIn 1440 900 "the verb that connects an absent agent stands inside the agent's own row" <| fun page ->
+            async {
+                do! noAgentRow page
+                let! inside =
+                    await (page.EvaluateAsync<bool>
+                            """() => {
+                                 const row = document.querySelector("#shell [data-agent-presence='absent']").getBoundingClientRect()
+                                 const verb = document.querySelector('#shell [data-no-agent-connect]')
+                                 const b = verb.getBoundingClientRect()
+                                 return verb.tagName === 'BUTTON' && b.width > 0
+                                     && b.top >= row.top - 0.5 && b.bottom <= row.bottom + 0.5
+                               }""")
+                Expect.isTrue inside "the connect verb is a button whose box lies within the agent's row"
+            }
+        editorCaseIn 1440 900 "the verb that connects an absent agent opens settings" <| fun page ->
+            async {
+                do! noAgentRow page
+                do! awaitU (page.ClickAsync "#shell [data-no-agent-connect]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-claude-panel]")
+                return ()
+            }
+        editorCaseIn 390 844 "on a phone the verb that connects an absent agent is a 44px target" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
+                do! noAgentRow page
+                let! height =
+                    await (page.EvaluateAsync<float>
+                            """() => {
+                                 const verb = document.querySelector('#shell [data-no-agent-connect]')
+                                 verb.scrollIntoView({ block: 'center' })
+                                 return verb.getBoundingClientRect().height
+                               }""")
+                Expect.isTrue (height >= 43.5) (sprintf "a thumb's 44px, got %.1f" height)
+            }
         thumbSized 390 844
         // A phone on its side is still a phone (`phone:` in app/tailwind.css): the same
         // controls, the same floor.

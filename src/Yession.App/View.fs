@@ -460,21 +460,17 @@ module View =
                 html $"""<div class="{Style.person}" data-agent-presence="live"><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]}"></span>agent<span class="{Style.statusErr} ml-auto"><span class="{Style.statusDot}"></span>{Dom.Text.signInAgainStatus}</span></div>"""
             | Some true ->
                 html $"""<div class="{Style.person}" data-agent-presence="live"><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]}"></span>agent<span class="{Style.statusOk} ml-auto"><span class="{Style.statusDot}"></span>ready</span></div>"""
-            // The dimmed avatar and the status word carry the state; the button carries the
-            // fix. What a message does meanwhile (recorded, unanswered — `Scheduler.create`,
-            // a `None` runner at drain time) is behaviour the queue itself shows, not a
-            // sentence to hang here.
+            // One roster row, like the live one: the dimmed avatar says nobody is here, and the
+            // bare verb at the right says what to do about it. It used to hang a full-width
+            // bordered button under the row with a rule beside it, which took the roster's
+            // second slot for good and repeated the button the settings face already wears.
+            // The verb opens that face (`ToggleSettingsMsg`), where the full one lives. What a
+            // message does meanwhile (recorded, unanswered — `Scheduler.create`, a `None`
+            // runner at drain time) is behaviour the queue itself shows, not a sentence to
+            // hang here.
             | Some false ->
                 html $"""
-                    <div class="{Style.noAgentBlock}" data-agent-presence="absent" data-no-agent>
-                      <div class="{Style.person}"><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]} opacity-40"></span><span class="text-ink-faint">agent</span><span class="{Style.statusRun} ml-auto">no agent</span></div>
-                      <div class="{Style.noAgentPrompt}">
-                        <span class="{Style.noAgentEdge}"></span>
-                        <div class="{Style.noAgentBody}">
-                          <button type="button" class="{Style.cls [ Style.btnPrimary; Style.noAgentAction ]}" data-settings-toggle="prompt" data-no-agent-connect @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>Connect Claude</button>
-                        </div>
-                      </div>
-                    </div>"""
+                    <div class="{Style.person}" data-agent-presence="absent" data-no-agent><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]} opacity-40"></span><span class="text-ink-faint">agent</span><button type="button" class="{Style.cls [ Style.btnBare; Style.rosterVerb ]}" data-settings-toggle="prompt" data-no-agent-connect @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>connect</button></div>"""
             | None ->
                 html $"""<div class="{Style.person}" data-agent-presence="unknown"><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]} opacity-40"></span><span class="text-ink-faint">agent</span></div>"""
 

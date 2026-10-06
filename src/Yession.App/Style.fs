@@ -488,6 +488,12 @@ module Style =
               "transition-colors"; focusRing ]
     let btnBare = cls [ btnBareBase; "text-ink-faint hover:text-ink" ]
     let btnBareDanger = cls [ btnBareBase; "text-ink-faint hover:text-err" ]
+    /// A bare verb at the right of a roster row (`person`): pushed to the row's trailing edge,
+    /// `-mr-1` so its WORD, not its padding, lines up with the status words other rows end in,
+    /// and a thumb's height on a phone, where a 24px word is not a target. It keeps the row's
+    /// baseline, so its word stands on the same line as the name beside it however tall its
+    /// hit area grows.
+    let rosterVerb = "ml-auto -mr-1 phone:min-h-11"
 
     /// 32px square and BORDERLESS: the verb parked INSIDE a field, over the text.
     ///
@@ -2921,10 +2927,12 @@ module Style =
     // above the composer, and the settings copy); repetition made it wallpaper, not a prompt.
     //
     // The absent state is the SAME roster row as the live one — same avatar cell, same
-    // right-aligned status slot — so connecting an agent flips "no agent" to "ready" in
-    // place; nothing moves and no box appears or collapses. (It used to be a boxed card,
-    // which broke the roster's geometry and made the connect moment a layout jump.) The
-    // prompt hangs beneath the row, on the roster's text column.
+    // right-aligned slot — so connecting an agent flips the bare `connect` verb to "ready" in
+    // place; nothing moves and no box appears or collapses. (It was a boxed card, then a row
+    // with a full-width button hanging under it; both took the roster's second slot for good.)
+    // The block below is the PROMPT shape the other two asks still wear — a session that has
+    // ended, and a checkout waiting on approval — where there is a sentence to put under the
+    // row and a decision to make.
 
     let noAgentBlock = "flex flex-col gap-2 phone:gap-0"
     /// The prompt reuses the roster's own grid — a 20px avatar column and the text column,
