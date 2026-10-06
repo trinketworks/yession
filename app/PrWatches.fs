@@ -522,26 +522,16 @@ let service
             (ChecksRollup.describe snapshot.Checks)
             (PrSnapshot.conflictClause snapshot.State snapshot.Mergeable)
 
-    let watch (authority: Authority) (pr: PrRef) : Async<Result<string, string>> =
+    /// The look a watch begins from: whose watch it would be, and what the provider says
+    /// the pull request stands at now. Records nothing.
+    let look (authority: Authority) (pr: PrRef) : Async<Result<PrSnapshot, string>> =
         async {
-            let! watches = watchesNow ()
             // Whose watch this would be is the event's own rule (`PrWatched.watcherOf`),
             // asked here before the look because the look is made on that credential —
             // and a refusal is said now, before a request is spent on it.
-            match watches |> List.tryFind (fun w -> w.Pr = pr), PrWatched.watcherOf pr authority with
-            // Already watched: a repeated ask is a question, not an act (the
-            // `add_repo` rule). Answer what is known and record nothing.
-            | Some existing, _ ->
-                return
-                    Ok (
-                        sprintf
-                            "%s already watched (%s, %s%s)"
-                            (PrRef.render pr)
-                            (PrState.describe existing.Known.State)
-                            (ChecksRollup.describe existing.Known.Checks)
-                            (PrSnapshot.conflictClause existing.Known.State existing.Known.Mergeable))
-            | None, Error reason -> return Error reason
-            | None, Ok watcher ->
+            match PrWatched.watcherOf pr authority with
+            | Error reason -> return Error reason
+            | Ok watcher ->
                 let! token = resolveToken (CredentialFor.Person watcher)
                 let! outcome = fetch token pr PrEtags.none None
                 match outcome with
@@ -550,14 +540,49 @@ let service
                 // provider that answers 304 to a first look has told us nothing to
                 // start a baseline from.
                 | PrUnchanged -> return Error (sprintf "%s answered nothing about that pull request" provider)
-                | PrChanged (snapshot, _) ->
-                    match mintId () |> Result.bind (fun id -> PrWatched.create id authority pr snapshot) with
+                | PrChanged (snapshot, _) -> return Ok snapshot
+        }
+
+    /// Begin a watch from a baseline already looked at. The baseline is what every later
+    /// look is compared against, so a change since it is a transition the poller reports.
+    let watchFrom (authority: Authority) (pr: PrRef) (snapshot: PrSnapshot) : Async<Result<unit, string>> =
+        async {
+            match mintId () |> Result.bind (fun id -> PrWatched.create id authority pr snapshot) with
+            | Error e -> return Error e
+            | Ok watched ->
+                do! append (PrWatched.actor watched) (SessionEvent.PrWatched watched)
+                let! watches = watchesNow ()
+                refold watches
+                return Ok ()
+        }
+
+    let isWatched (pr: PrRef) : Async<PrWatch option> =
+        async {
+            let! watches = watchesNow ()
+            return watches |> List.tryFind (fun w -> w.Pr = pr)
+        }
+
+    let watch (authority: Authority) (pr: PrRef) : Async<Result<string, string>> =
+        async {
+            match! isWatched pr with
+            // Already watched: a repeated ask is a question, not an act (the
+            // `add_repo` rule). Answer what is known and record nothing.
+            | Some existing ->
+                return
+                    Ok (
+                        sprintf
+                            "%s already watched (%s, %s%s)"
+                            (PrRef.render pr)
+                            (PrState.describe existing.Known.State)
+                            (ChecksRollup.describe existing.Known.Checks)
+                            (PrSnapshot.conflictClause existing.Known.State existing.Known.Mergeable))
+            | None ->
+                match! look authority pr with
+                | Error reason -> return Error reason
+                | Ok snapshot ->
+                    match! watchFrom authority pr snapshot with
                     | Error e -> return Error e
-                    | Ok watched ->
-                        do! append (PrWatched.actor watched) (SessionEvent.PrWatched watched)
-                        let! watches = watchesNow ()
-                        refold watches
-                        return Ok (describe pr snapshot)
+                    | Ok () -> return Ok (describe pr snapshot)
         }
 
     { Watch = watch
@@ -634,11 +659,32 @@ let service
                         | Ok watching -> return Ok (sprintf "%s; %s" said watching)
                         | Error reason -> return Ok (sprintf "%s; could not watch it: %s" said reason)
                     }
+                // A merge that lands at once leaves nothing after it for a watch to see, so a
+                // watch begun afterwards would start from "merged" and never say so. The look
+                // is taken BEFORE the merge instead, and a merge done at once begins the
+                // watch from it: the poller's next look then sees the merge and reports it as
+                // the transition it is — the same news, by the same road, as a merge that
+                // waited on its checks. Not taken for a pull request already watched, whose
+                // watch has its own baseline and will see the merge anyway.
+                let! before =
+                    async {
+                        match! isWatched pr with
+                        | Some _ -> return None
+                        | None ->
+                            let! looked = look authority pr
+                            return Result.toOption looked
+                    }
                 match! mergePr token pr method with
                 | PrMergeArmed pr -> return! watched (sprintf "%s will merge when its checks pass" (PrRef.render pr))
                 | PrMergeQueued pr -> return! watched (sprintf "%s is in the merge queue" (PrRef.render pr))
-                // Done, so there is nothing left for a watch to see.
-                | PrMergedNow pr -> return Ok (sprintf "%s merged" (PrRef.render pr))
+                | PrMergedNow pr ->
+                    let said = sprintf "%s merged" (PrRef.render pr)
+                    match before with
+                    | None -> return Ok said
+                    | Some snapshot ->
+                        match! watchFrom authority pr snapshot with
+                        | Ok () -> return Ok said
+                        | Error reason -> return Ok (sprintf "%s; could not watch it: %s" said reason)
                 // Nothing was done, and the answer says what already stands — which is the
                 // point of asking again rather than an apology for it.
                 | PrMergeUnneeded (pr, already) ->
