@@ -160,6 +160,7 @@ let private representativeModel : ClientModel =
       Caret = None
       // The roster names a draft's author even when they are not here: a label, never a peer id.
       Peers = Map.ofList [ ada, "swift-heron"; bob, "brave-owl" ]
+      Here = Here.empty
       Attribution = Attribution.empty
       Composer = Unchosen
       Environment = EnvironmentNotStarted
@@ -2792,13 +2793,96 @@ let private presenceTests =
                 (html.Contains (Dom.hookText (Dom.attr Dom.Hooks.peerAt Dom.Text.atChapter) Dom.Text.atSomeChapter))
                 "they are at a chapter, unnamed"
 
-        // Presence is who is here NOW. `Peers` deliberately keeps the departed so a draft's
-        // author still has a name — reporting them as present would make the roster a
-        // guest book.
-        testCase "a peer with no live caret is not reported as being anywhere" <| fun () ->
+        // `Peers` deliberately keeps the departed so a draft's author still has a name —
+        // reporting them as present would make the roster a guest book. Who is here is who has
+        // a connection open, and this model has nobody's.
+        testCase "a peer the log remembers but who is not connected has no roster row" <| fun () ->
             let html = Support.render { representativeModel with Presence = Map.empty }
             Expect.isFalse (html.Contains Dom.Hooks.peerPresence) "nobody else is claimed to be here"
             Expect.isTrue (html.Contains "swift-heron") "the local peer's own row is untouched"
+
+        // Who is in the room is folded from the log's joins and leaves, the path a browser
+        // takes; nobody here has a caret anywhere, so presence cannot be what puts them there.
+        let after (events: SessionEvent list) =
+            let envelopes =
+                events
+                |> List.mapi (fun i event ->
+                    { EventId = EventId.fresh ()
+                      SessionId = sessionId
+                      Offset = EventOffset.create (6L + int64 i) |> expect
+                      Actor = ActorRef.Session
+                      Timestamp = DateTimeOffset (2026, 10, 6, 0, 0, 0, TimeSpan.Zero)
+                      Event = event })
+            { representativeModel with Presence = Map.empty }
+            |> Support.step
+                (EventsPageMsg
+                    { Events = envelopes
+                      LastOffset = envelopes |> List.tryLast |> Option.map (fun e -> e.Offset)
+                      IsEnd = true })
+        let joins (peer: PeerId) (name: string) = PeerJoined { PeerId = peer; DisplayName = name; User = None }
+        let leaves (peer: PeerId) = PeerLeft { PeerId = peer }
+        let rowOf (who: ActorRef) (html: string) =
+            match html.IndexOf (Dom.attr Dom.Hooks.peerPresence (ActorRef.token who)) with
+            | -1 -> None
+            | opens -> Some (html.Substring (opens, html.IndexOf ("</div>", opens) - opens))
+
+        testCase "a connected peer who is editing nothing has a roster row" <| fun () ->
+            let html = Support.render (after [ joins bob "brave-owl" ])
+            Expect.isSome (rowOf (PeerRef bob) html) "somebody reading the timeline is still in the room"
+
+        // Where an idle person is, is nowhere the roster can name — and a word in the slot
+        // would claim somewhere.
+        testCase "a connected peer who is editing nothing is placed nowhere" <| fun () ->
+            Expect.isTrue
+                (rowOf (PeerRef bob) (Support.render (after [ joins bob "brave-owl" ]))
+                 |> Option.exists (fun row -> not (row.Contains Dom.Hooks.peerAt)))
+                "they have a row, and it says nothing about where they are"
+
+        testCase "a peer who disconnects leaves the roster" <| fun () ->
+            let html = Support.render (after [ joins bob "brave-owl"; leaves bob ])
+            Expect.isNone (rowOf (PeerRef bob) html) "a departed peer is not in the room"
+
+        // One browser is one peer however many tabs it has open, so a tab closing is one of
+        // that peer's connections ending, not the person leaving.
+        testCase "a peer with two tabs open is still here when one closes" <| fun () ->
+            let html = Support.render (after [ joins bob "brave-owl"; joins bob "brave-owl"; leaves bob ])
+            Expect.isSome (rowOf (PeerRef bob) html) "the other tab is still connected"
+
+        testCase "a peer with two tabs open has one roster row" <| fun () ->
+            let html = Support.render (after [ joins bob "brave-owl"; joins bob "brave-owl" ])
+            let token = Dom.attr Dom.Hooks.peerPresence (ActorRef.token (PeerRef bob))
+            Expect.equal (html.Split token).Length 2 "one person, one row"
+
+        // A process that dies writes no `PeerLeft` for the links it took with it; everybody
+        // still here rejoins after the next boot's own event.
+        testCase "a session's boot forgets the connections its last process held" <| fun () ->
+            let html =
+                Support.render
+                    (after
+                        [ joins bob "brave-owl"
+                          SessionResumed { MessageId = MessageId.create "msg-boot" |> expect; LastHeardAt = DateTimeOffset (2026, 10, 6, 0, 0, 0, TimeSpan.Zero) } ])
+            Expect.isNone (rowOf (PeerRef bob) html) "nobody is here until they rejoin"
+
+        // Two devices of one verified user are two peers and one person: one row, under the
+        // name everybody sees them by.
+        testCase "one person on two devices has one roster row" <| fun () ->
+            let dora = PeerId.create "dora" |> expect
+            let model =
+                { after [ joins bob "lucid-tern"; joins dora "warm-tern" ] with
+                    Attribution = { Attribution.empty with PeerUsers = Map.ofList [ bob, carol; dora, carol ]; UserPeers = Map.ofList [ carol, dora ] } }
+            let html = Support.render model
+            Expect.isSome (rowOf (UserRef carol) html) "the person has a row"
+            Expect.isNone (rowOf (PeerRef bob) html) "and neither of their devices has another"
+
+        // Where they ARE still shows when they are somewhere: being connected adds the row,
+        // and a caret still fills its slot.
+        testCase "a connected peer with a caret is placed on the roster where it is" <| fun () ->
+            let model = { after [ joins bob "brave-owl" ] with Presence = (withBobIn Title).Presence }
+            Expect.isTrue
+                (rowOf (PeerRef bob) (Support.render model)
+                 |> Option.exists (fun row ->
+                     row.Contains (Dom.hookText (Dom.attr Dom.Hooks.peerAt Dom.Text.atTitle) Dom.Text.renamingSession)))
+                "the row says they are renaming the session"
 
         testCase "the local peer never appears as their own collaborator" <| fun () ->
             let html = Support.render (withBobIn Title)
@@ -3358,9 +3442,11 @@ let private semanticsTests =
                     Timeline = TimelineProjection.empty }
             let html = Support.render model
             let mark = Entity.actorMark model (UserRef carol)
+            // The roster's row is the PERSON's — one a person, however many peers they are on
+            // — so it is carol's row that bob's caret puts on it.
             let rosterRow =
-                let start = html.IndexOf (Dom.attr Dom.Hooks.peerPresence (ActorRef.token (PeerRef bob)))
-                Expect.isTrue (start >= 0) "bob is on the roster"
+                let start = html.IndexOf (Dom.attr Dom.Hooks.peerPresence (ActorRef.token (UserRef carol)))
+                Expect.isTrue (start >= 0) "carol is on the roster"
                 html.Substring (start, html.IndexOf ("</div>", start) - start)
             Expect.isTrue (rosterRow.Contains mark) "the roster row wears the person's mark"
             Expect.isTrue ((messageMetaOfLabel (UserId.value carol) html).Contains mark) "and so does the chat's author line"

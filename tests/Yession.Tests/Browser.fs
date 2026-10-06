@@ -903,6 +903,29 @@ let tests =
                 do! waitFor "B's timeline to show the sent message" pageB inTimeline
             }
 
+        // Who is in the room is everyone CONNECTED, not everyone editing something: two people
+        // who have only opened the session are each on the other's roster. It listed a peer
+        // only while their caret was in a field, so a collaborator reading the timeline was
+        // nowhere — and the cheap tier, which folds a log it was handed, cannot see the real
+        // session write the join every other client is reading.
+        sessionPair "a peer editing nothing is on the other peer's roster" <|
+            fun pageA pageB ->
+            async {
+                let oneOther = """document.querySelectorAll('[data-peer-presence]').length === 1"""
+                do! waitFor "A to list B" pageA oneOther
+                do! waitFor "B to list A" pageB oneOther
+            }
+
+        // And the room empties as people go: the link ending is what writes the leave.
+        sessionPair "a peer who goes leaves the other peer's roster" <|
+            fun pageA pageB ->
+            async {
+                let others = """document.querySelectorAll('[data-peer-presence]').length"""
+                do! waitFor "A to list B" pageA (others + " === 1")
+                let! _ = await (pageB.GotoAsync "about:blank")
+                do! waitFor "A to stop listing B" pageA (others + " === 0")
+            }
+
         // Terminals (Plan 13) in a real browser: the one part of the panel that only a
         // browser can exercise — the `<input>` bound to a `Y.Text` root. Everything under it
         // (the slot rule, the queue, the approval gate, the drain, the transcript) is covered
