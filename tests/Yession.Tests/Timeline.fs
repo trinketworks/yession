@@ -4282,6 +4282,71 @@ let private ptyResizeTests =
             Expect.equal (resizes effects) [ ClientEffect.ResizeTerminal (terminalA, wide) ] "the box the holder already has"
     ]
 
+let private presenceTests =
+    let caret : Link.Focus = { Field = Link.FocusField.Title; Pos = { Anchor = "AQI="; Head = "AQI=" } }
+    let reading = Some (ViewingTerminal terminalA)
+    let told (effects: ClientEffect list) =
+        effects |> List.choose (function ClientEffect.SendPresence (focus, viewing) -> Some (focus, viewing) | _ -> None)
+    let accepted =
+        ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (EventOffset.create 1L |> expect) }
+    let terminal = [ at 1L 0.0 (opened terminalA "build") ]
+    // Reading the terminal, with nothing else open — the pane's half, made to hold.
+    let onTerminal (model: ClientModel) = model |> Support.step (OpenInPaneMsg (Reading terminalA))
+
+    testList "This peer's presence is told once, whole, and only once it is accepted" [
+        // The first frame on a channel has to be the hello, and only acceptance says it went.
+        testCase "a caret moving before acceptance tells nobody" <| fun () ->
+            let _, effects = ClientModel.update (CaretMovedMsg (Some caret)) (clientOf terminal)
+            Expect.equal (told effects) [] "not connected yet"
+
+        // Presence has no keepalive: a peer that moved before the channel came up is invisible
+        // until it moves again unless acceptance says where it is.
+        testCase "acceptance restates the caret and the pane reported before it" <| fun () ->
+            let before = clientOf terminal |> onTerminal |> Support.step (CaretMovedMsg (Some caret))
+            let _, effects = ClientModel.update accepted before
+            Expect.equal (told effects) [ Some caret, reading ] "both halves, as the model holds them"
+
+        // A peer that left was cleared everywhere when it went; there is nothing to restate.
+        testCase "acceptance with nowhere to be tells nobody" <| fun () ->
+            let _, effects = ClientModel.update accepted (ClientModel.init { PeerId = ada; DisplayName = "swift-heron" })
+            Expect.equal (told effects) [] "no caret, no pane"
+
+        // The two halves ride one frame, so a caret that moves must not erase the pane.
+        testCase "a caret moving restates what is open beside it" <| fun () ->
+            let _, effects = ClientModel.update (CaretMovedMsg (Some caret)) (heardOf terminal |> onTerminal)
+            Expect.equal (told effects) [ Some caret, reading ] "the pane is still open"
+
+        // ...and a pane that moves must not erase the caret.
+        testCase "the pane moving restates the caret beside it" <| fun () ->
+            let before = heardOf terminal |> Support.step (CaretMovedMsg (Some caret))
+            let _, effects = ClientModel.update (OpenInPaneMsg (Reading terminalA)) before
+            Expect.equal (told effects) [ Some caret, reading ] "the caret is still there"
+
+        // Leaving every field is news too: it is how collaborators stop drawing the caret.
+        testCase "a caret leaving every field is told" <| fun () ->
+            let before = heardOf terminal |> Support.step (CaretMovedMsg (Some caret))
+            let _, effects = ClientModel.update (CaretMovedMsg None) before
+            Expect.equal (told effects) [ None, None ] "cleared"
+
+        // A render happens on every keystroke; a repeat tells a collaborator nothing.
+        testCase "a caret reported where it already was tells nobody" <| fun () ->
+            let before = heardOf terminal |> onTerminal |> Support.step (CaretMovedMsg (Some caret))
+            let _, effects = ClientModel.update (CaretMovedMsg (Some caret)) before
+            Expect.equal (told effects) [] "nothing moved"
+
+        // What the dead channel was told went with it, and a reconnect is a new peer to the
+        // Session until it is accepted again.
+        testCase "a reconnect restates where this peer is" <| fun () ->
+            let before =
+                heardOf terminal
+                |> onTerminal
+                |> Support.step (CaretMovedMsg (Some caret))
+                |> Support.step DisconnectedMsg
+                |> Support.step ConnectingMsg
+            let _, effects = ClientModel.update accepted before
+            Expect.equal (told effects) [ Some caret, reading ] "both halves, again"
+    ]
+
 let tests =
     testList "Timeline and the pane (Plan 14)" [
         contentChipTests
@@ -4312,4 +4377,5 @@ let tests =
         readsTests
         dvrTests
         ptyResizeTests
+        presenceTests
     ]

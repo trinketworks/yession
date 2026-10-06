@@ -157,6 +157,7 @@ let private representativeModel : ClientModel =
               { DisplayName = "brave-owl"
                 Focus = Some { Field = Title; Pos = { Anchor = "AQI="; Head = "AwQ=" } }
                 Viewing = None } ]
+      Caret = None
       // The roster names a draft's author even when they are not here: a label, never a peer id.
       Peers = Map.ofList [ ada, "swift-heron"; bob, "brave-owl" ]
       Attribution = Attribution.empty
