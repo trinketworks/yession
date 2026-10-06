@@ -2592,12 +2592,12 @@ module View =
         // It says WHERE, in the place and voice its queued self said it (`pendingChip`): a
         // chat of commands across three terminals otherwise reads as one terminal, and the
         // chip that becomes this one already named it.
-        let blockChip (terminalId: TerminalId) (block: Block) =
+        let blockChip (chip: string) (terminalId: TerminalId) (block: Block) =
             let blockId = block.BlockId
             let status = terminalBlockStatusLabel block.Status
             let where = Entity.terminalName model terminalId |> Option.defaultValue (TerminalId.value terminalId)
             html $"""
-                <button type="button" class="{Style.chatChip}"
+                <button type="button" class="{chip}"
                         data-chat-block="{BlockId.value blockId}"
                         data-chat-block-status="{status}"
                         data-terminal-id="{TerminalId.value terminalId}"
@@ -2749,7 +2749,7 @@ module View =
             let arrow = foldArrow key Icon.rights Dom.Text.details
             let body =
                 foldBodyWide key Style.chatTaskCardInner
-                    (lines |> List.map (fun ((terminalId, block), _) -> blockChip terminalId block))
+                    (lines |> List.map (fun ((terminalId, block), _) -> blockChip Style.chatChipCarded terminalId block))
             let header =
                 foldClickRow key alwaysToggle
                     [ arrow
@@ -2855,7 +2855,7 @@ module View =
                     // boundary, not a bug: the next page brings it.
                     blockOf terminalId blockId
                     |> Option.map (fun block ->
-                        Some (Authority.author block.Authority), blockChip terminalId block)
+                        Some (Authority.author block.Authority), blockChip Style.chatChip terminalId block)
                 | RowItem (TimelineStretch stretch) -> Some (Some stretch.Holder, stretchItem stretch)
                 // A lone call: `rows` leaves one call as its own row, and it draws as one.
                 | RowItem (TimelineToolUse (_, id)) ->
@@ -2880,7 +2880,7 @@ module View =
                     match blocks with
                     | [] -> None
                     | [ (terminalId, block) ] ->
-                        Some (Some (Authority.author block.Authority), blockChip terminalId block)
+                        Some (Some (Authority.author block.Authority), blockChip Style.chatChip terminalId block)
                     | many -> Some (Some ActorRef.Agent, taskCard turn many)
         // What is about to run, at the tail — after everything that has happened, which is
         // where it happens. `rows` is a fold over EVENTS and a pending act is not one, so it

@@ -2045,15 +2045,19 @@ module Style =
     /// of chips between two messages lines up with the prose rather than drifting under the
     /// avatars. The palette stays `text-ink-dim`/`text-ink-faint` — chips are the busiest
     /// thing the chat will carry, and they must read as texture next to what people said.
-    let chatChip =
+    let private chatChipEnding (rightEdge: string) =
         cls [ "w-full bg-transparent cursor-pointer text-left"
               readingColumn
               "flex items-baseline gap-2 pl-[32px] py-0.5 phone:py-2.5"
-              // The same right edge a tool run's line ends on (`itemGround`: `pr-8` less
-              // the phone's 16px bleed), so a chip's status and a call's stand in one column.
-              "pr-8 max-md:pr-4"
+              rightEdge
               "text-ink-dim hover:text-ink transition-colors duration-150 ease-out"
               focusRing ]
+    /// The same right edge a tool run's line ends on (`itemGround`: `pr-8` less the phone's
+    /// 16px bleed), so a chip's status and a call's stand in one column.
+    let chatChip = chatChipEnding "pr-8 max-md:pr-4"
+    /// A chip inside a task card, whose ground has already drawn that right edge: padding it
+    /// again would stop the chip's status 16px (phone) or 32px short of every other row's.
+    let chatChipCarded = chatChipEnding ""
     /// Who ran it — the same caps voice a message's author line wears, one step fainter.
     let chatChipWho = caps + " text-ink-faint shrink-0"
     /// Which terminal a queued command waits in. The same voice as `chatChipWho`, but it
