@@ -962,6 +962,12 @@ module Style =
     let personAvatar = "self-center"
     let commandCard = "flex flex-col gap-1 px-3 py-2 bg-surface"
 
+    /// The contents' entries, as one stack. Their own container rather than the section's, so
+    /// the gap the section puts under its heading (`sideSection`'s 8px) is not also put
+    /// between the entries: on a phone each entry is already a full 44px target
+    /// (`chapterEntry`), and a gap on top of that spread two chapters 52px apart.
+    let chapterEntries = "flex flex-col gap-2 phone:gap-0"
+
     /// One chapter in the contents: the roster row's shape, worn by a button.
     ///
     /// The same row as a person's, because the column holds one kind of list and a second
@@ -1093,7 +1099,7 @@ module Style =
     ///
     /// The gap is BETWEEN entries and not inside one: evenly spaced, a meaning sat as close
     /// to the next shape as to its own, and eight pairs read as sixteen lines.
-    let queryLegendEntries = "flex flex-col gap-2"
+    let queryLegendEntries = "flex flex-col gap-2 phone:gap-0"
     /// One pair, kept together. A `<div>` inside a `<dl>` is exactly what the grouping
     /// element is for, so the pairing is in the markup a screen reader walks and not only
     /// in the spacing a sighted reader sees.
@@ -2901,7 +2907,7 @@ module Style =
     // which broke the roster's geometry and made the connect moment a layout jump.) The
     // prompt hangs beneath the row, on the roster's text column.
 
-    let noAgentBlock = "flex flex-col gap-2"
+    let noAgentBlock = "flex flex-col gap-2 phone:gap-0"
     /// The prompt reuses the roster's own grid — a 20px avatar column and the text column,
     /// with the roster's 10px gutter — so the edge centres under the avatar and the text
     /// lands on the text column BY CONSTRUCTION, not by pixel arithmetic.
@@ -2910,7 +2916,7 @@ module Style =
     /// avatar column and spanning the prompt's height.
     let noAgentEdge = "w-0.5 justify-self-center bg-blue"
     /// The prompt's text column: the explainer over its one action.
-    let noAgentBody = "flex flex-col gap-2"
+    let noAgentBody = "flex flex-col gap-2 phone:gap-0"
     /// Full-width within the column so it reads as the section's one action, and a thumb's
     /// height on a phone, where the column is a drawer held in one hand.
     let noAgentAction = "w-full phone:h-11"
@@ -3266,7 +3272,7 @@ module Style =
     let terminalScrollback = "relative flex-1 min-h-0 overflow-y-auto flex flex-col px-3"
     let terminalStream = "flex flex-col gap-2 py-3"
     /// The commands inside a run's fold: the stream's rhythm, without its edges.
-    let terminalBlockRunBody = "flex flex-col gap-2"
+    let terminalBlockRunBody = "flex flex-col gap-2 phone:gap-0"
 
     /// One block: the command that ran, then everything it printed.
     ///
