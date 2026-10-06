@@ -18,6 +18,7 @@ module Yession.Tests.Tools
 open Fable.Pyxpecto
 open Yession.Domain
 open Yession.Domain.Agent
+open Yession.Domain.Content
 open Yession.Domain.Files
 open Yession.Domain.Prs
 open Yession.Domain.Terminals
@@ -1230,4 +1231,77 @@ let private searchTests =
         }
     ]
 
-let tests = testList "Tools" [ registryTests; sessionTests; fileTests; editTests; searchTests; auditTests ]
+/// `read_artifact` over a store that answers with `content` for any address.
+let private readingArtifacts (content: FileContent) =
+    let asked = ResizeArray<ContentRef> ()
+    let registry =
+        AgentTools.registry
+            { AgentCapabilities.none with
+                Artifacts =
+                    { AgentCapabilities.none.Artifacts with
+                        ArtifactCapabilities.Read =
+                          fun ref ->
+                              async {
+                                  asked.Add ref
+                                  return Ok content
+                              } } }
+    (fun (args: string) -> registry.Invoke (call "yession" "read_artifact" args)), asked
+
+let private artifactReadTests =
+    testList "read_artifact" [
+
+        // What makes this verb worth having beside `read_file`: an agent can look at the
+        // picture it shared. `read_file` reads a sandbox, and the store is not in one, so
+        // before this the only way to see a shared picture was to still have the original.
+        testCaseAsync "a shared picture comes back as the picture" <|
+            async {
+                let image = ToolImage.ofBase64 onePixelPng |> expect
+                let read, _ = readingArtifacts (FileContent.Image image)
+                match! read """{"artifact":"file:///artifacts/shot.png"}""" with
+                | Error e -> failwith e
+                | Ok answer -> Expect.equal answer.Image (Some image) "the model is shown it"
+            }
+
+        // The other half of `read_file`'s sentence, and the reason they are two verbs: an
+        // agent reading a picture has to know which of the two it is looking at, and the
+        // answer is the only thing in front of it at the time.
+        testCaseAsync "a shared picture is said to be one the people here can already see" <|
+            async {
+                let read, _ = readingArtifacts (FileContent.Image (ToolImage.ofBase64 onePixelPng |> expect))
+                match! read """{"artifact":"file:///artifacts/shot.png"}""" with
+                | Error e -> failwith e
+                | Ok answer ->
+                    Expect.stringContains answer.Text "shared" "it says the picture is shared"
+                    Expect.isFalse (answer.Text.Contains "share_artifact") "and never asks for it to be shared again"
+            }
+
+        testCaseAsync "an address is taken in any spelling a reader has seen" <|
+            async {
+                let read, asked = readingArtifacts (FileContent.Text "a report")
+                for spelling in [ "file:///artifacts/notes.md"; "/artifacts/notes.md"; "artifacts/notes.md" ] do
+                    match! read (sprintf """{"artifact":"%s"}""" spelling) with
+                    | Error e -> failwith e
+                    | Ok _ -> ()
+                Expect.equal
+                    (asked |> Seq.map ContentRef.value |> List.ofSeq)
+                    [ "artifacts/notes.md"; "artifacts/notes.md"; "artifacts/notes.md" ]
+                    "all three mean the one path, so the store is asked one question"
+            }
+
+        testCaseAsync "a path that is not an address is refused before the store is asked" <|
+            async {
+                let read, asked = readingArtifacts (FileContent.Text "a report")
+                match! read """{"artifact":"../../etc/passwd"}""" with
+                | Error e -> failwith e
+                | Ok answer -> Expect.isTrue (answer.Text.Contains "content path") "the refusal says what a content path is"
+                Expect.isEmpty asked "and nothing was looked for"
+            }
+
+        test "read_artifact declares itself read-only" {
+            let registry = AgentTools.registry AgentCapabilities.none
+            let tool = registry.Tools |> List.find (fun t -> t.Name = "read_artifact")
+            Expect.isTrue tool.ReadOnly "reading what is already shared changes nothing, and passes no gate"
+        }
+    ]
+
+let tests = testList "Tools" [ registryTests; sessionTests; fileTests; artifactReadTests; editTests; searchTests; auditTests ]

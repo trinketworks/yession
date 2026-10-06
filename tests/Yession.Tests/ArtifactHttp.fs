@@ -4,6 +4,10 @@ module Yession.Tests.ArtifactHttp
 // latest, `content/artifacts/<name>/<version>` is those bytes for good, and everything else is
 // a 404 — including a path that is a real address this build cannot serve yet.
 //
+// And the same store read by something that is not a browser at all (`Artifacts.read`), which
+// is how an agent looks at what it shared: same addresses, same containment, a different
+// destination — so the two readers are pinned against one resolution rather than two.
+//
 // Deliberately the shape of `TranscriptHttp.fs` and `EventsHttp.fs`, because it is the same
 // contract: a moving address that is never cached, redirecting to a fixed one whose bytes
 // cannot change under a client. What is different, and is what these pin, is that the fixed
@@ -13,6 +17,7 @@ module Yession.Tests.ArtifactHttp
 open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
+open Yession.Domain.Agent
 open Yession.Domain.Content
 open Yession.App
 open Yession.Host
@@ -196,4 +201,71 @@ let private routeTests =
             }
     ]
 
-let tests = testList "ArtifactHttp" [ routeTests ]
+/// An artifacts directory holding the versions named, with no server in front of it: what
+/// `Artifacts.read` is asked, which is the store and nothing else.
+let private holding (files: (ArtifactRef * string) list) =
+    let dir = TestFiles.tempDir "artifacts-read"
+    for (ref, body) in files do
+        TestFiles.ensureDir (sprintf "%s/%s" dir (ArtifactRef.name ref))
+        TestFiles.write (Artifacts.pathOf dir ref) body
+    dir, (fun (raw: string) -> Artifacts.read dir (ContentRef.create raw |> expect))
+
+/// A one-pixel PNG, so a picture under test is a real one: `ToolImage` reads the bytes and
+/// refuses a file that is named like an image and is not one.
+let private onePixelPng =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+let private readTests =
+    testList "reading the store" [
+
+        testCaseAsync "a bare name reads whatever is latest under it" <|
+            async {
+                let _, read = holding [ version "notes.md" 0, "the first"; version "notes.md" 1, "the second" ]
+                match! read "file:///artifacts/notes.md" with
+                | Ok (FileContent.Text text) -> Expect.stringContains text "the second" "the newest version, without the caller listing them"
+                | other -> failwithf "expected the latest text, got %A" other
+            }
+
+        testCaseAsync "a version reads those bytes however many came after it" <|
+            async {
+                let _, read = holding [ version "notes.md" 0, "the first"; version "notes.md" 1, "the second" ]
+                match! read "file:///artifacts/notes.md/0000-7f2a91" with
+                | Ok (FileContent.Text text) -> Expect.stringContains text "the first" "a pinned address cannot move"
+                | other -> failwithf "expected the pinned text, got %A" other
+            }
+
+        // The point of the whole verb: an agent that shared a screenshot can look at it.
+        testCaseAsync "a picture reads back as the picture" <|
+            async {
+                let dir, read = holding []
+                let ref = version "shot.png" 0
+                TestFiles.ensureDir (sprintf "%s/%s" dir (ArtifactRef.name ref))
+                TestFiles.writeBase64 (Artifacts.pathOf dir ref) onePixelPng
+                match! read "file:///artifacts/shot.png" with
+                | Ok (FileContent.Image image) -> Expect.equal image.Type "image/png" "typed by its bytes, as a model is shown it"
+                | other -> failwithf "expected a picture, got %A" other
+            }
+
+        testCaseAsync "a name nothing is shared under says how to find what is" <|
+            async {
+                let _, read = holding [ version "notes.md" 0, "the first" ]
+                match! read "file:///artifacts/absent.md" with
+                | Error said -> Expect.stringContains said "artifacts query" "the refusal names the listing, because an agent reads it"
+                | other -> failwithf "expected a refusal, got %A" other
+            }
+
+        testCaseAsync "a leaf that is a symlink out of the store reads nothing" <|
+            async {
+                let dir, read = holding [ version "notes.md" 0, "the first" ]
+                let outside = TestFiles.tempDir "artifacts-outside"
+                TestFiles.write (outside + "/secret") "not yours"
+                let ref = version "escape.md" 0
+                TestFiles.ensureDir (sprintf "%s/%s" dir (ArtifactRef.name ref))
+                TestFiles.symlink (outside + "/secret") (Artifacts.pathOf dir ref)
+                match! read "file:///artifacts/escape.md/0000-7f2a91" with
+                | Error _ -> ()
+                | other -> failwithf "expected nothing to be read, got %A" other
+            }
+    ]
+
+let tests = testList "ArtifactHttp" [ routeTests; readTests ]

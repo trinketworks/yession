@@ -69,6 +69,11 @@ let read (path: string) : string = fs.readFileSync (path, "utf8")
 /// A file's bytes as base64 — the shape a binary constant in the product carries.
 let readBase64 (path: string) : string = fs.readFileSync (path, "base64")
 
+/// The inverse: a binary fixture written from the base64 a test holds it as, so a case about
+/// a picture puts a real picture on disk rather than text named like one.
+let writeBase64 (path: string) (encoded: string) : unit =
+    fs.writeFileSync (path, box (buffer.Buffer.from (encoded, "base64")))
+
 /// Is there anything at that path?
 let exists (path: string) : bool = fs.existsSync (U2.Case1 path)
 

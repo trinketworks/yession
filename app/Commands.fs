@@ -1128,20 +1128,25 @@ let private fileCapabilitiesFor (turnActor: Principal) (capabilities: AgentCapab
 /// will be called — never a version, because none exists yet: the store mints it past the
 /// gate, so what is approved is "share this file under this name" and not an address that
 /// could be stale by the time the verdict lands.
-let private artifactCapabilitiesFor (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
+let private artifactCapabilitiesFor (services: CommandServices) (turnActor: Principal) (capabilities: AgentCapabilities) : AgentCapabilities =
     { capabilities with
         Artifacts =
-          { ArtifactCapabilities.Share =
-              fun sandbox path name ->
-                let summary =
-                    match name with
-                    | Some name -> sprintf "share_artifact %s as %s" path name
-                    | None -> sprintf "share_artifact %s" path
-                capabilities.RunGated
-                    { Tool = shareArtifactTool
-                      Args = encodeArgs ([ SandboxRef.render sandbox; path ] @ Option.toList name)
-                      Summary = summary
-                      Authority = Authority.agentFor turnActor } } }
+          // Reading is NOT gated, and that is the decision rather than an omission: it reaches
+          // only what has already been shared, which is to say nothing the agent could not
+          // already have. A gate in front of it would ask a person to approve the agent
+          // looking at the picture it put in front of them.
+          { ArtifactCapabilities.Read = fun ref -> (services.Artifacts ()).Read ref
+            ArtifactCapabilities.Share =
+                fun sandbox path name ->
+                  let summary =
+                      match name with
+                      | Some name -> sprintf "share_artifact %s as %s" path name
+                      | None -> sprintf "share_artifact %s" path
+                  capabilities.RunGated
+                      { Tool = shareArtifactTool
+                        Args = encodeArgs ([ SandboxRef.render sandbox; path ] @ Option.toList name)
+                        Summary = summary
+                        Authority = Authority.agentFor turnActor } } }
 
 /// What a turn may do to the side pane. Not gated, and that is the decision rather than an
 /// omission: opening a tab reaches nobody's filesystem, costs nothing, and undoes with one
@@ -1169,5 +1174,5 @@ let bindFor (services: CommandServices) (turnActor: Principal) (capabilities: Ag
     |> repoCapabilitiesFor services turnActor
     |> sandboxCapabilitiesFor services turnActor
     |> fileCapabilitiesFor turnActor
-    |> artifactCapabilitiesFor turnActor
+    |> artifactCapabilitiesFor services turnActor
     |> tabCapabilitiesFor services turnActor
