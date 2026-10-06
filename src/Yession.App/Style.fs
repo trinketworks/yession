@@ -991,6 +991,11 @@ module Style =
     /// thing in both places.
     let chapterEntryDot = "w-1.5 h-1.5 rounded-full bg-ink-faint shrink-0 self-center"
 
+    /// One terminal under the environment: the contents' entry, because the column holds one
+    /// kind of list. Its name truncates and its state mark (`View.terminalMark`) follows it,
+    /// as on the pivot; the way to the ones it does not list wears it too.
+    let terminalEntry = chapterEntry
+
     /// The generated read surface (Plan 15). A query answers with rows, fields, or one
     /// value, and these are the renderings — defined ONCE here because they are what every
     /// future query gets to look like, including the ones nobody has written.

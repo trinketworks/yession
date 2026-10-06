@@ -1945,6 +1945,10 @@ type ClientMsg =
     /// again does nothing. Opening it brings the pane with it — reaching for a terminal you
     /// cannot see is exactly the case where the pane is shut.
     | ToggleSwitcherMsg
+    /// Go to the `all` page and take the reader there — SET, not flipped, so it lands there
+    /// whatever was up: the sidebar's way to the terminals it does not list, pressed from a
+    /// column that cannot see whether the page is already showing.
+    | OpenAllMsg
     /// Leave the `all` page for the item it was laid over: Escape. Choosing from it leaves it
     /// too, as part of the choice (`ShowInPaneMsg`), and lands focus where the choice put the
     /// reader.
@@ -2397,6 +2401,16 @@ module ClientModel =
             model.Tabs
             |> List.tryFind (fun terminal ->
                 Projection.tryFind terminal model.Terminals |> Option.exists (fun view -> view.IsOpen))
+
+    /// What choosing `terminal` from a list shows: the read the pane is already in when it is
+    /// already about that terminal — a rewind, a scroll position — as pressing its tab keeps
+    /// them, and its text otherwise. ONE answer for every list a terminal is chosen from (the
+    /// `all` page, the sidebar's environment), so two lists cannot open one terminal two ways.
+    let chosenRead (terminal: TerminalId) (model: ClientModel) : TerminalMode =
+        model.Pane
+        |> Option.bind PaneMode.subject
+        |> Option.filter (fun mode -> TerminalMode.terminal mode = terminal)
+        |> Option.defaultValue (Reading terminal)
 
     /// The preview laid over the pane, if one is on screen (P2-1).
     let preview (model: ClientModel) : Preview option =
@@ -3701,6 +3715,13 @@ module ClientModel =
         if model.Column.Wide then { model with Column = { model.Column with Collapsed = false } }
         else paneHidden { model with Column = { model.Column with Drawer = true } }
 
+    /// The other half of `columnOn`'s rule: taking the reader INTO the pane from inside the
+    /// phone's drawer — the sidebar's terminals — shuts the drawer, so there is still only one
+    /// sheet and it is the one they asked for, rather than a pane opened behind the drawer they
+    /// pressed it in. Nothing on a desktop, where the column is not a sheet.
+    let private drawerShut (model: ClientModel) : ClientModel =
+        if model.Column.Wide then model else { model with Column = { model.Column with Drawer = false } }
+
     let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
         heard (notice (reconcileLaunch (openOfItself model (settle (recall (
         match msg with
@@ -4291,7 +4312,7 @@ module ClientModel =
                 Pane = Some (OnTerminal mode)
                 Switcher = false
                 TerminalsOpen = true }
-        | OpenInPaneMsg mode -> fold (ShowInPaneMsg mode) model
+        | OpenInPaneMsg mode -> drawerShut (fold (ShowInPaneMsg mode) model)
         | ReplayCaughtUpMsg terminal -> fold (ShowInPaneMsg (Reading terminal)) model
         | ShowPreviewMsg preview
         | OpenPreviewMsg preview ->
@@ -4440,7 +4461,8 @@ module ClientModel =
             // shuts the menu, as moving to any other pivot item would: a popover does not
             // outlive the page it hung over.
             if model.Switcher then { model with Switcher = false }
-            else { model with Switcher = true; PaneMenu = false; TerminalsOpen = true }
+            else fold OpenAllMsg model
+        | OpenAllMsg -> drawerShut { model with Switcher = true; PaneMenu = false; TerminalsOpen = true }
         | CloseSwitcherMsg -> { model with Switcher = false }
         | EnsureTerminalDraftMsg (terminal, author, queueId) ->
             // Typing changes nothing about the strip: a terminal being typed in is on screen
@@ -4854,6 +4876,7 @@ module ClientModel =
             | ToggleSwitcherMsg ->
                 if next.Switcher then [ ClientEffect.Move DomMove.FocusSwitcher ]
                 else [ ClientEffect.Move DomMove.FocusPivot ]
+            | OpenAllMsg -> [ ClientEffect.Move DomMove.FocusSwitcher ]
             | CloseSwitcherMsg when model.Switcher -> [ ClientEffect.Move DomMove.FocusPivot ]
             // The × that was pressed leaves with its tab: onto the tab that took its place, or
             // the pane's empty press when there is none.

@@ -6521,6 +6521,62 @@ let editorTests =
                 return ()
             }
 
+        // The sidebar's environment lists what is running, and an entry is a way INTO it: the
+        // same `OpenInPaneMsg` the `all` page's row sends. A hook that stopped matching, or a
+        // message that stopped opening anything, leaves a list of names that quietly do
+        // nothing, which no rendered string can tell from one that works.
+        editorCaseIn 1440 900 "a terminal in the environment opens the pane on it" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-environment-terminals] [data-environment-terminal='term-live']")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """document.querySelector('#shell [data-pane-panel]')?.getAttribute('data-pane-panel') === 'terminal:term-live'""")
+                return ()
+            }
+        // On a phone the environment is in the DRAWER, and the pane is the other sheet over the
+        // chat: an entry that opened the pane and left the drawer up would show the reader
+        // nothing. Hit-tested at the panel's centre, which is the only way to ask whether
+        // something is over it; read BEFORE the press as well, so a drawer that stopped
+        // covering anything fails here rather than passing by vacuity.
+        editorCaseIn 390 844 "a terminal pressed in the environment on a phone is shown, not left behind the drawer" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
+                let entry = "#shell [data-environment-terminals] [data-environment-terminal='term-live']"
+                // WAITED for, not read once: the column is in the document whether or not the
+                // drawer is open — shut, it is only translated off the side — so the entry's
+                // selector matches at once, while the drawer is still sliding in over its
+                // transition. A single read raced that slide and lost on a slower runner.
+                let! covered =
+                    await (page.WaitForFunctionAsync
+                            """(() => {
+                                 const box = document.querySelector('#shell aside').getBoundingClientRect()
+                                 if (box.left < 0) return false
+                                 const at = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+                                 return !!at?.closest('aside')
+                               })()""")
+                Expect.isNotNull covered "the drawer is up, which is where the environment sits on a phone"
+
+                do! awaitU (page.ClickAsync entry)
+                let! shown =
+                    await (page.WaitForFunctionAsync
+                            """(() => {
+                                 const panel = document.querySelector("#shell [data-pane-panel='terminal:term-live']")
+                                 if (!panel) return false
+                                 const box = panel.getBoundingClientRect()
+                                 const at = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+                                 return !!at && panel.contains(at)
+                               })()""")
+                Expect.isNotNull shown "the drawer stood aside, and the terminal is on the screen"
+                // And it is GONE rather than under the pane: on a phone the pane is the other
+                // sheet, at the same layer and later in the document, so a drawer left open
+                // behind it hides nothing on screen and comes back the moment the pane goes.
+                let! away =
+                    await (page.WaitForFunctionAsync
+                            """document.querySelector('#shell aside').getBoundingClientRect().right <= 0""")
+                Expect.isNotNull away "the drawer has left the screen"
+                return ()
+            }
+
         // Escape steps back off the `all` page. It removes the element focus was on, and the
         // pivot item the reader is back on — the terminal the page was laid over — is where
         // they are.

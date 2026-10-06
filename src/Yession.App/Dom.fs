@@ -143,6 +143,12 @@ module Dom =
         /// message its chapter opens at.
         let chapters = "data-chapters"
         let chapterEntry = "data-chapter-entry"
+        /// What is running in the environment, under its status in the sidebar: the list of
+        /// the session's OPEN terminals, one entry each valued by its id, and the way to the
+        /// rest valued by how many it stands for — present only when the list is capped.
+        let environmentTerminals = "data-environment-terminals"
+        let environmentTerminal = "data-environment-terminal"
+        let environmentMore = "data-environment-more"
         /// The per-item actions control, valued by the message it acts on, and the menu it
         /// opens. `data-item-is-chapter` rides the CHAPTER entry rather than the control: what
         /// a test wants to read is which way the entry will go, and that is a property of
@@ -621,6 +627,10 @@ module Dom =
         let removeChapter = "Remove chapter"
         let dismissMenu = "Close menu"
         let chapters = "Chapters"
+        /// The environment's way to the terminals it does not list: short on screen, and the
+        /// whole of what it does to a screen reader — which keeps the visible words in the name.
+        let moreShort (count: int) : string = sprintf "+%d more" count
+        let moreTerminals (count: int) : string = sprintf "+%d more terminals" count
 
         /// A chapter on a message that has not said anything yet — a turn that has started and
         /// written nothing. Rare, and the alternative is a control with no name at all.

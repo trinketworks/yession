@@ -368,6 +368,34 @@ let private runBlock (authority: Authority) (n: int) (status: BlockStatus) : Blo
       Status = status
       StoppedBy = None }
 
+/// The representative session holding these terminals instead of its one, each a copy of the
+/// fixture's terminal under another id, its last command `last` (`None`: never ran one), and
+/// open or not — the shapes the sidebar's environment and the pane's marks are read from.
+let private withTerminals (terminals: (string * BlockStatus option * bool) list) : ClientModel =
+    let template = List.head representativeModel.Terminals.Terminals
+    let view (id: string, last: BlockStatus option, isOpen: bool) =
+        let terminal = TerminalId.create id |> expect
+        { template with
+            TerminalId = terminal
+            Title = TerminalTitle.fromProse id
+            IsOpen = isOpen
+            Closed = (if isOpen then None else Some { TerminalId = terminal; Reason = "closed by a peer"; By = Some (PeerRef bob) })
+            Blocks = last |> Option.map (runBlock (Authority.ofAuthor (Principal.Peer ada)) 1) |> Option.toList }
+    let views = List.map view terminals
+    { representativeModel with
+        Terminals = { representativeModel.Terminals with Terminals = views }
+        // Each one looked at since it last finished something, so its mark is its state and
+        // not news (`ClientModel.unseen`): the cases here are about what a terminal is doing.
+        Seen = views |> List.map (fun v -> v.TerminalId, Codecs.CommandTally.ofView v) |> Map.ofList }
+
+/// The markup of one terminal's entry under the sidebar's environment, if it is listed: from
+/// its hook to the end of its button, so what a case reads off it is that entry's and not the
+/// same terminal's tab or row elsewhere on the page.
+let private environmentEntry (id: string) (html: string) : string option =
+    match html.IndexOf (Dom.attr Dom.Hooks.environmentTerminal id) with
+    | -1 -> None
+    | at -> Some (html.Substring (at, html.IndexOf ("</button>", at) - at))
+
 /// How many times a hook appears in a rendered page. Counting MOUNTS rather than words: what
 /// these cases promise is one control per item and one stroke per mark, and a substring of
 /// somebody's prose is not either.
@@ -1922,6 +1950,65 @@ let private uiChecklistTests =
             Expect.isFalse
                 ((Support.render representativeModel).Contains Dom.Hooks.chapters)
                 "no chapters, no contents"
+
+        // The environment says what is running in it. Every OPEN terminal is an entry — the
+        // pane is one press from the index, rather than only from the "n terminals" over the
+        // conversation.
+        testCase "the environment lists every open terminal" <| fun () ->
+            let html =
+                Support.render
+                    (withTerminals
+                        [ "term-idle", Some (BlockFinished (CommandSucceeded 0)), true
+                          "term-run", Some BlockRunning, true ])
+            Expect.isSome (environmentEntry "term-idle" html) "an idle terminal is listed"
+            Expect.isSome (environmentEntry "term-run" html) "and a busy one"
+
+        // ONE vocabulary for a terminal's state (`View.terminalMark`): the entry wears the mark
+        // the pivot does, so a failure reads the same in the index as in the pane.
+        testCase "an environment entry wears its terminal's state mark" <| fun () ->
+            let html =
+                Support.render
+                    (withTerminals
+                        [ "term-idle", Some (BlockFinished (CommandSucceeded 0)), true
+                          "term-run", Some BlockRunning, true
+                          "term-fail", Some (BlockFinished (CommandFailed 2)), true ])
+            let mark id =
+                environmentEntry id html
+                |> Option.map (fun entry ->
+                    match entry.IndexOf (Dom.Hooks.paneMark + "=\"") with
+                    | -1 -> "none"
+                    | at ->
+                        let from = at + Dom.Hooks.paneMark.Length + 2
+                        entry.Substring (from, entry.IndexOf ("\"", from) - from))
+            Expect.equal
+                ([ "term-idle"; "term-run"; "term-fail" ] |> List.map mark)
+                [ Some "none"; Some "running"; Some "failed" ]
+                "idle says nothing, running pulses, a failed last command says so"
+
+        // What is RUNNING: a closed terminal is a recording, and the `all` page offers those.
+        testCase "a closed terminal is not listed under the environment" <| fun () ->
+            let html =
+                Support.render
+                    (withTerminals
+                        [ "term-live", None, true
+                          "term-gone", Some (BlockFinished (CommandSucceeded 0)), false ])
+            Expect.isNone (environmentEntry "term-gone" html) "closed, so not running in it"
+
+        // A heading over nothing teaches a reader to skip the place the list will appear.
+        testCase "an environment with no open terminal lists none" <| fun () ->
+            let html = Support.render (withTerminals [ "term-gone", None, false ])
+            Expect.isFalse (html.Contains Dom.Hooks.environmentTerminals) "no open terminals, no list"
+
+        // A phone's drawer has to keep `settings` on screen, so the list stops at a cap and the
+        // rest are one press away on the `all` page — counted, so the door says what is behind it.
+        testCase "past its cap the environment says how many more terminals there are" <| fun () ->
+            let html =
+                Support.render
+                    (withTerminals [ for n in 1..8 -> sprintf "term-%d" n, None, true ])
+            Expect.equal
+                (occurrences (Dom.Hooks.environmentTerminal + "=") html, occurrences (Dom.attr Dom.Hooks.environmentMore "3") html)
+                (5, 1)
+                "five listed, and a way to the other three"
 
         // What a rule says is the SESSION's answer (`Chapters.name`), not this surface's: two
         // surfaces computing a name apiece are two surfaces that can call one chapter two
