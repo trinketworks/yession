@@ -544,6 +544,17 @@ let private paneTests =
                 [ ClientEffect.Move (DomMove.FocusChat (PreviewSubject.Block (terminalA, block "1"))) ]
                 "the preview is leaving the document with focus in it, and the chip is where it came from"
 
+        // The preview's way back (F3) is its terminal's tab pressed, and it leaves with the
+        // preview: a keyboard on it would be stranded on `body`. Only IF dropped, because the
+        // same message pressed on the tab itself leaves the hand on a tab that stays.
+        testCase "the way back from a preview lands the keyboard on the terminal, if its press dropped it" <| fun () ->
+            let _, effects =
+                ClientModel.update (ShowInPaneMsg (Reading terminalA)) (clientOf oneBlock |> Support.step (chip terminalA "1"))
+            Expect.equal
+                effects
+                [ ClientEffect.Move (DomMove.IfDropped (DomMove.FocusCommandLine terminalA)) ]
+                "onto what a terminal is for"
+
         testCase "a preview's key and its terminal's tab key are different, drawn from the same ids" <| fun () ->
             // A block id and a terminal id come from the same alphabet, and a collision would
             // silently answer for the wrong thing.
@@ -585,8 +596,7 @@ let private paneTests =
             let html = Support.render model
             let required =
                 [ "the preview", Dom.attr Dom.Hooks.panePreview "block:term-a:b-1"
-                  // Its close rides its pivot item; the way back to the terminal is that
-                  // terminal's own item, beside it.
+                  // Its close, in the line under the pivot that names it (F3).
                   "its close", Dom.Hooks.panePreviewClose
                   "the block's read-only view", Dom.attr Dom.Hooks.paneBlock "b-1"
                   "the command", "ls -la"
@@ -604,8 +614,9 @@ let private paneTests =
                 (html.Contains (Dom.attr Dom.Hooks.terminalInput (BodyKey.terminalDraft terminalA ada)))
                 "no composer under a preview"
 
-        // A preview has a pivot item, slanted and with its own close — but of its OWN kind,
-        // never a terminal's tab, which is the fault the last preview was removed for.
+        // A preview is never a terminal's tab, which is the fault the last preview was removed
+        // for — nor an item of the pivot at all (F3): see "a preview is named under the
+        // pivot, never in it".
         testCase "a preview is never one of the terminals' tabs" <| fun () ->
             let html = Support.render (clientOf oneBlock |> Support.step (chip terminalA "1"))
             Expect.equal
@@ -3108,20 +3119,51 @@ let private tabTests =
                 ([ "terminal:term-a"; "terminal:term-b"; "terminal:term-c" ], Some terminalA)
                 "the preview is over its own tab, which did not move"
 
-        // The way back from a preview is the tab it is laid over, beside it. That used to hold
-        // because the tab came to the END of the strip with the preview (F2); now the tab stays
-        // where it stood, so the preview's item goes to it.
-        testCase "a preview's item sits right after the tab it is laid over" <| fun () ->
+        // These replaced "a preview's item sits right after the tab it is laid over" (F2). A
+        // preview had an item of its own in the strip, slanted, with its own ×, beside the tab
+        // it covered — so the strip mixed two kinds of thing that looked alike, and a phone's
+        // strip with room for three tabs spent one on it (F3). A preview is a layer OF its
+        // terminal: that terminal's tab is the selected item, and the preview is named in the
+        // line under the pivot, between the way back and its close.
+        testCase "a preview is named under the pivot, never in it" <| fun () ->
+            let model =
+                heardOf
+                    [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (started terminalA "1" byAda "ls" 1)
+                      at 3L 2.0 (opened terminalB "logs") ]
+                |> Support.step (chip terminalA "1")
+            let html = Support.render model
+            let pivot = markupAt Dom.Hooks.panePivot html
+            Expect.equal
+                (html.Contains Dom.Hooks.panePreviewName,
+                 pivot.Contains Dom.Hooks.panePreviewName || pivot.Contains Dom.Hooks.panePreviewClose)
+                (true, false)
+                "named on the page, and nothing of it in the pivot"
+
+        testCase "under a preview, the tab it is laid over is the selected item" <| fun () ->
             let model =
                 heardOf
                     [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (started terminalA "1" byAda "ls" 1)
                       at 3L 2.0 (opened terminalB "logs") ]
                 |> Support.step (chip terminalA "1")
             let pivot = markupAt Dom.Hooks.panePivot (Support.render model)
-            let where (hook: string) = pivot.IndexOf hook
-            let a, preview, b =
-                where (Dom.attr Dom.Hooks.paneTab "terminal:term-a"), where Dom.Hooks.panePreviewTab, where (Dom.attr Dom.Hooks.paneTab "terminal:term-b")
-            Expect.isTrue (a >= 0 && a < preview && preview < b) (sprintf "term-a at %d, the preview at %d, term-b at %d" a preview b)
+            let selectedTabs =
+                Text.RegularExpressions.Regex.Matches (pivot, "<[^>]*aria-selected=\"true\"[^>]*>")
+                |> Seq.choose (fun m ->
+                    let tab = Text.RegularExpressions.Regex.Match (m.Value, Dom.Hooks.paneTab + "=\"([^\"]*)\"")
+                    if tab.Success then Some tab.Groups.[1].Value else None)
+                |> List.ofSeq
+            Expect.equal selectedTabs [ "terminal:term-a" ] "the terminal under the preview, and only it"
+
+        testCase "a preview's way back is the terminal it is laid over" <| fun () ->
+            let model =
+                heardOf
+                    [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (started terminalA "1" byAda "ls" 1)
+                      at 3L 2.0 (opened terminalB "logs") ]
+                |> Support.step (chip terminalA "1")
+            Expect.stringContains
+                (Support.render model)
+                (Dom.attr Dom.Hooks.panePreviewBack (TerminalId.value terminalA))
+                "back to term-a"
 
         testCase "a chip of a closed terminal that was put away does not bring its tab back" <| fun () ->
             let model =

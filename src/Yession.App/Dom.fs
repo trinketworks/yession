@@ -60,6 +60,10 @@ module Dom =
     /// technology which tab the region under the strip belongs to.
     let panePanelId = "pane-panel"
 
+    /// The `id` of a preview's name, in the line under the pivot: what its panel is labelled
+    /// by, after the tab of the terminal it is laid over (`View.contentPane`).
+    let panePreviewNameId = "pane-preview-name"
+
     /// A tab's `id`, from its key (`ClientModel.tabKey`). Keys carry `:` and `/`, which an id may
     /// hold but a selector has to escape, so everything outside `[A-Za-z0-9-]` is spelled as
     /// `_` and its code in four hex digits — `_` included, and the width fixed, so two keys
@@ -469,11 +473,14 @@ module Dom =
         /// opened from the chat — carrying its subject's key (`PreviewSubject.key`). Present
         /// exactly while one is up, on its panel.
         let panePreview = "data-pane-preview"
-        /// The preview's pivot item, carrying the same key: a name of its own kind in the
-        /// pivot, never a terminal's tab (`paneTab`), and the item its close rides.
-        let panePreviewTab = "data-pane-preview-tab"
-        /// The preview's close, on its pivot item. The way back to the terminal under it is
-        /// that terminal's own item, beside it.
+        /// The preview's name, carrying the same key — in the line under the pivot, never in
+        /// the pivot itself: a preview is a layer OF the terminal it is laid over (F3), whose
+        /// own tab stays the selected item, not a sibling tab beside it.
+        let panePreviewName = "data-pane-preview-name"
+        /// The preview's way back, in the same line, carrying the id of the terminal it is
+        /// laid over: the press of that terminal's own tab. Absent over nothing.
+        let panePreviewBack = "data-pane-preview-back"
+        /// The preview's close, in the same line, after its name.
         let panePreviewClose = "data-pane-preview-close"
         /// A CLOSED terminal's × on its pivot item, carrying its id: it puts the tab away
         /// (`DismissTabMsg`), where an open one's × is its kill (`terminalClose`).
@@ -484,8 +491,6 @@ module Dom =
         /// at it (`ClientModel.unseen`), `unseen-ok` or `unseen-failed`. Absent for an open
         /// terminal that is idle and fine, and has nothing new.
         let paneMark = "data-pane-mark"
-        /// What the preview is, and which terminal it belongs to — its subtitle.
-        let panePreviewMeta = "data-pane-preview-meta"
         /// A block's read-only view: its command line and everything it printed.
         let paneBlock = "data-pane-block"
         /// The pane's action row: the acts about the thing on screen, in ONE place at the
@@ -910,10 +915,9 @@ module Dom =
         /// A preview's close, naming what it closes. It says PREVIEW, because "close" on its
         /// own is the word this product uses for ending a terminal.
         let closePreview (what: string) = sprintf "Close preview %s" what
-        /// What kind of thing a preview is, in its subtitle.
-        let aCommand = "command"
-        let aStretch = "session"
-        let aFile = "file"
+        /// A preview's way back to the terminal it is laid over, naming it — the word on the
+        /// control is the terminal's name alone.
+        let backTo (terminal: string) = sprintf "Back to %s" terminal
         /// From a command's preview to that command in its terminal, named.
         let showIn (terminal: string) = sprintf "Show in %s" terminal
         /// A command chip's accessible name: what ran, how it went, and WHERE — the part the
