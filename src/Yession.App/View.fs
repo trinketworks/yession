@@ -188,7 +188,7 @@ module View =
             | Retrying (reason, failures) ->
                 Some (
                     Dom.Text.retryingWhy reason failures,
-                    html $"""<span class="{Style.syncRow}"><span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>{Dom.Text.retryingStatus failures}</span></span>""")
+                    html $"""<span class="{Style.syncRow}"><span class="{Style.statusWait}"><span class="{Style.statusDotPulse}"></span>{Dom.Text.retryingStatus failures}</span></span>""")
             | _ -> None
         match settled, reopenAction model Style.noAgentAction with
         | Some (reason, status), Some action ->
@@ -255,7 +255,7 @@ module View =
         let why =
             [ if model.EphemeralStorage then Dom.Text.ephemeralAddress ]
         let running (word: string) =
-            html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>{word}</span>"""
+            html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotPulse}"></span>{word}</span>"""
         let stopped (word: string) = html $"""<span class="{Style.statusErr}">{word}</span>"""
         match model.Connection, model.EventConsumer.Feed with
         // The session leg subsumes the history leg: a Process that cannot be reached cannot
@@ -310,7 +310,7 @@ module View =
         let catchUp =
             if not showsCatchUp then Lit.nothing
             else
-                html $"""<span class="{Style.syncRow}"><span class="{Style.statusRun}" data-catch-up>{Dom.Text.catchingUp}</span><span class="{Style.label} tabular-nums"><b class="text-ink-dim" data-last-processed-offset>{offsetText consumer.LastProcessedOffset}</b> / <b class="text-ink-dim" data-latest-known-offset>{offsetText consumer.LatestKnownOffset}</b></span></span>"""
+                html $"""<span class="{Style.syncRow}"><span class="{Style.statusWait}" data-catch-up>{Dom.Text.catchingUp}</span><span class="{Style.label} tabular-nums"><b class="text-ink-dim" data-last-processed-offset>{offsetText consumer.LastProcessedOffset}</b> / <b class="text-ink-dim" data-latest-known-offset>{offsetText consumer.LatestKnownOffset}</b></span></span>"""
         // The one thing a person can do about a settled disconnection. The supervised loop is
         // already trying; this is for the client it will not carry — a refused peer parks
         // until asked — and for anyone who would rather not wait out a backoff.
@@ -593,7 +593,7 @@ module View =
     let private environmentStatus =
         function
         | EnvironmentNotStarted -> Style.statusFaint, html $"""not started"""
-        | EnvironmentStarting -> Style.statusRun, html $"""<span class="{Style.statusDotPulse}"></span>starting"""
+        | EnvironmentStarting -> Style.statusWait, html $"""<span class="{Style.statusDotPulse}"></span>starting"""
         | EnvironmentRunning _ -> Style.statusOk, html $"""<span class="{Style.statusDot}"></span>running"""
         | EnvironmentFailed _ -> Style.statusErr, html $"""failed"""
         | EnvironmentDown -> Style.statusFaint, html $"""stopped"""
@@ -717,7 +717,7 @@ module View =
             // shows it, not merely that the session said yes (`Pending`).
             match claude.Flow with
             | _ when Pending.inFlight claude.Pending ->
-                html $"""<span class="{Style.statusRun}" data-claude-busy><span class="{Style.statusDotPulse}"></span>working…</span>"""
+                html $"""<span class="{Style.statusWait}" data-claude-busy><span class="{Style.statusDotPulse}"></span>working…</span>"""
             | ClaudeAwaitingCode (url, _) ->
                 html $"""
                     <a class="{Style.btnPrimary}" href="{url}" target="_blank" rel="noreferrer" data-claude-authorize>Approve on claude.ai</a>
@@ -780,7 +780,7 @@ module View =
             // As Claude's, for its reason.
             match github.Flow with
             | _ when Pending.inFlight github.Pending ->
-                html $"""<span class="{Style.statusRun}" data-github-busy><span class="{Style.statusDotPulse}"></span>working…</span>"""
+                html $"""<span class="{Style.statusWait}" data-github-busy><span class="{Style.statusDotPulse}"></span>working…</span>"""
             | GitHubAwaitingApproval (userCode, verificationUri, _, _) ->
                 // The code has to reach github.com's form, and on the phone that means the
                 // clipboard: this session is one tab, the approval is another, and eight
@@ -1704,7 +1704,7 @@ module View =
         let pictured (voice: string) (mark: TemplateResult) =
             html $"""<span class="{voice}" data-block-mark="{token}"><span aria-hidden="true">{mark}</span><span class="{Style.srOnly}">{terminalBlockStatusWord model status}</span></span>"""
         match status with
-        | BlockRunning -> pictured Style.statusRun (html $"""<span class="{Style.statusDotOnly}"></span>""")
+        | BlockRunning -> pictured Style.statusOk (html $"""<span class="{Style.statusDotLive}"></span>""")
         | BlockFinished (CommandSucceeded code) -> pictured Style.statusOk (html $"""{Icon.checkSm} {code}""")
         | BlockFinished (CommandFailed code) -> pictured Style.statusErr (html $"""{Icon.crossSm} {code}""")
         | BlockFinished CommandTimedOut
@@ -1744,10 +1744,10 @@ module View =
     let private pendingStatus (model: ClientModel) (entry: PendingAct) : string * TemplateResult =
         if ClientModel.awaitsIntegration entry model then
             Dom.Text.queuedAwaitingIntegration,
-            html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>not marking</span>"""
+            html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotPulse}"></span>not marking</span>"""
         elif ClientModel.awaitsTerminal entry model then
             Dom.Text.queuedAwaitingTerminal,
-            html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>terminal busy</span>"""
+            html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotPulse}"></span>terminal busy</span>"""
         else Dom.Text.queuedReady, html $"""<span class="{Style.statusOk}">queued</span>"""
 
     /// What the terminal this act is queued in is CALLED — its name, or its id while this
@@ -1889,7 +1889,7 @@ module View =
         let listing =
             match launch.Listing with
             | ListingUnknown ->
-                note (html $"""<span class="{Style.statusRun}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>""")
+                note (html $"""<span class="{Style.statusWait}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>""")
             | ListingUnavailable (reason, true) ->
                 let said = note (html $"""<span class="{Style.small}">{reason}</span>""")
                 html $"""
@@ -1960,7 +1960,7 @@ module View =
         let actionsRow =
             match launch.Stage with
             | Resolving _ ->
-                html $"""<span class="{Style.statusRun}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>"""
+                html $"""<span class="{Style.statusWait}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>"""
             | Choosing -> startButton (Launch.target launch) false
             | Sent (_, target) -> startButton (Some target) true
             | Cloning target -> startButton (Some target) true
@@ -2046,7 +2046,7 @@ module View =
                         note (html $"""<span class="{Style.statusErr}" role="status">{reason}</span>""")
                     | Some BranchesUnknown
                     | None ->
-                        note (html $"""<span class="{Style.statusRun}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>""")
+                        note (html $"""<span class="{Style.statusWait}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>""")
                     | Some (BranchesLoaded page) ->
                         let foot =
                             match page.Next, launch.BranchMore, launch.BranchQuery.Trim () with
@@ -2832,7 +2832,7 @@ module View =
             let failed =
                 count tally.Failed (html $"""<span class="{Style.statusErr}">{Icon.crossSm} {tally.Failed}</span>""")
             let running =
-                count tally.Running (html $"""<span class="{Style.statusRun}"><span class="{Style.statusDotPulse}"></span>{tally.Running}</span>""")
+                count tally.Running (html $"""<span class="{Style.statusOk}"><span class="{Style.statusDotLiveLead}"></span>{tally.Running}</span>""")
             let done' =
                 count tally.Done (html $"""<span class="{Style.statusOk}">{Icon.checkSm} {tally.Done}</span>""")
             let counts =
@@ -3464,7 +3464,7 @@ module View =
                             @click={Ev(fun _ -> dispatch (TakeTerminalMsg terminal))}>Take over</button>"""
         html $"""
             <div class="{Style.terminalBandRow}" data-terminal-lease="{label}" aria-live="polite">
-              <span class="{Style.paneLive}"><span class="{Style.statusDotPulse}"></span>live</span>
+              <span class="{Style.paneLive}"><span class="{Style.statusDotLiveLead}"></span>live</span>
               <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model holder ]}"></span>
               <span class="{Style.paneSays}">{who} in {where}</span>
               <div class="ml-auto flex items-center gap-2">{control}</div>
@@ -4181,7 +4181,7 @@ module View =
                         html $"""<span class="{Style.syncDot}" style="background:{Entity.presenceColour model (ActorRef.PeerRef peer)}"
                                        title="{Entity.actorName model (PeerRef peer)}"></span>"""
                     | Some holder ->
-                        html $"""<span class="{Style.statusRun}" title="{Entity.actorName model holder}"><span class="{Style.statusDot}"></span></span>"""
+                        html $"""<span class="{Style.statusOk}" title="{Entity.actorName model holder}"><span class="{Style.statusDot}"></span></span>"""
                     | None -> Lit.nothing
             // A hole in an audit trail is stated — beside the name, quietly
             // (`Style.terminalGone`): nine closed rows of it in the error red were a column of

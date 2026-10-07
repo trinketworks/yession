@@ -75,7 +75,7 @@ type QueryShape =
 /// failure differently from a settled success without knowing what either is about.
 ///
 /// Four, and not a palette: these are the distinctions the app's own status vocabulary
-/// already makes (`Style.statusOk`/`statusRun`/`statusErr`/`statusFaint`), so a query
+/// already makes (`Style.statusOk`/`statusWait`/`statusErr`/`statusFaint`), so a query
 /// naming one is asking for a rendering that exists rather than inventing a colour. A
 /// fifth would need a token, a contrast proof on every surface, and a reason.
 ///

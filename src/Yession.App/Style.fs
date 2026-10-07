@@ -237,15 +237,15 @@ module Style =
     // --- Statuses: text only — never filled, never boxed --------------------------------
 
     let statusOk = caps + " text-green"
-    let statusRun = caps + " text-blue"
+    /// A wait: reconnecting, starting, looking, busy. `ink-dim`, never blue — blue is never a
+    /// status (docs/visual-design.md, Colour). A LIVE thing is `statusOk` with `statusDotLive`.
+    let statusWait = caps + " text-ink-dim"
     let statusErr = caps + " text-err"
     let statusFaint = caps + " text-ink-faint"
     /// The small leading dot a live status may carry (`bg-current` follows the text colour).
     let statusDot = "inline-block w-1.5 h-1.5 rounded-full bg-current mr-1.5 align-[1px]"
+    /// A wait that is still under way beats its dot (opacity); a LIVE thing wears `statusDotLive`.
     let statusDotPulse = statusDot + " animate-pulse2 motion-reduce:animate-none"
-    /// A live status said by the dot ALONE (a block or tool call still running): no word
-    /// beside it, so no trailing gap to push it off the line's right edge.
-    let statusDotOnly = "inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse2 motion-reduce:animate-none"
     /// The same dot standing still: a state that has SETTLED (a terminal's last command
     /// failed), where the pulse is one still under way.
     let statusDotSolid = "inline-block w-1.5 h-1.5 rounded-full bg-current"
@@ -255,6 +255,8 @@ module Style =
     /// (`beat-live`), never in opacity, so it holds the 3:1 a mark owes its surface at every
     /// frame. Still and green under reduced motion.
     let statusDotLive = "inline-block w-1.5 h-1.5 rounded-full bg-green animate-beat-live motion-reduce:animate-none"
+    /// The live dot leading a word or a count on its line, as `statusDot` leads a status.
+    let statusDotLiveLead = statusDotLive + " mr-1.5 align-[1px]"
     /// The settled dot with a ring round it: something has happened that the person reading
     /// has not seen yet (`ClientModel.unseen`). An outline rather than a ring utility, so the
     /// gap between the two is the surface it sits on, whichever that is.
@@ -1063,7 +1065,7 @@ module Style =
     /// and a reader who cannot see the colour still reads the value. All four already
     /// clear 4.5:1 on every surface; the theme-contrast suite is what says so.
     let toneOk = "text-green"
-    let toneBusy = "text-blue"
+    let toneBusy = "text-ink-dim"
     let toneBad = "text-err"
     let toneMuted = "text-ink-faint"
 
@@ -1193,7 +1195,7 @@ module Style =
     /// on a phone is most of the time. Never both at once, so it is a relocation, not a repeat.
     /// Same visibility rule as `navReopen`, for the same reason.
     let headerNoAgent =
-        "bg-transparent border-0 cursor-pointer " + caps + " text-blue hover:text-blue-up-1 transition-colors "
+        "bg-transparent border-0 cursor-pointer " + caps + " text-ink-dim hover:text-ink transition-colors "
         + focusRing + " "
         + "hidden wide:[.nav-alt_&]:block phone:block phone:[.nav-alt_&]:hidden phone:py-3.5"
 
@@ -3172,8 +3174,8 @@ module Style =
     let paneSays = "min-w-0 font-ui font-light text-small text-ink-dim"
     /// Who a fact is about, at the head of its line: the caption's size in full ink.
     let paneWho = "shrink-0 font-ui font-normal text-small text-ink"
-    /// Somebody holds the keyboard: the running pulse and the word, in the live blue.
-    let paneLive = "shrink-0 inline-flex items-center font-ui font-light text-small text-blue"
+    /// Somebody holds the keyboard: the live beat and the word, in live's green.
+    let paneLive = "shrink-0 inline-flex items-center font-ui font-light text-small text-green"
 
     /// The pane's body — whatever the selected tab shows. It takes the column's remaining
     /// height so the thing inside it scrolls rather than the column.
@@ -3643,9 +3645,9 @@ module Style =
     /// Its mark, AFTER the count ("2 terminals ●"), because the count is what the tab is
     /// named by and the mark only qualifies it. Idle: a dot in the control's own faint ink,
     /// saying terminals are there and nothing is happening in them. Running: the live
-    /// status's own blue pulse, the same mark a running block wears everywhere else.
+    /// dot itself (`statusDotLive`), the same mark a running block wears everywhere else.
     let terminalReopenIdle = "inline-block w-1.5 h-1.5 rounded-full bg-current"
-    let terminalReopenRunning = "inline-block w-1.5 h-1.5 rounded-full bg-blue animate-pulse2 motion-reduce:animate-none"
+    let terminalReopenRunning = statusDotLive
 
     // --- ANSI styling ---------------------------------------------------------------------------
     // Turning a parsed `AnsiStyle` into what a span wears. Split in two on purpose:

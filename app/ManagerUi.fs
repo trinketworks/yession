@@ -914,7 +914,7 @@ let private openingPage (sessionId: SessionId) (target: string) (readyUrl: strin
             Style.startMarkStill
             (Ssr.render Brand.mark)
             Style.startWord
-            Style.statusRun
+            Style.statusWait
             Style.startStatus
             Dom.Manager.openingFailed
             (Ssr.escapeAttr (Style.statusErr + " " + Style.startStatus))
