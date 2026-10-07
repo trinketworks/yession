@@ -1587,14 +1587,23 @@ do
         | ClientEffect.GitHub _
         | ClientEffect.GitHubPoll _ -> ()
         | ClientEffect.Move move -> PaneShell.move move
-        // A transcript read is answered as the session's store would answer it: the store
-        // holds exactly the lines this harness handed in, so a read past them is current — and
-        // a read from line 0 of a terminal it handed nothing for is a terminal with no
-        // recording, which is what the client must hear to say so. Left unanswered, every
-        // terminal the page folds in would stay unheard for ever, which no session does.
-        | ClientEffect.ReadTranscript (terminal, read, fromSeq) ->
-            dispatchRef (
-                TranscriptReadMsg (terminal, read, Some { Records = []; Header = None; NextSeq = fromSeq; IsEnd = true }))
+        // A read from line 0 of a terminal this harness handed nothing for is answered as the
+        // session's store would answer it: nothing, which is a terminal with no recording, and
+        // what the client must hear to say so. Left unanswered, a closed terminal the page
+        // folds in would stay unheard for ever, which no session does.
+        //
+        // Every other read stays out, unanswered, as a read to a slow session would: a read of
+        // a terminal this harness holds lines for or streams records into. Every live record
+        // past the read position asks one (`ClientModel.reads`), and an answer dispatched
+        // from inside the dispatch that asked is a second model, so a second render, for each
+        // streamed record. The bench's scroll scenario measures what a record costs to draw,
+        // and answering here doubled its renders per record and the frames they land in. What
+        // a read answer costs a streaming terminal in the app is a separate question, and one
+        // this stand-in cannot answer: its store is not the session's.
+        | ClientEffect.ReadTranscript (terminal, read, 0) when
+            ClientModel.recordingOf terminal model = RecordingKnown.NotYetKnown ->
+            dispatchRef (TranscriptReadMsg (terminal, read, Some { Records = []; Header = None; NextSeq = 0; IsEnd = true }))
+        | ClientEffect.ReadTranscript _ -> ()
         // No session to read from: the pages this harness shows it hands in itself, as the
         // messages a read's answer would be.
         | ClientEffect.ReadEvents _
