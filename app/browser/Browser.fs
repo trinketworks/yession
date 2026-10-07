@@ -1035,9 +1035,9 @@ let private start () =
         // plain-text roots the terminal composers live in (Plan 13), resolved the same way.
         let registry = BodyRegistry doc
         let texts = TextRegistry doc
-        // A caret moved: told to the model once per frame, which decides whether and when it
-        // reaches anybody (`ClientModel.presenceToSend`).
-        let sendFocus = Render.focusReporter (fun focus -> dispatchRef (CaretMovedMsg focus))
+        // A caret moved: told to the model, which decides whether and when it reaches anybody
+        // (`ClientModel.presenceToSend`).
+        let sendFocus (focus: Focus option) = dispatchRef (CaretMovedMsg focus)
 
         // The collaborative text behind a field somebody's caret is in, for the fields worn by
         // a plain `<input>` — which report char offsets and so need the type to measure them
