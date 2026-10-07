@@ -59,6 +59,16 @@ module SessionHistory =
                 | SessionResumed r -> Some { At = e.Timestamp; LastHeardAt = r.LastHeardAt }
                 | _ -> None) }
 
+/// Why a turn runs, as its prompt is told it: somebody said something, or work this agent
+/// started reported back while it was not running (Plan 20, stage 2). One value rather than a
+/// message and a wake reason side by side, so "both" and "neither" cannot be built.
+[<RequireQualifiedAccess>]
+type Occasion =
+    /// What was just said: the item the turn answers.
+    | Asked of ConversationItem
+    /// Why a turn nobody asked for is running, so it can be told.
+    | Woken of WakeReason
+
 /// Everything the agent is given for one turn. Phase 1: no tools, no environment.
 type AgentContextPack =
     { SessionId      : SessionId
@@ -66,7 +76,7 @@ type AgentContextPack =
       /// Whose turn this is: the party whose credentials it runs on (Plan 08 — the agent is
       /// the acting party and has no scope of its own), stated rather than derived.
       ///
-      /// It used to be read off `CurrentMessage.Author` by everything that needed it, which
+      /// It used to be read off the triggering message's author by everything that needed it, which
       /// was fine while every turn began with somebody speaking. A woken turn (Plan 20,
       /// stage 2) has nobody speaking and still has authority, so the thing three call sites
       /// actually wanted — WHOSE turn is this — says so itself.
@@ -75,14 +85,11 @@ type AgentContextPack =
       /// says there is a somebody. A wake that resolved its actor to the agent used to
       /// type-check and fail at dispatch, saying "sign in" to a person who was.
       TurnActor      : Principal
-      /// What was just said, when a turn began with somebody saying something. `None` for a
-      /// turn nothing asked for: the agent was woken because work it started finished, and
-      /// there is no message to point at. What moved arrives through `Terminals` either way.
-      CurrentMessage : ConversationItem option
-      /// Why a turn nobody asked for is running, so it can be told. `None` exactly when
-      /// `CurrentMessage` is `Some`. The prompt used to say "work you started in the
-      /// background finished" to every woken turn — true for one reason of five.
-      Woke           : WakeReason option
+      /// Why this turn runs: what was just said, or, for a turn nothing asked for, why it was
+      /// woken. What moved arrives through `Terminals` either way. The prompt used to say
+      /// "work you started in the background finished" to every woken turn, true for one
+      /// reason of five, so the reason is carried rather than assumed.
+      Occasion       : Occasion
       /// What the session's terminals did since the previous turn (Plan 13, stage 3a).
       /// A SEPARATE field, deliberately: a command someone ran is not something someone
       /// said, so folding blocks into `Conversation` would make the chat log a place
@@ -91,7 +98,7 @@ type AgentContextPack =
       Terminals      : BlockDigest list
       /// The session's repos, as of this turn's projection read -- carried alongside
       /// `Terminals` for the same reason: this is repo-authored (or empty), not
-      /// something the operator or the product said, and `promptOf` treats it that way
+      /// something the operator or the product said, and `Prompting` treats it that way
       /// (its own quarantined section, never folded into the system prompt).
       Repos          : SessionRepo list
       /// Which model to run this turn on, when the session has picked one. `None` means
