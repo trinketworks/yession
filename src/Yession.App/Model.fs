@@ -2880,6 +2880,11 @@ module ClientModel =
                 Projection.tryFind terminal model.Terminals
                 |> Option.map (fun view ->
                     view.Blocks
+                    // A rewind's cast ends at the pin, and a command started after it is not in
+                    // it: its chapter would be the cast's last event, past every record, and the
+                    // player would stretch the recording out to reach it — dead air at the end
+                    // of a rewind, and a mark naming a command the replay never shows.
+                    |> List.filter (fun block -> pin |> Option.forall (fun length -> block.FromSeq < length))
                     |> List.choose (fun block ->
                         // A block whose first line this client has not read has no time
                         // to mark, and a marker at a guessed one would point at the

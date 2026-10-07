@@ -1780,6 +1780,26 @@ let private videoTests =
                 Expect.isTrue (marker >= 0 && marker < record) "the chapter line comes first"
             | None -> failwith "the header is known, so there is a recording"
 
+        testCase "a replay draws each command where it began" <| fun () ->
+            // A block's command is recorded as its INPUT record, the one rendering of it: the
+            // shell's echo is not kept. The player draws `"o"` alone, so a cast that handed
+            // that record over as `"i"` replayed `make`'s output and `make test`'s run together
+            // with nothing between them to say where one command ended and the next began.
+            let model =
+                [ 1, { At = 10.0; Kind = TranscriptInput; Data = "make\r\n" }
+                  2, { At = 10.5; Kind = TranscriptOutput; Data = "building\r\n" }
+                  3, { At = 40.0; Kind = TranscriptInput; Data = "make test\r\n" }
+                  4, { At = 43.5; Kind = TranscriptOutput; Data = "FAILED\r\n" } ]
+                |> List.fold (fun m (seq, record) -> Support.step (TerminalRecordsMsg (terminalA, [ seq, record ])) m) (clientOf recordedTerminal)
+                |> Support.step (TerminalHeaderMsg (terminalA, baseHeader))
+            match ClientModel.terminalReplay terminalA model with
+            | Some replay ->
+                Expect.equal
+                    (outputsOf replay.Cast)
+                    [ "make\r\n"; "building\r\n"; "make test\r\n"; "FAILED\r\n" ]
+                    "each command drawn on the screen, ahead of what it printed"
+            | None -> failwith "the header is known, so there is a recording"
+
         testCase "'play whole terminal' lands on the block it stepped out from" <| fun () ->
             // The two paths answer different questions: the slice is "what did this command
             // print", the whole is "what was going on around it".
@@ -2064,6 +2084,17 @@ let private dvrTests =
                     (TerminalRecordsMsg (terminalA, [ 5, { At = 60.0; Kind = TranscriptOutput; Data = "after\r\n" } ]))
                     model
             Expect.equal (castAt stillGrowing) (castAt model) "the recording under the reader is unchanged"
+
+        testCase "a rewind marks only the commands it holds" <| fun () ->
+            // A command started after the pin is not in the rewind's cast. Its chapter would be
+            // the cast's last event, and the player would stretch the recording out to reach it.
+            let model =
+                Support.step (RewindTerminalMsg terminalA) (withLongRecords (clientOf liveRecordedTerminal))
+                |> withPage [ at 6L 60.0 (started terminalA "3" byAda "make again" 15) ]
+                |> Support.step (TerminalRecordsMsg (terminalA, [ 15, { At = 90.0; Kind = TranscriptInput; Data = "make again\r\n" } ]))
+            match ClientModel.terminalReplay terminalA model with
+            | Some replay -> Expect.isFalse (replay.Cast.Contains "make again") "no chapter for a command past the pin"
+            | None -> failwith "the header is known, so there is a recording"
 
         testCase "rewinding goes back to the last command with room to play, not to the pin" <| fun () ->
             // The pin is the END of the cast, and a player told to play from the end of its

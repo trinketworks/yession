@@ -54,6 +54,8 @@ let private gappyReplayHost : Browser.Types.Element = Browser.Dom.document.getEl
 module private Published =
     let md : PageGlobal<unit -> string> = PageGlobal.named "__md"
     let pushRemote : PageGlobal<string -> unit> = PageGlobal.named "__pushRemote"
+    /// Mount the chaptered replay (`#replay-chapters`) at the end of the page.
+    let chapters : PageGlobal<unit -> unit> = PageGlobal.named "__chapters"
     /// How many times Ctrl+Enter has asked to send. The harness mounts the editor exactly as
     /// the COMPOSER does (`onSubmit` supplied), so the E2E drives the real binding: plain
     /// Enter opens a paragraph and Ctrl+Enter (Cmd+Enter on macOS) sends. A counter rather
@@ -287,6 +289,44 @@ do
           BehindLive = None }
         None
     |> ignore
+
+    // A terminal that ran three commands as blocks, each recorded the way the Session records
+    // one — the command as its input record, then what it printed — with a chapter at each,
+    // and one command long enough that its label is wider than a phone. Resting at its start,
+    // so its chapters are on the bar before anybody presses play.
+    //
+    // Mounted on demand (`__chapters`) and at the END of the page, because a host in the flow
+    // above the shell moves every case that hit-tests the shell where the viewport ends.
+    let loop = "for i in 1 2 3; do echo \"step $i\"; sleep 1; done"
+    let chaptered =
+        TranscriptReplay.castWithMarkers
+            { Width = 80; Height = 24; Timestamp = 0L }
+            [ 0, { At = 0.0; Kind = TranscriptInput; Data = "echo one\r\n" }
+              1, { At = 0.5; Kind = TranscriptOutput; Data = "one\r\n" }
+              2, { At = 2.0; Kind = TranscriptInput; Data = loop + "\r\n" }
+              3, { At = 3.0; Kind = TranscriptOutput; Data = "step 1\r\n" }
+              4, { At = 4.0; Kind = TranscriptOutput; Data = "step 2\r\n" }
+              5, { At = 5.0; Kind = TranscriptOutput; Data = "step 3\r\n" }
+              6, { At = 6.5; Kind = TranscriptInput; Data = "echo three\r\n" }
+              7, { At = 7.0; Kind = TranscriptOutput; Data = "three\r\n" }
+              8, { At = 9.0; Kind = TranscriptOutput; Data = "end\r\n" } ]
+            [ 0.0, "echo one"
+              2.0, loop
+              6.5, "echo three" ]
+    PageGlobal.set Published.chapters (fun () ->
+        let chaptersHost = Browser.Dom.document.createElement "div"
+        chaptersHost.id <- "replay-chapters"
+        chaptersHost.setAttribute ("style", "height: 14rem")
+        Browser.Dom.document.body.appendChild chaptersHost |> ignore
+        Replay.mount
+            chaptersHost
+            { Cast = chaptered
+              StartAt = None
+              LandedAt = Some 0.0
+              Poster = None
+              BehindLive = None }
+            None
+        |> ignore)
 
 // --- Two peers converging on one body (the caret write-back) -----------------------------
 //

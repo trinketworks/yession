@@ -1790,7 +1790,8 @@ let private transcriptTests =
         // from a new whole-file route, and that is only sound if the reassembly is the FILE.
         // This drives the real route end to end — write through the store, read the chunks a
         // client reads, decode them as a client decodes them, rebuild — and compares against
-        // the recording on disk byte for byte.
+        // the recording on disk byte for byte — every record in it as the player draws it
+        // (`TranscriptReplay.drawn`, pinned on its own below), and nothing else changed.
         testCase "a replay rebuilt from fetched answers IS the recording on disk" <| fun () ->
             let dir = sprintf "tests/Yession.Tests/out/.data/replay-%s" (string (System.Guid.NewGuid ()))
             let store = Yession.Host.TranscriptStore.openStore dir
@@ -1819,10 +1820,42 @@ let private transcriptTests =
             // the map a client keeps them in has no order at all. Sequence order is the
             // recording's order, and `cast` is what restores it.
             let cast = TranscriptReplay.cast header (List.rev decoded)
+            let file =
+                (TestFiles.read (sprintf "%s/%s.cast" dir (TerminalId.value terminalA))).Split '\n'
+                |> Array.map (fun line ->
+                    match Codec.fromString Transcripts.line line with
+                    | Ok (TranscriptRecordLine record) ->
+                        Codec.toString Transcripts.line (TranscriptRecordLine (TranscriptReplay.drawn record))
+                    | Ok (TranscriptHeaderLine _) | Error _ -> line)
+                |> String.concat "\n"
+            Expect.equal cast file "the rebuilt cast is the file"
+
+        // The player draws `"o"` events and nothing else. A block's command is recorded as its
+        // input record and a piped block's stderr as `"e"`, and every other fold of a transcript
+        // draws both — so a cast that handed them over as recorded replayed commands' output
+        // with no command between them, and dropped what went to stderr.
+        testCase "a replay hands the player every record a terminal draws, as output" <| fun () ->
+            let cast =
+                TranscriptReplay.cast
+                    { Width = 80; Height = 24; Timestamp = 0L }
+                    [ 0, { At = 0.0; Kind = TranscriptInput; Data = "ls -la\r\n" }
+                      1, { At = 0.1; Kind = TranscriptOutput; Data = "total 0\r\n" }
+                      2, { At = 0.2; Kind = TranscriptStderr; Data = "warning\r\n" }
+                      3, { At = 0.3; Kind = TranscriptResize; Data = "100x30" } ]
+            let kinds =
+                cast.Split '\n'
+                |> Array.toList
+                |> List.choose (fun line ->
+                    match Codec.fromString Transcripts.line line with
+                    | Ok (TranscriptRecordLine record) -> Some (record.Kind, record.Data)
+                    | Ok (TranscriptHeaderLine _) | Error _ -> None)
             Expect.equal
-                cast
-                (TestFiles.read (sprintf "%s/%s.cast" dir (TerminalId.value terminalA)))
-                "the rebuilt cast is the file"
+                kinds
+                [ TranscriptOutput, "ls -la\r\n"
+                  TranscriptOutput, "total 0\r\n"
+                  TranscriptOutput, "warning\r\n"
+                  TranscriptResize, "100x30" ]
+                "the command and the stderr drawn, the resize still a resize"
 
         // A terminal can hold no records the client has: one that printed nothing, or one
         // whose output the cap (stage 3d) refused before a single chunk arrived. A cast of
