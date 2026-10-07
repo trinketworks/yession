@@ -426,7 +426,7 @@ type Deps =
       Dispatch : ClientMsg -> unit
       Links : Links }
 
-/// The render, and the two things beside it that need what it keeps.
+/// The render, and the things beside it that need what it keeps.
 type Renderer =
     { /// The page for this model: drawn now when this frame has not been drawn yet, and
       /// otherwise at the frame's end, as whichever model is latest by then (`setState`).
@@ -436,7 +436,13 @@ type Renderer =
       /// render, because a command line is a root the Ylmish codec does not carry.
       SyncTerminalInputs : unit -> unit
       /// The live screens, for the arrival of a snapshot from the session.
-      Screens : Screens.Screens }
+      Screens : Screens.Screens
+      /// The listeners that belong with the render, bound once per page: renders keep the
+      /// reader's place (`SetState`), and these keep it across the other thing that moves it,
+      /// a viewport that changed size under a laid-out surface — against the model `SetState`
+      /// was last given — and the split between the two columns is the reader's to set, not
+      /// the theme's.
+      Attach : unit -> unit }
 
 let create (deps: Deps) : Renderer =
     let doc = deps.Doc
@@ -876,13 +882,9 @@ let create (deps: Deps) : Renderer =
 
     { SetState = setState
       SyncTerminalInputs = syncTerminalInputs
-      Screens = screens }
-
-/// The listeners that belong with the render and are bound once per page: renders keep the
-/// reader's place (`setState`), and this keeps it across the other thing that moves it, a
-/// viewport that changed size under a laid-out surface; and the split between the two columns
-/// is the reader's to set, not the theme's.
-let attach (dispatch: ClientMsg -> unit) : unit =
-    Tail.attach dispatch
-    PaneShell.installPaneResize dispatch
-    PaneShell.installStrip ()
+      Screens = screens
+      Attach =
+        fun () ->
+            Tail.attach dispatch (fun () -> latest |> Option.map (fun model -> model.Away) |> Option.defaultValue Set.empty)
+            PaneShell.installPaneResize dispatch
+            PaneShell.installStrip () }

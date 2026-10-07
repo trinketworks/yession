@@ -1758,7 +1758,7 @@ do
     // The shell harness drives the real render, so it gets the real page listeners too — a
     // splitter, a pinned surface or a rail that only worked in the app is one no browser-tier
     // test could reach.
-    Render.attach dispatch
+    renderer.Attach ()
 
     // --- Scrolling while records arrive (the `bench` scroll scenario) ------------------------
     //
