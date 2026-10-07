@@ -82,6 +82,71 @@ let private following (el: HTMLElement) : bool =
 let private toEnd (el: HTMLElement) : unit =
     if not (atEnd el) then el.scrollTop <- el.scrollHeight
 
+// --- What a press opens, it opens UPWARD ------------------------------------------------------
+//
+// A terminal's history is read from its end, and everything in it is EARLIER than what follows
+// it: the fold "ran N earlier commands" holds what came before the commands under it, and a
+// block's hidden lines came before the ones it shows. So when a reader presses one of those
+// open, what they were looking at is what FOLLOWS it — the latest command, for a reader at the
+// end — and the press must not move it. What it opens appears above, in the space the scroll
+// makes for it.
+//
+// The browser's own scroll anchoring cannot be relied on to say that. It keeps the FIRST fully
+// visible box where it was, so with the fold's own line on screen it anchored on the fold and
+// let everything under it fall down the page — the latest command pushed off the bottom by
+// the history it had just asked to see (472px, measured in the browser tier, from the end
+// with the fold's line at the top of the pane). Nor does every browser anchor at all. So the
+// place is kept here, from the press: the entry pressed in, and where it ENDED.
+//
+// Which surfaces read this way is the view's to say, on the element whose children are the
+// entries (`Dom.Hooks.tailEntries`). The chat does not: its folds open downward, under the
+// line pressed, and nothing here touches them.
+//
+// That is a POINTER's press. A keyboard's is different, because a keyboard reader is looking at
+// the control their focus is on, and opening upward takes that control — and the ring that says
+// where focus is — off the top of the pane, so Enter appears to do nothing at all. So a press
+// from the keyboard keeps the CONTROL where it was instead: what it opens appears below it, and
+// the reader stays on the line they pressed. One mechanism either way; what differs is only
+// which element's edge is held.
+
+/// A press inside one entry of a surface: the surface, the element whose place is kept, where
+/// that element ended in the surface's CONTENT when it was pressed, and the surface's scroll
+/// then. `Held` is the entry for a pointer and the pressed control for a keyboard; `ByKeyboard`
+/// says which, because a keyboard's press is kept for a reader at the end too, who is otherwise
+/// put back at the end.
+type private Press =
+    { Surface : string
+      Held : Element
+      Ended : float
+      Top : float
+      ByKeyboard : bool }
+
+/// The press the next render is owed, if there is one. Rendering takes it (`restore`), so a
+/// press nothing re-rendered for is not kept past the render after it.
+let mutable private pressed : Press option = None
+
+/// Where an element ends in a surface's content: its bottom edge measured from the top of
+/// everything the surface scrolls rather than from its box, so the reader's own scrolling does
+/// not move it and only a change of what is ABOVE that edge does.
+let private endIn (surface: HTMLElement) (el: Element) : float =
+    el.getBoundingClientRect().bottom - surface.getBoundingClientRect().top + surface.scrollTop
+
+/// The surface and the entry a press landed in, when it landed inside a list of entries
+/// (`Dom.Hooks.tailEntries`) that is inside a surface.
+let private pressedIn (target: Node) : (HTMLElement * Element) option =
+    let rec listOf (node: Node) : HTMLElement option =
+        match node.parentElement with
+        | null -> None
+        | parent when parent.hasAttribute Dom.Hooks.tailEntries -> Some parent
+        | parent -> listOf parent
+    listOf target
+    |> Option.bind (fun list ->
+        let entries = list.children
+        let entry = [ for i in 0 .. entries.length - 1 -> entries.[i] ] |> List.tryFind (fun e -> e.contains target)
+        match entry, list.closest selector with
+        | Some entry, Some surface -> Some (surface :?> HTMLElement, entry)
+        | _ -> None)
+
 /// Where whether each reader is following goes: the model, which draws each surface's "jump
 /// to latest" from it (`ClientModel.Away`). Set once, by `attach`.
 let mutable private tell : ClientMsg -> unit = ignore
@@ -156,16 +221,35 @@ let private observe (current: HTMLElement list) : unit =
 /// the end. A reader who was not following is put back where they were, written only when the
 /// render moved them (Lit replaced the element and the new one starts at zero), for `toEnd`'s
 /// reason.
+///
+/// Except by what a press of theirs opened (`Press`): the element held keeps its END where it
+/// was on screen. Measured in the surface's content and added to where the scroll stood at the
+/// press, so whatever the browser's own anchoring did during the render is neither counted nor
+/// fought. A pointer's press at the end needs none of that — the end is what they were looking
+/// at, and the end is where they are put. A keyboard's press at the end is held like any other,
+/// and leaves the reader following only if that is still the end.
 let restore (Before positions) : unit =
     let current = surfaces ()
+    let press = pressed
+    pressed <- None
     readers.Clear ()
     for el in current do
         let key = keyOf el
-        match Map.tryFind key positions |> Option.flatten with
-        | Some top ->
-            if el.scrollTop <> top then el.scrollTop <- top
+        let kept =
+            match press with
+            | Some press when press.Surface = key && el.contains press.Held ->
+                Some (press, press.Top + (endIn el press.Held - press.Ended))
+            | Some _
+            | None -> None
+        match Map.tryFind key positions |> Option.flatten, kept with
+        | Some top, _ ->
+            let kept = kept |> Option.map snd |> Option.defaultValue top
+            if el.scrollTop <> kept then el.scrollTop <- kept
             readers.[key] <- { Following = false; Top = el.scrollTop }
-        | None ->
+        | None, Some (press, kept) when press.ByKeyboard ->
+            if el.scrollTop <> kept then el.scrollTop <- kept
+            readers.[key] <- { Following = atEnd el; Top = el.scrollTop }
+        | None, _ ->
             toEnd el
             readers.[key] <- { Following = true; Top = el.scrollTop }
     observe current
@@ -206,8 +290,34 @@ let follow (surface: TailSurface) : HTMLElement option =
 /// Toggle: a fold opened or shut inside a surface moves everything below it with no scroll at
 /// all. A reader who opened one is reading it, and is following the end afterwards only if
 /// the end is still where they are.
+///
+/// Click: captured, so it is heard BEFORE the control pressed dispatches what it opens — the
+/// render that opens it has to find the place already taken (`Press`). A key that presses a
+/// control is a click too, and the click says which it was: one a key made counts no clicks
+/// (`detail` is 0), one a pointer made counts at least one.
 let attach (dispatch: ClientMsg -> unit) : unit =
     tell <- dispatch
+    document.addEventListener (
+        "click",
+        (fun event ->
+            match EventTargets.asNode event.target |> Option.bind pressedIn with
+            | Some (surface, entry) ->
+                // A click event is a `MouseEvent`: the one cast, on the line that reads it.
+                let byKeyboard = (event :?> MouseEvent).detail = 0.0
+                let held =
+                    match EventTargets.asHTMLElement event.target with
+                    | Some control when byKeyboard -> control :> Element
+                    | Some _
+                    | None -> entry
+                pressed <-
+                    Some
+                        { Surface = keyOf surface
+                          Held = held
+                          Ended = endIn surface held
+                          Top = surface.scrollTop
+                          ByKeyboard = byKeyboard }
+            | None -> ()),
+        true)
     document.addEventListener (
         "scroll",
         (fun event ->

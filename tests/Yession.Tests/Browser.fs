@@ -2635,6 +2635,110 @@ let private paneTakesTheRoom (page: IPage) : Async<unit> =
             "the chat keeps its measure, the pane takes the rest and is never under its floor"
     }
 
+// --- A fold of earlier commands opens UPWARD (`Tail`'s `Press`) ------------------------------
+//
+// What a reader of a terminal's history is looking at when they press "ran N earlier commands"
+// is what FOLLOWS the fold — the latest command, at the end. Opening it used to push all of that
+// down the page by the height of what it opened, because the browser anchored its scroll on the
+// fold's own line. Only a laid-out page has a place on screen to keep.
+
+/// The harness terminal's newest fold — nearest the end, so the one a reader there can see — by
+/// the block id it is keyed by.
+let private newestRun (page: IPage) : Async<string> =
+    await (
+        page.EvaluateAsync<string> (
+            """selector => {
+                 const runs = document.querySelector(selector).querySelectorAll('[data-terminal-block-run]')
+                 return runs.length ? runs[runs.length - 1].getAttribute('data-terminal-block-run') : ''
+               }""",
+            box (tailSurface "blocks:term-harness")))
+
+/// A fold's line, by the id the run is keyed by.
+let private runLine (run: string) =
+    sprintf "%s [data-terminal-block-run='%s'] summary" (tailSurface "blocks:term-harness") run
+
+/// Where the latest command's line stands on screen — the last one drawn, since everything a
+/// fold holds came before it.
+let private latestCommandTop (page: IPage) : Async<float> =
+    await (
+        page.EvaluateAsync<float> (
+            """selector => {
+                 const lines = document.querySelector(selector).querySelectorAll('[data-terminal-block-command]')
+                 return lines[lines.length - 1].getBoundingClientRect().top
+               }""",
+            box (tailSurface "blocks:term-harness")))
+
+/// Whether a fold's line lies wholly inside the history's box: the precondition for a case
+/// about a reader who presses it from where they are, since one off screen is a press nobody
+/// at the end makes (and the browser's own anchoring keeps the place for it anyway).
+let private runLineOnScreen (page: IPage) (run: string) : Async<bool> =
+    await (
+        page.EvaluateAsync<bool> (
+            """([surface, line]) => {
+                 const box = document.querySelector(surface).getBoundingClientRect()
+                 const at = document.querySelector(line).getBoundingClientRect()
+                 return at.top >= box.top && at.bottom <= box.bottom
+               }""",
+            box [| tailSurface "blocks:term-harness"; runLine run |]))
+
+/// Press a fold one way or another, and wait for the press to have been drawn — open if it was
+/// shut, shut if it was open — and the frame after.
+let private pressRunBy (press: IPage -> string -> Async<unit>) (page: IPage) (run: string) : Async<unit> =
+    async {
+        let details = sprintf "%s [data-terminal-block-run='%s'] details" (tailSurface "blocks:term-harness") run
+        let! was = await (page.EvaluateAsync<bool> ("selector => document.querySelector(selector).open", box details))
+        do! press page (runLine run)
+        let! _ =
+            await (
+                page.WaitForFunctionAsync (
+                    "([selector, was]) => document.querySelector(selector).open !== was",
+                    box [| box details; box was |]))
+        do! twoFrames page
+    }
+
+/// A pointer's press on whatever is painted at the middle of `selector`, where it stands — not
+/// the locator's click, which first scrolls its target to wherever it judges clear of a sticky
+/// line, and so moves the very place a case is measuring.
+let private clickWhereItIs (page: IPage) (selector: string) : Async<unit> =
+    async {
+        let! at =
+            await (
+                page.EvaluateAsync<float[]> (
+                    "selector => { const r = document.querySelector(selector).getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2] }",
+                    box selector))
+        do! awaitU (page.Mouse.ClickAsync (float32 at.[0], float32 at.[1]))
+    }
+
+/// A fold pressed with a pointer, where it is on screen.
+let private clickRun = pressRunBy clickWhereItIs
+
+/// A fold pressed from the keyboard, as a reader whose focus is on its line does.
+let private enterRun =
+    pressRunBy (fun page line ->
+        async {
+            do! awaitU (page.FocusAsync line)
+            do! awaitU (page.Keyboard.PressAsync "Enter")
+        })
+
+/// Scroll a surface by hand so `selector` sits near the top of its box, clear of any command line
+/// held at the top while its output scrolls — up, away from the end, which is what makes its
+/// reader one who is not following it.
+let private scrollToTop (page: IPage) (selector: string) : Async<unit> =
+    async {
+        do! awaitU (
+                page.EvaluateAsync (
+                    """([surface, target]) => {
+                         const el = document.querySelector(surface)
+                         el.scrollTop += document.querySelector(target).getBoundingClientRect().top - el.getBoundingClientRect().top - 120
+                       }""",
+                    box [| tailSurface "blocks:term-harness"; selector |]))
+        do! twoFrames page
+    }
+
+/// Where something stands on screen: the top of its box.
+let private topOf (page: IPage) (selector: string) : Async<float> =
+    await (page.EvaluateAsync<float> ("selector => document.querySelector(selector).getBoundingClientRect().top", box selector))
+
 let editorTests =
     testList "Editor rendering (browser)" [
         editorCase "Markdown typed in the rich editor renders formatted and round-trips to Markdown" <| fun page ->
@@ -6473,6 +6577,99 @@ let editorTests =
                         """() => new Promise(done => requestAnimationFrame(() =>
                              done(document.querySelector("#shell [data-terminal-block-run='block-burst-ok'] details").open)))""")
                 Expect.isTrue opened "open as the reader left it"
+            }
+
+        // Opening a fold of earlier commands with a pointer, from the end of the history, leaves
+        // the latest command where the reader was looking at it: what the fold holds came before,
+        // so it appears ABOVE. It used to push the latest command off the bottom of the pane.
+        editorCaseIn 1440 900 "clicking open the earlier commands leaves the latest command where a reader at the end saw it" <| fun page ->
+            async {
+                do! paneOnBlocks page
+                do! toTheEnd page "blocks:term-harness"
+                let! run = newestRun page
+                let! reachable = runLineOnScreen page run
+                Expect.isTrue reachable "the fold's line is on screen at the end of the history"
+                let! before = latestCommandTop page
+                do! clickRun page run
+                let! after = latestCommandTop page
+                Expect.isTrue (abs (after - before) <= 2.0) (sprintf "the latest command stays put: it was at %.1fpx, and is at %.1fpx" before after)
+            }
+        // A reader who scrolled back and has the fold's line at the top of the pane is looking
+        // at the commands under it, and those stay where they are too.
+        editorCaseIn 1440 900 "clicking open the earlier commands leaves what a reader scrolled back to where it was" <| fun page ->
+            async {
+                do! paneOnBlocks page
+                do! toTheEnd page "blocks:term-harness"
+                let! run = newestRun page
+                do! scrollToTop page (runLine run)
+                let next = sprintf "%s [data-terminal-block-run='%s'] + *" (tailSurface "blocks:term-harness") run
+                let! before = topOf page next
+                do! clickRun page run
+                let! after = topOf page next
+                Expect.isTrue (abs (after - before) <= 2.0) (sprintf "the command under the fold stays put: it was at %.1fpx, and is at %.1fpx" before after)
+            }
+        // A block's "show all N lines" is the same kind of press: the lines it brings back came
+        // before the ones on screen, so the commands under the block stay where they are.
+        editorCaseIn 1440 900 "clicking to show all of a command's lines leaves the commands under it where a reader saw them" <| fun page ->
+            async {
+                do! paneOnBlocks page
+                do! awaitU (
+                        page.EvaluateAsync
+                            """() => window.__record('term-harness', 2, 'o',
+                                       Array.from({ length: 300 }, (_, i) => 'line ' + (i + 1)).join('\r\n'))""")
+                let block = sprintf "%s [data-terminal-block='block-burst-running']" (tailSurface "blocks:term-harness")
+                let expand = block + " [data-terminal-output-expand]"
+                let! _ = await (page.WaitForSelectorAsync expand)
+                do! toTheEnd page "blocks:term-harness"
+                do! scrollToTop page expand
+                let! before = topOf page (block + " + *")
+                do! clickWhereItIs page expand
+                let! _ = await (page.WaitForFunctionAsync ("selector => document.querySelector(selector).getAttribute('aria-expanded') === 'true'", box expand))
+                do! twoFrames page
+                let! after = topOf page (block + " + *")
+                Expect.isTrue (abs (after - before) <= 2.0) (sprintf "the command under the block stays put: it was at %.1fpx, and is at %.1fpx" before after)
+            }
+        // From the KEYBOARD the reader is looking at the line their focus is on, so that is what
+        // stays: the earlier commands open below it, and the line and its focus ring stay on
+        // screen. Held like a pointer's press, Enter took the line off the top of the pane and
+        // appeared to do nothing.
+        editorCaseIn 1440 900 "Enter on the earlier commands keeps their line where it was, on screen" <| fun page ->
+            async {
+                do! paneOnBlocks page
+                do! toTheEnd page "blocks:term-harness"
+                let! run = newestRun page
+                let! reachable = runLineOnScreen page run
+                Expect.isTrue reachable "the fold's line is on screen at the end of the history"
+                let! before = topOf page (runLine run)
+                do! enterRun page run
+                let! after = topOf page (runLine run)
+                let! onScreen = runLineOnScreen page run
+                Expect.isTrue (abs (after - before) <= 2.0 && onScreen) (sprintf "the fold's line stays put and on screen: it was at %.1fpx, and is at %.1fpx (inside the box: %b)" before after onScreen)
+            }
+        // …and the next Enter shuts them again with the line still where it was.
+        editorCaseIn 1440 900 "Enter again shuts the earlier commands with their line where it was, on screen" <| fun page ->
+            async {
+                do! paneOnBlocks page
+                do! toTheEnd page "blocks:term-harness"
+                let! run = newestRun page
+                do! enterRun page run
+                let! before = topOf page (runLine run)
+                do! enterRun page run
+                let! after = topOf page (runLine run)
+                let! onScreen = runLineOnScreen page run
+                Expect.isTrue (abs (after - before) <= 2.0 && onScreen) (sprintf "the fold's line stays put and on screen: it was at %.1fpx, and is at %.1fpx (inside the box: %b)" before after onScreen)
+            }
+        // The press keeps the keyboard on the fold's line, so the next Enter shuts what this one
+        // opened.
+        editorCaseIn 1440 900 "the fold of earlier commands keeps the keyboard when it opens" <| fun page ->
+            async {
+                do! paneOnBlocks page
+                do! toTheEnd page "blocks:term-harness"
+                let! run = newestRun page
+                do! enterRun page run
+                let! focused =
+                    await (page.EvaluateAsync<bool> ("selector => document.activeElement === document.querySelector(selector)", box (runLine run)))
+                Expect.isTrue focused "the keyboard is on the fold's line"
             }
 
         // A command the agent has queued, in the chat. Two promises here that no rendered

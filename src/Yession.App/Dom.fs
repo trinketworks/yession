@@ -124,6 +124,11 @@ module Dom =
         /// terminal's blocks, a terminal's live screen. What `Tail` keeps at the end for a
         /// reader who is there.
         let tail = "data-tail"
+        /// Inside a `tail` surface, the element whose children are its entries, oldest first,
+        /// each EARLIER than the next — a terminal's blocks. What a pointer's press in one opens,
+        /// it opens upward: `Tail` keeps what follows the entry where it was on screen (a
+        /// keyboard's press keeps the control pressed there instead).
+        let tailEntries = "data-tail-entries"
         let messageId = "data-message-id"
         let messageAuthor = "data-message-author"
         let messageStatus = "data-message-status"
