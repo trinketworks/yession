@@ -1587,10 +1587,17 @@ do
         | ClientEffect.GitHub _
         | ClientEffect.GitHubPoll _ -> ()
         | ClientEffect.Move move -> PaneShell.move move
+        // A transcript read is answered as the session's store would answer it: the store
+        // holds exactly the lines this harness handed in, so a read past them is current — and
+        // a read from line 0 of a terminal it handed nothing for is a terminal with no
+        // recording, which is what the client must hear to say so. Left unanswered, every
+        // terminal the page folds in would stay unheard for ever, which no session does.
+        | ClientEffect.ReadTranscript (terminal, read, fromSeq) ->
+            dispatchRef (
+                TranscriptReadMsg (terminal, read, Some { Records = []; Header = None; NextSeq = fromSeq; IsEnd = true }))
         // No session to read from: the pages this harness shows it hands in itself, as the
         // messages a read's answer would be.
         | ClientEffect.ReadEvents _
-        | ClientEffect.ReadTranscript _
         // No session to ask for a keyframe: the replay plays without one.
         | ClientEffect.FetchKeyframe _
         | ClientEffect.Remember _
