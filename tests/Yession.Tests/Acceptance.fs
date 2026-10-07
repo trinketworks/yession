@@ -727,8 +727,8 @@ let private uiChecklistTests =
                   "block chip in the chat", Dom.attr Dom.Hooks.chatBlock "block-ui"
                   "chip carries the block's status", Dom.attr Dom.Hooks.chatBlockStatus Dom.Text.blockOk
                   // Settings + agent presence (Plan 08 pass): the model has no agent, so
-                  // the sidebar row says absent, the prompt strip renders with its
-                  // connect call-to-action, and the drawer holds the Claude panel.
+                  // the sidebar row says absent and carries the verb that connects one,
+                  // and the drawer holds the Claude panel.
                   "settings drawer toggle", Dom.Hooks.settingsToggle
                   "settings drawer panel", Dom.Hooks.settingsPanel
                   "claude panel in settings", Dom.Hooks.claudePanel
@@ -737,8 +737,8 @@ let private uiChecklistTests =
                   // thing rather than two that could disagree.
                   "model picker", Dom.attr Dom.Hooks.modelSelect (ModelId.value pickedModel)
                   "agent presence row (absent)", Dom.attr Dom.Hooks.agentPresence "absent"
-                  "no-agent prompt strip", Dom.Hooks.noAgent
-                  "no-agent connect call-to-action", Dom.Hooks.noAgentConnect ]
+                  "no-agent marker on the agent's row", Dom.Hooks.noAgent
+                  "no-agent connect verb", Dom.Hooks.noAgentConnect ]
             for label, marker in required do
                 Expect.isTrue (html.Contains marker) (sprintf "%s (`%s`) must render" label marker)
 
@@ -1280,17 +1280,22 @@ let private uiChecklistTests =
                 2
                 "one editable draft body, plus the queued message's own editor"
 
-        // The agent's absence is a call to action, and a call to action repeated three times
-        // is wallpaper: it used to be a sidebar row, a strip over the composer, AND the
-        // settings copy, all at once. It now lives where the session's members are listed.
-        testCase "the agent's absence is asked for exactly once, where the session's members are" <| fun () ->
+        // The agent's absence is asked for exactly once, and by a verb on the agent's own row
+        // rather than a box under it. It used to be a sidebar row, a strip over the composer
+        // AND the settings copy; then a full-width button hanging under the row, repeating
+        // the one settings already has. A real <button>, so Tab and Enter reach it.
+        testCase "the agent's absence is asked for exactly once, by a button on the agent's own row" <| fun () ->
             let html = Support.render representativeModel // no agent in this model
             let occurrences (needle: string) = (html.Split needle |> Array.length) - 1
-            Expect.equal (occurrences Dom.Hooks.noAgentConnect) 1 "one connect call-to-action, not several"
+            Expect.equal (occurrences Dom.Hooks.noAgentConnect) 1 "one connect verb, not several"
             // It sits in the membership section, which the shell renders before the timeline.
             Expect.isTrue
                 (html.IndexOf Dom.Hooks.noAgentConnect < html.IndexOf Dom.Hooks.conversation)
-                "the prompt is in the sidebar's membership section, not over the composer"
+                "the verb is in the sidebar's membership section, not over the composer"
+            // A button, opened after the agent's row opens: the verb rides that row.
+            let row = html.IndexOf (Dom.attr Dom.Hooks.agentPresence "absent")
+            let verb = html.IndexOf Dom.Hooks.noAgentConnect
+            Expect.isTrue (html.Substring(0, verb).LastIndexOf "<button" > row) "the verb is a button opened inside the agent's row"
             // A session WITH an agent asks for nothing at all.
             let connected = representativeModel |> withClaudePanel (fun panel -> { panel with AgentAvailable = true })
             let connectedHtml = Support.render connected
