@@ -547,10 +547,10 @@ let runWith (guidance: string option) (dataDir: string) (backend: SandboxBackend
             let registry = registryFor capabilities
             // What this turn is told: its strategy's plan over what the turn was handed and
             // what this host's operator wrote.
-            let plan = Prompting.forTurn guidance context
+            let plan = Prompting.forTurn guidance registry context
             let! outcome, usage =
                 runQuery
-                    [| plan.Stable |]
+                    (Prompting.systemBlocks dynamicBoundary plan)
                     plan.Turn
                     // No choice is `None`, all the way down to the SDK option that is then
                     // not passed. The turn carries the choice rather than the runner holding

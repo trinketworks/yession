@@ -140,6 +140,10 @@ type PromptStrategy =
     /// Every product section in the system prompt, the operator's guidance after them, and
     /// the turn's context as one message.
     | Static
+    /// Claude Code's architecture: the product sections in a prefix every turn on every host
+    /// shares, what varies by host and turn after the cache boundary, and the turn's context
+    /// as reminders beside what the turn answers.
+    | ClaudeCodeLike
 
 module PromptStrategy =
 
@@ -148,6 +152,7 @@ module PromptStrategy =
     let name (strategy: PromptStrategy) : string =
         match strategy with
         | PromptStrategy.Static -> "static"
+        | PromptStrategy.ClaudeCodeLike -> "claude-code-like"
 
     /// Every strategy. A new case breaks `name` above, which is the reminder to list it here.
-    let all : PromptStrategy list = [ PromptStrategy.Static ]
+    let all : PromptStrategy list = [ PromptStrategy.Static; PromptStrategy.ClaudeCodeLike ]
