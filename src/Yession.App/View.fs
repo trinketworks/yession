@@ -1667,7 +1667,7 @@ module View =
 
     let private ansiText (text: string) : TemplateResult list = ansiLines (Ansi.parse text) None
 
-    /// How a block went, as its HOOKS spell it: four tokens for six outcomes, because what a
+    /// How a block went, as its HOOKS spell it: five tokens for seven outcomes, because what a
     /// hook is asked is whether it went, not how.
     let private terminalBlockStatusLabel =
         function
@@ -1675,6 +1675,7 @@ module View =
         | BlockFinished (CommandSucceeded _) -> Dom.Text.blockOk
         | BlockFinished _ -> Dom.Text.blockFailed
         | BlockRejected _ -> Dom.Text.blockRejected
+        | BlockEnded _ -> Dom.Text.blockEnded
 
     /// How a block went, in WORDS — what a screen reader hears where the mark draws a glyph
     /// and a number, and what a command chip's accessible name says in its middle.
@@ -1686,6 +1687,7 @@ module View =
         | BlockFinished CommandTimedOut -> Dom.Text.blockTimedOut
         | BlockFinished (CommandExecutionFailed _) -> Dom.Text.failed
         | BlockRejected (by, _) -> Dom.Text.blockRefusedBy (Entity.actorName model by)
+        | BlockEnded _ -> Dom.Text.blockEnded
 
     /// How a block went, drawn. ONE renderer for every surface that shows a block — its line
     /// in the pane, its tab's header, its chip in the chat — so a reader who learnt the marks
@@ -1710,6 +1712,10 @@ module View =
         | BlockFinished CommandTimedOut
         | BlockFinished (CommandExecutionFailed _) ->
             html $"""<span class="{Style.statusErr}" data-block-mark="{token}">{terminalBlockStatusWord model status}</span>"""
+        // A record, not a wrong thing: nothing says it failed, so it is not red. Faint like
+        // any other status with nothing to report, and the block's facts carry why it ended.
+        | BlockEnded _ ->
+            html $"""<span class="{Style.statusFaint}" data-block-mark="{token}">{terminalBlockStatusWord model status}</span>"""
         // Named, not merely absent. "refused by nick" in line with the commands that ran
         // is the whole reason a refusal mints a block at all — so it is a NAME, resolved like
         // every other person on screen, not the id the hook carries.
@@ -3155,7 +3161,8 @@ module View =
         else
             match block.Status with
             | BlockRunning -> html $"""<div class="{Style.terminalOutputEmpty}" data-terminal-output>…</div>"""
-            | BlockFinished _ -> html $"""<div class="{Style.terminalOutputEmpty}" data-terminal-output>no output</div>"""
+            | BlockFinished _
+            | BlockEnded _ -> html $"""<div class="{Style.terminalOutputEmpty}" data-terminal-output>no output</div>"""
             // "no output" would be true and useless. A refused command has no output
             // because it never ran, and the reason — when one was given — is the thing
             // the next reader actually wants.
@@ -3271,7 +3278,8 @@ module View =
             | None -> Lit.nothing
         let reason =
             match block.Status with
-            | BlockFinished (CommandExecutionFailed reason) ->
+            | BlockFinished (CommandExecutionFailed reason)
+            | BlockEnded reason ->
                 html $"""<span class="{Style.terminalBlockFact}">{reason}</span>"""
             | BlockRunning
             | BlockFinished _
@@ -3279,6 +3287,7 @@ module View =
         let facts =
             match block.Status, block.StoppedBy with
             | BlockFinished (CommandExecutionFailed _), _
+            | BlockEnded _, _
             | _, Some _ -> html $"""<div class="{Style.terminalBlockFacts}" data-terminal-block-facts>{reason}{stoppedBy}</div>"""
             | _ -> Lit.nothing
         // Stop: ^C to this command, the terminal left standing — on the command line it stops,
@@ -3296,7 +3305,8 @@ module View =
                             aria-keyshortcuts="Control+C"
                             @click={Ev(fun _ -> dispatch (InterruptTerminalMsg terminal))}>{Icon.stop}stop</button>"""
             | BlockFinished _
-            | BlockRejected _ -> Lit.nothing
+            | BlockRejected _
+            | BlockEnded _ -> Lit.nothing
         html $"""
             <article class="{Style.terminalBlock}" data-terminal-block="{BlockId.value block.BlockId}"
                      data-terminal-block-status="{terminalBlockStatusLabel block.Status}">
@@ -3766,8 +3776,11 @@ module View =
         // The per-terminal output cap (stage 3d) can eat a whole recording. Saying so is the
         // point: an empty player would be indistinguishable from a terminal that printed
         // nothing, and the whole reason the drop is recorded is that a gap in an audit trail
-        // must be a stated fact.
-        let gone = Map.isEmpty feed.Records && view.DroppedBytes > 0
+        // must be a stated fact. Said only of what is KNOWN: a recording the store does not
+        // hold, or one it holds with every record capped away — never of one this reader has
+        // simply not been answered about yet (`RecordingKnown`).
+        let affords = ClientModel.affordances view model
+        let gone = affords.RecordingLost || (affords.CanReplay && Map.isEmpty feed.Records && view.DroppedBytes > 0)
         // Which one closed, by the name it wore while open: a closed band reached from the
         // chat may be the only thing on screen that says which terminal this was.
         let name = TerminalName.display model.Terminals view
@@ -4189,7 +4202,7 @@ module View =
             // own: a row with no command under it would grow by one when its terminal died,
             // and move every row beneath it.
             let gone =
-                if view.IsOpen || affords.CanReplay then Lit.nothing
+                if not affords.RecordingLost then Lit.nothing
                 else html $"""<span class="{Style.terminalGone}" data-terminal-list-gone="{id}">{Dom.Text.recordingLost}</span>"""
             let peers =
                 ClientModel.editorsInTerminal view.TerminalId model
@@ -4948,7 +4961,7 @@ module View =
                    duplicate, so out of the tree and the Tab order (`Style.paneGrabEdge`). -->
               <button type="button" class="{Style.paneGrabEdge}" tabindex="-1" aria-hidden="true"
                       aria-label="{Dom.Text.backToChat}" data-pane-grab-edge
-                      @click={Ev(fun _ -> dispatch ToggleContentMsg)}><span class="{Style.paneGrabMark}">{Icon.right}</span></button>
+                      @click={Ev(fun _ -> dispatch ToggleContentMsg)}><span class="{Style.paneGrabMark}">{Icon.rightSm}</span></button>
               <!-- Escape anywhere in the pane steps back one item: off `all` to what it was
                    laid over, or a preview down, as its close does — but not while the menu is
                    open over it, whose own Escape is about the menu and runs first, on the

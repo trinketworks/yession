@@ -1183,7 +1183,7 @@ let private start () =
         |> Program.withSetState setState
         |> Program.run
 
-        Render.attach (fun msg -> dispatchRef msg)
+        renderer.Attach ()
 
         // The column is beside the chat or a drawer over it according to the stylesheet's
         // breakpoint, which a window resized or a phone turned can cross at any time.

@@ -264,20 +264,18 @@ let private projectionTests =
                 (Some (PeerRef bob))
                 "the block names the peer who interrupted it"
 
-        testCase "a block still running when its terminal closes is finished BY the close" <| fun () ->
+        testCase "a block still running when its terminal closes is ended BY the close, not failed" <| fun () ->
             // No process outlives its pty. The Process appends the completion itself when it
             // closes a terminal; this is the fold's own guard, for a log written before it did
-            // and for the two events arriving the other way round.
+            // and for the two events arriving the other way round. How the command went is
+            // not something the close knows, so it says ended — never a guessed failure.
             let proj =
                 fold
                     [ opened terminalA "build"
                       started terminalA "1" "perl -pi -e 1" 0
                       SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "stuck"; By = None } ]
             let a = Projection.tryFind terminalA proj |> Option.get
-            Expect.equal
-                a.Blocks.Head.Status
-                (BlockFinished (CommandExecutionFailed "the terminal was closed: stuck"))
-                "it ended with the terminal, and says so"
+            Expect.equal a.Blocks.Head.Status (BlockEnded "stuck") "it ended with the terminal, and says why"
             let finished =
                 fold
                     [ opened terminalA "build"
@@ -288,6 +286,20 @@ let private projectionTests =
                 (Projection.tryFind terminalA finished |> Option.get).Blocks.Head.Status
                 (BlockFinished (CommandFailed 2))
                 "one that had already ended keeps its own ending"
+
+        testCase "a completion folded after its terminal's close still says how the block went" <| fun () ->
+            // The close and the completion are two appends. A shell that `exit`ed 0 under its
+            // block brings a success; a close folded first must not have the last word.
+            let proj =
+                fold
+                    [ opened terminalA "build"
+                      started terminalA "1" "exit" 0
+                      SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "the shell exited with code 0"; By = Some ActorRef.System }
+                      completed terminalA "1" (CommandSucceeded 0) 1 ]
+            Expect.equal
+                (Projection.tryFind terminalA proj |> Option.get).Blocks.Head.Status
+                (BlockFinished (CommandSucceeded 0))
+                "the completion is the answer"
 
         testCase "a closed terminal keeps its blocks — the audit outlives the process" <| fun () ->
             let proj =
@@ -1286,6 +1298,20 @@ let private waitTests =
                     (TerminalCommandWait.step false (observing status false))
                     (TerminalCommandWait.Return expected)
                     "an answer is returned the moment it exists"
+
+        // A close and the completion it brings are two appends. The completion is the answer
+        // (a shell's `exit 0` is a success), so a close folded first is not the end of the wait.
+        testCase "a block its terminal closed under waits for its completion" <| fun () ->
+            Expect.equal
+                (TerminalCommandWait.step false (observing (BlockEnded "the shell exited with code 0") false))
+                TerminalCommandWait.KeepWaiting
+                "the completion may still say how it went"
+
+        testCase "a block its terminal closed under, with no completion by the deadline, is told as ended" <| fun () ->
+            Expect.equal
+                (TerminalCommandWait.step true (observing (BlockEnded "stuck") false))
+                (TerminalCommandWait.Return (TerminalCommandEnded "stuck"))
+                "ended, not failed: nothing on the record says it failed"
 
         testCase "a withdrawn request is an absence, not an outcome" <| fun () ->
             // Deleting a queued entry is withdrawal and has no event. Reporting it as any
@@ -3884,26 +3910,36 @@ let private affordanceTests =
         // loosened test reads as coverage for.
 
         testCase "the kill is offered exactly while the terminal is open" <| fun () ->
-            let afforded (view: TerminalView) = (Affordances.ofView true view).CanKill
+            let afforded (view: TerminalView) = (Affordances.ofView RecordingKnown.Recorded view).CanKill
             Expect.isTrue (afforded (viewOf true false)) "a running terminal can be killed"
             Expect.isFalse (afforded (viewOf false false)) "a closed one has nothing left to kill"
 
         testCase "the rewind is offered exactly while a live terminal has something recorded" <| fun () ->
             let afforded recorded view = (Affordances.ofView recorded view).CanRewind
-            Expect.isTrue (afforded true (viewOf true false)) "live, and there is something behind it"
-            Expect.isFalse (afforded false (viewOf true false)) "a DVR with nothing recorded has nothing to do"
-            Expect.isFalse (afforded true (viewOf false false)) "and a closed terminal is replayed, not rewound"
+            Expect.isTrue (afforded RecordingKnown.Recorded (viewOf true false)) "live, and there is something behind it"
+            Expect.isFalse (afforded RecordingKnown.NotRecorded (viewOf true false)) "a DVR with nothing recorded has nothing to do"
+            Expect.isFalse (afforded RecordingKnown.Recorded (viewOf false false)) "and a closed terminal is replayed, not rewound"
 
         testCase "the replay is offered exactly where a closed terminal's recording survives" <| fun () ->
             let afforded recorded view = (Affordances.ofView recorded view).CanReplay
-            Expect.isTrue (afforded true (viewOf false false)) "closed, with its recording"
+            Expect.isTrue (afforded RecordingKnown.Recorded (viewOf false false)) "closed, with its recording"
             // The stated gap: the per-terminal cap ate it. Offering a player over nothing
             // would be indistinguishable from a terminal that printed nothing.
-            Expect.isFalse (afforded false (viewOf false false)) "closed, with nothing kept"
-            Expect.isFalse (afforded true (viewOf true false)) "and a live terminal is not a recording yet"
+            Expect.isFalse (afforded RecordingKnown.NotRecorded (viewOf false false)) "closed, with nothing kept"
+            Expect.isFalse (afforded RecordingKnown.Recorded (viewOf true false)) "and a live terminal is not a recording yet"
+
+        // A reader who arrives after a terminal closed has heard nothing of its recording
+        // until a read answers. That silence is not a loss: saying "recording lost" over a
+        // `.cast` sitting intact in the store is a false statement about an audit trail.
+        testCase "a recording is said to be lost exactly where the store is known not to hold it" <| fun () ->
+            let afforded known view = (Affordances.ofView known view).RecordingLost
+            Expect.isTrue (afforded RecordingKnown.NotRecorded (viewOf false false)) "closed, and the store has nothing"
+            Expect.isFalse (afforded RecordingKnown.NotYetKnown (viewOf false false)) "not heard back yet is not lost"
+            Expect.isFalse (afforded RecordingKnown.Recorded (viewOf false false)) "closed, with its recording"
+            Expect.isFalse (afforded RecordingKnown.NotRecorded (viewOf true false)) "and a live terminal is still recording"
 
         testCase "attaching again is offered exactly on a closed stream whose provider allows it" <| fun () ->
-            let afforded (view: TerminalView) = (Affordances.ofView true view).CanReattach
+            let afforded (view: TerminalView) = (Affordances.ofView RecordingKnown.Recorded view).CanReattach
             Expect.isTrue (afforded (viewOf false true)) "closed, and asking again is safe"
             Expect.isFalse (afforded (viewOf false false)) "a shell terminal has no provider to ask"
             Expect.isFalse (afforded (viewOf true true)) "and a stream still running needs no second one"
@@ -3914,7 +3950,7 @@ let private affordanceTests =
         // nobody asked.
         testCase "attaching again survives a recording the cap ate" <| fun () ->
             Expect.isTrue
-                ((Affordances.ofView false (viewOf false true)).CanReattach)
+                ((Affordances.ofView RecordingKnown.NotRecorded (viewOf false true)).CanReattach)
                 "the way back is about the stream, not about what was kept of it"
 
         testCase "the recording is the only read exactly where a closed terminal ran nothing" <| fun () ->
@@ -3936,17 +3972,17 @@ let private affordanceTests =
                             ToSeq = Some 3
                             Status = BlockFinished (CommandSucceeded 0)
                             StoppedBy = None } ] }
-            Expect.isTrue (afforded true (viewOf false false)) "closed, recorded, and nothing ran in it"
-            Expect.isFalse (afforded true ran) "the commands it ran are the read instead"
-            Expect.isFalse (afforded false (viewOf false false)) "and a recording the cap ate is no read at all"
-            Expect.isFalse (afforded true (viewOf true false)) "a live terminal is not a recording yet"
+            Expect.isTrue (afforded RecordingKnown.Recorded (viewOf false false)) "closed, recorded, and nothing ran in it"
+            Expect.isFalse (afforded RecordingKnown.Recorded ran) "the commands it ran are the read instead"
+            Expect.isFalse (afforded RecordingKnown.NotRecorded (viewOf false false)) "and a recording the cap ate is no read at all"
+            Expect.isFalse (afforded RecordingKnown.Recorded (viewOf true false)) "a live terminal is not a recording yet"
 
         testCase "the screen is the only read exactly where a live terminal has no blocks" <| fun () ->
             // The live twin, and the rule a device needs. Gated on the LEASE, the screen
             // appeared only while somebody was typing — so a serial port nobody had taken
             // rendered an empty block list beside a stream arriving the whole time, and the
             // only way to see anything was to claim the keyboard.
-            let afforded view = (Affordances.ofView true view).ScreenIsTheRead
+            let afforded view = (Affordances.ofView RecordingKnown.Recorded view).ScreenIsTheRead
             let device = { viewOf true false with Sandbox = None }
             Expect.isTrue (afforded device) "an open stream with no blocks is its screen"
             Expect.isFalse (afforded (viewOf true false)) "a shell's read is the blocks it is about to have"
@@ -3956,7 +3992,7 @@ let private affordanceTests =
             // Why the rule asks the BLOCKS as well as the sandbox. A source that declared
             // `instrument` has no sandbox either, so the sandbox alone would take the block
             // read away from exactly the source that has one.
-            let afforded view = (Affordances.ofView true view).ScreenIsTheRead
+            let afforded view = (Affordances.ofView RecordingKnown.Recorded view).ScreenIsTheRead
             let instrumented =
                 { viewOf true false with
                     Sandbox = None
@@ -4354,6 +4390,19 @@ let private blockOverAnExitingShell () =
         return terminals, id, log, endShell
     }
 
+/// How the block running over an exiting shell ended, as the record says: the shell ends
+/// `how`, and the answer is the block's completion once the terminal is no longer busy.
+let private blockEndedByItsShell (how: SandboxRun) =
+    async {
+        let! terminals, id, log, endShell = blockOverAnExitingShell ()
+        endShell how
+        do!
+            waitUntilWithin 2_000 "the block to end when its shell did" (fun () ->
+                not (terminals.Busy () |> Set.contains (TerminalId.value id)))
+        let! events = eventsOf log
+        return events |> List.tryPick (function SessionEvent.TerminalBlockCompleted e -> Some e.Result | _ -> None)
+    }
+
 /// What a shell's exit does to the terminal it was the shell of. Two facts, because they
 /// fail apart: a block left running for ever is an agent waiting on news that never comes,
 /// and a terminal left open over a dead pty is a queue the drain keeps offering work to.
@@ -4364,16 +4413,33 @@ let private shellExitTests =
         // left `busy` and every command queued behind it waited for ever.
         testCaseAsync "a shell that exits ends the block it was running" <|
             async {
-                let! terminals, id, log, endShell = blockOverAnExitingShell ()
-                endShell (SandboxExited 0)
-                do!
-                    waitUntilWithin 2_000 "the block to end when its shell did" (fun () ->
-                        not (terminals.Busy () |> Set.contains (TerminalId.value id)))
-                let! events = eventsOf log
-                match events |> List.tryPick (function SessionEvent.TerminalBlockCompleted e -> Some e.Result | _ -> None) with
+                let! ended = blockEndedByItsShell (SandboxExited 0)
+                Expect.isSome ended "the block's completion is on the record"
+            }
+
+        // The command that ends a shell is the command whose code the shell exits with:
+        // `exit` never reaches the prompt hook that would have marked it, so the shell's code
+        // is the only word on it. Read as a failure, a plain `exit` showed "failed" beside a
+        // close notice saying the shell exited 0 — two surfaces, two answers.
+        testCaseAsync "a block its shell exited 0 under ends ok" <|
+            async {
+                let! ended = blockEndedByItsShell (SandboxExited 0)
+                Expect.equal ended (Some (CommandSucceeded 0)) "exit 0 is the command's exit 0"
+            }
+
+        testCaseAsync "a block its shell exited 3 under ends failed with 3" <|
+            async {
+                let! ended = blockEndedByItsShell (SandboxExited 3)
+                Expect.equal ended (Some (CommandFailed 3)) "exit 3 is still a failure, with its code"
+            }
+
+        // A signal says nothing about how the command went, so no code is made up for it.
+        testCaseAsync "a block its shell was signalled under ends naming the signal, with no code" <|
+            async {
+                match! blockEndedByItsShell (SandboxSignalled "SIGKILL") with
                 | Some (CommandExecutionFailed reason) ->
-                    Expect.isTrue (reason.Contains "the shell exited with code 0") "and says what happened to it"
-                | other -> failwithf "expected the block to end when its shell did, got %A" other
+                    Expect.isTrue (reason.Contains "the shell was ended by SIGKILL") "it says what ended the shell"
+                | other -> failwithf "expected the block to end without an exit code, got %A" other
             }
 
         // A terminal whose pty is gone can run nothing — nothing to type into, nothing to

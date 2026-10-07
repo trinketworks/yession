@@ -544,6 +544,7 @@ let promptOf (context: AgentContextPack) : string =
                     | BlockFinished (CommandFailed code) -> sprintf "exit %d" code
                     | BlockFinished (CommandExecutionFailed reason) -> sprintf "could not run: %s" reason
                     | BlockFinished CommandTimedOut -> "timed out"
+                    | BlockEnded reason -> sprintf "ended, exit status unknown: %s" reason
                     // The agent is told it was refused, and by whom. This is the feedback
                     // the review gate owes whoever it refused: without it a rejected
                     // command is indistinguishable from one that vanished, and the model
@@ -567,8 +568,8 @@ let promptOf (context: AgentContextPack) : string =
                 (blocks |> List.map render |> String.concat "\n\n")
     // A repo's root AGENTS.md, when it has one: rendered as its own quarantined section,
     // same instinct as `terminals` above and the same mechanism Claude Code uses for its
-    // own CLAUDE.md -- a tagged block inside the per-turn CONTENT, never folded into
-    // `SystemPrompt`. `SystemPrompt` is the operator speaking about their own host,
+    // own CLAUDE.md -- a tagged block inside the per-turn CONTENT, never folded into the
+    // system prompt. The system prompt carries the operator speaking about their own host,
     // trusted as such; this is whatever anyone who could land a PR chose to put at a
     // repo's root, and it stays labeled that way rather than concatenated in as if it
     // were the operator's own line. The tag is sanitized against a literal close tag
@@ -667,7 +668,10 @@ let registryFor (capabilities: AgentCapabilities) : ToolRegistry =
             own
     merged |> ToolUseLog.wrap capabilities.Tools.Record
 
-/// The Claude Agent SDK–backed `RunAgent`, over this session's data directory (the CLI's
+/// The Claude Agent SDK–backed `RunAgent`, over what the operator of this host wrote for the
+/// agent (`ProfileFile.Guidance`, read once at boot: the profile is the host's statement, and
+/// a host does not change its mind between turns, so the runner holds it rather than every
+/// turn carrying it), this session's data directory (the CLI's
 /// scratch HOME hangs off it), the backend that confines the CLI — decided once at
 /// session boot and passed in, never re-read here — and the turn's credential:
 /// `None` = the ambient credential variables pass through (the documented last resort
@@ -681,7 +685,7 @@ let registryFor (capabilities: AgentCapabilities) : ToolRegistry =
 /// interrupt cancels the live query promptly (the returned failure is then discarded
 /// by the orchestrator); the spawner's own kill fires only on the SDK's forwarded
 /// signal, after the graceful stdin-EOF window.
-let runWith (dataDir: string) (backend: SandboxBackend) (credential: (string * string) option) : RunAgent =
+let runWith (guidance: string option) (dataDir: string) (backend: SandboxBackend) (credential: (string * string) option) : RunAgent =
     fun context capabilities signal onChunk ->
         async {
             let cli = Sandboxes.AgentSandbox.prepare backend dataDir credential
@@ -690,7 +694,7 @@ let runWith (dataDir: string) (backend: SandboxBackend) (credential: (string * s
             let registry = registryFor capabilities
             let! outcome, usage =
                 runQuery
-                    context.SystemPrompt
+                    (AgentTurn.promptWith guidance)
                     (promptOf context)
                     // No choice is `None`, all the way down to the SDK option that is then
                     // not passed. The turn carries the choice rather than the runner holding
@@ -709,6 +713,7 @@ let runWith (dataDir: string) (backend: SandboxBackend) (credential: (string * s
         }
 
 /// The ambient-credential runner over a given data directory (existing call sites and the
-/// env fallback). The data dir is where the CLI's scratch HOME goes, so a caller that has no
-/// launch of its own passes `Launch.unlaunched.DataDir` and says so by doing it.
-let run (dataDir: string) (backend: SandboxBackend) : RunAgent = runWith dataDir backend None
+/// env fallback), with no operator guidance: a caller with no host profile has none to give.
+/// The data dir is where the CLI's scratch HOME goes, so a caller that has no launch of its
+/// own passes `Launch.unlaunched.DataDir` and says so by doing it.
+let run (dataDir: string) (backend: SandboxBackend) : RunAgent = runWith None dataDir backend None

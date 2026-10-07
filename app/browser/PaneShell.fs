@@ -385,73 +385,6 @@ let private toComposer () : unit =
     |> Option.orElseWith (fun () -> find "input[data-session-title]")
     |> focusOn
 
-/// Carry out a move the model asked for (`Yession.App.DomMove`) — the one place a move is
-/// turned into the document call that makes it, for the page and the harness alike.
-///
-/// A move that PLACES focus waits one frame, for the render that has to have happened, and
-/// then is judged and made in that same frame (`place`). A guarded move used to be judged a
-/// frame before it was made: the guard ran on the first frame and asked for the move, and the
-/// move waited a frame of its own. A hand put down in the frame between — the × of the tab
-/// whose shell had just died, focused in the frame after the swap dropped the keyboard on
-/// `body` — was then taken by a verdict about a `body` it had already left, and its Enter
-/// pressed the panel instead of the ×. A verdict about where the hand is is only true in the
-/// frame it is read, so it is acted on there or not at all.
-let rec move (asked: Yession.App.DomMove) : unit =
-    match asked with
-    | Yession.App.DomMove.RevealBlock (terminalId, blockId) ->
-        revealBlock (Yession.Domain.TerminalId.value terminalId) (Yession.Domain.BlockId.value blockId)
-    | Yession.App.DomMove.RevealMessage messageId -> revealMessage (Yession.Domain.MessageId.value messageId)
-    | Yession.App.DomMove.ScrollToLatest surface -> Tail.follow surface |> ignore
-    | Yession.App.DomMove.JumpToLatest surface -> jumpToLatest surface
-    | placing -> nextFrame (fun () -> place placing)
-
-/// A placing move, made NOW — `move` has already waited the frame. Every guard here is read in
-/// the frame its move is made, by the call that makes it.
-and private place (asked: Yession.App.DomMove) : unit =
-    match asked with
-    | Yession.App.DomMove.FocusPane -> toPane ()
-    | Yession.App.DomMove.FocusCommandLine terminal -> toCommandLine terminal
-    | Yession.App.DomMove.FocusPaneReopen -> toPaneReopen ()
-    | Yession.App.DomMove.FocusPaneEmpty -> toPaneEmpty ()
-    | Yession.App.DomMove.FocusSwitcherRow terminal -> toSwitcherRow terminal
-    | Yession.App.DomMove.FocusSwitcher -> toSwitcher ()
-    | Yession.App.DomMove.FocusPivot -> toPivot ()
-    | Yession.App.DomMove.FocusTab terminal -> toTab terminal
-    // A frame on, after the render the arrival caused — which is the render that took the
-    // pressed control away, so a hand still on it reads as stranded by then.
-    | Yession.App.DomMove.OnArrival inner -> if stranded [ "[data-content-panel]" ] then place inner
-    // The same frame on, and only for a hand that the render dropped — or that the last drop
-    // left on the panel, which is a catch rather than somewhere a reader chose to be.
-    | Yession.App.DomMove.IfDropped inner ->
-        let onPanel =
-            match document.activeElement with
-            | null -> false
-            | active -> active.hasAttribute Yession.App.Dom.Hooks.panePanel
-        if stranded [] || onPanel then place inner
-    | Yession.App.DomMove.FocusChat subject -> toChatItem subject
-    | Yession.App.DomMove.FocusItemActions messageId -> toItemActions (Yession.Domain.MessageId.value messageId)
-    | Yession.App.DomMove.FocusPaneNew -> toPaneNew ()
-    | Yession.App.DomMove.FocusComposer -> toComposer ()
-    // Not placements, and nothing guards one: made as `move` makes them.
-    | Yession.App.DomMove.RevealBlock _
-    | Yession.App.DomMove.RevealMessage _
-    | Yession.App.DomMove.ScrollToLatest _
-    | Yession.App.DomMove.JumpToLatest _ -> move asked
-    | Yession.App.DomMove.FocusTerminalScreen terminal -> toTerminalScreen terminal
-    | Yession.App.DomMove.FocusWatchToggle -> toWatchToggle ()
-    | Yession.App.DomMove.FocusNavToggle shown -> toNavToggle shown
-    | Yession.App.DomMove.FocusSettingsToggle opened -> toSettingsToggle opened
-
-/// The pane's open state, as a class on the shell root — the same mechanism the sidebar uses,
-/// so a Lit re-render never fights the CSS transition. A `set` rather than a toggle, because
-/// the model holds the bit and this only reflects it: the app opens this column itself
-/// whenever a chip or a tab is chosen. The served shell (`Ssr.page`) writes the same class
-/// from the same field before the first paint, so the first call here changes nothing —
-/// which is the point: a column that painted open and was then shut is a jump.
-let setOpen (isOpen: bool) : unit =
-    if isOpen then document.documentElement.classList.remove [| Yession.App.Dom.termClosedClass |]
-    else document.documentElement.classList.add [| Yession.App.Dom.termClosedClass |]
-
 /// The pane's tab strip scrolls sideways, and a scroll box keeps nothing in view by itself: the
 /// fourth terminal at the pane's default width opened past the right-hand edge, selected and
 /// invisible, and the arrow walk moved focus onto tabs nobody could see. Where to scroll is
@@ -488,50 +421,96 @@ module private Strip =
         |> Option.iter (fun left -> scroller.scrollLeft <- left)
         mark scroller
 
-    /// The least scroll that shows this tab's START clear of the edges — where its name
-    /// begins, and where a press on it landed — and none when it already is.
-    let revealStart (scroller: HTMLElement) (tab: HTMLElement) : unit =
-        let box = scroller.getBoundingClientRect ()
-        let span = tab.getBoundingClientRect ()
-        let start = span.left - box.left - scroller.clientLeft + scroller.scrollLeft
-        Yession.App.TabStrip.reveal (port scroller) start (start + min span.width 1.0)
-        |> Option.iter (fun left -> scroller.scrollLeft <- left)
-        mark scroller
-
-    /// The selected tab's key (and width) at the last render that revealed it. A reveal on EVERY render
-    /// would take the strip back from a reader scrolling it to look at the other tabs the
-    /// moment anything at all arrived; on a CHANGE of selection it is the reader's own act (or
-    /// a collaborator's `TabOpened`) being answered.
-    let mutable private revealed = ""
-
-    let sync () : unit =
+    /// The pivot's selected tab scrolled into view whole, when the model has said the strip
+    /// owes a reveal (`DomMove.RevealPivot`). A strip with no width is not laid out, and
+    /// measures zero for everything, so it is left alone; the column opening is a reveal of
+    /// its own.
+    let revealSelected () : unit =
         match find selector with
-        | None -> revealed <- ""
-        | Some scroller ->
-            // A strip with no width is not laid out, and measures zero for everything — and
-            // remembering its selection as revealed would skip the reveal once it is.
-            if scroller.clientWidth > 0.0 then
-                match scroller.querySelector "[role=\"tab\"][aria-selected=\"true\"]" with
-                | null -> revealed <- ""
-                | selected ->
-                    let selected = selected :?> HTMLElement
-                    // Its WIDTH too: arming its × widens the selected tab (P2-2). But a tab
-                    // that only GREW is kept by its start, where it was: the arming is a
-                    // press, and the confirm is only a confirm if the spot that was pressed
-                    // is still the control — a strip that scrolled the grown tab whole into
-                    // view slid the armed kill out from under the second press. So a new
-                    // selection is revealed whole, and a wider one only if its start left.
-                    let width = sprintf "%.0f" (selected.getBoundingClientRect ()).width
-                    let key = selected.id + " " + width
-                    if key <> revealed then
-                        let sameTab = revealed.StartsWith (selected.id + " ")
-                        revealed <- key
-                        if sameTab then revealStart scroller selected else reveal scroller selected
-                mark scroller
+        | Some scroller when scroller.clientWidth > 0.0 ->
+            match scroller.querySelector "[role=\"tab\"][aria-selected=\"true\"]" with
+            | null -> mark scroller
+            | selected -> reveal scroller (selected :?> HTMLElement)
+        | Some _ | None -> ()
 
-/// After every render: the selected tab in view if the selection changed, and the strip's
-/// fade on whichever ends have tabs past them.
-let syncStrip () : unit = Strip.sync ()
+    /// The strip's fade, on whichever ends have tabs past them.
+    let markShown () : unit = find selector |> Option.iter mark
+
+/// Carry out a move the model asked for (`Yession.App.DomMove`) — the one place a move is
+/// turned into the document call that makes it, for the page and the harness alike.
+///
+/// A move that PLACES focus waits one frame, for the render that has to have happened, and
+/// then is judged and made in that same frame (`place`). A guarded move used to be judged a
+/// frame before it was made: the guard ran on the first frame and asked for the move, and the
+/// move waited a frame of its own. A hand put down in the frame between — the × of the tab
+/// whose shell had just died, focused in the frame after the swap dropped the keyboard on
+/// `body` — was then taken by a verdict about a `body` it had already left, and its Enter
+/// pressed the panel instead of the ×. A verdict about where the hand is is only true in the
+/// frame it is read, so it is acted on there or not at all.
+let rec move (asked: Yession.App.DomMove) : unit =
+    match asked with
+    | Yession.App.DomMove.RevealBlock (terminalId, blockId) ->
+        revealBlock (Yession.Domain.TerminalId.value terminalId) (Yession.Domain.BlockId.value blockId)
+    | Yession.App.DomMove.RevealMessage messageId -> revealMessage (Yession.Domain.MessageId.value messageId)
+    | Yession.App.DomMove.ScrollToLatest surface -> Tail.follow surface |> ignore
+    | Yession.App.DomMove.JumpToLatest surface -> jumpToLatest surface
+    // A frame on, for the render that drew the selection; not a placement, so not guarded.
+    | Yession.App.DomMove.RevealPivot -> nextFrame Strip.revealSelected
+    | placing -> nextFrame (fun () -> place placing)
+
+/// A placing move, made NOW — `move` has already waited the frame. Every guard here is read in
+/// the frame its move is made, by the call that makes it.
+and private place (asked: Yession.App.DomMove) : unit =
+    match asked with
+    | Yession.App.DomMove.FocusPane -> toPane ()
+    | Yession.App.DomMove.FocusCommandLine terminal -> toCommandLine terminal
+    | Yession.App.DomMove.FocusPaneReopen -> toPaneReopen ()
+    | Yession.App.DomMove.FocusPaneEmpty -> toPaneEmpty ()
+    | Yession.App.DomMove.FocusSwitcherRow terminal -> toSwitcherRow terminal
+    | Yession.App.DomMove.FocusSwitcher -> toSwitcher ()
+    | Yession.App.DomMove.FocusPivot -> toPivot ()
+    | Yession.App.DomMove.FocusTab terminal -> toTab terminal
+    // A frame on, after the render the arrival caused — which is the render that took the
+    // pressed control away, so a hand still on it reads as stranded by then.
+    | Yession.App.DomMove.OnArrival inner -> if stranded [ "[data-content-panel]" ] then place inner
+    // The same frame on, and only for a hand that the render dropped — or that the last drop
+    // left on the panel, which is a catch rather than somewhere a reader chose to be.
+    | Yession.App.DomMove.IfDropped inner ->
+        let onPanel =
+            match document.activeElement with
+            | null -> false
+            | active -> active.hasAttribute Yession.App.Dom.Hooks.panePanel
+        if stranded [] || onPanel then place inner
+    | Yession.App.DomMove.FocusChat subject -> toChatItem subject
+    | Yession.App.DomMove.FocusItemActions messageId -> toItemActions (Yession.Domain.MessageId.value messageId)
+    | Yession.App.DomMove.FocusPaneNew -> toPaneNew ()
+    | Yession.App.DomMove.FocusComposer -> toComposer ()
+    // Not placements, and nothing guards one: made as `move` makes them.
+    | Yession.App.DomMove.RevealBlock _
+    | Yession.App.DomMove.RevealMessage _
+    | Yession.App.DomMove.ScrollToLatest _
+    | Yession.App.DomMove.JumpToLatest _ -> move asked
+    | Yession.App.DomMove.RevealPivot -> Strip.revealSelected ()
+    | Yession.App.DomMove.FocusTerminalScreen terminal -> toTerminalScreen terminal
+    | Yession.App.DomMove.FocusWatchToggle -> toWatchToggle ()
+    | Yession.App.DomMove.FocusNavToggle shown -> toNavToggle shown
+    | Yession.App.DomMove.FocusSettingsToggle opened -> toSettingsToggle opened
+
+/// The pane's open state, as a class on the shell root — the same mechanism the sidebar uses,
+/// so a Lit re-render never fights the CSS transition. A `set` rather than a toggle, because
+/// the model holds the bit and this only reflects it: the app opens this column itself
+/// whenever a chip or a tab is chosen. The served shell (`Ssr.page`) writes the same class
+/// from the same field before the first paint, so the first call here changes nothing —
+/// which is the point: a column that painted open and was then shut is a jump.
+let setOpen (isOpen: bool) : unit =
+    if isOpen then document.documentElement.classList.remove [| Yession.App.Dom.termClosedClass |]
+    else document.documentElement.classList.add [| Yession.App.Dom.termClosedClass |]
+
+/// After every render: the strip's fade on whichever ends have tabs past them. Which tab is in
+/// view is the model's to ask for (`ClientModel.pivotReveal`), never every render's: a reveal
+/// on EVERY render would take the strip back from a reader scrolling it to look at the other
+/// tabs the moment anything at all arrived.
+let syncStrip () : unit = Strip.markShown ()
 
 /// The listeners that keep the strip honest between renders — bound once per page, delegated
 /// from the document so they survive Lit replacing the strip.
@@ -540,8 +519,8 @@ let syncStrip () : unit = Strip.sync ()
 /// neighbour a Delete hands focus to, Tab). Only KEYBOARD focus, which is what `:focus-visible`
 /// says: a pointer pressing a half-hidden tab focuses it on the way down, and a strip that
 /// scrolled under the pointer then would release it over a different tab — a click whose two
-/// halves land on different elements goes to neither. A pointer's selection is revealed after
-/// the render it causes, by `syncStrip`.
+/// halves land on different elements goes to neither. A pointer's selection is revealed a frame
+/// after the render it causes (`DomMove.RevealPivot`).
 let installStrip () : unit =
     document.addEventListener (
         "focusin",
@@ -561,7 +540,7 @@ let installStrip () : unit =
             | _ -> ()),
         true)
     // A narrower window is a narrower strip, and what fits changes with it.
-    window.addEventListener ("resize", fun _ -> Strip.sync ())
+    window.addEventListener ("resize", fun _ -> Strip.markShown ())
 
 /// What this browser had open in one session's pane, kept across a reload (P0-4): the strip,
 /// the pins, the tab on top and whether the column was open. Per session, because a strip is

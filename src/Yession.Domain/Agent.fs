@@ -92,7 +92,7 @@ type AgentContextPack =
       /// The session's repos, as of this turn's projection read -- carried alongside
       /// `Terminals` for the same reason: this is repo-authored (or empty), not
       /// something the operator or the product said, and `promptOf` treats it that way
-      /// (its own quarantined section, never folded into `SystemPrompt`).
+      /// (its own quarantined section, never folded into the system prompt).
       Repos          : SessionRepo list
       /// Which model to run this turn on, when the session has picked one. `None` means
       /// "whatever the provider would have chosen", which is the honest default: no
@@ -110,8 +110,7 @@ type AgentContextPack =
       /// Who is who here, folded from the same page as `Conversation` — so the transcript
       /// can call each person by the name everybody else sees them under, and a message
       /// that says "@swift-heron" names somebody the agent can find in it.
-      People         : Attribution.State
-      SystemPrompt   : string }
+      People         : Attribution.State }
 
 /// What a runner streams, in the order it arrives. `Text` is the model speaking. A
 /// `MessageBoundary` is the model having begun its next message — after a tool call, in
@@ -200,6 +199,10 @@ type TerminalHeldBy =
 type TerminalCommandStatus =
     /// It ran to an outcome. The ordinary answer.
     | TerminalCommandRan of CommandResult
+    /// It is not running any more, and nothing on the record says how it went: its terminal
+    /// closed under it with no completion (`BlockEnded`). Carries the close's reason. Not a
+    /// `CommandResult`, for that case's reason: any result would be a guess.
+    | TerminalCommandEnded of reason: string
     /// Still going when the deadline fell. A yield, not a cancellation: the block runs on and
     /// the handle resumes it.
     | TerminalCommandRunning

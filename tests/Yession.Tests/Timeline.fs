@@ -416,6 +416,13 @@ let private clientOf (events: EventEnvelope<SessionEvent> list) : ClientModel =
         (EventsPageMsg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true })
         (ClientModel.init { PeerId = ada; DisplayName = "swift-heron" })
 
+/// What a message asked for, less the strip bringing its selected tab into view
+/// (`ClientModel.pivotReveal`): that rides along with every change of selection, scrolls the
+/// strip and places no focus, which is what the cases reading this are about. Its own cases
+/// pin it ("The strip's selected tab in view").
+let private unrevealed (effects: ClientEffect list) : ClientEffect list =
+    effects |> List.filter ((<>) (ClientEffect.Move DomMove.RevealPivot))
+
 /// One MORE page, into a client that has already folded some. The live path, and the only
 /// one these cases can be written on: a terminal you press for arrives after the pane
 /// already has a choice on it, which is the whole of what went wrong.
@@ -1164,6 +1171,16 @@ let private endedAs (result: CommandResult) : string =
     |> Support.step (ShowInPaneMsg (Reading terminalA))
     |> Support.render
 
+/// One command in terminal A whose terminal then closed with no completion saying how it
+/// went — a log from before the Process appended one — with terminal A on screen.
+let private cutOffByItsClose () : string =
+    clientOf
+        [ at 1L 0.0 (opened terminalA "build")
+          at 2L 1.0 (started terminalA "1" byAda "exit" 1)
+          at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "the shell exited with code 0"; By = Some ActorRef.System }) ]
+    |> Support.step (ShowInPaneMsg (Reading terminalA))
+    |> Support.render
+
 /// Every status mark drawn inside `html`, by the token it carries.
 let private marksIn (html: string) : string list =
     Text.RegularExpressions.Regex.Matches (html, Dom.Hooks.blockMark + "=\"([^\"]*)\"")
@@ -1204,6 +1221,16 @@ let private statusTests =
                     (endedAs (CommandExecutionFailed "the session stopped while it was running"))
             Expect.isTrue (block.Contains Dom.Hooks.terminalBlockFacts) "the facts are rendered"
             Expect.isFalse (block.Contains "<details") "and nothing has to be opened to read them"
+
+        testCase "a block that ended with nothing saying how is marked ended, not failed, in the pane and the chat" <| fun () ->
+            // Called failed, a shell's `exit` read FAILED beside a close notice saying the shell
+            // exited 0. Nothing on this record says it failed, so no surface may.
+            Expect.equal
+                (let html = cutOffByItsClose ()
+                 [ marksIn (markupAt (Dom.attr Dom.Hooks.terminalBlock "b-1") html)
+                   marksIn (markupAt (Dom.attr Dom.Hooks.chatBlock "b-1") html) ])
+                [ [ Dom.Text.blockEnded ]; [ Dom.Text.blockEnded ] ]
+                "one mark on each surface, and it says ended"
 
         testCase "a terminal running a command marks its tab, and an idle one does not" <| fun () ->
             let strip = Support.render (clientOf threeUntitled |> showingAll)
@@ -2895,14 +2922,14 @@ let private listTests =
             // fetched; a CLOSED one's records arrive as chunks with no live hint behind
             // them. Asking only one of the two would refuse the verb the other one earns.
             let model = clientOf [ at 1L 0.0 (opened terminalA "build") ]
-            Expect.isFalse (ClientModel.hasRecording terminalA model) "nothing has arrived yet"
+            Expect.equal (ClientModel.recordingOf terminalA model) RecordingKnown.NotYetKnown "nothing has arrived yet"
             let byHint = Support.step (TerminalAvailableMsg (terminalA, 12)) model
-            Expect.isTrue (ClientModel.hasRecording terminalA byHint) "a live terminal's length"
+            Expect.equal (ClientModel.recordingOf terminalA byHint) RecordingKnown.Recorded "a live terminal's length"
             let byRecord =
                 Support.step
                     (TerminalRecordsMsg (terminalA, [ 0, { At = 0.0; Kind = TranscriptOutput; Data = "hi" } ]))
                     model
-            Expect.isTrue (ClientModel.hasRecording terminalA byRecord) "a fetched record"
+            Expect.equal (ClientModel.recordingOf terminalA byRecord) RecordingKnown.Recorded "a fetched record"
 
         testCase "choosing a terminal in the switcher selects its tab" <| fun () ->
             let model =
@@ -2925,7 +2952,7 @@ let private listTests =
                 clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
                 |> Support.step ToggleSwitcherMsg
             let _, effects = ClientModel.update (OpenInPaneMsg (Reading terminalB)) switching
-            Expect.equal effects [ ClientEffect.Move (DomMove.FocusCommandLine terminalB) ] "onto what a terminal is for"
+            Expect.equal (unrevealed effects) [ ClientEffect.Move (DomMove.FocusCommandLine terminalB) ] "onto what a terminal is for"
 
         testCase "Escape leaves the all page for the item it was laid over" <| fun () ->
             // Escape is `CloseSwitcherMsg` (the pane's keydown): the page leaves the document
@@ -2933,7 +2960,7 @@ let private listTests =
             let switching = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step ToggleSwitcherMsg
             let model, effects = ClientModel.update CloseSwitcherMsg switching
             Expect.isFalse model.Switcher "left"
-            Expect.equal effects [ ClientEffect.Move DomMove.FocusPivot ] "onto the pivot's selected item"
+            Expect.equal (unrevealed effects) [ ClientEffect.Move DomMove.FocusPivot ] "onto the pivot's selected item"
 
         testCase "opening the switcher takes focus into it" <| fun () ->
             let _, effects = ClientModel.update ToggleSwitcherMsg (clientOf [ at 1L 0.0 (opened terminalA "build") ])
@@ -3593,7 +3620,7 @@ let private tabTests =
         testCase "a chip that opens a preview takes the reader to the pane" <| fun () ->
             // One message for both halves, so no chip can open a pane and leave focus behind it.
             let _, effects = ClientModel.update (chip terminalA "1") (clientOf oneBlock)
-            let moves = effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
+            let moves = unrevealed effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
             Expect.equal moves [ ClientEffect.Move DomMove.FocusPane ] "focus is asked to follow it"
 
         // Where focus lands after each act in the pane (the focus contract). Every one of these
@@ -3607,13 +3634,13 @@ let private tabTests =
                 ClientModel.update
                     (OpenInPaneMsg (Reading terminalA))
                     (clientOf [ at 1L 0.0 (opened terminalA "build") ])
-            Expect.equal effects [ ClientEffect.Move (DomMove.FocusCommandLine terminalA) ] "onto the command line"
+            Expect.equal (unrevealed effects) [ ClientEffect.Move (DomMove.FocusCommandLine terminalA) ] "onto the command line"
 
         testCase "showing the pane lands on the shown terminal's command line" <| fun () ->
             let shut = clientOf [ at 1L 0.0 (opened terminalA "build") ]
             Expect.isFalse shut.TerminalsOpen "the pane starts shut"
             let _, effects = ClientModel.update ToggleContentMsg shut
-            Expect.equal effects [ ClientEffect.Move (DomMove.FocusCommandLine terminalA) ] "onto the command line"
+            Expect.equal (unrevealed effects) [ ClientEffect.Move (DomMove.FocusCommandLine terminalA) ] "onto the command line"
 
         testCase "showing an empty pane lands on the press that fills it" <| fun () ->
             let _, effects = ClientModel.update ToggleContentMsg (clientOf [])
@@ -3806,7 +3833,7 @@ let private tabTests =
                     (EventsPageMsg { Events = [ at 2L 1.0 (opened terminalB "new") ]; LastOffset = Some (EventOffset.create 2L |> expect); IsEnd = true })
                     asked
             Expect.equal
-                effects
+                (unrevealed effects)
                 [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusCommandLine terminalB)) ]
                 "onto the new terminal's command line, if the hand is still in the pane"
 
@@ -3884,7 +3911,7 @@ let private tabTests =
                           LastOffset = Some (EventOffset.create 3L |> expect)
                           IsEnd = true })
                     pressed
-            Expect.equal effects [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusTab terminalA)) ] "onto its own tab"
+            Expect.equal (effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)) [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusTab terminalA)) ] "onto its own tab"
 
         testCase "a terminal somebody else ends moves no focus" <| fun () ->
             let rows = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
@@ -3926,7 +3953,7 @@ let private tabTests =
                           LastOffset = Some (EventOffset.create 2L |> expect)
                           IsEnd = true })
                     reading
-            Expect.equal effects [ ClientEffect.Move (DomMove.IfDropped (DomMove.FocusCommandLine terminalA)) ] "where the pane still is"
+            Expect.equal (effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)) [ ClientEffect.Move (DomMove.IfDropped (DomMove.FocusCommandLine terminalA)) ] "where the pane still is"
 
         testCase "a lease taken by somebody else lands a dropped keyboard where the pane lands" <| fun () ->
             // The command line goes, for their bar: there is nothing to type into, and the
@@ -3981,7 +4008,7 @@ let private tabTests =
                           LastOffset = Some (EventOffset.create 4L |> expect)
                           IsEnd = true })
                     previewing
-            Expect.equal effects [] "the preview is still there"
+            Expect.equal (effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)) [] "the preview is still there"
 
         testCase "a terminal's face changing in a log being replayed moves nothing" <| fun () ->
             // On load, focus rests on `body` because the page has just loaded, not because a
@@ -4000,7 +4027,7 @@ let private tabTests =
                     replayed
             // Only the moves: the same page may anchor the launch card, which asks for its
             // listing, and that is not what this is about.
-            let moves = effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
+            let moves = unrevealed effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
             Expect.equal moves [] "history is not a swap"
 
         // A refused kill is an ANSWER to the press, as a refused New terminal is (P0-6): left
@@ -4176,7 +4203,7 @@ let private tabTests =
         testCase "show in terminal scrolls the history to the command and focuses the pane" <| fun () ->
             let _, effects = ClientModel.update (ShowInTerminalMsg (terminalA, block "1")) (clientOf [ at 1L 0.0 (opened terminalA "build") ])
             Expect.equal
-                effects
+                (unrevealed effects)
                 [ ClientEffect.Move (DomMove.RevealBlock (terminalA, block "1")); ClientEffect.Move DomMove.FocusPane ]
                 "scrolled to, then focused, in that order"
 
@@ -4506,6 +4533,11 @@ let private tallyTests =
             // counted `exit 2` apart from `timed out` would be longer and say less.
             Expect.equal (TaskCard.stateOf (BlockFinished (CommandFailed 2))) TaskFailed "exit 2 failed"
             Expect.equal (TaskCard.stateOf (BlockFinished CommandTimedOut)) TaskFailed "so did the timeout"
+
+        testCase "a block that ended with nothing saying how is not counted failed" <| fun () ->
+            // Its terminal closed under it and no completion followed. Counting it failed
+            // would be a guess, and red is what a person scanning a card acts on.
+            Expect.equal (TaskCard.stateOf (BlockEnded "the shell exited with code 0")) TaskDone "over, not wrong"
 
         testCase "the summary counts every command once" <| fun () ->
             let states = [ TaskDone; TaskFailed; TaskDone; TaskRunning; TaskDone ]
@@ -5163,6 +5195,33 @@ let private ptyResizeTests =
             Expect.equal (resizes effects) [ ClientEffect.ResizeTerminal (terminalA, wide) ] "the box the holder already has"
     ]
 
+/// Whether a message asked the strip to bring its selected tab into view.
+let private reveals (msg: ClientMsg) (model: ClientModel) : bool =
+    ClientModel.update msg model |> snd |> List.contains (ClientEffect.Move DomMove.RevealPivot)
+
+let private revealTests =
+    let twoOpen () = heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "shell") ]
+    testList "The strip's selected tab in view" [
+        testCase "a newly selected tab is revealed" <| fun () ->
+            let model = twoOpen () |> Support.step (ShowInPaneMsg (Reading terminalA))
+            Expect.isTrue (reveals (ShowInPaneMsg (Reading terminalB)) model) "the tab just chosen"
+
+        testCase "the tab already selected is not revealed again" <| fun () ->
+            let model = twoOpen () |> Support.step (ShowInPaneMsg (Reading terminalB))
+            Expect.isFalse (reveals (ShowInPaneMsg (Reading terminalB)) model) "the strip stays where the reader has it"
+
+        // Arming the × widens the tab, and a strip that scrolled the grown tab whole into view
+        // slid the armed kill out from under the second press.
+        testCase "a kill armed on the selected tab reveals nothing" <| fun () ->
+            let model = twoOpen () |> Support.step (ShowInPaneMsg (Reading terminalB))
+            Expect.isFalse (reveals (KillPressedMsg terminalB) model) "the confirm stays under the press"
+
+        testCase "the column opening reveals the tab selected behind it" <| fun () ->
+            let model = twoOpen () |> Support.step (ShowInPaneMsg (Reading terminalB)) |> Support.step ToggleContentMsg
+            Expect.isFalse model.TerminalsOpen "shut, or this proves nothing"
+            Expect.isTrue (reveals ToggleContentMsg model) "a shut strip could not be measured"
+    ]
+
 let private presenceTests =
     let caret : Link.Focus = { Field = Link.FocusField.Title; Pos = { Anchor = "AQI="; Head = "AQI=" } }
     let reading = Some (ViewingTerminal terminalA)
@@ -5265,6 +5324,11 @@ let private readLoopTests =
         next, effects |> List.pick (function ClientEffect.ReadTranscript (_, read, _) -> Some read | _ -> None)
     /// A live record at line 0 of a terminal nothing has been read of: one read out, from 0.
     let readingTranscript () = askingTranscript (live 0) fresh
+    /// A terminal opened and closed, as a page — what a reader who arrives later is handed.
+    let closedPage (terminal: TerminalId) : EventPage<SessionEvent> =
+        { Events = [ at 1L 0.0 (opened terminal "build"); at 2L 1.0 (closedNow terminal) ]
+          LastOffset = Some (offset 2L)
+          IsEnd = true }
 
     testList "What the read loop asks for" [
         // --- The event log ---
@@ -5413,6 +5477,39 @@ let private readLoopTests =
             let _, effects = ClientModel.update (TranscriptReadMsg (terminalA, read, Some (linesOf 0 1 true))) lost
             Expect.equal (transcriptReads effects) [] "nothing owed survives the connection it was owed on"
 
+        // --- A closed terminal's recording, for a reader who was not there ---
+        // A closed terminal sends no live record and no length at a join, so nothing else
+        // would ever ask: a reader who arrived after it closed held nothing of a recording
+        // sitting intact in the store, and was told it was lost.
+        testCase "acceptance asks for the recording of a closed terminal nothing here has heard of" <| fun () ->
+            let model = fresh |> Support.step (EventsPageMsg (closedPage terminalA))
+            let _, effects = ClientModel.update (accepted None) model
+            Expect.equal (transcriptReads effects) [ terminalA, 0 ] "read from its first line"
+
+        testCase "an event page that brings a closed terminal asks for its recording" <| fun () ->
+            let connected = fresh |> Support.step (accepted None)
+            let _, effects = ClientModel.update (EventsPageMsg (closedPage terminalA)) connected
+            Expect.equal (transcriptReads effects) [ terminalA, 0 ] "read from its first line"
+
+        testCase "a closed terminal whose recording this client holds is not asked about" <| fun () ->
+            let held =
+                fresh
+                |> Support.step (EventsPageMsg (closedPage terminalA))
+                |> Support.step (TerminalPageMsg (terminalA, [ 1, output ], None, 2))
+            let _, effects = ClientModel.update (accepted None) held
+            Expect.equal (transcriptReads effects) [] "it has what it needs"
+
+        testCase "an empty answer from line 0 says the store holds no recording" <| fun () ->
+            let reading, read = askingTranscript (accepted None) (fresh |> Support.step (EventsPageMsg (closedPage terminalA)))
+            let answered = reading |> Support.step (TranscriptReadMsg (terminalA, read, Some (linesOf 0 0 true)))
+            Expect.equal (ClientModel.recordingOf terminalA answered) RecordingKnown.NotRecorded "known absent"
+
+        testCase "a failed read from line 0 leaves the recording unknown" <| fun () ->
+            // Not lost: the store has not said anything yet.
+            let reading, read = askingTranscript (accepted None) (fresh |> Support.step (EventsPageMsg (closedPage terminalA)))
+            let failed = reading |> Support.step (TranscriptReadMsg (terminalA, read, None))
+            Expect.equal (ClientModel.recordingOf terminalA failed) RecordingKnown.NotYetKnown "still unheard"
+
         testCase "a transcript answer to a read the last connection asked leaves the new read out" <| fun () ->
             let reading, stale = readingTranscript ()
             let again, _ = askingTranscript (live 1) (reading |> Support.step (accepted None))
@@ -5454,5 +5551,6 @@ let tests =
         dvrTests
         ptyResizeTests
         presenceTests
+        revealTests
         readLoopTests
     ]

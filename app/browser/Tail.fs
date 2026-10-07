@@ -151,22 +151,23 @@ let private pressedIn (target: Node) : (HTMLElement * Element) option =
 /// to latest" from it (`ClientModel.Away`). Set once, by `attach`.
 let mutable private tell : ClientMsg -> unit = ignore
 
-/// What the model was last told about each surface. A surface it has not been told about is
-/// one it takes to be followed, which is where every reader arrives.
-let private told = System.Collections.Generic.Dictionary<string, bool> ()
+/// The surfaces the model holds as away (`ClientModel.Away`), read off the latest model each
+/// time it is asked. Set once, by `attach`.
+let mutable private away : unit -> Set<TailSurface> = fun () -> Set.empty
 
-/// Tell the model about every reader whose following has changed since it was last told —
-/// the same answer the scroll is kept by, so the control is on screen exactly when the surface
-/// is not being kept at its end. Gathered first and told after, because telling renders, and
-/// a render rebuilds `readers`.
+/// Tell the model about every reader whose following it has wrong — the same answer the
+/// scroll is kept by, so the control is on screen exactly when the surface is not being kept
+/// at its end. Gathered first and told after, because telling renders, and a render rebuilds
+/// `readers`.
 let private report () : unit =
+    let held = away ()
     let changed =
         [ for KeyValue (key, reader) in readers do
-              let was = match told.TryGetValue key with | true, following -> following | false, _ -> true
-              if was <> reader.Following then yield key, reader.Following ]
-    for key, following in changed do
-        told.[key] <- following
-        TailSurface.ofKey key |> Option.iter (fun surface -> tell (ReaderMovedMsg (surface, following)))
+              match TailSurface.ofKey key with
+              | Some surface when Set.contains surface held = reader.Following -> yield surface, reader.Following
+              | Some _ | None -> () ]
+    for surface, following in changed do
+        tell (ReaderMovedMsg (surface, following))
 
 /// Where each surface's reader stands, taken before a render moves anything.
 type Before = private Before of Map<string, float option>
@@ -295,8 +296,9 @@ let follow (surface: TailSurface) : HTMLElement option =
 /// render that opens it has to find the place already taken (`Press`). A key that presses a
 /// control is a click too, and the click says which it was: one a key made counts no clicks
 /// (`detail` is 0), one a pointer made counts at least one.
-let attach (dispatch: ClientMsg -> unit) : unit =
+let attach (dispatch: ClientMsg -> unit) (awayNow: unit -> Set<TailSurface>) : unit =
     tell <- dispatch
+    away <- awayNow
     document.addEventListener (
         "click",
         (fun event ->

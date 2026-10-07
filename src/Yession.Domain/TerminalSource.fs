@@ -219,6 +219,22 @@ module Source =
         | SandboxSignalled signal -> sprintf "the shell was ended by %s" signal
         | SandboxRunFailed reason -> sprintf "the shell stopped: %s" reason
 
+    /// How a command the shell was running ENDED, when the shell's own end is the only
+    /// word on it. A command that ends its shell — `exit`, `exit 3`, an `exec` that
+    /// returns — never reaches the prompt hook that would have marked it finished, so the
+    /// shell's exit code is the command's: it is exactly what `exit` was asked to say.
+    ///
+    /// `None` where the shell did not exit with a code. A signal or a sandbox that stopped
+    /// says nothing about how the command went, and a code made up for it would be the
+    /// invented fact this exists to replace: an `exit` read as a failure beside a close
+    /// notice saying the shell exited 0.
+    let shellEndedResult (ending: SandboxRun) : CommandResult option =
+        match ending with
+        | SandboxExited 0 -> Some (CommandSucceeded 0)
+        | SandboxExited code -> Some (CommandFailed code)
+        | SandboxSignalled _
+        | SandboxRunFailed _ -> None
+
 /// Reach a byte stream somebody else is producing, and hand back a handle shaped exactly
 /// like a pty's.
 ///
