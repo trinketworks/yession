@@ -131,3 +131,23 @@ module ModelCatalogue =
     /// all — none of which is what somebody scanning a list is looking for.
     let ordered (models: AgentModel list) : AgentModel list =
         models |> List.sortBy (fun m -> m.Name.ToLowerInvariant (), ModelId.value m.Id)
+
+/// How the agent's prompt is put together: which rules run for a turn, and where each one's
+/// text goes (`Prompting` in Yession.Session holds every strategy's rules). Closed on purpose:
+/// a strategy is code, chosen by name, never supplied from outside.
+[<RequireQualifiedAccess>]
+type PromptStrategy =
+    /// Every product section in the system prompt, the operator's guidance after them, and
+    /// the turn's context as one message.
+    | Static
+
+module PromptStrategy =
+
+    /// The spelling an operator writes and a reader is shown. One table, so a strategy cannot
+    /// be read under one name and reported under another.
+    let name (strategy: PromptStrategy) : string =
+        match strategy with
+        | PromptStrategy.Static -> "static"
+
+    /// Every strategy. A new case breaks `name` above, which is the reminder to list it here.
+    let all : PromptStrategy list = [ PromptStrategy.Static ]

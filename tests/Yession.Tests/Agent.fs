@@ -117,41 +117,6 @@ let private turnTests =
                     "the thought is its own event, and the message is untouched by it"
             }
 
-        // The prompt is two authors' words in one string, and the ORDER is the invariant: the
-        // product's core first, the operator's after it, introduced as theirs. A host that
-        // wrote nothing gets the core and not a dangling introduction.
-        testCase "a host that wrote no guidance gets the core alone" <| fun () ->
-            Expect.equal (AgentTurn.promptWith None) AgentTurn.systemPrompt "no guidance, no introduction"
-
-        testCase "the operator's words follow the whole core" <| fun () ->
-            let guided = AgentTurn.promptWith (Some "Never push to main on this host.")
-            Expect.isTrue (guided.StartsWith AgentTurn.systemPrompt) "the core comes first, whole"
-            Expect.isTrue (guided.EndsWith "Never push to main on this host.") "the operator's words come last, whole"
-
-        testCase "a line between the core and the operator's words says whose they are" <| fun () ->
-            let guided = AgentTurn.promptWith (Some "Never push to main on this host.")
-            Expect.stringContains (guided.Substring AgentTurn.systemPrompt.Length) "operator" "the introduction names the operator"
-
-        // Where scratch goes is part of the core, not the operator's to add: the directory is
-        // one the BUILD sets, and `/tmp` is denied on a host the operator's words never mention.
-        testCase "the core says scratch goes under $TMPDIR, not /tmp" <| fun () ->
-            Expect.stringContains AgentTurn.systemPrompt "$TMPDIR" "the core names the scratch directory"
-            Expect.stringContains AgentTurn.systemPrompt "/tmp" "and names /tmp as not the agent's"
-
-        // The default sandbox is not guaranteed a language runtime — python is a stub on a
-        // Mac, absent on a minimal host — so the core says not to count on one. An agent that
-        // reached for python here lost turns to the stub.
-        testCase "the core warns that a language runtime is not assured" <| fun () ->
-            Expect.stringContains AgentTurn.systemPrompt "language runtime" "the core warns a runtime is not assured"
-
-        // The file tools are what the prompt steers to; the shell is for what only a shell
-        // does. It used to say the opposite — "edit with sed and awk" — and every edit reached
-        // the timeline as a head/tail/mv line nobody could read as an edit.
-        testCase "the core steers file work to the file tools, not the shell" <| fun () ->
-            Expect.stringContains AgentTurn.systemPrompt "edit_file" "names the tool to edit with"
-            Expect.stringContains AgentTurn.systemPrompt "read_file" "and the one to read with"
-            Expect.isFalse (AgentTurn.systemPrompt.Contains "edit with sed") "the shell is no longer the way to edit"
-
         // A turn whose only output was reasoning and tool calls SAID nothing, and the
         // transcript has to go on reading that way — otherwise recording the thinking would
         // quietly turn silent turns into speaking ones on every surface that draws them.
@@ -182,7 +147,7 @@ let private turnTests =
                 let scripted : RunAgent =
                     fun context _capabilities _signal onChunk ->
                         async {
-                            Expect.equal context.CurrentMessage (Some triggerItem) "the context's current message is the trigger"
+                            Expect.equal context.Occasion (Occasion.Asked triggerItem) "the context's occasion is the trigger"
                             Expect.equal context.SessionId sessionId "the context carries the session"
                             onChunk (AgentResponseChunk.Text "Hel")
                             onChunk (AgentResponseChunk.Text "lo!")
@@ -543,9 +508,13 @@ let private e2eTests =
                 let scripted : RunAgent =
                     fun context _capabilities _signal onChunk ->
                         async {
+                            let said =
+                                match context.Occasion with
+                                | Occasion.Asked item -> ConversationItem.said item
+                                | Occasion.Woken _ -> ""
                             onChunk (AgentResponseChunk.Text "You said: ")
-                            onChunk (AgentResponseChunk.Text (context.CurrentMessage |> Option.map ConversationItem.said |> Option.defaultValue ""))
-                            return AgentCompleted (sprintf "You said: %s" (context.CurrentMessage |> Option.map ConversationItem.said |> Option.defaultValue ""), None)
+                            onChunk (AgentResponseChunk.Text said)
+                            return AgentCompleted (sprintf "You said: %s" said, None)
                         }
                 let! h = Host.startWith (Some scripted) e2eSessionId 0
                 host <- Some h
@@ -780,8 +749,7 @@ let private sessionTimeTests =
         { SessionId = SessionId.create "time-session" |> expect
           Conversation = []
           TurnActor = Principal.Peer ada
-          CurrentMessage = None
-          Woke = Some CommandFinished
+          Occasion = Occasion.Woken CommandFinished
           Terminals = []
           Repos = []
           Model = None
@@ -790,16 +758,17 @@ let private sessionTimeTests =
           People = Attribution.empty }
     testList "What a turn is told about time" [
         testCase "a turn is told the time, and when its session began" <| fun () ->
-            let prompt = Yession.Host.Agent.promptOf (context { StartedAt = Some (now.AddDays -1.0); LastResumed = None })
+            let prompt = (Prompting.forTurn None (context { StartedAt = Some (now.AddDays -1.0); LastResumed = None })).Turn
             Expect.stringContains prompt "It is now 2026-09-25 13:05 UTC" "now"
             Expect.stringContains prompt "This session started 2026-09-24 13:05 UTC" "and when it began"
 
         testCase "a turn after a stop is told how long the session was away" <| fun () ->
             let prompt =
-                Yession.Host.Agent.promptOf
+                Prompting.forTurn None
                     (context
                         { StartedAt = None
                           LastResumed = Some { At = now.AddMinutes -5.0; LastHeardAt = now.AddMinutes -5.0 |> fun t -> t.AddHours -9.0 } })
+                |> fun plan -> plan.Turn
             Expect.stringContains prompt "after being stopped for 9h" "the gap it was away for"
     ]
 
@@ -2122,46 +2091,36 @@ let private multiplayerTests =
     let joined (peer: PeerId) (name: string) (user: UserId option) =
         PeerJoined { PeerId = peer; DisplayName = name; User = user }
     let people events = Attribution.ofEvents events
-    let promptWith (people: Attribution.State) (author: ActorRef) =
+    let turnText (people: Attribution.State) (author: ActorRef) =
         let item = { triggerItem with Author = author }
-        Yession.Host.Agent.promptOf
-            { SessionId = sessionId
-              Conversation = [ item ]
-              TurnActor = Principal.Peer ada
-              CurrentMessage = Some item
-              Woke = None
-              Terminals = []
-              Repos = []
-              Model = None
-              Now = DateTimeOffset.UtcNow
-              History = SessionHistory.none
-              People = people }
+        let plan =
+            Prompting.forTurn None
+                { SessionId = sessionId
+                  Conversation = [ item ]
+                  TurnActor = Principal.Peer ada
+                  Occasion = Occasion.Asked item
+                  Terminals = []
+                  Repos = []
+                  Model = None
+                  Now = DateTimeOffset.UtcNow
+                  History = SessionHistory.none
+                  People = people }
+        plan.Turn
     testList "Several people in one session" [
 
-        testCase "the core prompt tells the agent the name people address it by" <| fun () ->
-            Expect.stringContains AgentTurn.systemPrompt "@agent" "the address a message for it carries"
-
-        // The static strategy is the one composition there is today: a section left out of it
-        // is a rule the agent never reads, and nothing else would notice.
-        testCase "the static strategy carries every section, in order" <| fun () ->
-            let positions =
-                SystemPrompt.sections |> List.map (fun section -> AgentTurn.systemPrompt.IndexOf section.Text)
-            Expect.all positions (fun at -> at >= 0) "every section is in the core"
-            Expect.equal positions (List.sort positions) "and in the order they are declared"
-
         testCase "a peer is named in the transcript by the name it joined under" <| fun () ->
-            let prompt = promptWith (people [ joined ada "swift-heron" None ]) (PeerRef ada)
+            let prompt = turnText (people [ joined ada "swift-heron" None ]) (PeerRef ada)
             Expect.stringContains prompt "swift-heron: hi agent" "the line wears the name, not the id"
 
         testCase "a user is named by the peer they last joined as" <| fun () ->
             let prompt =
-                promptWith
+                turnText
                     (people [ joined bob "old-name" (Some alice); joined ada "brave-owl" (Some alice) ])
                     (UserRef alice)
             Expect.stringContains prompt "brave-owl: hi agent" "the current name, not the subject"
 
         testCase "a person who joined as agent is not named agent" <| fun () ->
-            let prompt = promptWith (people [ joined ada "Agent" None ]) (PeerRef ada)
+            let prompt = turnText (people [ joined ada "Agent" None ]) (PeerRef ada)
             Expect.isFalse (prompt.Contains "Agent: hi agent") "their line cannot pass for the agent's own"
 
         testCase "a turn that ends having said nothing leaves no message" <| fun () ->
@@ -2279,8 +2238,97 @@ let private addressTests =
             }
     ]
 
+/// A turn's context as a strategy reads it: somebody asked, nothing else has happened.
+let private askedContext (guidance: string option) : Prompting.Context =
+    { Prompting.Context.Occasion = Occasion.Asked triggerItem
+      Conversation = [ triggerItem ]
+      Terminals = []
+      Repos = []
+      People = Attribution.empty
+      History = SessionHistory.none
+      Now = DateTimeOffset (2026, 9, 25, 13, 5, 0, TimeSpan.Zero)
+      Guidance = guidance }
+
+/// The system text a strategy gives a turn, as the model reads it.
+let private systemText (strategy: PromptStrategy) (guidance: string option) =
+    (Prompting.plan strategy (askedContext guidance)).Stable
+
+/// What a turn is told, under every strategy. The product's rules hold whichever strategy a
+/// host chose: a strategy decides where text goes and when, never whether the core is there.
+let private promptTests =
+    let words = "Never push to main on this host."
+    let rulesOf (strategy: PromptStrategy) =
+        let core = systemText strategy None
+        testList (PromptStrategy.name strategy) [
+            // Every product section, in order: a section left out is a rule the agent never
+            // reads, and nothing else would notice.
+            testCase "the core carries every section, in order" <| fun () ->
+                let positions = Prompting.sections |> List.map (fun section -> core.IndexOf section.Text)
+                Expect.all positions (fun at -> at >= 0) "every section is in the core"
+                Expect.equal positions (List.sort positions) "and in the order they are declared"
+
+            testCase "the core tells the agent the name people address it by" <| fun () ->
+                Expect.stringContains core $"@{Addressed.agentName}" "the address a message for it carries"
+
+            // Where scratch goes is part of the core, not the operator's to add: the directory
+            // is one the BUILD sets, and `/tmp` is denied on a host the operator's words never
+            // mention.
+            testCase "the core says scratch goes under $TMPDIR, not /tmp" <| fun () ->
+                Expect.stringContains core "$TMPDIR" "the core names the scratch directory"
+                Expect.stringContains core "/tmp" "and names /tmp as not the agent's"
+
+            // The default sandbox is not guaranteed a language runtime: python is a stub on a
+            // Mac, absent on a minimal host. An agent that reached for python here lost turns
+            // to the stub.
+            testCase "the core warns that a language runtime is not assured" <| fun () ->
+                Expect.stringContains core "language runtime" "the core warns a runtime is not assured"
+
+            // The file tools are what the prompt steers to; the shell is for what only a shell
+            // does. It used to say the opposite ("edit with sed and awk"), and every edit
+            // reached the timeline as a head/tail/mv line nobody could read as an edit.
+            testCase "the core steers file work to the file tools, not the shell" <| fun () ->
+                Expect.stringContains core AgentTools.ToolName.EditFile "names the tool to edit with"
+                Expect.stringContains core AgentTools.ToolName.ReadFile "and the one to read with"
+                Expect.isFalse (core.Contains "edit with sed") "the shell is no longer the way to edit"
+
+            // The prompt is two authors' words, and the ORDER is the invariant: the product's
+            // core first, the operator's after it, introduced as theirs.
+            testCase "the operator's words come after the whole core" <| fun () ->
+                let guided = systemText strategy (Some words)
+                Expect.isTrue (guided.StartsWith core) "the core comes first, whole"
+                Expect.isTrue (guided.EndsWith words) "the operator's words come last, whole"
+
+            testCase "a line before the operator's words says whose they are" <| fun () ->
+                let guided = systemText strategy (Some words)
+                Expect.stringContains (guided.Substring core.Length) "operator" "the introduction names the operator"
+
+            // A host that wrote nothing gets the core, and not a dangling introduction.
+            testCase "a host that wrote no guidance gets no operator rule" <| fun () ->
+                let plan = Prompting.plan strategy (askedContext None)
+                Expect.isFalse (plan.Included |> List.contains (Prompting.idOf Prompting.Static.operator)) "nothing of the operator's is placed"
+        ]
+    testList "What a turn is told" [
+        yield! PromptStrategy.all |> List.map rulesOf
+
+        // A rule that does not hold says nothing: the policy is what decides, not the text.
+        testCase "a rule whose condition does not hold is left out" <| fun () ->
+            let quiet = Prompting.plan PromptStrategy.Static (askedContext None)
+            Expect.isFalse (quiet.Included |> List.contains (Prompting.idOf Prompting.Static.terminals)) "no terminal activity, no terminal section"
+
+        testCase "a woken turn is told why, and is not asked to reply" <| fun () ->
+            let woken = Prompting.plan PromptStrategy.Static { askedContext None with Occasion = Occasion.Woken CommandFinished }
+            Expect.isTrue (woken.Included |> List.contains (Prompting.idOf Prompting.Static.wake)) "the wake says why"
+            Expect.isFalse (woken.Included |> List.contains (Prompting.idOf Prompting.Static.ask)) "and nobody is to be replied to"
+
+        testCase "an asked turn is asked to reply, and is not told it was woken" <| fun () ->
+            let answering = Prompting.plan PromptStrategy.Static (askedContext None)
+            Expect.isTrue (answering.Included |> List.contains (Prompting.idOf Prompting.Static.ask)) "the message is to be answered"
+            Expect.isFalse (answering.Included |> List.contains (Prompting.idOf Prompting.Static.wake)) "and no wake is invented"
+    ]
+
 let tests =
     testList "Agent" [
+        promptTests
         turnTests
         deltaTests
         thoughtTests

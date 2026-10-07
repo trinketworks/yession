@@ -60,7 +60,7 @@ type VolumeMaintenance =
 /// default sandbox's resources" were one phrase for two things.
 ///
 /// `Guidance` is the one thing here that is not about resources: words for the agent, from the
-/// operator, appended after the product's own system prompt (`AgentTurn.systemPrompt`). It is
+/// operator, appended after the product's own system prompt (`Prompting`'s sections). It is
 /// APPENDED and never replaces, on the same principle that keeps a path out of a repo's file:
 /// each author writes what only they know. The core prompt describes mechanics the build
 /// defines — which tool reaches which sandbox, how a queued command comes back — and a copy of

@@ -6,174 +6,11 @@ open Yession.Domain.Terminals
 open Yession.Domain.Chat
 open Yession.Domain.Repos
 
-/// The product-authored system prompt, as named sections a strategy composes.
-///
-/// Sections, not one string, so a later strategy can choose them by context (which tools a
-/// turn has, whether it was woken or asked). Today there is one strategy, `Static`: every
-/// section, in order. Real names reach the text by interpolation — a tool's name from its
-/// descriptor's literal, the agent's from the parser that reads `@agent` — so a rename
-/// cannot leave the prompt naming something that is gone.
-///
-/// Written in Simplified Technical English: one instruction per sentence, active voice, one
-/// word for one thing. A model reads this with nobody to ask what a sentence meant.
-///
-/// Product-authored, not mechanical: several sections carry rules that no gate can see. The
-/// lazy-lifecycle suite scripts its agent, so cutting `environments` removes the lazy-start
-/// rule (technical-design.md §3) while every gate stays green. Read a section's comment
-/// before trimming it.
-module SystemPrompt =
-
-    open AgentTools
-
-    type Section = { Name : string; Text : string }
-
-    /// How sections become one prompt. `Static` takes all of them; a context-specific
-    /// strategy is a new case here, not a second assembly somewhere else.
-    type Strategy = | Static
-
-    let private agent = Addressed.agentName
-
-    let role =
-        { Name = "role"
-          Text = $"You are the agent in a collaborative engineering session. People here call you `{agent}`." }
-
-    /// Whether a turn RUNS is the scheduler's policy. What that policy cannot settle from
-    /// mentions alone reaches the agent to settle by reading. Saying nothing is a real answer
-    /// to people talking to each other, and a turn that ends that way leaves no message
-    /// (`ConversationProjection`).
-    let addressing =
-        { Name = "addressing"
-          Text =
-            $"""Several people can share this session. Each line of the conversation names its author. Reply to the latest message, and use the earlier lines as context.
-- A message that contains @{agent} is for you.
-- A message with no address is probably for you when you spoke last or when only one person is here. Otherwise, decide from what it says.
-- An imperative, such as "run the tests" or "fix it", is for you. Do it.
-- If you cannot tell who a message is for, ask in one short sentence.
-- If people are talking to each other, end your turn and write nothing.""" }
-
-    /// The lazy-start rule (technical-design.md §3): only the agent can decide whether a
-    /// one-shot answer opens a sandbox, and no test can see that decision.
-    let environments =
-        { Name = "environments"
-          Text = "You can answer without an environment. Start one only to run a command or to change the repo." }
-
-    /// `read_file` and `edit_file` put the path and the change on the record as facts. The
-    /// same work through the shell is on the record as text a reader must parse. This prompt
-    /// once said "edit with sed and awk", and every change reached the timeline as a
-    /// `head`/`tail`/`mv` line.
-    let files =
-        { Name = "files"
-          Text =
-            $"Use {ToolName.ReadFile} to read a file, {ToolName.EditFile} to change part of a file, and {ToolName.WriteFile} to write a whole file. Do not use cat, sed, awk, head, tail or heredocs in {ToolName.ExecuteCommand} for this. The file tools record which file you read and what you changed. Shell text does not." }
-
-    /// Every tool description says how to reach each sandbox, and none can say which to
-    /// prefer. A runtime is not assured in the default sandbox: python is a stub on a Mac
-    /// without Xcode tools and absent on a minimal host, and an agent that found a binary on
-    /// PATH learned it was the wrong sandbox only after the edit failed several ways.
-    let shell =
-        { Name = "shell"
-          Text =
-            $"Use {ToolName.ExecuteCommand} only for work that needs a shell: git, builds, tests and running code. Use the default sandbox for the checkout and for small work. Use a work sandbox ({ToolName.StartWorkSandbox}) for work that needs its toolchain. The default sandbox is not assured a language runtime. A python or node there can be missing or a stub. Use a work sandbox when you need an interpreter." }
-
-    /// Every sandbox sets `$TMPDIR` to a directory of the session's own, but `/tmp` is three
-    /// different things across the backends (the container's own, a tmpfs dropped at exit, a
-    /// path macOS denies). `$TMPDIR` stays a variable here because its value differs per
-    /// sandbox and the agent's shell is what expands it. Write-before-delete covers the half
-    /// of the fault the directory does not: a `sed -i … && cat > /tmp/…` refused at the
-    /// second step lost a line of a file.
-    let scratch =
-        { Name = "scratch"
-          Text =
-            "Write scratch files under `$TMPDIR`. Every sandbox sets it. Do not write to `/tmp`, because it is not yours. To replace a file, write the new content before you delete the old file. A sandbox can refuse the second step after the first step is done." }
-
-    let background =
-        { Name = "background"
-          Text =
-            "Run a long command with `background: true`, then end your turn. The session wakes you when the command finishes. Do not poll. The result of a queued command comes to you in a later turn as terminal activity, not as a tool result. Read it before you decide that the command did nothing." }
-
-    /// People read the chat, not the tool calls: the agent CLI's own preset says the same,
-    /// and a custom prompt replaces that preset whole, so it is restated here.
-    let communication =
-        { Name = "communication"
-          Text =
-            """The people here read your text. They usually do not see your tool calls, tool results or thinking.
-- Be concise and concrete.
-- Before your first tool call, say in one sentence what you will do.
-- While you work, give a one-sentence update when you find something important or change direction.
-- Do not describe your reasoning. State results and decisions.
-- In your final message, give the answer or the result first. Give details after it.
-- Write complete sentences. Do not use arrows, or names that you made up during the session.
-- Give a direct answer to a simple question, with no headers or sections.
-- Do not use emojis unless a person asks for them.
-- Stop when the content stops. Do not end with an offer of more help.""" }
-
-    let reporting =
-        { Name = "reporting"
-          Text =
-            """Report what happened, not what you intended.
-- Say that a step is done only when you saw the result: tool output, or the file as it is now.
-- If you did not check a result, say so.
-- If a step failed or you skipped it, say so in your first sentence.
-- If tests fail, say so and show the output.
-- If you stop before the task is complete, say what remains. Do not describe partial work as complete.""" }
-
-    let scope =
-        { Name = "scope"
-          Text =
-            """Do the task that the person asked for. Do not make it smaller or larger.
-- When you have enough information, act. Do not ask again about a decision that a person already made.
-- Make routine decisions yourself. Ask only when different interpretations give very different work.
-- If one part of the task is blocked, complete all other parts. Then say which part you did not do, and why.
-- For a question such as "how should we do X?", give a recommendation and its main trade-off in two or three sentences. Do not implement it until a person agrees.
-- Do not add features, abstractions or refactors that the task does not need.
-- Do not add error handling for cases that cannot occur. Check input only at system boundaries.
-- If you are sure that code is unused, delete it. Do not keep a compatibility shim for it.
-- Write code that matches the code around it. Write a comment only when the code cannot show the reason.
-- Do not write code with security vulnerabilities, such as command injection or cross-site scripting.""" }
-
-    /// Autonomous by intent. A branch or pull request the agent made in this session is its
-    /// own work, and asking before each push there only stalls the people waiting on it.
-    /// The line is ownership: someone else's branch, someone else's pull request and the
-    /// default branch are other people's work, and those still need a person's word.
-    let care =
-        { Name = "care"
-          Text =
-            """Work on your own. Do not ask for approval when you can safely act.
-- A branch or a pull request that you made in this session is yours. On it, commit, push, force-push, rebase, open the pull request, reply to comments and fix failed checks without asking.
-- Before you change a branch or a pull request that is not yours, or the default branch, get approval from a person in this session. An instruction from a person in this session is approval for that action only.
-- Before you delete or overwrite something that you did not make, look at it.
-- Do not use a destructive action to get past an obstacle. Find the cause.""" }
-
-    /// Every section, in the order the static strategy reads them.
-    let sections : Section list =
-        [ role; addressing; environments; files; shell; scratch; background; communication; reporting; scope; care ]
-
-    let compose (strategy: Strategy) (from: Section list) : string =
-        match strategy with
-        | Static -> from |> List.map _.Text |> String.concat "\n\n"
-
 /// Orchestration of one agent turn (Step 08): builds the context pack from the
 /// projection-derived conversation, drives the injected `RunAgent` capability, and
 /// represents the whole lifecycle — including failure — as events. The Session
 /// is the only writer; the agent itself never touches the log or the Yjs doc.
 module AgentTurn =
-
-    /// The core prompt: every section, by the static strategy (`SystemPrompt`).
-    let systemPrompt = SystemPrompt.compose SystemPrompt.Static SystemPrompt.sections
-
-    /// The prompt a turn actually runs under: the core above, and after it whatever the
-    /// operator of this host wrote in their profile (`ProfileFile.Guidance`).
-    ///
-    /// Appended, never substituted — an operator cannot take the core away. The core describes
-    /// mechanics the BUILD defines and the operator's file cannot see change; a replacement
-    /// prompt would describe the tools as they were the day it was written. Introduced by a
-    /// line saying whose words they are: the model treats "never push to main" differently
-    /// knowing it came from the host's operator rather than from the product, and the
-    /// transcript's reader can tell the two apart.
-    let promptWith (guidance: string option) : string =
-        match guidance with
-        | None -> systemPrompt
-        | Some words -> systemPrompt + "\n\nThe operator of this host adds:\n\n" + words
 
     /// Why a turn is running (Plan 20, stage 2). A turn has exactly ONE reason to exist,
     /// which is what makes this a choice rather than two optional arguments free to be both
@@ -239,7 +76,7 @@ module AgentTurn =
         (terminals: BlockDigest list)
         // The session's repos, off the same page terminals came off (Plan: repo AGENTS.md
         // into per-turn context). Carried apart from the operator's guidance, which the runner
-        // holds: this is repo-authored, not the operator's words, and `promptOf` is where that
+        // holds: this is repo-authored, not the operator's words, and `Prompting` is where that
         // distinction is enforced.
         (repos: SessionRepo list)
         // Which model this turn runs on, read from the session's collaborative register at
@@ -258,10 +95,6 @@ module AgentTurn =
                     return ()
                 }
             let turnActor = TurnTrigger.actor trigger
-            let triggeringMessage =
-                match trigger with
-                | FromMessage message -> Some message
-                | FromWake _ -> None
             // Kept, not discarded like the rest: the envelope it was written in is this turn's
             // "now", on the session's own clock — read back by the offset the append answered.
             let! appended =
@@ -287,9 +120,9 @@ module AgentTurn =
             try
                 // The agent's context is the event-log-derived projection — by
                 // construction it can never include Yjs/draft state.
-                let currentMessage =
-                    triggeringMessage
-                    |> Option.map (fun message ->
+                let occasion =
+                    match trigger with
+                    | FromMessage message ->
                         conversation
                         |> List.tryFind (fun item -> item.MessageId = message.MessageId)
                         |> Option.defaultValue
@@ -304,16 +137,14 @@ module AgentTurn =
                               Offset = EventOffset.zero
                               // A turn with a triggering message is by definition a turn
                               // somebody asked for, so there is nothing here to explain.
-                              Woke = None; CausedBy = None })
+                              Woke = None; CausedBy = None }
+                        |> Occasion.Asked
+                    | FromWake (reason, _) -> Occasion.Woken reason
                 let context =
                     { SessionId = sessionId
                       Conversation = conversation
                       TurnActor = turnActor
-                      CurrentMessage = currentMessage
-                      Woke =
-                        match trigger with
-                        | FromMessage _ -> None
-                        | FromWake (reason, _) -> Some reason
+                      Occasion = occasion
                       Terminals = terminals
                       Repos = repos
                       Model = model
