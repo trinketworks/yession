@@ -3290,34 +3290,66 @@ module Style =
     /// not the thing the row opens. An artifact's size sits in the same slot.
     let terminalListSubtitle = "block min-w-0 truncate font-terminal text-code-sm text-ink-faint"
 
-    /// A row's verb, as a WORD: `rewind`, `kill`. They were glyphs, and the kill's was a
-    /// square — which is what stop looks like, beside a command that now has a real Stop. A
-    /// word cannot be read as anything else, costs a row nothing it has not got (the space is
-    /// at the row's right edge, empty but for these), and is what the rest of this column
-    /// says its acts with. Faint at rest because the ROW is the subject, ink under the hand —
-    /// or the error red, for the one that ends something.
+    /// A row's verb, as a WORD: `rewind`, `kill`, `replay`, `put away`. They were glyphs, and
+    /// the kill's was a square — which is what stop looks like, beside a command that now has
+    /// a real Stop. A word cannot be read as anything else, and a verb that rides a listed row
+    /// is bare, in the caps voice every bare verb speaks in, `ink-dim` at rest
+    /// (docs/visual-design.md, "Hierarchy of controls") — ink under the hand, or the error red
+    /// for the one that ends something.
     let private terminalListActBase =
         cls [ "h-6 px-1 shrink-0 inline-flex items-center justify-center bg-transparent border-0 cursor-pointer"
-              "font-ui font-light text-body lowercase whitespace-nowrap transition-colors"; focusRing ]
-    let terminalListAct = cls [ terminalListActBase; "text-ink-faint hover:text-ink" ]
-    let terminalListKill = cls [ terminalListActBase; "text-ink-faint hover:text-err" ]
+              caps; "whitespace-nowrap transition-colors"; focusRing ]
+    let terminalListAct = cls [ terminalListActBase; "text-ink-dim hover:text-ink" ]
+    let terminalListKill = cls [ terminalListActBase; "text-ink-dim hover:text-err" ]
 
-    /// The row's verbs, at its right edge — quiet until they are wanted. On a desktop they
-    /// come up under the pointer or the keyboard anywhere in the row (`group/row`, and
-    /// `focus-within` so Tab reaches them visibly); on a device that cannot hover, and on a
-    /// phone, they are always there, because there is no other way to them. `opacity`, never
-    /// `hidden`, so they never leave the tab order, and an ARMED kill is worn whatever the
-    /// pointer does — a confirm that faded out would be a confirm nobody could see.
+    /// The row's verbs, at its right edge, WORN: on the row the pane is about, and on one whose
+    /// kill is armed — a confirm that faded out would be a confirm nobody could see. Which rows
+    /// wear them is the view's to say (`View.allPage`); the rest wear `terminalListVerbsAtRest`.
     ///
     /// On a phone each is at least a 44px box with its word centred (`[&>*]`): the 24px line
     /// is WCAG 2.5.8's floor for the MARK, never for the target, and a kill 4px from a rewind
     /// is a kill pressed by a thumb aiming at the rewind.
     let terminalListVerbs =
-        cls [ "ml-auto flex items-center gap-4 shrink-0 phone:gap-2 phone:[&>*]:min-w-11 phone:[&>*]:min-h-11"
+        "ml-auto flex items-center gap-4 shrink-0 phone:gap-2 phone:[&>*]:min-w-11 phone:[&>*]:min-h-11"
+
+    /// Every other row's verbs: there, but not shown, until they are wanted. Under the pointer
+    /// or the keyboard anywhere in the row they come up (`group/row`, and `focus-within` so Tab
+    /// reaches them visibly) — `opacity`, never `hidden`, so they never leave the tab order.
+    ///
+    /// A thumb has no hover, so on a device that cannot hover they are not merely see-through
+    /// but out of the way (`sr-only` until focus is inside them): a see-through kill at a
+    /// row's edge is a kill a thumb can press without seeing, and the width they kept was the
+    /// width the command under the name was cut short by. There, the row is how to reach them:
+    /// it opens its terminal, whose own surface carries every one of these, and the row it was
+    /// opened from wears them when the reader comes back.
+    let terminalListVerbsAtRest =
+        cls [ terminalListVerbs
               "opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100"
-              "has-[[data-terminal-close-armed=true]]:opacity-100"
-              "[@media(hover:none)]:opacity-100 phone:opacity-100"
+              "[@media(hover:none)]:[&:not(:focus-within)]:sr-only"
               "transition-opacity duration-150 ease-out motion-reduce:transition-none" ]
+
+    /// The page's filters (F5), at its head over the rows: `all` and each kind of terminal
+    /// there is, with how many. ONE line, never wrapped: a filter arriving or leaving as
+    /// terminals change must not grow the row and move every row under it, so words that
+    /// outgrow it pan inside it rather than wrap or push the page sideways. The first word
+    /// on the rail, as every name under it is.
+    let allFilters =
+        "shrink-0 flex items-center gap-x-4 px-3 pb-2 phone:gap-x-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+
+    /// One filter: the pivot's idiom at the section label's size — a word, lowercase and
+    /// light, told apart from the others by INK alone: the one the page is narrowed to in
+    /// full ink, the rest in `ink-faint` and brightening under the hand. A setting, so bare
+    /// (docs/visual-design.md, "Hierarchy of controls"); a lens over the list rather than a
+    /// verb on it, so in the page's lowercase rather than the row verbs' caps. Read from
+    /// `aria-pressed`, so what is drawn and what is announced are one attribute. A thumb's 44
+    /// on a phone, with the word kept on the rail.
+    let allFilter =
+        cls [ "shrink-0 inline-flex items-center gap-1 bg-transparent border-0 cursor-pointer p-0 phone:min-h-11 phone:min-w-11"
+              "font-ui font-light text-body lowercase whitespace-nowrap text-ink-faint hover:text-ink aria-pressed:text-ink"
+              "transition-colors duration-150 ease-out motion-reduce:transition-none"; focusRingFar ]
+
+    /// A filter's count: figures that do not shift the words beside them as they change.
+    let allFilterCount = "tabular-nums"
 
     /// The page's word when there is nothing on it.
     let contentListEmptyWord = "px-3 py-3 font-ui font-light text-body text-ink-faint select-none"

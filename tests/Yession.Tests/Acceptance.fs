@@ -225,6 +225,7 @@ let private representativeModel : ClientModel =
       ItemMenu = None
       PaneMenu = false
       Switcher = false
+      ListFilter = ListFilter.All
       Refused = None
       Stolen = None
       Asked = Map.empty

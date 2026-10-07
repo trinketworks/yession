@@ -575,26 +575,20 @@ module View =
         let mark (token: string) (voice: string) (glyph: TemplateResult) (word: string) =
             html $"""<span class="{Style.pivotMark} {voice}" data-pane-mark="{token}"><span aria-hidden="true">{glyph}</span><span class="{Style.srOnly}">{word}</span></span>"""
         let news = html $"""<span class="{Style.statusDotNews}"></span>"""
+        match ClientModel.terminalState view model with
         // Hollow: the dot with nothing left in it. Not a stop square, which is what a running
         // command's Stop looks like.
-        if not view.IsOpen then
+        | TerminalState.Closed ->
             mark "closed" "text-ink-faint" (html $"""<span class="{Style.statusDotHollow}"></span>""") Dom.Text.markClosed
-        elif Option.isSome (Projection.runningBlock view) then
+        | TerminalState.Running ->
             html $"""<span class="{Style.pivotMark}" data-pane-mark="running">{runningDot}</span>"""
-        else
-            match ClientModel.unseen view.TerminalId model with
-            | Some Unseen.Failed -> mark "unseen-failed" "text-err" news Dom.Text.markUnseenFailed
-            | Some Unseen.Succeeded -> mark "unseen-ok" "text-ink" news Dom.Text.markUnseenOk
-            | None ->
-                match view.Blocks |> List.tryLast |> Option.map (fun block -> block.Status) with
-                | Some (BlockFinished (CommandFailed _ | CommandTimedOut | CommandExecutionFailed _))
-                // A solid dot in the error red, not the block's own cross: beside a name in a row
-                // whose selected item wears a × that KILLS, a red × read as a second kill.
-                | Some (BlockRejected _) ->
-                    mark "failed" "text-err" (html $"""<span class="{Style.statusDotSolid}"></span>""") Dom.Text.markFailed
-                | Some (BlockFinished (CommandSucceeded _))
-                | Some BlockRunning
-                | None -> Lit.nothing
+        | TerminalState.UnseenFailed -> mark "unseen-failed" "text-err" news Dom.Text.markUnseenFailed
+        | TerminalState.UnseenOk -> mark "unseen-ok" "text-ink" news Dom.Text.markUnseenOk
+        // A solid dot in the error red, not the block's own cross: beside a name in a row
+        // whose selected item wears a × that KILLS, a red × read as a second kill.
+        | TerminalState.Failed ->
+            mark "failed" "text-err" (html $"""<span class="{Style.statusDotSolid}"></span>""") Dom.Text.markFailed
+        | TerminalState.Idle -> Lit.nothing
 
     let private environmentStatus =
         function
@@ -632,7 +626,9 @@ module View =
                   <span class="truncate min-w-0">{TerminalName.display model.Terminals view}</span>{terminalMark model view}
                 </button>"""
         let terminals =
-            match ClientModel.terminalRows model |> List.filter (fun view -> view.IsOpen) with
+            // In the order they were opened, as the strip reads — and every open one, whatever
+            // the `all` page is narrowed to (`terminalRows`).
+            match Projection.openTerminals model.Terminals with
             | [] -> Lit.nothing
             | live ->
                 let shown = List.truncate environmentTerminalCap live
@@ -4143,11 +4139,24 @@ module View =
     /// place in the one row the pane is navigated by, and the way to make something is that
     /// row's `+` and nothing here. Choosing from it is choosing a tab.
     ///
+    /// The terminals are in the order they were opened, and can be narrowed by what they need
+    /// of a person (`ClientModel.listFilters`): what finished unseen or failed, what is
+    /// running, what is idle, what has ended. Eight rows with running, failed and closed mixed
+    /// together was a list a reader had to read all of to find the one that wanted them — but
+    /// grouped by state it was a list whose rows moved when their terminals did, under the
+    /// pointer. A filter decides its rows when it is chosen and holds them (`ListFilter`).
+    ///
     /// The verbs are rendered from `Affordances` and from nothing else — a row wears exactly
     /// the controls its terminal's state allows, and a control that does not apply is ABSENT
-    /// rather than disabled. A row's state is the mark the pivot wears for it (`terminalMark`),
-    /// whoever holds its keyboard is their own colour beside it, and the one state with no
-    /// glyph — a recording the cap ate — is the only one that says a word.
+    /// rather than disabled. They are the row's, not the page's: shown at rest only on the
+    /// row the pane is about and on one whose kill is armed, and on any other under the
+    /// pointer or the keyboard (`Style.terminalListVerbsAtRest`). The same pair of words
+    /// down every row was a third of a phone's width saying nothing about any one of them.
+    /// A closed row's verbs are its recording's (`replay`) and its tab's (`put away`), where
+    /// an open one's are its rewind and its kill. A row's state is the mark the pivot wears
+    /// for it (`terminalMark`), whoever holds its keyboard is their own colour beside it, and
+    /// the one state with no glyph — a recording the cap ate — is the only one that says a
+    /// word.
     ///
     /// Lists of rows rather than a `listbox`: a row carries its verbs, and a listbox's options
     /// may hold no controls. The name is the row's own button; the arrows walk the names
@@ -4206,6 +4215,28 @@ module View =
                         <button type="button" class="{Style.terminalListAct}" data-terminal-reattach="{id}"
                                 aria-label="Attach {name} again" title="Attach {name} again"
                                 @click={Ev(fun _ -> dispatch (ReattachTerminalMsg view.TerminalId))}>{Dom.Text.reattach}</button>"""
+            // A closed terminal's recording, played: the closed tab's own `replay`, from here.
+            let replay =
+                if not affords.CanReplay then Lit.nothing
+                else
+                    html $"""
+                        <button type="button" class="{Style.terminalListAct}" data-terminal-list-replay="{id}"
+                                aria-label="{Dom.Text.replayTerminal name}" title="{Dom.Text.replayTerminal name}"
+                                @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Watching view.TerminalId)))}>{Dom.Text.replayRow}</button>"""
+            // A closed terminal's tab, put away — the closed tab's ×, from here. Only while it
+            // HAS a tab: a closed terminal nobody opened here has nothing to put away.
+            let putAway =
+                if view.IsOpen || not (List.contains view.TerminalId model.Tabs) then Lit.nothing
+                else
+                    html $"""
+                        <button type="button" class="{Style.terminalListAct}" data-terminal-list-dismiss="{id}"
+                                aria-label="{Dom.Text.dismissTab name}" title="{Dom.Text.dismissTab name}"
+                                @click={Ev(fun _ -> dispatch (DismissTabMsg view.TerminalId))}>{Dom.Text.putAway}</button>"""
+            // The verbs are worn at rest on the row the pane is about, and on one a press from
+            // gone: an armed kill that faded out would be a confirm nobody could see.
+            let verbs =
+                if selected = Some view.TerminalId || model.KillArmed = Some view.TerminalId then Style.terminalListVerbs
+                else Style.terminalListVerbsAtRest
             let nameClass = if view.IsOpen then Style.terminalListName else Style.terminalListNameClosed
             let killWord = html $"""{Dom.Text.kill}"""
             // What it is doing or last did, under the name: nine rows of `term N` say which is
@@ -4227,7 +4258,7 @@ module View =
                     </span>
                     {subtitle}
                   </span>
-                  <span class="{Style.terminalListVerbs}">{rewind}{reattach}{killControl dispatch model Style.terminalListKill Style.btnKillArmed killWord view}</span>
+                  <span class="{verbs}">{rewind}{replay}{reattach}{putAway}{killControl dispatch model Style.terminalListKill Style.btnKillArmed killWord view}</span>
                 </div>"""
         // A file's row, in the same shape as a terminal's. Reachability is the whole point of
         // it: a file is otherwise findable only by its chip in a message, so one shared two
@@ -4254,7 +4285,12 @@ module View =
                   </span>
                 </div>"""
         let terminals = ClientModel.terminalRows model
-        let artifacts = ClientModel.artifactRows model
+        // The files are not a kind of terminal: narrowed to one, the page is that kind's rows
+        // and nothing else.
+        let artifacts =
+            match model.ListFilter with
+            | ListFilter.All -> ClientModel.artifactRows model
+            | ListFilter.Only _ -> []
         // Headings only when there are two kinds to tell apart: over a list of terminals alone,
         // "terminals" names the only thing on screen, which is a word that says nothing.
         let heading (label: string) =
@@ -4266,6 +4302,30 @@ module View =
                 html $"""
                     {heading label}
                     <div role="list" aria-label="{label}">{rows}</div>"""
+        // The filters, each a button that says whether the page is narrowed to it — and none
+        // at all where there is nothing to narrow (`listFilters`).
+        let filters =
+            match ClientModel.listFilters model with
+            | [] -> Lit.nothing
+            | offered ->
+                let chosen =
+                    match model.ListFilter with
+                    | ListFilter.All -> None
+                    | ListFilter.Only (kind, _, _) -> Some kind
+                let filter (kind: TerminalKind option, count: int) =
+                    let token, label =
+                        match kind with
+                        | None -> "all", Dom.Text.filterAll
+                        | Some TerminalKind.Attention -> "attention", Dom.Text.filterAttention
+                        | Some TerminalKind.Running -> "running", Dom.Text.filterRunning
+                        | Some TerminalKind.Idle -> "idle", Dom.Text.filterIdle
+                        | Some TerminalKind.Closed -> "closed", Dom.Text.filterClosed
+                    html $"""
+                        <button type="button" class="{Style.allFilter}" data-terminal-filter="{token}"
+                                aria-pressed="{if chosen = kind then "true" else "false"}"
+                                @click={Ev(fun _ -> dispatch (FilterListMsg kind))}>{label}<span class="{Style.allFilterCount}">{string count}</span></button>"""
+                html $"""
+                    <div class="{Style.allFilters}" role="group" aria-label="{Dom.Text.filterTerminals}">{offered |> List.map filter}</div>"""
         // The arrow walk down the names — the rows' own buttons — and only for a key the walk
         // claims, so Tab still reaches the verbs.
         let walk (e: Browser.Types.Event) =
@@ -4294,6 +4354,7 @@ module View =
               <div class="{Style.allPage}" data-content-list aria-label="{Dom.Text.terminalsAndFiles}"
                    @keydown={Ev(walk)}>
                 {door}
+                {filters}
                 {section "terminals" (terminals |> List.map row)}
                 {section "files" (artifacts |> List.map artifactRow)}
                 {empty}

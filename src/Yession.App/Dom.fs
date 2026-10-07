@@ -587,6 +587,14 @@ module Dom =
         /// Every row verb is rendered ONLY where `Affordances` says it applies, so a
         /// test asserting one is absent is asserting the fold, not a template's mood.
         let terminalListRewind = "data-terminal-list-rewind"
+        /// A closed row's verbs: play its recording (the closed tab's `replay`), and put its
+        /// tab away (the closed tab's ×, `DismissTabMsg`) while it has one.
+        let terminalListReplay = "data-terminal-list-replay"
+        let terminalListDismiss = "data-terminal-list-dismiss"
+        /// One of the `all` page's filters (`ClientModel.listFilters`): `all`, or a kind of
+        /// terminal — `attention`, `running`, `idle` or `closed`. `aria-pressed` says which
+        /// one the page is narrowed to.
+        let terminalFilter = "data-terminal-filter"
         /// A closed row whose recording the per-terminal cap ate. The stated gap, where a
         /// play affordance would otherwise be — an audit trail's hole is said, never left to
         /// look like a terminal that printed nothing.
@@ -900,6 +908,18 @@ module Dom =
         let rewind = "rewind"
         let kill = "kill"
         let reattach = "attach"
+        let replayRow = "replay"
+        let putAway = "put away"
+        /// The list's replay, named for its terminal.
+        let replayTerminal (title: string) = "Replay " + title
+        /// The `all` page's filters (`ClientModel.listFilters`): every terminal, or one kind,
+        /// by what it needs of the person reading.
+        let filterTerminals = "Show terminals"
+        let filterAll = "all"
+        let filterAttention = "needs a look"
+        let filterRunning = "running"
+        let filterIdle = "idle"
+        let filterClosed = "closed"
         /// A rewound reader, told how far behind the live edge they are — when there is any
         /// distance yet to tell.
         let behindLive (distance: string option) =

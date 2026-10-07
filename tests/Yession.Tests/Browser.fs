@@ -7158,6 +7158,169 @@ let editorTests =
                 return ()
             }
 
+        // F5. A row's verbs are not drawn down every row at rest, so what has to hold is that
+        // none of them is out of the keyboard's reach: Tab from the first name visits every
+        // verb on the page, and each is PAINTED when it is reached — a control focus lands on
+        // unseen is one a keyboard user presses blind.
+        editorCase "every verb of a row on the all page is reached by Tab, and shows when it is" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-list-replay]")
+                let verbs = "#shell [data-content-list] [role=listitem] button:not([data-terminal-list-row])"
+                let! offered =
+                    await (page.EvaluateAsync<string[]> (sprintf """() => [...document.querySelectorAll("%s")]
+                        .map(b => b.outerHTML.slice(0, b.outerHTML.indexOf('>')))""" verbs))
+                Expect.isTrue (offered.Length >= 3) (sprintf "a page with verbs on it, or this proves nothing: %A" offered)
+                do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-list-row]")
+                let reached = System.Collections.Generic.HashSet<string> ()
+                let inside = ref true
+                let presses = ref 0
+                while inside.Value && presses.Value < 40 do
+                    do! awaitU (page.Keyboard.PressAsync "Tab")
+                    presses.Value <- presses.Value + 1
+                    let! here =
+                        await (page.EvaluateAsync<string> (sprintf """() => {
+                            const el = document.activeElement;
+                            if (!el?.closest('#shell [data-content-list]')) return 'outside';
+                            return el.matches("%s") ? el.outerHTML.slice(0, el.outerHTML.indexOf('>')) : 'name';
+                        }""" verbs))
+                    if here = "outside" then inside.Value <- false
+                    elif here <> "name" then
+                        // Painted: every box from it up to the page fully opaque, once the
+                        // fade has run.
+                        let! _ =
+                            await (page.WaitForFunctionAsync """() => {
+                                for (let n = document.activeElement; n; n = n.parentElement)
+                                    if (getComputedStyle(n).opacity !== '1') return false;
+                                return true;
+                            }""")
+                        reached.Add here |> ignore
+                for verb in offered do
+                    Expect.isTrue (reached.Contains verb) (sprintf "Tab reaches %s" verb)
+            }
+
+        // F5. A closed row's recording is one press from the list, as it is from the closed
+        // tab's own footer: the replay mounts that terminal's recording in the pane.
+        editorCase "a closed row on the all page offers its replay" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-list-replay='term-done']")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-replay='terminal:term-done']")
+                return ()
+            }
+
+        // F5. The page is narrowed by filters rather than grouped, and a filter is a control
+        // like any other: every one of them is on the keyboard's way, from the rows back up.
+        editorCase "every filter on the all page is reached by Tab" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-filter='closed']")
+                let! offered =
+                    await (page.EvaluateAsync<string[]> """() => [...document.querySelectorAll("#shell [data-content-list] [data-terminal-filter]")]
+                        .map(b => b.getAttribute('data-terminal-filter'))""")
+                Expect.isTrue (offered.Length >= 3) (sprintf "all and at least two kinds, or this proves nothing: %A" offered)
+                do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-list-row]")
+                let reached = System.Collections.Generic.HashSet<string> ()
+                let presses = ref 0
+                while reached.Count < offered.Length && presses.Value < 12 do
+                    do! awaitU (page.Keyboard.PressAsync "Shift+Tab")
+                    presses.Value <- presses.Value + 1
+                    let! here =
+                        await (page.EvaluateAsync<string> """() => document.activeElement?.getAttribute('data-terminal-filter') ?? ''""")
+                    if here <> "" then reached.Add here |> ignore
+                for filter in offered do
+                    Expect.isTrue (reached.Contains filter) (sprintf "Tab reaches the %s filter" filter)
+            }
+
+        // F5. Which filter the page is narrowed to is said to assistive technology, not only
+        // drawn: chosen from the keyboard, that one — and only that one — is pressed.
+        editorCase "a filter chosen from the keyboard is the one pressed" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-filter='closed']")
+                do! awaitU (page.Keyboard.PressAsync "Enter")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-filter='closed'][aria-pressed='true']")
+                let! pressed =
+                    await (page.EvaluateAsync<string[]> """() => [...document.querySelectorAll("#shell [data-content-list] [data-terminal-filter]")]
+                        .filter(b => b.getAttribute('aria-pressed') === 'true')
+                        .map(b => b.getAttribute('data-terminal-filter'))""")
+                Expect.equal (List.ofArray pressed) [ "closed" ] "closed, and nothing else"
+            }
+
+        // F5, on a phone: every filter is a thumb's 44px, painted and on top where it is.
+        editorCaseOnTouch 390 844 "on a touch screen every filter on the all page is at the touch floor" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-filter='closed']")
+                let! sizes =
+                    await (page.EvaluateAsync<string> """() => JSON.stringify(
+                        [...document.querySelectorAll("#shell [data-content-list] [data-terminal-filter]")].map(b => {
+                            b.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+                            const r = b.getBoundingClientRect();
+                            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+                            return [b.getAttribute('data-terminal-filter'), Math.round(r.width), Math.round(r.height), hit !== null && b.contains(hit)];
+                        }))""")
+                let sizes = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement[]> sizes
+                Expect.isTrue (sizes.Length >= 3) "filters to measure"
+                for size in sizes do
+                    Expect.isTrue
+                        (size.[1].GetInt32 () >= 44 && size.[2].GetInt32 () >= 44 && size.[3].GetBoolean ())
+                        (sprintf "a filter on top, at the touch floor: %O" size)
+            }
+
+        // F5, on a phone: a thumb has no hover, so the row the pane is about WEARS its verbs —
+        // the way back to them is the row itself — and each is a thumb's 44px.
+        editorCaseOnTouch 390 844 "on a touch screen the row the pane is about wears its verbs at the touch floor" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-list-row][aria-current='true']")
+                let! sizes =
+                    await (page.EvaluateAsync<string> """() => {
+                        const row = document.querySelector("#shell [data-content-list] [data-terminal-list-row][aria-current='true']").closest('[role=listitem]');
+                        return JSON.stringify([...row.querySelectorAll('button:not([data-terminal-list-row])')].map(b => {
+                            const r = b.getBoundingClientRect();
+                            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+                            let opacity = 1;
+                            for (let n = b; n; n = n.parentElement) opacity *= Number(getComputedStyle(n).opacity);
+                            return [Math.round(r.width), Math.round(r.height), hit !== null && b.contains(hit) && opacity === 1];
+                        }));
+                    }""")
+                let sizes = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement[]> sizes
+                Expect.isNonEmpty sizes "the row the pane is about has verbs to wear"
+                for size in sizes do
+                    Expect.isTrue
+                        (size.[0].GetInt32 () >= 44 && size.[1].GetInt32 () >= 44 && size.[2].GetBoolean ())
+                        (sprintf "a verb painted, on top, at the touch floor: %O" size)
+            }
+
+        // F5, on a phone: every OTHER row's verbs are out of the way, not merely see-through —
+        // a see-through kill at a row's edge is one a thumb presses without seeing it.
+        editorCaseOnTouch 390 844 "on a touch screen no row hides a press it does not show" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-list-row][aria-current='false']")
+                let! hidden =
+                    await (page.EvaluateAsync<string[]> """() => [...document.querySelectorAll("#shell [data-content-list] [data-terminal-list-row][aria-current='false']")]
+                        .flatMap(name => [...name.closest('[role=listitem]').querySelectorAll('button:not([data-terminal-list-row])')])
+                        .filter(b => {
+                            const r = b.getBoundingClientRect();
+                            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+                            let opacity = 1;
+                            for (let n = b; n; n = n.parentElement) opacity *= Number(getComputedStyle(n).opacity);
+                            return hit !== null && b.contains(hit) && opacity < 0.5;
+                        })
+                        .map(b => b.outerHTML.slice(0, b.outerHTML.indexOf('>')))""")
+                Expect.isEmpty hidden "nothing pressable that is not painted"
+            }
+
         // The shortcut works from anywhere on the page — the whole point of one — including
         // with the pane shut, which it opens.
         editorCase "the switcher's shortcut opens it from the chat" <| fun page ->
