@@ -3014,9 +3014,13 @@ module Style =
     let paneGrabEdge =
         cls [ "wide:hidden absolute left-0 inset-y-0 w-1.5 z-50 p-0 border-0 bg-transparent cursor-pointer"
               "flex items-center"; focusRing ]
-    /// Its mark: the head's own `›` (`Icon.right`) in the faint ink, midway down the edge.
+    /// Its mark: the head's own `›` (`Icon.rightSm`) in the faint ink, midway down the edge.
     /// The same glyph as the control it duplicates, so the edge reads as the way back to the
     /// chat rather than as a bare rule with no meaning (which is what a short bar was).
+    ///
+    /// Hung in the gutter and no further: a phone's rail is 12px from the edge, and the 14px
+    /// box the head's glyph is drawn in ran 2px over the first letters of whatever row sat at
+    /// its height ("›exit"). The mark's box is 12px, so it ends where the rail begins.
     let paneGrabMark = "block text-ink-faint"
 
     /// The column's head: a PIVOT, the one row this pane is navigated by (Zune's own idiom,

@@ -3983,6 +3983,51 @@ let editorTests =
                 return ()
             }
 
+        // The edge's mark hangs in the gutter, and the gutter is the column left of the rail:
+        // no word in the pane may begin under it. The mark sits midway down the edge, so the
+        // row it met depended on how many rows there were ("›exit"); this asks of EVERY painted
+        // text run in the pane, so the answer does not depend on which one happens to be there.
+        // Both faces of the pane, because the all page's rows and a terminal's lines are
+        // different surfaces with different leftmost text.
+        editorCaseIn 390 844 "on a phone no text in the pane begins under the edge's mark" <| fun page ->
+            async {
+                let underTheMark =
+                    """() => {
+                         const mark = document.querySelector('#shell [data-pane-grab-edge] svg').getBoundingClientRect()
+                         const panel = document.querySelector('#shell [data-content-panel]')
+                         const walker = document.createTreeWalker(panel, NodeFilter.SHOW_TEXT)
+                         const runs = []
+                         for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+                           if (!n.textContent.trim()) continue
+                           const range = document.createRange()
+                           range.selectNodeContents(n)
+                           for (const r of range.getClientRects())
+                             if (r.width > 1 && r.height > 1 && r.right > 0 && r.left < window.innerWidth)
+                               runs.push({ text: n.textContent.trim().slice(0, 20), left: r.left, top: r.top, bottom: r.bottom })
+                         }
+                         return JSON.stringify({ runs: runs.length, under: runs.filter(r => r.left < mark.right) })
+                       }"""
+                let measure () =
+                    async {
+                        let! json = await (page.EvaluateAsync<string> underTheMark)
+                        use doc = System.Text.Json.JsonDocument.Parse json
+                        let root = doc.RootElement
+                        Expect.isTrue (root.GetProperty("runs").GetInt32 () > 0) "the pane has text on it, or this proves nothing"
+                        return root.GetProperty("under").ToString ()
+                    }
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left <= 1")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-switcher]")
+                let! onTerminal = measure ()
+                Expect.equal onTerminal "[]" "no text on the terminal face begins under the mark"
+                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                let! onAll = measure ()
+                Expect.equal onAll "[]" "no text on the all page begins under the mark"
+            }
+
         // The focus contract (where the keyboard goes after an act in the pane). Each of these
         // removes the control that was pressed or puts a surface in front of the reader, and
         // what only a browser can say is where focus actually ENDED — the model can name a
