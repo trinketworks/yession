@@ -1169,6 +1169,7 @@ let private start () =
                     try Browser.WebStorage.localStorage.setItem ("yession.nav", (if collapsed then "collapsed" else "open"))
                     with _ -> ()
                 | Preference.PaneWidth width -> PaneShell.rememberPaneWidth width
+                | Preference.Pane (session, memory) -> PaneShell.Memory.write session memory
               Client.Ports.Keyframe =
                 fun terminal seq ->
                     async {

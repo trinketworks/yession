@@ -568,18 +568,12 @@ let installStrip () : unit =
 /// a set of things in ONE session; per browser, like the split below, because it is one
 /// person's view and never anybody else's.
 ///
-/// The model decides what is remembered (`ClientModel.paneMemory`) and when it is put back
-/// (`ClientModel.remembered`, then the fold's `recall`); this only reads and writes it.
+/// The model decides what is remembered and when (`ClientModel.paneToRemember`), and when it is
+/// put back (`ClientModel.remembered`, then the fold's `recall`); this only reads and writes it.
 module Memory =
 
     let private key (session: Yession.Domain.SessionId) : string =
         "yession:pane:" + Yession.Domain.SessionId.value session
-
-    /// What storage is known to hold, so a render that changed nothing about the pane writes
-    /// nothing. Seeded by `read` with what it found — or with an untouched pane when it found
-    /// nothing — so a session merely visited leaves no key behind until something in its pane
-    /// is actually moved.
-    let mutable private stored : (Yession.Domain.SessionId * Yession.App.Codecs.PaneMemory) option = None
 
     /// The pane this browser remembered for this session.
     ///
@@ -588,34 +582,23 @@ module Memory =
     /// purpose: what is lost is one person's tab arrangement, the page that cannot read it
     /// starts exactly as a session never seen, and the next change overwrites it.
     let read (session: Yession.Domain.SessionId) : Yession.App.Codecs.PaneMemory option =
-        let found =
-            try
-                match localStorage.getItem (key session) with
-                | null | "" -> None
-                | text ->
-                    Yession.Codecs.Codec.fromString Yession.App.Codecs.PaneMemory.codec text
-                    |> Result.toOption
-            with _ -> None
-        stored <- Some (session, found |> Option.defaultValue Yession.App.Codecs.PaneMemory.untouched)
-        found
+        try
+            match localStorage.getItem (key session) with
+            | null | "" -> None
+            | text ->
+                Yession.Codecs.Codec.fromString Yession.App.Codecs.PaneMemory.codec text
+                |> Result.toOption
+        with _ -> None
 
-    /// Write the pane down, if it changed. Not while a memory is still HELD by the model
-    /// (`ClientModel.PaneMemory`): the strip on screen then holds only the terminals the log
-    /// has named so far, and writing it would forget the rest of the strip waiting to be put
-    /// back.
-    let keep (model: Yession.App.ClientModel) : unit =
-        match model.Session, model.PaneMemory with
-        | Some session, None ->
-            let memory = Yession.App.ClientModel.paneMemory model
-            if stored <> Some (session, memory) then
-                stored <- Some (session, memory)
-                // Denied in a private window, and a pane that cannot be remembered is still a
-                // pane that works.
-                try
-                    localStorage.setItem (key session, Yession.Codecs.Codec.toString Yession.App.Codecs.PaneMemory.codec memory)
-                with _ ->
-                    ()
-        | _ -> ()
+    /// Write the pane down. Which pane, and whether there is anything new to write, is the
+    /// model's (`ClientModel.paneToRemember`).
+    let write (session: Yession.Domain.SessionId) (memory: Yession.App.Codecs.PaneMemory) : unit =
+        // Denied in a private window, and a pane that cannot be remembered is still a pane
+        // that works.
+        try
+            localStorage.setItem (key session, Yession.Codecs.Codec.toString Yession.App.Codecs.PaneMemory.codec memory)
+        with _ ->
+            ()
 
 /// The pane's width on desktop, as a custom property on the shell root — the same mechanism
 /// the open state uses, and for the same reason: a Lit re-render must not fight the column's
