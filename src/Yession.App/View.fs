@@ -1667,7 +1667,7 @@ module View =
 
     let private ansiText (text: string) : TemplateResult list = ansiLines (Ansi.parse text) None
 
-    /// How a block went, as its HOOKS spell it: four tokens for six outcomes, because what a
+    /// How a block went, as its HOOKS spell it: five tokens for seven outcomes, because what a
     /// hook is asked is whether it went, not how.
     let private terminalBlockStatusLabel =
         function
@@ -1675,6 +1675,7 @@ module View =
         | BlockFinished (CommandSucceeded _) -> Dom.Text.blockOk
         | BlockFinished _ -> Dom.Text.blockFailed
         | BlockRejected _ -> Dom.Text.blockRejected
+        | BlockEnded _ -> Dom.Text.blockEnded
 
     /// How a block went, in WORDS — what a screen reader hears where the mark draws a glyph
     /// and a number, and what a command chip's accessible name says in its middle.
@@ -1686,6 +1687,7 @@ module View =
         | BlockFinished CommandTimedOut -> Dom.Text.blockTimedOut
         | BlockFinished (CommandExecutionFailed _) -> Dom.Text.failed
         | BlockRejected (by, _) -> Dom.Text.blockRefusedBy (Entity.actorName model by)
+        | BlockEnded _ -> Dom.Text.blockEnded
 
     /// How a block went, drawn. ONE renderer for every surface that shows a block — its line
     /// in the pane, its tab's header, its chip in the chat — so a reader who learnt the marks
@@ -1710,6 +1712,10 @@ module View =
         | BlockFinished CommandTimedOut
         | BlockFinished (CommandExecutionFailed _) ->
             html $"""<span class="{Style.statusErr}" data-block-mark="{token}">{terminalBlockStatusWord model status}</span>"""
+        // A record, not a wrong thing: nothing says it failed, so it is not red. Faint like
+        // any other status with nothing to report, and the block's facts carry why it ended.
+        | BlockEnded _ ->
+            html $"""<span class="{Style.statusFaint}" data-block-mark="{token}">{terminalBlockStatusWord model status}</span>"""
         // Named, not merely absent. "refused by nick" in line with the commands that ran
         // is the whole reason a refusal mints a block at all — so it is a NAME, resolved like
         // every other person on screen, not the id the hook carries.
@@ -3155,7 +3161,8 @@ module View =
         else
             match block.Status with
             | BlockRunning -> html $"""<div class="{Style.terminalOutputEmpty}" data-terminal-output>…</div>"""
-            | BlockFinished _ -> html $"""<div class="{Style.terminalOutputEmpty}" data-terminal-output>no output</div>"""
+            | BlockFinished _
+            | BlockEnded _ -> html $"""<div class="{Style.terminalOutputEmpty}" data-terminal-output>no output</div>"""
             // "no output" would be true and useless. A refused command has no output
             // because it never ran, and the reason — when one was given — is the thing
             // the next reader actually wants.
@@ -3271,7 +3278,8 @@ module View =
             | None -> Lit.nothing
         let reason =
             match block.Status with
-            | BlockFinished (CommandExecutionFailed reason) ->
+            | BlockFinished (CommandExecutionFailed reason)
+            | BlockEnded reason ->
                 html $"""<span class="{Style.terminalBlockFact}">{reason}</span>"""
             | BlockRunning
             | BlockFinished _
@@ -3279,6 +3287,7 @@ module View =
         let facts =
             match block.Status, block.StoppedBy with
             | BlockFinished (CommandExecutionFailed _), _
+            | BlockEnded _, _
             | _, Some _ -> html $"""<div class="{Style.terminalBlockFacts}" data-terminal-block-facts>{reason}{stoppedBy}</div>"""
             | _ -> Lit.nothing
         // Stop: ^C to this command, the terminal left standing — on the command line it stops,
@@ -3296,7 +3305,8 @@ module View =
                             aria-keyshortcuts="Control+C"
                             @click={Ev(fun _ -> dispatch (InterruptTerminalMsg terminal))}>{Icon.stop}stop</button>"""
             | BlockFinished _
-            | BlockRejected _ -> Lit.nothing
+            | BlockRejected _
+            | BlockEnded _ -> Lit.nothing
         html $"""
             <article class="{Style.terminalBlock}" data-terminal-block="{BlockId.value block.BlockId}"
                      data-terminal-block-status="{terminalBlockStatusLabel block.Status}">

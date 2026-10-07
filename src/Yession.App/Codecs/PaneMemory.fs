@@ -35,6 +35,7 @@ module CommandTally =
             | BlockFinished (CommandFailed _ | CommandTimedOut | CommandExecutionFailed _)
             | BlockRejected _ -> true
             | BlockFinished (CommandSucceeded _)
+            | BlockEnded _
             | BlockRunning -> false
         { CommandTally.Finished = view.Blocks |> List.filter (fun b -> b.Status <> BlockRunning) |> List.length
           CommandTally.Failed = view.Blocks |> List.filter (fun b -> failed b.Status) |> List.length }

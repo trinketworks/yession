@@ -1006,7 +1006,7 @@ module BlockGroup =
             not (Set.contains block.BlockId latest)
             && (match block.Status with
                 | BlockRunning -> false
-                | BlockFinished _ | BlockRejected _ -> true)
+                | BlockFinished _ | BlockRejected _ | BlockEnded _ -> true)
         // Each group so far as its first block and the rest newest-first, so it can never be
         // empty and its latest block is at hand.
         let step (groups: (Block * Block list) list) (next: Block) : (Block * Block list) list =
@@ -2695,6 +2695,7 @@ module ClientModel =
                 | Some (BlockFinished (CommandFailed _ | CommandTimedOut | CommandExecutionFailed _))
                 | Some (BlockRejected _) -> TerminalState.Failed
                 | Some (BlockFinished (CommandSucceeded _))
+                | Some (BlockEnded _)
                 | Some BlockRunning
                 | None -> TerminalState.Idle
 

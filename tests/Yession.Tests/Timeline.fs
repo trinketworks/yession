@@ -1115,6 +1115,16 @@ let private endedAs (result: CommandResult) : string =
     |> Support.step (ShowInPaneMsg (Reading terminalA))
     |> Support.render
 
+/// One command in terminal A whose terminal then closed with no completion saying how it
+/// went — a log from before the Process appended one — with terminal A on screen.
+let private cutOffByItsClose () : string =
+    clientOf
+        [ at 1L 0.0 (opened terminalA "build")
+          at 2L 1.0 (started terminalA "1" byAda "exit" 1)
+          at 3L 2.0 (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "the shell exited with code 0"; By = Some ActorRef.System }) ]
+    |> Support.step (ShowInPaneMsg (Reading terminalA))
+    |> Support.render
+
 /// Every status mark drawn inside `html`, by the token it carries.
 let private marksIn (html: string) : string list =
     Text.RegularExpressions.Regex.Matches (html, Dom.Hooks.blockMark + "=\"([^\"]*)\"")
@@ -1155,6 +1165,16 @@ let private statusTests =
                     (endedAs (CommandExecutionFailed "the session stopped while it was running"))
             Expect.isTrue (block.Contains Dom.Hooks.terminalBlockFacts) "the facts are rendered"
             Expect.isFalse (block.Contains "<details") "and nothing has to be opened to read them"
+
+        testCase "a block that ended with nothing saying how is marked ended, not failed, in the pane and the chat" <| fun () ->
+            // Called failed, a shell's `exit` read FAILED beside a close notice saying the shell
+            // exited 0. Nothing on this record says it failed, so no surface may.
+            Expect.equal
+                (let html = cutOffByItsClose ()
+                 [ marksIn (markupAt (Dom.attr Dom.Hooks.terminalBlock "b-1") html)
+                   marksIn (markupAt (Dom.attr Dom.Hooks.chatBlock "b-1") html) ])
+                [ [ Dom.Text.blockEnded ]; [ Dom.Text.blockEnded ] ]
+                "one mark on each surface, and it says ended"
 
         testCase "a terminal running a command marks its tab, and an idle one does not" <| fun () ->
             let strip = Support.render (clientOf threeUntitled |> showingAll)
@@ -4457,6 +4477,11 @@ let private tallyTests =
             // counted `exit 2` apart from `timed out` would be longer and say less.
             Expect.equal (TaskCard.stateOf (BlockFinished (CommandFailed 2))) TaskFailed "exit 2 failed"
             Expect.equal (TaskCard.stateOf (BlockFinished CommandTimedOut)) TaskFailed "so did the timeout"
+
+        testCase "a block that ended with nothing saying how is not counted failed" <| fun () ->
+            // Its terminal closed under it and no completion followed. Counting it failed
+            // would be a guess, and red is what a person scanning a card acts on.
+            Expect.equal (TaskCard.stateOf (BlockEnded "the shell exited with code 0")) TaskDone "over, not wrong"
 
         testCase "the summary counts every command once" <| fun () ->
             let states = [ TaskDone; TaskFailed; TaskDone; TaskRunning; TaskDone ]

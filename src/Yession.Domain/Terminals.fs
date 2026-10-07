@@ -118,6 +118,13 @@ type BlockStatus =
     | BlockRunning
     | BlockFinished of CommandResult
     | BlockRejected of by: ActorRef * reason: string option
+    /// It ended, and nothing on the record says HOW: its terminal closed while it was still
+    /// running and no completion was ever appended for it (a log from before the Process
+    /// appended one itself, or the two events landing the other way round). Carries the
+    /// close's reason. Its own case rather than a `CommandResult`, because any result here
+    /// would be a guess, and the guess used to be "failed" — a red word on a command whose
+    /// shell may well have exited 0 under it.
+    | BlockEnded of reason: string
 
 /// One executed command and the transcript range it produced.
 type Block =
@@ -308,9 +315,11 @@ module Projection =
             // closed terminal still calls running is a chip spinning over nothing. The
             // Process appends the completion itself when it closes a terminal, and this is
             // the guard for the log that predates that, and for the one where the two
-            // events arrive the other way round. `ToSeq` stays unknown — the fold has no
-            // sequence to close the range at, and a reader that slices to the end gets
-            // everything the command printed before the shell went.
+            // events arrive the other way round. It ends `BlockEnded`, not a result: a close
+            // does not know how the command went, and a completion folded after it still
+            // says. `ToSeq` stays unknown — the fold has no sequence to close the range at,
+            // and a reader that slices to the end gets everything the command printed
+            // before the shell went.
             proj
             |> updateTerminal e.TerminalId (fun t ->
                 { t with
@@ -321,8 +330,7 @@ module Projection =
                         t.Blocks
                         |> List.map (fun b ->
                             match b.Status with
-                            | BlockRunning ->
-                                { b with Status = BlockFinished (CommandExecutionFailed (sprintf "the terminal was closed: %s" e.Reason)) }
+                            | BlockRunning -> { b with Status = BlockEnded e.Reason }
                             | _ -> b) })
         | SessionEvent.TerminalLeaseTaken e ->
             proj |> updateTerminal e.TerminalId (fun t -> { t with Lease = Some e.By })
