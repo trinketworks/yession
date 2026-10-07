@@ -104,7 +104,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "Running it.")
                             return AgentCompleted ("Running it.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None asked
                 let! events = eventsOf log
                 Expect.equal
                     events
@@ -119,47 +119,38 @@ let private turnTests =
 
         // The prompt is two authors' words in one string, and the ORDER is the invariant: the
         // product's core first, the operator's after it, introduced as theirs. A host that
-        // wrote nothing gets the core and not a dangling introduction. Asserted on the
-        // context the runner is handed, which is the only place the assembled prompt exists.
-        testCaseAsync "the operator's words follow the product's, and are named as theirs" <|
-            async {
-                let seen = ref []
-                let capturing : RunAgent =
-                    fun context _capabilities _signal _onChunk ->
-                        async {
-                            seen.Value <- context.SystemPrompt :: seen.Value
-                            return AgentCompleted ("", None)
-                        }
-                let words = "Never push to main on this host."
-                do! AgentTurn.run (newLog ()) capturing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None (Some words) asked
-                do! AgentTurn.run (newLog ()) capturing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
-                match List.rev seen.Value with
-                | [ guided; bare ] ->
-                    Expect.equal bare AgentTurn.systemPrompt "no guidance is the core alone"
-                    // Where scratch goes is part of the core, not the operator's to add: the
-                    // directory is one the BUILD sets, and `/tmp` is denied on a host the
-                    // operator's words never mention.
-                    Expect.stringContains AgentTurn.systemPrompt "$TMPDIR" "the core names the scratch directory"
-                    Expect.stringContains AgentTurn.systemPrompt "/tmp" "and names /tmp as not the agent's"
-                    // The default sandbox is not guaranteed a language runtime — python is a
-                    // stub on a Mac, absent on a minimal host — so the core says not to count
-                    // on one. Product-true on every
-                    // host; an agent that reached for python here lost turns to the stub.
-                    Expect.stringContains AgentTurn.systemPrompt "language runtime" "the core warns a runtime is not assured"
-                    // The file tools (read_file, edit_file) are what the prompt steers to; the
-                    // shell is for what only a shell does. It used to say the opposite —
-                    // "edit with sed and awk" — and every edit reached the timeline as a
-                    // head/tail/mv line nobody could read as an edit.
-                    Expect.stringContains AgentTurn.systemPrompt "edit_file" "and names the tool to edit with"
-                    Expect.stringContains AgentTurn.systemPrompt "read_file" "and the one to read with"
-                    Expect.isFalse (AgentTurn.systemPrompt.Contains "edit with sed") "the shell is no longer the way to edit"
-                    Expect.isTrue (guided.StartsWith AgentTurn.systemPrompt) "the core comes first, whole"
-                    Expect.isTrue (guided.EndsWith words) "the operator's words come last, whole"
-                    Expect.isTrue
-                        (guided.Substring(AgentTurn.systemPrompt.Length).Contains "operator")
-                        "and between them a line says whose they are"
-                | other -> failwithf "expected two prompts, got %d" (List.length other)
-            }
+        // wrote nothing gets the core and not a dangling introduction.
+        testCase "a host that wrote no guidance gets the core alone" <| fun () ->
+            Expect.equal (AgentTurn.promptWith None) AgentTurn.systemPrompt "no guidance, no introduction"
+
+        testCase "the operator's words follow the whole core" <| fun () ->
+            let guided = AgentTurn.promptWith (Some "Never push to main on this host.")
+            Expect.isTrue (guided.StartsWith AgentTurn.systemPrompt) "the core comes first, whole"
+            Expect.isTrue (guided.EndsWith "Never push to main on this host.") "the operator's words come last, whole"
+
+        testCase "a line between the core and the operator's words says whose they are" <| fun () ->
+            let guided = AgentTurn.promptWith (Some "Never push to main on this host.")
+            Expect.stringContains (guided.Substring AgentTurn.systemPrompt.Length) "operator" "the introduction names the operator"
+
+        // Where scratch goes is part of the core, not the operator's to add: the directory is
+        // one the BUILD sets, and `/tmp` is denied on a host the operator's words never mention.
+        testCase "the core says scratch goes under $TMPDIR, not /tmp" <| fun () ->
+            Expect.stringContains AgentTurn.systemPrompt "$TMPDIR" "the core names the scratch directory"
+            Expect.stringContains AgentTurn.systemPrompt "/tmp" "and names /tmp as not the agent's"
+
+        // The default sandbox is not guaranteed a language runtime — python is a stub on a
+        // Mac, absent on a minimal host — so the core says not to count on one. An agent that
+        // reached for python here lost turns to the stub.
+        testCase "the core warns that a language runtime is not assured" <| fun () ->
+            Expect.stringContains AgentTurn.systemPrompt "language runtime" "the core warns a runtime is not assured"
+
+        // The file tools are what the prompt steers to; the shell is for what only a shell
+        // does. It used to say the opposite — "edit with sed and awk" — and every edit reached
+        // the timeline as a head/tail/mv line nobody could read as an edit.
+        testCase "the core steers file work to the file tools, not the shell" <| fun () ->
+            Expect.stringContains AgentTurn.systemPrompt "edit_file" "names the tool to edit with"
+            Expect.stringContains AgentTurn.systemPrompt "read_file" "and the one to read with"
+            Expect.isFalse (AgentTurn.systemPrompt.Contains "edit with sed") "the shell is no longer the way to edit"
 
         // A turn whose only output was reasoning and tool calls SAID nothing, and the
         // transcript has to go on reading that way — otherwise recording the thinking would
@@ -175,7 +166,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Thinking "still weighing it up")
                             return AgentCompleted ("", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None asked
                 let! events = eventsOf log
                 let started =
                     events |> List.filter (function AgentMessageStarted _ -> true | _ -> false) |> List.length
@@ -197,7 +188,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "lo!")
                             return AgentCompleted ("Hello!", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None asked
                 let! events = eventsOf log
                 Expect.equal
                     events
@@ -226,7 +217,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "It finished.")
                             return AgentCompleted ("Let me run it again.It finished.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None asked
                 let! events = eventsOf log
                 Expect.equal
                     (events |> List.skip 2)
@@ -251,7 +242,7 @@ let private turnTests =
                             onChunk (AgentResponseChunk.Text "Done.")
                             return AgentCompleted ("Done.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None asked
                 let! events = eventsOf log
                 Expect.equal
                     (events |> List.skip 2)
@@ -271,7 +262,7 @@ let private turnTests =
                             onChunk AgentResponseChunk.MessageBoundary
                             return AgentCompleted ("Done.", None)
                         }
-                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
+                do! AgentTurn.run log scripted AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId (mintMessageIds ()) sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None asked
                 let! events = eventsOf log
                 Expect.equal
                     (events |> List.skip 2)
@@ -285,7 +276,7 @@ let private turnTests =
             async {
                 let log = newLog ()
                 let failing : RunAgent = fun _ _ _ _ -> async { return AgentFailed ("boom", None) }
-                do! AgentTurn.run log failing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
+                do! AgentTurn.run log failing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None asked
                 let! events = eventsOf log
                 Expect.equal
                     (List.last events)
@@ -297,7 +288,7 @@ let private turnTests =
             async {
                 let log = newLog ()
                 let throwing : RunAgent = fun _ _ _ _ -> failwith "runner exploded"
-                do! AgentTurn.run log throwing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
+                do! AgentTurn.run log throwing AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None asked
                 let! events = eventsOf log
                 match List.last events with
                 | AgentTurnFailed f -> Expect.equal f.Reason "runner exploded" "the thrown reason is captured"
@@ -626,7 +617,7 @@ let private liveTests =
                 let log = newLog ()
                 let mintLiveTurn () = AgentTurnId.create (string (Guid.NewGuid ())) |> expect
                 let mintLiveMessage () = MessageId.create (string (Guid.NewGuid ())) |> expect
-                do! AgentTurn.run log (Agent.run Yession.Manager.Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
+                do! AgentTurn.run log (Agent.run Yession.Manager.Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None asked
                 let! events = eventsOf log
                 match List.last events with
                 | AgentMessageCompleted completed ->
@@ -647,7 +638,7 @@ let private liveTests =
                 let log = newLog ()
                 let mintLiveTurn () = AgentTurnId.create (string (Guid.NewGuid ())) |> expect
                 let mintLiveMessage () = MessageId.create (string (Guid.NewGuid ())) |> expect
-                do! AgentTurn.run log (Agent.runWith Yession.Manager.Launch.unlaunched.DataDir HostBackend (Some credential)) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None None asked
+                do! AgentTurn.run log (Agent.runWith None Yession.Manager.Launch.unlaunched.DataDir HostBackend (Some credential)) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None asked
                 let! events = eventsOf log
                 match List.last events with
                 | AgentMessageCompleted completed ->
@@ -724,7 +715,7 @@ let private liveTests =
                 let log = newLog ()
                 let mintLiveTurn () = AgentTurnId.create (string (Guid.NewGuid ())) |> expect
                 let mintLiveMessage () = MessageId.create (string (Guid.NewGuid ())) |> expect
-                do! AgentTurn.run log (Agent.run Yession.Manager.Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ probeItem ] Attribution.empty [] [] None None (AgentTurn.FromMessage probe)
+                do! AgentTurn.run log (Agent.run Yession.Manager.Launch.unlaunched.DataDir HostBackend) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ probeItem ] Attribution.empty [] [] None (AgentTurn.FromMessage probe)
                 let! events = eventsOf log
                 match List.last events with
                 | AgentMessageCompleted completed ->
@@ -796,8 +787,7 @@ let private sessionTimeTests =
           Model = None
           Now = now
           History = history
-          People = Attribution.empty
-          SystemPrompt = "" }
+          People = Attribution.empty }
     testList "What a turn is told about time" [
         testCase "a turn is told the time, and when its session began" <| fun () ->
             let prompt = Yession.Host.Agent.promptOf (context { StartedAt = Some (now.AddDays -1.0); LastResumed = None })
@@ -1262,7 +1252,7 @@ let private armedSchedulerOver (doc: Y.Doc) (seed: SessionEvent list) (duringTur
     let scheduler =
         Scheduler.create sessionId doc log (fun () -> Some runner)
             (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId Principal.Peer
-            (fun _ _ _ -> []) None TurnPolicy.addressed Set.empty
+            (fun _ _ _ -> []) TurnPolicy.addressed Set.empty
     scheduler, log
 
 let private armedScheduler (seed: SessionEvent list) (duringTurn: EventLog<SessionEvent> -> unit) =
@@ -1559,7 +1549,7 @@ let private schedulerOverPickedModel (choice: ModelId option) =
     let scheduler =
         Scheduler.create (SessionId.create "model-session" |> expect) doc log (fun () -> Some runner)
             (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) (fun () -> turnId) (fun () -> agentMessageId) Principal.Peer
-            (fun _ _ _ -> []) None TurnPolicy.addressed Set.empty
+            (fun _ _ _ -> []) TurnPolicy.addressed Set.empty
     scheduler, (fun () -> seen)
 
 let private modelChoiceTests =
@@ -2145,8 +2135,7 @@ let private multiplayerTests =
               Model = None
               Now = DateTimeOffset.UtcNow
               History = SessionHistory.none
-              People = people
-              SystemPrompt = "" }
+              People = people }
     testList "Several people in one session" [
 
         testCase "the core prompt tells the agent the name people address it by" <| fun () ->

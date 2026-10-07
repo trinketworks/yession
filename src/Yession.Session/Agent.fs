@@ -238,8 +238,9 @@ module AgentTurn =
         // the same instant.
         (terminals: BlockDigest list)
         // The session's repos, off the same page terminals came off (Plan: repo AGENTS.md
-        // into per-turn context). Carried separately from `guidance`: this is repo-authored,
-        // not the operator's words, and `promptOf` is where that distinction is enforced.
+        // into per-turn context). Carried apart from the operator's guidance, which the runner
+        // holds: this is repo-authored, not the operator's words, and `promptOf` is where that
+        // distinction is enforced.
         (repos: SessionRepo list)
         // Which model this turn runs on, read from the session's collaborative register at
         // the same instant the page above it was (`None` = the provider's own default). A
@@ -247,10 +248,6 @@ module AgentTurn =
         // that read its conversation now and its model later could run the answer to one
         // question on the model somebody picked for the next.
         (model: ModelId option)
-        // What the operator wrote for the agent, if anything (`promptWith`). Read once at boot
-        // with the rest of the profile, unlike the model beside it: the profile is the host's
-        // statement, and a host does not change its mind between turns.
-        (guidance: string option)
         (trigger: TurnTrigger)
         : Async<unit> =
         async {
@@ -322,8 +319,7 @@ module AgentTurn =
                       Model = model
                       Now = now
                       History = history
-                      People = people
-                      SystemPrompt = promptWith guidance }
+                      People = people }
                 do! append (AgentContextBuilt { AgentTurnId = turnId; MessageCount = List.length conversation })
 
                 // Where one message ends and the next begins, decided from the stream alone.
