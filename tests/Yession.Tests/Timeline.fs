@@ -1015,6 +1015,22 @@ let private twoOpenOneEnded =
       at 3L 2.0 (opened terminalC "old")
       at 4L 3.0 (SessionEvent.TerminalClosed { TerminalId = terminalC; Reason = "exited"; By = None }) ]
 
+/// A phone's pane brought up by its edge tab before the log has been read through: the first
+/// of two pages folded, a terminal somebody else opened in it, and the last still to come.
+let private upBeforeTheLog : ClientModel =
+    ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
+    |> Support.step HistoryReadMsg
+    |> Support.step
+        (ConnectedMsg
+            { SessionId = sessionId
+              AssignedDisplayName = "swift-heron"
+              LatestOffset = Some (EventOffset.create 2L |> expect) })
+    |> Support.step ToggleContentMsg
+    |> withPage [ at 1L 0.0 (openedBy (PeerRef bob) terminalA "build") ]
+
+/// The page that carries `upBeforeTheLog` past the read-through line.
+let private lastOfTheLog = [ at 2L 1.0 (sent "1" "hello") ]
+
 let private edgeTabTests =
     testList "The hidden pane is an edge tab (P1-4)" [
         testCase "the hidden pane's edge tab counts the open terminals" <| fun () ->
@@ -1102,6 +1118,39 @@ let private edgeTabTests =
             // gives it nothing to show; an empty pane over a running build is the wrong answer.
             let model = firstLook true [ [ at 1L 0.0 (openedBy (PeerRef bob) terminalA "build") ] ]
             Expect.isTrue model.Switcher "the switcher, which says what is here"
+
+        // The same landing for every way the pane comes up. A phone's pane never opens itself;
+        // it comes up by its edge tab, and that way landed a fresh viewer on the empty pane.
+        testCase "a pane brought up with nothing of this reader's in the strip opens the switcher" <| fun () ->
+            let model =
+                firstLook false [ [ at 1L 0.0 (openedBy (PeerRef bob) terminalA "build") ] ]
+                |> Support.step ToggleContentMsg
+            Expect.isTrue model.Switcher "the switcher, which says what is here"
+
+        testCase "a pane brought up with the reader's own terminal in the strip shows that terminal" <| fun () ->
+            let model =
+                firstLook false [ [ at 1L 0.0 (opened terminalA "build") ] ]
+                |> Support.step ToggleContentMsg
+            Expect.isFalse model.Switcher "the reader's own tab is what it lands on"
+
+        testCase "a pane brought up over a session with no open terminal shows the empty pane" <| fun () ->
+            let model = firstLook false [ [ at 1L 0.0 (sent "1" "hello") ] ] |> Support.step ToggleContentMsg
+            Expect.isFalse model.Switcher "nothing to list, and the empty pane is where a terminal is made"
+
+        testCase "a pane brought up before the log arrived lands on the switcher once it has" <| fun () ->
+            // Before the log is read through, "no terminal" and "not heard yet" look the same;
+            // the pane up early is landed again by the page that settles which it was.
+            let model = upBeforeTheLog |> withPage lastOfTheLog
+            Expect.isTrue model.Switcher "landed on the switcher when the log said what is here"
+
+        testCase "a pane brought up before the log arrived hands a dropped keyboard to the switcher" <| fun () ->
+            // The empty pane's door may be under the hand, and it leaves with the empty pane.
+            let _, effects =
+                ClientModel.update
+                    (EventsPageMsg { Events = lastOfTheLog; LastOffset = Some (EventOffset.create 2L |> expect); IsEnd = true })
+                    upBeforeTheLog
+            let moves = effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
+            Expect.equal moves [ ClientEffect.Move (DomMove.IfDropped DomMove.FocusSwitcher) ] "onto the switcher, if dropped"
 
         testCase "an empty pane offers one way to make a terminal" <| fun () ->
             let html = Support.render (clientOf [] |> Support.step ToggleContentMsg)

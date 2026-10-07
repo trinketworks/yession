@@ -2765,6 +2765,46 @@ module ClientModel =
                 PaneMemory = if readThrough model then None else model.PaneMemory }
         | None -> model
 
+    /// What the pane LANDS on when it comes on screen with nothing chosen: the reader's own tab
+    /// where the strip offers one (`selectedTerminal`), and otherwise, over a session with
+    /// terminals open, the switcher (P2-2). The strip holds only what this reader opened, so a
+    /// fresh browser on a session whose terminals are the agent's or a colleague's has an empty
+    /// strip, and an empty pane saying "New terminal" over a running build is the one thing the
+    /// pane must not land on. The switcher is what answers "what is here".
+    ///
+    /// ONE rule for every way the pane comes up onto nothing. It was the desktop's alone
+    /// (`openOfItself`), so a phone — whose pane never opens itself, and comes up by its edge
+    /// tab — landed every fresh viewer on exactly that empty pane, over six running terminals.
+    /// Nothing changes once something is up: a preview, the switcher, or a terminal chosen.
+    let private landed (model: ClientModel) : ClientModel =
+        if model.Switcher
+           || Option.isSome (selectedTerminal model)
+           || Option.isSome (preview model)
+           || List.isEmpty (Projection.openTerminals model.Terminals) then
+            model
+        else { model with Switcher = true }
+
+    /// The pane's other landing: the log arriving under a pane ALREADY on screen. Before the
+    /// read-through line "this session has no terminal" and "this client has not heard about
+    /// it yet" look identical, so a pane brought up early — the edge tab pressed before the log
+    /// arrived, or the pane put back open by a reload's memory (`remembered`) over a strip that
+    /// had nothing in it — lands on the empty pane honestly, and is landed again by the message
+    /// that carries the client past that line (`heard`, which runs after this and latches it).
+    let private landsWhenHeard (model: ClientModel) : ClientModel =
+        if model.HeardThrough || not model.TerminalsOpen || not (readThrough model) then model
+        else landed model
+
+    /// Where the keyboard goes when `landsWhenHeard` put the switcher up under a pane that was
+    /// already on screen: whatever the hand was on in the empty pane went with it, so onto the
+    /// switcher — and only if it was dropped (`IfDropped`), because an arrival does not know
+    /// where the hand is. Not for a pane that came up on the same message (`openOfItself`):
+    /// focus resting on `body` then is a page that has just loaded, not a control that went.
+    let heardLanding (before: ClientModel) (after: ClientModel) : DomMove option =
+        let crossed = not before.HeardThrough && after.HeardThrough
+        if before.TerminalsOpen && crossed && not before.Switcher && after.Switcher then
+            Some (DomMove.IfDropped DomMove.FocusSwitcher)
+        else None
+
     /// The pane opening itself on a desktop's first look at a session (P1-4), once the log has
     /// been read through — the same line `recall` lets go of its memory at, and for the same
     /// reason: before it, "this session has no terminal" and "this client has not heard about
@@ -2778,11 +2818,7 @@ module ClientModel =
     /// a person who shuts the pane afterwards is not argued with by the next page of events.
     ///
     /// Opens, and never shuts: a session with nothing open leaves the column as the page found
-    /// it. What it opens ONTO is the reader's own tab where the strip offers one
-    /// (`selectedTerminal`), and otherwise the switcher (P2-2) — the strip holds only what this
-    /// reader opened, so a fresh browser on a session whose terminals are the agent's or a
-    /// colleague's has an empty strip, and an empty pane saying "New terminal" over a running
-    /// build is the one thing this must not show. The switcher is what answers "what is here".
+    /// it. What it opens ONTO is what the pane always lands on (`landed`).
     let private openOfItself (before: ClientModel) (model: ClientModel) : ClientModel =
         if not model.PaneOpensItself then model
         elif model.TerminalsOpen <> before.TerminalsOpen then { model with PaneOpensItself = false }
@@ -2790,10 +2826,7 @@ module ClientModel =
         elif model.PaneRemembered || List.isEmpty (Projection.openTerminals model.Terminals) then
             { model with PaneOpensItself = false }
         else
-            { model with
-                PaneOpensItself = false
-                TerminalsOpen = true
-                Switcher = model.Switcher || Option.isNone (selectedTerminal model) }
+            landed { model with PaneOpensItself = false; TerminalsOpen = true }
 
     /// Where focus lands when the pane comes on screen showing what this model shows.
     ///
@@ -4053,6 +4086,8 @@ module ClientModel =
     /// `settle`, after it, so the strip holds only what it may whichever message moved it;
     /// and through `openOfItself`, which waits for the line `recall` settles at and needs the
     /// model from before the message to tell whether something else moved the column first;
+    /// and through `landsWhenHeard` after it, so a pane already up when that line is crossed
+    /// lands where a pane brought up then would;
     /// and through `notice`, so what this person has looked at is counted from wherever the
     /// message left the pane; and through `holdFilter` after it, last before `heard`, so the
     /// `all` page's filter judges a terminal by what it is once that has been counted.
@@ -4091,7 +4126,7 @@ module ClientModel =
         { model with PaneRoom = { model.PaneRoom with Chosen = Some width } }
 
     let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
-        heard (holdFilter model (notice (reconcileLaunch (openOfItself model (settle (recall (
+        heard (holdFilter model (notice (reconcileLaunch (landsWhenHeard (openOfItself model (settle (recall (
         match msg with
         | ConnectingMsg ->
             { model with Connection = Connecting }
@@ -4772,8 +4807,10 @@ module ClientModel =
                 Switcher = false
                 TerminalsOpen = true }
         | ToggleContentMsg ->
-            // A popover does not outlive the pane it hangs in.
-            { model with TerminalsOpen = not model.TerminalsOpen; Switcher = false; PaneMenu = false }
+            // A popover does not outlive the pane it hangs in. Brought up, the pane lands where
+            // every way of bringing it up lands (`landed`).
+            if model.TerminalsOpen then paneHidden model
+            else landed { model with TerminalsOpen = true; Switcher = false; PaneMenu = false }
         | HideContentMsg -> paneHidden model
         | ToggleNavMsg ->
             // The nav control always returns the column to its workspace face: a column that
@@ -5023,7 +5060,7 @@ module ClientModel =
                     Pane =
                         if selectedTerminal model = Some terminal then next |> Option.map (Reading >> OnTerminal)
                         else model.Pane }
-        )))))))
+        ))))))))
 
     /// The read loop's decisions: what a message, once folded, asks to be read next — of the
     /// event log and of each terminal's transcript — and what it settles of the reads out.
@@ -5344,6 +5381,7 @@ module ClientModel =
                 | RefusalMount.Chat -> [ ClientEffect.Move DomMove.FocusComposer ]
             | _ -> []
         let swapped = keyboardSwap model next |> Option.map ClientEffect.Move |> Option.toList
+        let landing = heardLanding model next |> Option.map ClientEffect.Move |> Option.toList
         let leased = leaseLanding model next |> Option.map ClientEffect.Move |> Option.toList
         let revealed = pivotReveal model next |> Option.map ClientEffect.Move |> Option.toList
         let resized = ptyResizes model next |> List.map ClientEffect.ResizeTerminal
@@ -5355,7 +5393,7 @@ module ClientModel =
             | Some key when not (Set.contains key next.KeyframesAsked) ->
                 { next with KeyframesAsked = Set.add key next.KeyframesAsked }, [ ClientEffect.FetchKeyframe key ]
             | Some _ | None -> next, []
-        next, effects @ answered @ unnoticed @ swapped @ leased @ revealed @ resized @ present @ kept @ fetching @ offering @ reading
+        next, effects @ answered @ unnoticed @ swapped @ landing @ leased @ revealed @ resized @ present @ kept @ fetching @ offering @ reading
 
     /// A message and the effects it asks for. A kill's press is resolved here, against the
     /// model as it stands, into the press it is (`killPress`) — then applied like any other.
