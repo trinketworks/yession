@@ -156,3 +156,17 @@ module PromptStrategy =
 
     /// Every strategy. A new case breaks `name` above, which is the reminder to list it here.
     let all : PromptStrategy list = [ PromptStrategy.Static; PromptStrategy.ClaudeCodeLike ]
+
+/// What this host's operator says about the agent (`agent:` in the profile): words for it, and
+/// the strategy that puts its prompt together. Read once at boot, because a host does not
+/// change its mind between turns.
+type AgentProfile =
+    { /// Appended after the product's system prompt, introduced as the operator's. `None`
+      /// appends nothing.
+      Guidance : string option
+      Prompt : PromptStrategy }
+
+module AgentProfile =
+
+    /// A host that says nothing about the agent: no guidance, and the static prompt.
+    let defaults : AgentProfile = { Guidance = None; Prompt = PromptStrategy.Static }

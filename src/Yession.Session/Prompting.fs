@@ -513,7 +513,7 @@ module Prompting =
           Tools = tools }
 
     /// What the runner calls: the turn's plan, from what it was handed, what this host's
-    /// operator wrote, and the registry the turn runs with (the tools it can really call, which
-    /// only the runner has). Nothing chooses a strategy yet, so it is the static one.
-    let forTurn (guidance: string option) (registry: ToolRegistry) (pack: AgentContextPack) : Plan =
-        plan PromptStrategy.Static (contextOf guidance registry.Tools pack)
+    /// operator wrote (the guidance, and the strategy that plans the turn), and the registry
+    /// the turn runs with (the tools it can really call, which only the runner has).
+    let forTurn (profile: AgentProfile) (registry: ToolRegistry) (pack: AgentContextPack) : Plan =
+        plan profile.Prompt (contextOf profile.Guidance registry.Tools pack)

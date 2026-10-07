@@ -21,6 +21,7 @@ open System
 open Fable.Pyxpecto
 open Hedgehog
 open Yession.Domain
+open Yession.Domain.Agent
 open Yession.Domain.Sandboxes
 open Yession.Domain.Tools
 open Yession.Host
@@ -566,19 +567,19 @@ let tests =
             | Ok _ -> failwith "expected a refusal"
             | Error e -> Expect.isTrue (e.Contains "overlay") (sprintf "the refusal lists the modes, said: %s" e)
 
-        // The one key in this file that is not a resource: words for the agent, from the
-        // operator. Read as written apart from the newline a YAML block scalar leaves on the
-        // end, and absent — not empty — when the block is not there, so the prompt that
-        // appends it can tell "wrote nothing" from "wrote an empty string".
+        // The one block in this file that is not about resources: what the operator says about
+        // the agent. Its words are read as written apart from the newline a YAML block scalar
+        // leaves on the end, and absent — not empty — when the block is not there, so the
+        // prompt that appends them can tell "wrote nothing" from "wrote an empty string".
         testCase "an operator's guidance is read as written, and absent when unwritten" <| fun () ->
             let profile =
                 OperatorProfile.parse """
                     { "version": 1, "resources": {},
                       "agent": { "guidance": "Never push to main on this host.\n" } }"""
                 |> expect
-            Expect.equal profile.Guidance (Some "Never push to main on this host.") "the words, without the scalar's closing newline"
+            Expect.equal profile.Agent.Guidance (Some "Never push to main on this host.") "the words, without the scalar's closing newline"
             let silent = OperatorProfile.parse """{ "version": 1, "resources": {} }""" |> expect
-            Expect.equal silent.Guidance None "no block is no words"
+            Expect.equal silent.Agent.Guidance None "no block is no words"
 
         // The same failure a hollow resource is: a block that reads as configuration and is
         // none. Both spellings of nothing — no key, and a key with only whitespace behind it.
@@ -591,8 +592,33 @@ let tests =
         testCase "an unknown key inside the agent block is refused, not skipped" <| fun () ->
             Expect.isError
                 (OperatorProfile.parse """
-                    { "version": 1, "resources": {}, "agent": { "guidance": "x", "prompt": "y" } }""")
+                    { "version": 1, "resources": {}, "agent": { "guidance": "x", "promt": "static" } }""")
                 "a misspelled key fails the file even when the guidance beside it is fine"
+
+        // The name an operator writes is the name a boot reports (`PromptStrategy.name`), and
+        // every strategy the build has can be chosen by it, with or without guidance beside it.
+        testCase "every prompt strategy is chosen by the name it is reported under" <| fun () ->
+            let chosen (strategy: PromptStrategy) =
+                OperatorProfile.parse (
+                    sprintf """{ "version": 1, "resources": {}, "agent": { "prompt": "%s" } }""" (PromptStrategy.name strategy))
+                |> expect
+                |> fun profile -> profile.Agent.Prompt
+            Expect.equal (PromptStrategy.all |> List.map chosen) PromptStrategy.all "each name reads back as its strategy"
+
+        // A host that names no strategy runs the one every host ran before there was a choice.
+        testCase "a profile that names no prompt strategy gets the static one" <| fun () ->
+            for agent in [ ""; """, "agent": { "guidance": "x" }""" ] do
+                let profile = OperatorProfile.parse (sprintf """{ "version": 1, "resources": {}%s }""" agent) |> expect
+                Expect.equal profile.Agent.Prompt PromptStrategy.Static (sprintf "unnamed in %s" (if agent = "" then "a profile with no agent block" else agent))
+
+        // A typo must not run the agent on a prompt nobody chose, and the refusal says what
+        // there is to choose from.
+        testCase "a prompt strategy this build does not have is refused, naming the ones it has" <| fun () ->
+            match OperatorProfile.parse """{ "version": 1, "resources": {}, "agent": { "prompt": "claude-code" } }""" with
+            | Ok _ -> failwith "expected a refusal"
+            | Error e ->
+                for strategy in PromptStrategy.all do
+                    Expect.stringContains e $"{PromptStrategy.name strategy}" "the refusal lists every strategy"
 
         // The policy the file's two halves express: `resources` is the menu, `always` is what
         // is served whether or not anybody ordered it. A name in one and not the other is the

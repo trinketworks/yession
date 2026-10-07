@@ -2,6 +2,7 @@ namespace Yession.Session
 
 open System
 open Yession.Domain
+open Yession.Domain.Agent
 open Yession.Domain.Sandboxes
 
 #if FABLE_COMPILER
@@ -27,7 +28,7 @@ module OperatorProfile =
     let Version = 1
 
     let private fileKeys = [ "version"; "resources"; "always"; "agent"; "sandboxes" ]
-    let private agentKeys = [ "guidance" ]
+    let private agentKeys = [ "guidance"; "prompt" ]
     let private leafKeys = [ "mount"; "socket"; "endpoint"; "env"; "exec"; "volume"; "connection"; "sensitive" ]
     let private mountKeys = [ "from"; "at"; "mode" ]
     let private volumeKeys = [ "name"; "at"; "maintain" ]
@@ -292,17 +293,49 @@ module OperatorProfile =
                 | Ok names -> Decode.succeed names
                 | Error e -> Decode.fail e)
 
-    /// What the operator tells the agent. One key today, under a block of its own so the next
-    /// thing an operator has to say to the agent has somewhere to go that is not the file's
-    /// top level. Trimmed, because a YAML block scalar ends in the newline that closed it, and
-    /// refused when nothing is left: an `agent:` block that says nothing is the same failure
-    /// as a resource that grants nothing — configuration that reads as something and is none.
-    let private agent : Decoder<string> =
-        noUnknownKeys agentKeys
-        |> Decode.andThen (fun () -> Decode.field "guidance" Decode.string)
+    /// The operator's words for the agent. Trimmed, because a YAML block scalar ends in the
+    /// newline that closed it, and refused when nothing is left: guidance that says nothing is
+    /// the same failure as a resource that grants nothing — configuration that reads as
+    /// something and is none.
+    let private guidance : Decoder<string> =
+        Decode.string
         |> Decode.map (fun text -> text.Trim ())
         |> Decode.andThen (fun text ->
-            failIf (text = "") "agent guidance says nothing — write what the agent should know about this host, or leave the block out" (Decode.succeed text))
+            failIf (text = "") "agent guidance says nothing — write what the agent should know about this host, or leave 'guidance' out" (Decode.succeed text))
+
+    /// A strategy, by the name `PromptStrategy.name` gives it. A name this build does not have
+    /// is refused with the ones it does, so a typo cannot run the agent on a prompt nobody chose.
+    let private promptStrategy : Decoder<PromptStrategy> =
+        Decode.string
+        |> Decode.andThen (fun raw ->
+            match PromptStrategy.all |> List.tryFind (fun strategy -> PromptStrategy.name strategy = raw) with
+            | Some strategy -> Decode.succeed strategy
+            | None ->
+                Decode.fail (
+                    sprintf
+                        "agent prompt '%s' is not a strategy this build has (known: %s)"
+                        raw
+                        (PromptStrategy.all |> List.map PromptStrategy.name |> String.concat ", ")))
+
+    /// What the operator says about the agent: its guidance, and the strategy that puts its
+    /// prompt together. Each key may be left out, and a missing one is the default
+    /// (`AgentProfile.defaults`), because that is what a host that says nothing gets. An
+    /// `agent:` block with neither key is refused: it reads as configuration and is none.
+    let private agent : Decoder<AgentProfile> =
+        noUnknownKeys agentKeys
+        |> Decode.andThen (fun () ->
+            Decode.map2
+                (fun words strategy -> words, strategy)
+                (Decode.optional "guidance" guidance)
+                (Decode.optional "prompt" promptStrategy))
+        |> Decode.andThen (fun (words, strategy) ->
+            match words, strategy with
+            | None, None ->
+                Decode.fail "the agent block says nothing — give it guidance (what the agent should know about this host) or a prompt strategy, or leave the block out"
+            | _ ->
+                Decode.succeed
+                    { Guidance = words
+                      Prompt = strategy |> Option.defaultValue AgentProfile.defaults.Prompt })
 
     /// `default` is the spelling `always` had before it was named for what it does. Refused
     /// BY NAME rather than left to `noUnknownKeys`, which would say "unknown key: default
@@ -328,11 +361,11 @@ module OperatorProfile =
                     (version <> Version)
                     (sprintf "this build speaks %s version %d, not %d" FileName Version version)
                     (Decode.map5
-                        (fun declared selection guidance sandboxes maintained ->
-                            declared, selection, guidance, sandboxes, maintained)
+                        (fun declared selection said sandboxes maintained ->
+                            declared, selection, said, sandboxes, maintained)
                         (Decode.field "resources" resources)
                         (Decode.optional "always" names |> Decode.map (Option.defaultValue []))
-                        (Decode.optional "agent" agent)
+                        (Decode.optional "agent" agent |> Decode.map (Option.defaultValue AgentProfile.defaults))
                         (Decode.optional "sandboxes" Decode.value
                          |> Decode.andThen (fun block ->
                              match block with
@@ -342,7 +375,7 @@ module OperatorProfile =
                                  | Ok declared -> Decode.succeed declared
                                  | Error e -> Decode.fail (sprintf "sandboxes: %s" e)))
                         (Decode.field "resources" maintenance))))
-        |> Decode.andThen (fun (declared, selection, guidance, sandboxes, maintained) ->
+        |> Decode.andThen (fun (declared, selection, said, sandboxes, maintained) ->
             // The algebra's own refusals — a cycle, a dangling name, a name declared twice, a
             // resource that contradicts itself — reached through `load` and NOT re-checked
             // here. A decoder with its own copy of those rules is the redundant spare that
@@ -360,7 +393,7 @@ module OperatorProfile =
                     Decode.succeed
                         { Resources = profile
                           Always = selection
-                          Guidance = guidance
+                          Agent = said
                           Sandboxes = sandboxes
                           Maintenance = maintained })
 

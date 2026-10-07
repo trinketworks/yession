@@ -64,12 +64,25 @@ declare it, and a session on a host whose profile declares none has nowhere to r
 until a repo's sandbox starts. Declare it with what it should hold — `wants: [ github ]` for
 `git push` from a terminal.
 
-The same file carries the one thing you can say to the agent: `agent.guidance`, appended after
-the product's own system prompt on every turn, introduced as the operator's. It never replaces
-that prompt — the prompt describes the build's tools and sandboxes, and a copy in your file
-would describe the build you wrote it against — so write what only this host knows: its
-conventions, what is slow here, what is never to be pushed where. Leave the block out to say
-nothing; a block that says nothing is refused.
+The same file carries what you say about the agent, under `agent`. `agent.guidance` is
+appended after the product's own system prompt on every turn, introduced as the operator's. It
+never replaces that prompt — the prompt describes the build's tools and sandboxes, and a copy in
+your file would describe the build you wrote it against — so write what only this host knows:
+its conventions, what is slow here, what is never to be pushed where.
+
+`agent.prompt` picks how that prompt is put together, from the strategies the build has:
+
+- `static`, the default: the product's sections and your guidance as one system prompt, and
+  the turn's context (the time, the conversation, terminal activity, repo notes) as one
+  message.
+- `claude-code-like`: Claude Code's layout. The product's sections come first and are the
+  same on every host. Your guidance, and a note on tools from other MCP servers, follow the
+  SDK's dynamic boundary. The turn's context arrives as `<system-reminder>` blocks beside the
+  message the turn answers.
+
+A session reads the file at boot and says on its stderr which strategy it chose. Leave the
+block out to say nothing; a block that says nothing is refused, and so is a strategy the build
+does not have.
 
 ---
 
@@ -531,7 +544,8 @@ let
         uses: [ ca ]
         wants: [ github-git ]
     # Appended after the product's system prompt, as the operator's words. Host
-    # conventions only — the prompt already covers the tools.
+    # conventions only — the prompt already covers the tools. `prompt:` would
+    # pick the strategy; left out, it is `static`.
     agent:
       guidance: |
         A fresh container's first terminal takes minutes to open while the
