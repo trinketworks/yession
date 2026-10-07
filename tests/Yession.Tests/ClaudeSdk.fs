@@ -20,6 +20,7 @@ open Fable.Core
 open Fable.Core.JsInterop
 open Fable.Pyxpecto
 open Fable.ClaudeAgentSdk
+open Thoth.Json
 open Yession.Host
 
 /// Whether a JS object HAS a key, which is the question `jsOptions` exists to answer: an
@@ -109,7 +110,7 @@ let private optionTests =
         testCase "a model nobody chose is absent, not empty" <| fun () ->
             // An empty string would be this session inventing a model id of "". Absent is
             // what leaves the pick to the SDK.
-            let options = jsOptions<Options> (fun o -> o.systemPrompt <- "be terse")
+            let options = jsOptions<Options> (fun o -> o.systemPrompt <- [| "be terse" |])
             Expect.isFalse (hasKey "model" options) "no model key at all"
 
         testCase "a chosen model is on the options" <| fun () ->
@@ -144,6 +145,61 @@ let private queryTests =
             Expect.isFalse
                 (Fable.NodeExtras.Processes.reportsReadTheNetwork ())
                 "a report taken now would not reverse-resolve this process's sockets"
+
+        // The system prompt goes to the CLI in the SDK's `initialize` request. A strategy
+        // places a cache boundary between blocks, so the blocks a turn hands over have to be
+        // the blocks the CLI gets: an SDK that joined them, or wrapped them again, would move
+        // the boundary and nothing would fail. Nothing is run: the spawner hands back a
+        // stand-in, and what the SDK writes to its stdin is read.
+        testCaseAsync "the system prompt reaches the CLI as the blocks it was given" <|
+            async {
+                let blocks = [| "first block"; "second block" |]
+                let stdin = Node.Api.stream.PassThrough.Create<string> ()
+                let relay = Fable.NodeExtras.EventRelays.createRelay ()
+                let spawner =
+                    Spawner (fun _ ->
+                        SpawnedProcess.standingIn
+                            stdin
+                            (Node.Api.stream.PassThrough.Create<string> ())
+                            (Node.Api.stream.PassThrough.Create<string> ())
+                            (fun () -> false)
+                            (fun () -> None)
+                            (fun _ -> true)
+                            relay)
+                // What the SDK writes waits in the stream until something reads it, so the
+                // reader can start before the query does.
+                let! reading =
+                    Async.FromContinuations (fun (resolve, _, _) ->
+                        let written = System.Text.StringBuilder ()
+                        let mutable answered = false
+                        stdin.on (
+                            "data",
+                            fun (chunk: obj) ->
+                                written.Append (string chunk) |> ignore
+                                let complete = written.ToString().Split '\n' |> Array.rev |> Array.tail
+                                match complete |> Array.tryFind (fun line -> line.Contains "\"subtype\":\"initialize\"") with
+                                | Some line when not answered ->
+                                    answered <- true
+                                    resolve line
+                                | Some _
+                                | None -> ())
+                        |> ignore)
+                    |> Async.StartChild
+                query
+                    "hello"
+                    (jsOptions<Options> (fun o ->
+                        o.systemPrompt <- blocks
+                        o.spawnClaudeCodeProcess <- spawner))
+                |> ignore
+                let! initialize = reading
+                // Ended the way a CLI ends: its process exits. An abort would be the SDK's own
+                // cancel, which writes to the process after the abort and rejects where no case
+                // is listening.
+                relay.exited (Some 0, None)
+                let sent =
+                    Decode.fromString (Decode.field "request" (Decode.field "systemPrompt" (Decode.array Decode.string))) initialize
+                Expect.equal sent (Ok blocks) "the blocks, as given"
+            }
     ]
 
 // --- narrowing what the query yields ------------------------------------------------------
@@ -254,7 +310,7 @@ let liveTests =
                         (fun _ -> async { return ToolResult.ofTextAndImage "here it is" "image/png" redSquare } |> Async.StartAsPromise)
                 let options =
                     jsOptions<Options> (fun o ->
-                        o.systemPrompt <- "Answer with one word and nothing else."
+                        o.systemPrompt <- [| "Answer with one word and nothing else." |]
                         o.settingSources <- [||]
                         o.tools <- [||]
                         o.mcpServers <- McpServers.ofList [ "probe", createSdkMcpServer "probe" "1.0.0" [| look |] ]
@@ -278,7 +334,7 @@ let liveTests =
             async {
                 let options =
                     jsOptions<Options> (fun o ->
-                        o.systemPrompt <- "Answer with one word and nothing else."
+                        o.systemPrompt <- [| "Answer with one word and nothing else." |]
                         o.settingSources <- [||]
                         o.tools <- [||]
                         o.allowedTools <- [||])

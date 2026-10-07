@@ -386,7 +386,7 @@ module Turn =
 
 /// Everything one query runs under, assembled from what the session decided.
 let private optionsFor
-    (systemPrompt: string)
+    (systemPrompt: string array)
     (model: string option)
     (registry: ToolRegistry)
     (controller: Fable.NodeExtras.AbortController)
@@ -429,7 +429,7 @@ let private optionsFor
 /// Drive one query to its end: forward what the turn says as it says it, and answer with the
 /// body or the reason, and what it spent either way.
 let private runQuery
-    (systemPrompt: string)
+    (systemPrompt: string array)
     (prompt: string)
     (model: string option)
     (registry: ToolRegistry)
@@ -550,7 +550,7 @@ let runWith (guidance: string option) (dataDir: string) (backend: SandboxBackend
             let plan = Prompting.forTurn guidance context
             let! outcome, usage =
                 runQuery
-                    plan.Stable
+                    [| plan.Stable |]
                     plan.Turn
                     // No choice is `None`, all the way down to the SDK option that is then
                     // not passed. The turn carries the choice rather than the runner holding
