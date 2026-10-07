@@ -181,6 +181,25 @@ type TerminalView =
       /// the record has a stated gap.
       DroppedBytes : int }
 
+/// What one reader KNOWS of a terminal's recording — the client-local half of what a row
+/// affords (`Affordances.ofView`).
+///
+/// Three answers rather than a yes and a no, because "not heard of yet" and "not there" are
+/// different facts with different things to say. A reader who arrives after a terminal closed
+/// has heard nothing of its recording until a read answers, and when this was a `bool` that
+/// silence read as the recording being gone: every closed terminal a late viewer opened said
+/// "recording lost" over a `.cast` sitting intact in the store. Only the store can say a
+/// recording is absent, and only by answering a read with nothing.
+[<RequireQualifiedAccess>]
+type RecordingKnown =
+    /// Nothing has reached this reader either way: no length, no record, no answer.
+    | NotYetKnown
+    /// This reader holds some of it, or has been told how long it is.
+    | Recorded
+    /// The store answered a read from the recording's first line with nothing — and line 0
+    /// is a recording's header, which every recording has.
+    | NotRecorded
+
 /// What a terminal's state affords a reader RIGHT NOW (Plan 20, stage 0) — the verbs its row
 /// in the terminal list offers.
 ///
@@ -204,10 +223,13 @@ type Affordances =
       /// Step back through what a LIVE terminal has recorded so far (Plan 14, stage 7). A
       /// DVR with nothing behind it is a control with nothing to do.
       CanRewind : bool
-      /// Play a CLOSED terminal's recording. False with the terminal closed is the stated
-      /// gap — the per-terminal cap ate it — which the surface says rather than opening an
-      /// empty player.
+      /// Play a CLOSED terminal's recording.
       CanReplay : bool
+      /// A CLOSED terminal whose recording the store is KNOWN not to hold — the stated gap,
+      /// which the surface says rather than opening an empty player. Not merely the absence of
+      /// `CanReplay`: a reader who has not heard back yet has lost nothing, and telling them
+      /// otherwise is a false statement about an audit trail.
+      RecordingLost : bool
       /// Ask the provider for the stream again (Plan 19, step 4). Closed, and its source
       /// said asking again is safe; a shell terminal is never renewable, because a second
       /// shell is a second terminal and opening one already exists.
@@ -242,14 +264,16 @@ type Affordances =
 
 module Affordances =
 
-    /// `recorded` is whether this READER holds anything of the terminal's recording. The one
-    /// input that is not a fact about the terminal, and it cannot be: a recording lives in
-    /// the transcript store, so no fold over the event log can answer it — which is exactly
-    /// why it is a named parameter rather than something this module reaches for.
-    let ofView (recorded: bool) (view: TerminalView) : Affordances =
+    /// `known` is what this READER knows of the terminal's recording. The one input that is
+    /// not a fact about the terminal, and it cannot be: a recording lives in the transcript
+    /// store, so no fold over the event log can answer it — which is exactly why it is a
+    /// named parameter rather than something this module reaches for.
+    let ofView (known: RecordingKnown) (view: TerminalView) : Affordances =
+        let recorded = known = RecordingKnown.Recorded
         { CanKill = view.IsOpen
           CanRewind = view.IsOpen && recorded
           CanReplay = not view.IsOpen && recorded
+          RecordingLost = not view.IsOpen && known = RecordingKnown.NotRecorded
           // Not gated on `recorded`, and that is the point of asking the provider rather than
           // the store: a terminal whose recording the cap ate can still have a live device on
           // the other end, and refusing the way back because the RECORD is gone would answer

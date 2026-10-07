@@ -3884,26 +3884,36 @@ let private affordanceTests =
         // loosened test reads as coverage for.
 
         testCase "the kill is offered exactly while the terminal is open" <| fun () ->
-            let afforded (view: TerminalView) = (Affordances.ofView true view).CanKill
+            let afforded (view: TerminalView) = (Affordances.ofView RecordingKnown.Recorded view).CanKill
             Expect.isTrue (afforded (viewOf true false)) "a running terminal can be killed"
             Expect.isFalse (afforded (viewOf false false)) "a closed one has nothing left to kill"
 
         testCase "the rewind is offered exactly while a live terminal has something recorded" <| fun () ->
             let afforded recorded view = (Affordances.ofView recorded view).CanRewind
-            Expect.isTrue (afforded true (viewOf true false)) "live, and there is something behind it"
-            Expect.isFalse (afforded false (viewOf true false)) "a DVR with nothing recorded has nothing to do"
-            Expect.isFalse (afforded true (viewOf false false)) "and a closed terminal is replayed, not rewound"
+            Expect.isTrue (afforded RecordingKnown.Recorded (viewOf true false)) "live, and there is something behind it"
+            Expect.isFalse (afforded RecordingKnown.NotRecorded (viewOf true false)) "a DVR with nothing recorded has nothing to do"
+            Expect.isFalse (afforded RecordingKnown.Recorded (viewOf false false)) "and a closed terminal is replayed, not rewound"
 
         testCase "the replay is offered exactly where a closed terminal's recording survives" <| fun () ->
             let afforded recorded view = (Affordances.ofView recorded view).CanReplay
-            Expect.isTrue (afforded true (viewOf false false)) "closed, with its recording"
+            Expect.isTrue (afforded RecordingKnown.Recorded (viewOf false false)) "closed, with its recording"
             // The stated gap: the per-terminal cap ate it. Offering a player over nothing
             // would be indistinguishable from a terminal that printed nothing.
-            Expect.isFalse (afforded false (viewOf false false)) "closed, with nothing kept"
-            Expect.isFalse (afforded true (viewOf true false)) "and a live terminal is not a recording yet"
+            Expect.isFalse (afforded RecordingKnown.NotRecorded (viewOf false false)) "closed, with nothing kept"
+            Expect.isFalse (afforded RecordingKnown.Recorded (viewOf true false)) "and a live terminal is not a recording yet"
+
+        // A reader who arrives after a terminal closed has heard nothing of its recording
+        // until a read answers. That silence is not a loss: saying "recording lost" over a
+        // `.cast` sitting intact in the store is a false statement about an audit trail.
+        testCase "a recording is said to be lost exactly where the store is known not to hold it" <| fun () ->
+            let afforded known view = (Affordances.ofView known view).RecordingLost
+            Expect.isTrue (afforded RecordingKnown.NotRecorded (viewOf false false)) "closed, and the store has nothing"
+            Expect.isFalse (afforded RecordingKnown.NotYetKnown (viewOf false false)) "not heard back yet is not lost"
+            Expect.isFalse (afforded RecordingKnown.Recorded (viewOf false false)) "closed, with its recording"
+            Expect.isFalse (afforded RecordingKnown.NotRecorded (viewOf true false)) "and a live terminal is still recording"
 
         testCase "attaching again is offered exactly on a closed stream whose provider allows it" <| fun () ->
-            let afforded (view: TerminalView) = (Affordances.ofView true view).CanReattach
+            let afforded (view: TerminalView) = (Affordances.ofView RecordingKnown.Recorded view).CanReattach
             Expect.isTrue (afforded (viewOf false true)) "closed, and asking again is safe"
             Expect.isFalse (afforded (viewOf false false)) "a shell terminal has no provider to ask"
             Expect.isFalse (afforded (viewOf true true)) "and a stream still running needs no second one"
@@ -3914,7 +3924,7 @@ let private affordanceTests =
         // nobody asked.
         testCase "attaching again survives a recording the cap ate" <| fun () ->
             Expect.isTrue
-                ((Affordances.ofView false (viewOf false true)).CanReattach)
+                ((Affordances.ofView RecordingKnown.NotRecorded (viewOf false true)).CanReattach)
                 "the way back is about the stream, not about what was kept of it"
 
         testCase "the recording is the only read exactly where a closed terminal ran nothing" <| fun () ->
@@ -3936,17 +3946,17 @@ let private affordanceTests =
                             ToSeq = Some 3
                             Status = BlockFinished (CommandSucceeded 0)
                             StoppedBy = None } ] }
-            Expect.isTrue (afforded true (viewOf false false)) "closed, recorded, and nothing ran in it"
-            Expect.isFalse (afforded true ran) "the commands it ran are the read instead"
-            Expect.isFalse (afforded false (viewOf false false)) "and a recording the cap ate is no read at all"
-            Expect.isFalse (afforded true (viewOf true false)) "a live terminal is not a recording yet"
+            Expect.isTrue (afforded RecordingKnown.Recorded (viewOf false false)) "closed, recorded, and nothing ran in it"
+            Expect.isFalse (afforded RecordingKnown.Recorded ran) "the commands it ran are the read instead"
+            Expect.isFalse (afforded RecordingKnown.NotRecorded (viewOf false false)) "and a recording the cap ate is no read at all"
+            Expect.isFalse (afforded RecordingKnown.Recorded (viewOf true false)) "a live terminal is not a recording yet"
 
         testCase "the screen is the only read exactly where a live terminal has no blocks" <| fun () ->
             // The live twin, and the rule a device needs. Gated on the LEASE, the screen
             // appeared only while somebody was typing — so a serial port nobody had taken
             // rendered an empty block list beside a stream arriving the whole time, and the
             // only way to see anything was to claim the keyboard.
-            let afforded view = (Affordances.ofView true view).ScreenIsTheRead
+            let afforded view = (Affordances.ofView RecordingKnown.Recorded view).ScreenIsTheRead
             let device = { viewOf true false with Sandbox = None }
             Expect.isTrue (afforded device) "an open stream with no blocks is its screen"
             Expect.isFalse (afforded (viewOf true false)) "a shell's read is the blocks it is about to have"
@@ -3956,7 +3966,7 @@ let private affordanceTests =
             // Why the rule asks the BLOCKS as well as the sandbox. A source that declared
             // `instrument` has no sandbox either, so the sandbox alone would take the block
             // read away from exactly the source that has one.
-            let afforded view = (Affordances.ofView true view).ScreenIsTheRead
+            let afforded view = (Affordances.ofView RecordingKnown.Recorded view).ScreenIsTheRead
             let instrumented =
                 { viewOf true false with
                     Sandbox = None

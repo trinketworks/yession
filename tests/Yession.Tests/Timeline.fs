@@ -2782,14 +2782,14 @@ let private listTests =
             // fetched; a CLOSED one's records arrive as chunks with no live hint behind
             // them. Asking only one of the two would refuse the verb the other one earns.
             let model = clientOf [ at 1L 0.0 (opened terminalA "build") ]
-            Expect.isFalse (ClientModel.hasRecording terminalA model) "nothing has arrived yet"
+            Expect.equal (ClientModel.recordingOf terminalA model) RecordingKnown.NotYetKnown "nothing has arrived yet"
             let byHint = Support.step (TerminalAvailableMsg (terminalA, 12)) model
-            Expect.isTrue (ClientModel.hasRecording terminalA byHint) "a live terminal's length"
+            Expect.equal (ClientModel.recordingOf terminalA byHint) RecordingKnown.Recorded "a live terminal's length"
             let byRecord =
                 Support.step
                     (TerminalRecordsMsg (terminalA, [ 0, { At = 0.0; Kind = TranscriptOutput; Data = "hi" } ]))
                     model
-            Expect.isTrue (ClientModel.hasRecording terminalA byRecord) "a fetched record"
+            Expect.equal (ClientModel.recordingOf terminalA byRecord) RecordingKnown.Recorded "a fetched record"
 
         testCase "choosing a terminal in the switcher selects its tab" <| fun () ->
             let model =
@@ -3771,7 +3771,7 @@ let private tabTests =
                           LastOffset = Some (EventOffset.create 3L |> expect)
                           IsEnd = true })
                     pressed
-            Expect.equal effects [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusTab terminalA)) ] "onto its own tab"
+            Expect.equal (effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)) [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusTab terminalA)) ] "onto its own tab"
 
         testCase "a terminal somebody else ends moves no focus" <| fun () ->
             let rows = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "test") ]
@@ -3813,7 +3813,7 @@ let private tabTests =
                           LastOffset = Some (EventOffset.create 2L |> expect)
                           IsEnd = true })
                     reading
-            Expect.equal effects [ ClientEffect.Move (DomMove.IfDropped (DomMove.FocusCommandLine terminalA)) ] "where the pane still is"
+            Expect.equal (effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)) [ ClientEffect.Move (DomMove.IfDropped (DomMove.FocusCommandLine terminalA)) ] "where the pane still is"
 
         testCase "a lease taken by somebody else lands a dropped keyboard where the pane lands" <| fun () ->
             // The command line goes, for their bar: there is nothing to type into, and the
@@ -3868,7 +3868,7 @@ let private tabTests =
                           LastOffset = Some (EventOffset.create 4L |> expect)
                           IsEnd = true })
                     previewing
-            Expect.equal effects [] "the preview is still there"
+            Expect.equal (effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)) [] "the preview is still there"
 
         testCase "a terminal's face changing in a log being replayed moves nothing" <| fun () ->
             // On load, focus rests on `body` because the page has just loaded, not because a
@@ -5152,6 +5152,11 @@ let private readLoopTests =
         next, effects |> List.pick (function ClientEffect.ReadTranscript (_, read, _) -> Some read | _ -> None)
     /// A live record at line 0 of a terminal nothing has been read of: one read out, from 0.
     let readingTranscript () = askingTranscript (live 0) fresh
+    /// A terminal opened and closed, as a page — what a reader who arrives later is handed.
+    let closedPage (terminal: TerminalId) : EventPage<SessionEvent> =
+        { Events = [ at 1L 0.0 (opened terminal "build"); at 2L 1.0 (closedNow terminal) ]
+          LastOffset = Some (offset 2L)
+          IsEnd = true }
 
     testList "What the read loop asks for" [
         // --- The event log ---
@@ -5299,6 +5304,39 @@ let private readLoopTests =
             let lost = reading |> Support.step (live 1) |> Support.step DisconnectedMsg
             let _, effects = ClientModel.update (TranscriptReadMsg (terminalA, read, Some (linesOf 0 1 true))) lost
             Expect.equal (transcriptReads effects) [] "nothing owed survives the connection it was owed on"
+
+        // --- A closed terminal's recording, for a reader who was not there ---
+        // A closed terminal sends no live record and no length at a join, so nothing else
+        // would ever ask: a reader who arrived after it closed held nothing of a recording
+        // sitting intact in the store, and was told it was lost.
+        testCase "acceptance asks for the recording of a closed terminal nothing here has heard of" <| fun () ->
+            let model = fresh |> Support.step (EventsPageMsg (closedPage terminalA))
+            let _, effects = ClientModel.update (accepted None) model
+            Expect.equal (transcriptReads effects) [ terminalA, 0 ] "read from its first line"
+
+        testCase "an event page that brings a closed terminal asks for its recording" <| fun () ->
+            let connected = fresh |> Support.step (accepted None)
+            let _, effects = ClientModel.update (EventsPageMsg (closedPage terminalA)) connected
+            Expect.equal (transcriptReads effects) [ terminalA, 0 ] "read from its first line"
+
+        testCase "a closed terminal whose recording this client holds is not asked about" <| fun () ->
+            let held =
+                fresh
+                |> Support.step (EventsPageMsg (closedPage terminalA))
+                |> Support.step (TerminalPageMsg (terminalA, [ 1, output ], None, 2))
+            let _, effects = ClientModel.update (accepted None) held
+            Expect.equal (transcriptReads effects) [] "it has what it needs"
+
+        testCase "an empty answer from line 0 says the store holds no recording" <| fun () ->
+            let reading, read = askingTranscript (accepted None) (fresh |> Support.step (EventsPageMsg (closedPage terminalA)))
+            let answered = reading |> Support.step (TranscriptReadMsg (terminalA, read, Some (linesOf 0 0 true)))
+            Expect.equal (ClientModel.recordingOf terminalA answered) RecordingKnown.NotRecorded "known absent"
+
+        testCase "a failed read from line 0 leaves the recording unknown" <| fun () ->
+            // Not lost: the store has not said anything yet.
+            let reading, read = askingTranscript (accepted None) (fresh |> Support.step (EventsPageMsg (closedPage terminalA)))
+            let failed = reading |> Support.step (TranscriptReadMsg (terminalA, read, None))
+            Expect.equal (ClientModel.recordingOf terminalA failed) RecordingKnown.NotYetKnown "still unheard"
 
         testCase "a transcript answer to a read the last connection asked leaves the new read out" <| fun () ->
             let reading, stale = readingTranscript ()

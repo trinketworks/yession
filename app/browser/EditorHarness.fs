@@ -1197,7 +1197,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                             1, { At = 0.1; Kind = TranscriptOutput; Data = "total 0\n" } ]
                     KnownLength = 2
                     ReadThrough = 2
-                    Header = Some { Width = 80; Height = 24; Timestamp = 0L } }
+                    Header = Some { Width = 80; Height = 24; Timestamp = 0L }
+                    Unrecorded = false }
                   liveId,
                   { Records =
                       Map.ofList
@@ -1217,12 +1218,14 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     // fits a pane whichever way the player is scaled, so a rewind of one could
                     // not show a player fitted to the width alone pushing its last lines and
                     // its control bar out of the bottom of the panel.
-                    Header = Some { Width = 40; Height = 60; Timestamp = 0L } }
+                    Header = Some { Width = 40; Height = 60; Timestamp = 0L }
+                    Unrecorded = false }
                   doneId,
                   { Records = Map.ofList [ 0, { At = 0.0; Kind = TranscriptOutput; Data = "installed\r\n" } ]
                     KnownLength = 1
                     ReadThrough = 1
-                    Header = Some { Width = 80; Height = 24; Timestamp = 0L } } ]
+                    Header = Some { Width = 80; Height = 24; Timestamp = 0L }
+                    Unrecorded = false } ]
         // SHUT to begin with, like a fresh client: the phone case is about what happens when
         // a chip brings the pane on screen, which is nothing to watch if it is already there.
         // The screen the harness block's command began on — what a replay of that block rests

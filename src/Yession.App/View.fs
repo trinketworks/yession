@@ -3766,8 +3766,11 @@ module View =
         // The per-terminal output cap (stage 3d) can eat a whole recording. Saying so is the
         // point: an empty player would be indistinguishable from a terminal that printed
         // nothing, and the whole reason the drop is recorded is that a gap in an audit trail
-        // must be a stated fact.
-        let gone = Map.isEmpty feed.Records && view.DroppedBytes > 0
+        // must be a stated fact. Said only of what is KNOWN: a recording the store does not
+        // hold, or one it holds with every record capped away — never of one this reader has
+        // simply not been answered about yet (`RecordingKnown`).
+        let affords = ClientModel.affordances view model
+        let gone = affords.RecordingLost || (affords.CanReplay && Map.isEmpty feed.Records && view.DroppedBytes > 0)
         // Which one closed, by the name it wore while open: a closed band reached from the
         // chat may be the only thing on screen that says which terminal this was.
         let name = TerminalName.display model.Terminals view
@@ -4189,7 +4192,7 @@ module View =
             // own: a row with no command under it would grow by one when its terminal died,
             // and move every row beneath it.
             let gone =
-                if view.IsOpen || affords.CanReplay then Lit.nothing
+                if not affords.RecordingLost then Lit.nothing
                 else html $"""<span class="{Style.terminalGone}" data-terminal-list-gone="{id}">{Dom.Text.recordingLost}</span>"""
             let peers =
                 ClientModel.editorsInTerminal view.TerminalId model

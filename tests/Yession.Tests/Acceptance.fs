@@ -198,7 +198,8 @@ let private representativeModel : ClientModel =
                         1, { At = 0.1; Kind = TranscriptOutput; Data = "\u001b[32mtotal 0\u001b[0m\n" } ]
                 KnownLength = 2
                 ReadThrough = 2
-                Header = Some { Width = 80; Height = 24; Timestamp = 0L } } ]
+                Header = Some { Width = 80; Height = 24; Timestamp = 0L }
+                Unrecorded = false } ]
       TranscriptReads = Map.empty
       ReadsAsked = 0
       TerminalKeyframes = Map.empty
@@ -345,7 +346,8 @@ let private runModelWith (blocks: Block list) : ClientModel =
             Map.ofList [ 0, { At = 0.0; Kind = TranscriptOutput; Data = String.replicate (BlockGroup.unfoldedLines + 1) "line\n" } ]
           KnownLength = 1
           ReadThrough = 1
-          Header = None }
+          Header = None
+          Unrecorded = false }
     { representativeModel with
         TerminalFeeds = Map.add terminalId overflowing representativeModel.TerminalFeeds
         Terminals =
@@ -508,12 +510,16 @@ let private renewableTerminalModel : ClientModel =
 /// …and after the per-terminal output cap ate its recording (stage 3d): the blocks survive
 /// in the projection, the transcript does not, and the byte count is the only trace of what
 /// it held.
+///
+/// The store has SAID so — its answer to a read from line 0 was nothing. This fixture used
+/// to be an empty feed, which is also what a reader holds who has not been answered yet, and
+/// a surface that called that "lost" told every late viewer their recordings were gone.
 let private forgottenTerminalModel : ClientModel =
     { closedTerminalModel with
         Terminals =
             { Terminals =
                 closedTerminalModel.Terminals.Terminals |> List.map (fun t -> { t with DroppedBytes = 4096 }) }
-        TerminalFeeds = Map.empty }
+        TerminalFeeds = Map.ofList [ terminalId, { TerminalFeed.empty with Unrecorded = true } ] }
 
 /// The buttons in a rendered page that a screen reader would announce as nothing but
 /// "button": no text between the tags once markup is stripped, and no `aria-label` /
@@ -1253,6 +1259,14 @@ let private uiChecklistTests =
             Expect.isFalse
                 (html.Contains (Dom.attr Dom.Hooks.paneReplay (ClientModel.tabKey terminalId)))
                 "and no player is mounted over nothing"
+
+        testCase "a closed terminal's band says nothing of a recording not yet heard back about" <| fun () ->
+            // The same output dropped, but the store has not answered this reader yet: a gap
+            // nobody has been told about is not one to state.
+            let html = Support.render { forgottenTerminalModel with TerminalFeeds = Map.empty }
+            Expect.isFalse
+                (html.Contains (Dom.attr Dom.Hooks.terminalReplayGone (TerminalId.value terminalId)))
+                "nothing is known to be missing"
 
         testCase "the random peer display name is human-readable" <| fun () ->
             let rng = Random 1234
@@ -2360,6 +2374,14 @@ let private terminalListTests =
             Expect.isFalse
                 ((listed closedTerminalModel).Contains (Dom.attr Dom.Hooks.terminalListGone id))
                 "and a recording that survived says nothing of the sort"
+
+        // Unknown is not lost. A reader who arrived after the terminal closed holds nothing of
+        // its recording until a read answers, and the row used to call that a hole.
+        testCase "a closed terminal's row says nothing of a recording not yet heard back about" <| fun () ->
+            let unheard = { forgottenTerminalModel with TerminalFeeds = Map.empty }
+            Expect.isFalse
+                ((listed unheard).Contains (Dom.attr Dom.Hooks.terminalListGone id))
+                "nothing is known to be missing"
 
         // "the strip and the list are never on screen together" was here: the list REPLACED
         // the pane then, and a tablist left standing over it promised a panel that was not in
