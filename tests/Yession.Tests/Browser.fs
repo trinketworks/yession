@@ -4005,7 +4005,10 @@ let editorTests =
                              if (r.width > 1 && r.height > 1 && r.right > 0 && r.left < window.innerWidth)
                                runs.push({ text: n.textContent.trim().slice(0, 20), left: r.left, top: r.top, bottom: r.bottom })
                          }
-                         return JSON.stringify({ runs: runs.length, under: runs.filter(r => r.left < mark.right) })
+                         // Text and mark abut at the rail, so both edges land on the same fractional
+                         // pixel and the runner's rounding decides which reads larger. Under means
+                         // covered by at least half a pixel; the old 14px box covered 2.
+                         return JSON.stringify({ runs: runs.length, under: runs.filter(r => r.left < mark.right - 0.5).map(r => ({ ...r, markRight: mark.right })) })
                        }"""
                 let measure () =
                     async {
