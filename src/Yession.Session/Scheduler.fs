@@ -103,9 +103,6 @@ module Scheduler =
         // stage 3a). Injected rather than reached for, so a session with no transcript
         // storage still runs turns — it simply reports blocks with empty output.
         (readTranscript: ReadTranscript)
-        // The operator's words for the agent, from the host's profile; `None` is a host that
-        // wrote none. Passed straight to `AgentTurn.run`.
-        (guidance: string option)
         // Whether a drained batch starts a turn, and which message it answers. The policy,
         // handed in: this scheduler is the mechanism that appends, asks, and runs.
         (turnPolicy: TurnPolicy)
@@ -211,7 +208,7 @@ module Scheduler =
                                         (Digest.window events)
                                 let repos =
                                     events |> List.fold ReposProjection.applyEvent ReposProjection.empty
-                                do! AgentTurn.run log agent (signalFor turn) capabilitiesFor emitUsage (fun () -> turn.TurnId) mintMessageId sessionId (SessionHistory.ofEnvelopes page.Events) projection.Items people terminals repos.Repos (selectedModel ()) guidance trigger
+                                do! AgentTurn.run log agent (signalFor turn) capabilitiesFor emitUsage (fun () -> turn.TurnId) mintMessageId sessionId (SessionHistory.ofEnvelopes page.Events) projection.Items people terminals repos.Repos (selectedModel ()) trigger
                                 // Release the slot and re-arm — unless an interrupt
                                 // already released it (and possibly started a successor).
                                 match running with
@@ -288,7 +285,6 @@ module Scheduler =
                                     terminals
                                     repos.Repos
                                     (selectedModel ())
-                                    guidance
                                     (AgentTurn.FromWake (reason, turnActor))
                             match running with
                             | Some current when current.Generation = turn.Generation ->

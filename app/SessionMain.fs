@@ -900,7 +900,7 @@ let private runAgent () : RunAgent option =
     | "credential-probe" ->
         if envCreds || connectedSomewhere () then Some (dispatching credentialProbe) else None
     | _ ->
-        if envCreds || connectedSomewhere () then Some (dispatching (Agent.runWith dataDir agentBackend)) else None
+        if envCreds || connectedSomewhere () then Some (dispatching (Agent.runWith (resourceProfile |> Option.bind (fun file -> file.Guidance)) dataDir agentBackend)) else None
 
 /// Both ways stdin can end, and the resume that makes either happen: a paused stdin never
 /// reaches either end, so the handlers are only ever called because of it.
@@ -1380,7 +1380,7 @@ Async.StartImmediate (
                     fun terminal ->
                         gitGateway.Retire terminal
                         credentialProxy.Retire terminal } ]
-        let! host = Host.startFull clock runAgent summarize (Some (makeSandboxes forwardableCredentials (CredentialProxy.provider credentialProxy sandboxBackend gatewayHostFor))) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage (resourceProfile |> Option.bind (fun file -> file.Guidance)) port
+        let! host = Host.startFull clock runAgent summarize (Some (makeSandboxes forwardableCredentials (CredentialProxy.provider credentialProxy sandboxBackend gatewayHostFor))) (secretsCapabilitiesFor sessionId) (Some log) (Some docStore) (Some transcriptStore) reportName reportActivity telemetry.Emit subscribeNotifications mcpServers connectionRoutes sessionId auth sessionMount managerOrigin ephemeralStorage port
         // The Host built the sandbox registry (it owns the log), so the cell the turn
         // capabilities and the `work_sandboxes` query read is filled here — before the
         // readiness line, and therefore before any turn or any browser can ask.
