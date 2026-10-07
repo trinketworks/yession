@@ -856,6 +856,9 @@ module Dom =
         let blockOk = "ok"
         let blockFailed = "failed"
         let blockRejected = "rejected"
+        /// Over with nothing on the record saying how (`BlockEnded`): neither a pass nor a
+        /// failure, so it borrows neither word.
+        let blockEnded = "ended"
         /// How a block went, in WORDS — what a screen reader hears where a sighted reader
         /// sees `✓ 0` or `✕ 1`, and what a chip's accessible name carries. The mark is a
         /// glyph and a number; neither says what it means to anybody who cannot see it.

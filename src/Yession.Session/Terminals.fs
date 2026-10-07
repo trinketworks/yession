@@ -332,6 +332,10 @@ module TerminalCommandWait =
             match block.Status with
             | BlockRejected (by, reason) -> Return (TerminalCommandRefused (by, reason))
             | BlockFinished result -> Return (TerminalCommandRan result)
+            // Its terminal closed and no completion has said how it went. One may yet: the
+            // close and the completion are two appends, and the completion is the answer
+            // worth waiting the deadline for. Past it, the record has nothing more to say.
+            | BlockEnded reason -> if deadlineElapsed then Return (TerminalCommandEnded reason) else KeepWaiting
             // A block that has taken the screen is waiting for the CALLER, so there is nothing
             // left to wait out: returned at once, deadline or no. Burning the deadline first
             // and then saying "still running" would spend two minutes telling the one party
@@ -1755,7 +1759,9 @@ module SessionTerminals =
                                 | Some pty ->
                                     let! ending = pty.Exited
                                     if isOpen id then
-                                        do! closeTerminal id ActorRef.System (Source.shellEndedReason ending) |> Async.Ignore
+                                        do!
+                                            closeTerminal id ActorRef.System (Source.shellEndedReason ending) (Source.shellEndedResult ending)
+                                            |> Async.Ignore
                                 | None -> ()
                             })
                     | Attached _ ->
@@ -1816,14 +1822,22 @@ module SessionTerminals =
                                 if not ending && isOpen id then
                                     ending <- true
                                     do!
-                                        closeTerminal id ActorRef.System (Source.endedReason capabilities outcome)
+                                        closeTerminal id ActorRef.System (Source.endedReason capabilities outcome) None
                                         |> Async.Ignore
                             })
                     | None -> ()
                     return Ok id
             }
 
-        and closeTerminal (id: TerminalId) (by: ActorRef) (reason: string) : Async<Result<unit, string>> =
+        /// `said` is how a block still running here ended, when whatever closed the terminal
+        /// knows: a shell's own exit does (`Source.shellEndedResult`), and every other close —
+        /// a person, a restart, a stream that went quiet — does not.
+        and closeTerminal
+            (id: TerminalId)
+            (by: ActorRef)
+            (reason: string)
+            (said: CommandResult option)
+            : Async<Result<unit, string>> =
             async {
                 if not (isOpen id) then return Error "terminal is not open"
                 else
@@ -1854,10 +1868,19 @@ module SessionTerminals =
                     // and an agent's `check_pending` waiting on a command nothing would finish.
                     // The one verb that ends a stuck block is this one, and a verb that ends the
                     // process while leaving its record open has done half its job.
+                    //
+                    // How it ended is the closer's to say when it can. A shell that EXITED was
+                    // ended by the command it was running — `exit` never reaches the prompt hook
+                    // that marks it finished — so its code is that command's code, and `exit` in
+                    // a clean shell is a success. Calling it a failure put "failed" on the block
+                    // beside a close notice saying the shell exited 0.
                     match pending.TryGetValue (TerminalId.value id) with
                     | true, (complete, _, _) ->
                         pending.Remove (TerminalId.value id) |> ignore
-                        complete (CommandExecutionFailed (sprintf "the terminal was closed: %s" reason))
+                        complete (
+                            said
+                            |> Option.defaultValue (CommandExecutionFailed (sprintf "the terminal was closed: %s" reason))
+                        )
                     | _ -> ()
                     runningAuthor.Remove (TerminalId.value id) |> ignore
                     appliedSize.Remove (TerminalId.value id) |> ignore
@@ -2799,7 +2822,7 @@ module SessionTerminals =
                         | _ -> None
                     match retired with
                     | Some (id, true) ->
-                        let! _ = closeTerminal id ActorRef.System "the shell profile changed"
+                        let! _ = closeTerminal id ActorRef.System "the shell profile changed" None
                         ()
                     | _ -> ()
                     // What was STORED, not what the caller typed: the answer, the timeline
@@ -2859,7 +2882,7 @@ module SessionTerminals =
           AgentTerminal = agentTerminal
           OpenAgentTerminal = openAgentTerminal
           OpenedByAgent = fun id -> agentOpened.Contains (TerminalId.value id)
-          Close = closeTerminal
+          Close = fun id by reason -> closeTerminal id by reason None
           Interrupt = interrupt
           RunBlock = runBlock
           Refuse = refuse

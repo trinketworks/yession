@@ -124,6 +124,10 @@ module AgentTools =
         | TerminalCommandRan CommandTimedOut -> sprintf "TIMED OUT in %s%s" where output
         | TerminalCommandRan (CommandExecutionFailed reason) ->
             sprintf "EXECUTION FAILED in %s: %s%s" where reason output
+        | TerminalCommandEnded reason ->
+            sprintf
+                "ENDED in %s with no exit status on record: %s. It is not running; whether it succeeded is not known — read its output.%s"
+                where reason output
         | TerminalCommandRunning ->
             // How it has been doing, when there is a block to measure: the clause that tells a
             // build halfway through from a wait loop whose server died at launch.

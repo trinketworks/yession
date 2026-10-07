@@ -200,6 +200,10 @@ type TerminalHeldBy =
 type TerminalCommandStatus =
     /// It ran to an outcome. The ordinary answer.
     | TerminalCommandRan of CommandResult
+    /// It is not running any more, and nothing on the record says how it went: its terminal
+    /// closed under it with no completion (`BlockEnded`). Carries the close's reason. Not a
+    /// `CommandResult`, for that case's reason: any result would be a guess.
+    | TerminalCommandEnded of reason: string
     /// Still going when the deadline fell. A yield, not a cancellation: the block runs on and
     /// the handle resumes it.
     | TerminalCommandRunning
