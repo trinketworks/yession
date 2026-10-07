@@ -855,11 +855,6 @@ let create (deps: Deps) : Renderer =
         // than the model, so a tab a collaborator's `TabOpened` selected is covered too — and
         // its fade on whichever ends have tabs past them.
         PaneShell.syncStrip ()
-        // The column and its strip, remembered for this browser's next load of this
-        // session (P0-4). Written here, after every render, rather than by the messages that
-        // change it: the four fields have a dozen writers between them, and a write per
-        // writer is a writer somebody adds without one.
-        PaneShell.Memory.keep model
         // Keep a slot rule running for every open terminal: a person may be mid-command
         // in more than one, and each slot follows its own command line.
         syncTerminalSlots model

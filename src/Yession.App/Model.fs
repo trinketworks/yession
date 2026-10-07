@@ -1224,6 +1224,8 @@ type Preference =
     | NavCollapsed of bool
     /// The pane's width on a desktop, as the reader last set it.
     | PaneWidth of int
+    /// What this browser had open in one session's pane (`ClientModel.paneToRemember`).
+    | Pane of SessionId * PaneMemory
 
 type ClientModel =
     { Peer          : PeerState
@@ -3613,6 +3615,32 @@ module ClientModel =
         | _, Connected when caret.IsSome || view.IsSome -> Some (caret, view)
         | _ -> None
 
+    /// What this browser writes down of the pane after a message (P0-4), or `None` when the
+    /// pane it would write is the one already kept. Read off the model either side of the
+    /// message rather than by the messages that move it: the four fields `paneMemory` reads
+    /// have a dozen writers between them, and a write per writer is a writer somebody adds
+    /// without one.
+    ///
+    /// Only a CHANGE from what storage already holds, which the model knows without asking:
+    /// the memory it was HELD (`remembered`) up to the message that lets go of it, the pane as
+    /// it stood before the message once it has, and an untouched pane when this session's
+    /// arrival found nothing kept — so a session merely visited leaves no key behind until
+    /// something in its pane is actually moved.
+    ///
+    /// Never while a memory is still held: the strip then holds only the terminals the log has
+    /// named so far, and writing it would forget the rest of what is waiting to be put back.
+    let paneToRemember (before: ClientModel) (after: ClientModel) : (SessionId * PaneMemory) option =
+        match after.Session, after.PaneMemory with
+        | Some session, None ->
+            let kept =
+                match before.PaneMemory with
+                | Some held -> held
+                | None when before.Session = after.Session -> paneMemory before
+                | None -> PaneMemory.untouched
+            let memory = paneMemory after
+            if memory <> kept then Some (session, memory) else None
+        | _ -> None
+
     /// Whether a durable actor is this client. The question every ownership rule here asks —
     /// is this terminal mine, is this lease mine — with `me` as its one answer.
     let isMine (actor: ActorRef) (model: ClientModel) : bool =
@@ -5241,13 +5269,14 @@ module ClientModel =
         let leased = leaseLanding model next |> Option.map ClientEffect.Move |> Option.toList
         let resized = ptyResizes model next |> List.map ClientEffect.ResizeTerminal
         let present = presenceToSend model next |> Option.map ClientEffect.SendPresence |> Option.toList
+        let kept = paneToRemember model next |> Option.map (Preference.Pane >> ClientEffect.Remember) |> Option.toList
         // Asked once per keyframe, whichever message first left the preview needing one.
         let next, fetching =
             match missingKeyframe next with
             | Some key when not (Set.contains key next.KeyframesAsked) ->
                 { next with KeyframesAsked = Set.add key next.KeyframesAsked }, [ ClientEffect.FetchKeyframe key ]
             | Some _ | None -> next, []
-        next, effects @ answered @ unnoticed @ swapped @ leased @ resized @ present @ fetching @ offering @ reading
+        next, effects @ answered @ unnoticed @ swapped @ leased @ resized @ present @ kept @ fetching @ offering @ reading
 
     /// A message and the effects it asks for. A kill's press is resolved here, against the
     /// model as it stands, into the press it is (`killPress`) — then applied like any other.

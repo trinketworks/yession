@@ -794,6 +794,26 @@ let private reloaded (memory: PaneMemory) (pages: EventEnvelope<SessionEvent> li
 let private remembering (tabs: TerminalId list) : PaneMemory =
     { PaneMemory.untouched with PaneMemory.Tabs = tabs; PaneMemory.Open = true }
 
+/// What a run of messages asked this browser to write down of the pane, in order.
+let private panesKept (msgs: ClientMsg list) (model: ClientModel) : PaneMemory list =
+    msgs
+    |> List.fold
+        (fun (model, kept) msg ->
+            let next, effects = ClientModel.update msg model
+            let written =
+                effects |> List.choose (function ClientEffect.Remember (Preference.Pane (_, memory)) -> Some memory | _ -> None)
+            next, kept @ written)
+        (model, [])
+    |> snd
+
+/// A reload's messages after boot: the local store read, the session accepted with its log
+/// ending at the last of `events`, and one page carrying them.
+let private reloading (events: EventEnvelope<SessionEvent> list) : ClientMsg list =
+    let latest = events |> List.tryLast |> Option.map (fun e -> e.Offset)
+    [ HistoryReadMsg
+      ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = latest }
+      EventsPageMsg { Events = events; LastOffset = latest; IsEnd = true } ]
+
 let private reloadTests =
     testList "What the pane had, across a reload (P0-4)" [
         testCase "a remembered pane round-trips through its codec" <| fun () ->
@@ -899,6 +919,50 @@ let private reloadTests =
                 |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (EventOffset.create 9L |> expect) })
                 |> withPage [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "shell") ]
             Expect.equal (ClientModel.selectedTerminal catchingUp) (Some terminalB) "the terminal that was on top, already"
+
+        testCase "a session merely visited writes nothing down" <| fun () ->
+            let fresh = ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } |> ClientModel.remembered None
+            Expect.equal (panesKept (reloading []) fresh) [] "no key for a pane nobody moved"
+
+        testCase "a pane moved is written down as it now is" <| fun () ->
+            let model = heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "shell") ]
+            let moved = Support.step (ShowInPaneMsg (Reading terminalB)) model
+            Expect.equal (panesKept [ ShowInPaneMsg (Reading terminalB) ] model) [ ClientModel.paneMemory moved ] "the pane after the move"
+
+        testCase "a message that moves nothing in the pane writes nothing" <| fun () ->
+            let model =
+                heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "shell") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalB))
+            Expect.equal (panesKept [ ShowInPaneMsg (Reading terminalB) ] model) [] "the same pane, already kept"
+
+        // While a memory is held the strip holds only the terminals the log has named so far,
+        // and writing that would forget the rest of what is waiting to be put back.
+        testCase "nothing is written while a remembered pane is still held" <| fun () ->
+            let memory = { remembering [ terminalA; terminalB ] with PaneMemory.Selected = Some terminalB }
+            let booted = ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } |> ClientModel.remembered (Some memory)
+            let msgs =
+                [ HistoryReadMsg
+                  ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (EventOffset.create 9L |> expect) }
+                  EventsPageMsg { Events = [ at 1L 0.0 (opened terminalA "build") ]; LastOffset = Some (EventOffset.create 1L |> expect); IsEnd = false } ]
+            Expect.equal (panesKept msgs booted) [] "the half-restored strip is not written over the whole one"
+
+        testCase "a remembered pane put back as it was is not written again" <| fun () ->
+            let none = { CommandTally.Finished = 0; CommandTally.Failed = 0 }
+            let memory =
+                { remembering [ terminalA; terminalB ] with
+                    PaneMemory.Selected = Some terminalB
+                    PaneMemory.Seen = Map.ofList [ terminalA, none; terminalB, none ] }
+            let booted = ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } |> ClientModel.remembered (Some memory)
+            let events = [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "shell") ]
+            Expect.equal (panesKept (reloading events) booted) [] "storage already holds it"
+
+        testCase "a remembered pane the session has lost part of is written as it now is" <| fun () ->
+            let memory = remembering [ terminalA; TerminalId.create "term-gone" |> expect ]
+            let booted = ClientModel.init { PeerId = ada; DisplayName = "swift-heron" } |> ClientModel.remembered (Some memory)
+            Expect.equal
+                (panesKept (reloading oneBlock) booted |> List.map (fun kept -> kept.Tabs))
+                [ [ terminalA ] ]
+                "once, without the tab onto nothing"
 
         testCase "a preview is not remembered; the terminal under it is" <| fun () ->
             let model = clientOf oneBlock |> Support.step (chip terminalA "1")
