@@ -3952,6 +3952,39 @@ let editorTests =
                 Expect.equal doors 1 "one door to a new terminal on the all page"
             }
 
+        // A fresh viewer's strip holds nothing — a strip holds only what its reader opened — and
+        // the pane brought up over a session with terminals open lands on the page that lists
+        // them, never on the empty pane's New terminal over them. The edge tab is a phone's only
+        // way into the pane, and it is the way that landed there. Counted by the rows a person
+        // can SEE, hit-tested at their centres, so a list mounted under another face, or
+        // clipped off the screen, is not one.
+        editorCaseOnTouch 390 844 "on a phone the pane brought up by a fresh viewer lands on the session's open terminals" <| fun page ->
+            async {
+                do! awaitU (page.EvaluateAsync "() => window.__freshViewer()")
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                do! waitFor "the pane to cover the phone's screen" page
+                        """(() => {
+                             const r = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
+                             return r.left <= 1 && Math.round(r.width) === window.innerWidth
+                           })()"""
+                do! awaitU (
+                        page.EvaluateAsync
+                            """() => Promise.all(
+                                 document.getAnimations()
+                                   .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
+                                   .map(a => a.finished.catch(() => null)))""")
+                let! rows =
+                    await (page.EvaluateAsync<string[]> """() => [...document.querySelectorAll(
+                        '#shell [data-content-panel] [data-terminal-list-row]')]
+                        .filter(e => {
+                            const r = e.getBoundingClientRect()
+                            if (!r.width || !r.height) return false
+                            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+                            return hit !== null && e.contains(hit) })
+                        .map(e => e.getAttribute('data-terminal-list-row'))""")
+                Expect.containsAll rows [| "term-harness"; "term-live" |] "both open terminals are rows on the screen"
+            }
+
         // The phone pane's left edge says it is the way back: a mark a person can SEE on the
         // screen, and one whose press lands on the handle that closes the pane. A mark that
         // measured zero, hung off the screen, or sat under another element would render the

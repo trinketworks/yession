@@ -205,6 +205,13 @@ module private Published =
     /// page can say, and the shell this harness starts in has not heard from the credential
     /// stream, which draws no row for the agent at all.
     let noAgent : PageGlobal<unit -> unit> = PageGlobal.named "__noAgent"
+    /// Swap in the shell with its terminals open and NOTHING in the strip — what a fresh
+    /// viewer of somebody else's work has, since a strip holds only what its reader opened.
+    /// Which terminal opened them is the fold's question and is pinned where it is cheap; the
+    /// question here is where the pane lands when it is brought up over that, and on a phone
+    /// whether what it lands on is really the thing ON SCREEN — which only a laid-out page
+    /// can answer.
+    let freshViewer : PageGlobal<unit -> unit> = PageGlobal.named "__freshViewer"
 
 
 let private doc = Y.Doc.Create ()
@@ -1732,6 +1739,9 @@ do
                                    Owner = OwnedByUser
                                    AgentAvailable = false
                                    Models = ModelsUnknown } } }
+        render ())
+    PageGlobal.set Published.freshViewer (fun () ->
+        model <- { shellModel with Tabs = []; Column = { shellModel.Column with Wide = PaneShell.onDesktop () } }
         render ())
     PageGlobal.set Published.chapterCaret (System.Action<_, _, _> (fun id anchor head ->
         match MessageId.create id, PeerId.create "brave-owl" with
