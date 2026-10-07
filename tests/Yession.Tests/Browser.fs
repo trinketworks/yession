@@ -3493,6 +3493,8 @@ let editorTests =
                 do! awaitU (page.EvaluateAsync "() => document.querySelector('#shell [data-pane-strip] [role=tab]:last-child').click()")
                 do! waitFor "the last tab to be selected" page
                         "document.querySelector('#shell [data-pane-strip] [role=tab]:last-child')?.getAttribute('aria-selected') === 'true'"
+                // A frame for the reveal, which runs after the render.
+                do! twoFrames page
                 let! inView =
                     await (page.EvaluateAsync<bool>
                         (insideStrip "document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=true]')"))

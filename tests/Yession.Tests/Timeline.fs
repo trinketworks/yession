@@ -416,6 +416,13 @@ let private clientOf (events: EventEnvelope<SessionEvent> list) : ClientModel =
         (EventsPageMsg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true })
         (ClientModel.init { PeerId = ada; DisplayName = "swift-heron" })
 
+/// What a message asked for, less the strip bringing its selected tab into view
+/// (`ClientModel.pivotReveal`): that rides along with every change of selection, scrolls the
+/// strip and places no focus, which is what the cases reading this are about. Its own cases
+/// pin it ("The strip's selected tab in view").
+let private unrevealed (effects: ClientEffect list) : ClientEffect list =
+    effects |> List.filter ((<>) (ClientEffect.Move DomMove.RevealPivot))
+
 /// One MORE page, into a client that has already folded some. The live path, and the only
 /// one these cases can be written on: a terminal you press for arrives after the pane
 /// already has a choice on it, which is the whole of what went wrong.
@@ -2876,7 +2883,7 @@ let private listTests =
                 clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
                 |> Support.step ToggleSwitcherMsg
             let _, effects = ClientModel.update (OpenInPaneMsg (Reading terminalB)) switching
-            Expect.equal effects [ ClientEffect.Move (DomMove.FocusCommandLine terminalB) ] "onto what a terminal is for"
+            Expect.equal (unrevealed effects) [ ClientEffect.Move (DomMove.FocusCommandLine terminalB) ] "onto what a terminal is for"
 
         testCase "Escape leaves the all page for the item it was laid over" <| fun () ->
             // Escape is `CloseSwitcherMsg` (the pane's keydown): the page leaves the document
@@ -2884,7 +2891,7 @@ let private listTests =
             let switching = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step ToggleSwitcherMsg
             let model, effects = ClientModel.update CloseSwitcherMsg switching
             Expect.isFalse model.Switcher "left"
-            Expect.equal effects [ ClientEffect.Move DomMove.FocusPivot ] "onto the pivot's selected item"
+            Expect.equal (unrevealed effects) [ ClientEffect.Move DomMove.FocusPivot ] "onto the pivot's selected item"
 
         testCase "opening the switcher takes focus into it" <| fun () ->
             let _, effects = ClientModel.update ToggleSwitcherMsg (clientOf [ at 1L 0.0 (opened terminalA "build") ])
@@ -3544,7 +3551,7 @@ let private tabTests =
         testCase "a chip that opens a preview takes the reader to the pane" <| fun () ->
             // One message for both halves, so no chip can open a pane and leave focus behind it.
             let _, effects = ClientModel.update (chip terminalA "1") (clientOf oneBlock)
-            let moves = effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
+            let moves = unrevealed effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
             Expect.equal moves [ ClientEffect.Move DomMove.FocusPane ] "focus is asked to follow it"
 
         // Where focus lands after each act in the pane (the focus contract). Every one of these
@@ -3558,13 +3565,13 @@ let private tabTests =
                 ClientModel.update
                     (OpenInPaneMsg (Reading terminalA))
                     (clientOf [ at 1L 0.0 (opened terminalA "build") ])
-            Expect.equal effects [ ClientEffect.Move (DomMove.FocusCommandLine terminalA) ] "onto the command line"
+            Expect.equal (unrevealed effects) [ ClientEffect.Move (DomMove.FocusCommandLine terminalA) ] "onto the command line"
 
         testCase "showing the pane lands on the shown terminal's command line" <| fun () ->
             let shut = clientOf [ at 1L 0.0 (opened terminalA "build") ]
             Expect.isFalse shut.TerminalsOpen "the pane starts shut"
             let _, effects = ClientModel.update ToggleContentMsg shut
-            Expect.equal effects [ ClientEffect.Move (DomMove.FocusCommandLine terminalA) ] "onto the command line"
+            Expect.equal (unrevealed effects) [ ClientEffect.Move (DomMove.FocusCommandLine terminalA) ] "onto the command line"
 
         testCase "showing an empty pane lands on the press that fills it" <| fun () ->
             let _, effects = ClientModel.update ToggleContentMsg (clientOf [])
@@ -3757,7 +3764,7 @@ let private tabTests =
                     (EventsPageMsg { Events = [ at 2L 1.0 (opened terminalB "new") ]; LastOffset = Some (EventOffset.create 2L |> expect); IsEnd = true })
                     asked
             Expect.equal
-                effects
+                (unrevealed effects)
                 [ ClientEffect.Move (DomMove.OnArrival (DomMove.FocusCommandLine terminalB)) ]
                 "onto the new terminal's command line, if the hand is still in the pane"
 
@@ -3951,7 +3958,7 @@ let private tabTests =
                     replayed
             // Only the moves: the same page may anchor the launch card, which asks for its
             // listing, and that is not what this is about.
-            let moves = effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
+            let moves = unrevealed effects |> List.filter (function ClientEffect.Move _ -> true | _ -> false)
             Expect.equal moves [] "history is not a swap"
 
         // A refused kill is an ANSWER to the press, as a refused New terminal is (P0-6): left
@@ -4127,7 +4134,7 @@ let private tabTests =
         testCase "show in terminal scrolls the history to the command and focuses the pane" <| fun () ->
             let _, effects = ClientModel.update (ShowInTerminalMsg (terminalA, block "1")) (clientOf [ at 1L 0.0 (opened terminalA "build") ])
             Expect.equal
-                effects
+                (unrevealed effects)
                 [ ClientEffect.Move (DomMove.RevealBlock (terminalA, block "1")); ClientEffect.Move DomMove.FocusPane ]
                 "scrolled to, then focused, in that order"
 
@@ -5114,6 +5121,33 @@ let private ptyResizeTests =
             Expect.equal (resizes effects) [ ClientEffect.ResizeTerminal (terminalA, wide) ] "the box the holder already has"
     ]
 
+/// Whether a message asked the strip to bring its selected tab into view.
+let private reveals (msg: ClientMsg) (model: ClientModel) : bool =
+    ClientModel.update msg model |> snd |> List.contains (ClientEffect.Move DomMove.RevealPivot)
+
+let private revealTests =
+    let twoOpen () = heardOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "shell") ]
+    testList "The strip's selected tab in view" [
+        testCase "a newly selected tab is revealed" <| fun () ->
+            let model = twoOpen () |> Support.step (ShowInPaneMsg (Reading terminalA))
+            Expect.isTrue (reveals (ShowInPaneMsg (Reading terminalB)) model) "the tab just chosen"
+
+        testCase "the tab already selected is not revealed again" <| fun () ->
+            let model = twoOpen () |> Support.step (ShowInPaneMsg (Reading terminalB))
+            Expect.isFalse (reveals (ShowInPaneMsg (Reading terminalB)) model) "the strip stays where the reader has it"
+
+        // Arming the × widens the tab, and a strip that scrolled the grown tab whole into view
+        // slid the armed kill out from under the second press.
+        testCase "a kill armed on the selected tab reveals nothing" <| fun () ->
+            let model = twoOpen () |> Support.step (ShowInPaneMsg (Reading terminalB))
+            Expect.isFalse (reveals (KillPressedMsg terminalB) model) "the confirm stays under the press"
+
+        testCase "the column opening reveals the tab selected behind it" <| fun () ->
+            let model = twoOpen () |> Support.step (ShowInPaneMsg (Reading terminalB)) |> Support.step ToggleContentMsg
+            Expect.isFalse model.TerminalsOpen "shut, or this proves nothing"
+            Expect.isTrue (reveals ToggleContentMsg model) "a shut strip could not be measured"
+    ]
+
 let private presenceTests =
     let caret : Link.Focus = { Field = Link.FocusField.Title; Pos = { Anchor = "AQI="; Head = "AQI=" } }
     let reading = Some (ViewingTerminal terminalA)
@@ -5405,5 +5439,6 @@ let tests =
         dvrTests
         ptyResizeTests
         presenceTests
+        revealTests
         readLoopTests
     ]
