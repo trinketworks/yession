@@ -359,8 +359,10 @@ module Thinking =
 /// directions here: an unset `model` is the SDK's own pick, while `tools = [||]` is "no
 /// built-in tools at all" and omitting it is every built-in.
 type [<AllowNullLiteral>] Options =
-    /// The whole system prompt, replacing Claude Code's preset.
-    abstract systemPrompt : string with get, set
+    /// The whole system prompt, replacing Claude Code's preset, as blocks. Blocks are what
+    /// the SDK sends the CLI either way (a bare string goes as a one-block list), so declaring
+    /// the list is declaring what arrives: the blocks a turn planned, as it planned them.
+    abstract systemPrompt : string array with get, set
     /// The model id. Unset = the SDK's own choice; there is no id meaning "no choice".
     abstract model : string with get, set
     /// Which on-disk settings layers to read. `[||]` reads none.
