@@ -1695,6 +1695,9 @@ type DomMove =
     | RevealBlock of TerminalId * BlockId
     /// Scroll the conversation to one message and mark it.
     | RevealMessage of MessageId
+    /// Scroll the pane's strip the least distance that shows its selected tab whole
+    /// (`ClientModel.pivotReveal`).
+    | RevealPivot
     /// Scroll a surface to its own tail and follow it from there — what a sent message
     /// does to the conversation. Focus stays where it was: the sender is still typing.
     | ScrollToLatest of TailSurface
@@ -3537,6 +3540,33 @@ module ClientModel =
             else None
         | Some _ | None -> None
 
+    /// Whether the strip owes its selected tab a reveal after a message — a scroll box keeps
+    /// nothing in view by itself, and the newest tab, the one just selected, opens past the
+    /// right-hand edge.
+    ///
+    /// Only on a CHANGE of what it would show: a reveal on every message would take the strip
+    /// back from a reader scrolling it to look at the other tabs the moment anything at all
+    /// arrived, while a change of selection is the reader's own act (or a collaborator's
+    /// `TabOpened`) being answered. The selected tab is what the pivot marks: the terminal the
+    /// pane is about, and none while `all` is up, which is not in the strip. A tab that only
+    /// GREW — its × armed (P2-2), a collaborator's mark beside its name — is not a change: the
+    /// confirm is only a confirm if the spot that was pressed is still the control, and a
+    /// strip that scrolled the grown tab whole into view slid it out from under the second
+    /// press.
+    ///
+    /// And on the two moments a selection that has not changed is first drawn where it can be
+    /// measured: the column opening (a shut strip has no width, so a selection made behind it
+    /// could not be revealed), and the log read through (`HeardThrough`), before which renders
+    /// are held while a reload replays it, so a remembered selection may not have been drawn by
+    /// the frame its own reveal ran in.
+    let pivotReveal (before: ClientModel) (after: ClientModel) : DomMove option =
+        let shown (model: ClientModel) = if model.Switcher then None else selectedTerminal model
+        let opened = after.TerminalsOpen && not before.TerminalsOpen
+        let caughtUp = after.HeardThrough && not before.HeardThrough
+        match shown after with
+        | Some _ when shown before <> shown after || opened || caughtUp -> Some DomMove.RevealPivot
+        | Some _ | None -> None
+
     /// Where the keyboard goes when this peer has just become the one typing into the terminal
     /// on screen — onto its live screen. Taking the keyboard is the whole of what live mode IS,
     /// and both ways into it leave focus where the keys no longer belong: pressing `take`
@@ -5268,6 +5298,7 @@ module ClientModel =
             | _ -> []
         let swapped = keyboardSwap model next |> Option.map ClientEffect.Move |> Option.toList
         let leased = leaseLanding model next |> Option.map ClientEffect.Move |> Option.toList
+        let revealed = pivotReveal model next |> Option.map ClientEffect.Move |> Option.toList
         let resized = ptyResizes model next |> List.map ClientEffect.ResizeTerminal
         let present = presenceToSend model next |> Option.map ClientEffect.SendPresence |> Option.toList
         let kept = paneToRemember model next |> Option.map (Preference.Pane >> ClientEffect.Remember) |> Option.toList
@@ -5277,7 +5308,7 @@ module ClientModel =
             | Some key when not (Set.contains key next.KeyframesAsked) ->
                 { next with KeyframesAsked = Set.add key next.KeyframesAsked }, [ ClientEffect.FetchKeyframe key ]
             | Some _ | None -> next, []
-        next, effects @ answered @ unnoticed @ swapped @ leased @ resized @ present @ kept @ fetching @ offering @ reading
+        next, effects @ answered @ unnoticed @ swapped @ leased @ revealed @ resized @ present @ kept @ fetching @ offering @ reading
 
     /// A message and the effects it asks for. A kill's press is resolved here, against the
     /// model as it stands, into the press it is (`killPress`) — then applied like any other.
