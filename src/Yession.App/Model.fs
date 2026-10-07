@@ -426,7 +426,11 @@ type TerminalFeed =
       /// The transcript's own header, once chunk 0 has been fetched (Plan 13, stage 3e).
       /// The replay rebuilds a `.cast` from these records, and the recorded width and height
       /// are what make it come out the shape the terminal actually was.
-      Header : TranscriptHeader option }
+      Header : TranscriptHeader option
+      /// The store answered a read from line 0 with nothing: it holds no recording of this
+      /// terminal. Kept apart from an empty feed because that is also what a reader who has
+      /// not asked yet holds, and the two say opposite things (`RecordingKnown`).
+      Unrecorded : bool }
 
 /// One fetched page of a terminal's transcript (Plan 13): the records it carried with their
 /// sequence numbers, and whether the transcript continues past it.
@@ -454,7 +458,16 @@ type TranscriptRead = { Read : int; From : int; Owed : bool }
 
 module TerminalFeed =
 
-    let empty : TerminalFeed = { Records = Map.empty; KnownLength = 0; ReadThrough = 0; Header = None }
+    let empty : TerminalFeed =
+        { Records = Map.empty; KnownLength = 0; ReadThrough = 0; Header = None; Unrecorded = false }
+
+    /// What this feed says of the recording behind it. Anything held, or any length heard,
+    /// is a recording — whatever an earlier answer said, because a line cannot arrive from a
+    /// recording that does not exist.
+    let known (feed: TerminalFeed) : RecordingKnown =
+        if feed.KnownLength > 0 || not (Map.isEmpty feed.Records) then RecordingKnown.Recorded
+        elif feed.Unrecorded then RecordingKnown.NotRecorded
+        else RecordingKnown.NotYetKnown
 
     /// Fold one record in. Out-of-order and duplicate records are both fine — the map key
     /// is the sequence number.
@@ -3117,21 +3130,20 @@ module ClientModel =
     let terminalFeed (terminal: TerminalId) (model: ClientModel) : TerminalFeed =
         model.TerminalFeeds |> Map.tryFind terminal |> Option.defaultValue TerminalFeed.empty
 
-    /// Whether this client holds anything of a terminal's recording (Plan 20, stage 0) — the
-    /// one client-local input `Affordances.ofView` takes.
+    /// What this client knows of a terminal's recording (Plan 20, stage 0) — the one
+    /// client-local input `Affordances.ofView` takes.
     ///
-    /// Either signal counts, because they are the same fact reaching this client two ways: a
-    /// LIVE terminal's length arrives as a catch-up hint before any chunk is fetched, and a
-    /// CLOSED one's records arrive as chunks with no live hint behind them. Asking only one
-    /// would offer the rewind on a terminal whose records had not been fetched, or refuse the
-    /// replay on a recording sitting in the feed.
-    let hasRecording (terminal: TerminalId) (model: ClientModel) : bool =
-        let feed = terminalFeed terminal model
-        feed.KnownLength > 0 || not (Map.isEmpty feed.Records)
+    /// Either signal counts as a recording, because they are the same fact reaching this
+    /// client two ways: a LIVE terminal's length arrives as a catch-up hint before any chunk
+    /// is fetched, and a CLOSED one's records arrive as chunks with no live hint behind them.
+    /// Asking only one would offer the rewind on a terminal whose records had not been
+    /// fetched, or refuse the replay on a recording sitting in the feed.
+    let recordingOf (terminal: TerminalId) (model: ClientModel) : RecordingKnown =
+        TerminalFeed.known (terminalFeed terminal model)
 
     /// What a terminal's row offers this reader.
     let affordances (view: TerminalView) (model: ClientModel) : Affordances =
-        Affordances.ofView (hasRecording view.TerminalId model) view
+        Affordances.ofView (recordingOf view.TerminalId model) view
 
     /// Whether a terminal has a recording to play at all — what decides whether a surface
     /// OFFERS one. Cheap on purpose: a map lookup, no cast built, so a view can ask it on
@@ -4626,6 +4638,12 @@ module ClientModel =
         | TranscriptReadMsg (terminal, _, Some page)
             when TranscriptCursor.advances (terminalFeed terminal model).ReadThrough page.NextSeq ->
             fold (TerminalPageMsg (terminal, page.Records, page.Header, page.NextSeq)) model
+        // An answer from line 0 that ends where it began: the store has no line 0, and a
+        // recording's line 0 is its header. That is the one way this client learns a recording
+        // is not there — as opposed to not read yet, which is every feed's starting state.
+        | TranscriptReadMsg (terminal, _, Some page) when page.NextSeq = 0 ->
+            let feed = terminalFeed terminal model
+            { model with TerminalFeeds = Map.add terminal { feed with Unrecorded = true } model.TerminalFeeds }
         | TranscriptReadMsg _ -> model
         | TerminalHeaderMsg (terminal, header) ->
             let feed = terminalFeed terminal model
@@ -5085,16 +5103,42 @@ module ClientModel =
             { model with
                 EventConsumer = { model.EventConsumer with Reading = None }
                 TranscriptReads = Map.empty }
+        // A CLOSED terminal signals nothing: no live record, and no length at a join — those
+        // are the open terminals' (`SessionTerminals.Lengths`). So a reader who was not here
+        // while it ran had nothing to read on, held nothing of its recording, and was told
+        // the recording was lost. Each closed terminal this client has heard nothing of is
+        // asked about once, from line 0, and the answer settles it either way: lines are the
+        // recording, and nothing at all is the store saying it has none
+        // (`TerminalFeed.Unrecorded`).
+        //
+        // Asked when a connection is accepted, and when an event page may have brought a
+        // terminal this client did not know — the only two ways a closed terminal nobody has
+        // read reaches the model — and only while connected, because a read asked with no
+        // connection to carry it is a read the model believes is out until the next one. Never
+        // on a transcript answer: a read that failed leaves the terminal unheard, and asking
+        // again from its own answer is a spin.
+        let unheard ((model: ClientModel), (effects: ClientEffect list)) =
+            model.Terminals.Terminals
+            |> List.filter (fun view ->
+                model.Connection = Connected
+                && not view.IsOpen
+                && recordingOf view.TerminalId model = RecordingKnown.NotYetKnown
+                && not (Map.containsKey view.TerminalId model.TranscriptReads))
+            |> List.fold
+                (fun (model, effects) view ->
+                    let model, asked = askTranscript view.TerminalId 0 false model
+                    model, effects @ asked)
+                (model, effects)
         match msg with
-        | ConnectedMsg _ -> askEventsIfBehind (forgotten model)
+        | ConnectedMsg _ -> askEventsIfBehind (forgotten model) |> unheard
         | DisconnectedMsg -> forgotten model, []
         | EventsAvailableMsg _ -> askEventsIfBehind model
         | EventsReadMsg (read, answer) when model.EventConsumer.Reading = Some read ->
             let settled = { model with EventConsumer = { model.EventConsumer with Reading = None } }
             match answer with
             // A non-final page means more events already exist beyond this one.
-            | Ok page when not page.IsEnd -> askEvents settled
-            | Ok _ -> askEventsIfBehind settled
+            | Ok page when not page.IsEnd -> askEvents settled |> unheard
+            | Ok _ -> askEventsIfBehind settled |> unheard
             // The feed's policy has already spent its retries by the time this is reached, so
             // do NOT re-request here: park, and re-arm on the next availability hint or
             // reconnect. The read position is untouched, so the re-arm resumes exactly where
@@ -5107,6 +5151,9 @@ module ClientModel =
             // over the data channel the whole time, so the only symptom was a timeline that
             // never filled.
             | Error _ -> settled, []
+        // Folded whichever read they answer, so a terminal they bring is the model's either way.
+        | EventsReadMsg (_, Ok _)
+        | EventsPageMsg _ -> unheard (model, [])
         // The terminal-feed counterpart of `EventsAvailable`: a hint that there is more,
         // answered by a read rather than by trusting the hint's contents.
         | TerminalAvailableMsg (terminal, length)

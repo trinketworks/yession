@@ -1197,7 +1197,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                             1, { At = 0.1; Kind = TranscriptOutput; Data = "total 0\n" } ]
                     KnownLength = 2
                     ReadThrough = 2
-                    Header = Some { Width = 80; Height = 24; Timestamp = 0L } }
+                    Header = Some { Width = 80; Height = 24; Timestamp = 0L }
+                    Unrecorded = false }
                   liveId,
                   { Records =
                       Map.ofList
@@ -1217,12 +1218,14 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     // fits a pane whichever way the player is scaled, so a rewind of one could
                     // not show a player fitted to the width alone pushing its last lines and
                     // its control bar out of the bottom of the panel.
-                    Header = Some { Width = 40; Height = 60; Timestamp = 0L } }
+                    Header = Some { Width = 40; Height = 60; Timestamp = 0L }
+                    Unrecorded = false }
                   doneId,
                   { Records = Map.ofList [ 0, { At = 0.0; Kind = TranscriptOutput; Data = "installed\r\n" } ]
                     KnownLength = 1
                     ReadThrough = 1
-                    Header = Some { Width = 80; Height = 24; Timestamp = 0L } } ]
+                    Header = Some { Width = 80; Height = 24; Timestamp = 0L }
+                    Unrecorded = false } ]
         // SHUT to begin with, like a fresh client: the phone case is about what happens when
         // a chip brings the pane on screen, which is nothing to watch if it is already there.
         // The screen the harness block's command began on — what a replay of that block rests
@@ -1584,10 +1587,17 @@ do
         | ClientEffect.GitHub _
         | ClientEffect.GitHubPoll _ -> ()
         | ClientEffect.Move move -> PaneShell.move move
+        // A transcript read is answered as the session's store would answer it: the store
+        // holds exactly the lines this harness handed in, so a read past them is current — and
+        // a read from line 0 of a terminal it handed nothing for is a terminal with no
+        // recording, which is what the client must hear to say so. Left unanswered, every
+        // terminal the page folds in would stay unheard for ever, which no session does.
+        | ClientEffect.ReadTranscript (terminal, read, fromSeq) ->
+            dispatchRef (
+                TranscriptReadMsg (terminal, read, Some { Records = []; Header = None; NextSeq = fromSeq; IsEnd = true }))
         // No session to read from: the pages this harness shows it hands in itself, as the
         // messages a read's answer would be.
         | ClientEffect.ReadEvents _
-        | ClientEffect.ReadTranscript _
         // No session to ask for a keyframe: the replay plays without one.
         | ClientEffect.FetchKeyframe _
         | ClientEffect.Remember _
