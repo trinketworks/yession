@@ -1579,7 +1579,7 @@ module View =
                       {interruptControl dispatch model}
                       <button type="button" class="{sendClass}" aria-keyshortcuts="Control+Enter"
                               title="{Dom.Text.composerKeys}"
-                              data-send-draft="{PeerId.value target}" @click={Ev(fun _ -> actions.SendDraft target)}>send</button>
+                              data-send-draft="{PeerId.value target}" data-send-ready="{if hasContent then "yes" else "no"}" @click={Ev(fun _ -> actions.SendDraft target)}>send</button>
                     </div>
                   </div>
                 </article>"""
