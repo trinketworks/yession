@@ -912,6 +912,11 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
     let burstOk : BlockId = BlockId.create "block-burst-ok" |> expect
     let burstFailed : BlockId = BlockId.create "block-burst-failed" |> expect
     let burstRunning : BlockId = BlockId.create "block-burst-running" |> expect
+    /// A refusal on a long command: the status is the widest one a block wears ("refused by"
+    /// and a name), and the command is several words past a phone's column.
+    let refusedLong : BlockId = BlockId.create "block-refused-long" |> expect
+    let refusedLongCommand =
+        "cd /repos/trinketworks/yession && git fetch origin master -q && git log --oneline -5 origin/master"
     let peerId : PeerId = PeerId.create "ada" |> expect
     let toolUseId : ToolUseId = ToolUseId.create "tool-harness" |> expect
     let messageId : MessageId = MessageId.create "msg-harness" |> expect
@@ -1149,6 +1154,15 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                           FromSeq = 2
                           ToSeq = None
                           Status = BlockRunning
+                          StoppedBy = None }
+                        { BlockId = refusedLong
+                          QueueId = None
+                          Authority = Authority.agentFor (Principal.Peer peerId)
+                          Command = refusedLongCommand
+                          Background = false
+                          FromSeq = 2
+                          ToSeq = Some 2
+                          Status = BlockRejected (ActorRef.System, None)
                           StoppedBy = None }
                         // Enough history that the scrollback actually OVERFLOWS its box.
                         // "Show in terminal" (Plan 25, stage 3) scrolls to a command, and a

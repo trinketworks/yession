@@ -3420,8 +3420,16 @@ module Style =
     /// separates them in a terminal: a green prompt glyph, the command in ink, its output
     /// dim beneath, and a line of air.
     let terminalBlock = "flex flex-col"
-    /// The command line as it was run, and how it went.
-    let terminalBlockCommand = "flex items-baseline gap-2"
+    /// The command line as it was run, and how it went. It WRAPS: the command (`terminalBlockLine`)
+    /// asks for its whole length, so when it and its status do not fit one line the status goes
+    /// UNDER it, at the end of its own line, and the command gets the full width. Side by side,
+    /// a long status ("refused by <name>") took half a phone's column and the command broke
+    /// mid-word in the other half.
+    let terminalBlockCommand = "flex flex-wrap items-baseline gap-x-2 gap-y-0.5"
+    /// The prompt and the command, held together as one item of `terminalBlockCommand` so a wrap
+    /// takes the status down a line rather than the command away from its `$`. `grow` so the
+    /// status that does fit sits at the line's end; `min-w-0` so it can give way to the row.
+    let terminalBlockLine = "flex min-w-0 grow items-baseline gap-2"
     /// A block's command line in the scrollback, which STAYS while its output scrolls: a
     /// 300-line output used to carry its own command off the top, and a reader in the middle
     /// of it was looking at a screen of numbers with nothing to say what printed them.
@@ -3433,7 +3441,7 @@ module Style =
     /// browser's and arrives keyboard-operable and correctly announced. Not sticky: the
     /// commands inside it are, and two rows held at one edge is one row hidden.
     let terminalBlockRunSummary =
-        cls [ terminalBlockCommand; "cursor-pointer list-none"
+        cls [ "flex items-baseline gap-2 cursor-pointer list-none"
               "hover:text-ink transition-colors duration-150 ease-out"; focusRing ]
     /// Its mark: the chevron every fold turns (`queryLegendMark`), pointing on at rest and
     /// down when open. It was an ellipsis, which at the end of a line reads as a menu.
@@ -3464,7 +3472,12 @@ module Style =
     let terminalBlockAuthor = "shrink-0 min-w-0 max-w-[40%] inline-flex items-baseline"
 
     let terminalPrompt = "shrink-0 font-terminal text-code text-green select-none"
-    let terminalCommandText = "font-terminal text-code text-ink break-all"
+    /// A command breaks where a shell would let you: at its spaces. `anywhere` is the last resort
+    /// for a single token wider than the column (a long path), which must wrap rather than push
+    /// the page sideways, and it is also what lets a flex item holding one shrink below that
+    /// token's width. It was `break-all`, which broke every command mid-word the moment it
+    /// reached the edge.
+    let terminalCommandText = "min-w-0 font-terminal text-code text-ink [overflow-wrap:anywhere]"
     /// Output: preformatted, wrapping, and horizontally scrollable for the lines that will
     /// not wrap — the column must never make the PAGE scroll sideways. No padding of its
     /// own: it sits directly under its command, on the scrollback's own gutter, the way a
