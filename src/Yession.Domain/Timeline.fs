@@ -332,7 +332,7 @@ module TimelineProjection =
             | _ -> proj
         match envelope.Event with
         | SessionEvent.TerminalOpened e ->
-            { proj with Titles = Map.add (TerminalId.value e.TerminalId) (TerminalTitle.value e.Title) proj.Titles }
+            { proj with Titles = Map.add (TerminalId.value e.TerminalId) (TerminalTitle.named e.Sandbox e.Title) proj.Titles }
         | SessionEvent.AgentTurnStarted e -> { proj with CurrentTurn = Some e.AgentTurnId }
         | SessionEvent.TerminalBlockStarted e ->
             // Anchored at the START, and it mutates in place as it finishes — so a

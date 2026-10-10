@@ -651,7 +651,8 @@ module TerminalName =
             | None -> Some "term"
 
     /// The name: the title when somebody gave one, else the sandbox and an ordinal — `term 1`,
-    /// `dev 2`.
+    /// `dev 2`. Only the name — a title recorded with its sandbox in front of it reads
+    /// without (`TerminalTitle.named`), because where it runs is `place`'s to say, beside it.
     ///
     /// The ordinal is the terminal's place among the untitled terminals numbered the same way,
     /// in the order they OPENED, closed ones included — so a name never changes once given:
@@ -660,7 +661,7 @@ module TerminalName =
     /// rather than leaving a reader looking for the one before it.
     let display (proj: Projection) (view: TerminalView) : string =
         match numberedAs view with
-        | None -> TerminalTitle.value view.Title
+        | None -> TerminalTitle.named view.Sandbox view.Title
         | Some prefix ->
             let before =
                 proj.Terminals
@@ -669,12 +670,38 @@ module TerminalName =
                 |> List.length
             sprintf "%s %d" prefix (before + 1)
 
+    /// Where a terminal runs, when that tells a person something: a named sandbox, rendered.
+    /// `None` for `default`, which every session has, and for a stream, which runs nowhere.
+    ///
+    /// Secondary text, beside the name and never in it: the name is what a strip of tabs
+    /// truncates, and a sandbox in front of it is what survives the cut.
+    let place (view: TerminalView) : string option =
+        match view.Sandbox with
+        | Some sandbox when sandbox <> SandboxRef.defaultRef -> Some (SandboxRef.render sandbox)
+        | Some _
+        | None -> None
+
     /// What the terminal is doing, or last did: the block running, else the last one it
     /// ran, else nothing — a terminal that has run nothing has nothing to add to its name.
     /// The block rather than a string, because a surface wants both halves of it: its name
     /// (`BlockLabel.ofBlock`) to show, and its whole command for whoever asks for more.
     let latest (view: TerminalView) : Block option =
         Projection.runningBlock view |> Option.orElse (List.tryLast view.Blocks)
+
+    /// What it is doing, then where it runs — whichever of the two there is, and nothing
+    /// when neither — with the block spelled however the surface needs it.
+    let private alongside (spell: Block -> string) (view: TerminalView) : string =
+        [ latest view |> Option.map spell |> Option.defaultValue ""
+          place view |> Option.map (sprintf "in %s") |> Option.defaultValue "" ]
+        |> List.filter (fun part -> part <> "")
+        |> String.concat " · "
+
+    /// The line a terminal's list row carries under its name: the block by its NAME
+    /// (`BlockLabel.ofBlock`), because that row is scanned and a whole command is a truncation.
+    let summary (view: TerminalView) : string = alongside BlockLabel.ofBlock view
+
+    /// The same line in full, for the hover that a person asks for more from: the whole command.
+    let hint (view: TerminalView) : string = alongside (fun block -> block.Command) view
 
 /// What the emulator's alt-screen state proposes doing about the lease (Plan 13, stage 2e).
 ///
@@ -772,6 +799,10 @@ type BlockDigest =
     { TerminalId : TerminalId
       /// The terminal's title, so the agent can name the place rather than an opaque id.
       Title : TerminalTitle
+      /// Which sandbox the terminal runs in — `None` for a stream. Carried beside the title
+      /// rather than read out of it: a title is only a name (`TerminalTitle.inSandbox`), and
+      /// the agent has to know WHERE a command ran to know what it ran against.
+      Sandbox : SandboxRef option
       BlockId : BlockId
       /// Who wrote the command — the agent's own, or someone else's it should know ran.
       Author : ActorRef
@@ -829,6 +860,7 @@ module Digest =
                     let elided = max 0 (output.Length - tailCap)
                     { TerminalId = terminal.TerminalId
                       Title = terminal.Title
+                      Sandbox = terminal.Sandbox
                       BlockId = block.BlockId
                       Author = Authority.author block.Authority
                       Command = block.Command
