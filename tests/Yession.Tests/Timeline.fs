@@ -3422,7 +3422,7 @@ let private tabTests =
         // it covered — so the strip mixed two kinds of thing that looked alike, and a phone's
         // strip with room for three tabs spent one on it (F3). A preview is a layer OF its
         // terminal: that terminal's tab is the selected item, and the preview is named in the
-        // line under the pivot, between the way back and its close.
+        // line under the pivot, beside its close.
         testCase "a preview is named under the pivot, never in it" <| fun () ->
             let model =
                 heardOf
@@ -3452,16 +3452,23 @@ let private tabTests =
                 |> List.ofSeq
             Expect.equal selectedTabs [ "terminal:term-a" ] "the terminal under the preview, and only it"
 
-        testCase "a preview's way back is the terminal it is laid over" <| fun () ->
+        // Replaces "a preview's way back is the terminal it is laid over". The way back was
+        // the selected tab's press again, landing where the preview's close lands, so it
+        // went; the tab is the way back. What the line still owes a reader is the terminal's
+        // name when no tab gives it: a command of a terminal put away is laid over another.
+        testCase "a preview of a put-away terminal's command says which terminal it is in" <| fun () ->
             let model =
                 heardOf
                     [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (started terminalA "1" byAda "ls" 1)
                       at 3L 2.0 (opened terminalB "logs") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalB))
+                |> thenFolded [ at 4L 3.0 (closedNow terminalA) ]
+                |> Support.step (DismissTabMsg terminalA)
                 |> Support.step (chip terminalA "1")
             Expect.stringContains
                 (Support.render model)
-                (Dom.attr Dom.Hooks.panePreviewBack (TerminalId.value terminalA))
-                "back to term-a"
+                (Dom.attr Dom.Hooks.panePreviewWhere (TerminalId.value terminalA))
+                "in term-a, under term-b's tab"
 
         testCase "a chip of a closed terminal that was put away does not bring its tab back" <| fun () ->
             let model =

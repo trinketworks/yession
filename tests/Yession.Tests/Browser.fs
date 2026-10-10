@@ -6946,13 +6946,16 @@ let editorTests =
 
         // Measured where a thumb lands: each one's centre hit-tested, so a name clipped to
         // nothing or a control under something else is not "reachable" — and the two presses
-        // a thumb's 44 each, the floor the strip's own items hold.
-        editorCaseIn 390 844 "on a phone, a preview's name, its way back and its close are on the screen" <| fun page ->
+        // a thumb's 44 each, the floor the strip's own items hold. The two presses are the
+        // preview's two exits: its close, back to the terminal it is laid over, and the way to
+        // this command in that terminal's history. (A third, `‹ <terminal>`, went where the
+        // close goes, and is gone.)
+        editorCaseIn 390 844 "on a phone, a preview's name, its close and its way into the terminal are on the screen" <| fun page ->
             async {
                 do! previewSettled page
                 let! faults =
                     await (page.EvaluateAsync<string[]>
-                            """() => [['name', '[data-pane-preview-name]', 0], ['back', '[data-pane-preview-back]', 44], ['close', '[data-pane-preview-close]', 44]]
+                            """() => [['name', '[data-pane-preview-name]', 0], ['close', '[data-pane-preview-close]', 44], ['show in terminal', '[data-pane-show-in-terminal]', 44]]
                                  .flatMap(([what, sel, floor]) => {
                                    const e = document.querySelector('#shell ' + sel)
                                    if (!e) return [what + ': not rendered']
@@ -6965,6 +6968,24 @@ let editorTests =
                                    return faults
                                  })""")
                 Expect.isEmpty faults (sprintf "the name is visible and both presses are 44px targets: %s" (String.Join (", ", faults)))
+            }
+
+        // Nothing in a block preview pushes the column wider than the phone. The harness's
+        // terminal carries the longest title an agent gives one, and the action row used to
+        // put it on a control (`show in <title>`) that does not wrap — 557px of content in a
+        // 390px pane, the control's end past the screen's edge, where no thumb can scroll to
+        // it. Measured as what overflows, the page and the pane alike: the pane clips at its
+        // own edge, so the page never scrolls and only the pane's scroll width says anything
+        // is past it.
+        editorCaseIn 390 844 "a block preview does not scroll sideways on a phone" <| fun page ->
+            async {
+                do! previewSettled page
+                let! faults =
+                    await (page.EvaluateAsync<string[]>
+                            """() => [['the page', document.documentElement], ['the pane', document.querySelector('#shell [data-content-panel]')]]
+                                 .flatMap(([what, e]) => !e ? [what + ': not rendered']
+                                   : e.scrollWidth > e.clientWidth + 1 ? [what + ': ' + e.scrollWidth + 'px of content in ' + e.clientWidth + 'px'] : [])""")
+                Expect.isEmpty faults (sprintf "nothing wider than the screen: %s" (String.Join (", ", faults)))
             }
 
         // The `all` page is over the preview AND its terminal, so the head that names the

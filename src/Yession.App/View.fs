@@ -4063,14 +4063,20 @@ module View =
             // the body already answers, but what was going on around it. Text answers it —
             // the terminal's own history, scrolled here — so there has to be a history. It
             // takes the preview down: the reader has asked for the terminal instead.
+            //
+            // A fixed word, with the terminal's name in its accessible name only. It used to
+            // say `show in <name>`, and a terminal an agent opened is named for why it was
+            // opened — sixty characters of it, in the row's largest type, run off the side of
+            // a phone. Which terminal is the one the strip has selected, or the head says.
             let showInTerminal =
                 if List.isEmpty blocks then []
                 else
                     let where = Entity.terminalName model terminalId |> Option.defaultValue (TerminalId.value terminalId)
                     [ html $"""
                         <button type="button" class="{Style.paneAct}" data-pane-show-in-terminal="{BlockId.value blockId}"
+                                aria-label="{Dom.Text.showInTerminalNamed where}" title="{Dom.Text.showInTerminalNamed where}"
                                 @click={Ev(fun _ ->
-                                              dispatch (ShowInTerminalMsg (terminalId, blockId)))}>{Dom.Text.showIn where}</button>""" ]
+                                              dispatch (ShowInTerminalMsg (terminalId, blockId)))}>{Dom.Text.showInTerminal}</button>""" ]
             watch @ showInTerminal
         | PreviewSubject.Stretch _ -> []
         | PreviewSubject.Content ref -> [ contentDownloadLink ref ]
@@ -4388,8 +4394,8 @@ module View =
     /// one keeps its place, closed, until the reader puts it away with its × (F2).
     /// What the chat opens is a PREVIEW (P2-1), laid over the terminal it belongs to: one at a
     /// time, and a layer OF that terminal rather than a tab beside it (F3). The terminal's tab
-    /// stays the selected item, and the preview is named in the line under the pivot, between
-    /// the way back to that terminal and its own close.
+    /// stays the selected item — the way back to it — and the preview is named in the line
+    /// under the pivot, beside its own close.
     let private contentPane (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let tabs = model.Tabs |> List.choose (fun terminal -> Projection.tryFind terminal model.Terminals)
         let selected = ClientModel.selectedTerminal model
@@ -4536,9 +4542,8 @@ module View =
             // `artifacts/chart.png/0003-7f2a91` truncates to the part that says least.
             | PreviewSubject.Content ref -> same (ContentName.ofRef ref)
         // Showing a terminal is showing a terminal, whichever way it is asked. Its tab under a
-        // preview, and the preview's way back, take the reader to that terminal as they left
-        // it — and from `all`, to whichever read of it they were in. One function, so the way
-        // back is the tab's press and not a second one that could drift from it.
+        // preview takes the reader to that terminal as they left it — and from `all`, to
+        // whichever read of it they were in.
         let showTerminal (terminal: TerminalId) =
             let mode =
                 model.Pane
@@ -4857,9 +4862,16 @@ module View =
         // A screen or a recording says neither, so for those this says what is running, or
         // last ran, and how it went.
         //
-        // Under a preview this line is the PREVIEW's (F3): `‹ term 2 / $ seq 1 40 ×` — the way
-        // back to the terminal whose tab is selected above it, the preview's name, and its
-        // close, the same act as Escape. Not on `all`, which is over both.
+        // Under a preview this line is the PREVIEW's (F3): its name and its close — `$ seq 1
+        // 40 ×` — and nothing else. Not on `all`, which is over both.
+        //
+        // It used to lead with a way back, `‹ term 2 /`, which was the selected tab's press
+        // (`showTerminal`, landing on the read the preview is laid over) — and the close lands
+        // on that same read (`ClosePreviewMsg`). Two exits to one place, under a tab that is a
+        // third, and on a phone the line named the terminal a second time between the tab
+        // that names it and the action row that named it again. The other place a reader can
+        // ask for — this command, in its terminal's history — is the action row's
+        // `show in terminal`, which is a different destination and the only control for it.
         let subtitle =
             let line (hook: string) (content: TemplateResult) =
                 html $"""<div class="{Style.panePivotSubtitle}" data-pane-subtitle="{hook}">{content}</div>"""
@@ -4868,24 +4880,23 @@ module View =
             | Some preview, _ ->
                 let key = PreviewSubject.key preview.Subject
                 let label, hint = previewLabel preview.Subject
-                // Over nothing — a file opened in an empty pane — there is no way back to
-                // offer, only the close.
-                let back =
-                    match tabs |> List.tryFind (fun view -> Some view.TerminalId = selected) with
-                    | Some view ->
-                        let name = TerminalName.display model.Terminals view
-                        html $"""
-                            <button type="button" class="{Style.panePreviewBack}"
-                                    data-pane-preview-back="{TerminalId.value view.TerminalId}"
-                                    aria-label="{Dom.Text.backTo name}" title="{Dom.Text.backTo name}"
-                                    @click={Ev(fun _ -> showTerminal view.TerminalId)}>{Icon.left}<span class="truncate">{name}</span></button>
-                            <span class="{Style.panePreviewSep}" aria-hidden="true">/</span>"""
-                    | None -> Lit.nothing
+                // Where the command lives, said only where the strip does not already say it:
+                // a command of a terminal the reader put away is laid over whichever terminal
+                // they are on, whose tab is the selected one, so the strip names the wrong
+                // terminal and this is the only place the right one is. Context, not a control —
+                // the act of going there is `show in terminal`.
+                let whereabouts =
+                    match preview.Subject with
+                    | PreviewSubject.Block (terminal, _) when Some terminal <> selected ->
+                        let name = Entity.terminalName model terminal |> Option.defaultValue (TerminalId.value terminal)
+                        html $"""<span class="{Style.panePreviewWhere}" data-pane-preview-where="{TerminalId.value terminal}"
+                                       title="{Dom.Text.inTerminal name}">{Dom.Text.inTerminal name}</span>"""
+                    | PreviewSubject.Block _ | PreviewSubject.Stretch _ | PreviewSubject.Content _ -> Lit.nothing
                 html $"""
                     <div class="{Style.panePreviewHead}" data-pane-subtitle="preview">
-                      {back}
                       <span class="{Style.panePreviewName}" id="{Dom.panePreviewNameId}" data-pane-preview-name="{key}"
                             title="{hint}">{label}</span>
+                      {whereabouts}
                       <button type="button" class="{Style.panePreviewClose}" data-pane-preview-close
                               aria-label="{Dom.Text.closePreview label}" title="{Dom.Text.closePreview label}"
                               @click={Ev(fun _ -> dispatch ClosePreviewMsg)}>{Icon.close}</button>

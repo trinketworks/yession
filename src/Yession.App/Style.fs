@@ -3037,8 +3037,11 @@ module Style =
     /// faintest ink the floor admits; `all` leads it, then the tabs, then — on a desktop — the
     /// one `+`, then the way back to the chat. Nothing in it is boxed.
     ///
-    /// On a phone every control in it is a thumb's 44 (`phone:min-h-11` on each).
-    let panePivotRow = "shrink-0 flex items-center gap-1 pl-1.5 pr-3 pt-2 phone:pt-1 phone:pr-1"
+    /// On a phone every control in it is a thumb's 44 (`phone:min-h-11` on each). The row's
+    /// right padding there is the `›`'s own negative margin paid back (`navChevronBase`'s
+    /// `-m-1.5`) and no less: at `pr-1` the chevron's box ran 2px past the pane's edge, which
+    /// clips it and makes the whole column 2px wider than the phone.
+    let panePivotRow = "shrink-0 flex items-center gap-1 pl-1.5 pr-3 pt-2 phone:pt-1 phone:pr-1.5"
     /// The tablist: `all`, then the scroller of tabs. `all` stays put at the row's head however
     /// many tabs follow it — a door to every terminal that scrolled away with them would be no
     /// door, and one that moved along every time a tab opened would be a door to hunt for.
@@ -3122,21 +3125,17 @@ module Style =
         "shrink-0 flex items-center gap-2 min-w-0 px-3 pb-2 font-ui text-small text-ink-faint"
     /// A command inside it, in the terminal's own face, cut short rather than wrapped.
     let panePivotSubtitleCommand = "min-w-0 truncate font-terminal text-code-sm text-ink-dim"
-    /// A preview's line under the pivot (F3) — `‹ term 2 / $ seq 1 40 ×`: the way back to the
-    /// terminal it is laid over, its name, and its close. The preview is a layer OF that
-    /// terminal, whose tab stays selected in the strip; as an item of its own in the strip it
-    /// was a sibling that looked like one more tab, and on a phone it cost the strip one of
-    /// the three tabs it has room for. The same caption's place and size as the subtitle it
-    /// stands in for, with the name in full ink because it is what is on screen.
-    let panePreviewHead = "shrink-0 flex items-center gap-1.5 min-w-0 px-3 pb-2 font-ui text-small"
-    /// Its way back: the terminal's name after a `‹`, an act in `ink-dim` brightening under
-    /// the hand, a thumb's 44 tall on a phone. Capped, so a long terminal name leaves the
-    /// preview's own name the room.
-    let panePreviewBack =
-        cls [ "shrink-0 max-w-[40%] inline-flex items-center gap-1 bg-transparent border-0 cursor-pointer p-0 phone:min-h-11"
-              "font-ui text-small text-ink-dim hover:text-ink transition-colors"; focusRing ]
-    /// What parts the way back from the name: a mark, not a word.
-    let panePreviewSep = "shrink-0 text-ink-faint select-none"
+    /// A preview's line under the pivot (F3) — `$ seq 1 40 ×`: its name and its close. The
+    /// preview is a layer OF the terminal it is laid over, whose tab stays selected in the
+    /// strip; as an item of its own in the strip it was a sibling that looked like one more
+    /// tab, and on a phone it cost the strip one of the three tabs it has room for. The
+    /// subtitle's place, at the body's size rather than the caption's: this is the one line
+    /// that names what is on screen, and the action row's verbs under it are never louder
+    /// than the name of what they act on.
+    let panePreviewHead = "shrink-0 flex items-center gap-1.5 min-w-0 px-3 pb-2 font-ui text-body"
+    /// Where a previewed command lives, beside its name when the strip does not say it: a
+    /// caption, faint and small, and the first thing to give up its room.
+    let panePreviewWhere = "min-w-0 shrink-[4] truncate text-small text-ink-faint"
     /// The preview's name, cut short rather than pushing its close off the line.
     let panePreviewName = "min-w-0 truncate text-ink"
     /// Its close: a bare ×, neutral rather than red — closing a preview ends nothing — and a
@@ -3160,8 +3159,10 @@ module Style =
         cls [ "shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer p-0 no-underline"
               "font-ui font-light lowercase whitespace-nowrap"
               "transition-colors duration-150 ease-out motion-reduce:transition-none"; focusRingFar ]
-    /// An act at the foot of the column (`paneActions`), in the pivot's size.
-    let paneAct = cls [ paneActBase; "text-pivot leading-6 text-ink-dim hover:text-ink" ]
+    /// An act at the foot of the column (`paneActions`), at the body's size: no louder than
+    /// the name of the thing it acts on (`panePreviewHead`). It was the pivot's size, and
+    /// under a block preview `show in <terminal>` became the largest type on a phone.
+    let paneAct = cls [ paneActBase; "text-body text-ink-dim hover:text-ink" ]
     /// The one act a surface is FOR — the empty pane's way to make a terminal: blue, which is
     /// what interactive means here, and nothing louder than that.
     let paneActPrimary = cls [ paneActBase; "text-pivot leading-6 text-blue hover:text-blue-up-1" ]
@@ -3230,13 +3231,15 @@ module Style =
     /// the way back. A row rather than a column, because they are alternatives to each other
     /// rather than a list of facts.
     ///
-    /// On a phone every verb in it is a thumb's height (`[&>*]`), whatever face it wears — a
-    /// button, or a download link.
+    /// On a phone every verb in it is a thumb's 44 each way (`[&>*]`), whatever face it wears —
+    /// a button, or a download link. The width too, since the verbs went to the body's size:
+    /// `replay` in it is 41px of word, and the box grows past the word's end rather than
+    /// centring it, so the word stays on the rail.
     ///
     /// Words (`paneAct`) with air between them, and no rule over them: the band above ends on
     /// its own ground, and a hairline between it and a row of light type was a box's edge with
     /// the rest of the box taken away.
-    let paneActions = "shrink-0 flex flex-wrap items-center gap-x-7 gap-y-1 px-3 pt-2.5 pb-3 phone:py-1 phone:[&>*]:min-h-11"
+    let paneActions = "shrink-0 flex flex-wrap items-center gap-x-7 gap-y-1 px-3 pt-2.5 pb-3 phone:py-1 phone:[&>*]:min-h-11 phone:[&>*]:min-w-11"
 
     // --- Content: a file the pane shows rather than a terminal ---------------------------
 
