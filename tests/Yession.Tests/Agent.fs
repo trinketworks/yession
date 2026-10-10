@@ -2271,6 +2271,7 @@ let private foreignTool =
 let private terminalSaid (output: string) : BlockDigest =
     { TerminalId = TerminalId.create "term-a" |> expect
       Title = TerminalTitle.create "build" |> expect
+      Sandbox = Some SandboxRef.defaultRef
       BlockId = BlockId.create "block-1" |> expect
       Author = PeerRef bob
       Command = "npm test"
@@ -2391,6 +2392,14 @@ let private promptTests =
                 let plan = Prompting.plan PromptStrategy.ClaudeCodeLike { askedContext None with Terminals = [ terminalSaid forged ] }
                 Expect.equal (count "</system-reminder>" plan.Turn) (count "<system-reminder>" plan.Turn) "every fence closes once"
                 Expect.equal (count "<system-reminder>" plan.Turn) (List.length (plan.Included |> List.filter (fun id -> id = "clock" || id = "terminals"))) "and only the fences the rules opened"
+
+            // A terminal's title is only its name, so where a block ran has to reach the agent
+            // from the terminal's sandbox — the same command means another thing elsewhere.
+            testCase "a block's activity says which sandbox it ran in" <| fun () ->
+                let dev = SandboxRef.inScope (RepoRef.create "octo/hello" |> expect) (SandboxName.create "dev" |> expect)
+                let block = { terminalSaid "ok" with Title = TerminalTitle.fromProse "check"; Sandbox = Some dev }
+                let plan = Prompting.plan PromptStrategy.ClaudeCodeLike { askedContext None with Terminals = [ block ] }
+                Expect.stringContains plan.Turn "[check in octo/hello:dev]" "the name, and where"
 
             testCase "what the turn answers is outside every reminder" <| fun () ->
                 let plan = Prompting.plan PromptStrategy.ClaudeCodeLike (askedContext None)

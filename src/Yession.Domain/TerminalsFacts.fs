@@ -73,33 +73,51 @@ module TerminalTitle =
         elif trimmed.Length > ProseLength then TerminalTitle (trimmed.Substring (0, ProseLength - 3) + "...")
         else TerminalTitle trimmed
 
-    /// What a terminal is called when it runs in a NAMED sandbox: the sandbox in brackets,
-    /// then whatever the opener had to say about it. Several terminals in a strip are
-    /// navigable only if each says where it is, and a strip is the only place most of them
-    /// are ever read.
+    /// What a terminal is called when it runs in a sandbox: what the opener had to say about
+    /// it, and nothing about where. The sandbox is a FIELD of the terminal
+    /// (`TerminalOpened.Sandbox`), and every surface that needs it reads it from there.
     ///
-    /// Here for the reason the rest of this module is: the convention was spelled out at two
-    /// callers inside the terminal manager, and a third way of opening a terminal would have
-    /// had to remember it. A caller that forgot would not fail to compile — it would simply
-    /// produce a terminal that does not say where it is, in a strip beside ones that do.
+    /// This used to put the sandbox in brackets in front of the name — `[octo/hello:dev]
+    /// check` — on the reading that a strip of tabs is navigable only if each says where it
+    /// is. But a title is truncated from the END, so on a phone that tab read
+    /// `[octo/hello…`: the half that survived was the half that says least, the same on
+    /// every tab in the sandbox, and the name a reader needed was the half cut off. Where a
+    /// terminal runs is said beside its name, from the field (`TerminalName.place`); its
+    /// title is only the name.
     ///
-    /// `default` carries NO prefix, because every session has it and a bracket on every tab
-    /// is a mark that distinguishes nothing. An empty name is not an error: for a named
-    /// sandbox the sandbox IS the title then, which is what a terminal opened by picking a
-    /// sandbox and nothing else should be called; for `default` it is `fallback`, as
-    /// everywhere else.
+    /// Here for the reason the rest of this module is: the convention was spelled out at
+    /// several callers, and a further way of opening a terminal would have had to remember
+    /// it.
     ///
-    /// Truncating, through `fromProse`, prefix included — this is prose we wrote ourselves,
-    /// and the bracket is part of it. Which means a long scope eats into the name rather
-    /// than past `ProseLength`: the sandbox is the half a reader cannot work out from
-    /// context, so it is the half that survives.
+    /// An empty name is not an error: for a named sandbox the sandbox IS the title then,
+    /// which is what a terminal opened by picking a sandbox and nothing else should be
+    /// called (and what `TerminalName` numbers as `dev 1`, `dev 2`); for `default` it is
+    /// `fallback`, as everywhere else. Truncating, through `fromProse` — this is prose.
     let inSandbox (sandbox: SandboxRef) (name: string) : TerminalTitle =
         let trimmed = if isNull (box name) then "" else name.Trim ()
         match sandbox = SandboxRef.defaultRef, trimmed with
         | true, "" -> fallback
-        | true, named -> fromProse named
         | false, "" -> fromProse (SandboxRef.render sandbox)
-        | false, named -> fromProse (sprintf "[%s] %s" (SandboxRef.render sandbox) named)
+        | _, named -> fromProse named
+
+    /// The name a title says for a terminal in `sandbox`: the title, less the `[<sandbox>] `
+    /// an earlier `inSandbox` wrote in front of it.
+    ///
+    /// Terminals opened before the prefix was dropped carry it in their recorded
+    /// `TerminalOpened`, and the log is not rewritten — so the reading changes instead. Only
+    /// EXACTLY the prefix that rule would have written for this terminal's own sandbox is
+    /// taken off: a bracket naming some other sandbox, or one a person typed into a title
+    /// in `default`, is part of what somebody said, and stays.
+    let named (sandbox: SandboxRef option) (title: TerminalTitle) : string =
+        let text = value title
+        match sandbox with
+        | Some scope when scope <> SandboxRef.defaultRef ->
+            let prefix = sprintf "[%s] " (SandboxRef.render scope)
+            if text.Length > prefix.Length && text.Substring (0, prefix.Length) = prefix then
+                text.Substring prefix.Length
+            else text
+        | Some _
+        | None -> text
 
 type TerminalOpened =
     { TerminalId : TerminalId
