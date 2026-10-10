@@ -643,43 +643,32 @@ module Style =
     /// box's right edge.
     let fieldSelectWrap = "relative w-full"
     let fieldSelectWrapOf (width: string) = cls [ "relative"; width ]
+    /// `Icon.caret`, never `Icon.down`: the arrow is the timeline's jump-to-latest.
     let fieldSelectMark = "pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ink-faint"
 
-    /// The model picker's own width, now that it rides the composer's row (`View.modelControl`)
-    /// instead of a settings column that gave it the row's full width. `shrink-0` so Send and
-    /// Interrupt, packed in beside it, never squeeze it below the model names it has to show.
+    /// The model picker's FACE, on the composer's row: a setting, so bare, and a bare control
+    /// speaks the caps label voice (docs/visual-design.md, Hierarchy of controls) — the face
+    /// Send's row-mate should wear beside Send rather than a 16px light line of grey that read
+    /// as a placeholder.
     ///
-    /// `w-28` (112px) was too narrow for the control's OWN default label, "Provider's
-    /// default" — a native `<select>` does not ellipsize an overflowing option, it hard-clips
-    /// the text at the box edge, so the row read "Provider's de" with the caret crammed
-    /// against it. `w-40` (160px) is sized to that longest label, which is also longer than
-    /// any catalogue model name (`ModelCatalogue`) seen in testing — fixing the label fixes
-    /// every shorter option too.
-    let modelControlWidth = "w-40 shrink-0"
-
-    /// The model picker's own FACE, now that it stands on the composer's row rather than in a
-    /// settings column: bare — deliberately NOT the same register as Send beside it any more.
-    /// Send wears a solid box now (`btnComposerSend`), the one filled rectangle this row
-    /// draws, precisely so the picker does not have to: a bare control next to a filled one
-    /// reads, correctly, as "this is the one that matters." Riding `fieldSelect` here made
-    /// the picker a filled rectangle fighting Send for that same attention — the bordered/
-    /// filled/ringed box every settings `<select>` wears (`fieldFace`) — which is the mistake
-    /// this face still avoids, just against a different trailing neighbour now.
-    /// `appearance-none` still drops the platform caret (the mark beside it draws the one
-    /// that's left); nothing else of the field face survives.
+    /// The face is a SPAN (`modelSelectFace`), and the real `<select>` lies over it with its
+    /// text transparent (`modelSelect`). Two reasons it is not simply a `<select>` set in
+    /// caps: iOS zooms the page into any focused field under 16px and leaves it zoomed, so
+    /// the select must stay at `touchType` whatever the face is set in; and a native select
+    /// does not ellipsize, it hard-clips — which is why this used to be a fixed `w-40` sized to
+    /// its longest label. The face is ordinary text, so the wrapper is as wide as what it
+    /// says and the select, filling the wrapper, is exactly as wide as the face. Transparent
+    /// text rather than `opacity-0`, so the focus ring the select wears still paints.
+    let modelSelectWrap = "relative shrink-0 h-10 inline-flex items-center gap-1.5 min-w-0"
+    let modelSelectFace = cls [ caps; "text-ink-dim truncate pointer-events-none" ]
     let modelSelect =
-        cls [ "h-10 pl-0 pr-5 bg-transparent border-0 appearance-none cursor-pointer w-full"
-              "font-ui font-light text-ink-dim hover:text-ink transition-colors"; touchType; focusRing ]
+        cls [ "absolute inset-0 w-full h-full p-0 bg-transparent border-0 appearance-none cursor-pointer"
+              "text-transparent"; touchType; focusRing ]
 
-    /// Its wrapper: `modelControlWidth` for the width Send and Interrupt need it to hold to,
-    /// `relative` for the mark `modelSelectMark` sits against — the same split `fieldSelectWrapOf`
-    /// makes, kept separate because this wrapper carries none of that function's field chrome.
-    let modelSelectWrap = cls [ "relative"; modelControlWidth ]
-
-    /// The caret `appearance-none` took away, drawn at the picker's own faint weight —
-    /// `fieldSelectMark` is `text-ink-faint` too, so the two marks read as one family even
-    /// though the box behind them no longer matches.
-    let modelSelectMark = "pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-ink-faint"
+    /// The caret `appearance-none` took away: `Icon.caret`, the chevron a disclosure points
+    /// with. It was `Icon.down`, the arrow the timeline's jump-to-latest wears on the same
+    /// screen, so one glyph meant "go to the newest" and "open this list" a few pixels apart.
+    let modelSelectMark = "pointer-events-none text-ink-faint"
 
     /// A field with a VERB at its trailing edge, built exactly as the terminal composer's is
     /// (`terminalCommandWrap` / `terminalCommandTrail`): the wrapper carries the width, the

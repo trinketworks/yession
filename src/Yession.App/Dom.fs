@@ -769,7 +769,7 @@ module Dom =
         /// "whatever the provider picks" are the same fact, and only one of them is a
         /// sentence — a picker showing an empty row reads as a control that failed to load.
         let modelDefault = "default"
-        let modelDefaultLabel = "Provider's default"
+        let modelDefaultLabel = "default model"
         /// Why this client is keeping no history (Plan 20). The Cache API needs a secure
         /// context; a session reached over plain HTTP at a non-loopback address has none, so
         /// nothing is kept and — without this — nothing says why, which is indistinguishable

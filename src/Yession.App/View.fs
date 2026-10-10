@@ -1412,6 +1412,16 @@ module View =
             match chosen with
             | Some id when offered |> List.forall (fun m -> m.Id <> id) -> [ AgentModel.create id "" ]
             | _ -> []
+        // What the face says: the chosen model's name, or the default's label.
+        let face =
+            match chosen with
+            | None -> Dom.Text.modelDefaultLabel
+            | Some id ->
+                (orphan @ offered)
+                |> List.tryFind (fun m -> m.Id = id)
+                |> Option.map (fun m -> m.Name)
+                |> Option.filter (System.String.IsNullOrWhiteSpace >> not)
+                |> Option.defaultValue (ModelId.value id)
         let options =
             (orphan @ offered)
             |> List.map (fun offer ->
@@ -1434,13 +1444,14 @@ module View =
             | Some (kind, text) -> html $"""<span class="{Style.srOnly}" data-model-note="{kind}">{text}</span>"""
         html $"""
             <div class="{Style.modelSelectWrap}" data-model-panel>
+              <span class="{Style.modelSelectFace}" aria-hidden="true">{face}</span>
+              <span class="{Style.modelSelectMark}">{Icon.caret}</span>
               <select aria-label="model" class="{Style.modelSelect}"
                       data-model-select="{chosen |> Option.map ModelId.value |> Option.defaultValue Dom.Text.modelDefault}"
                       @change={EvVal(fun v -> dispatch (SetModelMsg (match ModelId.create v with Ok id -> Some id | Error _ -> None)))}>
                 <option value="" ?selected={chosen.IsNone}>{Dom.Text.modelDefaultLabel}</option>
                 {options}
               </select>
-              <span class="{Style.modelSelectMark}">{Icon.down}</span>
               {noteEl}
             </div>"""
 
