@@ -168,8 +168,8 @@ not a quieter button. A setting is bare. A status is never pressable. When two c
 the one closer to the surface's verb keeps its weight, and the other drops one.
 
 There is one bordered face. It is `ring` in the `edge` tone, with `ink` text. Interaction
-brightens the ring. There is no blue-ringed button. Blue text belongs to a link (`askLink`) and
-to the fill. While a flow is under way, its awaited step wears the fill. Every other verb on
+brightens the ring. There is no blue-ringed button. Blue text belongs to a link (`askLink`), to
+the fill, and to the composer's Send, which says its verb as a bare blue word. While a flow is under way, its awaited step wears the fill. Every other verb on
 that surface drops to bordered or bare. Bare verbs speak in one voice, the caps label step. A
 verb that rides a listed row is bare and `ink-dim` at rest.
 *Test: list every button face on a surface. Filled, bordered, bare: three at most, each drawn

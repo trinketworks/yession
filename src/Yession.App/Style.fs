@@ -521,37 +521,36 @@ module Style =
     /// is not a blocked one.
     let btnSendInFieldWaiting = cls [ btnInField; "text-ink-faint hover:text-ink" ]
 
-    /// Send's own box — SOLID, not the word every other composer verb wears. The product's
-    /// own rule (above) is bordered for a standalone act, borderless for a verb riding the
-    /// thing it acts on, and Send is the second kind by that rule — it wore the borderless
-    /// word for three revisions on exactly that reasoning (`SEND →` once, then the word
-    /// alone). Direct design direction overrode it: a thumb on a phone finds a filled
-    /// rectangle before it finds a word's own baseline, and now that the model picker rides
-    /// this same row (`Style.modelSelect`) Send is the one control in it worth standing apart
-    /// from, not blending into. No `rounded-*` — every rectangle this product draws is
-    /// sharp-cornered (`btn`/`btnPrimary`/every bordered verb above), and a lone rounded
-    /// button would read as a different product's chrome leaking in, not as "more primary."
+    /// Send is a WORD: the caps voice one step up (`capsLg`), in blue, with no rectangle
+    /// around it. It wore a solid blue box for a while — a thumb finds a filled rectangle
+    /// before a baseline — and on a phone that box ran to within 4px of the glass, because
+    /// the row's gutter (`draftCommitBase`'s `pr-1` beside this `px-3`) is measured to the
+    /// WORD. Direct design direction took the box back off: the word in the interactive
+    /// colour says "press" on its own, and the word is what sits on the 16px gutter.
     ///
-    /// 40px tall, which is the composer's resting line exactly (`draftInput`: a 24px line in
-    /// `py-2`) — so it bottom-aligns onto that line with no correction, same as the word it
-    /// replaces, and `draftCommit` spends no `pb` to centre it.
+    /// Bare, as the doctrine has a verb that rides the thing it acts on — the draft — and
+    /// blue, as the one bare verb that is the surface's own act (docs/visual-design.md,
+    /// Hierarchy of controls). No `rounded-*`, no border, no fill.
+    ///
+    /// 40px tall, which is the composer's resting line box below its top room (`draftInput`:
+    /// a 24px line, `pb-2`) — so it bottom-aligns onto that line with no correction.
     let private btnComposerBox =
         cls [ "h-10 px-3 shrink-0 inline-flex items-center justify-center cursor-pointer font-ui"
-              capsLg; "transition-colors"; Stroke.ring; focusRing ]
+              "bg-transparent border-0"; capsLg; "transition-colors"; focusRing ]
     /// Send's own hit area, grown past its 40px box the way `btnIconBareTouch` grows a bare
-    /// icon's: an empty `::before` reaching past the glyph on three sides, a press on the
+    /// icon's: an empty `::before` reaching past the word on three sides, a press on the
     /// pseudo-element landing on the element. Only three sides, not four — Send is the
     /// TRAILING control in this row, and `draftEditors` sits to its left across one `gap-1`;
     /// growing left would widen onto that presence display rather than onto nothing.
     let private btnComposerSendTouch =
         "relative before:absolute before:content-[''] before:-top-1.5 before:-bottom-1.5 before:-right-1.5"
     let btnComposerSend =
-        cls [ btnComposerBox; btnComposerSendTouch; Stroke.blue; "bg-blue text-bg hover:bg-blue-up-1 hover:border-blue-up-1" ]
-    /// Waiting for something to send. The same box in the same place, unfilled — a hairline
-    /// rectangle at the weight of a thing with nothing to do, never `disabled` in either
-    /// spelling: an empty composer is not a blocked one.
+        cls [ btnComposerBox; btnComposerSendTouch; "text-blue hover:text-blue-up-1" ]
+    /// Waiting for something to send. The same word in the same place at the weight of a
+    /// thing with nothing to do, never `disabled` in either spelling: an empty composer is
+    /// not a blocked one.
     let btnComposerSendWaiting =
-        cls [ btnComposerBox; btnComposerSendTouch; Stroke.hair; "text-ink-faint hover:text-ink hover:border-edge" ]
+        cls [ btnComposerBox; btnComposerSendTouch; "text-ink-faint hover:text-ink" ]
     /// Chrome, not an action: the small sidebar collapse/reveal chevrons. They lean the way
     /// they travel on hover and lead further on press — the only motion chrome earns, and the
     /// reason the two directions are separate values rather than one class plus a guess.
@@ -2727,15 +2726,18 @@ module Style =
     /// has. It costs nothing when there is not: height is content-driven and `max-height`
     /// only caps it, so a one-line draft still stands at 40.
     ///
-    /// The mask's stops are absolute FROM THE TOP (2.5rem → 3.25rem) rather than a percentage
+    /// Since the line gained `pt-3` the box is 44px at rest and the cap and the ramp moved down
+    /// 4px with it (2.75rem → 3.5rem).
+    ///
+    /// The mask's stops are absolute FROM THE TOP (2.75rem → 3.5rem) rather than a percentage
     /// or an offset from the bottom, and that is the whole reason it is safe. A ramp measured
     /// from the bottom edge is a ramp whose position moves with the box: at 40px it would run
     /// up through the first line and fade the descenders of a draft that fits perfectly well.
     /// Anchored at the top it begins exactly where line one's box ends, so line one is never
     /// touched and the ramp is simply off the end of a box that has not grown.
     let draftInput =
-        cls [ "block w-full max-h-[3.25rem] overflow-hidden transition-[max-height] duration-200 ease-out"
-              "[mask-image:linear-gradient(#000_2.5rem,transparent_3.25rem)]"
+        cls [ "block w-full max-h-[3.5rem] overflow-hidden transition-[max-height] duration-200 ease-out"
+              "[mask-image:linear-gradient(#000_2.75rem,transparent_3.5rem)]"
               "group-focus-within:max-h-64 group-focus-within:overflow-y-auto"
               // Gone on focus, not merely pushed down: the ramp would otherwise sit over the
               // line being typed the moment a draft scrolls inside.
@@ -2745,7 +2747,10 @@ module Style =
               // No `placeholder:` variant: this field is a mounted editor, not an `<input>`,
               // so it has no placeholder attribute for that variant to have ever matched. The
               // prompt is drawn on the editor itself — `[data-rich-body]` in `tailwind.css`.
-              "text-body text-ink px-4 py-2"; touchType ]
+              // `pt-3` over `pb-2`: the line sat 8px under the band's top rule and 16px in
+              // from its side, cramped against the one edge that carries the focus gradient.
+              // The extra 4px is spent above, so the line still ends where Send's box does.
+              "text-body text-ink px-4 pt-3 pb-2"; touchType ]
 
     /// The writing side of the box: whose message it is, then the message. A column only
     /// because someone else's draft says so above the words; your own — the case that is
@@ -2763,9 +2768,9 @@ module Style =
     /// other edge: the word ends where `draftInput`'s `px-4` begins, so the line of text and
     /// the verb that sends it are on one rail rather than four pixels apart.
     ///
-    /// No `pb`, derived, not eyeballed: the rest-state input is a 24px line inside `py-2`
-    /// (40px), so the line's centre sits 20px from the box top; a 40px control bottom-aligned
-    /// on the same 40px box centres at 20px too. It used to spend `pb-1` because the controls
+    /// No `pb`, derived, not eyeballed: the rest-state input is a 24px line over `pb-2`, so
+    /// the line's centre sits 20px above the box bottom; a 40px control bottom-aligned on the
+    /// same box centres 20px above it too (the 4px of `pt-3` beyond that is all above). It used to spend `pb-1` because the controls
     /// were 32px squares and needed 4px under them to reach that centre — the correction went
     /// out with the glyphs (`btnComposerBox`, above, is the line's own height).
     ///
@@ -3623,14 +3628,14 @@ module Style =
     /// to the right of. The old placeholder said "a command to run here", which a `$` says
     /// shorter; the field keeps its `aria-label`, because a placeholder is not a name.
     let terminalCommandWrap = "relative w-full"
-    /// `py-3` is not a guess: 12 + 16 + 12 is exactly the 40px the message composer's band
-    /// stands at (`py-2` around a 24px line), and the two sit side by side on a desktop where
-    /// four pixels of disagreement between them reads as one of the columns being wrong.
-    /// A phone has no column beside it to agree with, and a thumb to hold: 44px there, with
-    /// room at the trailing edge for the 44px Run (`btnInField`).
+    /// `pt-4 pb-3` is not a guess: 16 + 16 + 12 is exactly the 44px the message composer's
+    /// band stands at (`pt-3 pb-2` around a 24px line), and the two sit side by side on a
+    /// desktop where four pixels of disagreement between them reads as one of the columns
+    /// being wrong. On a phone, 44px is also the thumb's target, with room at the trailing
+    /// edge for the 44px Run (`btnInField`).
     let terminalCommand =
         cls [ "w-full"; fieldBare
-              "font-terminal text-code text-ink px-3 py-3 pr-10 phone:py-3.5 phone:pr-13 placeholder:text-green"; touchType ]
+              "font-terminal text-code text-ink px-3 pt-4 pb-3 pr-10 phone:py-3.5 phone:pr-13 placeholder:text-green"; touchType ]
     /// What sits at the field's trailing edge, inside its border: whoever else has a caret in
     /// this slot, and the verb.
     let terminalCommandTrail = "absolute right-1 inset-y-0 flex items-center gap-1"
