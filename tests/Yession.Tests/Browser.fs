@@ -5814,7 +5814,8 @@ let editorTests =
                                       Yession.Domain.Authority.agentFor (Yession.Domain.Principal.Peer (Yession.Domain.PeerId.create "ada" |> expect))
                                   Yession.Domain.Terminals.TerminalBlockStarted.Command = "make"
                                   Yession.Domain.Terminals.TerminalBlockStarted.FromSeq = 3
-                                  Yession.Domain.Terminals.TerminalBlockStarted.Background = false } ]
+                                  Yession.Domain.Terminals.TerminalBlockStarted.Background = false
+                                  Yession.Domain.Terminals.TerminalBlockStarted.Description = None } ]
                     do! awaitU (page.EvaluateAsync "() => window.__record('term-harness', 3, 'o', 'tail-mark-blocks\\r\\n')")
                     let! shown = newestShown page "blocks:term-harness" "tail-mark-blocks"
                     Expect.stringContains shown shownFully "the newest line of output is wholly on screen"

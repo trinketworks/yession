@@ -114,6 +114,7 @@ let private representativeModel : ClientModel =
                     // build one.
                     Authority = Authority.agentFor (Principal.Peer ada)
                     Order = 1.0
+                    Description = None
                     Background = false
                     Stdin = false
                     // An agent command, so no viewport and no claim about width.
@@ -181,6 +182,7 @@ let private representativeModel : ClientModel =
                       QueueId = None
                       Authority = Authority.ofAuthor (Principal.Peer ada)
                       Command = "ls -la"
+                      Description = None
                       Background = false
                       FromSeq = 0
                       ToSeq = Some 2
@@ -365,6 +367,7 @@ let private runBlock (authority: Authority) (n: int) (status: BlockStatus) : Blo
       QueueId = None
       Authority = authority
       Command = sprintf "step %d" n
+      Description = None
       Background = false
       FromSeq = 0
       ToSeq = Some 1

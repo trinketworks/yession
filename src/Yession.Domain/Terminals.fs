@@ -138,7 +138,11 @@ type Block =
       /// who released it. Carried whole rather than split back into fields, because a
       /// projection that re-spells the value is another place the three can drift apart.
       Authority : Authority
+      /// The command line, whole. What the block's BODY shows; its name is `BlockLabel`.
       Command : string
+      /// What its author said it is for (`BlockDescription`), when they said anything —
+      /// what `BlockLabel.ofBlock` calls it in place of the command.
+      Description : string option
       /// Whether the agent asked for this one in the background (Plan 20, stage 2) — it did
       /// not hold a turn open, and its completion is something the agent is waiting to be
       /// told about. Projected so a surface can SAY so while it runs: work nobody is sitting
@@ -379,6 +383,7 @@ module Projection =
                                   QueueId = e.QueueId
                                   Authority = e.Authority
                                   Command = e.Command
+                                  Description = e.Description
                                   Background = e.Background
                                   FromSeq = e.FromSeq
                                   ToSeq = None
@@ -406,6 +411,7 @@ module Projection =
                                   // in here.
                                   Authority = e.Authority
                                   Command = e.Command
+                                  Description = e.Description
                                   // An EMPTY range, not a missing one: a command that never
                                   // ran produced no output, so every reader that slices
                                   // [From, To) gets nothing without a special case.
@@ -454,6 +460,12 @@ module Projection =
 ///
 /// A non-empty command never gets an empty label: if nothing is left, it is the command,
 /// trimmed. The BODY that shows a command keeps all of it; this is for what NAMES one.
+///
+/// That rule is the fallback. A block whose author said what it is FOR
+/// (`Block.Description`, which the agent writes with every command it runs) is called that
+/// instead — "Run the unit tests" says more than any part of the command line can, and it
+/// is the one name a person reading a phone needs. A person's own commands carry none and
+/// keep the rule.
 module BlockLabel =
 
     type private Token =
@@ -612,9 +624,15 @@ module BlockLabel =
             |> String.concat ""
         if label = "" then trimmed else label
 
-    /// What a block is called — the one function every surface that NAMES a block asks. A
-    /// command wears the prompt it was typed at, so a name that is a command reads as one.
-    let ofBlock (block: Block) : string = "$ " + ofCommand block.Command
+    /// What a block is called — the one function every surface that NAMES a block asks: its
+    /// description when it has one (bounded again here, through `BlockDescription.ofProse`,
+    /// because a name is shown wherever a block is and the log is read for ever), else its
+    /// command's meaningful part. A command wears the prompt it was typed at, so a name that
+    /// is a command reads as one; a description is prose and wears none.
+    let ofBlock (block: Block) : string =
+        match block.Description |> Option.bind BlockDescription.ofProse with
+        | Some description -> description
+        | None -> "$ " + ofCommand block.Command
 
 /// What a terminal is CALLED on a screen, and the line that says what it is doing.
 ///
