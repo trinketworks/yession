@@ -6263,7 +6263,7 @@ let editorTests =
                 // Send's own weight moves from waiting to ready exactly while the draft
                 // does, so its arrival is the rule having settled — the one signal here
                 // that is not a guess at a duration.
-                let! _ = await (page.WaitForSelectorAsync """#shell [data-send-draft][class~="bg-blue"]""")
+                let! _ = await (page.WaitForSelectorAsync """#shell [data-send-draft][data-send-ready="yes"]""")
                 let! drafted = await (page.EvaluateAsync<float> below)
                 Expect.isTrue
                     (empty < drafted && empty <= 24.0)
@@ -6288,7 +6288,7 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync line)
                 do! awaitU (page.ClickAsync line)
                 do! awaitU (page.Keyboard.TypeAsync "something to send")
-                let! _ = await (page.WaitForSelectorAsync """#shell [data-send-draft][class~="bg-blue"]""")
+                let! _ = await (page.WaitForSelectorAsync """#shell [data-send-draft][data-send-ready="yes"]""")
                 // The shell into the viewport first: this harness page stacks its mounts and
                 // the shell is not the top of it, so the composer sits below the fold and a
                 // hit-test in VIEWPORT coordinates answers null for a reason this case is
