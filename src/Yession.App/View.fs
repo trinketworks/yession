@@ -1718,7 +1718,7 @@ module View =
             html $"""<span class="{voice}" data-block-mark="{token}"><span aria-hidden="true">{mark}</span><span class="{Style.srOnly}">{terminalBlockStatusWord model status}</span></span>"""
         match status with
         | BlockRunning -> pictured Style.statusOk (html $"""<span class="{Style.statusDotLive}"></span>""")
-        | BlockFinished (CommandSucceeded code) -> pictured Style.statusOk (html $"""{Icon.checkSm} {code}""")
+        | BlockFinished (CommandSucceeded code) -> pictured Style.statusDone (html $"""{Icon.checkSm} {code}""")
         | BlockFinished (CommandFailed code) -> pictured Style.statusErr (html $"""{Icon.crossSm} {code}""")
         | BlockFinished CommandTimedOut
         | BlockFinished (CommandExecutionFailed _) ->
@@ -2757,7 +2757,7 @@ module View =
                 | None ->
                     Dom.Text.blockRunning,
                     runningDot
-                | Some ToolCallOk -> Dom.Text.blockOk, html $"""<span class="{Style.statusOk}">{Icon.checkSm}</span>"""
+                | Some ToolCallOk -> Dom.Text.blockOk, html $"""<span class="{Style.statusDone}">{Icon.checkSm}</span>"""
                 | Some (ToolCallFailed reason) -> Dom.Text.blockFailed, html $"""<span class="{Style.statusErr}">{reason}</span>"""
             // `None` is not "no arguments" — it is a foreign tool, whose schema we did not
             // write and therefore cannot trust to have marked its own secrets. Said so, in
@@ -2861,7 +2861,7 @@ module View =
             let running =
                 count tally.Running (html $"""<span class="{Style.statusOk}"><span class="{Style.statusDotLiveLead}"></span>{tally.Running}</span>""")
             let done' =
-                count tally.Done (html $"""<span class="{Style.statusOk}">{Icon.checkSm} {tally.Done}</span>""")
+                count tally.Done (html $"""<span class="{Style.statusDone}">{Icon.checkSm} {tally.Done}</span>""")
             let counts =
                 html $"""<span class="{Style.chatTaskCounts}">{failed}{running}{done'}</span>"""
             let commands =
@@ -3385,7 +3385,7 @@ module View =
         let count n inner = if n = 0 then Lit.nothing else inner
         let failed = count tally.Failed (html $"""<span class="{Style.statusErr}">{Icon.crossSm} {tally.Failed}</span>""")
         // No running count: a running command is never in a run (`BlockGroup.ofBlocks`).
-        let done' = count tally.Done (html $"""<span class="{Style.statusOk}">{Icon.checkSm} {tally.Done}</span>""")
+        let done' = count tally.Done (html $"""<span class="{Style.statusDone}">{Icon.checkSm} {tally.Done}</span>""")
         let counts = html $"""<span class="{Style.terminalBlockRunCounts}">{failed}{done'}</span>"""
         // EARLIER commands: a run is only ever history older than what the pane draws whole
         // (`BlockGroup.ofBlocks`), and the line says so rather than reading as everything.
