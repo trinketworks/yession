@@ -4967,6 +4967,12 @@ module View =
                  stopped eleven times on things nobody could see. From the model, so the first
                  paint (`Ssr`) carries it too; the root class (`PaneShell.setOpen`) is only the
                  animation. -->
+            <!-- A phone's grab edge: the chat left showing beside the pane, under a scrim, and
+                 the way back when pressed. A duplicate of the pivot's `›`, so out of the tree
+                 and the Tab order (`Style.paneGrabEdge`). -->
+            <button type="button" class="{Style.paneGrabEdge}" tabindex="-1" aria-hidden="true"
+                    aria-label="{Dom.Text.backToChat}" data-pane-grab-edge
+                    @click={Ev(fun _ -> dispatch ToggleContentMsg)}></button>
             <aside class="{Style.contentPanel}" data-content-panel ?inert={not model.TerminalsOpen}>
               <!-- The split, as a real separator: `aria-valuenow` and the arrow keys are what
                    make a splitter reachable without a pointer, and the shell keeps the value
@@ -4974,11 +4980,6 @@ module View =
               <div class="{Style.terminalResize}" data-term-resize role="separator" tabindex="0"
                    aria-orientation="vertical" aria-label="Resize the content column"
                    aria-valuemin="{PaneSplit.narrowest}" aria-valuenow="{split.Width}" aria-valuemax="{split.Widest}"></div>
-              <!-- A phone's grab edge: the pivot's `›` again, for a thumb at the edge. A
-                   duplicate, so out of the tree and the Tab order (`Style.paneGrabEdge`). -->
-              <button type="button" class="{Style.paneGrabEdge}" tabindex="-1" aria-hidden="true"
-                      aria-label="{Dom.Text.backToChat}" data-pane-grab-edge
-                      @click={Ev(fun _ -> dispatch ToggleContentMsg)}><span class="{Style.paneGrabMark}">{Icon.rightSm}</span></button>
               <!-- Escape anywhere in the pane steps back one item: off `all` to what it was
                    laid over, or a preview down, as its close does — but not while the menu is
                    open over it, whose own Escape is about the menu and runs first, on the
