@@ -127,9 +127,6 @@ module Icon =
                      stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" focusable="false"><path d="{chainedPath}"></path></svg>"""
     let left = stroked "w-3.5 h-3.5" leftPath
     let right = stroked "w-3.5 h-3.5" rightPath
-    /// The same `›` in a 12px box, for the one place that has 12px to hang in: the phone pane's
-    /// grab edge, whose mark sits in the gutter left of the rail (`Style.paneGrabMark`).
-    let rightSm = stroked "w-3 h-3" rightPath
     let rights = stroked "w-3.5 h-3.5" rightsPath
     let send = stroked "w-3.5 h-3.5" sendPath
     /// Put what this sits on onto the clipboard, and — the same control, once it has — the

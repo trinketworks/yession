@@ -2980,7 +2980,7 @@ module Style =
         + Stroke.dividerLeft + " "
         + "wide:transition-[width] wide:duration-200 wide:ease-out wide:[.term-resizing_&]:transition-none "
         + "wide:[.term-closed_&]:w-0 wide:[.term-closed_&]:border-l-0 "
-        + "phone:fixed phone:inset-y-0 phone:right-0 phone:w-full phone:border-l-0 "
+        + "phone:fixed phone:inset-y-0 phone:right-0 phone:left-5 phone:w-auto phone:border-l-0 "
         + degradedBarRoom + " "
         + "phone:transition-transform phone:duration-200 phone:ease-out "
         + "phone:[.term-closed_&]:translate-x-[101%] " + reduceColumnMotion
@@ -3000,30 +3000,30 @@ module Style =
               "bg-transparent hover:bg-blue/50 focus-visible:bg-blue focus-visible:outline-none"
               "transition-colors motion-reduce:transition-none" ]
 
-    /// The pane's left edge on a phone: the way back, drawn where a sheet that slid in from
-    /// the right is held. The `›` in the head is the way back for everyone; this is the same
-    /// press for a thumb already at the edge, and the mark is what says the sheet came from
-    /// somewhere — the affordance a swipe would have, without a gesture to discover.
+    /// The pane's left edge on a phone: a strip of the chat left showing, under a scrim, and
+    /// pressing it is the way back. The sheet slid in from the right and stops short of the
+    /// screen's edge, so what it covers is still there beside it — the same dimmed ground the
+    /// nav drawer leaves behind it (`scrim`), and the same press dismisses both. No mark: a
+    /// glyph in 6px of edge was a `›` hanging in the middle of the screen that said nothing a
+    /// reader could act on, and the chat behind the scrim says where the press goes.
+    ///
+    /// Outside the panel, because the panel clips its overflow and the strip is not the pane's.
+    /// Fixed, so it lies over the chat column at the screen's edge, as wide as the gap the
+    /// panel leaves (`contentPanel`'s `phone:left-5`), and it fades with the panel's slide.
     ///
     /// Out of the accessibility tree and the Tab order (`aria-hidden`, `tabindex=-1`): it is a
-    /// duplicate, and a reader of the tree should meet the way back once. Which is also why it
-    /// may be 6px wide — WCAG 2.5.8 excepts a target whose act an equivalent control on the
-    /// same screen offers at full size, and the head's is 44. Its mark is wider than that and
-    /// hangs over the pane's gutter, where no words sit; being the button's own child it is
-    /// pressable all the way across.
+    /// duplicate of the head's `›`, and a reader of the tree should meet the way back once.
+    /// WCAG 2.5.8 excepts a target whose act an equivalent control on the same screen offers
+    /// at full size, and the head's is 44.
+    ///
+    /// 20px: wide enough to find with a thumb and to read as the chat rather than a rule, and
+    /// no wider, because every pixel of it comes out of the tab row (`panePivotRow`).
     ///
     /// The splitter's place on a desktop (`terminalResize`); the two never share a screen.
     let paneGrabEdge =
-        cls [ "wide:hidden absolute left-0 inset-y-0 w-1.5 z-50 p-0 border-0 bg-transparent cursor-pointer"
-              "flex items-center"; focusRing ]
-    /// Its mark: the head's own `›` (`Icon.rightSm`) in the faint ink, midway down the edge.
-    /// The same glyph as the control it duplicates, so the edge reads as the way back to the
-    /// chat rather than as a bare rule with no meaning (which is what a short bar was).
-    ///
-    /// Hung in the gutter and no further: a phone's rail is 12px from the edge, and the 14px
-    /// box the head's glyph is drawn in ran 2px over the first letters of whatever row sat at
-    /// its height ("›exit"). The mark's box is 12px, so it ends where the rail begins.
-    let paneGrabMark = "block text-ink-faint"
+        cls [ "hidden phone:block fixed left-0 inset-y-0 w-5 z-40 p-0 border-0 bg-black/60 cursor-pointer"
+              "transition-opacity duration-200 ease-out motion-reduce:transition-none"
+              "phone:[.term-closed_&]:opacity-0 phone:[.term-closed_&]:pointer-events-none"; focusRing ]
 
     /// The column's head: a PIVOT, the one row this pane is navigated by (Zune's own idiom,
     /// which the rest of the shell already speaks: big light words, no boxes).
@@ -3040,8 +3040,10 @@ module Style =
     /// On a phone every control in it is a thumb's 44 (`phone:min-h-11` on each). The row's
     /// right padding there is the `›`'s own negative margin paid back (`navChevronBase`'s
     /// `-m-1.5`) and no less: at `pr-1` the chevron's box ran 2px past the pane's edge, which
-    /// clips it and makes the whole column 2px wider than the phone.
-    let panePivotRow = "shrink-0 flex items-center gap-1 pl-1.5 pr-3 pt-2 phone:pt-1 phone:pr-1.5"
+    /// clips it and makes the whole column 2px wider than the phone. No left padding there:
+    /// the pane stops short of the screen for the chat's edge (`paneGrabEdge`), `all` has its
+    /// own, and the row needs those 6px to show three whole tabs.
+    let panePivotRow = "shrink-0 flex items-center gap-1 pl-1.5 pr-3 pt-2 phone:pt-1 phone:pl-0 phone:pr-1.5"
     /// The tablist: `all`, then the scroller of tabs. `all` stays put at the row's head however
     /// many tabs follow it — a door to every terminal that scrolled away with them would be no
     /// door, and one that moved along every time a tab opened would be a door to hunt for.

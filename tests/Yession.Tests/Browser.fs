@@ -3838,13 +3838,14 @@ let editorTests =
                     await (page.WaitForFunctionAsync
                         "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
 
-                // A chip brings it on, and it takes the WHOLE column.
+                // A chip brings it on, and it takes the column, short of the edge strip the chat
+                // shows dimmed through (`Style.paneGrabEdge`).
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
                 let! _ =
                     await (page.WaitForFunctionAsync
                         """(() => {
                              const r = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
-                             return r.left <= 1 && Math.round(r.width) === window.innerWidth
+                             return Math.abs(r.right - window.innerWidth) <= 1 && r.left < window.innerWidth / 2
                            })()""")
                 // …with the tab strip retained, which is what keeps phone and desktop one
                 // mental model rather than two surfaces that happen to share a codebase.
@@ -3919,12 +3920,15 @@ let editorTests =
                     await (page.EvaluateAsync<string>
                         """() => {
                              const s = document.querySelector('#shell [data-pane-strip]').getBoundingClientRect()
-                             return JSON.stringify([...document.querySelectorAll('#shell [data-pane-strip] [role=tab]')]
+                             const tabs = [...document.querySelectorAll('#shell [data-pane-strip] [role=tab]')]
+                             window.__stripShape = JSON.stringify({ strip: [s.left, s.right], tabs: tabs.map(t => { const r = t.getBoundingClientRect(); return [t.textContent.trim(), Math.round(r.left), Math.round(r.right)] }) })
+                             return JSON.stringify(tabs
                                .filter(t => { const r = t.getBoundingClientRect(); return r.left >= s.left - 0.5 && r.right <= s.right + 0.5 })
                                .map(t => t.textContent.trim()))
                            }""")
                 let whole = System.Text.Json.JsonSerializer.Deserialize<string array> whole
-                Expect.isTrue (whole.Length >= 3) (sprintf "three whole tabs or more, got %A" whole)
+                let! shape = await (page.EvaluateAsync<string> "() => window.__stripShape")
+                Expect.isTrue (whole.Length >= 3) (sprintf "three whole tabs or more, got %A in %s" whole shape)
             }
 
         // The room came partly from the `+`, which a phone's row no longer carries — and making
@@ -3967,7 +3971,7 @@ let editorTests =
                 do! waitFor "the pane to cover the phone's screen" page
                         """(() => {
                              const r = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
-                             return r.left <= 1 && Math.round(r.width) === window.innerWidth
+                             return Math.abs(r.right - window.innerWidth) <= 1 && r.left < window.innerWidth / 2
                            })()"""
                 do! awaitU (
                         page.EvaluateAsync
@@ -3987,83 +3991,57 @@ let editorTests =
                 Expect.containsAll rows [| "term-harness"; "term-live" |] "both open terminals are rows on the screen"
             }
 
-        // The phone pane's left edge says it is the way back: a mark a person can SEE on the
-        // screen, and one whose press lands on the handle that closes the pane. A mark that
-        // measured zero, hung off the screen, or sat under another element would render the
-        // same string as one that works, so this measures it and hit-tests its centre.
-        editorCaseIn 390 844 "on a phone the pane's edge shows a mark that presses as the way back" <| fun page ->
+        // On a phone the pane stops short of the screen's left edge, and what shows there is
+        // the chat under a scrim — pressable, as the way back. Measured rather than read from
+        // the markup: a strip that measured zero, sat under the pane, or left a gap the chat
+        // showed through undimmed would render the same string as one that works.
+        editorCaseIn 390 844 "on a phone the chat shows dimmed beside the pane and pressing it is the way back" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
                 let! _ =
                     await (page.WaitForFunctionAsync
                         """(() => {
                              const r = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
-                             return r.left <= 1 && Math.round(r.width) === window.innerWidth
+                             return Math.abs(r.right - window.innerWidth) <= 1 && r.left < window.innerWidth / 2
                            })()""")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        "getComputedStyle(document.querySelector('#shell [data-pane-grab-edge]')).opacity === '1'")
                 let! shape =
                     await (page.EvaluateAsync<float[]> """() => {
                         const edge = document.querySelector('#shell [data-pane-grab-edge]')
-                        const mark = edge.querySelector('svg').getBoundingClientRect()
-                        const hit = document.elementFromPoint(mark.left + mark.width / 2, mark.top + mark.height / 2)
-                        return [mark.width, mark.height, mark.left, mark.right, window.innerWidth, edge.contains(hit) ? 1 : 0, mark.top + mark.height / 2]
+                        const e = edge.getBoundingClientRect()
+                        const p = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
+                        const hit = document.elementFromPoint(e.left + e.width / 2, e.top + e.height / 2)
+                        return [e.left, e.width, p.left - e.right, edge.contains(hit) ? 1 : 0, e.top + e.height / 2]
                     }""")
-                Expect.isTrue (shape.[0] > 0.0 && shape.[1] > 0.0) "the mark has a size"
-                Expect.isTrue (shape.[2] >= 0.0 && shape.[3] <= shape.[4]) "and is on the screen"
-                Expect.equal shape.[5] 1.0 "and what is painted at its centre is the handle, so pressing the mark presses it"
-                // Pressed where it is drawn, and the pane goes back off the screen.
-                do! awaitU (page.Mouse.ClickAsync (float32 (shape.[2] + shape.[0] / 2.0), float32 shape.[6]))
+                Expect.equal shape.[0] 0.0 "the strip starts at the screen's edge"
+                Expect.isTrue (shape.[1] >= 20.0) "and is a thumb's width, not a hairline"
+                Expect.isTrue (abs shape.[2] <= 1.0) "and the pane begins where it ends, so no chat shows undimmed"
+                Expect.equal shape.[3] 1.0 "and what is painted at its centre is the strip, so pressing there presses it"
+                do! awaitU (page.Mouse.ClickAsync (float32 (shape.[1] / 2.0), float32 shape.[4]))
                 let! _ =
                     await (page.WaitForFunctionAsync
                         "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
                 return ()
             }
 
-        // The edge's mark hangs in the gutter, and the gutter is the column left of the rail:
-        // no word in the pane may begin under it. The mark sits midway down the edge, so the
-        // row it met depended on how many rows there were ("›exit"); this asks of EVERY painted
-        // text run in the pane, so the answer does not depend on which one happens to be there.
-        // Both faces of the pane, because the all page's rows and a terminal's lines are
-        // different surfaces with different leftmost text.
-        editorCaseIn 390 844 "on a phone no text in the pane begins under the edge's mark" <| fun page ->
+        // Shut, the strip is gone with the pane: a scrim left over the chat would dim the
+        // thing the reader came back to, and swallow the first press at the screen's edge.
+        editorCaseIn 390 844 "on a phone the pane's edge leaves nothing over the chat once it is shut" <| fun page ->
             async {
-                let underTheMark =
-                    """() => {
-                         const mark = document.querySelector('#shell [data-pane-grab-edge] svg').getBoundingClientRect()
-                         const panel = document.querySelector('#shell [data-content-panel]')
-                         const walker = document.createTreeWalker(panel, NodeFilter.SHOW_TEXT)
-                         const runs = []
-                         for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-                           if (!n.textContent.trim()) continue
-                           const range = document.createRange()
-                           range.selectNodeContents(n)
-                           for (const r of range.getClientRects())
-                             if (r.width > 1 && r.height > 1 && r.right > 0 && r.left < window.innerWidth)
-                               runs.push({ text: n.textContent.trim().slice(0, 20), left: r.left, top: r.top, bottom: r.bottom })
-                         }
-                         // Text and mark abut at the rail, so both edges land on the same fractional
-                         // pixel and the runner's rounding decides which reads larger. Under means
-                         // covered by at least half a pixel; the old 14px box covered 2.
-                         return JSON.stringify({ runs: runs.length, under: runs.filter(r => r.left < mark.right - 0.5).map(r => ({ ...r, markRight: mark.right })) })
-                       }"""
-                let measure () =
-                    async {
-                        let! json = await (page.EvaluateAsync<string> underTheMark)
-                        use doc = System.Text.Json.JsonDocument.Parse json
-                        let root = doc.RootElement
-                        Expect.isTrue (root.GetProperty("runs").GetInt32 () > 0) "the pane has text on it, or this proves nothing"
-                        return root.GetProperty("under").ToString ()
-                    }
-                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 let! _ =
                     await (page.WaitForFunctionAsync
-                        "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left <= 1")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-switcher]")
-                let! onTerminal = measure ()
-                Expect.equal onTerminal "[]" "no text on the terminal face begins under the mark"
-                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
-                let! onAll = measure ()
-                Expect.equal onAll "[]" "no text on the all page begins under the mark"
+                        "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
+                let! _ =
+                    await (page.WaitForFunctionAsync
+                        """(() => {
+                             const edge = document.querySelector('#shell [data-pane-grab-edge]')
+                             const e = edge.getBoundingClientRect()
+                             const hit = document.elementFromPoint(e.left + 2, e.top + e.height / 2)
+                             return getComputedStyle(edge).opacity === '0' && !edge.contains(hit)
+                           })()""")
+                return ()
             }
 
         // The focus contract (where the keyboard goes after an act in the pane). Each of these
@@ -7894,7 +7872,7 @@ let editorTests =
                     do! waitFor "the pane to cover the screen" page
                             """(() => {
                                  const r = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
-                                 return r.left <= 1 && r.right >= window.innerWidth - 1
+                                 return Math.abs(r.right - window.innerWidth) <= 1 && r.left < window.innerWidth / 2
                                })()"""
                     do! awaitU (page.FocusAsync "#shell [data-nav-toggle='show']")
                     do! awaitU (page.Keyboard.PressAsync "Enter")
