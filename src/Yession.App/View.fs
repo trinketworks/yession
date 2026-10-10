@@ -2163,11 +2163,16 @@ module View =
         // The dispatch carries the id alone: which way the verdict goes is `Chapters.toggle`'s
         // to work out from the item, so this control never holds a second copy of what an act
         // defaults to (see `Chapters`).
-        let itemActions (item: ConversationItem) =
+        //
+        // `onHeadline`: the item's first line is not its headline (an act under its cause),
+        // so the control and its menu are placed on the headline's row instead.
+        let itemActionsAt (onHeadline: bool) (item: ConversationItem) =
             let isChapter = Set.contains item.MessageId chapterOpenings
             let opened = model.ItemMenu = Some item.MessageId
+            let control = if onHeadline then Style.itemActionsOnHeadline else Style.itemActions
+            let menuClass = if onHeadline then Style.itemMenuOnHeadline else Style.itemMenu
             let dress =
-                if opened then Style.cls [ Style.itemActions; Style.itemActionsOpen ] else Style.itemActions
+                if opened then Style.cls [ control; Style.itemActionsOpen ] else control
             // Rendered only while open. A menu per item kept in the document and hidden would
             // be twenty menus in the accessibility tree of a twenty-message conversation, and
             // twenty more with every message that arrives.
@@ -2178,7 +2183,7 @@ module View =
                         <button type="button" class="{Style.itemMenuBackdrop}" tabindex="-1"
                                 aria-label="{Dom.Text.dismissMenu}"
                                 @click={Ev(fun _ -> dispatch CloseItemMenuMsg)}></button>
-                        <div class="{Style.itemMenu}" role="menu" data-item-menu="{MessageId.value item.MessageId}">
+                        <div class="{menuClass}" role="menu" data-item-menu="{MessageId.value item.MessageId}">
                           <button type="button" role="menuitem" class="{Style.itemMenuEntry}"
                                   data-item-chapter="{MessageId.value item.MessageId}"
                                   data-item-is-chapter="{if isChapter then "yes" else "no"}"
@@ -2207,6 +2212,7 @@ module View =
                           @click={Ev(fun _ -> dispatch (ToggleItemMenuMsg item.MessageId))}>{Icon.more}</button>
                   {menu}
                 </div>"""
+        let itemActions = itemActionsAt false
         // The particulars, under the headline and never instead of it. A second LINE rather
         // than a disclosure: what an act asked for is exactly what a person has to decide
         // about, and a decision behind a click is a decision most readers never see. One
@@ -2516,6 +2522,11 @@ module View =
             // instead: an act in flight is not one to unfold, and its account is about to
             // change under the reader anyway.
             let key = FoldKey.Act item.MessageId
+            // A cause row above the headline moves the actions down onto the headline.
+            let underCause =
+                match Map.tryFind item.MessageId causeLinks with
+                | Some (CauseLink.Drawn _) | Some CauseLink.Chained -> true
+                | Some CauseLink.Unlinked | None -> false
             let rail =
                 if Set.contains item.MessageId chainedOn then
                     html $"""<span class="{Style.causeRail}" aria-hidden="true"></span>"""
@@ -2544,7 +2555,7 @@ module View =
             let fold = foldBody key Style.actNoteFoldInner folded
             html $"""
                 <article class="{Style.actNote}" data-message-id="{MessageId.value item.MessageId}" tabindex="-1" data-act-note data-act-status="{messageStatusLabel item.Status}" data-message-author="{Entity.actorToken item.Author}">
-                  {itemActions item}
+                  {itemActionsAt underCause item}
                   {causeLine item}
                   {header}
                   {rail}
