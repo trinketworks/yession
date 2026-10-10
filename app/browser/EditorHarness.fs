@@ -1555,7 +1555,7 @@ do
               Links =
                 { SendDraft = ignore
                   SendTerminalDraft = fun _ _ -> ()
-                  ReportFocus = Render.focusReporter (fun focus -> dispatchRef (CaretMovedMsg focus)) } }
+                  ReportFocus = fun focus -> dispatchRef (CaretMovedMsg focus) } }
     let mutable model = { shellModel with Column = { shellModel.Column with Wide = PaneShell.onDesktop () } }
     /// What `Published.closed` reads, kept here for `typed`'s reason: the count is this
     /// instrument's output, not the place it keeps it.
