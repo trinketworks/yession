@@ -49,6 +49,8 @@ module AgentTools =
         let WriteFile = "write_file"
         [<Literal>]
         let StartWorkSandbox = "start_work_sandbox"
+        [<Literal>]
+        let ShareArtifact = "share_artifact"
 
     /// One outcome, rendered as tool text (Plan 13, stage 3b).
     ///
@@ -937,7 +939,7 @@ module AgentTools =
               (fun (path, content, sandbox) -> ok (writeFile capabilities path content sandbox))
 
           tool
-              "share_artifact"
+              ToolName.ShareArtifact
               "Share a file with the people here — an image you plotted, a screenshot, a report. Takes a path in a sandbox (as read_file takes them) and copies it into the session's artifacts, which everyone can see and nobody has to have a sandbox to read. Answers with the address the copy got, `file:///artifacts/<name>/<version>`: write it in a message, as it is, and the people here see it as the file — a chip that opens it — rather than as a URL. Sharing the same name again does NOT overwrite it — it adds a version, and the older ones stay where they are, so an address you have already written keeps showing what it showed. At most 100 MB a file; the refusal says how big yours is. The `artifacts` query lists what has been shared."
               (toolArgs {
                   let! path = ToolArgs.text "path" "the file to share, e.g. \"out/chart.png\" — a literal path, as read_file takes one: it is not a shell word, so an environment variable in it is not expanded"
