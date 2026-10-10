@@ -395,7 +395,7 @@ let private terminalNameTests =
             let proj = fold [ untitledIn (termN 1) SandboxRef.defaultRef; untitledIn (termN 2) devSandbox ]
             Expect.equal (nameIn proj (termN 2)) "dev 1" "the sandbox, and its place there"
 
-        testCase "a terminal's subtitle is the command it is running" <| fun () ->
+        testCase "a terminal's latest block is the one it is running" <| fun () ->
             let proj =
                 fold
                     [ untitledIn (termN 1) SandboxRef.defaultRef
@@ -403,11 +403,11 @@ let private terminalNameTests =
                       completed (termN 1) "1" (CommandSucceeded 0) 3
                       started (termN 1) "2" "npm test" 3 ]
             Expect.equal
-                (TerminalName.subtitle (Projection.tryFind (termN 1) proj |> Option.get))
-                "npm test"
+                (TerminalName.latest (Projection.tryFind (termN 1) proj |> Option.get) |> Option.map (fun b -> b.Command))
+                (Some "npm test")
                 "what it is doing now"
 
-        testCase "with nothing running, a terminal's subtitle is the last command it ran" <| fun () ->
+        testCase "with nothing running, a terminal's latest block is the last one it ran" <| fun () ->
             let proj =
                 fold
                     [ untitledIn (termN 1) SandboxRef.defaultRef
@@ -416,9 +416,58 @@ let private terminalNameTests =
                       started (termN 1) "2" "npm test" 3
                       completed (termN 1) "2" (CommandFailed 1) 9 ]
             Expect.equal
-                (TerminalName.subtitle (Projection.tryFind (termN 1) proj |> Option.get))
-                "npm test"
+                (TerminalName.latest (Projection.tryFind (termN 1) proj |> Option.get) |> Option.map (fun b -> b.Command))
+                (Some "npm test")
                 "what it did last"
+    ]
+
+let private labelOf (command: string) = BlockLabel.ofCommand command
+
+let private blockLabelTests =
+    testList "What a block is called" [
+        testCase "a leading cd is not the name" <| fun () ->
+            Expect.equal (labelOf "cd /repos/trinketworks/yession && git fetch origin master -q") "git fetch origin master -q" "the part that does the work"
+
+        testCase "an && inside quotes does not split the command" <| fun () ->
+            Expect.equal (labelOf "cd /x && bash -c 'make && make test'") "bash -c 'make && make test'" "one command, quoted as written"
+
+        testCase "an && inside a command substitution does not split the command" <| fun () ->
+            Expect.equal (labelOf "echo $(cd /x && pwd)") "echo $(cd /x && pwd)" "the substitution is part of its word"
+
+        testCase "a command that is all set-up keeps its last step" <| fun () ->
+            Expect.equal (labelOf "cd /x && export FOO=1") "export FOO=1" "something, rather than nothing"
+
+        testCase "set-up between two steps is dropped, and the operator after it kept" <| fun () ->
+            Expect.equal (labelOf "make; cd sub || make again") "make || make again" "only the work, joined as it ran"
+
+        testCase "a bare assignment is set-up" <| fun () ->
+            Expect.equal (labelOf "FOO=1 BAR=2; make") "make" "an assignment alone runs nothing"
+
+        testCase "an assignment in front of a command stays with it" <| fun () ->
+            Expect.equal (labelOf "FOO=1 make") "FOO=1 make" "it is how that command was run"
+
+        testCase "set -e is set-up" <| fun () ->
+            Expect.equal (labelOf "set -euo pipefail; npm test") "npm test" "a shell option is not the work"
+
+        testCase "a trailing tail pipe is dropped" <| fun () ->
+            Expect.equal (labelOf "dotnet build 2>&1 | tail -20") "dotnet build" "trimming output is not the work"
+
+        testCase "a pipe that does work is kept" <| fun () ->
+            Expect.equal (labelOf "ls -la | grep fix | head -5") "ls -la | grep fix" "only the trimming stage goes"
+
+        testCase "output sent to /dev/null is not the name" <| fun () ->
+            Expect.equal (labelOf "make >/dev/null 2> /dev/null") "make" "silencing is not the work"
+
+        testCase "only the first line names a multi-line command" <| fun () ->
+            Expect.equal (labelOf "cat <<EOF > notes.txt\nhello\nEOF") "cat <<EOF > notes.txt" "a heredoc's body is not its name"
+
+        testCase "a command nothing is left of names itself" <| fun () ->
+            Expect.equal (labelOf "  2>&1  ") "2>&1" "never empty for a non-empty command"
+
+        testCase "a block's name wears the prompt" <| fun () ->
+            let proj = fold [ untitledIn (termN 1) SandboxRef.defaultRef; started (termN 1) "1" "cd /x && make" 0 ]
+            let view = Projection.tryFind (termN 1) proj |> Option.get
+            Expect.equal (view.Blocks |> List.map BlockLabel.ofBlock) [ "$ make" ] "named as a command"
     ]
 
 // --- OSC 133 marks and their integrity (Plan 13, stage 2d) -------------------------------
@@ -5357,6 +5406,7 @@ let tests =
         drainTests
         projectionTests
         terminalNameTests
+        blockLabelTests
         blockStdinTests
         typingTests
         markTests

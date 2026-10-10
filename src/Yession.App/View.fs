@@ -2704,10 +2704,9 @@ module View =
                         data-chat-block="{BlockId.value blockId}"
                         data-chat-block-status="{status}"
                         data-terminal-id="{TerminalId.value terminalId}"
-                        aria-label="{Dom.Text.commandChip block.Command (terminalBlockStatusWord model block.Status) where}"
+                        aria-label="{Dom.Text.commandChip (BlockLabel.ofBlock block) (terminalBlockStatusWord model block.Status) where}"
                         @click={Ev(fun _ -> dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Block (terminalId, blockId)))))}>
-                  <span class="{Style.terminalPrompt}">$</span>
-                  <code class="{Style.chatChipCommand}">{block.Command}</code>
+                  <code class="{Style.chatChipCommand}" title="{block.Command}">{BlockLabel.ofBlock block}</code>
                   <span class="{Style.chatChipSubject}" data-chat-block-terminal="{TerminalId.value terminalId}">{where}</span>
                   <span class="shrink-0">{terminalBlockStatus model block.Status}</span>
                 </button>"""
@@ -3301,7 +3300,7 @@ module View =
             | BlockRunning ->
                 html $"""
                     <button type="button" class="{Style.terminalBlockStop}" data-terminal-block-stop="{BlockId.value block.BlockId}"
-                            aria-label="{Dom.Text.stopCommand block.Command}" title="{Dom.Text.stopCommandHint}"
+                            aria-label="{Dom.Text.stopCommand (BlockLabel.ofBlock block)}" title="{Dom.Text.stopCommandHint}"
                             aria-keyshortcuts="Control+C"
                             @click={Ev(fun _ -> dispatch (InterruptTerminalMsg terminal))}>{Icon.stop}stop</button>"""
             | BlockFinished _
@@ -4098,7 +4097,7 @@ module View =
             let id = TerminalId.value view.TerminalId
             let name = TerminalName.display model.Terminals view
             let armed = model.KillArmed = Some view.TerminalId
-            let running = Projection.runningBlock view |> Option.map (fun b -> b.Command)
+            let running = Projection.runningBlock view |> Option.map BlockLabel.ofBlock
             // Nothing running is a fact worth saying, not an absence: it is what makes a kill
             // cheap.
             let says = running |> Option.defaultValue Dom.Text.killIdle
@@ -4255,9 +4254,10 @@ module View =
             // What it is doing or last did, under the name: nine rows of `term N` say which is
             // which, and this says which is the one you want.
             let subtitle =
-                match TerminalName.subtitle view with
-                | "" -> Lit.nothing
-                | command -> html $"""<span class="{Style.terminalListSubtitle}" title="{command}">{command}</span>"""
+                match TerminalName.latest view with
+                | None -> Lit.nothing
+                | Some block ->
+                    html $"""<span class="{Style.terminalListSubtitle}" title="{block.Command}">{BlockLabel.ofBlock block}</span>"""
             let mode = ClientModel.chosenRead view.TerminalId model
             html $"""
                 <div class="{Style.terminalListRow}" role="listitem">
@@ -4459,7 +4459,7 @@ module View =
             // The item says WHICH terminal; what it is running rides the tooltip, because a
             // row of names is what a person scans and a row of commands is a row of
             // truncations.
-            let tooltip = TerminalName.subtitle view
+            let tooltip = TerminalName.latest view |> Option.map (fun b -> b.Command) |> Option.defaultValue ""
             // Who is in THIS terminal, on its item — the same presence the roster reports, put
             // where you would look for it. Without it, a collaborator typing a command in a
             // terminal you are not showing is visible nowhere in this column.
@@ -4515,20 +4515,22 @@ module View =
                          @keydown={Ev(activateKey)}
                          @click={Ev(fun _ -> activate ())}><span class="{Style.pivotName}" data-terminal-tab-name>{name}</span>{mark}{peers}{dismiss}</div>"""
         // What a preview is CALLED — its name under the pivot, its close's, and so its
-        // panel's. One function, so they can never disagree.
-        let previewLabel (subject: PreviewSubject) =
+        // panel's. One function, so they can never disagree. With it, what its name's
+        // tooltip says: a block's whole command, which its name is only the working part of.
+        let previewLabel (subject: PreviewSubject) : string * string =
+            let same label = label, label
             match subject with
             | PreviewSubject.Block (terminalId, blockId) ->
                 Projection.tryFind terminalId model.Terminals
                 |> Option.bind (fun v -> v.Blocks |> List.tryFind (fun b -> b.BlockId = blockId))
-                |> Option.map (fun b -> "$ " + b.Command)
-                |> Option.defaultValue (BlockId.value blockId)
+                |> Option.map (fun b -> BlockLabel.ofBlock b, b.Command)
+                |> Option.defaultValue (same (BlockId.value blockId))
             | PreviewSubject.Stretch stretch ->
                 let where = Entity.terminalName model stretch.TerminalId |> Option.defaultValue stretch.Title
-                sprintf "%s typed in %s" (Entity.actorName model stretch.Holder) where
+                same (sprintf "%s typed in %s" (Entity.actorName model stretch.Holder) where)
             // The file's own name, which is what the reader asked for. Not the path:
             // `artifacts/chart.png/0003-7f2a91` truncates to the part that says least.
-            | PreviewSubject.Content ref -> ContentName.ofRef ref
+            | PreviewSubject.Content ref -> same (ContentName.ofRef ref)
         // Showing a terminal is showing a terminal, whichever way it is asked. Its tab under a
         // preview, and the preview's way back, take the reader to that terminal as they left
         // it — and from `all`, to whichever read of it they were in. One function, so the way
@@ -4861,7 +4863,7 @@ module View =
             | _ when onAll -> Lit.nothing
             | Some preview, _ ->
                 let key = PreviewSubject.key preview.Subject
-                let label = previewLabel preview.Subject
+                let label, hint = previewLabel preview.Subject
                 // Over nothing — a file opened in an empty pane — there is no way back to
                 // offer, only the close.
                 let back =
@@ -4879,7 +4881,7 @@ module View =
                     <div class="{Style.panePreviewHead}" data-pane-subtitle="preview">
                       {back}
                       <span class="{Style.panePreviewName}" id="{Dom.panePreviewNameId}" data-pane-preview-name="{key}"
-                            title="{label}">{label}</span>
+                            title="{hint}">{label}</span>
                       <button type="button" class="{Style.panePreviewClose}" data-pane-preview-close
                               aria-label="{Dom.Text.closePreview label}" title="{Dom.Text.closePreview label}"
                               @click={Ev(fun _ -> dispatch ClosePreviewMsg)}>{Icon.close}</button>
@@ -4894,7 +4896,7 @@ module View =
                     | Some block ->
                         line
                             "terminal"
-                            (html $"""<code class="{Style.panePivotSubtitleCommand}" title="{block.Command}">{block.Command}</code><span class="shrink-0">{terminalBlockStatus model block.Status}</span>""")
+                            (html $"""<code class="{Style.panePivotSubtitleCommand}" title="{block.Command}">{BlockLabel.ofBlock block}</code><span class="shrink-0">{terminalBlockStatus model block.Status}</span>""")
                     | None -> Lit.nothing
                 | Some _ | None -> Lit.nothing
             | None, None -> Lit.nothing

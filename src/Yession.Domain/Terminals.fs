@@ -434,6 +434,188 @@ module Projection =
     let runningBlock (view: TerminalView) : Block option =
         view.Blocks |> List.tryFind (fun b -> b.Status = BlockRunning)
 
+/// What a block is CALLED on a screen: the part of its command that does the work.
+///
+/// An agent's command very often opens with `cd <dir> &&` and closes with
+/// `2>&1 | tail -20`, so a title that is the raw command line truncates on a phone to
+/// `$ cd /repos/trinketwo…` — the part that says least. The rule, applied to the first line
+/// only (a heredoc's body is not its name):
+///
+/// - It is split at the top-level `&&`, `||` and `;` — never inside quotes, a `$(…)` or
+///   a subshell's parentheses, never at a pipe.
+/// - A segment that only sets up is dropped: `cd`, `pushd`, `popd`, `export`, `source`,
+///   `.`, `set -…`/`set +…`, and bare `NAME=value` assignments. If every segment is set-up,
+///   the last one is kept.
+/// - Noise redirects are dropped (`2>&1`, and anything sent to `/dev/null`), and so are
+///   trailing `| head …` and `| tail …` stages, which trim what it printed rather than do
+///   anything.
+/// - What is left is joined back with the operators that stood between it, so it is still
+///   the command — its meaningful part, never a word it did not say.
+///
+/// A non-empty command never gets an empty label: if nothing is left, it is the command,
+/// trimmed. The BODY that shows a command keeps all of it; this is for what NAMES one.
+module BlockLabel =
+
+    type private Token =
+        | Word of string
+        | Op of string
+
+    /// The shell's words and the operators between them, each word as it was written
+    /// (quotes and all), so a label quotes exactly what the command did.
+    let private lex (line: string) : Token list =
+        let tokens = ResizeArray<Token> ()
+        let word = System.Text.StringBuilder ()
+        let flush () =
+            if word.Length > 0 then
+                tokens.Add (Word (word.ToString ()))
+                word.Clear () |> ignore
+        let n = line.Length
+        let mutable i = 0
+        // Inside a quote nothing is an operator; inside parentheses (a `$(…)` or a
+        // subshell) neither is — they are one word with the rest of what they belong to.
+        let mutable quote : char option = None
+        let mutable depth = 0
+        while i < n do
+            let c = line.[i]
+            let next = if i + 1 < n then Some line.[i + 1] else None
+            match quote with
+            | Some q ->
+                word.Append c |> ignore
+                if c = '\\' && q <> '\'' && next.IsSome then
+                    word.Append next.Value |> ignore
+                    i <- i + 1
+                elif c = q then quote <- None
+                i <- i + 1
+            | None ->
+                match c, next with
+                | '\\', Some escaped ->
+                    word.Append(c).Append escaped |> ignore
+                    i <- i + 2
+                | ('\'' | '"' | '`'), _ ->
+                    quote <- Some c
+                    word.Append c |> ignore
+                    i <- i + 1
+                | '(', _ ->
+                    depth <- depth + 1
+                    word.Append c |> ignore
+                    i <- i + 1
+                | ')', _ ->
+                    depth <- max 0 (depth - 1)
+                    word.Append c |> ignore
+                    i <- i + 1
+                | _ when depth > 0 ->
+                    word.Append c |> ignore
+                    i <- i + 1
+                | ('&', Some '&') | ('|', Some '|') | ('|', Some '&') ->
+                    flush ()
+                    tokens.Add (Op (string c + string next.Value))
+                    i <- i + 2
+                | (';' | '|'), _ ->
+                    flush ()
+                    tokens.Add (Op (string c))
+                    i <- i + 1
+                | _ when System.Char.IsWhiteSpace c ->
+                    flush ()
+                    i <- i + 1
+                | _ ->
+                    word.Append c |> ignore
+                    i <- i + 1
+        flush ()
+        List.ofSeq tokens
+
+    let private isPipe (op: string) = op = "|" || op = "|&"
+
+    /// Cut a token list at the operators `at` admits: the pieces, each with the operator
+    /// that came before it (`None` for the first).
+    let private splitAt (at: string -> bool) (tokens: Token list) : (string option * Token list) list =
+        let rec go (before: string option) (current: Token list) (acc: (string option * Token list) list) =
+            function
+            | [] -> List.rev ((before, List.rev current) :: acc)
+            | Op op :: rest when at op -> go (Some op) [] ((before, List.rev current) :: acc) rest
+            | token :: rest -> go before (token :: current) acc rest
+        go None [] [] tokens
+
+    let private words (tokens: Token list) : string list =
+        tokens |> List.choose (function Word w -> Some w | Op _ -> None)
+
+    let private isNullSink (target: string) = target = "/dev/null"
+
+    /// A redirect that only silences or merges output — written `2>/dev/null` or
+    /// `2> /dev/null` — gone, with its target when that was a word of its own.
+    let rec private dropNoise (ws: string list) : string list =
+        let redirect (w: string) =
+            let w = w.TrimStart [| '0'; '1'; '2'; '3'; '4'; '5'; '6'; '7'; '8'; '9'; '&' |]
+            w = ">" || w = ">>"
+        match ws with
+        | [] -> []
+        | w :: rest when w = "2>&1" -> dropNoise rest
+        | w :: target :: rest when redirect w && isNullSink target -> dropNoise rest
+        | w :: rest when redirect (w.Replace ("/dev/null", "")) && w.EndsWith "/dev/null" -> dropNoise rest
+        | w :: rest -> w :: dropNoise rest
+
+    let private isAssignment (w: string) =
+        match w.IndexOf '=' with
+        | at when at > 0 ->
+            let name = w.Substring (0, at)
+            not (System.Char.IsDigit name.[0]) && name |> Seq.forall (fun c -> System.Char.IsLetterOrDigit c || c = '_')
+        | _ -> false
+
+    /// A segment that prepares for the work rather than doing it.
+    let private isSetup (stages: string list list) =
+        match stages with
+        | [ ws ] ->
+            match ws with
+            | ("cd" | "pushd" | "popd" | "export" | "source" | ".") :: _ -> true
+            | "set" :: flag :: _ when flag.StartsWith "-" || flag.StartsWith "+" -> true
+            | _ :: _ when List.forall isAssignment ws -> true
+            | _ -> false
+        | _ -> false
+
+    /// Its pipeline stages, cleaned: noise redirects out, then trailing output-trimming
+    /// stages — but never the first, which is the command whose output they trimmed.
+    let private stagesOf (tokens: Token list) : string list list =
+        let stages =
+            splitAt isPipe tokens
+            |> List.map (snd >> words >> dropNoise)
+            |> List.filter (not << List.isEmpty)
+        let rec trim (reversed: string list list) =
+            match reversed with
+            | (("head" | "tail") :: _) :: (_ :: _ as rest) -> trim rest
+            | _ -> reversed
+        stages |> List.rev |> trim |> List.rev
+
+    /// The meaningful part of a command line, by the rule above.
+    let ofCommand (command: string) : string =
+        let trimmed = command.Trim ()
+        let line =
+            trimmed.Split '\n'
+            |> Array.tryHead
+            |> Option.map (fun l -> l.Trim ())
+            |> Option.defaultValue trimmed
+        let segments =
+            splitAt (fun op -> op = "&&" || op = "||" || op = ";") (lex line)
+            |> List.map (fun (before, tokens) -> before, stagesOf tokens)
+            |> List.filter (snd >> List.isEmpty >> not)
+        let kept =
+            match segments |> List.filter (snd >> isSetup >> not) with
+            | [] -> segments |> List.tryLast |> Option.toList
+            | work -> work
+        let render (stages: string list list) =
+            stages |> List.map (String.concat " ") |> String.concat " | "
+        let label =
+            kept
+            |> List.mapi (fun at (before, stages) ->
+                match at, before with
+                | 0, _ | _, None -> render stages
+                | _, Some ";" -> "; " + render stages
+                | _, Some op -> " " + op + " " + render stages)
+            |> String.concat ""
+        if label = "" then trimmed else label
+
+    /// What a block is called — the one function every surface that NAMES a block asks. A
+    /// command wears the prompt it was typed at, so a name that is a command reads as one.
+    let ofBlock (block: Block) : string = "$ " + ofCommand block.Command
+
 /// What a terminal is CALLED on a screen, and the line that says what it is doing.
 ///
 /// Every terminal a person opens without naming one is titled `terminal`
@@ -487,15 +669,12 @@ module TerminalName =
                 |> List.length
             sprintf "%s %d" prefix (before + 1)
 
-    /// What the terminal is doing, or last did: the command running, else the last one it
+    /// What the terminal is doing, or last did: the block running, else the last one it
     /// ran, else nothing — a terminal that has run nothing has nothing to add to its name.
-    let subtitle (view: TerminalView) : string =
-        match Projection.runningBlock view with
-        | Some running -> running.Command
-        | None ->
-            match List.tryLast view.Blocks with
-            | Some last -> last.Command
-            | None -> ""
+    /// The block rather than a string, because a surface wants both halves of it: its name
+    /// (`BlockLabel.ofBlock`) to show, and its whole command for whoever asks for more.
+    let latest (view: TerminalView) : Block option =
+        Projection.runningBlock view |> Option.orElse (List.tryLast view.Blocks)
 
 /// What the emulator's alt-screen state proposes doing about the lease (Plan 13, stage 2e).
 ///

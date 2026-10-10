@@ -1869,8 +1869,8 @@ let private videoTests =
             let model = withRecords (clientOf recordedTerminal)
             match ClientModel.terminalReplay terminalA model with
             | Some replay ->
-                Expect.stringContains replay.Cast "[10,\"m\",\"make\"]" "a chapter at the first block's first line"
-                Expect.stringContains replay.Cast "[40,\"m\",\"make test\"]" "and one at the second's"
+                Expect.stringContains replay.Cast "[10,\"m\",\"$ make\"]" "a chapter at the first block's first line"
+                Expect.stringContains replay.Cast "[40,\"m\",\"$ make test\"]" "and one at the second's"
                 Expect.isNone replay.StartAt "and it starts at the start until somebody asks for a command"
             | None -> failwith "the header is known, so there is a recording"
 
@@ -1915,7 +1915,7 @@ let private videoTests =
             let model = withRecords (clientOf recordedTerminal)
             match ClientModel.terminalReplay terminalA model with
             | Some replay ->
-                let marker = replay.Cast.IndexOf "[10,\"m\",\"make\"]"
+                let marker = replay.Cast.IndexOf "[10,\"m\",\"$ make\"]"
                 let record = replay.Cast.IndexOf "building"
                 Expect.isTrue (marker >= 0 && marker < record) "the chapter line comes first"
             | None -> failwith "the header is known, so there is a recording"

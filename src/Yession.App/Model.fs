@@ -3036,7 +3036,7 @@ module ClientModel =
                         // A block whose first line this client has not read has no time
                         // to mark, and a marker at a guessed one would point at the
                         // wrong command.
-                        timeOf block.FromSeq |> Option.map (fun at -> at, block.Command)))
+                        timeOf block.FromSeq |> Option.map (fun at -> at, BlockLabel.ofBlock block)))
                 |> Option.defaultValue []
             let records =
                 match pin with
