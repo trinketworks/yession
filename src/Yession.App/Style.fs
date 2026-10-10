@@ -1449,23 +1449,21 @@ module Style =
     /// scroll-distance fact, not model state — see there for why), kept off the button itself
     /// so toggling it can never fight the button's own layout for which `display` wins.
     ///
-    /// The scrim fades to `bg` and NOT to `surface`: the timeline draws no fill of its own, so
-    /// what a line of prose actually sits on down there is the canvas `mainColumn` inherits.
-    /// Fading to the wrong one would leave a visible band edge where the two greys meet.
-    /// Tonal, so the module header still holds — the ONE gradient spent in this product is the
-    /// composer's blue→green edge, and darkening toward the ground the text is already on is
-    /// not a second one.
+    /// No scrim. There was one — a 48px ramp from `bg/90` up to clear — and what it lay over
+    /// was the NEWEST line, the one the button leads to, which sits right on the composer's
+    /// edge whenever a reader is only a little way back: photographed on a phone, a command
+    /// chip under it read at well under the contrast floor. The button is opaque on its own;
+    /// a ramp behind it bought nothing but a darker line of text (doctrine: dimming is a
+    /// role, never opacity).
     ///
     /// `pointer-events-none`, with the button taking them back: the slot is a full-width strip
-    /// lying over live text, and a scrim that swallowed a tap or a selection would take more
-    /// from the reader than the contrast it buys.
+    /// lying over live text, and it must not swallow a tap or a selection meant for it.
     ///
     /// `px-8` is the timeline's own padding, so the rail inside it has the reading column's
     /// geometry exactly — see `chatJumpToLatestRail`. None on a phone, where the grounds bleed
     /// to the screen's edges and the column they draw is the whole width.
     let chatJumpToLatestSlot =
-        "absolute inset-x-0 bottom-0 z-10 pointer-events-none px-8 max-md:px-0 "
-        + "pt-12 pb-4 bg-linear-to-t from-bg/90 to-transparent"
+        "absolute inset-x-0 bottom-0 z-10 pointer-events-none px-8 max-md:px-0 pb-4"
 
     /// How wide anything in the timeline is allowed to get.
     ///
@@ -1499,8 +1497,12 @@ module Style =
     /// column on a desktop (in the gutter, or in the timeline's own 32px padding when the
     /// column fills the pane), and `right-0` on a phone puts it exactly over the strip, its
     /// centre on the same line as every handle above it.
+    ///
+    /// The square stays 32px to the eye; on a phone its press grows to the 44px touch target
+    /// (`before:-inset-1.5`), the floor the doctrine never trades.
     let chatJumpToLatest =
         cls [ "pointer-events-auto absolute bottom-0 left-full max-md:left-auto max-md:right-0"
+              "max-md:before:absolute max-md:before:-inset-1.5 max-md:before:content-['']"
               "w-8 h-8 flex items-center justify-center bg-surface"
               "text-ink-dim hover:text-ink cursor-pointer transition-colors"
               Stroke.ring; Stroke.rim; focusRing ]
