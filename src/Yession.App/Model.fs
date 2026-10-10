@@ -1977,8 +1977,8 @@ type ClientMsg =
     /// adding to anything — six chips read leave one preview and the strip as it was.
     | OpenPreviewMsg of Preview
     /// Take the preview down, back to the read of the terminal it was laid over — positioned
-    /// where it was — with focus back on the chip that opened it. Back, its close and Escape
-    /// are all this one act.
+    /// where it was — with focus back on the chip that opened it. Its close and Escape are
+    /// both this one act.
     | ClosePreviewMsg
     /// Show a terminal's history at one of its commands, scrolled to it, with focus in the
     /// pane — a block preview's "show in terminal". Takes the preview down on the way, since
@@ -5303,7 +5303,7 @@ module ClientModel =
             // A chip opening a preview is the same promise: the reader was moved, so their
             // keyboard is too.
             | OpenPreviewMsg _ -> [ ClientEffect.Move (paneLanding next) ]
-            // The preview's way back, its close and Escape all hand focus back to the chip that
+            // The preview's close and Escape both hand focus back to the chip that
             // opened it: the preview is leaving the document with focus inside it, and the
             // chip is where the reader came from (`PaneShell.toChatItem` falls back to the pane
             // when the chip is covered, as it is on a phone).
@@ -5311,10 +5311,10 @@ module ClientModel =
                 match preview model with
                 | Some preview -> [ ClientEffect.Move (DomMove.FocusChat preview.Subject) ]
                 | None -> []
-            // The preview's way back (`‹ term 2`, in the line under the strip) is the press of
-            // its terminal's own tab — but unlike the tab it leaves the document with the
-            // preview, under the hand that pressed it. So the keyboard lands where the pane now
-            // does, if it was dropped; pressed on the tab itself, it stays on the tab.
+            // A terminal shown from under a preview — its tab pressed — takes the preview out
+            // of the document, and with it whatever in the preview had the keyboard. So the
+            // keyboard lands where the pane now does, if it was dropped; pressed on the tab
+            // itself, it stays on the tab.
             | ShowInPaneMsg _ when Option.isSome (preview model) && not model.Switcher ->
                 [ ClientEffect.Move (DomMove.IfDropped (paneLanding next)) ]
             | ShowInTerminalMsg (terminal, block) ->

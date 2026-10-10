@@ -482,9 +482,9 @@ module Dom =
         /// the pivot itself: a preview is a layer OF the terminal it is laid over (F3), whose
         /// own tab stays the selected item, not a sibling tab beside it.
         let panePreviewName = "data-pane-preview-name"
-        /// The preview's way back, in the same line, carrying the id of the terminal it is
-        /// laid over: the press of that terminal's own tab. Absent over nothing.
-        let panePreviewBack = "data-pane-preview-back"
+        /// Where a previewed command lives, in the same line, carrying its terminal's id —
+        /// present only when the strip's selected tab is not that terminal.
+        let panePreviewWhere = "data-pane-preview-where"
         /// The preview's close, in the same line, after its name.
         let panePreviewClose = "data-pane-preview-close"
         /// A CLOSED terminal's × on its pivot item, carrying its id: it puts the tab away
@@ -705,7 +705,8 @@ module Dom =
         let inYourDraft = "in your message"
         let inDraftOf (name: string) : string = "in " + name + "'s message"
         let editingQueued = "in the queue"
-        /// In a terminal, named when the terminal is known to this client.
+        /// In a terminal, named when the terminal is known to this client — and where a
+        /// previewed command lives, beside its name.
         let inTerminal (title: string) : string = "in " + title
         let atSomeTerminal = "at a terminal"
         /// Writing a chapter's name, named when this client knows the chapter.
@@ -943,11 +944,11 @@ module Dom =
         /// A preview's close, naming what it closes. It says PREVIEW, because "close" on its
         /// own is the word this product uses for ending a terminal.
         let closePreview (what: string) = sprintf "Close preview %s" what
-        /// A preview's way back to the terminal it is laid over, naming it — the word on the
-        /// control is the terminal's name alone.
-        let backTo (terminal: string) = sprintf "Back to %s" terminal
-        /// From a command's preview to that command in its terminal, named.
-        let showIn (terminal: string) = sprintf "Show in %s" terminal
+        /// From a command's preview to that command in its terminal's history. A fixed word:
+        /// the terminal is named in the accessible name, never on the control.
+        let showInTerminal = "Show in terminal"
+        /// The same act's accessible name, which says which terminal.
+        let showInTerminalNamed (terminal: string) = sprintf "Show in terminal %s" terminal
         /// A command chip's accessible name: what ran, how it went, and WHERE — the part the
         /// chip's look leaves to its terminal name, and the part a screen reader walking a
         /// chat of forty commands across three terminals has no other way to hear. Status
