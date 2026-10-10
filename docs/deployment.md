@@ -76,7 +76,8 @@ its conventions, what is slow here, what is never to be pushed where.
   the turn's context (the time, the conversation, terminal activity, repo notes) as one
   message.
 - `claude-code-like`: Claude Code's layout. The product's sections come first and are the
-  same on every host. Your guidance, and a note on tools from other MCP servers, follow the
+  same on every host, with one more of Claude Code's: look at a UI change in a headless
+  browser before calling it done, or say it was not looked at. Your guidance, and a note on tools from other MCP servers, follow the
   SDK's dynamic boundary. The turn's context arrives as `<system-reminder>` blocks beside the
   message the turn answers.
 

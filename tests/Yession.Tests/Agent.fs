@@ -2377,6 +2377,11 @@ let private promptTests =
                 Expect.isTrue (included Prompting.ClaudeCodeLike.foreignTools plan) "the note is placed"
                 Expect.stringContains plan.Dynamic Prompting.foreignToolsNote.Text "after the boundary"
 
+            // Claude Code's frontend rule: the same on every host, so it is part of the shared prefix.
+            testCase "the rule to look at a UI change is before the cache boundary" <| fun () ->
+                let plan = Prompting.plan PromptStrategy.ClaudeCodeLike (askedContext None)
+                Expect.stringContains plan.Stable Prompting.looking.Text "in the shared prefix"
+
             testCase "the operator's words are after the cache boundary" <| fun () ->
                 let plan = Prompting.plan PromptStrategy.ClaudeCodeLike (askedContext (Some "Never push to main on this host."))
                 Expect.stringContains plan.Dynamic "Never push to main on this host." "they vary by host"
