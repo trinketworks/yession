@@ -237,6 +237,10 @@ module Style =
     // --- Statuses: text only — never filled, never boxed --------------------------------
 
     let statusOk = caps + " text-green"
+    /// A record of something that finished well — `✓ 0`, a tally of done. `ink`, not green:
+    /// green is LIVE (a running command, a connected peer), and a command that exited is no
+    /// longer doing anything (docs/visual-design.md, Colour). Running keeps `statusOk`.
+    let statusDone = caps + " text-ink"
     /// A wait: reconnecting, starting, looking, busy. `ink-dim`, never blue — blue is never a
     /// status (docs/visual-design.md, Colour). A LIVE thing is `statusOk` with `statusDotLive`.
     let statusWait = caps + " text-ink-dim"
