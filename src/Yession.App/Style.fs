@@ -3637,9 +3637,8 @@ module Style =
         cls [ "w-full"; fieldBare
               "font-terminal text-code text-ink px-3 pt-4 pb-3 pr-10 phone:py-3.5 phone:pr-13 placeholder:text-green"; touchType ]
     /// What sits at the field's trailing edge, inside its border: whoever else has a caret in
-    /// this slot, and the verb. `top-1` above `md`, where the line sits 4px low in its box
-    /// (`terminalCommand`'s `pt-4 pb-3`), so the verb centres on the line, not on the box.
-    let terminalCommandTrail = "absolute right-1 top-1 bottom-0 phone:top-0 flex items-center gap-1"
+    /// this slot, and the verb.
+    let terminalCommandTrail = "absolute right-1 inset-y-0 flex items-center gap-1"
 
     // Run itself is `btnSendInField` / `btnSendInFieldWaiting`, which the message composer's
     // Send used to be as well. The two parted over the geometry rather than the meaning:
