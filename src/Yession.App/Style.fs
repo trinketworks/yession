@@ -2726,18 +2726,19 @@ module Style =
     /// has. It costs nothing when there is not: height is content-driven and `max-height`
     /// only caps it, so a one-line draft still stands at 40.
     ///
-    /// Since the line gained `pt-3` the box is 44px at rest and the cap and the ramp moved down
-    /// 4px with it (2.75rem → 3.5rem).
+    /// On a phone the line has `pt-3`, the box is 44px at rest, and the cap and the ramp move
+    /// down 4px with it (2.75rem → 3.5rem).
     ///
-    /// The mask's stops are absolute FROM THE TOP (2.75rem → 3.5rem) rather than a percentage
+    /// The mask's stops are absolute FROM THE TOP (2.5rem → 3.25rem) rather than a percentage
     /// or an offset from the bottom, and that is the whole reason it is safe. A ramp measured
     /// from the bottom edge is a ramp whose position moves with the box: at 40px it would run
     /// up through the first line and fade the descenders of a draft that fits perfectly well.
     /// Anchored at the top it begins exactly where line one's box ends, so line one is never
     /// touched and the ramp is simply off the end of a box that has not grown.
     let draftInput =
-        cls [ "block w-full max-h-[3.5rem] overflow-hidden transition-[max-height] duration-200 ease-out"
-              "[mask-image:linear-gradient(#000_2.75rem,transparent_3.5rem)]"
+        cls [ "block w-full max-h-[3.25rem] phone:max-h-[3.5rem] overflow-hidden transition-[max-height] duration-200 ease-out"
+              "[mask-image:linear-gradient(#000_2.5rem,transparent_3.25rem)]"
+              "phone:[mask-image:linear-gradient(#000_2.75rem,transparent_3.5rem)]"
               "group-focus-within:max-h-64 group-focus-within:overflow-y-auto"
               // Gone on focus, not merely pushed down: the ramp would otherwise sit over the
               // line being typed the moment a draft scrolls inside.
@@ -2747,10 +2748,12 @@ module Style =
               // No `placeholder:` variant: this field is a mounted editor, not an `<input>`,
               // so it has no placeholder attribute for that variant to have ever matched. The
               // prompt is drawn on the editor itself — `[data-rich-body]` in `tailwind.css`.
-              // `pt-3` over `pb-2`: the line sat 8px under the band's top rule and 16px in
-              // from its side, cramped against the one edge that carries the focus gradient.
-              // The extra 4px is spent above, so the line still ends where Send's box does.
-              "text-body text-ink px-4 pt-3 pb-2"; touchType ]
+              // `phone:pt-3` over `pb-2`: on a phone the line sat 8px under the band's top rule
+              // and 16px in from its side, cramped against the one edge that carries the focus
+              // gradient, and 44px is the thumb's height. The extra 4px is spent above, so the
+              // line still ends where Send's box does. A desktop keeps `py-2`, the 40px the
+              // terminal's command band beside it agrees with (`terminalCommand`).
+              "text-body text-ink px-4 py-2 phone:pt-3"; touchType ]
 
     /// The writing side of the box: whose message it is, then the message. A column only
     /// because someone else's draft says so above the words; your own — the case that is
@@ -3628,14 +3631,15 @@ module Style =
     /// to the right of. The old placeholder said "a command to run here", which a `$` says
     /// shorter; the field keeps its `aria-label`, because a placeholder is not a name.
     let terminalCommandWrap = "relative w-full"
-    /// `pt-4 pb-3` is not a guess: 16 + 16 + 12 is exactly the 44px the message composer's
-    /// band stands at (`pt-3 pb-2` around a 24px line), and the two sit side by side on a
-    /// desktop where four pixels of disagreement between them reads as one of the columns
-    /// being wrong. On a phone, 44px is also the thumb's target, with room at the trailing
-    /// edge for the 44px Run (`btnInField`).
+    /// `py-3` is not a guess: 12 + 16 + 12 is exactly the 40px the message composer's band
+    /// stands at (`py-2` around a 24px line), and the two sit side by side on a desktop where
+    /// four pixels of disagreement between them reads as one of the columns being wrong.
+    /// A phone has no column beside it to agree with, and a thumb to hold: 44px there, with
+    /// room at the trailing edge for the 44px Run (`btnInField`) — and the message composer
+    /// stands at 44 there too (`draftInput`'s `phone:pt-3`).
     let terminalCommand =
         cls [ "w-full"; fieldBare
-              "font-terminal text-code text-ink px-3 pt-4 pb-3 pr-10 phone:py-3.5 phone:pr-13 placeholder:text-green"; touchType ]
+              "font-terminal text-code text-ink px-3 py-3 pr-10 phone:py-3.5 phone:pr-13 placeholder:text-green"; touchType ]
     /// What sits at the field's trailing edge, inside its border: whoever else has a caret in
     /// this slot, and the verb.
     let terminalCommandTrail = "absolute right-1 inset-y-0 flex items-center gap-1"
