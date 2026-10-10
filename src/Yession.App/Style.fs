@@ -2300,26 +2300,43 @@ module Style =
     /// `top-2 right-1` and not the corner it used to sit in: `top-2` is the ground's own top
     /// padding, so a 24px control there is centred on the 24px first line — the dots read as
     /// belonging to that line rather than floating above it.
-    let itemActions =
-        cls [ "absolute right-1 top-2 w-6 h-6 flex items-center justify-center"
-              "bg-transparent cursor-pointer text-ink-faint hover:text-ink"
-              "opacity-60 group-hover/item:opacity-100 focus-visible:opacity-100"
-              "transition-opacity duration-150 ease-out"
+    ///
+    /// Rest is `ink-faint`, a role, and nothing on top of it. It used to be that AND
+    /// `opacity-60`, lifted by hover — and a phone never hovers, so on the one device where
+    /// this is the only way to the menu it sat at a dimming the doctrine does not allow
+    /// (dimming is a role, never opacity).
+    let private itemActionsBase =
+        cls [ "absolute w-6 h-6 flex items-center justify-center"
+              "bg-transparent cursor-pointer text-ink-faint hover:text-ink transition-colors duration-150 ease-out"
               focusRing ]
+    let itemActions = cls [ itemActionsBase; "right-1 top-2" ]
+    /// The same control on an act whose headline is NOT its first line, because its cause
+    /// sits above it (`causeRow`). `top-2` would put the dots on the cause — which reads as
+    /// the menu of "Resumed session" — or, under a chain's link, beside a row holding nothing
+    /// but an arrow. So it is placed in the headline's grid ROW instead: an absolutely
+    /// positioned grid child with a row named resolves against that row's area, so the dots
+    /// stand on the headline whatever height the cause above it draws. `-right-7` is
+    /// `right-1` read from the content column's edge rather than the padding's (`itemGround`'s
+    /// `pr-8`, less 4px).
+    let itemActionsOnHeadline = cls [ itemActionsBase; "row-start-2 col-start-2 top-0 -right-7" ]
     /// While its menu is open the control is at full strength: a menu hanging off something
     /// faint reads as a menu hanging off nothing.
-    let itemActionsOpen = "opacity-100"
+    let itemActionsOpen = "text-ink"
 
     /// The menu itself, hung under the control. `panel` rather than the page's ground,
     /// because it is a surface OVER the conversation and has to be told from it.
-    let itemMenu =
-        cls [ "absolute right-0 top-7 z-30 min-w-[12rem] py-1"
+    let private itemMenuBase =
+        cls [ "absolute z-30 min-w-[12rem] py-1"
               // Chrome, not content: a menu is a list of things to press, and dragging across
               // one should never start selecting its labels.
               "select-none"
               "bg-panel"
               Stroke.ring
               Stroke.hair ]
+    let itemMenu = cls [ itemMenuBase; "right-0 top-7" ]
+    /// Hung under `itemActionsOnHeadline`, from the same row: `top-5` is `top-7` less the
+    /// control's own `top-2`, and `-right-8` the padding edge read from the content column's.
+    let itemMenuOnHeadline = cls [ itemMenuBase; "row-start-2 col-start-2 top-5 -right-8" ]
     /// One entry. Full width so the whole row is the target, left-aligned so the entries read
     /// as a list rather than as a row of buttons.
     let itemMenuEntry =
