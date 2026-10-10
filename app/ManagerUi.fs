@@ -435,7 +435,7 @@ let private mcpTemplate (views: ProcessManager.SessionView list) (declarations: 
                     <option value="">any session</option>
                     {options}
                   </select>
-                  <span class="{Style.fieldSelectMark}">{Icon.down}</span>
+                  <span class="{Style.fieldSelectMark}">{Icon.caret}</span>
                 </div>
               </div>
               <button type="submit" class="{Style.btnPrimary}">Declare</button>
