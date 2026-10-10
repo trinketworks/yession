@@ -6712,6 +6712,32 @@ let editorTests =
                     Expect.equal said expected "the run is open, the command in view, marked, and focus in the pane"
             }
 
+        // A command and its status share a line only while the command keeps the line. With
+        // "refused by <name>" beside it the command had a third of a phone's column and broke
+        // mid-word in it; the status now goes under, and the command takes the width. What is
+        // measured is the command's share of its row and that nothing leaves the page sideways
+        // — not where the status is drawn, which is the design's to move.
+        editorCaseIn 390 844 "a refused block's command keeps its row's width on a phone" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-block='block-refused-long'] [data-block-mark]")
+                let! measured =
+                    await (
+                        page.EvaluateAsync<string>
+                            """() => {
+                                 const row = document.querySelector('#shell [data-terminal-block=block-refused-long] [data-terminal-block-command]')
+                                 const code = row.querySelector('code'), r = row.getBoundingClientRect(), c = code.getBoundingClientRect()
+                                 return JSON.stringify({
+                                   share: Math.round(100 * c.width / r.width),
+                                   inRow: c.left >= r.left - 1 && c.right <= r.right + 1,
+                                   pageScrollsSideways: document.documentElement.scrollWidth > window.innerWidth + 1
+                                 })
+                               }""")
+                Expect.stringContains measured "\"inRow\":true,\"pageScrollsSideways\":false" "the command stays inside its row and the page"
+                let share = (System.Text.Json.JsonDocument.Parse measured).RootElement.GetProperty("share").GetInt32 ()
+                Expect.isTrue (share >= 60) (sprintf "the command has most of its row, not what a long status leaves (%d%%)" share)
+            }
+
         // A run a person opened is theirs to shut. It was the `<details>` element's own state,
         // so anything that rebuilt the terminal's history — a preview laid over it and taken
         // down again — rebuilt it shut. The open is native (a click on the summary), which is

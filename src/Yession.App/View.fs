@@ -3311,9 +3311,11 @@ module View =
             <article class="{Style.terminalBlock}" data-terminal-block="{BlockId.value block.BlockId}"
                      data-terminal-block-status="{terminalBlockStatusLabel block.Status}">
               <div class="{Style.terminalBlockSummary}" data-terminal-block-command>
-                {author}
-                <span class="{Style.terminalPrompt}">$</span>
-                <code class="{Style.terminalCommandText}">{block.Command}</code>
+                <span class="{Style.terminalBlockLine}">
+                  {author}
+                  <span class="{Style.terminalPrompt}">$</span>
+                  <code class="{Style.terminalCommandText}">{block.Command}</code>
+                </span>
                 <span class="ml-auto shrink-0">{terminalBlockStatus model block.Status}</span>
                 {stop}
               </div>
@@ -3901,8 +3903,10 @@ module View =
                 <section class="{Style.paneBody}" data-pane-block="{BlockId.value blockId}">
                   <div class="{Style.paneFacts}">
                     <div class="{Style.terminalBlockCommand}">
-                      <span class="{Style.terminalPrompt}">$</span>
-                      <code class="{Style.terminalCommandText}">{block.Command}</code>
+                      <span class="{Style.terminalBlockLine}">
+                        <span class="{Style.terminalPrompt}">$</span>
+                        <code class="{Style.terminalCommandText}">{block.Command}</code>
+                      </span>
                       <span class="ml-auto shrink-0">{terminalBlockStatus model block.Status}</span>
                     </div>
                   </div>
