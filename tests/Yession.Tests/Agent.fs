@@ -607,7 +607,7 @@ let private liveTests =
                 let log = newLog ()
                 let mintLiveTurn () = AgentTurnId.create (string (Guid.NewGuid ())) |> expect
                 let mintLiveMessage () = MessageId.create (string (Guid.NewGuid ())) |> expect
-                do! AgentTurn.run log (Agent.runWith None Yession.Manager.Launch.unlaunched.DataDir HostBackend (Some credential)) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None asked
+                do! AgentTurn.run log (Agent.runWith AgentProfile.defaults Yession.Manager.Launch.unlaunched.DataDir HostBackend (Some credential)) AgentAbortSignal.none (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintLiveTurn mintLiveMessage sessionId SessionHistory.none [ triggerItem ] Attribution.empty [] [] None asked
                 let! events = eventsOf log
                 match List.last events with
                 | AgentMessageCompleted completed ->
@@ -758,13 +758,13 @@ let private sessionTimeTests =
           People = Attribution.empty }
     testList "What a turn is told about time" [
         testCase "a turn is told the time, and when its session began" <| fun () ->
-            let prompt = (Prompting.forTurn None Yession.Domain.Tools.ToolRegistry.empty (context { StartedAt = Some (now.AddDays -1.0); LastResumed = None })).Turn
+            let prompt = (Prompting.forTurn AgentProfile.defaults Yession.Domain.Tools.ToolRegistry.empty (context { StartedAt = Some (now.AddDays -1.0); LastResumed = None })).Turn
             Expect.stringContains prompt "It is now 2026-09-25 13:05 UTC" "now"
             Expect.stringContains prompt "This session started 2026-09-24 13:05 UTC" "and when it began"
 
         testCase "a turn after a stop is told how long the session was away" <| fun () ->
             let prompt =
-                Prompting.forTurn None Yession.Domain.Tools.ToolRegistry.empty
+                Prompting.forTurn AgentProfile.defaults Yession.Domain.Tools.ToolRegistry.empty
                     (context
                         { StartedAt = None
                           LastResumed = Some { At = now.AddMinutes -5.0; LastHeardAt = now.AddMinutes -5.0 |> fun t -> t.AddHours -9.0 } })
@@ -2094,7 +2094,7 @@ let private multiplayerTests =
     let turnText (people: Attribution.State) (author: ActorRef) =
         let item = { triggerItem with Author = author }
         let plan =
-            Prompting.forTurn None Yession.Domain.Tools.ToolRegistry.empty
+            Prompting.forTurn AgentProfile.defaults Yession.Domain.Tools.ToolRegistry.empty
                 { SessionId = sessionId
                   Conversation = [ item ]
                   TurnActor = Principal.Peer ada
@@ -2408,6 +2408,27 @@ let private promptTests =
                 let plan = Prompting.plan PromptStrategy.ClaudeCodeLike (askedContext (Some "words"))
                 Expect.equal (Prompting.systemBlocks "BOUNDARY" plan) [| plan.Stable; "BOUNDARY"; plan.Dynamic |] "three blocks, in that order"
         ]
+
+        // The operator's profile names the strategy, and the runner hands that profile to
+        // `forTurn`: nothing between them may pick another one.
+        testCase "the strategy a profile names is the one that plans its turns" <| fun () ->
+            let pack : AgentContextPack =
+                { SessionId = sessionId
+                  Conversation = [ triggerItem ]
+                  TurnActor = Principal.Peer ada
+                  Occasion = Occasion.Asked triggerItem
+                  Terminals = []
+                  Repos = []
+                  Model = None
+                  Now = DateTimeOffset (2026, 9, 25, 13, 5, 0, TimeSpan.Zero)
+                  History = SessionHistory.none
+                  People = Attribution.empty }
+            let reminds (strategy: PromptStrategy) =
+                (Prompting.forTurn { AgentProfile.defaults with Prompt = strategy } Yession.Domain.Tools.ToolRegistry.empty pack).Turn.Contains "<system-reminder>"
+            Expect.equal
+                (PromptStrategy.all |> List.map (fun strategy -> strategy, reminds strategy))
+                [ PromptStrategy.Static, false; PromptStrategy.ClaudeCodeLike, true ]
+                "only claude-code-like gives the turn's context as reminders"
 
         // A rule that does not hold says nothing: the policy is what decides, not the text.
         testCase "a rule whose condition does not hold is left out" <| fun () ->

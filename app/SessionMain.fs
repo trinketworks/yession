@@ -95,6 +95,10 @@ let private resourceProfile =
             // operator reads a boot: the file is honoured as written, as a repo's is.
             for located in read |> Option.map (fun r -> r.Findings) |> Option.defaultValue [] do
                 eprintfn "%s: %s: %s" path (LocatedFinding.where located) located.Finding.Message
+            // And the strategy the agent's prompt is planned with, which nothing else a session
+            // reports says: the operator reads here which one their file chose.
+            for r in Option.toList read do
+                eprintfn "%s: agent prompt: %s" path (PromptStrategy.name r.Profile.Agent.Prompt)
             read |> Option.map (fun r -> r.Profile)
         | Error e -> failwith e
 
@@ -900,7 +904,7 @@ let private runAgent () : RunAgent option =
     | "credential-probe" ->
         if envCreds || connectedSomewhere () then Some (dispatching credentialProbe) else None
     | _ ->
-        if envCreds || connectedSomewhere () then Some (dispatching (Agent.runWith (resourceProfile |> Option.bind (fun file -> file.Guidance)) dataDir agentBackend)) else None
+        if envCreds || connectedSomewhere () then Some (dispatching (Agent.runWith (resourceProfile |> Option.defaultValue ProfileFile.empty).Agent dataDir agentBackend)) else None
 
 /// Both ways stdin can end, and the resume that makes either happen: a paused stdin never
 /// reaches either end, so the handlers are only ever called because of it.

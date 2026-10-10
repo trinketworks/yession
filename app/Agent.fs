@@ -520,8 +520,8 @@ let registryFor (capabilities: AgentCapabilities) : ToolRegistry =
             own
     merged |> ToolUseLog.wrap capabilities.Tools.Record
 
-/// The Claude Agent SDK–backed `RunAgent`, over what the operator of this host wrote for the
-/// agent (`ProfileFile.Guidance`, read once at boot: the profile is the host's statement, and
+/// The Claude Agent SDK–backed `RunAgent`, over what the operator of this host said about the
+/// agent (`ProfileFile.Agent`, read once at boot: the profile is the host's statement, and
 /// a host does not change its mind between turns, so the runner holds it rather than every
 /// turn carrying it, and hands it to `Prompting.forTurn` with the turn), this session's data
 /// directory (the CLI's
@@ -538,7 +538,7 @@ let registryFor (capabilities: AgentCapabilities) : ToolRegistry =
 /// interrupt cancels the live query promptly (the returned failure is then discarded
 /// by the orchestrator); the spawner's own kill fires only on the SDK's forwarded
 /// signal, after the graceful stdin-EOF window.
-let runWith (guidance: string option) (dataDir: string) (backend: SandboxBackend) (credential: (string * string) option) : RunAgent =
+let runWith (profile: AgentProfile) (dataDir: string) (backend: SandboxBackend) (credential: (string * string) option) : RunAgent =
     fun context capabilities signal onChunk ->
         async {
             let cli = Sandboxes.AgentSandbox.prepare backend dataDir credential
@@ -547,7 +547,7 @@ let runWith (guidance: string option) (dataDir: string) (backend: SandboxBackend
             let registry = registryFor capabilities
             // What this turn is told: its strategy's plan over what the turn was handed and
             // what this host's operator wrote.
-            let plan = Prompting.forTurn guidance registry context
+            let plan = Prompting.forTurn profile registry context
             let! outcome, usage =
                 runQuery
                     (Prompting.systemBlocks dynamicBoundary plan)
@@ -569,7 +569,8 @@ let runWith (guidance: string option) (dataDir: string) (backend: SandboxBackend
         }
 
 /// The ambient-credential runner over a given data directory (existing call sites and the
-/// env fallback), with no operator guidance: a caller with no host profile has none to give.
+/// env fallback), on the defaults a host that says nothing gets (`AgentProfile.defaults`): a
+/// caller with no host profile has no guidance and no strategy to give.
 /// The data dir is where the CLI's scratch HOME goes, so a caller that has no launch of its
 /// own passes `Launch.unlaunched.DataDir` and says so by doing it.
-let run (dataDir: string) (backend: SandboxBackend) : RunAgent = runWith None dataDir backend None
+let run (dataDir: string) (backend: SandboxBackend) : RunAgent = runWith AgentProfile.defaults dataDir backend None

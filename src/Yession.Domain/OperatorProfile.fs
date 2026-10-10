@@ -2,6 +2,7 @@ namespace Yession.Domain.Sandboxes
 
 open System
 open Yession.Domain
+open Yession.Domain.Agent
 
 // What an operator writes, and how it becomes a vocabulary.
 //
@@ -59,18 +60,18 @@ type VolumeMaintenance =
 /// sandbox a terminal that names none opens in (`SandboxRef.defaultRef`), so "the default resources" and "the
 /// default sandbox's resources" were one phrase for two things.
 ///
-/// `Guidance` is the one thing here that is not about resources: words for the agent, from the
-/// operator, appended after the product's own system prompt (`Prompting`'s sections). It is
-/// APPENDED and never replaces, on the same principle that keeps a path out of a repo's file:
-/// each author writes what only they know. The core prompt describes mechanics the build
+/// `Agent` is the one thing here that is not about resources: what the operator says about the
+/// agent. Its guidance is APPENDED after the product's own system prompt (`Prompting`'s
+/// sections) and never replaces it, on the same principle that keeps a path out of a repo's
+/// file: each author writes what only they know. The core prompt describes mechanics the build
 /// defines — which tool reaches which sandbox, how a queued command comes back — and a copy of
 /// it in an operator's file would describe the build that was current when they wrote it. What
 /// an operator knows is this host: its conventions, what is slow here, what is never to be
-/// pushed where. `None` appends nothing, and the agent runs on the core alone.
+/// pushed where. The operator also picks the strategy, by name, from the ones the build has.
 type ProfileFile =
     { Resources : ResourceProfile
       Always : ResourceName list
-      Guidance : string option
+      Agent : AgentProfile
       /// The sandboxes this host's sessions have from boot, in the form a repo declares its
       /// own (`ConfigFile.sandboxes`). Session-owned: scoped to no repo, and run on the
       /// backend this host configures for the session's own sandboxes.
@@ -87,6 +88,6 @@ module ProfileFile =
     let empty : ProfileFile =
         { Resources = ResourceProfile.empty
           Always = []
-          Guidance = None
+          Agent = AgentProfile.defaults
           Sandboxes = Map.empty
           Maintenance = Map.empty }
