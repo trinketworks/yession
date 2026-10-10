@@ -1467,12 +1467,10 @@ module Style =
     /// lying over live text, and it must not swallow a tap or a selection meant for it.
     ///
     /// `px-8` is the timeline's own padding, so the rail inside it has the reading column's
-    /// geometry exactly — see `chatJumpToLatestRail`. On a phone `px-4`: the screen's gutter,
-    /// the same 16px every line and the composer's Send keep from the right edge. `pb-6`
-    /// holds the button clear of the line sitting on the composer's edge, which is the line
-    /// a reader a little way back is looking at.
+    /// geometry exactly — see `chatJumpToLatestRail`. None on a phone, where the grounds bleed
+    /// to the screen's edges and the column they draw is the whole width.
     let chatJumpToLatestSlot =
-        "absolute inset-x-0 bottom-0 z-10 pointer-events-none px-8 max-md:px-4 pb-4 max-md:pb-6"
+        "absolute inset-x-0 bottom-0 z-10 pointer-events-none px-8 max-md:px-0 pb-4"
 
     /// How wide anything in the timeline is allowed to get.
     ///
@@ -1502,11 +1500,10 @@ module Style =
     /// opaque so it reads over whatever is scrolling under it, no rounded corners because
     /// this product draws none (see `itemGround`).
     ///
-    /// 32px square: `left-full` puts it just past the column on a desktop (in the gutter, or
-    /// in the timeline's own 32px padding when the column fills the pane), and `right-0` on a
-    /// phone puts it against the slot's gutter (`chatJumpToLatestSlot`'s `max-md:px-4`). It
-    /// used to sit over the items' actions strip with no gutter at all, and a bordered square
-    /// flush with the glass reads as one sliding off the screen.
+    /// 32px square, which is the width of that strip: `left-full` puts it just past the
+    /// column on a desktop (in the gutter, or in the timeline's own 32px padding when the
+    /// column fills the pane), and `right-0` on a phone puts it exactly over the strip, its
+    /// centre on the same line as every handle above it.
     ///
     /// The square stays 32px to the eye; on a phone its press grows to the 44px touch target
     /// (`before:-inset-1.5`), the floor the doctrine never trades.
