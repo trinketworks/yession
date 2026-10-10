@@ -275,6 +275,12 @@ type [<AllowNullLiteral>] SpawnedProcess =
     abstract once : ``event``: string * listener: Fable.NodeExtras.RelayListener -> unit
     abstract off : ``event``: string * listener: Fable.NodeExtras.RelayListener -> unit
 
+/// The block that splits a system prompt in two: what comes before it is the same for every
+/// session and may be cached across them, what comes after it is this session's own. Placed
+/// as a block of its own in `Options.systemPrompt`.
+[<Import("SYSTEM_PROMPT_DYNAMIC_BOUNDARY", "@anthropic-ai/claude-agent-sdk")>]
+let dynamicBoundary : string = jsNative
+
 /// What `spawnClaudeCodeProcess` is: one request in, one process out, synchronously.
 type Spawner = Func<SpawnOptions, SpawnedProcess>
 
