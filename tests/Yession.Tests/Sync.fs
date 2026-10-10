@@ -85,13 +85,14 @@ let private codecProgram (doc: Y.Doc) =
           OnError = Ylmish.Program.OnError.log }
     |> Harness.run
 
-/// A command the agent queued to run in the background, asking for stdin, on Ada's behalf —
-/// the entry that carries every field a pending act has.
+/// A command the agent queued to run in the background, asking for stdin, on Ada's behalf,
+/// saying what it is for — the entry that carries every field a pending act has.
 let private agentsBackgroundAct (queueId: QueueId) (terminal: TerminalId) : PendingAct =
     { QueueId = queueId
       Terminal = terminal
       Order = 1.0
       Authority = Authority.agentFor (Principal.Peer ada)
+      Description = Some "Watch the build"
       Background = true
       Stdin = true
       Size = None }
@@ -387,7 +388,7 @@ let private codecTests =
             let doc = Y.Doc.Create ()
             let terminal = TerminalId.create "term-a" |> expect
             let queueId = QueueId.create "q-bg" |> expect
-            SyncedStateSync.enqueueTerminalCommand doc queueId terminal (Authority.agentFor (Principal.Peer ada)) 1.0 "make watch" true true
+            SyncedStateSync.enqueueTerminalCommand doc queueId terminal (Authority.agentFor (Principal.Peer ada)) 1.0 "make watch" true true None
             let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             p.Dispatch (user (ReorderPendingMsg (queueId, 5.0)))
 
@@ -405,7 +406,7 @@ let private codecTests =
             let terminal = TerminalId.create "term-a" |> expect
             let act = agentsBackgroundAct (QueueId.create "q-bg" |> expect) terminal
             let direct = Y.Doc.Create ()
-            SyncedStateSync.enqueueTerminalCommand direct act.QueueId terminal act.Authority act.Order "make watch" act.Background act.Stdin
+            SyncedStateSync.enqueueTerminalCommand direct act.QueueId terminal act.Authority act.Order "make watch" act.Background act.Stdin act.Description
             let encoded = Y.Doc.Create ()
             (codecProgram encoded).Dispatch (user (Replaced { (SyncedSessionState.empty CollabText.ylmish) with Pending = Map.ofList [ act.QueueId, act ] }))
 

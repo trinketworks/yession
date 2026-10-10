@@ -119,6 +119,40 @@ module TerminalTitle =
         | Some _
         | None -> text
 
+/// What the author of a command said it is FOR, in a few words — "Run the unit tests" — the
+/// name a block wears on every surface in place of its command line (`BlockLabel.ofBlock`).
+///
+/// The agent writes one with each command it runs; a person typing into a composer does
+/// not, and their block keeps the name its command gives it. It is the model's own prose and
+/// is held to that: one line, bounded, and never mistaken for a command — which is why a
+/// leading `$ ` is taken off rather than kept, since a block's NAME only wears the prompt
+/// when the name is the command.
+module BlockDescription =
+
+    /// As long as the prose title a terminal gets (`TerminalTitle.ProseLength`), for the same
+    /// reason: a few words make a name, a sentence makes a bad one, and this is appended to
+    /// a durable event and replayed for ever.
+    [<Literal>]
+    let MaxLength = TerminalTitle.ProseLength
+
+    /// The description as it is kept: trimmed, its first line, without a leading `$ `, and
+    /// truncated past `MaxLength`. `None` when nothing is left — a blank description is no
+    /// description, not an empty name.
+    ///
+    /// Total and truncating, like `TerminalTitle.fromProse`: a description that runs long is
+    /// not something a tool call should fail over, and the command it names is kept whole.
+    /// Idempotent, so every reader that bounds what it was handed agrees with the writer.
+    let ofProse (raw: string) : string option =
+        let text = if isNull (box raw) then "" else raw.Trim ()
+        let line =
+            match text.Split '\n' |> Array.tryHead with
+            | Some first -> first.Trim ()
+            | None -> text
+        let line = if line.StartsWith "$ " then (line.Substring 2).TrimStart () else line
+        if line = "" || line = "$" then None
+        elif line.Length > MaxLength then Some (line.Substring (0, MaxLength - 3) + "...")
+        else Some line
+
 type TerminalOpened =
     { TerminalId : TerminalId
       /// Who asked for it. A terminal is opened by a peer or by the agent, and which one
@@ -228,7 +262,12 @@ and TerminalBlockStarted =
       /// makes "is a wake due" a pure fold over the log: the doc's entry is gone the moment
       /// the block starts, and a scheduling decision that depended on it would be a decision
       /// a restart could not re-derive.
-      Background : bool }
+      Background : bool
+      /// What the author said the command is for (`BlockDescription`), when they said
+      /// anything: the agent names each command it runs, a person typing one does not.
+      /// `None` on every block written before the field, which is what a log from then
+      /// still reads as.
+      Description : string option }
 /// A queued command a peer refused (Plan 13, stage 2a). The other half of the approval
 /// gate: a log that records every yes and no no is the weaker thing wearing the stronger
 /// thing's face, and "the agent proposed this and a human said no" is the more interesting
@@ -256,6 +295,9 @@ and TerminalCommandRejected =
       /// The command line, snapshotted because the doc entry is deleted immediately after.
       /// A record saying *something* was rejected is not a record.
       Command : string
+      /// What its author said it was for, snapshotted for the reason `Command` is — so a
+      /// refused block is called what a started one would have been.
+      Description : string option
       Reason : string option }
 /// The shell stopped emitting marks (Plan 13, stage 2f). `exec sh`, or an image whose shell
 /// drops into another, replaces the process we instrumented while the pty stays open — so

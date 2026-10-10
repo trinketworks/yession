@@ -179,6 +179,9 @@ module SyncedStateSync =
           // foreground act that asks for nothing is what an entry with neither key reads as.
           "background", (if q.Background then Some (PendingValue.Word "true") else None)
           "stdin", (if q.Stdin then Some (PendingValue.Word "true") else None)
+          // Absent rather than blank when the author said nothing, which every person's
+          // command and every entry from before the field is.
+          "description", q.Description |> Option.map PendingValue.Word
           // `"120x40"`, the same spelling the transcript's `r` record uses (`Size.format`),
           // so one format serves the doc and the recording and neither can drift from the
           // other.
@@ -312,6 +315,9 @@ module SyncedStateSync =
           Background : string option
           /// Whether the author asked for stdin, `"true"` when they did. Absent reads as no.
           Stdin : string option
+          /// What the author said the command is for, as written. Bounded on the way to the
+          /// domain (`pendingToDomain`), because any peer can write here.
+          Description : string option
           /// The author's terminal width, `"120x40"`. `None` for an act with no viewport —
           /// the doc said nothing rather than said a blank.
           Size : string option }
@@ -332,6 +338,9 @@ module SyncedStateSync =
             let! order = Decode.object.optional "order" Decode.float
             let! background = Decode.object.optional "background" Decode.string
             let! stdin = Decode.object.optional "stdin" Decode.string
+            // Through `slot`, like the width: a description nobody can read names nothing,
+            // and the command it would have named still runs.
+            let! description = slot "description" Decode.string
             // The one field read through `slot` rather than failing its entry: a width nobody
             // can read is NO claim (`pendingToDomain`), not a reason to drop the command.
             let! size = slot "size" Decode.string
@@ -347,6 +356,7 @@ module SyncedStateSync =
                   Order = defaultArg order 0.0
                   Background = background
                   Stdin = stdin
+                  Description = description
                   Size = present size }
         }
 
@@ -458,6 +468,9 @@ module SyncedStateSync =
                       // writes is and what every entry written before Plan 20 was.
                       Background = (f.Background = Some "true")
                       Stdin = (f.Stdin = Some "true")
+                      // The doc is shared with peers we do not control, and this is what the
+                      // drain records: one line, bounded, blank as none.
+                      Description = f.Description |> Option.bind BlockDescription.ofProse
                       // Unreadable or absent is NO claim rather than a guessed one: an entry
                       // written before the field existed, or by something that put nonsense
                       // there, leaves the terminal at the width it had.
@@ -742,6 +755,9 @@ module SyncedStateSync =
         // Whether the author asked for the terminal's stdin (`BlockStdinPolicy`); on the
         // entry for the same reason `background` is.
         (stdin: bool)
+        // What the command is for (`BlockDescription`), when the author said; on the entry
+        // for the same reason again.
+        (description: string option)
         : unit =
         let act : PendingAct =
             { QueueId = id
@@ -750,6 +766,7 @@ module SyncedStateSync =
               Authority = authority
               Background = background
               Stdin = stdin
+              Description = description
               // The Process has no screen to measure, so it claims no width: the terminal
               // keeps the one it has.
               Size = None }

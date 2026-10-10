@@ -87,6 +87,7 @@ let private started (id: TerminalId) (n: string) (authority: Authority) (command
           Authority = authority
           Command = command
           FromSeq = fromSeq
+          Description = None
           Background = false }
 
 let private completed (id: TerminalId) (n: string) (result: CommandResult) (toSeq: int) =
@@ -203,6 +204,7 @@ let private chipTests =
                                 BlockId = block "no"
                                 Authority = agentForAda
                                 RejectedBy = PeerRef ada
+                                Description = None
                                 Command = "rm -rf /"
                                 Reason = Some "no" }) ]
             Expect.equal (shapes items) [ "ran:b-no" ] "the refusal is in the chat where it was proposed"
@@ -1376,6 +1378,7 @@ let private blockOf (authority: Authority) (n: string) (status: BlockStatus) : B
       QueueId = None
       Authority = authority
       Command = "echo " + n
+      Description = None
       Background = false
       FromSeq = 0
       ToSeq = Some 1
@@ -2020,6 +2023,7 @@ let private videoTests =
                             BlockId = block "no"
                             Authority = agentForAda
                             RejectedBy = PeerRef ada
+                            Description = None
                             Command = "rm -rf /"
                             Reason = Some "no" }) ]
             let model = withRecords (clientOf rejected)
@@ -4387,6 +4391,7 @@ let private rejected (id: TerminalId) (n: string) (authority: Authority) (comman
           BlockId = block n
           Authority = authority
           RejectedBy = PeerRef ada
+          Description = None
           Command = command
           Reason = Some "not that one" }
 

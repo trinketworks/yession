@@ -232,6 +232,7 @@ let private queueEntry (terminal: TerminalId) (author: Principal) (n: string) : 
       Authority = Authority.ofAuthor author
       Order = 1.0
       Size = None
+      Description = None
       Background = false
       Stdin = false }
 

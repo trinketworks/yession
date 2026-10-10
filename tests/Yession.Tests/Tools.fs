@@ -576,6 +576,45 @@ let private sessionTests =
                 Expect.stringContains description "stdin: true" "and the description says how to ask"
             }
 
+        // What the command is for, in the agent's words: the name its block wears on every
+        // surface. Asked for on every call, so the description must say so — the model
+        // learns the argument from nowhere else.
+        testCaseAsync "a description is read into the request" <|
+            async {
+                let mutable said = None
+                let registry =
+                    AgentTools.registry (capabilities (fun (request: CommandRequest) ->
+                        async {
+                            said <- request.Description
+                            return Ok (ran request.Command)
+                        }))
+                let! _ = registry.Invoke (call "yession" "execute_command" """{"command":"dotnet test","description":"Run the unit tests"}""")
+                Expect.equal said (Some "Run the unit tests") "the agent's words reach the request"
+            }
+
+        // Optional in the schema: a model that leaves it out still gets its command run, and
+        // the block is named after the command instead.
+        testCaseAsync "a call without a description still runs, describing nothing" <|
+            async {
+                let asked = ResizeArray<string option> ()
+                let registry =
+                    AgentTools.registry (capabilities (fun (request: CommandRequest) ->
+                        async {
+                            asked.Add request.Description
+                            return Ok (ran request.Command)
+                        }))
+                let! _ = registry.Invoke (call "yession" "execute_command" """{"command":"ls"}""")
+                Expect.equal (List.ofSeq asked) [ None ] "it ran, and said nothing about what for"
+            }
+
+        testCaseAsync "the tool asks for a description on every call" <|
+            async {
+                let registry = AgentTools.registry (capabilities (fun _ -> async { return Ok (ran "") }))
+                let description =
+                    registry.Tools |> List.find (fun t -> t.Name = "execute_command") |> fun t -> t.Description
+                Expect.stringContains description "Always pass `description`" "the model is told to name each command"
+            }
+
         testCaseAsync "a terminal and a sandbox together are refused, and nothing runs" <|
             async {
                 let mutable ran' = false

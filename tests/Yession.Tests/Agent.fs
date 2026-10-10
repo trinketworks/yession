@@ -706,6 +706,7 @@ let private blockStarted (n: string) (background: bool) (owner: Principal) =
           Authority = Authority.agentFor owner
           Command = "make"
           FromSeq = 0
+          Description = None
           Background = background }
 
 let private blockCompleted (n: string) =
@@ -960,6 +961,7 @@ let private blockStartedIn (id: TerminalId) (n: string) (background: bool) (owne
           Authority = Authority.agentFor owner
           Command = "make"
           FromSeq = 0
+          Description = None
           Background = background }
 
 let private integrationLost (id: TerminalId) =

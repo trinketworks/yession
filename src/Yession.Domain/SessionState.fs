@@ -81,6 +81,10 @@ type PendingAct =
       /// agent's answer matters — a person's block reads the terminal regardless — and it
       /// rides the entry for the reason `Background` does: the drain reads the doc.
       Stdin : bool
+      /// What the author said the command is for (`BlockDescription`), when they said
+      /// anything — only the agent does. On the entry for the reason `Background` is: the
+      /// drain mints the block that records it, and the drain reads the doc.
+      Description : string option
       /// How wide the author's terminal was when they asked for this, if they had one.
       ///
       /// The size rides the ACT rather than sitting in a register beside the terminal, and

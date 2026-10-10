@@ -364,13 +364,17 @@ type CommandRequest =
       /// Whether the command should read the terminal's stdin (`BlockStdinPolicy`). False is
       /// end-of-file, and is what a command that names its files wants; true is for the one
       /// that prompts, which the agent then answers by typing into its block.
-      Stdin : bool }
+      Stdin : bool
+      /// What the command is for, in a few words (`BlockDescription`) — the name its block
+      /// wears on every surface. `None` when the agent said nothing, and the block is then
+      /// called after its command.
+      Description : string option }
 
 module CommandRequest =
 
     /// The plain case: a command, waited for, in the default sandbox's agent terminal.
     let ofCommand (command: string) : CommandRequest =
-        { Command = command; Target = None; Background = false; Stdin = false }
+        { Command = command; Target = None; Background = false; Stdin = false; Description = None }
 
 type ExecuteCommand = CommandRequest -> Async<Result<TerminalCommandOutcome, string>>
 

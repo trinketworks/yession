@@ -156,6 +156,7 @@ let tests =
                               Authority = Authority.agentFor (Principal.Peer ada)
                               Command = "make"
                               FromSeq = 0
+                              Description = None
                               Background = true })
                 let! host = Host.startWithEnvironment None None (Some log) (sid ()) 0
                 let! page = log.Read None System.Int32.MaxValue
@@ -1136,6 +1137,42 @@ let tests =
                     | Some view -> view.Blocks |> List.exists (fun b -> b.Command = "rm -rf build")
                     | None -> false
                 do! a.Runner.WaitFor ran
+                do! host.Stop ()
+            }
+
+        // What the agent says a command is for is what every peer sees it called — through
+        // the tool's request, the queue entry in the doc, the drain's block fact and the
+        // client's fold, every seam the description crosses.
+        testCaseAsync "the agent's command is called what the agent said it is for" <|
+            async {
+                let environment : SessionEnvironment.SessionEnvironment =
+                    { Ensure = fun _ _ -> async { return EnvironmentAvailable }
+                      Spawn =
+                        fun _ onChunk ->
+                            async {
+                                onChunk (Stdout, "cleaned")
+                                return
+                                    Ok
+                                        { WriteStdin = ignore
+                                          CloseStdin = ignore
+                                          Kill = ignore
+                                          Exited = async { return SandboxExited 0 } }
+                            }
+                      SpawnPty = fun _ _ _ _ -> async { return Error "no pty in this fixture" }
+                      Stop = fun () -> async { return () }
+                      CurrentRef = fun () -> Some "scripted"
+                      Shell = fun () -> None
+                      Realisation = fun () -> [] }
+                let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
+                let! a = connectInMemoryClient host "ada" "Ada"
+                let request = { CommandRequest.ofCommand "cd /ws && rm -rf build" with Description = Some "Clean the build" }
+                match! host.TerminalCommands.Execute request agentActing with
+                | Error reason -> failwith reason
+                | Ok outcome -> Expect.equal outcome.Status (TerminalCommandRan (CommandSucceeded 0)) "it ran"
+                let named (m: ClientModel) =
+                    m.Terminals.Terminals
+                    |> List.exists (fun view -> view.Blocks |> List.exists (fun b -> BlockLabel.ofBlock b = "Clean the build"))
+                do! a.Runner.WaitFor named
                 do! host.Stop ()
             }
 

@@ -79,7 +79,7 @@ module Prompting =
     let shell =
         { Name = "shell"
           Text =
-            $"Use {ToolName.ExecuteCommand} only for work that needs a shell: git, builds, tests and running code. Use the default sandbox for the checkout and for small work. Use a work sandbox ({ToolName.StartWorkSandbox}) for work that needs its toolchain. The default sandbox is not assured a language runtime. A python or node there can be missing or a stub. Use a work sandbox when you need an interpreter." }
+            $"Use {ToolName.ExecuteCommand} only for work that needs a shell: git, builds, tests and running code. Use the default sandbox for the checkout and for small work. Use a work sandbox ({ToolName.StartWorkSandbox}) for work that needs its toolchain. The default sandbox is not assured a language runtime. A python or node there can be missing or a stub. Use a work sandbox when you need an interpreter. Give each command a `description` of a few words that says what it is for, such as `Run the unit tests`. People see it as the title of the command." }
 
     /// Every sandbox sets `$TMPDIR` to a directory of the session's own, but `/tmp` is three
     /// different things across the backends (the container's own, a tmpfs dropped at exit, a

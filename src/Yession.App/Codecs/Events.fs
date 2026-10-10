@@ -437,6 +437,15 @@ module Events =
                   // recorded who, which is what `None` says.
                   TerminalClosed.By = get.Optional.Field "by" Codec.actor.Decode }) }
 
+    /// What a command's author said it is for, as a block's facts carry it: the key only when
+    /// there is one. Absent is what every block written before the field reads as — a log is
+    /// read back for the life of its session — so a `None` is written as that, not as a
+    /// `null` nothing before it ever wrote.
+    let private descriptionField (description: string option) =
+        match description with
+        | Some text -> [ "description", Encode.string text ]
+        | None -> []
+
     let private terminalBlockStarted : Codec<TerminalBlockStarted> =
         { Encode =
             fun (p: TerminalBlockStarted) ->
@@ -447,6 +456,7 @@ module Events =
                       "command", Encode.string p.Command
                       "fromSeq", Encode.int p.FromSeq
                       "background", Encode.bool p.Background ]
+                    @ descriptionField p.Description
                     @ Codec.authorityFields p.Authority)
           Decode =
             Decode.object (fun get ->
@@ -462,7 +472,8 @@ module Events =
                   // undecodable — which is a session that will not open, to record a bool
                   // whose absence already means `false`.
                   TerminalBlockStarted.Background =
-                    get.Optional.Field "background" Decode.bool |> Option.defaultValue false }) }
+                    get.Optional.Field "background" Decode.bool |> Option.defaultValue false
+                  TerminalBlockStarted.Description = get.Optional.Field "description" Decode.string }) }
 
     let private terminalBlockCompleted : Codec<TerminalBlockCompleted> =
         { Encode =
@@ -594,6 +605,7 @@ module Events =
                       "rejectedBy", Codec.actor.Encode p.RejectedBy
                       "command", Encode.string p.Command
                       "reason", Encode.option Encode.string p.Reason ]
+                    @ descriptionField p.Description
                     @ Codec.authorityFields p.Authority)
           Decode =
             Decode.object (fun get ->
@@ -603,6 +615,7 @@ module Events =
                   TerminalCommandRejected.Authority = get.Required.Raw Codec.authorityOf
                   TerminalCommandRejected.RejectedBy = get.Required.Field "rejectedBy" Codec.actor.Decode
                   TerminalCommandRejected.Command = get.Required.Field "command" Decode.string
+                  TerminalCommandRejected.Description = get.Optional.Field "description" Decode.string
                   TerminalCommandRejected.Reason = get.Required.Field "reason" (Decode.option Decode.string) }) }
 
     let private terminalTranscriptTruncated : Codec<TerminalTranscriptTruncated> =

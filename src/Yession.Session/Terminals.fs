@@ -1976,6 +1976,7 @@ module SessionTerminals =
                       Authority = entry.Authority
                       RejectedBy = ActorRef.System
                       Command = command
+                      Description = entry.Description
                       Reason = Some reason })
 
         let runBlock (terminalId: TerminalId) (entry: PendingAct) (command: string) (onStarted: unit -> unit) : Async<unit> =
@@ -2056,7 +2057,8 @@ module SessionTerminals =
                                       Authority = entry.Authority
                                       Command = command
                                       FromSeq = fromSeq
-                                      Background = entry.Background })
+                                      Background = entry.Background
+                                      Description = entry.Description })
                         // Consumed: the durable fact exists, so the doc key can go. Between
                         // the append and this call the entry is in both places, which the
                         // drain answers by planning against the log-anchored `consumed` set
@@ -3306,6 +3308,7 @@ module TerminalCommands =
                             command
                             request.Background
                             request.Stdin
+                            request.Description
                         if not request.Background then return! awaitOutcome terminal handle (clock.Now ()) None None
                         else
                             // Answer with what is true NOW rather than waiting: the caller

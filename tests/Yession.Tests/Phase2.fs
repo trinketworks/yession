@@ -2199,6 +2199,7 @@ let private acceptanceTests =
                           Authority = Authority.agentFor (Principal.Peer ada)
                           Command = "true"
                           FromSeq = 0
+                          Description = None
                           Background = false }
                       SessionEvent.TerminalBlockCompleted
                         { TerminalId = TerminalId.create "t1" |> expect
