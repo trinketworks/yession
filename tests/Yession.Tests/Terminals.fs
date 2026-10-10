@@ -395,6 +395,40 @@ let private terminalNameTests =
             let proj = fold [ untitledIn (termN 1) SandboxRef.defaultRef; untitledIn (termN 2) devSandbox ]
             Expect.equal (nameIn proj (termN 2)) "dev 1" "the sandbox, and its place there"
 
+        // Terminals opened before the title stopped carrying the sandbox still have it in
+        // their recorded `TerminalOpened`; the log is not rewritten, the reading is.
+        testCase "a recorded title with its own sandbox in front displays as the name" <| fun () ->
+            let proj = fold [ openedIn (termN 1) devSandbox (TerminalTitle.fromProse "[dev] check") ]
+            Expect.equal (nameIn proj (termN 1)) "check" "the name, without where"
+
+        testCase "a title whose bracket names a different sandbox is left alone" <| fun () ->
+            // Only the exact prefix the old rule wrote for THIS terminal's sandbox comes off;
+            // anything else in brackets is part of what somebody said.
+            let proj = fold [ openedIn (termN 1) devSandbox (TerminalTitle.fromProse "[prod] check") ]
+            Expect.equal (nameIn proj (termN 1)) "[prod] check" "as written"
+
+        testCase "a terminal in a named sandbox says where, apart from its name" <| fun () ->
+            let proj = fold [ openedIn (termN 1) devSandbox (TerminalTitle.fromProse "check") ]
+            Expect.equal
+                (TerminalName.place (Projection.tryFind (termN 1) proj |> Option.get))
+                (Some "dev")
+                "the sandbox, as its own fact"
+
+        testCase "a terminal in the default sandbox has no place to say" <| fun () ->
+            // Every session has it, so saying so on every terminal distinguishes nothing.
+            let proj = fold [ openedIn (termN 1) SandboxRef.defaultRef (TerminalTitle.fromProse "check") ]
+            Expect.isNone (TerminalName.place (Projection.tryFind (termN 1) proj |> Option.get)) "nothing to add"
+
+        testCase "a terminal's hint says what it runs and where" <| fun () ->
+            let proj =
+                fold
+                    [ openedIn (termN 1) devSandbox (TerminalTitle.fromProse "check")
+                      started (termN 1) "1" "npm test" 0 ]
+            Expect.equal
+                (TerminalName.hint (Projection.tryFind (termN 1) proj |> Option.get))
+                "npm test · in dev"
+                "the command, then the sandbox"
+
         testCase "a terminal's subtitle is the command it is running" <| fun () ->
             let proj =
                 fold
@@ -2974,23 +3008,16 @@ let private terminalTitleTests =
         testCase "empty prose falls back too" <| fun () ->
             Expect.equal (TerminalTitle.value (TerminalTitle.fromProse "")) "terminal" "the same fallback"
 
-        // Where a terminal RUNS, in the one place a reader usually meets it: its title. The
-        // rule was spelled out at two callers inside the terminal manager and tested at
-        // neither, so a third way of opening a terminal could silently produce one that does
-        // not say where it is.
-        testCase "a terminal in a named sandbox says which, in brackets" <| fun () ->
+        // A title used to carry its sandbox in brackets, `[octo/hello:dev] npm test`, and a
+        // tab truncated it to `[octo/hello…` — the half that said least. The sandbox is the
+        // terminal's own field; the title is the name, in any sandbox, which is why there is
+        // no separate case for `default` any more.
+        testCase "a new terminal's title does not carry its sandbox" <| fun () ->
             let dev = SandboxRef.inScope (RepoRef.create "octo/hello" |> expect) (SandboxName.create "dev" |> expect)
             Expect.equal
                 (TerminalTitle.value (TerminalTitle.inSandbox dev "npm test"))
-                "[octo/hello:dev] npm test"
-                "the sandbox, then what the opener had to say"
-
-        testCase "the default sandbox puts a bracket on nothing" <| fun () ->
-            // Every session has it, so a mark for it on every tab distinguishes nothing.
-            Expect.equal
-                (TerminalTitle.value (TerminalTitle.inSandbox SandboxRef.defaultRef "npm test"))
                 "npm test"
-                "no prefix"
+                "what the opener had to say, and nothing about where"
 
         testCase "a named sandbox with nothing else to say is the whole title" <| fun () ->
             // What a terminal opened by picking a sandbox and nothing else is called. An
@@ -3007,14 +3034,10 @@ let private terminalTitleTests =
                 "terminal"
                 "the same fallback every other way of asking gets"
 
-        testCase "a long name is cut around the sandbox rather than instead of it" <| fun () ->
-            // The sandbox is the half a reader cannot work out from context, so it is the
-            // half that survives `ProseLength`. A prefix outside the budget would push the
-            // cut past it instead, and a title that outgrew a tab is what the budget is for.
+        testCase "a long name is cut to fit a tab" <| fun () ->
             let dev = SandboxRef.inScope (RepoRef.create "octo/hello" |> expect) (SandboxName.create "dev" |> expect)
             let got = TerminalTitle.value (TerminalTitle.inSandbox dev (String.replicate 200 "y"))
-            Expect.equal got.Length TerminalTitle.ProseLength "cut to fit a tab, prefix included"
-            Expect.isTrue (got.StartsWith "[octo/hello:dev] ") "and the sandbox is what is left"
+            Expect.equal got.Length TerminalTitle.ProseLength "prose, so truncated rather than refused"
     ]
 
 let private transcriptCursorTests =

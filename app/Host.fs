@@ -660,7 +660,7 @@ let startFull
                                     (Projection.openTerminals terminalProjection
                                      |> List.map (fun view ->
                                          { Terminal = view.TerminalId
-                                           Name = TerminalTitle.value view.Title
+                                           Name = TerminalTitle.named view.Sandbox view.Title
                                            Sandbox = view.Sandbox
                                            Mine = terminals.OpenedByAgent view.TerminalId
                                            Busy = Set.contains (TerminalId.value view.TerminalId) busy }))

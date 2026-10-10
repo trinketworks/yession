@@ -4252,12 +4252,12 @@ module View =
                 else Style.terminalListVerbsAtRest
             let nameClass = if view.IsOpen then Style.terminalListName else Style.terminalListNameClosed
             let killWord = html $"""{Dom.Text.kill}"""
-            // What it is doing or last did, under the name: nine rows of `term N` say which is
-            // which, and this says which is the one you want.
+            // What it is doing or last did, and where, under the name: nine rows of `term N`
+            // say which is which, and this says which is the one you want.
             let subtitle =
-                match TerminalName.subtitle view with
+                match TerminalName.hint view with
                 | "" -> Lit.nothing
-                | command -> html $"""<span class="{Style.terminalListSubtitle}" title="{command}">{command}</span>"""
+                | hint -> html $"""<span class="{Style.terminalListSubtitle}" title="{hint}">{hint}</span>"""
             let mode = ClientModel.chosenRead view.TerminalId model
             html $"""
                 <div class="{Style.terminalListRow}" role="listitem">
@@ -4456,10 +4456,10 @@ module View =
             let id = TerminalId.value view.TerminalId
             let klass = if on then Style.pivotItemOn else Style.pivotItem
             let name = TerminalName.display model.Terminals view
-            // The item says WHICH terminal; what it is running rides the tooltip, because a
-            // row of names is what a person scans and a row of commands is a row of
-            // truncations.
-            let tooltip = TerminalName.subtitle view
+            // The item says WHICH terminal; what it is running, and the sandbox it runs in, ride
+            // the tooltip, because a row of names is what a person scans and a row of commands
+            // or sandboxes is a row of truncations.
+            let tooltip = TerminalName.hint view
             // Who is in THIS terminal, on its item — the same presence the roster reports, put
             // where you would look for it. Without it, a collaborator typing a command in a
             // terminal you are not showing is visible nowhere in this column.

@@ -70,10 +70,9 @@ module SessionCommands =
                 //
                 // A peer who NAMED nothing gets the name the sandbox gives it — `terminal`
                 // for `default`, the sandbox itself for a named one — because the only thing
-                // they said was where. A title they DID type stays exactly theirs, prefix
-                // and all absent: the bracket the agent's terminals wear is prose we wrote,
-                // and putting it in front of somebody's own words would make us the author
-                // of a title we would then have to shorten to fit.
+                // they said was where. A title they DID type stays exactly theirs, refused
+                // rather than shortened when it is too long, which is why it does not go
+                // through `inSandbox`'s truncating prose.
                 let said = if isNull (box raw) then "" else raw.Trim ()
                 match TerminalTitle.create said with
                 | Error reason -> return CommandRejected reason

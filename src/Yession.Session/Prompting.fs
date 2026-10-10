@@ -318,9 +318,17 @@ module Prompting =
                 if block.Elided > 0 then
                     sprintf "[%d earlier characters omitted — the whole output is in the transcript]\n" block.Elided
                 else ""
+            // Where, from the field: the title is only the terminal's name, and the same
+            // command means a different thing in a different sandbox.
+            let place =
+                match block.Sandbox with
+                | Some sandbox when sandbox <> SandboxRef.defaultRef -> sprintf " in %s" (SandboxRef.render sandbox)
+                | Some _
+                | None -> ""
             sprintf
-                "[%s] %s ran: %s (%s)\n%s%s"
-                (TerminalTitle.value block.Title)
+                "[%s%s] %s ran: %s (%s)\n%s%s"
+                (TerminalTitle.named block.Sandbox block.Title)
+                place
                 (label context.People block.Author)
                 block.Command
                 outcome
