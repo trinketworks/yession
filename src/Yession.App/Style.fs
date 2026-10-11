@@ -986,9 +986,10 @@ module Style =
     /// have: a row's fill under the pointer, the ring a keyboard sees, and — on the one entry
     /// that is `aria-current` — the step-up fill and full ink that say "this is the one on
     /// screen". The padding is spent OUTWARD, so the text sits on the column's rail with
-    /// everything else and the fill grows around it.
+    /// everything else and the fill grows around it — on both sides, which is why the width
+    /// is the column's plus both margins rather than `w-full`, a box shifted left by one.
     let chapterEntry =
-        cls [ person; "w-full text-left px-3 -mx-3 py-1.5 phone:py-3 hover:text-ink hover:bg-surface"
+        cls [ person; "w-[calc(100%+1.5rem)] text-left px-3 -mx-3 py-1.5 phone:py-3 hover:text-ink hover:bg-surface"
               "aria-[current=true]:bg-surface-2 aria-[current=true]:text-ink"
               "transition-colors cursor-pointer"; focusRing ]
 
