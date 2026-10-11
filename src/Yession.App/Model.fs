@@ -2574,6 +2574,15 @@ module ClientModel =
     let preview (model: ClientModel) : Preview option =
         model.Pane |> Option.bind PaneMode.preview
 
+    /// The terminal a person is LOOKING at in the pane: the column is open, its `all` page is
+    /// not up, and no preview covers it. What a list of terminals marks as current, so the
+    /// sidebar points at the terminal the strip's selected tab is showing, and at none while
+    /// the pane is shut — a choice kept for when it reopens is not something on the screen.
+    let shownTerminal (model: ClientModel) : TerminalId option =
+        if model.TerminalsOpen && not model.Switcher && Option.isNone (preview model) then
+            selectedTerminal model
+        else None
+
     /// What a preview is laid OVER, given the terminal read the pane is about now: the
     /// terminal the subject belongs to — that same read, positioned where it was, when it is
     /// the one already up — and for a file, which belongs to no terminal, whatever is up.

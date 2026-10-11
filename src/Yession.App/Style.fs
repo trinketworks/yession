@@ -14,15 +14,10 @@ open Yession.Domain.Terminals
 /// below says which rule it is spending and why, and a value this file wants that the
 /// doctrine does not admit is a question for the doctrine, not a local exception.
 ///
-/// The design is Metro / Zune (pre-Windows 8) worn by a Slack/Cursor workspace anatomy.
-/// Zune's own panorama — horizontal surfaces you pan between — was considered for the whole
-/// shell and rejected: it is a media-browsing metaphor, and the job here is watching one
-/// conversation, editing a queue, and intervening fast. The session is one room, and
-/// navigation through it is vertical time, not horizontal space. Zune survives in the type,
-/// the colour and the motion, and the pivot idiom survives at two scales — the sidebar's two
-/// destinations (`navPivot`), which are a place you go, not a surface you pan; and the content
-/// pane's row of what it holds (`panePivotRow`), which IS a set of surfaces side by side, one
-/// at a time, which is what a pivot was for.
+/// The anatomy is a Slack/Cursor workspace: a sidebar, a conversation, a pane. The session is
+/// one room, and navigation through it is vertical time, not horizontal space. The pivot idiom
+/// survives in one place, the content pane's row of what it holds (`panePivotRow`), which IS a
+/// set of surfaces side by side, one at a time, which is what a pivot was for.
 ///
 /// What is this file's own, rather than the doctrine's:
 ///
@@ -720,28 +715,19 @@ module Style =
     /// A row you can act on: the surface lifts, the edge does not move.
     let private rowLift = "hover:bg-surface-2 focus-within:bg-surface-2"
 
-    // --- Pivots: the sidebar's two destinations, set as type ----------------------------
-    // Zune navigated by WORDS — big, quiet, lowercase, with a thin chevron pointing the way the
-    // surface was about to move — and Courier's chrome earned its place by being set rather than
-    // drawn. `settings ›` and `‹ back` are ONE control, mirrored: same size, same foot of the
-    // same column, so pressing it leaves the word replaced and the mark flipped, in place. (The
-    // head is identity — the wordmark, then the settings title — and never navigation; the two
-    // fought for the 280px band when they shared it, and two chevrons a thumb apart read as a
-    // pair of arrows rather than a way in and a way out.)
+    // --- The sidebar's way to settings and back ----------------------------------------
+    // `settings ›` and `‹ back` are ONE control, mirrored: same row, same foot of the same
+    // column, so pressing it leaves the word replaced and the mark flipped, in place. (The
+    // head is identity — the wordmark, then the settings title — and never navigation; two
+    // chevrons a thumb apart read as a pair of arrows rather than a way in and a way out.)
     //
-    // Everything that marks them as interactive is a RESPONSE: the word brightens to ink, the
-    // mark turns blue and steps the way it points, and a press sends it further. Nothing at rest
-    // but type.
-
-    /// One step below the settings title (28/32) and two below the wordmark (32/36), on the
-    /// same 4px rhythm: a destination, never a heading.
-    let private pivotBase =
+    // It is a ROW, the column's own entry shape (`chapterEntry`), because it is one more place
+    // the column takes you; the mark turns blue and steps the way it points.
+    let navPivot =
         "group bg-transparent border-0 cursor-pointer flex items-center gap-2 "
-        + "font-extralight text-pivot tracking-[-0.01em] lowercase "
-        + "text-ink-faint hover:text-ink focus-visible:text-ink transition-colors duration-150 ease-out "
-        + "phone:min-h-11 motion-reduce:transition-none " + focusRingFar
-
-    let navPivot = pivotBase
+        + "font-light text-small leading-5 text-ink-dim px-3 -mx-3 py-1.5 phone:min-h-11 "
+        + "hover:text-ink hover:bg-surface focus-visible:text-ink transition-colors duration-150 ease-out "
+        + "motion-reduce:transition-none " + focusRing
 
     /// A column's foot: the pivot, and opposite it on the same baseline, the build. One row
     /// so the build costs the column no height — it lives in the slack the pivot already
@@ -970,13 +956,18 @@ module Style =
 
     /// The shared header band (`--spacing-band`): baselines align across the sidebar/main
     /// hairline because all three heads compose the same token.
-    let sideHead = "h-band shrink-0 flex items-end justify-between pb-5"
-    let sideSection = "flex flex-col gap-2 py-4 " + Stroke.dividerTop
-    let sideSectionFirst = "flex flex-col gap-2 pb-4"
+    /// The hairline under it is the band's, and the only rule in the column: groups below it
+    /// are told apart by the space between them and by their heads, not by a line each.
+    let sideHead = "h-band shrink-0 flex items-end justify-between pb-5 " + Stroke.dividerBottom
+    let sideSection = "flex flex-col gap-2 pt-6"
+    let sideSectionFirst = "flex flex-col gap-2 pt-6"
     let sideRow = "flex items-baseline justify-between gap-2"
     /// A roster row aligns on the TEXT BASELINE, so the 11px caps ("you", a status) sit on
     /// the 13px name's baseline instead of floating box-centred beside it.
     let person = "flex items-baseline gap-2.5 font-light text-small leading-5 text-ink-dim"
+    /// Beside your own name, in the row's voice rather than caps: the roster's right edge is
+    /// for what a person is DOING (a place, a verb), and being you is not news.
+    let personYou = "text-ink-faint shrink-0"
     /// The avatar opts back out: a box has no baseline (it would park its bottom edge on
     /// the line), so it centres in the row the way it always did.
     let personAvatar = "self-center"
@@ -986,17 +977,19 @@ module Style =
     /// the gap the section puts under its heading (`sideSection`'s 8px) is not also put
     /// between the entries: on a phone each entry is already a full 44px target
     /// (`chapterEntry`), and a gap on top of that spread two chapters 52px apart.
-    let chapterEntries = "flex flex-col gap-2 phone:gap-0"
+    let chapterEntries = "flex flex-col"
 
     /// One chapter in the contents: the roster row's shape, worn by a button.
     ///
     /// The same row as a person's, because the column holds one kind of list and a second
     /// shape here would read as a second kind of thing. What it adds is what a control has to
-    /// have: a name that brightens under the pointer, and the ring a keyboard sees. The
-    /// padding is spent OUTWARD, so the text sits on the column's rail with everything else
-    /// and the hover fill grows around it.
+    /// have: a row's fill under the pointer, the ring a keyboard sees, and — on the one entry
+    /// that is `aria-current` — the step-up fill and full ink that say "this is the one on
+    /// screen". The padding is spent OUTWARD, so the text sits on the column's rail with
+    /// everything else and the fill grows around it.
     let chapterEntry =
-        cls [ person; "w-full text-left px-2 -mx-2 py-0.5 phone:py-3 hover:text-ink hover:bg-surface-2"
+        cls [ person; "w-full text-left px-3 -mx-3 py-1.5 phone:py-3 hover:text-ink hover:bg-surface"
+              "aria-[current=true]:bg-surface-2 aria-[current=true]:text-ink"
               "transition-colors cursor-pointer"; focusRing ]
 
     /// Its mark, the same dot the rule in the timeline wears, so one chapter looks like one
@@ -2960,8 +2953,9 @@ module Style =
     // root <html> element (`settings-open`, drawn from the model's `Column.Face`).
 
     /// The settings face's header band: the same 88px rhythm as the nav and the main header, so
-    /// the three baselines still align when the column changes face.
-    let settingsHead = "h-band shrink-0 flex items-end justify-between pb-5"
+    /// the three baselines still align when the column changes face — the nav's head, hairline
+    /// and all, so the band's rule does not come and go as the faces turn.
+    let settingsHead = sideHead
     let settingsTitle = "font-extralight text-heading tracking-[-0.01em] lowercase text-ink"
 
     // --- The agent's absence -------------------------------------------------------------------
@@ -3066,16 +3060,15 @@ module Style =
               "transition-opacity duration-200 ease-out motion-reduce:transition-none"
               "phone:[.term-closed_&]:opacity-0 phone:[.term-closed_&]:pointer-events-none"; focusRing ]
 
-    /// The column's head: a PIVOT, the one row this pane is navigated by (Zune's own idiom,
-    /// which the rest of the shell already speaks: big light words, no boxes).
+    /// The column's head: a PIVOT, the one row this pane is navigated by: big light words,
+    /// no boxes.
     ///
     /// It was three layers — a 40px bar naming the selected terminal and opening a boxed
     /// popover of every terminal, under it a strip of uppercase tabs with a `+` and a `+N`,
     /// then the content — and the name of where you were sat ABOVE the row you moved between
     /// places with, so the hierarchy read upside down and there were two ways to make a
-    /// terminal. Now every name is in one row, in the type the shell uses for places
-    /// (`navPivot`'s face, a size up), the selected one in full ink and the rest in the
-    /// faintest ink the floor admits; `all` leads it, then the tabs, then — on a desktop — the
+    /// terminal. Now every name is in one row, in big light type, the selected one in full ink
+    /// and the rest in the faintest ink the floor admits; `all` leads it, then the tabs, then — on a desktop — the
     /// one `+`, then the way back to the chat. Nothing in it is boxed.
     ///
     /// On a phone every control in it is a thumb's 44 (`phone:min-h-11` on each). The row's

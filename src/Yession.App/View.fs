@@ -543,7 +543,7 @@ module View =
         html $"""
             <section class="{Style.cls [ Style.sideSection; Style.navLane1 ]}">
               <span class="{Style.label}">in this session</span>
-              <div class="{Style.person}"><span class="{Style.cls [ Style.avatar; Entity.actorMark model (PeerRef model.Peer.PeerId); Style.personAvatar ]}"></span><span class="truncate" data-display-name>{model.Peer.DisplayName}</span><span class="{Style.label} ml-auto">you</span></div>
+              <div class="{Style.person}"><span class="{Style.cls [ Style.avatar; Entity.actorMark model (PeerRef model.Peer.PeerId); Style.personAvatar ]}"></span><span class="truncate" data-display-name>{model.Peer.DisplayName}</span><span class="{Style.personYou}">you</span></div>
               {peerRows}
               {agentRow}
               {approvalPrompts}
@@ -618,10 +618,13 @@ module View =
     let private environmentSection (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let status = model.Environment
         let statusClass, statusInner = environmentStatus status
+        let shown = ClientModel.shownTerminal model
         let entry (view: TerminalView) =
+            // `aria-current` is the selection, for a reader and for the row's fill alike.
             html $"""
                 <button type="button" class="{Style.terminalEntry}"
                         data-environment-terminal="{TerminalId.value view.TerminalId}"
+                        aria-current="{if shown = Some view.TerminalId then "true" else "false"}"
                         @click={Ev(fun _ -> dispatch (OpenInPaneMsg (ClientModel.chosenRead view.TerminalId model)))}>
                   <span class="truncate min-w-0">{TerminalName.display model.Terminals view}</span>{terminalMark model view}
                 </button>"""
@@ -981,7 +984,7 @@ module View =
               {historyStoreNote model}
               <div class="flex-1"></div>
               <div class="{Style.cls [ Style.sideFoot; Style.settingsLane2 ]}">
-                <button type="button" class="{Style.navPivot}" aria-label="Back to session" data-settings-toggle="close" @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}><span class="{Style.pivotMarkBack}">{Icon.pivotLeft}</span>back</button>
+                <button type="button" class="{Style.navPivot}" aria-label="Back to session" data-settings-toggle="close" @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}><span class="{Style.pivotMarkBack}">{Icon.left}</span>back</button>
                 {buildMark model}
               </div>
             </div>"""
@@ -1033,7 +1036,7 @@ module View =
               {environmentSection dispatch model}
               <div class="flex-1"></div>
               <div class="{Style.cls [ Style.sideFoot; Style.navLane2 ]}">
-                <button type="button" class="{Style.navPivot}" data-settings-toggle="open" @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>settings<span class="{Style.pivotMarkForward}">{Icon.pivotRight}</span></button>
+                <button type="button" class="{Style.navPivot}" data-settings-toggle="open" @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>settings<span class="{Style.pivotMarkForward}">{Icon.right}</span></button>
                 {buildMark model}
               </div>
             </div>"""
