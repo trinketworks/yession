@@ -114,6 +114,26 @@ let tests =
                 do! sandbox.Dispose ()
             })
 
+            // A process whose parent exits is reparented to the container's PID 1, and only
+            // PID 1 can reap it once it exits. `tail` there never did, and a dev sandbox
+            // collected 431 zombies that way (the `Init` note in Sandboxes.fs). The orphan is
+            // a `sleep` whose shell exits first; the probe waits — inside the container, up
+            // to five seconds — for its /proc entry to go, which only a reap does, then names
+            // every zombie left under PID 1. Waiting on the orphan's own pid is what keeps
+            // the assertion from passing before the orphan has even exited.
+            testCaseAsync "a process orphaned in the container is reaped when it exits, not left a zombie" (async {
+                let! _, sandbox = startOrFail alpineSpec
+                let probe =
+                    [ "pid=$(sh -c 'sleep 0.1 & echo $!')"
+                      "i=0; while [ -e /proc/$pid ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done"
+                      "for s in /proc/[0-9]*/status; do awk '/^Name:/{n=$2} /^State:/{st=$2} /^PPid:/{pp=$2} END{if(st==\"Z\"&&pp==1)print n}' \"$s\" 2>/dev/null; done" ]
+                    |> String.concat "\n"
+                let! run, out, err = runInSandbox sandbox "sh" [ "-c"; probe ] Map.empty None
+                Expect.equal run (SandboxExited 0) (sprintf "the probe ran: %s" err)
+                Expect.equal (out.Trim ()) "" "no zombie is left with PID 1 as its parent"
+                do! sandbox.Dispose ()
+            })
+
             // compose's `entrypoint`, as the rule `ProcessEntry` adopts: work runs behind
             // it, housekeeping runs bare. `env VAR=…` is an entrypoint whose effect a
             // command can report, which is what makes the two sides observable.

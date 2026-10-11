@@ -1455,9 +1455,10 @@ module DockerSandbox =
     /// materialised /etc/shadow is re-created with the shell's umask, not the
     /// symlink target's mode (container root reads it either way, but an image that
     /// added an unprivileged user changes observably); and the declared command is
-    /// pasted after the fixes without `exec`, so sh stays PID 1 and signals reach the
-    /// command only as sh forwards them — the idle arm execs, a declared one does not,
-    /// because a declared string may be a sequence.
+    /// pasted after the fixes without `exec`, so sh stays the process the init runs (see
+    /// `Init` at the create site) and signals reach the command only as sh forwards them
+    /// — the idle arm execs, a declared one does not, because a declared string may be a
+    /// sequence.
     ///
     /// The daemon's regression, so the backend carries the workaround: it sat in
     /// yession.yaml for a while, where every repo adopting a nix-built image would have
@@ -1754,7 +1755,25 @@ module DockerSandbox =
                                             // tmpfs is a ceiling, not a reservation: a
                                             // container that never opens a browser writes
                                             // nothing here and pays nothing for the headroom.
-                                            host.ShmSize <- 1073741824))
+                                            host.ShmSize <- 1073741824
+                                            // An init as PID 1, reaping what the sandbox
+                                            // orphans. Whatever the start command leaves
+                                            // there — `tail` idling, or a repo's declared
+                                            // command — never waits on children it did not
+                                            // start, and every process whose parent exits
+                                            // is reparented to it: a dev sandbox a few days
+                                            // into a session's work stood at 431 zombies,
+                                            // every one with ppid 1 (some 160 dotnet, 129
+                                            // chrome, 40 crashpad handlers, 42 git). The
+                                            // daemon's own init, rather than a reaper loop
+                                            // in `startCommand`'s shell, because the loop
+                                            // would cover only the idle arm: a declared
+                                            // command is the repo's, and whatever it is
+                                            // runs as PID 1 with the same blind spot. It
+                                            // forwards signals too, which `tail` as PID 1
+                                            // ignored. Stdout passes straight through, so
+                                            // `awaitStarted` reads the mark as before.
+                                            host.Init <- true))
                             )
                             |> Interop.awaitPromise
                         do! container.start () |> Interop.awaitPromise |> Async.Ignore

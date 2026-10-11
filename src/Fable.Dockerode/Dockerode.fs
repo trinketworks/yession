@@ -89,6 +89,9 @@ type HostConfig =
     abstract SecurityOpt: string array with get, set
     /// `/dev/shm`, in bytes.
     abstract ShmSize: int with get, set
+    /// Run the daemon's init (docker-init, which is tini) as PID 1, in front of `Cmd` —
+    /// `docker run --init`.
+    abstract Init: bool with get, set
 
 /// `createContainer`'s options: `name` rides the query string, the rest is the body.
 [<AllowNullLiteral>]
