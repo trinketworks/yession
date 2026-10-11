@@ -759,6 +759,15 @@ let private markTests =
                 for line in rc.Split '\n' do
                     Expect.isTrue (line.StartsWith " ") (sprintf "%s keeps its bootstrap out of history: %s" shell line)
 
+        testCase "every dialect turns history expansion off before any other line" <| fun () ->
+            // Expansion happens as a line is read, so it is off for every line after the
+            // first only if the first is what turns it off. On, a `!` in a block's double
+            // quotes discards the line and no start mark ever comes. sh asks first because
+            // dash refuses `-H` and bash-as-sh still expands an unquoted `!word`.
+            for shell, off in [ "bash", " set +H"; "zsh", " unsetopt BANG_HIST"; "sh", " [ -n \"$BASH_VERSION\" ] && set +H" ] do
+                let first = (Marks.rcFor shell nonce |> Option.get).Rc.Split('\n').[0]
+                Expect.equal first off (sprintf "%s's rc opens by turning history expansion off" shell)
+
         testCase "a shell we cannot instrument says so rather than guessing" <| fun () ->
             Expect.isNone (Marks.rcFor "fish" nonce) "fish is not one of the three yet"
             Expect.isNone (Marks.rcFor "" nonce) "and neither is nothing"

@@ -196,8 +196,18 @@ let private chromiumPath () : string =
 // the arguments it means, and every answer and event comes back typed.
 module Cdp = Fable.NodeExtras.Cdp
 
+/// How much of Chromium's stderr is kept to explain a launch that failed: its LAST bytes,
+/// because a refusal is the last thing it says, and a browser that started keeps talking
+/// on stderr for as long as it runs.
+let private stderrKept = 4096
+
 /// A headless Chromium on a debugging port of the OS's choosing, read back from the file it
 /// writes into its profile directory — no port to collide on.
+///
+/// A Chromium that will not start says why on stderr and exits, so both are watched: an exit
+/// before the port file appears fails the launch AT ONCE, with the code and what it said.
+/// With stderr ignored, the only sentence left was "never wrote DevToolsActivePort", ten
+/// seconds later, for every cause alike.
 let private launch
     (executable: string)
     (width: int)
@@ -206,37 +216,57 @@ let private launch
     : JS.Promise<Node.ChildProcess.ChildProcess * string> =
     promise {
         let profile : string = fs?mkdtempSync (joinTwo (os?tmpdir () |> unbox) "yession-frames-") |> unbox
+        // `--no-sandbox` as root, as Playwright passes it: Chromium refuses to start as uid 0
+        // with its own sandbox on, and an agent's work sandbox runs as root. The suite never
+        // met this because it launches through Playwright; this camera met it as a browser
+        // that exited before writing its port. The sandbox it gives up is Chromium's
+        // renderer confinement, inside a container that is already the boundary.
+        let sandbox = if Fable.NodeExtras.Processes.isRoot () then [ "--no-sandbox" ] else []
         let args =
             // `--use-mock-keychain`, as Playwright passes: without it a Chromium the OS has not
             // seen before stops in its network service, waiting on a Keychain prompt nobody
             // can answer, and the first navigation never gets a response.
-            [| "--headless=new"; "--remote-debugging-port=0"; sprintf "--user-data-dir=%s" profile; "--no-first-run"
-               "--use-mock-keychain"; "--password-store=basic"; "--ignore-certificate-errors"
-               sprintf "--window-size=%d,%d" width height |]
-            |> fun fixedArgs -> Array.append fixedArgs (Array.ofList (extra @ [ "about:blank" ]))
-        let ignored : Fable.NodeExtras.StreamWiring =
-            { Stdin = Fable.NodeExtras.Stdio.Ignore
-              Stdout = Fable.NodeExtras.Stdio.Ignore
-              Stderr = Fable.NodeExtras.Stdio.Ignore }
+            [ "--headless=new"; "--remote-debugging-port=0"; sprintf "--user-data-dir=%s" profile; "--no-first-run"
+              "--use-mock-keychain"; "--password-store=basic"; "--ignore-certificate-errors"
+              sprintf "--window-size=%d,%d" width height ]
+            @ sandbox @ extra @ [ "about:blank" ]
         let child =
             Fable.NodeExtras.ChildProcesses.spawn
                 executable
-                (List.ofArray args)
+                args
                 { Cwd = None
                   Env = Fable.NodeExtras.ChildEnv.Adding Map.empty
-                  Streams = ignored
+                  Streams = { Stdin = Fable.NodeExtras.Stdio.Ignore; Stdout = Fable.NodeExtras.Stdio.Ignore; Stderr = Fable.NodeExtras.Stdio.Pipe }
                   Detached = false }
+        // Read for the browser's whole life, not only the launch: a pipe nobody drains fills,
+        // and a Chromium blocked writing a log line is a camera that stops filming.
+        let said = ref ""
+        Fable.NodeExtras.Readables.text (Fable.NodeExtras.ChildProcessStreams.stderr child) (fun chunk ->
+            let kept = said.Value + chunk
+            said.Value <- if kept.Length > stderrKept then kept.Substring (kept.Length - stderrKept) else kept)
+        let exited : int option option ref = ref None
+        Fable.NodeExtras.ChildProcessStreams.onExit child (fun code -> exited.Value <- Some code)
+        Fable.NodeExtras.ChildProcessStreams.onError child (fun _ -> exited.Value <- Some None)
+        /// Say why, with what Chromium said, and stop — the browser with it, if it is still up.
+        let failed (why: string) : unit =
+            let stderr = said.Value.Trim ()
+            if exited.Value.IsNone then child.kill () |> ignore
+            abort (sprintf "%s\n%s" why (if stderr = "" then "(Chromium wrote nothing to stderr)" else stderr))
         let portFile = joinTwo profile "DevToolsActivePort"
         let mutable port = ""
         let mutable waited = 0
-        while port = "" && waited < 100 do
+        while port = "" && exited.Value.IsNone && waited < 100 do
             if exists portFile then
                 let lines : string = fs?readFileSync (portFile, "utf8") |> unbox
                 port <- lines.Split('\n').[0].Trim ()
             if port = "" then
                 do! delay 100
                 waited <- waited + 1
-        if port = "" then failwith "Chromium never wrote DevToolsActivePort"
+        if port = "" then
+            match exited.Value with
+            | Some (Some code) -> failed (sprintf "Chromium (%s) exited with code %d before writing DevToolsActivePort. Its stderr:" executable code)
+            | Some None -> failed (sprintf "Chromium (%s) could not be started, or a signal ended it, before writing DevToolsActivePort. Its stderr:" executable)
+            | None -> failed (sprintf "Chromium (%s) never wrote DevToolsActivePort in 10s. Its stderr:" executable)
         let mutable target = ""
         waited <- 0
         while target = "" && waited < 50 do
@@ -590,7 +620,7 @@ let private run () =
             writeFile picture (bytesOfBase64 shot)
             say (sprintf "wrote %s (%dx%d)" picture width height)
             cdp.Close ()
-            child.kill ()
+            child.kill () |> ignore
             do! stopCreated ()
             // A page that never landed is a failed picture of SOMETHING, kept because what the
             // tab showed is usually why — and said with a code, so a caller cannot read it as a
@@ -780,7 +810,7 @@ let private run () =
             if not (List.isEmpty lines) then say (sprintf "#%d t=%d %s" (renderNo r) (renderTime r) (String.concat " ; " lines))
 
         cdp.Close ()
-        child.kill ()
+        child.kill () |> ignore
         do! stopCreated ()
         exitWith 0
     }

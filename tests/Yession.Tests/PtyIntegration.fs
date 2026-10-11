@@ -1053,6 +1053,36 @@ let private dialectTests =
                         Expect.isTrue (printed.Contains "marked") (sprintf "the block ran; transcript: %s" printed)
                         Expect.isFalse (printed.Contains "]133;") (sprintf "no mark reached the record as text: %s" printed)
                     })
+
+            // An interactive shell reads `!p` as a history event, inside double quotes too,
+            // and on `event not found` discards the whole line: nothing runs, no start mark
+            // comes, and the detector holds the queue of a shell that is working fine. The
+            // line is an agent's, quoted as an agent writes them.
+            testCaseAsync (sprintf "%s: a block with a ! in double quotes runs as written" label) <|
+                withShellTerminal shell SessionTerminals.BlockLoans.none (fun _ -> async { return () }) (label + "-bang") (fun terminals id records log _ advance ->
+                    async {
+                        let! block =
+                            Async.StartChild (terminals.RunBlock id (queueEntry id ada "1") "M=\"if (!p || x) {}\"; echo \"bang:$M\"" ignore, 10000)
+                        let! ran = printedOutput records "bang:if (!p || x) {}"
+                        // A line the shell discarded prints nothing to the transcript — that
+                        // is before the start mark — so what it said instead is read off the
+                        // loss the detector records once its window has passed.
+                        if not ran then
+                            let! _ =
+                                until 2000 (fun () ->
+                                    advance (System.TimeSpan.FromSeconds 3.0)
+                                    not (Set.isEmpty (terminals.Lost ())))
+                            ()
+                        let! page = log.Read None 1000
+                        let said =
+                            page.Events
+                            |> List.tryPick (fun e ->
+                                match e.Event with
+                                | SessionEvent.TerminalIntegrationLost l -> l.Evidence |> Option.map (fun evidence -> evidence.Said)
+                                | _ -> None)
+                        Expect.isTrue ran (sprintf "the block printed its own line; the shell said: %A" said)
+                        do! block
+                    })
     ]
 
 /// What a block is lent reaches the shell that runs it — under bash, whose dialect has a
