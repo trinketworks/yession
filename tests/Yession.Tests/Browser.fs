@@ -2342,13 +2342,15 @@ let [<Literal>] private groundSpare =
        }"""
 
 /// Wait for the "jump to latest" control to be on the screen — hit-tested at its own centre,
-/// so a control that is present, shown and buried under something else does not count.
+/// so a control that is present, shown and buried under something else does not count. The
+/// chat's is not in the document at all until it is offered.
 let private jumpShown (page: IPage) =
     async {
         let! _ =
             await (page.WaitForFunctionAsync
                     """(() => {
                          const control = document.querySelector('#shell [data-jump-to-latest="chat"] button')
+                         if (!control) return false
                          const box = control.getBoundingClientRect()
                          if (box.width === 0) return false
                          const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
@@ -2362,72 +2364,43 @@ let private jumpShown (page: IPage) =
 let private scrolledAwayFromLatest (page: IPage) =
     async {
         let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
-        // The harness page is taller than the viewport, so the conversation's own box is
-        // brought into view first; then its scroll goes back to the start.
+        // The harness page is taller than the viewport, so the composer — and the tray on its
+        // top edge, where the control is offered — is brought into view first; then the
+        // conversation's scroll goes back to the start.
         do! awaitU (
                 page.EvaluateAsync
                     """() => {
                          const conversation = document.querySelector('#shell [data-conversation]')
-                         conversation.parentElement.scrollIntoView({ block: 'end' })
                          conversation.scrollTop = 0
                        }""")
-        do! jumpShown page
-    }
-
-/// Every line of a message's words the "jump to latest" control lies over, and whether any
-/// line of words runs level with it at all — the second half is what keeps the first from
-/// being vacuous, since a control with nothing beside it covers nothing wherever it stands.
-/// Lines rather than boxes: a message's box runs the column's width whatever it says, and
-/// what the control must not hide is the words in it.
-let [<Literal>] private wordsUnderJump =
-    """() => {
-         const control = document.querySelector('#shell [data-jump-to-latest="chat"] button').getBoundingClientRect()
-         const covered = [], level = []
-         for (const body of document.querySelectorAll('#shell [data-conversation] [data-message-body]')) {
-           const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT)
-           while (walker.nextNode()) {
-             const text = walker.currentNode
-             if (!text.textContent.trim()) continue
-             const range = document.createRange()
-             range.selectNodeContents(text)
-             for (const line of range.getClientRects()) {
-               if (line.width === 0 || line.top >= control.bottom || line.bottom <= control.top) continue
-               level.push(text.textContent.trim().slice(0, 40))
-               if (line.left < control.right && line.right > control.left) covered.push(text.textContent.trim().slice(0, 40))
-             }
-           }
-         }
-         return JSON.stringify({ covered, level: level.length })
-       }"""
-
-/// The "jump to latest" control, shown, and the words beside it: none of them under it.
-///
-/// Where the scroll stops decides what is level with the control, and a tool run or a chip
-/// there would leave nothing to ask about — so a message from the middle of the column, far
-/// enough from the end that the control stays shown, is brought level with it first.
-let private jumpCoversNoWords (page: IPage) =
-    async {
-        do! scrolledAwayFromLatest page
         do! awaitU (
-                page.EvaluateAsync
-                    """() => {
-                         const conversation = document.querySelector('#shell [data-conversation]')
-                         const control = document.querySelector('#shell [data-jump-to-latest="chat"] button').getBoundingClientRect()
-                         const body = conversation.querySelector("[data-message-id='msg-filler-8'] [data-message-body]")
-                         const range = document.createRange()
-                         range.selectNodeContents(body)
-                         const line = [...range.getClientRects()].find(r => r.width > 0 && r.height < 40)
-                         conversation.scrollTop += (line.top + line.bottom) / 2 - (control.top + control.bottom) / 2
-                       }""")
+                page.WaitForFunctionAsync
+                    """(() => {
+                         const control = document.querySelector('#shell [data-jump-to-latest="chat"] button')
+                         if (!control) return false
+                         document.querySelector('#shell [data-draft-editor]').scrollIntoView({ block: 'end' })
+                         return true
+                       })()""")
         do! jumpShown page
-        let! report = await (page.EvaluateAsync<string> wordsUnderJump)
-        use doc = System.Text.Json.JsonDocument.Parse report
-        let level = doc.RootElement.GetProperty("level").GetInt32 ()
-        let covered = [ for e in doc.RootElement.GetProperty("covered").EnumerateArray () -> e.GetString () ]
-        Expect.isTrue (level > 0) "a message's words run level with the control, so there is something it could cover"
-        Expect.isEmpty covered (sprintf "the control lies over these words: %s" (String.concat " | " covered))
-        return ()
     }
+
+/// The way to stop a turn and the way back to the latest message, each that is missing or
+/// whose box overlaps the conversation's — what neither may do, since the conversation is
+/// where the words are and a control drawn over it hides whatever line scrolls under it.
+/// Found by their own hooks, wherever a redesign puts them; a missing one is reported, so
+/// the case cannot pass by measuring nothing.
+let [<Literal>] private controlsOverConversation =
+    """() => {
+         const c = document.querySelector('#shell [data-conversation]').getBoundingClientRect()
+         const controls = { interrupt: '#shell [data-interrupt-turn]', jump: '#shell [data-jump-to-latest="chat"] button' }
+         return Object.entries(controls).flatMap(([name, sel]) => {
+           const el = document.querySelector(sel)
+           if (!el) return [name + ' missing']
+           const r = el.getBoundingClientRect()
+           const over = r.top < c.bottom - 0.5 && r.bottom > c.top + 0.5 && r.left < c.right && r.right > c.left
+           return over ? [name + ' spans ' + r.top + '..' + r.bottom + ' over the conversation ending at ' + c.bottom] : []
+         }).join('; ')
+       }"""
 
 // --- Surfaces read from their end (`Tail`) ---------------------------------------------------
 //
@@ -2576,6 +2549,7 @@ let private jumpOffered (key: string) =
     sprintf
         """(() => {
              const control = document.querySelector("#shell [data-jump-to-latest='%s'] button")
+             if (!control) return false
              const box = control.getBoundingClientRect()
              if (box.width === 0 || box.height === 0) return false
              const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
@@ -5734,52 +5708,32 @@ let editorTests =
                     (sprintf "the ground runs to within %fpx of a 1440px window" spare)
                 return ()
             }
-        // The "jump to latest" control is an opaque square floating over a scrolling column,
-        // so wherever it stands it hides what is under it. Centred, it stood on the prose:
-        // measured on a phone it covered 22px of a paragraph. Markup cannot see that — the
-        // control is in the document and so are the words, whichever is on top.
-        //
-        // A phone only. The screen where a line of words runs the whole width is the one
-        // that can fail this; at 1440 the fixture's lines stop short of where the centred
-        // control stood, so a desktop case passed with the old placement as well and would
-        // have been a case that cannot go red.
-        editorCaseIn 390 844 "the jump to the latest message covers none of the words on a phone" <| jumpCoversNoWords
-        // The control is one more mark down the column people's pictures stand on: an
-        // avatar's square, on an avatar's left edge. Measured against an author line's own
-        // picture, so the promise holds wherever a redesign puts that column.
-        let jumpOnAvatarColumn (page: IPage) =
+        // A control laid over the timeline lies over words the moment a long line scrolls
+        // under it, wherever it is put: centred, the jump covered 22px of a paragraph on a
+        // phone, and a stop word at the trailing edge sat on every line that ran the width.
+        // So both stand in their own strip under the conversation, and neither reaches into
+        // it — measured with both shown at once, a turn running and the reader scrolled back.
+        editorCaseIn 390 844 "on a phone the ways to stop a turn and to jump to the latest lie over none of the conversation" <| fun page ->
             async {
+                do! awaitU (page.EvaluateAsync "() => window.__agentTurn()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-interrupt-turn]")
                 do! scrolledAwayFromLatest page
-                let! misplaced =
-                    await (page.EvaluateAsync<string> """() => {
-                        const control = document.querySelector('#shell [data-jump-to-latest="chat"] button').getBoundingClientRect()
-                        const picture = document.querySelector('#shell [data-conversation] [data-message-author] header > span').getBoundingClientRect()
-                        const off = (a, b) => Math.abs(a - b) > 0.5
-                        const wrong = []
-                        if (off(control.left, picture.left)) wrong.push('left ' + control.left + ' against ' + picture.left)
-                        if (off(control.width, picture.width) || off(control.height, picture.height))
-                          wrong.push('size ' + control.width + 'x' + control.height + ' against ' + picture.width + 'x' + picture.height)
-                        return wrong.join('; ')
-                      }""")
-                Expect.equal misplaced "" "the jump stands on the avatars' column, at an avatar's size"
+                let! over = await (page.EvaluateAsync<string> controlsOverConversation)
+                Expect.equal over "" "both controls are on screen and neither lies over the conversation"
             }
-        editorCaseIn 390 844 "on a phone the jump to the latest message stands on the avatars' column" <| jumpOnAvatarColumn
-        editorCaseIn 1440 900 "the jump to the latest message stands on the avatars' column" <| jumpOnAvatarColumn
-        // The square is an avatar's 20px; a thumb is not. A press 10px outside the square on
-        // any side still reaches the control.
-        editorCaseIn 390 844 "on a phone the jump to the latest message answers a press beside its square" <| fun page ->
+        // The tray takes its own height when a turn starts, and the conversation's box gives
+        // it up. A reader who was at the latest message must still be at it, not left with
+        // the newest line under the strip.
+        editorCaseIn 390 844 "on a phone a turn starting leaves a reader at the latest message at it" <| fun page ->
             async {
-                do! scrolledAwayFromLatest page
-                let! missed =
-                    await (page.EvaluateAsync<string> """() => {
-                        const control = document.querySelector('#shell [data-jump-to-latest="chat"] button')
-                        const r = control.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2
-                        const probes = { left: [r.left - 10, cy], right: [r.right + 10, cy], above: [cx, r.top - 10], below: [cx, r.bottom + 10] }
-                        return Object.entries(probes)
-                          .filter(([, [x, y]]) => { const hit = document.elementFromPoint(x, y); return !hit || !control.contains(hit) })
-                          .map(([side]) => side).join(', ')
-                      }""")
-                Expect.equal missed "" "a press 10px beside the square reaches the control on every side"
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+                do! toTheEnd page "chat"
+                do! twoFrames page
+                do! awaitU (page.EvaluateAsync "() => window.__agentTurn()")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-interrupt-turn]")
+                do! twoFrames page
+                let! there = await (page.EvaluateAsync<bool> (atItsEnd "chat"))
+                Expect.isTrue there "the reader is still at the end of the conversation"
             }
         // The surfaces read from their end, one list so `--only "read from their end"` runs them.
         testList "Surfaces read from their end" [

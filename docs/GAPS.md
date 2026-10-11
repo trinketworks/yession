@@ -586,7 +586,7 @@ until the code is brought to it. Each entry names the rule and the sites.
   carries the waiting. `Style.fs` says the same twice, in so many words — and then wears
   `disabled:*` on three controls: the launch card's rows (`askRowButton`), its commit
   button (`askStart`, "disabled until something is held — and looks it") and
-  `btnInterrupt`. Either the rule admits a case — a control that CANNOT act, as opposed to
+  `trayInterrupt`. Either the rule admits a case — a control that CANNOT act, as opposed to
   one with nothing to act on — and says so, or the three move to the waiting face. Nothing
   yet says which.
 - **The touch target is a literal, not a token.** The doctrine names "the touch target" as part
