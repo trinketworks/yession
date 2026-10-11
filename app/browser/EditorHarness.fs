@@ -1562,6 +1562,8 @@ do
     // queue would render a chip with nothing in it — and a case reading the command off that
     // chip would be asserting against the render's silence rather than against the doc.
     TerminalText.setTo shellTexts (BodyKey.terminalQueued harnessQueued) harnessQueuedCommand
+    // The caret the model holds, read off the renderer once there is one (`Render.focusReporter`).
+    let mutable caretHeld : unit -> Focus option = fun () -> None
     let renderer =
         Render.create
             { Doc = shellDoc
@@ -1577,7 +1579,7 @@ do
               Links =
                 { SendDraft = ignore
                   SendTerminalDraft = fun _ _ -> ()
-                  ReportFocus = Render.focusReporter (fun focus -> dispatchRef (CaretMovedMsg focus)) } }
+                  ReportFocus = Render.focusReporter (fun () -> caretHeld ()) (fun focus -> dispatchRef (CaretMovedMsg focus)) } }
     let mutable model = { shellModel with Column = { shellModel.Column with Wide = PaneShell.onDesktop () } }
     /// What `Published.closed` reads, kept here for `typed`'s reason: the count is this
     /// instrument's output, not the place it keeps it.
@@ -1810,6 +1812,7 @@ do
     // splitter, a pinned surface or a rail that only worked in the app is one no browser-tier
     // test could reach.
     renderer.Attach ()
+    caretHeld <- renderer.Caret
 
     // --- Scrolling while records arrive (the `bench` scroll scenario) ------------------------
     //

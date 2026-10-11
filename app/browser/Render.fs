@@ -369,39 +369,31 @@ let private fieldOfKey (key: string) : FocusField option =
         | Error _ -> None
     else None
 
-/// Presence reported at most once per animation frame: a caret sweep or drag fires many
-/// selection events, but the peer only needs the latest. The latest is coalesced; the rAF
-/// callback ships whatever it is at paint time — and only if it differs from what was last
-/// shipped.
+/// A caret reported at most once per animation frame, and only when it is news: a caret
+/// sweep or drag fires many selection events, and an editor mounting, re-rendering or going
+/// (its plugin reports `None` as it is destroyed, which a scrolling conversation does to
+/// editors all the time) reports where its caret is or is not. The frame's last report is
+/// told to the model (`CaretMovedMsg`) only when it differs from the caret the model holds
+/// (`ClientModel.Caret`, read through `caret`), because telling is not free: every message
+/// is a pass through `update`, a Ylmish transaction and a render, whatever it changes, and
+/// one per editor going by is what a scroll cannot afford.
 ///
-/// The dedup lives HERE, with the one presence slot it governs, rather than in each
-/// reporter. Three of them share that slot — the rich editor's plugin, the title input,
-/// and terminal command lines — and a reporter that compared against its OWN last value
-/// would be answering a question about somebody else's write: a command line re-reporting
-/// `None` after the editor had claimed the caret would suppress a clear that was needed.
-/// Compared on the encoded focus, which is precisely what goes on the wire, so a report is
-/// dropped only when it would tell a collaborator nothing.
-///
-/// Safe because presence is relayed live and last-write-wins (`Host.broadcastPresenceExcept`)
-/// — no TTL, so a repeat is never a keepalive. It costs a stationary caret nothing that the
-/// reporters were not already costing it: the editor plugin has always dropped an unmoved
-/// selection, so a peer arriving late has never been shown one.
+/// Compared against the MODEL rather than against what this last said, so there is one slot
+/// for the caret and the reporters (the rich editor's plugin, the title input, the command
+/// lines) all answer to it.
 ///
 /// Made separately from the render because the title input reports through it too, and that
 /// reporter is an action the view is built with before there is a render to ask.
-let focusReporter (report: Focus option -> unit) : Focus option -> unit =
+let focusReporter (caret: unit -> Focus option) (report: Focus option -> unit) : Focus option -> unit =
     let mutable scheduled = false
     let mutable latest : Focus option = None
-    let mutable sent : Focus option option = None
     fun focus ->
         latest <- focus
         if not scheduled then
             scheduled <- true
             raf (fun () ->
                 scheduled <- false
-                if sent <> Some latest then
-                    sent <- Some latest
-                    report latest)
+                if latest <> caret () then report latest)
 
 /// What the render reaches for that is not on the page. Every one of these is the session
 /// behind the shell, which the harness has none of and the app has only after its first
@@ -411,7 +403,7 @@ type Links =
       SendDraft : PeerId -> unit
       /// Enter on a terminal command line: run it.
       SendTerminalDraft : TerminalId -> PeerId -> unit
-      /// A caret moved in a body or a command line (already paced by `focusReporter`).
+      /// A caret moved in a body or a command line (paced by `focusReporter`).
       ReportFocus : Focus option -> unit }
 
 /// Everything the render is composed of.
@@ -442,7 +434,10 @@ type Renderer =
       /// a viewport that changed size under a laid-out surface — against the model `SetState`
       /// was last given — and the split between the two columns is the reader's to set, not
       /// the theme's.
-      Attach : unit -> unit }
+      Attach : unit -> unit
+      /// This peer's caret as the model `SetState` was last given holds it (`ClientModel.Caret`)
+      /// — what `focusReporter` asks before telling it again.
+      Caret : unit -> Focus option }
 
 let create (deps: Deps) : Renderer =
     let doc = deps.Doc
@@ -553,8 +548,8 @@ let create (deps: Deps) : Renderer =
                 else Some key
             // Four events report the caret here and most report it unmoved — a keyup for
             // every key that types rather than navigates, a click landing where the caret
-            // already was, the focus that precedes both. They are dropped by `sendFocus`,
-            // which is where the slot they all write to lives.
+            // already was, the focus that precedes both. They are dropped by the model, which
+            // holds the one slot they all write to (`ClientModel.Caret`).
             let reportFocus () =
                 match lineOf () with
                 | Some key ->
@@ -887,4 +882,5 @@ let create (deps: Deps) : Renderer =
         fun () ->
             Tail.attach dispatch (fun () -> latest |> Option.map (fun model -> model.Away) |> Option.defaultValue Set.empty)
             PaneShell.installPaneResize dispatch
-            PaneShell.installStrip () }
+            PaneShell.installStrip ()
+      Caret = fun () -> latest |> Option.bind (fun model -> model.Caret) }
