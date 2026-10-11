@@ -5744,6 +5744,43 @@ let editorTests =
         // control stood, so a desktop case passed with the old placement as well and would
         // have been a case that cannot go red.
         editorCaseIn 390 844 "the jump to the latest message covers none of the words on a phone" <| jumpCoversNoWords
+        // The control is one more mark down the column people's pictures stand on: an
+        // avatar's square, on an avatar's left edge. Measured against an author line's own
+        // picture, so the promise holds wherever a redesign puts that column.
+        let jumpOnAvatarColumn (page: IPage) =
+            async {
+                do! scrolledAwayFromLatest page
+                let! misplaced =
+                    await (page.EvaluateAsync<string> """() => {
+                        const control = document.querySelector('#shell [data-jump-to-latest="chat"] button').getBoundingClientRect()
+                        const picture = document.querySelector('#shell [data-conversation] [data-message-author] header > span').getBoundingClientRect()
+                        const off = (a, b) => Math.abs(a - b) > 0.5
+                        const wrong = []
+                        if (off(control.left, picture.left)) wrong.push('left ' + control.left + ' against ' + picture.left)
+                        if (off(control.width, picture.width) || off(control.height, picture.height))
+                          wrong.push('size ' + control.width + 'x' + control.height + ' against ' + picture.width + 'x' + picture.height)
+                        return wrong.join('; ')
+                      }""")
+                Expect.equal misplaced "" "the jump stands on the avatars' column, at an avatar's size"
+            }
+        editorCaseIn 390 844 "on a phone the jump to the latest message stands on the avatars' column" <| jumpOnAvatarColumn
+        editorCaseIn 1440 900 "the jump to the latest message stands on the avatars' column" <| jumpOnAvatarColumn
+        // The square is an avatar's 20px; a thumb is not. A press 10px outside the square on
+        // any side still reaches the control.
+        editorCaseIn 390 844 "on a phone the jump to the latest message answers a press beside its square" <| fun page ->
+            async {
+                do! scrolledAwayFromLatest page
+                let! missed =
+                    await (page.EvaluateAsync<string> """() => {
+                        const control = document.querySelector('#shell [data-jump-to-latest="chat"] button')
+                        const r = control.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2
+                        const probes = { left: [r.left - 10, cy], right: [r.right + 10, cy], above: [cx, r.top - 10], below: [cx, r.bottom + 10] }
+                        return Object.entries(probes)
+                          .filter(([, [x, y]]) => { const hit = document.elementFromPoint(x, y); return !hit || !control.contains(hit) })
+                          .map(([side]) => side).join(', ')
+                      }""")
+                Expect.equal missed "" "a press 10px beside the square reaches the control on every side"
+            }
         // The surfaces read from their end, one list so `--only "read from their end"` runs them.
         testList "Surfaces read from their end" [
             // Taking the keyboard puts the reader at the CURSOR — the bottom of the screen, where
