@@ -5529,8 +5529,78 @@ let private readLoopTests =
             Expect.equal (transcriptReads effects) [] "the new read is still out"
     ]
 
+// --- A file, sent in from the all page ----------------------------------------------------
+
+let private uploadTests =
+    let pick (id: string) (name: string) (bytes: int64) model = ClientModel.update (UploadPickedMsg (id, name, bytes)) model
+    testList "A file, sent in" [
+
+        testCase "a picked file is sent at once, under the name an artifact can have" <| fun () ->
+            let model, effects = pick "u1" "Screen Shot.png" 2_048L (clientOf [])
+            Expect.equal effects [ ClientEffect.Upload ("u1", "Screen-Shot.png") ] "sent, by the name it will be shared as"
+            Expect.equal
+                (model.Uploads |> List.map (fun u -> u.Name, u.State))
+                [ "Screen-Shot.png", UploadState.Sending 0L ]
+                "and on its way"
+
+        testCase "a file past the cap is refused before a byte leaves, and its bytes let go" <| fun () ->
+            let model, effects = pick "u1" "huge.iso" (ArtifactRef.cap + 1L) (clientOf [])
+            Expect.equal effects [ ClientEffect.ForgetUpload "u1" ] "nothing sent, nothing kept"
+            match model.Uploads with
+            | [ { State = UploadState.Refused said } ] -> Expect.stringContains said "100 MB" "the refusal quotes the cap"
+            | other -> failwithf "expected one refused upload, got %A" other
+
+        testCase "a recorded upload leaves the list, since the store's own row takes its place" <| fun () ->
+            let sending, _ = pick "u1" "notes.md" 10L (clientOf [])
+            let model, effects = ClientModel.update (UploadAnsweredMsg ("u1", UploadAnswer.Uploaded)) sending
+            Expect.isEmpty model.Uploads "the artifact row is `ArtifactShared`'s, which every peer gets"
+            Expect.equal effects [ ClientEffect.ForgetUpload "u1" ] "and the bytes are let go"
+
+        testCase "a failed try keeps its bytes and offers another, which sends them again" <| fun () ->
+            let sending, _ = pick "u1" "notes.md" 10L (clientOf [])
+            let failed, effects = ClientModel.update (UploadAnsweredMsg ("u1", UploadAnswer.Failed "unreachable")) sending
+            Expect.isEmpty effects "kept for the retry"
+            let again, effects = ClientModel.update (RetryUploadMsg "u1") failed
+            Expect.equal effects [ ClientEffect.Upload ("u1", "notes.md") ] "sent again"
+            Expect.equal (again.Uploads |> List.map (fun u -> u.State)) [ UploadState.Sending 0L ] "and on its way again"
+
+        testCase "a refusal is not retried, and putting one away lets it go" <| fun () ->
+            let sending, _ = pick "u1" "notes.md" 10L (clientOf [])
+            let refused, effects = ClientModel.update (UploadAnsweredMsg ("u1", UploadAnswer.Refused "no")) sending
+            Expect.equal effects [ ClientEffect.ForgetUpload "u1" ] "nothing to send again, so nothing kept"
+            Expect.isEmpty (ClientModel.update (RetryUploadMsg "u1") refused |> snd) "a retry of a refusal asks nothing"
+            let gone, effects = ClientModel.update (DismissUploadMsg "u1") refused
+            Expect.isEmpty gone.Uploads "put away"
+            Expect.equal effects [ ClientEffect.ForgetUpload "u1" ] "and let go"
+
+        testCase "an answer for an upload put away while it was out changes nothing" <| fun () ->
+            let sending, _ = pick "u1" "notes.md" 10L (clientOf [])
+            let gone, _ = ClientModel.update (DismissUploadMsg "u1") sending
+            let model, effects = ClientModel.update (UploadAnsweredMsg ("u1", UploadAnswer.Failed "cut short")) gone
+            Expect.isEmpty model.Uploads "it stays away"
+            Expect.isEmpty effects "and nothing is asked"
+
+        testCase "the all page offers the upload, and wears each upload's state with its verbs" <| fun () ->
+            let model =
+                clientOf []
+                |> Support.step ToggleSwitcherMsg
+                |> Support.step (UploadPickedMsg ("u1", "sending.md", 4_000L))
+                |> Support.step (UploadProgressMsg ("u1", 1_000L))
+                |> Support.step (UploadPickedMsg ("u2", "failed.md", 10L))
+                |> Support.step (UploadAnsweredMsg ("u2", UploadAnswer.Failed "the session could not be reached"))
+            let html = Support.render model
+            Expect.stringContains html Dom.Hooks.artifactUpload "a way to send a file in"
+            Expect.stringContains html (Dom.attr Dom.Hooks.uploadState "sending") "one on its way"
+            Expect.stringContains html (Dom.Text.uploadSending "1.00 kB" "4.00 kB") "saying how much has gone"
+            Expect.stringContains html (Dom.attr Dom.Hooks.uploadState "failed") "one that did not go"
+            Expect.stringContains html "the session could not be reached" "saying why"
+            Expect.stringContains html (Dom.attr Dom.Hooks.uploadRetry "u2") "with another try on offer"
+            Expect.isFalse (html.Contains (Dom.attr Dom.Hooks.uploadRetry "u1")) "which one still sending does not offer"
+    ]
+
 let tests =
     testList "Timeline and the pane (Plan 14)" [
+        uploadTests
         contentChipTests
         richTableTests
         listTests

@@ -56,7 +56,11 @@ type ViewActions =
       /// reply would make typing a round trip. The Session checks the lease, which
       /// is the only place it CAN be checked — a client that believes it holds one may be
       /// looking at a steal it has not seen yet.
-      TypeIntoTerminal : TerminalId -> string -> unit }
+      TypeIntoTerminal : TerminalId -> string -> unit
+      /// Take files a person picked, pasted or dropped, to send into the artifacts. Imperative
+      /// because a file's bytes are not model data: the browser keeps them and tells the model
+      /// what it is keeping (`UploadPickedMsg`).
+      Upload : Browser.Types.File list -> unit }
 
 module ViewActions =
     /// A no-op action set for rendering the view to a string (SSR + tests). The handlers
@@ -65,7 +69,8 @@ module ViewActions =
         { SendDraft = ignore
           ReportFieldSelection = fun _ _ -> ()
           SendTerminalDraft = fun _ _ -> ()
-          TypeIntoTerminal = fun _ _ -> () }
+          TypeIntoTerminal = fun _ _ -> ()
+          Upload = ignore }
 
 module View =
 
@@ -4209,7 +4214,7 @@ module View =
     /// `door` is the phone's way to make a terminal: the pivot's `+` is a desktop control
     /// (`Style.terminalTabNewCell`), so on a phone this page — the door to everything — carries
     /// the press instead, at its head.
-    let private allPage (dispatch: ClientMsg -> unit) (model: ClientModel) (door: TemplateResult) : TemplateResult =
+    let private allPage (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) (door: TemplateResult) : TemplateResult =
         let selected = ClientModel.selectedTerminal model
         let row (view: TerminalView) =
             let id = TerminalId.value view.TerminalId
@@ -4329,17 +4334,81 @@ module View =
                     <span class="{Style.artifactListSize}">{ContentSize.render a.Bytes}</span>
                   </span>
                 </div>"""
+        // A file on its way in, in the row a shared one has, so it becomes that row in place
+        // when the store records it. What it is doing is worn under the name: a wait in
+        // `ink-dim` with the bytes gone, beating; or the one red word, with what can be done
+        // about it as the row's verbs, worn at rest because there is nothing else to do here.
+        let uploadRow (upload: Upload) =
+            let token, status, verbs =
+                match upload.State with
+                | UploadState.Sending sent ->
+                    "sending",
+                    html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotPulse}" aria-hidden="true"></span>{Dom.Text.uploadSending (ContentSize.render sent) (ContentSize.render upload.Bytes)}</span>""",
+                    [ "remove" ]
+                | UploadState.Failed reason ->
+                    "failed", html $"""<span class="{Style.statusErr}">{reason}</span>""", [ "retry"; "remove" ]
+                | UploadState.Refused reason ->
+                    "refused", html $"""<span class="{Style.statusErr}">{reason}</span>""", [ "remove" ]
+            let verb (which: string) =
+                match which with
+                | "retry" ->
+                    html $"""
+                        <button type="button" class="{Style.terminalListAct}" data-upload-retry="{upload.Id}"
+                                aria-label="{Dom.Text.retryUpload upload.Name}"
+                                @click={Ev(fun _ -> dispatch (RetryUploadMsg upload.Id))}>{Dom.Text.retry}</button>"""
+                | _ ->
+                    html $"""
+                        <button type="button" class="{Style.terminalListAct}" data-upload-dismiss="{upload.Id}"
+                                aria-label="{Dom.Text.dismissUpload upload.Name}"
+                                @click={Ev(fun _ -> dispatch (DismissUploadMsg upload.Id))}>{Dom.Text.remove}</button>"""
+            html $"""
+                <div class="{Style.artifactListRow}" role="listitem" data-upload-row="{upload.Name}" data-upload-state="{token}">
+                  <span class="min-w-0 flex-1 flex flex-col">
+                    <span class="{Style.terminalListNameLine}">
+                      <span class="{Style.uploadName}">{upload.Name}</span>
+                    </span>
+                    <span class="{Style.artifactListSize}" role="status">{status}</span>
+                  </span>
+                  <span class="{Style.terminalListVerbs}">{verbs |> List.map verb}</span>
+                </div>"""
         let terminals = ClientModel.terminalRows model
         // The files are not a kind of terminal: narrowed to one, the page is that kind's rows
         // and nothing else.
-        let artifacts =
+        let artifacts, uploads =
             match model.ListFilter with
-            | ListFilter.All -> ClientModel.artifactRows model
-            | ListFilter.Only _ -> []
+            | ListFilter.All -> ClientModel.artifactRows model, model.Uploads
+            | ListFilter.Only _ -> [], []
+        // Files arrive however a person has them: chosen, pasted while the page has the
+        // keyboard, or dropped on it. All three are one action.
+        let take (files: Browser.Types.File array) =
+            if Array.isEmpty files then false
+            else
+                actions.Upload (List.ofArray files)
+                true
+        let picked (e: Browser.Types.Event) =
+            let input = e.target :?> Browser.Types.HTMLInputElement
+            take (CarriedFiles.ofInput input) |> ignore
+            // Emptied, so the same file chosen again is a change the input reports.
+            input.value <- ""
+        let pasted (e: Browser.Types.Event) = if take (CarriedFiles.ofPaste e) then e.preventDefault ()
+        let dragged (e: Browser.Types.Event) = if CarriedFiles.inDrag e then e.preventDefault ()
+        let dropped (e: Browser.Types.Event) = if take (CarriedFiles.ofDrop e) then e.preventDefault ()
+        let choose (e: Browser.Types.Event) =
+            let button = e.currentTarget :?> Browser.Types.Element
+            match button.parentElement.querySelector (sprintf "[%s]" Dom.Hooks.artifactUploadInput) with
+            | null -> ()
+            | input -> (input :?> Browser.Types.HTMLElement).click ()
+        let uploadControl =
+            html $"""
+                <div class="{Style.uploadCell}">
+                  <input type="file" class="border-0" multiple hidden data-artifact-upload-input @change={Ev(picked)}>
+                  <button type="button" class="{Style.terminalListAct}" data-artifact-upload
+                          aria-label="{Dom.Text.uploadNamed}" @click={Ev(choose)}>{Dom.Text.upload}</button>
+                </div>"""
         // Headings only when there are two kinds to tell apart: over a list of terminals alone,
         // "terminals" names the only thing on screen, which is a word that says nothing.
         let heading (label: string) =
-            if List.isEmpty terminals || List.isEmpty artifacts then Lit.nothing
+            if List.isEmpty terminals || (List.isEmpty artifacts && List.isEmpty uploads) then Lit.nothing
             else html $"""<div class="{Style.listSectionLabel}" data-list-section="{label}">{label}</div>"""
         let section (label: string) (rows: TemplateResult list) =
             if List.isEmpty rows then Lit.nothing
@@ -4390,18 +4459,19 @@ module View =
                 pressed.preventDefault ()
             | None -> ()
         let empty =
-            if List.isEmpty terminals && List.isEmpty artifacts then
+            if List.isEmpty terminals && List.isEmpty artifacts && List.isEmpty uploads then
                 html $"""<span class="{Style.contentListEmptyWord}">{Dom.Text.nothingOpenedYet}</span>"""
             else Lit.nothing
         html $"""
             <div class="{Style.panePanel}" role="tabpanel" tabindex="-1"
                  id="{Dom.panePanelId}" aria-labelledby="{Dom.paneTabId allKey}" data-pane-panel="{allKey}">
               <div class="{Style.allPage}" data-content-list aria-label="{Dom.Text.terminalsAndFiles}"
-                   @keydown={Ev(walk)}>
+                   @keydown={Ev(walk)} @paste={Ev(pasted)} @dragover={Ev(dragged)} @drop={Ev(dropped)}>
                 {door}
+                {uploadControl}
                 {filters}
                 {section "terminals" (terminals |> List.map row)}
-                {section "files" (artifacts |> List.map artifactRow)}
+                {section "files" ((artifacts |> List.map artifactRow) @ (uploads |> List.map uploadRow))}
                 {empty}
               </div>
             </div>"""
@@ -4802,7 +4872,7 @@ module View =
             match previewing, selected with
             // `all`, over whatever the pane was showing — which stays selected under it, to go
             // back to.
-            | _ when onAll -> allPage dispatch model allDoor
+            | _ when onAll -> allPage actions dispatch model allDoor
             // A preview, laid over the selected terminal: the thing itself. Not the terminal's
             // composer — the reader is reading, not typing, and its close restores it.
             //

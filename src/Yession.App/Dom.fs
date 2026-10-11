@@ -604,6 +604,18 @@ module Dom =
         /// which is why the section exists at all — and why the hook is on the row's control
         /// rather than on a wrapper: it is a button, operable from the keyboard by construction.
         let artifactListRow = "data-artifact-list-row"
+        /// The `all` page's way to send a file into the artifacts: a button, standing in for
+        /// the file input beside it (`artifactUploadInput`), which is what the browser's own
+        /// chooser is opened from.
+        let artifactUpload = "data-artifact-upload"
+        let artifactUploadInput = "data-artifact-upload-input"
+        /// A file on its way into the artifacts, carrying the name it will have, with
+        /// `data-upload-state` saying where it has got to — `sending`, `failed` or `refused`.
+        let uploadRow = "data-upload-row"
+        let uploadState = "data-upload-state"
+        /// Send a failed upload again, and put one away.
+        let uploadRetry = "data-upload-retry"
+        let uploadDismiss = "data-upload-dismiss"
 
     /// Observable text/value tokens the session view emits (labels and status words that
     /// tests assert exactly — never free-text message bodies, which are model data).
@@ -997,6 +1009,15 @@ module Dom =
         /// What the `all` page says when nothing has been opened. It offers nothing: making
         /// something is the pivot's `+`, and this answers what exists.
         let nothingOpenedYet = "No terminals yet"
+        /// The `all` page's verb for sending a file in, and what it says to a screen reader.
+        let upload = "upload"
+        let uploadNamed = "Upload a file to the artifacts"
+        /// A file on its way: how much of it has gone.
+        let uploadSending (sent: string) (total: string) = sprintf "sending %s of %s" sent total
+        let retryUpload (name: string) = sprintf "Send %s again" name
+        let dismissUpload (name: string) = sprintf "Put away %s" name
+        let retry = "retry"
+        let remove = "remove"
         /// What a terminal's mark says to a screen reader (`View.terminalMark`): it has
         /// closed, or the last thing it ran did not succeed. Running says `blockRunning`, as
         /// every running mark does.

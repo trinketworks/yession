@@ -287,6 +287,27 @@ module ObjectUrls =
 
     [<Emit("URL.revokeObjectURL($0)")>]
     let revoke (url: string) : unit = jsNative
+
+/// The files an event carries — a file input's choice, a paste, a drop — as an array, empty
+/// where it carries none. `Fable.Browser.Dom` types neither `clipboardData` nor `dataTransfer`,
+/// and a `FileList` is not an array; each is read and converted once, here.
+module CarriedFiles =
+
+    [<Emit("Array.from($0.files || [])")>]
+    let ofInput (input: HTMLInputElement) : File array = jsNative
+
+    [<Emit("Array.from(($0.clipboardData && $0.clipboardData.files) || [])")>]
+    let ofPaste (e: Event) : File array = jsNative
+
+    [<Emit("Array.from(($0.dataTransfer && $0.dataTransfer.files) || [])")>]
+    let ofDrop (e: Event) : File array = jsNative
+
+    /// Whether a drag carries files — what `dragover` must cancel for, so that a drop of them
+    /// lands here rather than the browser navigating to the first one. Asked of the types,
+    /// because a drag's files are not readable until it is dropped.
+    [<Emit("!!($0.dataTransfer && Array.from($0.dataTransfer.types).includes('Files'))")>]
+    let inDrag (e: Event) : bool = jsNative
+
 /// What `Fable.Browser.Dom` leaves off `Node`.
 module Nodes =
 

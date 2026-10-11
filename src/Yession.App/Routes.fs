@@ -260,6 +260,11 @@ type SessionRoute =
     /// dot-segment would be a traversal a single forgetful reader away. `ContentRef` refuses
     /// those at construction, so no route of this shape has ever held one.
     | Content of ref: ContentRef
+    /// A file a person sends INTO the content root, as the next version of the name its path
+    /// gives: the write half of `Content`, at the same address, so what a browser puts is
+    /// where it then reads it. Only an artifact's bare name takes one — a version is
+    /// immutable, and the store, not the caller, says which version comes next.
+    | ContentUpload of ref: ContentRef
     /// One of the Claude panel's write actions.
     | Claude of action: ClaudeAction
     /// One of the GitHub panel's write actions.
@@ -298,6 +303,11 @@ module SessionRoute =
     /// root, so `artifacts/…` and `repos/…` are directories under one address rather than two
     /// routes that have to grow the same gate.
     let private contentPrefix = "content/"
+
+    /// The header a `ContentUpload` names its sender's peer in. A cookie says WHO only when
+    /// the deployment attributes users; where it attributes nobody, a peer is the actor every
+    /// other act of this browser's is recorded under, and the upload is recorded the same way.
+    let uploaderHeader = "x-yession-peer"
 
     /// A path inside the asset set, as a build emits it. Segments are ordinary file names, so
     /// anything outside that shape is simply not a route — which is also what keeps a path
@@ -349,7 +359,8 @@ module SessionRoute =
           | TerminalTranscriptAfter (terminal, Some after) -> sprintf "terminals/%s/after/%d" terminal after
           | TerminalTranscriptRange (terminal, first, last) -> sprintf "terminals/%s/%d-%d" terminal first last
           | TerminalKeyframe (terminal, seq) -> sprintf "terminals/%s/keyframes/%d" terminal seq
-          | Content ref -> contentPrefix + ContentRef.value ref
+          | Content ref
+          | ContentUpload ref -> contentPrefix + ContentRef.value ref
           | Claude action -> "claude/" + claudeSegment action
           | GitHub action -> "github/" + githubSegment action
           | GitHubRepos -> "github/repos"
@@ -446,6 +457,8 @@ module SessionRoute =
         // rather than at a filesystem that would have to be asked carefully.
         | "GET", "content" :: path ->
             ContentRef.create (String.concat "/" path) |> Result.toOption |> Option.map Content
+        | "PUT", "content" :: path ->
+            ContentRef.create (String.concat "/" path) |> Result.toOption |> Option.map ContentUpload
         | "POST", [ "claude"; "begin" ] -> Some (Claude ClaudeAction.Begin)
         | "POST", [ "claude"; "complete" ] -> Some (Claude ClaudeAction.Complete)
         | "POST", [ "claude"; "token" ] -> Some (Claude ClaudeAction.Token)

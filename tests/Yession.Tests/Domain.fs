@@ -3958,6 +3958,18 @@ let private artifactTests =
             Expect.isError (ArtifactRef.create "chart.png" 10_000 stamp) "a fifth digit would sort before the rest"
             Expect.isError (ArtifactRef.next stamp (chart 9999)) "so the next version refuses rather than wrapping"
 
+        // What a person picked is shared under its own name, never refused for its spelling:
+        // the rule is the name's, so the browser that sends and the store that mints agree.
+        testCase "a picked file's name becomes a name an artifact can have" <| fun () ->
+            Expect.equal (ArtifactRef.nameFor "Screen Shot 1.png") "Screen-Shot-1.png" "spaces are not a refusal"
+            Expect.equal (ArtifactRef.nameFor ".env") "env" "a dotfile loses its dot rather than its name"
+            Expect.equal (ArtifactRef.nameFor "  ") "file" "nothing left is still a name"
+            let long = ArtifactRef.nameFor (String.replicate 200 "a" + ".png")
+            Expect.equal long.Length 120 "cut to the segment bound"
+            Expect.isTrue (long.EndsWith ".png") "with the extension the media type is read from"
+            for picked in [ "Screen Shot 1.png"; ".env"; "über.txt"; String.replicate 200 "a" + ".png" ] do
+                Expect.isOk (ArtifactRef.first (ArtifactRef.nameFor picked) stamp) (sprintf "'%s' names a first version" picked)
+
         testCase "the first version is a share and any later one an update" <| fun () ->
             Expect.isTrue (ArtifactRef.isFirst (ArtifactRef.first "chart.png" stamp |> expect)) "seq 0 put the name there"
             Expect.equal (ArtifactRef.next stamp (chart 0) |> expect |> ArtifactRef.seq) 1 "an update increments"

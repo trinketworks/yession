@@ -130,6 +130,16 @@ module Client =
           GitHubPoll : string -> Async<GitHubPollAnswer>
           Now : unit -> int64 }
 
+    /// Where the bytes of the files this browser is sending are kept, and how they are sent
+    /// (`ClientModel.Uploads` decides when). Keyed by the id the keeper minted as it took them.
+    [<RequireQualifiedAccess>]
+    type UploadPort =
+        { /// Send the bytes kept under the id as the next version of the name, reporting the
+          /// bytes sent so far as they go. Total: a failure is an answer.
+          Send : string -> string -> (int64 -> unit) -> Async<UploadAnswer>
+          /// Let go of them, cutting short a send still out.
+          Forget : string -> unit }
+
     /// What the program's effects are carried out against (`ClientEffect`).
     ///
     /// A getter rather than a connection because the program exists first: a client is local
@@ -155,12 +165,14 @@ module Client =
           Keyframe : TerminalId -> int -> Async<TranscriptKeyframe option>
           /// Keep a preference for this browser's next load. Best effort: storage refused (a
           /// private window) is a preference that works now and is not remembered.
-          Remember : Preference -> unit }
+          Remember : Preference -> unit
+          /// `None` where there is no page to send from, as for `Launch`.
+          Uploads : UploadPort option }
 
     module Ports =
 
         /// A client with no session to ask: every request goes nowhere.
-        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None; Ports.Panels = None; Ports.Moves = ignore; Ports.Clipboard = (fun _ -> async.Return false); Ports.Retry = ignore; Ports.Keyframe = (fun _ _ -> async.Return None); Ports.Remember = ignore }
+        let offline : Ports = { Ports.Connection = (fun () -> None); Ports.Launch = None; Ports.Panels = None; Ports.Moves = ignore; Ports.Clipboard = (fun _ -> async.Return false); Ports.Retry = ignore; Ports.Keyframe = (fun _ _ -> async.Return None); Ports.Remember = ignore; Ports.Uploads = None }
 
         /// A launch read, answered as the message that carries its result.
         let private launchRead (reads: LaunchReads) (dispatch: ClientMsg -> unit) (effect: LaunchEffect) : Async<unit> =
@@ -269,6 +281,15 @@ module Client =
                         if written then dispatch (CopiedMsg (Some box))
                     })
             | ClientEffect.RetryNow -> ports.Retry ()
+            | ClientEffect.Upload (id, name) ->
+                ports.Uploads
+                |> Option.iter (fun uploads ->
+                    Async.StartImmediate (
+                        async {
+                            let! answer = uploads.Send id name (fun sent -> dispatch (UploadProgressMsg (id, sent)))
+                            dispatch (UploadAnsweredMsg (id, answer))
+                        }))
+            | ClientEffect.ForgetUpload id -> ports.Uploads |> Option.iter (fun uploads -> uploads.Forget id)
             | ClientEffect.GitHubPoll (round, scope) ->
                 ports.Panels
                 |> Option.iter (fun panels ->

@@ -3437,6 +3437,14 @@ module Style =
     /// or take it away, so it is on the row rather than behind it.
     let artifactListSize = "block font-ui font-light text-small text-ink-faint tabular-nums"
 
+    /// A file on its way in: the name a shared one's row will carry, in its type, but `ink-dim`
+    /// and not a control — there is nothing to open until the store has it.
+    let uploadName = "min-w-0 truncate font-ui font-light text-[22px] leading-7 text-ink-dim"
+
+    /// The page's way to send a file in, at its head on every screen: a bare verb on the rail,
+    /// because it is a way in rather than the page's act — choosing is.
+    let uploadCell = "self-start px-2 pb-2 phone:[&>button]:min-h-11"
+
     /// The block history's scroll box, and the stream inside it.
     ///
     /// A terminal grows DOWNWARD from the top and the viewport rides the tail. Those are two

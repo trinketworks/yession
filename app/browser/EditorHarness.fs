@@ -1614,7 +1614,9 @@ do
         | ClientEffect.Launch _
         | ClientEffect.Claude _
         | ClientEffect.GitHub _
-        | ClientEffect.GitHubPoll _ -> ()
+        | ClientEffect.GitHubPoll _
+        | ClientEffect.Upload _
+        | ClientEffect.ForgetUpload _ -> ()
         | ClientEffect.Move move -> PaneShell.move move
         // A read from line 0 of a terminal this harness handed nothing for is answered as the
         // session's store would answer it: nothing, which is a terminal with no recording, and

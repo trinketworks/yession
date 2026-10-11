@@ -236,6 +236,7 @@ let private representativeModel : ClientModel =
       DatedBreaks = Set.empty
       QueueDeleteArmed = None
       Copied = None
+      Uploads = []
       // The pane shows a TAB by default; the list is what the cases below turn on.
       Claude =
         { Status =

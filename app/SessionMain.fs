@@ -1209,7 +1209,7 @@ Async.StartImmediate (
             // where the bytes are.
             let contentRoutes =
                 match auth with
-                | Some a -> Some (Artifacts.routes a artifactsDir sessionMount)
+                | Some a -> Some (Artifacts.routes a log artifactsDir sessionMount)
                 | None -> None
             [ claudeRoutes; githubRoutes; queryRoutes; repoRoutes; contentRoutes ]
             |> List.choose id

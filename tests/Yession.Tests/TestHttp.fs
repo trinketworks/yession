@@ -101,6 +101,14 @@ let postUnredirected (contentType: string) (body: string) (url: string) : Async<
 
 let postJson (body: string) (url: string) : Async<Reply> = post [] "application/json" body url
 
+/// A PUT of `body`, with whatever headers the route requires.
+let put (headers: (string * string) list) (body: string) (url: string) : Async<Reply> =
+    send
+        [ RequestProperties.Method HttpMethod.PUT
+          headersOf headers
+          RequestProperties.Body (BodyInit.Case3 body) ]
+        url
+
 let postForm (body: string) (url: string) : Async<Reply> =
     post [] "application/x-www-form-urlencoded" body url
 
