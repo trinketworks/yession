@@ -1115,6 +1115,24 @@ let private edgeTabTests =
             let model = firstLook true [ [ at 1L 0.0 (opened terminalA "build") ] ]
             Expect.equal (ClientModel.selectedTerminal model) (Some terminalA) "the terminal this reader opened"
 
+        // What a list of terminals marks as current (the sidebar's environment): the terminal
+        // on the screen, which is not always the one chosen.
+        testCase "an open pane shows its chosen terminal" <| fun () ->
+            let model = firstLook true [ [ at 1L 0.0 (opened terminalA "build") ] ]
+            Expect.equal (ClientModel.shownTerminal model) (Some terminalA) "the one in the pane"
+
+        testCase "a shut pane shows no terminal" <| fun () ->
+            let model =
+                firstLook true [ [ at 1L 0.0 (opened terminalA "build") ] ]
+                |> Support.step ToggleContentMsg
+            Expect.isNone (ClientModel.shownTerminal model) "kept for when it opens, and on no screen now"
+
+        testCase "a pane on its list shows no terminal" <| fun () ->
+            let model =
+                firstLook true [ [ at 1L 0.0 (opened terminalA "build") ] ]
+                |> Support.step ToggleSwitcherMsg
+            Expect.isNone (ClientModel.shownTerminal model) "the list covers it"
+
         testCase "a pane that opens itself with nothing of this reader's in the strip opens the switcher" <| fun () ->
             // The strip holds only what this reader opened, so a terminal somebody else opened
             // gives it nothing to show; an empty pane over a running build is the wrong answer.

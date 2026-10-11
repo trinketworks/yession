@@ -47,8 +47,6 @@ module Icon =
     let private rightsPath = "M3.75 3.5 L8.25 8 L3.75 12.5 M8.25 3.5 L12.75 8 L8.25 12.5"
     // Taller and narrower than the chrome chevrons: a mark set to the proportions of the
     // extralight lowercase word it travels with, not to a 24px button.
-    let private pivotLeftPath = "M10.25 1.5 L4.5 8 L10.25 14.5"
-    let private pivotRightPath = "M5.75 1.5 L11.5 8 L5.75 14.5"
     let private checkPath = "M3.5 8.25 L6.5 11.25 L12.5 5.25"
     let private crossPath = closePath
     let private sendPath = "M2.5 8 L12.5 8 M8.75 4.25 L12.5 8 L8.75 11.75"
@@ -138,11 +136,6 @@ module Icon =
     /// because the dots are square CAPS rather than segments: at 1.5 they are a smaller mark
     /// than any other glyph here, and read as dirt on the screen rather than as a control.
     let more = strokedAt "2.5" "w-3.5 h-3.5" morePath
-
-    /// The marks the sidebar's pivots travel with (`Style.navPivot`): tall, thin, and lighter
-    /// than any working control, because they sit beside a 19px extralight word.
-    let pivotLeft = strokedAt "1.1" "w-4 h-4" pivotLeftPath
-    let pivotRight = strokedAt "1.1" "w-4 h-4" pivotRightPath
 
     /// Stop: the interrupt beside a running turn. It was also the terminal list's kill, and
     /// a square beside a command reads as stopping the command, not ending the terminal —
