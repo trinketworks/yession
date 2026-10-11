@@ -1319,8 +1319,9 @@ type ClientModel =
       /// terminal command lines — so whether a report is news is asked of what this peer last
       /// said from anywhere, never of what one reporter last said: a command line re-reporting
       /// `None` after the editor had claimed the caret is a clear somebody needs. Most reports
-      /// are not news (a keyup for a key that typed, a click where the caret already was), and
-      /// those tell nobody anything.
+      /// are not news (a keyup for a key that typed, a click where the caret already was, an
+      /// editor going by in a scroll), and the reporter asks this field before telling it
+      /// (`Render.focusReporter`).
       Caret         : Focus option
       /// Every peer this session has seen, with the display name it joined under — folded from
       /// the durable log (`PeerJoined`/`PeerLeft`), so it survives a reload and names a draft's
@@ -1803,8 +1804,9 @@ type ClientMsg =
     /// A remote peer's cursor moved (or cleared) in the title — ephemeral presence folded
     /// into `Presence`, never into the synced state.
     | RemotePresenceMsg of PresencePayload
-    /// This peer's caret+selection moved, or left every collaborative field (`None`) — or was
-    /// reported where it already was, which changes nothing (`ClientModel.Caret`).
+    /// This peer's caret+selection moved, or left every collaborative field (`None`). Told only
+    /// when it differs from `ClientModel.Caret`, and once a frame at most, by whoever reports
+    /// it — in the browser, `Render.focusReporter`.
     | CaretMovedMsg of Focus option
     /// Ensure the draft slot keyed by `PeerId` exists (author only), carrying the queue key it
     /// will become when anyone sends it. The body is a rich-text `Y.XmlFragment` anchored by the
