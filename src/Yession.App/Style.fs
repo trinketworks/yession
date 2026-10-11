@@ -1471,10 +1471,10 @@ module Style =
     /// lying over live text, and it must not swallow a tap or a selection meant for it.
     ///
     /// `px-8` is the timeline's own padding, so the rail inside it has the reading column's
-    /// geometry exactly — see `chatJumpToLatestRail`. None on a phone, where the grounds bleed
-    /// to the screen's edges and the column they draw is the whole width.
+    /// geometry exactly — see `chatJumpToLatestRail` — and `max-md:px-4` is the timeline's
+    /// phone padding for the same reason: the rail's left edge is where the avatars' is.
     let chatJumpToLatestSlot =
-        "absolute inset-x-0 bottom-0 z-10 pointer-events-none px-8 max-md:px-0 pb-4"
+        "absolute inset-x-0 bottom-0 z-10 pointer-events-none px-8 max-md:px-4 pb-4"
 
     /// How wide anything in the timeline is allowed to get.
     ///
@@ -1495,26 +1495,27 @@ module Style =
     ///
     /// It used to be centred, as a control a thumb reaches with either hand — and a centred
     /// opaque square over a column of prose covers whatever line is under it. Measured on a
-    /// phone it hid 22px of a paragraph. So it stands where no text is: beside the column on
-    /// a desktop, and on a phone, where there is no beside, in the strip every item keeps
-    /// free for its actions handle (`itemGround`'s `pr-8`), which no message's words enter.
-    let chatJumpToLatestRail = cls [ readingColumn; "max-md:max-w-none relative h-8" ]
+    /// phone it hid 22px of a paragraph. So it stands where no text is: the AVATARS' column,
+    /// the 20px square every author line opens with, in the gutter no message's words enter
+    /// (bodies start at `pl-8`). It sat on the right after that, flush with the glass on a
+    /// phone, where a bordered square at the very edge reads as one sliding off the screen.
+    let chatJumpToLatestRail = cls [ readingColumn; "max-md:max-w-none relative h-5" ]
 
     /// The button on that rail: the chat's twin of `terminalJumpToLatest`'s solid ground —
     /// opaque so it reads over whatever is scrolling under it, no rounded corners because
     /// this product draws none (see `itemGround`).
     ///
-    /// 32px square, which is the width of that strip: `left-full` puts it just past the
-    /// column on a desktop (in the gutter, or in the timeline's own 32px padding when the
-    /// column fills the pane), and `right-0` on a phone puts it exactly over the strip, its
-    /// centre on the same line as every handle above it.
+    /// An avatar's square exactly — `avatar`'s size, at the rail's `left-0`, which is the
+    /// avatars' left edge — so it reads as one more mark down the column people's pictures
+    /// stand on, not a control floated over the conversation.
     ///
-    /// The square stays 32px to the eye; on a phone its press grows to the 44px touch target
-    /// (`before:-inset-1.5`), the floor the doctrine never trades.
+    /// The square is 20px to the eye and its press is 44px, the touch target the doctrine
+    /// never trades: `before:-inset-3` reaches 12px past it on every side, a press on the
+    /// pseudo-element landing on the button.
     let chatJumpToLatest =
-        cls [ "pointer-events-auto absolute bottom-0 left-full max-md:left-auto max-md:right-0"
-              "max-md:before:absolute max-md:before:-inset-1.5 max-md:before:content-['']"
-              "w-8 h-8 flex items-center justify-center bg-surface"
+        cls [ "pointer-events-auto absolute bottom-0 left-0"; avatar
+              "before:absolute before:-inset-3 before:content-['']"
+              "flex items-center justify-center bg-surface"
               "text-ink-dim hover:text-ink cursor-pointer transition-colors"
               Stroke.ring; Stroke.rim; focusRing ]
 
