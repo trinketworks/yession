@@ -993,20 +993,21 @@ let private uiChecklistTests =
                 "an empty one still says so"
 
         testCase "the way back to the latest message is rendered, named, and the chat's" <| fun () ->
-            // Whether the float can be SEEN is a scroll distance the document holds — nothing a
-            // string render can settle (`Tail` in the browser is what toggles it). What
-            // markup owns is the rest, and it is the half that breaks silently: an icon-only
-            // control with no accessible name is a button that says nothing to a screen reader,
-            // and one rendered outside the conversation would scroll the wrong column.
-            let html = Support.render representativeModel
-            Expect.isTrue (html.Contains Dom.Hooks.jumpToLatest) "the control is in the document"
+            // Whether it is OFFERED is the reader's scroll, which `Tail` in the browser reports
+            // as `Away`; given that, what markup owns is the rest, and it is the half that
+            // breaks silently: a control whose word is not its whole name, and one naming the
+            // wrong surface would bring back the wrong column.
+            let html = Support.render { representativeModel with Away = Set.singleton TailSurface.Conversation }
             Expect.isTrue
                 (html.Contains Dom.Text.jumpToLatest)
-                "carrying a name, since a chevron on its own says nothing"
+                "carrying a name, since the word on it says less than the whole act"
             let chats = sprintf "%s=\"%s\"" Dom.Hooks.jumpToLatest (TailSurface.key TailSurface.Conversation)
-            Expect.isTrue
-                (html.IndexOf chats > html.IndexOf Dom.Hooks.conversation)
-                "and it floats over the conversation, naming it as the surface it brings back"
+            Expect.isTrue (html.Contains chats) "naming the conversation as the surface it brings back"
+
+        testCase "the way back to the latest message is not offered to a reader already there" <| fun () ->
+            // Availability from the other side: a reader at the end has nowhere to jump to.
+            let html = Support.render { representativeModel with Away = Set.empty }
+            Expect.isFalse (html.Contains Dom.Text.jumpToLatest) "no jump while the reader is at the end"
 
         testCase "a client that cannot keep history says so; one that can says nothing" <| fun () ->
             // The availability invariant, not the wording: a client whose context denies it a

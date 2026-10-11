@@ -195,7 +195,7 @@ module Style =
     let private caps = "font-semibold text-label tracking-caps uppercase"
 
     /// The same voice one step up, for a verb that has ROOM: 13px rather than 11. Worn by
-    /// the composer's Send and by the interrupt above it — the two that stand on a band of
+    /// the composer's Send and by the tray's verbs above it — the ones that stand on a band of
     /// their own with nothing competing for the width. At the label size a word button there
     /// read as a caption of the glyph it replaced rather than as the thing you press.
     let private capsLg = "font-semibold text-small tracking-caps uppercase"
@@ -446,7 +446,7 @@ module Style =
     /// delete — see `View.queue`), which this says by wearing the err fill AT REST rather
     /// than only under the hand. A touch has no hover to hold the hint up, so the state a
     /// phone needs to see has to be worn rather than revealed — the same reasoning
-    /// `btnInterrupt` uses to stay unworn, read the other way: that button is never armed
+    /// `trayInterrupt` uses to stay unworn, read the other way: that button is never armed
     /// twice, this one specifically IS, between the two presses the confirm needs.
     /// Un-arms itself back to `btnIconBareDanger` on its own (`armedMs`), so a
     /// press nobody confirms cannot leave a row looking primed for ever.
@@ -1444,31 +1444,10 @@ module Style =
         + "max-md:px-4 max-md:pb-4 max-md:gap-5 max-md:before:-mb-1 break-words "
         + focusRingInset
 
-    /// The box `timeline` floats its "jump to latest" over — mirrors `terminalReplayRegion`'s
-    /// reason for existing: `timeline` IS the scroller, so an `absolute` child of it would
-    /// scroll away with everything else, and something has to sit around it to be the
-    /// positioned ancestor the float resolves against instead.
+    /// The box around `timeline`, the scroller. Nothing floats over it any more: the way back
+    /// to the latest message stands in the composer's tray (`composerTray`), below the words
+    /// rather than on them.
     let chatRegion = "relative flex-1 min-h-0 flex flex-col"
-
-    /// The float's own slot: positioning, the scrim, and the show/hide `Render.fs` toggles (a
-    /// scroll-distance fact, not model state — see there for why), kept off the button itself
-    /// so toggling it can never fight the button's own layout for which `display` wins.
-    ///
-    /// No scrim. There was one — a 48px ramp from `bg/90` up to clear — and what it lay over
-    /// was the NEWEST line, the one the button leads to, which sits right on the composer's
-    /// edge whenever a reader is only a little way back: photographed on a phone, a command
-    /// chip under it read at well under the contrast floor. The button is opaque on its own;
-    /// a ramp behind it bought nothing but a darker line of text (doctrine: dimming is a
-    /// role, never opacity).
-    ///
-    /// `pointer-events-none`, with the button taking them back: the slot is a full-width strip
-    /// lying over live text, and it must not swallow a tap or a selection meant for it.
-    ///
-    /// `px-8` is the timeline's own padding, so the rail inside it has the reading column's
-    /// geometry exactly — see `chatJumpToLatestRail` — and `max-md:px-4` is the timeline's
-    /// phone padding for the same reason: the rail's left edge is where the avatars' is.
-    let chatJumpToLatestSlot =
-        "absolute inset-x-0 bottom-0 z-10 pointer-events-none px-8 max-md:px-4 pb-4"
 
     /// How wide anything in the timeline is allowed to get.
     ///
@@ -1483,35 +1462,6 @@ module Style =
     /// Uncapped on a phone, where the screen is already narrower than any measure worth
     /// setting and the grounds inside it run edge to edge (`itemGround`).
     let readingColumn = "max-w-[38rem]"
-
-    /// The reading column again, drawn in the slot so the button can be placed against the
-    /// column's edge rather than against the window's.
-    ///
-    /// It used to be centred, as a control a thumb reaches with either hand — and a centred
-    /// opaque square over a column of prose covers whatever line is under it. Measured on a
-    /// phone it hid 22px of a paragraph. So it stands where no text is: the AVATARS' column,
-    /// the 20px square every author line opens with, in the gutter no message's words enter
-    /// (bodies start at `pl-8`). It sat on the right after that, flush with the glass on a
-    /// phone, where a bordered square at the very edge reads as one sliding off the screen.
-    let chatJumpToLatestRail = cls [ readingColumn; "max-md:max-w-none relative h-5" ]
-
-    /// The button on that rail: the chat's twin of `terminalJumpToLatest`'s solid ground —
-    /// opaque so it reads over whatever is scrolling under it, no rounded corners because
-    /// this product draws none (see `itemGround`).
-    ///
-    /// An avatar's square exactly — `avatar`'s size, at the rail's `left-0`, which is the
-    /// avatars' left edge — so it reads as one more mark down the column people's pictures
-    /// stand on, not a control floated over the conversation.
-    ///
-    /// The square is 20px to the eye and its press is 44px, the touch target the doctrine
-    /// never trades: `before:-inset-3` reaches 12px past it on every side, a press on the
-    /// pseudo-element landing on the button.
-    let chatJumpToLatest =
-        cls [ "pointer-events-auto absolute bottom-0 left-0"; avatar
-              "before:absolute before:-inset-3 before:content-['']"
-              "flex items-center justify-center bg-surface"
-              "text-ink-dim hover:text-ink cursor-pointer transition-colors"
-              Stroke.ring; Stroke.rim; focusRing ]
 
     /// One actor's consecutive run — their messages, the commands they ran, the tools they
     /// called — under ONE author line. Attribution is said where it CHANGES, which is how a
@@ -2580,41 +2530,46 @@ module Style =
     let proseTableAlignCenter = "text-center"
     let proseTableAlignRight = "text-right"
 
-    // --- Interrupt: one verb, in the composer's own row -----------------------------------
+    // --- The composer's tray: interrupt and the way back to the latest message --------------
     // The agent's activity strip used to live here: a 48px band carrying a pulse, the words
     // "agent is responding", the turn's number and a bordered Interrupt. It said what the
-    // streaming message's own meta line said one line above it, and what that message's caret
-    // said in the same breath — one fact, three animated marks, a twelfth of a phone's screen
-    // spent on the third of them. The control it carried was the only part that was its own.
+    // streaming message's caret already said, and the control it carried was the only part
+    // that was its own. That control then rode Send's row; the way back to the latest message
+    // floated over the timeline, a square on the avatars' column.
     //
-    // That control then spent a revision as a band of ITS OWN above the composer — one verb,
-    // nothing beside it, which was the right call next to a strip but still a second place to
-    // look beside the row Send already stands on. It lives in that row now (`View.drafts`),
-    // beside Send rather than above it: a turn running was never a reason to take Send away
-    // (queuing the next message is the one thing there is to do while the agent writes), so
-    // the two verbs sharing one row is the row admitting what was already true.
+    // Both now stand in one strip on the composer's top edge, shown only while either has
+    // something to do. Not floating: anything laid over the timeline lies over words the
+    // moment a long line scrolls under it, at whatever spot it is put, and room reserved
+    // under the newest line does nothing for a reader scrolled back. A strip that takes its
+    // own height covers nothing in any scroll state.
 
-    /// Ink at rest, err under the hand — the face every destructive verb here wears, and worn
-    /// for the same reason rather than out of symmetry. Err AT rest is this product's tone for
-    /// *something is wrong*, and nothing is: a turn running is the normal case, and a red word
-    /// standing beside Send every time the agent speaks would say otherwise within a day.
+    /// The strip. A step DOWN from the composer (`panel` under `surface`), above the composer's
+    /// rule rather than under it: the rule is where writing starts, so it stays the composer's
+    /// top edge, and these are controls for the timeline, not part of the draft. Edge to edge
+    /// like the composer and the queue's bands: inset, it would read as an object floating
+    /// over the conversation again. No rule of its own — the step from `bg` is its top edge.
     ///
-    /// A step brighter than the faint verbs that ride a listed row (`btnBare`), though, and
-    /// that difference is the same rule read the other way: those are faint because the ROW is
-    /// the subject and they are a thing you can do to it. Here the verb IS a subject, same as
-    /// Send beside it. `gap-1.5` pairs the stop glyph with the word (`Icon.stop`, the same mark
-    /// the timeline's stopped-turn item already wears at `stopSm` size, now costing nothing to
-    /// repeat here since the vocabulary existed before this button used it). `disabled:*` is
-    /// new too: the turn between a click and the stop actually landing
-    /// (`AgentViewState.Interrupting`), where without it the button would sit unchanged —
-    /// inert in every way a person can check except that the request, in fact, went.
-    /// `pointer-events-none` rather than relying on `hover:` losing a specificity fight, so the
-    /// err hover-face this button is built around never has a chance to paint while there is
-    /// nothing left to hover for.
-    let btnInterrupt =
-        cls [ "h-8 px-2 shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer font-ui"
-              capsLg; "text-ink-dim hover:text-err transition-colors"
-              "disabled:text-ink-faint disabled:cursor-default disabled:pointer-events-none"; focusRing ]
+    /// `px-4` is the composer's gutter, so interrupt's glyph starts on the model picker's
+    /// edge and the jump's ends on Send's. 44px on a phone, a thumb's target; 40 elsewhere.
+    let composerTray = "shrink-0 flex items-center h-10 max-md:h-11 px-4 bg-panel"
+
+    let private trayVerb =
+        cls [ "h-full min-w-11 shrink-0 inline-flex items-center gap-1.5 p-0 bg-transparent border-0 cursor-pointer font-ui"
+              capsLg; "text-ink-dim transition-colors"; focusRing ]
+
+    /// Ink at rest, err under the hand — the face every destructive verb here wears. Err AT
+    /// rest is this product's tone for *something is wrong*, and a turn running is the normal
+    /// case. `disabled:*` is the turn between a press and the stop landing
+    /// (`AgentViewState.Interrupting`); `pointer-events-none` so the err face never paints
+    /// while there is nothing left to press.
+    let trayInterrupt =
+        cls [ trayVerb; "hover:text-err"
+              "disabled:text-ink-faint disabled:cursor-default disabled:pointer-events-none" ]
+
+    /// The way back to the latest message, at the strip's trailing edge whatever stands at
+    /// its leading one. Its word ends in the glyph, so no caps tracking trails past the ink.
+    let trayJumpSlot = "ml-auto h-full flex"
+    let trayJump = cls [ trayVerb; "justify-end hover:text-ink" ]
 
     // --- Queue: editable until drained; the head's green count says so ------------------------
     // The queue is the composer's dock, not a list floating over the ground: its rows are
@@ -2822,10 +2777,9 @@ module Style =
     /// which is what the coming-and-going was for; it simply no longer offers a control with
     /// nothing to act on.
     ///
-    /// Interrupt rides this same row now (`View.drafts`), and "something to act on" grew a
-    /// second reason to be true: a turn running, which is what Interrupt acts on, not the
-    /// draft. `View.drafts` ORs the two in rather than this file computing it, because the
-    /// fact "is there a turn running" lives in `model.Agent`, not here.
+    /// Interrupt rode this row for a while, which gave it a second reason to stand (a turn
+    /// running). It stands in the composer's tray now (`composerTray`), so the draft is the
+    /// row's only reason again.
     ///
     /// It used to go GONE (`max-h-0`) as well as clear, back when the row had a line to
     /// itself and an invisible row of buttons was two thirds of a collapsed composer. The
@@ -3609,8 +3563,7 @@ module Style =
     /// `Tail` says the reader has left the end.
     let terminalJumpToLatestSlot = "absolute right-3 bottom-3 z-10"
 
-    /// The button in it: `chatJumpToLatest`'s square, without the rail that places that one
-    /// beside a reading column — a terminal has no column to stand beside.
+    /// The button in it: an opaque square, so it reads over whatever is scrolling under it.
     let terminalJumpToLatest =
         cls [ "w-8 h-8 flex items-center justify-center bg-surface"
               "text-ink-dim hover:text-ink cursor-pointer transition-colors"
