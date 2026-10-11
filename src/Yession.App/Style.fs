@@ -539,8 +539,20 @@ module Style =
     /// 40px tall, which is the composer's resting line box below its top room (`draftInput`:
     /// a 24px line, `pb-2`) — so it bottom-aligns onto that line with no correction.
     let private btnComposerBox =
-        cls [ "h-10 px-3 shrink-0 inline-flex items-center justify-center cursor-pointer font-ui"
-              "bg-transparent border-0"; capsLg; "transition-colors"; focusRing ]
+        // `pr` is `px-3` less one caps tracking: letter-spacing is laid after EVERY glyph,
+        // the last included, so a tracked word's ink ends 0.16em before its box does and the
+        // D stopped 2px short of the gutter the draft's text keeps from the same edge.
+        cls [ "h-10 pl-3 pr-[calc(0.75rem-var(--tracking-caps))] shrink-0 inline-flex items-center justify-center cursor-pointer font-ui"
+              // No colour tween on a phone: there is no hover there, so the only colour change
+              // is waiting → ready, which arrives with the row's fade (`draftCommit`), and two
+              // tweens at once read as the word blooming from grey through teal to blue.
+              "bg-transparent border-0"; capsLg; "transition-colors max-md:transition-none"; focusRing
+              // On a phone, the one item of its row that takes part in baseline alignment, so
+              // the row's baseline is Send's word (`draftActionsRow`). Without it the row
+              // reported the baseline of its FIRST item — the presence span, usually empty,
+              // whose synthesized baseline is its bottom edge — and the word sat 5px under
+              // the picker's.
+              "max-md:self-baseline" ]
     /// Send's own hit area, grown past its 40px box the way `btnIconBareTouch` grows a bare
     /// icon's: an empty `::before` reaching past the word on three sides, a press on the
     /// pseudo-element landing on the element. Only three sides, not four — Send is the
@@ -2820,29 +2832,33 @@ module Style =
     /// draft. `View.drafts` ORs the two in rather than this file computing it, because the
     /// fact "is there a turn running" lives in `model.Agent`, not here.
     ///
-    /// GONE means `max-h-0` beside the fade, not the fade alone. `opacity-0` hides a row and
-    /// keeps every pixel of its height, so the band under an empty composer carried a 44px
-    /// row of invisible buttons plus the clearance meant to sit below them — two thirds of a
-    /// collapsed composer, and a gap no markup test can tell from an empty one.
+    /// It used to go GONE (`max-h-0`) as well as clear, back when the row had a line to
+    /// itself and an invisible row of buttons was two thirds of a collapsed composer. The
+    /// picker shares the line now and holds its height, so clear is all gone needs to be.
     let private draftCommitBase =
         cls [ "shrink-0 flex items-center gap-1 pr-1"
-              "max-md:overflow-hidden"
-              "max-md:transition-[max-height,opacity] max-md:duration-150"
+              // Opacity alone on a phone, never height. The row shares its line with the model
+              // picker (`draftActionsRow`), which holds that line at 40px whether Send shows or
+              // not — so growing this row (it used to go `max-h-0` → `max-h-12` and gain a
+              // `pt-1`) moved nothing it needed to and four things it should not: measured
+              // frame by frame, the first character typed lifted the draft line 4px, the
+              // picker 2px, and dropped Send 2px before it rose again, and emptying the draft
+              // put all of it back in one frame.
+              "max-md:transition-opacity max-md:duration-150"
               // `max-md:` on the reduced-motion variant too, and not for symmetry: Tailwind
               // orders the stylesheet by variant, so a bare `motion-reduce:transition-none`
               // is EMITTED ABOVE the `max-md:` transition it is meant to cancel and loses to
               // it at exactly the widths that have one.
               "max-md:motion-reduce:transition-none" ]
 
-    /// Nothing to act on. The row takes no height and no presses — `pointer-events-none`
-    /// beside the fade, because a control nobody can see is not one a thumb should find.
+    /// Nothing to act on. The row takes no presses — `pointer-events-none` beside the fade,
+    /// because a control nobody can see is not one a thumb should find — and keeps its box,
+    /// so the line it shares stands still when it comes back.
     let draftCommit =
-        cls [ draftCommitBase; "max-md:max-h-0 max-md:opacity-0 max-md:pointer-events-none" ]
+        cls [ draftCommitBase; "max-md:opacity-0 max-md:pointer-events-none" ]
 
-    /// There is a draft. `pt-1` arrives with the row rather than sitting under it: `max-h-0`
-    /// is a border-box cap and cannot clamp below its own padding, so a `pt-1` left on in the
-    /// face above is 4px of band the row still owns while claiming to be gone.
-    let draftCommitReady = cls [ draftCommitBase; "max-md:pt-1 max-md:max-h-12" ]
+    /// There is a draft: the same box, seen.
+    let draftCommitReady = draftCommitBase
 
     /// The model picker's own row-mate, standing beside `draftCommit`/`draftCommitReady`
     /// rather than inside either: choosing a model has nothing to do with whether there is
@@ -2896,7 +2912,11 @@ module Style =
     /// `max-md:justify-between` is what used to be `draftCommitBase`'s own `justify-end` on
     /// a line it had to itself: with the picker as the row's other half now, pushing Send to
     /// the trailing edge is this shared row's job, not the commit box's.
-    let draftActionsRow = "max-md:flex max-md:items-center max-md:w-full max-md:justify-between md:contents"
+    ///
+    /// `max-md:items-baseline`: the picker speaks the 11px caps label and Send the 13px one,
+    /// so centring the two boxes put their words on two lines, a pixel and a half apart.
+    /// The doctrine aligns a row on its text baseline (Space), and so does this one.
+    let draftActionsRow = "max-md:flex max-md:items-baseline max-md:w-full max-md:justify-between md:contents"
 
     let draftAuthor = "pl-4 pt-2 " + caps + " text-ink-faint truncate"
 
