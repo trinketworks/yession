@@ -310,9 +310,11 @@ and TerminalCommandRejected =
 
 and TerminalIntegrationLost =
     { TerminalId : TerminalId
-      /// The block that was open when it happened, if one was. It stays open — its `ToSeq`
-      /// and exit code are exactly what was lost — and naming it here is what lets a reader
-      /// tell an unbounded block from a running one.
+      /// The block that was open when it happened, if one was. It stays open while the loss
+      /// lasts — its `ToSeq` and exit code are exactly what was lost — and naming it here is
+      /// what lets a reader tell an unbounded block from a running one. When marking comes
+      /// back it is settled `CommandOutcomeUnknown`, unless its own marks turned up late and
+      /// finished it first.
       BlockId : BlockId option
       /// What the detector had in hand when it fired. `None` only for a log written before
       /// it said — there is no honest value to invent for a moment nobody recorded.
@@ -343,8 +345,9 @@ and LostEvidence =
 /// act on. Recorded because the log otherwise shows a lost terminal completing a block with
 /// an exit code and says nothing about the contradiction.
 ///
-/// It does not clear the loss. Only a person re-arming does (`TerminalIntegrationRestored`),
-/// and whether a late mark should is a decision this fact exists to inform, not to take.
+/// It does not clear the loss by itself. The prompt after the block it starts does
+/// (`TerminalIntegrationRestored` with `PromptReturned`): a start mark arrives in the middle
+/// of a command, and the shell is only shown to be back once it has finished and prompted.
 
 and TerminalMarkedLate =
     { TerminalId : TerminalId
@@ -361,11 +364,25 @@ and TerminalBlockInterrupted =
     { TerminalId : TerminalId
       BlockId : BlockId
       By : ActorRef }
-/// Marking is back (Plan 13, stage 2f): a peer used the re-arm control and the shell that is
-/// actually there now answered our instrumentation.
+/// Marking is back (Plan 13, stage 2f), and `How` says what showed it.
 
 and TerminalIntegrationRestored =
-    { TerminalId : TerminalId }
+    { TerminalId : TerminalId
+      How : IntegrationRestoredBy }
+
+/// What brought a lost terminal's marks back.
+and IntegrationRestoredBy =
+    /// A peer used the re-arm control and the shell that is actually there now answered the
+    /// instrumentation typed into it. Every restoration before the other case existed was
+    /// this one, which is what a log that does not say reads as.
+    | Rearmed
+    /// Nobody did anything to the instrumentation: the shell printed a primary prompt with
+    /// this terminal's nonce in it, having answered every line it was handed — which only
+    /// the instrumented shell can do. Typically a ^C at a continuation prompt that had been
+    /// swallowing the block's line; before this case the terminal stayed lost over a shell
+    /// that was plainly marking, until a person pressed a button to say what the marks
+    /// already had.
+    | PromptReturned
 
 and TerminalBlockCompleted =
     { TerminalId : TerminalId

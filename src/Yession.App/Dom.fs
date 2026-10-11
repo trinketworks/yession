@@ -890,6 +890,11 @@ module Dom =
         /// Over with nothing on the record saying how (`BlockEnded`): neither a pass nor a
         /// failure, so it borrows neither word.
         let blockEnded = "ended"
+        /// The shell refused the line, so nothing ran (`CommandNotRun`): not a failure of
+        /// the command, which never started, and said as what it was.
+        let blockNotRun = "not-run"
+        /// The same, in words.
+        let blockDidNotRun = "didn't run"
         /// How a block went, in WORDS — what a screen reader hears where a sighted reader
         /// sees `✓ 0` or `✕ 1`, and what a chip's accessible name carries. The mark is a
         /// glyph and a number; neither says what it means to anybody who cannot see it.

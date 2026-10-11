@@ -154,10 +154,11 @@ module TaskCard =
         function
         | BlockRunning -> TaskRunning
         | BlockFinished (CommandSucceeded _) -> TaskDone
+        // Over, and nothing says it went wrong: a card counting it failed would be the
+        // guess `BlockEnded` exists to refuse — and an outcome nobody knows is the same guess.
+        | BlockFinished (CommandOutcomeUnknown _) -> TaskDone
         | BlockFinished _ -> TaskFailed
         | BlockRejected _ -> TaskFailed
-        // Over, and nothing says it went wrong: a card counting it failed would be the
-        // guess `BlockEnded` exists to refuse.
         | BlockEnded _ -> TaskDone
 
     /// What the summary line counts. Blocks whose status this client cannot resolve yet are

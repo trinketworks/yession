@@ -308,6 +308,8 @@ module Prompting =
                 | BlockFinished (CommandFailed code) -> sprintf "exit %d" code
                 | BlockFinished (CommandExecutionFailed reason) -> sprintf "could not run: %s" reason
                 | BlockFinished CommandTimedOut -> "timed out"
+                | BlockFinished (CommandNotRun said) -> sprintf "did not run, the shell rejected the line: %s" said
+                | BlockFinished (CommandOutcomeUnknown reason) -> sprintf "ended, outcome unknown: %s" reason
                 | BlockEnded reason -> sprintf "ended, exit status unknown: %s" reason
                 // The agent is told it was refused, and by whom. This is the feedback the
                 // review gate owes whoever it refused: without it a rejected command is
@@ -374,7 +376,7 @@ module Prompting =
         | PrChanged _ ->
             "You are running because a pull request watched here changed state — the conversation above says how. Say what it means for what you were doing, and carry on."
         | IntegrationLost _ ->
-            "You are running because a terminal you had a command running in stopped reporting, so nothing will say how that command ended — the terminal activity above is what is known. Decide what to do about it, and say so."
+            "You are running because a terminal you had a command running in stopped reporting, so nothing will say how that command ended — the terminal activity above is what is known. A shell left waiting for the rest of a command (an unclosed quote, say) comes back with a ctrl-c through write_terminal. Decide what to do about it, and say so."
         | StreamEnded _ ->
             "You are running because the stream behind a terminal you were working in has ended — the terminal activity above is the last of it. Say what it means for what you were doing."
         | CommandFinished ->

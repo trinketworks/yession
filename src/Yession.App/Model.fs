@@ -2729,6 +2729,7 @@ module ClientModel =
         |> List.filter (fun block ->
             match block.Status with
             | BlockFinished (CommandSucceeded _)
+            | BlockFinished (CommandOutcomeUnknown _)
             | BlockRunning
             | BlockEnded _ -> false
             | BlockFinished _
@@ -2897,9 +2898,10 @@ module ClientModel =
             | Some Unseen.Succeeded -> TerminalState.UnseenOk
             | None ->
                 match view.Blocks |> List.tryLast |> Option.map (fun block -> block.Status) with
-                | Some (BlockFinished (CommandFailed _ | CommandTimedOut | CommandExecutionFailed _))
+                | Some (BlockFinished (CommandFailed _ | CommandTimedOut | CommandExecutionFailed _ | CommandNotRun _))
                 | Some (BlockRejected _) -> TerminalState.Failed
                 | Some (BlockFinished (CommandSucceeded _))
+                | Some (BlockFinished (CommandOutcomeUnknown _))
                 | Some (BlockEnded _)
                 | Some BlockRunning
                 | None -> TerminalState.Idle

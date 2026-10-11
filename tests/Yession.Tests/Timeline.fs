@@ -1317,6 +1317,27 @@ let private statusTests =
                 [ [ Dom.Text.blockEnded ]; [ Dom.Text.blockEnded ] ]
                 "one mark on each surface, and it says ended"
 
+        // A line the shell refused was drawn RUNNING for as long as anybody looked: nothing
+        // ever finished it. It is over, it never ran, and that is what every surface says.
+        testCase "a block the shell refused is marked as not run, in the pane and the chat" <| fun () ->
+            let html = endedAs (CommandNotRun "bash: !p: event not found")
+            Expect.equal
+                [ marksIn (markupAt (Dom.attr Dom.Hooks.terminalBlock "b-1") html)
+                  marksIn (markupAt (Dom.attr Dom.Hooks.chatBlock "b-1") html) ]
+                [ [ Dom.Text.blockNotRun ]; [ Dom.Text.blockNotRun ] ]
+                "one mark on each surface, and it says it did not run"
+
+        testCase "a block the shell refused shows the shell's words" <| fun () ->
+            let block = textAt (Dom.attr Dom.Hooks.terminalBlock "b-1") (endedAs (CommandNotRun "bash: !p: event not found"))
+            Expect.stringContains block "bash: !p: event not found" "why, where the output would have been read"
+
+        // Nothing says it ran and nothing says it did not; red would be the guess.
+        testCase "a block whose outcome is not known is marked ended, not failed" <| fun () ->
+            Expect.equal
+                (marksIn (markupAt (Dom.attr Dom.Hooks.terminalBlock "b-1") (endedAs (CommandOutcomeUnknown "the shell came back to its prompt"))))
+                [ Dom.Text.blockEnded ]
+                "the word that already means over, with nothing saying how"
+
         testCase "a terminal running a command marks its tab, and an idle one does not" <| fun () ->
             let strip = Support.render (clientOf threeUntitled |> showingAll)
             Expect.equal
@@ -4615,6 +4636,12 @@ let private tallyTests =
             // Its terminal closed under it and no completion followed. Counting it failed
             // would be a guess, and red is what a person scanning a card acts on.
             Expect.equal (TaskCard.stateOf (BlockEnded "the shell exited with code 0")) TaskDone "over, not wrong"
+
+        testCase "a block whose outcome is not known is not counted failed" <| fun () ->
+            Expect.equal
+                (TaskCard.stateOf (BlockFinished (CommandOutcomeUnknown "the shell came back to its prompt")))
+                TaskDone
+                "the same guess, refused the same way"
 
         testCase "the summary counts every command once" <| fun () ->
             let states = [ TaskDone; TaskFailed; TaskDone; TaskRunning; TaskDone ]

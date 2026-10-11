@@ -234,6 +234,45 @@ let private sessionTests =
             Expect.isFalse (said.Contains "$TMPDIR") "no /tmp, no denial, no hint"
         }
 
+        // A line the shell refused never ran. Told it was STILL RUNNING, an agent waited on a
+        // command that had been thrown away at the prompt; told FAILED, it would read the
+        // parser's code as the command's. The word is what it has to act on.
+        test "a line the shell refused is told it did not run, in the shell's words" {
+            let said =
+                AgentTools.renderOutcome
+                    { elided None with
+                        Status = TerminalCommandRan (CommandNotRun "bash: syntax error near unexpected token `newline'")
+                        Output = "" }
+            Expect.isTrue (said.StartsWith "DID NOT RUN") (sprintf "the status word says it never started: %s" said)
+            Expect.stringContains said "syntax error near unexpected token" "and why, as the shell put it"
+        }
+
+        test "a line refused by history expansion is told how to quote it" {
+            let said =
+                AgentTools.renderOutcome
+                    { elided None with Status = TerminalCommandRan (CommandNotRun "bash: !p: event not found"); Output = "" }
+            Expect.stringContains said "single quotes" "the fix, which the shell's own words do not suggest"
+        }
+
+        test "a line refused for anything else is not given the quoting hint" {
+            let said =
+                AgentTools.renderOutcome
+                    { elided None with
+                        Status = TerminalCommandRan (CommandNotRun "bash: syntax error near unexpected token `)'")
+                        Output = "" }
+            Expect.isFalse (said.Contains "single quotes") "no `!`, no hint about one"
+        }
+
+        // Neither ran nor not: a resend could run it twice, and a wait would wait for nothing.
+        test "a command whose outcome is not known is told so, not FINISHED or DID NOT RUN" {
+            let said =
+                AgentTools.renderOutcome
+                    { elided None with
+                        Status = TerminalCommandRan (CommandOutcomeUnknown "the shell came back to its prompt")
+                        Output = "" }
+            Expect.isTrue (said.StartsWith "OUTCOME UNKNOWN") (sprintf "its own word: %s" said)
+        }
+
         test "a command still running is told it can be typed into" {
             let said = AgentTools.renderOutcome { elided None with Status = TerminalCommandRunning; Output = "" }
             Expect.stringContains said "write_terminal" "the hand that answers a prompt or ends a stuck one"
