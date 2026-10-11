@@ -11,24 +11,23 @@ step on the type ramp, a length. That file is short on purpose. Read it with thi
 ## Stance
 
 Yession is a working room. It holds one conversation, a queue, and the means to intervene
-fast. The design is flat type on black. It takes Metro and Zune's reduction, and wears it on a
-Slack or Cursor anatomy: a sidebar, a conversation, a pane.
-
-The product follows the Bauhaus workshop's method. A small set of primary forms. A grid that
-places them. A vocabulary that names each move once. Nothing carries decoration. Everything you
-can see does a job, and its appearance says what the job is.
+fast. Its anatomy is Slack's or Cursor's: a sidebar, a conversation, a pane. Its finish is
+flat: sharp rectangles on black, and nothing that does no job.
 
 ## Principles
 
 Each principle has a test. Apply the test before you change a surface.
 
-1. **Content is the interface.** Chrome frames content and recedes behind it.
-   *Test: remove the element. If the content is no harder to read or to act on, the element goes.*
+1. **Content is the interface.** Chrome frames content: it shows where things belong and
+   which one is selected, then gets out of the way.
+   *Test: remove the element. If the content, its groups and the selection are no harder to
+   see, the element goes.*
 
-2. **Typography carries hierarchy.** Importance is said by size, weight and position on one
-   grid. It is never said by a box, a fill, a colour or an ornament around the text.
-   *Test: view the surface in greyscale with every border removed. The order of importance
-   must still be legible.*
+2. **Chrome shows structure. Type shows importance.** Grouping, nesting and selection are
+   said by a surface step, a fill or a rule. Within a group, size, weight and position say
+   what matters. Words do not do a surface's job.
+   *Test: blur the screen until no word can be read. The groups and the selected thing must
+   still be visible.*
 
 3. **One verb per surface.** Each surface has one primary act, and only that act wears the
    fill. Every other control wears a border, nothing, or text.
@@ -47,10 +46,6 @@ Each principle has a test. Apply the test before you change a surface.
    gradient. Depth is said by blur over something real (`acrylic`), never by a painted edge.
    *Test: no surface may look lit from somewhere.*
 
-7. **Remove before you add.** When two solutions satisfy the rules above, the one with fewer
-   elements wins.
-   *Test: name what the extra element earns. If you cannot, it is ornament.*
-
 ## Materials
 
 ### Type
@@ -63,16 +58,14 @@ Every size is a step on the ramp (`text-label` … `text-wordmark`, and `text-co
 A step sets the size and the line box together, on the 4px rhythm. Nothing sits off the
 ramp.
 
-The caps voice — `text-label`, `tracking-caps`, semibold — is worn by labels, statuses,
-buttons and authors. A verb with room steps up one size (`text-small`). It never steps up a
-weight. Headings are lowercase.
-
-A section heading inside a drawer is one step above the field label beneath it. So two caps
-lines never read as two headings.
+The caps voice — `text-label`, `tracking-caps`, semibold — is for short labels, statuses and
+buttons. A stack of caps lines is a wall of text. Where it would form one, let a surface say
+the grouping instead.
 
 ### Colour
 
-The ground is `bg`, black. Three hues mean three things:
+The ground is `bg`, black. It steps up in greys — `panel`, `surface`, `surface-2` — and each
+step is one level of nesting or a selection. Three hues mean three things:
 
 - `blue` is interactive, and it is the agent.
 - `green` is live, and it is the people.
@@ -111,8 +104,7 @@ One vocabulary, `Style.Stroke`, composes every border. Two widths, and only two:
 - `lead`: the leading edge, for a listed thing, where two states share one surface.
 
 A stroke also has a tone at rest and a rule for what interaction does to it. Nobody writes a bare
-`border-*` utility outside `Stroke`. **Nothing but a field or a button carries a
-border.**
+`border-*` utility outside `Stroke`.
 
 ### Space
 
@@ -128,13 +120,10 @@ band is `spacing-band` tall. On a phone it is `spacing-band-phone`. Every head o
 shares the band. The hairline under it runs across every column at one height.
 *Test: draw a vertical line on the rail. Every first letter touches it.*
 
-Height is spent on content, not on chrome. A surface that is mostly empty box is spending the
-conversation's room.
-
 ### Motion
 
 One vocabulary. Things arrive by sliding a little and fading in, at `pace`, eased out. Press
-is the Metro tilt: in fast, back with a hair of overshoot. Pressed is *held* — the `pressed`
+is a tilt: in fast, back with a hair of overshoot. Pressed is *held* — the `pressed`
 variant covers `:active` and `aria-busy` — and the control stays filled until the act lands.
 A wait is a beat (`animate-beat`), not a spinner. A dot that beats animates its colour between
 a role and its dim, never its opacity. `motion-reduce` rides every one of them. It
@@ -170,8 +159,8 @@ the one closer to the surface's verb keeps its weight, and the other drops one.
 There is one bordered face. It is `ring` in the `edge` tone, with `ink` text. Interaction
 brightens the ring. There is no blue-ringed button. Blue text belongs to a link (`askLink`), to
 the fill, and to the composer's Send, which says its verb as a bare blue word. While a flow is under way, its awaited step wears the fill. Every other verb on
-that surface drops to bordered or bare. Bare verbs speak in one voice, the caps label step. A
-verb that rides a listed row is bare and `ink-dim` at rest.
+that surface drops to bordered or bare. A verb that rides a listed row is bare and `ink-dim` at
+rest.
 *Test: list every button face on a surface. Filled, bordered, bare: three at most, each drawn
 one way.*
 
@@ -186,9 +175,6 @@ reading column is, because there the width is the question. A `md:` beside a `ph
 bug the pair exists to stop: on a phone turned sideways, both match.
 
 Picture three anchors: desktop, phone upright, and phone sideways.
-
-On a short screen, a card that takes a share of the column takes enough of it to hold its
-field, one row and its verb. The share is a floor, not a fraction.
 
 ## Deciding
 
