@@ -6225,50 +6225,49 @@ let editorTests =
                 Expect.isTrue whole "the line, its send, and the new stop control all fit the phone at once"
                 return ()
             }
-        // The composer's promise is that it gives the conversation back the room it is not
-        // using, and on a phone the verbs that REACT TO CONTENT are the room: Send and
-        // Interrupt leave the line and sit below it, standing only once there is a draft or a
-        // turn for them to act on. `opacity-0` kept every pixel of that row while hiding it —
-        // 44px of invisible buttons, plus the clearance meant to land under them — so two
-        // thirds of an empty composer was band holding nothing.
-        //
-        // The model picker does NOT belong to that promise (`Style.draftLead`'s own doc
-        // comment): choosing a model has nothing to do with there being a draft, so it is
-        // permanently on screen and permanently claims its own height — correctly, since the
-        // whole point of standing it outside `commitClass` was that a person can reach it
-        // BEFORE writing a word. So this case measures the content-gated row alone (Send's
-        // own parent), not the composer band as a whole, which would never collapse now.
-        //
-        // Only a browser can tell that from a row that is simply padded: the markup is
-        // identical either way, and so is the row's own bounding box (clipping does not
-        // resize a child). What separates them is the row's own measured height.
-        editorCaseIn 390 844 "a composer with nothing to send spends no height on its verbs" <| fun page ->
+        // On a phone Send shares its line with the model picker, which holds that line's
+        // height whether Send shows or not — so the first character of a draft must move
+        // nothing. It used to: Send's row grew from nothing and gained a pad as it came, and
+        // measured frame by frame the draft line rose 4px, the picker 2px, and Send dropped
+        // 2px before rising, all of it undone in one frame when the draft was emptied. What
+        // is measured is where the line, the picker and the band's top edge stand, before
+        // and after: a restyle may put them anywhere, but a draft beginning may not move them.
+        editorCaseIn 390 844 "on a phone the composer stands still as a draft begins" <| fun page ->
             async {
-                // Measured with motion off for the reason every geometry case here is: a
-                // `max-height` mid-transition is neither of the two heights being compared.
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
                 let line = """#shell [data-draft-input] .ProseMirror"""
                 let! _ = await (page.WaitForSelectorAsync line)
-                // The content-gated row's own height — Send's direct parent (`commitClass` in
-                // `View.drafts`), not the band as a whole, which also holds the permanently
-                // visible model picker (`Style.draftLead`).
-                let below =
+                let where =
                     """() => {
-                         const commit = document.querySelector('#shell [data-send-draft]').parentElement
-                         return commit.getBoundingClientRect().height
+                         // In the document's coordinates: reaching the line can scroll the page.
+                         const top = s => Math.round((document.querySelector(s).getBoundingClientRect().top + scrollY) * 10) / 10
+                         return JSON.stringify({
+                           line: top('#shell [data-draft-input] .ProseMirror'),
+                           picker: top('#shell [data-model-panel]'),
+                           input: top('#shell [data-draft-input]')
+                         })
                        }"""
-                let! empty = await (page.EvaluateAsync<float> below)
+                let! empty = await (page.EvaluateAsync<string> where)
                 do! awaitU (page.ClickAsync line)
-                do! awaitU (page.Keyboard.TypeAsync "something to send")
-                // Send's own weight moves from waiting to ready exactly while the draft
-                // does, so its arrival is the rule having settled — the one signal here
-                // that is not a guess at a duration.
+                do! awaitU (page.Keyboard.TypeAsync "s")
                 let! _ = await (page.WaitForSelectorAsync """#shell [data-send-draft][data-send-ready="yes"]""")
-                let! drafted = await (page.EvaluateAsync<float> below)
-                Expect.isTrue
-                    (empty < drafted && empty <= 24.0)
-                    (sprintf "an empty composer ends under its line (%fpx below it, %fpx with a draft)" empty drafted)
-                return ()
+                let! drafted = await (page.EvaluateAsync<string> where)
+                Expect.equal drafted empty "the draft line, the picker and the composer's edge stand where they stood"
+            }
+        // The other half of Send coming and going: with nothing to send there is no Send to
+        // press. It is present for the focus order, but a finger on the place it will stand
+        // reaches whatever is under it, never the control.
+        editorCaseIn 390 844 "on a phone an empty composer offers no Send to press" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync """#shell [data-send-draft][data-send-ready="no"]""")
+                let! answered =
+                    await (page.EvaluateAsync<bool> """() => {
+                        const send = document.querySelector('#shell [data-send-draft]')
+                        const r = send.getBoundingClientRect()
+                        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+                        return !!hit && send.contains(hit)
+                      }""")
+                Expect.isFalse answered "a press where Send will stand does not reach it"
             }
         // THE bug, and the reason the row above follows the draft rather than the composer's
         // focus. `focus-within` is false the moment focus leaves the composer, and pressing a
