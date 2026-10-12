@@ -52,8 +52,8 @@ them as `<generator object …>`. This is what makes `driver_call power read` th
 "what is the board doing".
 
 **Bytes do not ride tool calls, so they get a leg of their own.** The console is a stream, and
-there are two ways to reach it here. Both are useful, and the difference between them is who
-is asking:
+a stream does not fit a request and a response. The provider therefore has two legs, and each
+carries one kind of traffic:
 
 | leg | transport | carries |
 |---|---|---|
@@ -74,8 +74,8 @@ A ticket joins the legs one way. `acquire` returns the ticket in the result's `_
 
 That object is all a provider implements to have its console become a terminal that a person
 can watch and type into. It is in `_meta` and not in the content, because a ticket is for the
-*client* and not for the model. A client that has never heard of the key ignores it, still gets
-the prose, and still has the three console tools.
+*client* and not for the model. A client that has never heard of the key ignores it and still
+gets the prose. It does not get the console, because the console is not a tool.
 
 [docs/streams.md](../../docs/streams.md) describes the contract behind that URL, including
 which two rules are load-bearing and which are courtesies.

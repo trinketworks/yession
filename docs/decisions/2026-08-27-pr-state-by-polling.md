@@ -119,6 +119,12 @@ the first reason above. It is still the route for repos you administer. It is no
 
 ## Consequences
 
+**Added, 2026-09-24.** A look at an open pull request now makes a third request: one GraphQL
+query for how the pull request is on its way in (auto merge or the merge queue), what review has
+decided, and whether it is behind its base. REST has none of these. GraphQL has no conditional
+request, so each look at an open pull request spends one point of the separate GraphQL budget.
+The two GETs, the cadence and the choice to poll stand as decided.
+
 ### What would change this decision
 
 - **The dispatching service exists.** `FetchPr` then gains a second implementation. Polling becomes

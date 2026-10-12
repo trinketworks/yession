@@ -186,8 +186,9 @@ let private footerOf (message: string) =
 /// inert) rather than bare.
 ///
 /// `BREAKING CHANGE:` stays footer-only. It is a conventional-commits trailer, defined to live
-/// there, and it is the one marker that moves MAJOR — an earlier policy scanned the whole body for
-/// it and line-wrapped prose that happened to start a line with it cut a spurious major tag.
+/// there, and it is the one marker read only from the footer — an earlier policy scanned the whole
+/// body for it and line-wrapped prose that happened to start a line with it cut a spurious major
+/// tag.
 ///
 /// Highest severity wins when several appear.
 let private bumpOf (message: string) =
@@ -317,9 +318,11 @@ let private restoreTools () =
         exec "npm" [ "install"; "--ignore-scripts" ]
     run "dotnet" [ "tool"; "restore" ] |> ignore
 
-/// The version to build with when the caller supplied none. GitVersion is a dotnet local tool,
-/// so the manifest has to be restored before it can be asked.
+/// The version to build with when the caller supplied none: `gitVersion`, which is
+/// `YESSION_VERSION` when set and otherwise computed from the commit history.
 let private defaultVersion () =
+    // TODO: this restore dates from when GitVersion, a dotnet local tool, computed the number, and
+    // `computeVersion` now needs only git. Drop it if `version` should not restore, or say why not.
     restoreTools ()
     gitVersion ()
 

@@ -235,12 +235,12 @@ with nothing else on it. Prose that mentions one mid-sentence never moves the ve
 the examples above: the trailing `-> 2.0.0-beta.0` keeps those lines from standing alone. Do NOT
 paste that table bare into a commit or PR body, because then it does bump.
 
-The `BREAKING CHANGE:` marker is the exception. The tool reads it only from the footer, the last
-blank-line-separated block. It is a conventional-commits trailer, and it is the one marker that
-moves MAJOR. Scanning the whole body for it once cut a spurious major tag off line-wrapped prose.
+The `BREAKING CHANGE:` marker is the exception. It is the one marker read only from the footer,
+the last blank-line-separated block. It is a conventional-commits trailer. Scanning the whole body
+for it once cut a spurious major tag off line-wrapped prose.
 
 **When to bump.** A breaking change to the Manager ↔ Session API is a major bump. That API is the
-protocol between the `yession` and `yession-session` bins, and the Manager tolerates anything but a
+protocol between the `yession-manager` and `yession-session` bins, and the Manager tolerates anything but a
 MAJOR mismatch. Otherwise use standard semver: new user-facing capability → minor, bug fix → patch.
 The same policy applies once the version leaves beta. A plain `feat:` subject does NOT bump. A tag
 is cut per green master push, so nearly every release would bump. Only an explicit marker moves

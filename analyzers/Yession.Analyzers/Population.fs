@@ -9,10 +9,12 @@ open FSharp.Compiler.Text
 /// What a whole-population rule reads: every declaration one project could name, of the code
 /// this repository builds.
 ///
-/// Two rules want this and a third is likely, so it is one module rather than a copy each. The
-/// walk is not cheap — it reads every referenced assembly — and the answer is the same for
-/// every file in a project, so it is done once per project and kept for as long as that
-/// project is the one being analyzed (`Kept`, which says why the lifetime is the point).
+/// Every rule that judges a project as a whole reads it from here, so it is one module rather
+/// than a copy each: `of'` gives the declarations and `reportsHere` names the one file that
+/// reports the verdict. The walk is not cheap — it reads every referenced assembly — and the
+/// answer is the same for every file in a project, so it is done once per project and kept for
+/// as long as that project is the one being analyzed (`Kept`, which says why the lifetime is
+/// the point).
 
 /// Where a declaration's name can be brought into scope. Not where it is USED: where a file
 /// could `open` its way to it, which is the question these rules ask and the one accessibility

@@ -348,8 +348,9 @@ only place where the current rotation is visible, because it appears in neither 
 the secret, nor the header.
 
 Verification is HMAC-SHA256 over the raw body, in hex, in `X-Hub-Signature-256` behind
-`sha256=` (the WebSub convention: GitHub, Shopify, Linear). To override it for one endpoint,
-add the override to the same option after an `=`:
+`sha256=` (the WebSub convention, which GitHub uses). A sender that signs the same way with
+another header, encoding or prefix needs an override, as Shopify does. To override it for one
+endpoint, add the override to the same option after an `=`:
 
 ```sh
 yession-manager --webhook 'shopify=x-shopify-hmac-sha256:base64:'
