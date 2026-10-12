@@ -3,10 +3,9 @@ module Yession.Host.AttachWs
 // Attaching a terminal to a byte stream somebody else is producing (Plan 16, part D).
 //
 // This file is the client half of a contract somebody outside this repository implements,
-// and `docs/streams.md` is that contract written down — MUST/SHOULD/MAY, and which two
-// rules are load-bearing. Change what happens here and change it there; a spec that drifts
-// from its only implementation is worse than none, which is how `{"type":"failed"}` came to
-// be sent, parsed, and specified nowhere.
+// and `docs/streams.md` is that contract written down, in MUST/SHOULD/MAY tiers. Change what
+// happens here and change it there; a spec that drifts from its only implementation is worse
+// than none, which is how `{"type":"failed"}` came to be sent, parsed, and specified nowhere.
 //
 // WebSocket, for three reasons and not because it is fashionable: the client costs nothing
 // (Node 22+ ships a global `WebSocket`, and the repo pins 24), a provider is already running

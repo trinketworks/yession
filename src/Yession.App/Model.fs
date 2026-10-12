@@ -3330,6 +3330,8 @@ module ClientModel =
     let previewPlayable (subject: PreviewSubject) (model: ClientModel) : bool =
         match subject with
         | PreviewSubject.Block (terminal, blockId) ->
+            // TODO: docs/notes/closed-terminal-playback-ux.md item 7 asks for no player under a minimum recorded duration
+            // (a sub-second block shows 00:00-00:00), and nothing here gates on duration. Pick a threshold, or show the span.
             terminalPlayable terminal model && blockRange terminal blockId model |> Option.isSome
         // A stretch with no recorded bounds is a gap in the record, which the surface
         // states rather than playing an empty player over.
