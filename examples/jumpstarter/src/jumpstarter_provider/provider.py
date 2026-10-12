@@ -247,9 +247,9 @@ class Provider:
             )
             # The console, as a stream a CLIENT can open — in `_meta`, which is the place MCP
             # reserves for data meant for the client rather than the model. A client that has
-            # never heard of the key ignores it and still gets the prose, and still has the
-            # three console tools; one that knows it turns the console into a terminal people
-            # can watch and type into.
+            # never heard of the key ignores it and still gets the prose, but no console: the
+            # console is not a tool. One that knows the key turns the console into a terminal
+            # people can watch and type into.
             offer = self.console.offer(self.origin(), holder)
             if offer is None:
                 return _said(f"{held} Its console is already attached to a terminal.")

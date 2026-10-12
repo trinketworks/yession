@@ -79,6 +79,9 @@ module SignatureSpec =
     /// comes from WebSub, which is why GitHub uses it and why defaulting to it teaches the
     /// Manager nothing about GitHub.
     let webSub : SignatureSpec = { Header = "x-hub-signature-256"; Encoding = SignatureEncoding.Hex; Prefix = "sha256=" }
+    // TODO: docs/deployment.md's example `--webhook github --webhook linear` gives Linear this
+    // default, but Linear's docs describe a `linear-signature` header, hex, no prefix. Check a
+    // real Linear delivery, then give the example an override or drop Linear from it.
 
     /// `header:encoding:prefix`, e.g. `x-shopify-hmac-sha256:base64:`. Split on the first
     /// two colons only, so a prefix may contain anything at all — `sha256=` included, which

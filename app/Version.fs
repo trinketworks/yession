@@ -10,7 +10,7 @@ module Yession.Host.Version
 // package.json being next to them.
 //
 // Every build states what it actually is; there are no placeholder versions:
-//   1.0.0-beta.95   a release (GitVersion, see GitVersion.yml)
+//   1.0.0-beta.95   a release (computed from the commit history by `tasks.fsx version`)
 //   0.0.0-g1a2b3c4  a pure Nix build — .git is stripped from its source, so it reports its rev
 //   test            the test tiers (`check` stages with this)
 //   dev             an unbundled run of the Fable output (`tasks.fsx start` / `dev`)
