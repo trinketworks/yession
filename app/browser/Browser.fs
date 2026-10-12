@@ -956,15 +956,10 @@ let private fetchPullHead (repo: RepoRef) (number: int) : Async<Result<PullHead,
 // --- Uploads into the artifacts ------------------------------------------------------------
 // The bytes of every file a person handed this page to send, kept until the model lets them go
 // (`ClientEffect.ForgetUpload`), with the request carrying them while one is out. What happens
-// to them is the model's (`Uploads`); this keeps them and sends them.
-//
-// `XMLHttpRequest` rather than `fetch`, because it is the one that reports how much of a body
-// has gone — the only progress a person waiting on a large file has.
+// to them is the model's (`Uploads`); this keeps them and sends them, through the one request
+// that reports progress (`Fable.BrowserExtras.Requests`).
 
-[<Emit("new XMLHttpRequest()")>]
-let private newRequest () : obj = jsNative
-
-let private keptUploads = Collections.Generic.Dictionary<string, Browser.Types.File * obj option> ()
+let private keptUploads = Collections.Generic.Dictionary<string, Browser.Types.File * (unit -> unit) option> ()
 
 /// Send the bytes kept under `id` as the next version of `name`. The session's 4xx is a
 /// refusal a second try would meet again; no answer, or a 5xx, is a try that may yet go.
@@ -974,28 +969,26 @@ let private sendUpload (peer: PeerId) (id: string) (name: string) (onProgress: i
     | _, Error reason -> async.Return (UploadAnswer.Refused reason)
     | (true, (file, _)), Ok content ->
         Async.FromContinuations (fun (resolve, _, _) ->
-            let request = newRequest ()
-            keptUploads.[id] <- (file, Some request)
-            request?``open`` ("PUT", Page.href (ContentUpload content))
-            request?setRequestHeader (SessionRoute.uploaderHeader, PeerId.value peer)
-            request?upload?onprogress <- fun (e: obj) -> onProgress (int64 (e?loaded : float))
-            request?onload <-
-                fun (_: obj) ->
-                    let status : int = request?status
-                    let said : string = request?responseText
-                    let said = if String.IsNullOrWhiteSpace said then sprintf "the session answered %d" status else said
-                    if status >= 200 && status < 300 then resolve UploadAnswer.Uploaded
-                    elif status >= 400 && status < 500 then resolve (UploadAnswer.Refused said)
-                    else resolve (UploadAnswer.Failed said)
-            request?onerror <- fun (_: obj) -> resolve (UploadAnswer.Failed "the session could not be reached")
-            request?onabort <- fun (_: obj) -> resolve (UploadAnswer.Failed "the send was cut short")
-            request?send file)
+            let answered (status: int) (said: string) =
+                let said = if String.IsNullOrWhiteSpace said then sprintf "the session answered %d" status else said
+                if status >= 200 && status < 300 then resolve UploadAnswer.Uploaded
+                elif status >= 400 && status < 500 then resolve (UploadAnswer.Refused said)
+                else resolve (UploadAnswer.Failed said)
+            let abort =
+                Fable.BrowserExtras.Requests.put
+                    (Page.href (ContentUpload content))
+                    [ SessionRoute.uploaderHeader, PeerId.value peer ]
+                    file
+                    (fun loaded -> onProgress (int64 loaded))
+                    answered
+                    (fun reason -> resolve (UploadAnswer.Failed reason))
+            keptUploads.[id] <- (file, Some abort))
 
 let private forgetUpload (id: string) : unit =
     match keptUploads.TryGetValue id with
-    | true, (_, Some request) ->
+    | true, (_, Some abort) ->
         keptUploads.Remove id |> ignore
-        request?abort ()
+        abort ()
     | true, (_, None) -> keptUploads.Remove id |> ignore
     | false, _ -> ()
 

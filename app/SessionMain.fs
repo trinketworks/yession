@@ -1209,7 +1209,9 @@ Async.StartImmediate (
             // where the bytes are.
             let contentRoutes =
                 match auth with
-                | Some a -> Some (Artifacts.routes a log artifactsDir sessionMount)
+                // Read at the request, not here: the store is composed once the Host is up.
+                | Some a ->
+                    Some (Artifacts.routes a (fun actor name declared body -> artifacts.Receive actor name declared body) artifactsDir sessionMount)
                 | None -> None
             [ claudeRoutes; githubRoutes; queryRoutes; repoRoutes; contentRoutes ]
             |> List.choose id
@@ -1395,10 +1397,12 @@ Async.StartImmediate (
         // Composed here rather than in the Host, because the artifacts directory is this
         // module's fact (`artifactsDir`, beside `reposDir`) and the Host is given a sandbox
         // registry rather than the layout under it. Everything else it needs is the Host's,
-        // read from what it just handed back.
+        // read from what it just handed back — the log among them, which is the one that
+        // tells every peer a share happened (`Host.Log`); the file log under it tells nobody,
+        // so a share recorded there showed up only when some later event was broadcast.
         artifacts <-
             Artifacts.create
-                log
+                host.Log
                 artifactsDir
                 host.Sandboxes.EnvironmentFor
                 // The store as each sandbox sees it: the bind mount's target under docker, the

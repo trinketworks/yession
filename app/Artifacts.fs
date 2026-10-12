@@ -448,9 +448,13 @@ let read (artifactsDir: string) (ref: ContentRef) : Async<Result<FileContent, st
 /// it, minted by `receive` and recorded as the sender's. No second check of where the request
 /// came from — the cookie is `SameSite=Lax`, so a page on another site cannot send it on a
 /// `PUT`, which is the same door every other write on this server stands behind.
+///
+/// The write is the store's (`SessionArtifacts.Receive`) rather than a log handed to the
+/// route: the log a fact must go on is the one that tells every peer it is there, and these
+/// routes are composed before that one exists.
 let routes
     (auth: SessionAuth.Auth)
-    (log: EventLog<SessionEvent>)
+    (receive: ActorRef -> string -> int64 option -> Readable -> Async<Result<ArtifactShared, UploadRefusal>>)
     (artifactsDir: string)
     (mount: string)
     : IncomingMessage -> ServerResponse -> bool =
@@ -487,7 +491,7 @@ let routes
                             | false, _ -> None)
                     Async.StartImmediate (
                         async {
-                            match! receive log artifactsDir actor name declared req with
+                            match! receive actor name declared req with
                             | Ok fact ->
                                 let pinned = RelativeUrl.under mount (SessionRoute.relative (SessionRoute.Content (ArtifactRef.content fact.Ref)))
                                 res.writeHead (
@@ -541,6 +545,9 @@ type SessionArtifacts =
       /// own name when none is given), and record the act. The answer is the fact that went on
       /// the log, so a caller never has to re-derive the address it minted.
       Share : ActorRef -> SandboxRef -> string -> string option -> Async<Result<ArtifactShared, string>>
+      /// Take a file a person sent (`receive`) as the next version of `name`, and record it
+      /// as theirs: the browser's way in, beside `Share`, which is the sandbox's.
+      Receive : ActorRef -> string -> int64 option -> Readable -> Async<Result<ArtifactShared, UploadRefusal>>
       /// One artifact back, by its address — the text, or the picture. The sibling of
       /// `Share`, and the only way anything that is not a browser reads this store.
       Read : ContentRef -> Async<Result<FileContent, string>>
@@ -587,6 +594,10 @@ let weighed (sandbox: SandboxRef) (path: string) (code: int, out: string, err: s
 
 let unavailable : SessionArtifacts =
     { SessionArtifacts.Share = fun _ _ _ _ -> async { return Error "this session has nowhere to keep artifacts" }
+      SessionArtifacts.Receive =
+        fun _ _ _ body ->
+            body.resume ()
+            async { return Error (UploadRefusal.Failed "this session has nowhere to keep artifacts") }
       SessionArtifacts.Read = fun _ -> async { return Error "this session has no artifacts to read" }
       SessionArtifacts.Versions = fun _ -> []
       SessionArtifacts.Names = fun () -> [] }
@@ -710,6 +721,7 @@ let create
         }
 
     { SessionArtifacts.Share = share
+      SessionArtifacts.Receive = receive log artifactsDir
       SessionArtifacts.Read = read artifactsDir
       SessionArtifacts.Versions = versions artifactsDir
       SessionArtifacts.Names = fun () -> names artifactsDir }

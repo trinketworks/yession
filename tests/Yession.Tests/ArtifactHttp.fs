@@ -67,7 +67,7 @@ let private serving (files: (ArtifactRef * string) list) =
                 None
                 None
                 None
-                (Some (Artifacts.routes (stubAuth ()) log dir ""))
+                (Some (Artifacts.routes (stubAuth ()) (Artifacts.receive log dir) dir ""))
                 (fun _ -> "no peer token is minted here")
                 ""
                 None
@@ -91,7 +91,7 @@ let private receiving () =
                 None
                 None
                 None
-                (Some (Artifacts.routes (stubAuth ()) log dir ""))
+                (Some (Artifacts.routes (stubAuth ()) (Artifacts.receive log dir) dir ""))
                 (fun _ -> "no peer token is minted here")
                 ""
                 None

@@ -4402,7 +4402,7 @@ module View =
             html $"""
                 <div class="{Style.uploadCell}">
                   <input type="file" class="border-0" multiple hidden data-artifact-upload-input @change={Ev(picked)}>
-                  <button type="button" class="{Style.terminalListAct}" data-artifact-upload
+                  <button type="button" class="{Style.paneAct}" data-artifact-upload
                           aria-label="{Dom.Text.uploadNamed}" @click={Ev(choose)}>{Dom.Text.upload}</button>
                 </div>"""
         // Headings only when there are two kinds to tell apart: over a list of terminals alone,
