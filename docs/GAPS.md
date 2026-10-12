@@ -381,7 +381,7 @@ against each other. The last section holds trust boundaries as sharp as the firs
     fault. `repoWorkBackend` is hard-coded with no preflight.
 
   The suite (`tests/Yession.Tests/DockerIntegration.fs`) needs the `Docker` capability. See
-  "Asking for a capability requires it" in [AGENTS.md](../AGENTS.md#testing).
+  `requireCapabilities` in [tasks.fsx](../tasks.fsx), which refuses a capability the box lacks.
 - **Secrets are a real Manager-owned store now** (Plan 06). The store has these parts:
   - AES-256-GCM per-entry ciphertext in `<DataDir>/secrets.json`
   - the KEK in the OS credential manager (`@napi-rs/keyring`), imported non-extractably each start
@@ -981,7 +981,7 @@ code matches the doctrine. Each entry names the rule and the sites.
     stream, but the open browser tab re-asks.
 - **Live-path verification is credential-gated by design.** The `LiveAgent` capability makes
   `verify` fail without `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN`, instead of skipping (see
-  "Asking for a capability requires it" in [AGENTS.md](../AGENTS.md#testing)). A cheap-tier run
+  `requireCapabilities` in [tasks.fsx](../tasks.fsx)). A cheap-tier run
   never asks. `YESSION_BIN_CLAUDE` matters in sandboxes that kill the SDK's vendored binary.
 
   That gate does NOT cover the credential going missing after it passes. The parent probes the

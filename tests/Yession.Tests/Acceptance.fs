@@ -3323,7 +3323,7 @@ let private chromeTests =
 
         // Deliberately no "focus is blue, everywhere" here. That focus is BLUE rather than
         // green is house style, not a floor — a design that moved it would fail such a test
-        // while breaking nothing, which is the shape this suite does not keep (AGENTS.md,
+        // while breaking nothing, which is the shape this suite does not keep (tests/AGENTS.md,
         // "Writing tests"). That focus is VISIBLE is the invariant, and the cases above are
         // what hold it.
 
@@ -3405,7 +3405,7 @@ let private chromeTests =
 // one name, an author is never a raw id, and a control is offered only when it does something.
 // Deliberately NOT here — the caret marking an empty timeline, the composer's rest-state rail,
 // which weight a waiting button wears — because those are the design, and the design changing
-// is not a regression (AGENTS.md, "Writing tests").
+// is not a regression (tests/AGENTS.md, "Writing tests").
 let private semanticsTests =
     testList "What the screen says about people and their choices" [
 

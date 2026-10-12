@@ -336,7 +336,8 @@ module Chapters =
         { Task =
             // The inner binding is NOT `current`. One name meaning an option in the outer
             // scope and its contents in the inner is the shape CI's whole-solution analyzer
-            // has been wedged by before (AGENTS.md, YES000), and it costs nothing to avoid.
+            // has been wedged by before (analyzers/AGENTS.md, YES000), and it costs nothing to
+            // avoid.
             match current with
             | None ->
                 "Name this part of a working session, the way a chapter in a book is named: "
