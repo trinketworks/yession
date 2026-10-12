@@ -2551,11 +2551,29 @@ module Style =
     ///
     /// `px-4` is the composer's gutter, so interrupt's glyph starts on the model picker's
     /// edge and the jump's ends on Send's. 44px on a phone, a thumb's target; 40 elsewhere.
-    let composerTray = "shrink-0 flex items-center h-10 max-md:h-11 px-4 bg-panel"
+    ///
+    /// It ARRIVES rather than appears: drawn first (`starting:`) a touch low and clear, it
+    /// rises onto the composer's rule and fades in, on the pace every arrival here takes
+    /// (`Motion.pace`) — out from behind the composer, which is later in the document and
+    /// positioned, so the few pixels it starts below the rule are under the band, not over it.
+    ///
+    /// Its HEIGHT is not animated, and that is the point of doing it this way. The strip is
+    /// laid out at its full height in one frame, so the conversation gives up its room once;
+    /// growing it from nothing instead moved the conversation's box every frame for 200ms —
+    /// the newest line re-pinned twelve times over, which the cold-open bench measured as six
+    /// times the paints of a strip that simply arrived. Opacity and translation move nothing
+    /// else on the page.
+    let composerTray =
+        cls [ "shrink-0 flex items-center h-10 max-md:h-11 px-4 bg-panel"
+              "transition-[translate,opacity] starting:translate-y-1 starting:opacity-0"; Motion.pace ]
 
     let private trayVerb =
         cls [ "h-full min-w-11 shrink-0 inline-flex items-center gap-1.5 p-0 bg-transparent border-0 cursor-pointer font-ui"
-              capsLg; "text-ink-dim transition-colors"; focusRing ]
+              capsLg; "text-ink-dim"
+              // A control arriving in a strip already open fades in on the same pace
+              // (`starting:`, the style it is first drawn from), so the second of the two
+              // turning up does not pop where the first arrived.
+              "transition-[color,opacity] starting:opacity-0"; Motion.pace; focusRing ]
 
     /// Ink at rest, err under the hand — the face every destructive verb here wears. Err AT
     /// rest is this product's tone for *something is wrong*, and a turn running is the normal
