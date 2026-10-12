@@ -2,7 +2,7 @@
 
 > Decided 2026-09-12 · Supersedes nothing · Related: [app/GitHubPrs.fs](../../app/GitHubPrs.fs) —
 > now the whole of these three tools, not just the REST underneath them.
-> [src/Yession.Domain/AgentTools.fs](../../src/Yession.Domain/AgentTools.fs) — the `yession`
+> [src/Yession.Session/AgentTools.fs](../../src/Yession.Session/AgentTools.fs) — the `yession`
 > registry, which no longer says GitHub anywhere. [app/PrWatches.fs](../../app/PrWatches.fs) — the
 > `pull_requests` query, the precedent this follows. [app/Commands.fs](../../app/Commands.fs) —
 > where the gated verbs and the tools of the provider are wired together.
@@ -34,7 +34,7 @@ turns that list into tools generically and never reads what is in it.
 ## Decision
 
 `create_pr`, `watch_pr` and `unwatch_pr` — their descriptions, their argument schemas, their JSON
-decoding — are declared in `app/GitHubPrs.fs`, not in `src/Yession.Domain/AgentTools.fs`. They reach
+decoding — are declared in `app/GitHubPrs.fs`, not in `src/Yession.Session/AgentTools.fs`. They reach
 the `yession` tool registry through a new field, `RepoCapabilities.ProviderTools : (ToolDescriptor *
 (string -> Async<Result<ToolAnswer, string>>)) list`. `AgentTools.fs` appends the field to its own
 declared tools without reading a word of it:
