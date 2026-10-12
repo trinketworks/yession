@@ -162,18 +162,10 @@ type Screens =
 /// drives the harness, which has no copy of it — which is how the one thing it did wrong went
 /// unnoticed: it ran only from `setState`, so a splitter drag or a window resize, which change
 /// the box and dispatch nothing, never measured anything at all.
-let create (dispatch: ClientMsg -> unit) : Screens =
+let create (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) : Screens =
     let live = System.Collections.Generic.Dictionary<string, Live> ()
 
-    /// The size each terminal's viewport was last measured at, so a render that moved nothing
-    /// dispatches nothing. Not the pty's de-duplication — the model keeps the measurement and
-    /// asks for a resize only when it changed — but the render loop's: a dispatch renders, and
-    /// this runs after every render, so a measurement dispatched whether or not it moved would
-    /// ask for another render after every one.
-    let measuredSize = System.Collections.Generic.Dictionary<string, int * int> ()
-
     let forget (key: string) =
-        measuredSize.Remove key |> ignore
         match live.TryGetValue key with
         | true, existing ->
             existing.Emulator.Dispose ()
@@ -192,36 +184,41 @@ let create (dispatch: ClientMsg -> unit) : Screens =
                     dispatch (TerminalScreenMsg (id, screen))
             })
 
-    /// The model as of the last sync, so the observer below has something to measure against.
-    /// A box changing is not a model change — that is the whole point of watching it — so the
-    /// callback cannot be handed one.
-    let mutable latest : ClientModel option = None
-
     /// Measure what this reader is looking at, and tell the model — for every terminal, held or
     /// not: a width is a fact about this client's own window, and the command about to be
     /// queued claims it (`PendingAct.Size`). That claim is made in BLOCK mode, where nobody
     /// holds anything — so measuring only the holder, as this used to, meant block mode never
     /// had a width to claim. What reaches the pty, and only for the holder, the model decides.
-    let measureSizes (boxes: Map<string, HTMLElement>) (model: ClientModel) =
-        for terminal in Projection.openTerminals model.Terminals do
-            let key = TerminalId.value terminal.TerminalId
-            match Map.tryFind key boxes |> Option.bind measure with
-            | None -> ()
-            | Some (cols, rows) ->
-                let last = match measuredSize.TryGetValue key with | true, v -> Some v | _ -> None
-                if last <> Some (cols, rows) then
-                    measuredSize.[key] <- (cols, rows)
-                    dispatch (TerminalViewportMsg (terminal.TerminalId, { Cols = cols; Rows = rows }))
+    ///
+    /// Told only when it differs from what the model already holds (`TerminalViewports`).
+    /// Not the pty's de-duplication — the model asks for a resize only when the size changed —
+    /// but the render loop's: every message costs an update and a render, this runs after every
+    /// render, and the observer below fires on every frame of a drag. Asked of the LATEST
+    /// model (`current`), not the one a sync was handed: a model that came during the frame
+    /// and has not been drawn yet may already hold the size, and telling it again is a message
+    /// for nothing. `measure` refuses a zero box as the model does, so what is told is kept.
+    let measureSizes (boxes: Map<string, HTMLElement>) =
+        match current () with
+        | None -> ()
+        | Some model ->
+            for terminal in Projection.openTerminals model.Terminals do
+                let key = TerminalId.value terminal.TerminalId
+                match Map.tryFind key boxes |> Option.bind measure with
+                | None -> ()
+                | Some (cols, rows) ->
+                    let size = { Cols = cols; Rows = rows }
+                    if Map.tryFind terminal.TerminalId model.TerminalViewports <> Some size then
+                        dispatch (TerminalViewportMsg (terminal.TerminalId, size))
 
     /// One observer, re-pointed at whichever terminal the pane is showing. A box can change
     /// without the model changing — the splitter is dragged, the window is resized, the phone
     /// is turned — and those are exactly the cases a render-loop measurement cannot see.
     ///
-    /// `measuredSize` is what keeps this cheap: an observer fires on every frame of a drag, and
-    /// only the frames that cross a whole character cell say anything.
+    /// Comparing against the model is what keeps this cheap: an observer fires on every frame
+    /// of a drag, and only the frames that cross a whole character cell say anything.
     let observer =
         if ResizeObserver.isSupported () then
-            Some (ResizeObserver.create (fun () -> latest |> Option.iter (measureSizes (viewports ()))))
+            Some (ResizeObserver.create (fun () -> measureSizes (viewports ())))
         else None
     let mutable observed : HTMLElement option = None
 
@@ -305,10 +302,9 @@ let create (dispatch: ClientMsg -> unit) : Screens =
                 forget stale
             // Last, because both read the document this render has just produced: which box
             // this reader is looking at, and how big it is.
-            latest <- Some model
             // One look at the document for both, because both ask it the same question —
             // where are the terminal boxes — and asking twice is asking twice.
             let boxes = viewports ()
             watchViewport boxes model
-            measureSizes boxes model
+            measureSizes boxes
       Forget = fun id -> forget (TerminalId.value id) }
