@@ -1461,9 +1461,8 @@ type ClientModel =
       /// place, wearing its closed mark, until they put it away (`DismissTabMsg`). Or
       /// `close_tab`, for one not on screen. Nothing else — not choosing another tab, not a
       /// preview over it, not a reload (`PaneMemory`) — so a tab never blinks out or comes
-      /// back somewhere else (F2). There is no way to drop a tab and leave its terminal
-      /// running (P2-2): a running tab's × is the kill, so the strip never says a terminal
-      /// is gone while it is still running somewhere.
+      /// back somewhere else (F2). A running terminal's tab can be put away too, and the
+      /// terminal goes on running: it is in the list, which is where it is stopped.
       Tabs          : TerminalId list
       /// How many terminals this client has ASKED for and not yet been shown.
       ///
@@ -1483,8 +1482,8 @@ type ClientModel =
       Opening       : int
       /// The terminal this client last asked to END, until the close arrives.
       ///
-      /// `Opening`'s shape, for `Opening`'s reason: the kill is pressed on a tab's × or a
-      /// row of the switcher, the close comes back as an event like every other peer's, and that event removes the
+      /// `Opening`'s shape, for `Opening`'s reason: the stop is pressed on a row of the
+      /// list, the close comes back as an event like every other peer's, and that event removes the
       /// control that was pressed — so the only thing that can say where focus goes next is
       /// the fold that sees the close arrive, and it can say so only if it knows the close is
       /// the answer to a press made HERE. A terminal somebody else ends must not move this
@@ -2204,7 +2203,7 @@ type ClientMsg =
     | RearmTerminalMsg of TerminalId
     /// Ask the provider for a closed terminal's stream again (Plan 19, step 4).
     | ReattachTerminalMsg of TerminalId
-    /// End a terminal — the one verb that stops what runs in it, and what a tab's × is (P2-2).
+    /// End a terminal — the one verb that stops what runs in it, the list's stop (P2-2).
     ///
     /// Dispatched by a kill control only on a SECOND press, once the terminal is `KillArmed` —
     /// the first press sends `ArmKillMsg` instead (`ClientModel.killPress`). Like `DeleteQueuedMsg`, the two-press rule is a
@@ -5196,16 +5195,14 @@ module ClientModel =
         | KillPressedMsg _ -> model
         | ArmKillMsg next -> { model with KillArmed = next }
         | DismissTabMsg terminal ->
-            match Projection.tryFind terminal model.Terminals with
-            | Some view when view.IsOpen -> model
-            | Some _
-            | None ->
-                let next = dismissLanding model terminal
-                { model with
-                    Tabs = model.Tabs |> List.filter (fun tab -> tab <> terminal)
-                    Pane =
-                        if selectedTerminal model = Some terminal then next |> Option.map (Reading >> OnTerminal)
-                        else model.Pane }
+            // Open or closed alike: putting a tab away ends nothing. A running terminal goes
+            // on running, in the list, which is where it is stopped.
+            let next = dismissLanding model terminal
+            { model with
+                Tabs = model.Tabs |> List.filter (fun tab -> tab <> terminal)
+                Pane =
+                    if selectedTerminal model = Some terminal then next |> Option.map (Reading >> OnTerminal)
+                    else model.Pane }
         ))))))))
 
     /// The read loop's decisions: what a message, once folded, asks to be read next — of the

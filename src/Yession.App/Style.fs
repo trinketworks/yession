@@ -3094,20 +3094,12 @@ module Style =
     /// A mark beside a name (`View.terminalMark`): the running pulse, a failed exit, a closed
     /// terminal. Sized to the small type, sat on the name's line.
     let pivotMark = "inline-flex items-center self-center"
-    /// A tab's × (P2-2): the terminal's kill, worn by the selected tab (and by one whose kill
-    /// a Delete armed). The row verb's own face, sat on the name's line so it costs the row no
-    /// height. On a phone its box is a thumb's 44 with the glyph centred, pulled in by as much
-    /// again (`-my-2.5`), so the item it rides is still the 44 every item is.
-    let terminalTabKill = cls [ btnIconBareDanger; "self-center phone:min-w-11 phone:min-h-11 phone:-my-2.5" ]
-    /// The same, armed: the kill's armed face, sat the same way, so arming it grows the item
-    /// sideways and never the row downwards.
-    let terminalTabKillArmed = cls [ btnKillArmed; "self-center phone:min-h-11 phone:-my-2.5" ]
-    /// The × a TERMINAL's tab wears — its kill, or a closed one's dismiss: `terminalTabKill`,
-    /// pulled in sideways on a phone as it already is up and down (`-mx-2`). The glyph is a
-    /// third of its 44px box, and the rest, in flow, made the selected tab 140px wide — half
-    /// the strip. The box is still the thumb's 44 and still on top of what it overlaps, which
-    /// is its own tab's padding and the gap after it, never a neighbour.
-    let pivotTabKill = cls [ terminalTabKill; "phone:-mx-2" ]
+    /// A tab's ×: it closes the tab and ends nothing, so it is neutral under the hand rather
+    /// than the error red. Sat on the name's line so it costs the row no height. On a phone its
+    /// box is a thumb's 44 with the glyph centred, pulled in by as much again up and down
+    /// (`-my-2.5`) and sideways (`-mx-2`), so the item it rides is still the 44 every item is
+    /// and the selected tab is not half the strip.
+    let pivotTabClose = cls [ btnIconBare; "self-center phone:min-w-11 phone:min-h-11 phone:-my-2.5 phone:-mx-2" ]
     /// The pivot's one way to make something: a `+` in the pivot's own type, unboxed, faint at
     /// rest like every item not chosen. The cell is the positioning context its menu hangs
     /// from, outside the scroller, because a menu hung inside an `overflow-x-auto` box is
@@ -3315,7 +3307,7 @@ module Style =
     /// (docs/visual-design.md, "Hierarchy of controls") — ink under the hand, or the error red
     /// for the one that ends something.
     let private terminalListActBase =
-        cls [ "h-6 px-1 shrink-0 inline-flex items-center justify-center bg-transparent border-0 cursor-pointer"
+        cls [ "h-6 px-1 shrink-0 inline-flex items-center justify-center gap-1.5 bg-transparent border-0 cursor-pointer"
               caps; "whitespace-nowrap transition-colors"; focusRing ]
     let terminalListAct = cls [ terminalListActBase; "text-ink-dim hover:text-ink" ]
     let terminalListKill = cls [ terminalListActBase; "text-ink-dim hover:text-err" ]

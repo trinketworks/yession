@@ -4110,13 +4110,9 @@ module View =
     /// the two. Armed, it says what it will end and what is running there. Escape, the wait
     /// (`ClientModel.armedMs`), or focus leaving it takes it back.
     ///
-    /// ONE control in two places — a row of the switcher, and the tab's × — rather than two
-    /// look-alikes: a close and a kill that looked the same and meant opposite things is what
-    /// this replaced. `glyph` is all that differs: a × on a tab, where it rides a name in a
-    /// row of names, and the word `kill` on a row, where the space is the row's own. It was a
-    /// square there, which is what Stop looks like — and a running command has a real Stop.
-    /// The faces carry only what each place needs to sit in its line. Absent, not disabled,
-    /// where the terminal cannot be killed.
+    /// On the list's row only: a tab's × closes the tab and ends nothing. It wears the stop
+    /// mark and the word `stop`, the interrupt's face, because it is the same act on a whole
+    /// terminal. Absent, not disabled, where the terminal cannot be stopped.
     let private killControl
         (dispatch: ClientMsg -> unit)
         (model: ClientModel)
@@ -4283,7 +4279,7 @@ module View =
                 if selected = Some view.TerminalId || model.KillArmed = Some view.TerminalId then Style.terminalListVerbs
                 else Style.terminalListVerbsAtRest
             let nameClass = if view.IsOpen then Style.terminalListName else Style.terminalListNameClosed
-            let killWord = html $"""{Dom.Text.kill}"""
+            let killWord = html $"""{Icon.stop}{Dom.Text.kill}"""
             // What it is doing or last did, and where, under the name: nine rows of `term N`
             // say which is which, and this says which is the one you want.
             let subtitle =
@@ -4538,18 +4534,10 @@ module View =
             (view: TerminalView)
             =
             let on = onTerminal view.TerminalId
-            // The × is worn by the selected item, and by one whose kill a Delete armed — the
-            // armed face has to be on screen to be confirmed. One control with the `all`
-            // page's row kill (`killControl`), so the two arm the same slot.
-            //
             // Not under a preview: there the tab is the way back to its terminal, and the
-            // preview's own × is right under it — a kill a thumb's height from a close reads
-            // as one control twice, and only one of them can be taken back.
+            // preview's own × is right under it — two closes a thumb's height apart read as
+            // one control twice.
             let showing = on && Option.isNone previewing
-            let kill =
-                if showing || model.KillArmed = Some view.TerminalId then
-                    killControl dispatch model Style.pivotTabKill Style.terminalTabKillArmed Icon.close view
-                else Lit.nothing
             let key = ClientModel.tabKey view.TerminalId
             let id = TerminalId.value view.TerminalId
             let klass = if on then Style.pivotItemOn else Style.pivotItem
@@ -4580,16 +4568,18 @@ module View =
                 if view.IsOpen && Option.isSome (Projection.runningBlock view) then
                     html $"""<span class="{Style.pivotMark}" data-terminal-tab-running>{terminalMark model view}</span>"""
                 else terminalMark model view
-            // A closed item's ×, where an open one's kill was: nothing is left to end, so it
-            // puts the tab away (`DismissTabMsg`) — the one way a closed tab leaves the strip,
-            // and Delete on the item is the same press from the keyboard.
-            // On the selected item only, and not under a preview, as the kill is.
+            // The item's ×: it closes the TAB (`DismissTabMsg`), open terminal or closed, and
+            // ends nothing — the terminal keeps running, in the list, where its stop is. A ×
+            // on a tab means close the tab everywhere else a person has met one; it used to
+            // mean kill here, and a press that ends a build is not one to make by habit.
+            // Delete on the item is the same press from the keyboard. On the selected item
+            // only.
             let dismiss =
-                if view.IsOpen || not showing then Lit.nothing
+                if not showing then Lit.nothing
                 else
                     let label = Dom.Text.dismissTab name
                     html $"""
-                        <button type="button" class="{Style.pivotTabKill}" data-pane-tab-dismiss="{id}"
+                        <button type="button" class="{Style.pivotTabClose}" data-pane-tab-dismiss="{id}"
                                 aria-label="{label}" title="{label}"
                                 @click={Ev(fun (e: Browser.Types.Event) ->
                                               // Not the item's press too: a × is not a way to select.
@@ -4604,7 +4594,7 @@ module View =
                          id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
                          aria-selected="{if on then "true" else "false"}" tabindex="{stopAt on}" title="{tooltip}"
                          @keydown={Ev(activateKey)}
-                         @click={Ev(fun _ -> activate ())}><span class="{Style.pivotName}" data-terminal-tab-name>{name}</span>{mark}{peers}{kill}</div>"""
+                         @click={Ev(fun _ -> activate ())}><span class="{Style.pivotName}" data-terminal-tab-name>{name}</span>{mark}{peers}{dismiss}</div>"""
             else
                 html $"""
                     <div role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-closed-tab="{id}"
@@ -4647,9 +4637,7 @@ module View =
             // free was Enter and Space, so the item says them itself — the pivot's own keydown
             // handler carries the arrow walk.
             //
-            // Delete is the ×'s press from the keyboard (`ClientModel.killPress`): the first arms
-            // the kill and shows its face on this item, the second kills. Escape takes the
-            // arming back, and only that — a preview laid over the pane stays.
+            // Delete is the ×'s press from the keyboard: it puts the tab away.
             let activateKey (e: Browser.Types.Event) =
                 let pressed = e :?> Browser.Types.KeyboardEvent
                 // Only keys pressed ON the item: Enter on its × is the ×'s, not a selection.
@@ -4659,12 +4647,8 @@ module View =
                     pressed.preventDefault ()
                     activate ()
                 elif pressed.key = "Delete" then
-                    // On a closed one there is nothing to kill, and Delete is its ×: put away.
                     pressed.preventDefault ()
-                    dispatch (if view.IsOpen then KillPressedMsg terminal else DismissTabMsg terminal)
-                elif pressed.key = "Escape" && model.KillArmed = Some terminal then
-                    pressed.stopPropagation ()
-                    dispatch (ArmKillMsg None)
+                    dispatch (DismissTabMsg terminal)
             terminalItem activate activateKey view
         // `all`, the pivot's FIRST item: the door to every terminal and file, as a page. A
         // real button, because it carries nothing of its own — and pressed while it is up it

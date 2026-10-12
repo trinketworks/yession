@@ -337,10 +337,8 @@ module Dom =
         /// One per place a terminal can be opened, carrying that sandbox's rendered ref —
         /// which is what makes two repos both declaring `dev` tellable apart in a selector.
         let sandboxNew = "data-sandbox-new"
-        /// A terminal's kill, on its row in the switcher and as its tab's × (P2-2). On both of
-        /// its faces — the glyph that arms and the word that confirms — because they are one
-        /// control in one place. The same hook in both places, because it is the same control:
-        /// a test tells them apart by what they are inside (the tablist, the switcher).
+        /// A terminal's stop, on its row of the list (P2-2). On both of its faces — the word
+        /// that arms and the word that confirms — because they are one control in one place.
         let terminalClose = "data-terminal-close"
         /// Beside `terminalClose`: `"true"` while the kill is armed, one press from done.
         let terminalCloseArmed = "data-terminal-close-armed"
@@ -487,8 +485,8 @@ module Dom =
         let panePreviewWhere = "data-pane-preview-where"
         /// The preview's close, in the same line, after its name.
         let panePreviewClose = "data-pane-preview-close"
-        /// A CLOSED terminal's × on its pivot item, carrying its id: it puts the tab away
-        /// (`DismissTabMsg`), where an open one's × is its kill (`terminalClose`).
+        /// A tab's × on its pivot item, carrying its id: it puts the tab away
+        /// (`DismissTabMsg`), open terminal or closed, and ends nothing.
         let paneTabDismiss = "data-pane-tab-dismiss"
         /// A terminal's state mark beside its name, on the pivot and the `all` page alike
         /// (`View.terminalMark`): `running`, `failed` (its last command did not succeed) or
@@ -646,13 +644,13 @@ module Dom =
 
         // A terminal's kill, armed: the word it confirms with, and what it says is running in
         // the terminal it would end — the command, or that nothing is.
-        let killConfirm = "Kill"
+        let killConfirm = "Stop"
         let killIdle = "idle"
-        let killTerminal (title: string) : string = "Kill " + title
+        let killTerminal (title: string) : string = "Stop " + title
         let confirmKill (title: string) (running: string option) : string =
             match running with
-            | Some command -> sprintf "Confirm: kill %s, running %s" title command
-            | None -> sprintf "Confirm: kill %s, idle" title
+            | Some command -> sprintf "Confirm: stop %s, running %s" title command
+            | None -> sprintf "Confirm: stop %s, idle" title
         let makeChapter = "Make chapter"
         let removeChapter = "Remove chapter"
         let dismissMenu = "Close menu"
@@ -922,7 +920,7 @@ module Dom =
         /// The `all` page's row verbs, as the words they are drawn as — the accessible names
         /// above say which terminal each is about.
         let rewind = "rewind"
-        let kill = "kill"
+        let kill = "stop"
         let reattach = "attach"
         let replayRow = "replay"
         let putAway = "put away"
@@ -1022,8 +1020,8 @@ module Dom =
         /// closed, or the last thing it ran did not succeed. Running says `blockRunning`, as
         /// every running mark does.
         let markClosed = "closed"
-        /// A closed terminal's × on its pivot item: put its tab away.
-        let dismissTab (terminal: string) = sprintf "Put away %s" terminal
+        /// A tab's ×: close the tab, which ends nothing.
+        let dismissTab (terminal: string) = sprintf "Close the %s tab" terminal
         let markFailed = "last command failed"
         /// A terminal that finished something since this person last looked at it
         /// (`ClientModel.unseen`): all of it went through, or something did not.

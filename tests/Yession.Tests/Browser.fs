@@ -7519,34 +7519,30 @@ let editorTests =
                 Expect.equal sent "[\"term-harness\"]" "one kill, of the terminal the double-click was on"
             }
 
-        // The tab's × IS that kill (P2-2) — the same control, the same two presses — so the
-        // same double-click on it ends its terminal and only its terminal, and selects nothing
-        // on the way: a × is not a way into the tab it sits on.
-        editorCase "a double-click on a tab's × ends that terminal and no other" <| fun page ->
+        // A tab's × closes the tab and ends nothing: the terminal under it goes on running,
+        // in the list, which is where it is stopped.
+        editorCase "pressing a tab's × closes that tab and sends no kill" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.Locator("#shell [role='tablist'] [data-terminal-close='term-harness']").DblClickAsync ())
-                let! sent = await (page.EvaluateAsync<string> "() => JSON.stringify(window.__closed || [])")
-                Expect.equal sent "[\"term-harness\"]" "one kill, of the tab the double-click was on"
+                do! awaitU (page.ClickAsync "#shell [role='tablist'] [data-pane-tab-dismiss='term-harness']")
+                do! waitFor "the tab to be gone" page "!document.querySelector(\"#shell [data-pane-tab='terminal:term-harness']\")"
+                let! sent = await (page.EvaluateAsync<int> "() => (window.__closed || []).length")
+                Expect.equal sent 0 "nothing ended"
             }
 
-        // Delete on a focused tab is the ×'s press from the keyboard: the first arms, and the
-        // armed face shows on that tab, so a reader can see what the next Delete will do.
-        editorCase "Delete on a tab arms its kill, and Delete again kills it" <| fun page ->
+        // Delete on a focused tab is the ×'s press from the keyboard.
+        editorCase "Delete on a tab closes it and sends no kill" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 // Opening the pane lands focus in it a frame later (`paneLanding`). Focus put on
-                // the tab before then is taken back by that landing, and the Deletes go to
+                // the tab before then is taken back by that landing, and the Delete goes to
                 // wherever it put the keyboard — so the hand moves only once the pane has landed.
                 do! twoFrames page
                 do! awaitU (page.FocusAsync "#shell [data-pane-tab='terminal:term-harness']")
                 do! awaitU (page.Keyboard.PressAsync "Delete")
-                let! _ = await (page.WaitForSelectorAsync "#shell [role='tablist'] [data-terminal-close='term-harness'][data-terminal-close-armed='true']")
+                do! waitFor "the tab to be gone" page "!document.querySelector(\"#shell [data-pane-tab='terminal:term-harness']\")"
                 let! sent = await (page.EvaluateAsync<int> "() => (window.__closed || []).length")
-                Expect.equal sent 0 "the first Delete asked"
-                do! awaitU (page.Keyboard.PressAsync "Delete")
-                let! sent = await (page.EvaluateAsync<string> "() => JSON.stringify(window.__closed || [])")
-                Expect.equal sent "[\"term-harness\"]" "the second killed that terminal"
+                Expect.equal sent 0 "nothing ended"
             }
 
         // The keyboard half of the same control (UI baseline: a swap must never strand
