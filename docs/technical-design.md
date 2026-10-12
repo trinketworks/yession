@@ -70,7 +70,7 @@ Each implementation phase must include automated end-to-end tests. Manual testin
 a substitute for verification. There is no "one-shot" manual validation.
 
 A test pins one invariant and goes red only when that invariant breaks. The rules for
-writing tests are in [AGENTS.md](../AGENTS.md#writing-tests).
+writing tests are in [tests/AGENTS.md](../tests/AGENTS.md#writing-tests).
 
 ---
 

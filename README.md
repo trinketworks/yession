@@ -187,8 +187,8 @@ Almost everything runs on Node. .NET is a build tool, and the tests exercise the
 JavaScript that the product ships. The one exception is the browser E2E. It runs on the .NET
 CLR so that it can drive Chromium through Playwright against a live Session.
 
-The Testing section of [AGENTS.md](AGENTS.md) lists every capability and the rules for writing
-tests.
+The Testing section of [AGENTS.md](AGENTS.md) lists the `check` tiers. [tests/AGENTS.md](tests/AGENTS.md)
+holds the capability notes and the rules for writing tests.
 
 Dependency versions are pinned centrally: npm packages in [package.json](package.json), and
 NuGet packages (including [Ylmish](Directory.Packages.props), the Elmish↔Yjs sync boundary)
