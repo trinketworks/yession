@@ -27,12 +27,8 @@ open Yession.Domain.Artifacts
 open Yession.Host.Interop
 open Yession.Session
 
-/// The most one shared file may weigh. Decimal, because `ContentSize.render` is decimal and
-/// a refusal that disagrees with the number printed beside it is the worse answer.
-let cap = 100_000_000L
-
-/// The cap as a refusal says it.
-let private capSaid = ContentSize.render cap
+/// The cap as a refusal says it (`ArtifactRef.cap`).
+let private capSaid = ContentSize.render ArtifactRef.cap
 
 let private readdirSafe (dir: string) : string array =
     try fs.readdirSync (U2.Case1 dir) |> Array.ofSeq with _ -> [||]
@@ -121,6 +117,142 @@ let nameOfPath (path: string) : string =
     let trimmed = path.TrimEnd '/'
     let idx = trimmed.LastIndexOf '/'
     if idx >= 0 then trimmed.Substring (idx + 1) else trimmed
+
+/// Where a version's bytes are written before they are the version: beside it, so the rename
+/// that publishes them is one directory entry and what appears at the version's own address
+/// appears whole.
+let private partOf (artifactsDir: string) (ref: ArtifactRef) : string = pathOf artifactsDir ref + ".part"
+
+/// The id the fact carries, minted here as every service that appends one mints its own: an
+/// id has to come from the act, and a projection that minted one would answer differently on
+/// every re-read of the same events.
+let private mintMessageId () : MessageId =
+    match MessageId.create (string (System.Guid.NewGuid ())) with
+    | Ok id -> id
+    | Error e -> failwithf "message id invariant violated: %s" e
+
+/// Make the bytes waiting at `ref`'s part leaf the version itself: measured, held to the cap,
+/// digested, renamed into place and recorded. The one ending every way into the store shares
+/// — a sandbox's copy and a browser's upload — so what makes a version a version is said once.
+///
+/// The cap is checked on what ARRIVED, whatever the way in checked before it: that is the
+/// check that guards the bytes a browser will be served. `said` is how the refusal names
+/// where the bytes came from.
+let private settle
+    (log: EventLog<SessionEvent>)
+    (artifactsDir: string)
+    (actor: ActorRef)
+    (ref: ArtifactRef)
+    (said: string)
+    (landedBytes: int64)
+    : Async<Result<ArtifactShared, string>> =
+    async {
+        let part = partOf artifactsDir ref
+        if landedBytes > ArtifactRef.cap then
+            discard part
+            return
+                Error (
+                    sprintf
+                        "%s grew to %s while it was being shared, past the %s an artifact may be"
+                        said
+                        (ContentSize.render landedBytes)
+                        capSaid)
+        else
+            match digestOf part with
+            | None ->
+                discard part
+                return Error (sprintf "could not read back what was shared as %s" (ArtifactRef.name ref))
+            | Some digest ->
+                Fs.rename part (pathOf artifactsDir ref)
+                let fact =
+                    { ArtifactShared.MessageId = mintMessageId ()
+                      ArtifactShared.Ref = ref
+                      ArtifactShared.MediaType = ArtifactRef.mediaType ref
+                      ArtifactShared.Bytes = landedBytes
+                      ArtifactShared.Digest = digest
+                      ArtifactShared.Actor = actor }
+                let! _ = log.Append actor (SessionEvent.ArtifactShared fact)
+                return Ok fact
+    }
+
+/// Why an upload was not taken — which the route answers with different statuses, because a
+/// browser retries one kind and not the other.
+[<RequireQualifiedAccess>]
+type UploadRefusal =
+    /// Nothing about these bytes will change on a second try: past the cap, or a name the
+    /// store cannot hold.
+    | Refused of reason: string
+    /// The store could not take them this time.
+    | Failed of reason: string
+
+/// A file a person sent, streamed off `body` into the store as the next version of `name` and
+/// recorded as theirs. The browser's way in, beside `share`, which is the sandbox's.
+///
+/// Streamed and counted as it comes rather than read whole, for `serveVersion`'s reason in the
+/// other direction — and the count stops it AT the cap, so a body that lied about its length,
+/// or never said one, costs at most the cap in disk and nothing in this process's heap.
+/// `declared` is the length the request said, refused up front when it is already too big.
+let receive
+    (log: EventLog<SessionEvent>)
+    (artifactsDir: string)
+    (actor: ActorRef)
+    (name: string)
+    (declared: int64 option)
+    (body: Readable)
+    : Async<Result<ArtifactShared, UploadRefusal>> =
+    let tooBig (bytes: int64) =
+        UploadRefusal.Refused (
+            sprintf "%s is %s, and an artifact may be at most %s" name (ContentSize.render bytes) capSaid)
+    match nextVersion artifactsDir name actor, declared with
+    | Error e, _ ->
+        body.resume ()
+        async { return Error (UploadRefusal.Refused e) }
+    | Ok _, Some bytes when bytes > ArtifactRef.cap ->
+        body.resume ()
+        async { return Error (tooBig bytes) }
+    | Ok ref, _ ->
+        let part = partOf artifactsDir ref
+        Async.FromContinuations (fun (resolve, _, _) ->
+            let fd =
+                try
+                    Fs.ensureDir (sprintf "%s/%s" artifactsDir (ArtifactRef.name ref))
+                    Ok (fs.openSync (U2.Case1 part, U2.Case1 "w"))
+                with e -> Error e.Message
+            match fd with
+            | Error why ->
+                body.resume ()
+                resolve (Error (UploadRefusal.Failed (sprintf "could not make room for %s: %s" name why)))
+            | Ok fd ->
+                let mutable received = 0L
+                // Once: the first of an end, an error, or the cap reached settles it, and
+                // whatever the stream says after that is about a request already answered.
+                let mutable settled = false
+                let finish (outcome: Async<Result<ArtifactShared, UploadRefusal>>) =
+                    if not settled then
+                        settled <- true
+                        (try fs.closeSync fd with _ -> ())
+                        Async.StartImmediate (async { let! result = outcome in resolve result })
+                let failWith (refusal: UploadRefusal) =
+                    finish (async {
+                        discard part
+                        return Error refusal })
+                body.onData (fun chunk ->
+                    if not settled then
+                        received <- received + int64 chunk.length
+                        if received > ArtifactRef.cap then
+                            body.destroy ()
+                            failWith (tooBig received)
+                        else
+                            try fs.writeSync (fd, chunk) |> ignore
+                            with e ->
+                                body.destroy ()
+                                failWith (UploadRefusal.Failed (sprintf "could not write %s: %s" name e.Message)))
+                body.onError (fun e -> failWith (UploadRefusal.Failed (sprintf "%s did not arrive whole: %s" name e.message)))
+                body.onEnd (fun () ->
+                    finish (async {
+                        match! settle log artifactsDir actor ref name received with
+                        | Ok fact -> return Ok fact
+                        | Error why -> return Error (UploadRefusal.Failed why) })))
 
 /// One version as a reader sees it: what it is called, which version it is, whether it is the
 /// one a bare name resolves to, and how big it is. Read from the directory each time — the
@@ -311,9 +443,67 @@ let read (artifactsDir: string) (ref: ContentRef) : Async<Result<FileContent, st
 /// decision in it is about THIS store: which addresses exist, what "latest" resolves to, and
 /// where the bytes are. The composition root is handed a handler, not the artifacts directory
 /// and instructions.
-let routes (auth: SessionAuth.Auth) (artifactsDir: string) (mount: string) : IncomingMessage -> ServerResponse -> bool =
+///
+/// The write half sits here too, for the same reason: a `PUT` of a name is the next version of
+/// it, minted by `receive` and recorded as the sender's. No second check of where the request
+/// came from — the cookie is `SameSite=Lax`, so a page on another site cannot send it on a
+/// `PUT`, which is the same door every other write on this server stands behind.
+///
+/// The write is the store's (`SessionArtifacts.Receive`) rather than a log handed to the
+/// route: the log a fact must go on is the one that tells every peer it is there, and these
+/// routes are composed before that one exists.
+let routes
+    (auth: SessionAuth.Auth)
+    (receive: ActorRef -> string -> int64 option -> Readable -> Async<Result<ArtifactShared, UploadRefusal>>)
+    (artifactsDir: string)
+    (mount: string)
+    : IncomingMessage -> ServerResponse -> bool =
+    let answer (res: ServerResponse) (status: int) (text: string) =
+        res.writeHead (status, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
+        res.``end`` text
     fun req res ->
         match SessionRoute.parseUnder mount req.``method`` (req.url.Split('?').[0]) with
+        | Some (SessionRoute.ContentUpload ref) ->
+            let refuse status text =
+                req.resume ()
+                answer res status text
+            match auth.IdentityOf req with
+            | None -> refuse 401 "unauthorized"
+            | Some identity ->
+                let actor =
+                    match identity.Attribution with
+                    | AttributedUser user -> Ok (UserRef user)
+                    | UnattributedAccess ->
+                        match headerOf req SessionRoute.uploaderHeader |> Option.map PeerId.create with
+                        | Some (Ok peer) -> Ok (PeerRef peer)
+                        | Some (Error _) | None -> Error (sprintf "an upload names its peer in %s" SessionRoute.uploaderHeader)
+                match actor, ArtifactAddress.ofContent ref with
+                | Error why, _ -> refuse 400 why
+                | Ok _, Ok (ArtifactAddress.Version _) ->
+                    refuse 409 "a version's bytes never change — send the name, and the store adds the next version"
+                | Ok _, Error why -> refuse 404 why
+                | Ok actor, Ok (ArtifactAddress.Name name) ->
+                    let declared =
+                        headerOf req "content-length"
+                        |> Option.bind (fun raw ->
+                            match System.Int64.TryParse raw with
+                            | true, n -> Some n
+                            | false, _ -> None)
+                    Async.StartImmediate (
+                        async {
+                            match! receive actor name declared req with
+                            | Ok fact ->
+                                let pinned = RelativeUrl.under mount (SessionRoute.relative (SessionRoute.Content (ArtifactRef.content fact.Ref)))
+                                res.writeHead (
+                                    201,
+                                    [ ResponseHeader.Location pinned
+                                      ResponseHeader.ContentType "text/plain"
+                                      ResponseHeader.CacheControl "no-store" ])
+                                res.``end`` (ArtifactRef.url fact.Ref)
+                            | Error (UploadRefusal.Refused why) -> answer res 400 why
+                            | Error (UploadRefusal.Failed why) -> answer res 500 why
+                        })
+            true
         | Some (SessionRoute.Content ref) ->
             if (auth.IdentityOf req).IsNone then
                 res.writeHead (401, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
@@ -355,6 +545,9 @@ type SessionArtifacts =
       /// own name when none is given), and record the act. The answer is the fact that went on
       /// the log, so a caller never has to re-derive the address it minted.
       Share : ActorRef -> SandboxRef -> string -> string option -> Async<Result<ArtifactShared, string>>
+      /// Take a file a person sent (`receive`) as the next version of `name`, and record it
+      /// as theirs: the browser's way in, beside `Share`, which is the sandbox's.
+      Receive : ActorRef -> string -> int64 option -> Readable -> Async<Result<ArtifactShared, UploadRefusal>>
       /// One artifact back, by its address — the text, or the picture. The sibling of
       /// `Share`, and the only way anything that is not a browser reads this store.
       Read : ContentRef -> Async<Result<FileContent, string>>
@@ -401,6 +594,10 @@ let weighed (sandbox: SandboxRef) (path: string) (code: int, out: string, err: s
 
 let unavailable : SessionArtifacts =
     { SessionArtifacts.Share = fun _ _ _ _ -> async { return Error "this session has nowhere to keep artifacts" }
+      SessionArtifacts.Receive =
+        fun _ _ _ body ->
+            body.resume ()
+            async { return Error (UploadRefusal.Failed "this session has nowhere to keep artifacts") }
       SessionArtifacts.Read = fun _ -> async { return Error "this session has no artifacts to read" }
       SessionArtifacts.Versions = fun _ -> []
       SessionArtifacts.Names = fun () -> [] }
@@ -419,14 +616,6 @@ let create
     (workingDirectoryFor: SandboxRef -> string option)
     (shell: TerminalShell)
     : SessionArtifacts =
-
-    /// The id the fact carries, minted here as every service that appends one mints its own:
-    /// an id has to come from the act, and a projection that minted one would answer
-    /// differently on every re-read of the same events.
-    let mintMessageId () : MessageId =
-        match MessageId.create (string (System.Guid.NewGuid ())) with
-        | Ok id -> id
-        | Error e -> failwithf "message id invariant violated: %s" e
 
     /// One bare spawn inside the sandbox: `script` under the shell with `args` as its positional
     /// parameters, and both streams back whole. Nothing here reads a file's CONTENT, so there is
@@ -495,7 +684,7 @@ let create
             | Ok ref ->
                 match! weigh sandbox source with
                 | Error reason -> return Error reason
-                | Ok bytes when bytes > cap ->
+                | Ok bytes when bytes > ArtifactRef.cap ->
                     return
                         Error (
                             sprintf
@@ -507,13 +696,11 @@ let create
                     match! copyIn sandbox source ref with
                     | Error reason -> return Error reason
                     | Ok target ->
-                        let landed = pathOf artifactsDir ref
-                        let part = landed + ".part"
+                        let part = partOf artifactsDir ref
                         // What ARRIVED, measured on this side. The check above refused a file that
-                        // was too big when it was asked about; this one refuses a file that is too
+                        // was too big when it was asked about; `settle` refuses one that is too
                         // big now — a source that grew between the two, a sandbox that copied
-                        // something else — and it is the one that guards the bytes a browser will
-                        // be served.
+                        // something else.
                         match sizeOf part with
                         // Both paths, said out loud. This is the one refusal whose cause is
                         // entirely outside what either side can see on its own — the copy
@@ -530,34 +717,11 @@ let create
                                         (SandboxRef.render sandbox)
                                         target
                                         part)
-                        | Some landedBytes when landedBytes > cap ->
-                            discard part
-                            return
-                                Error (
-                                    sprintf
-                                        "%s grew to %s while it was being shared, past the %s an artifact may be"
-                                        source
-                                        (ContentSize.render landedBytes)
-                                        capSaid)
-                        | Some landedBytes ->
-                            match digestOf part with
-                            | None ->
-                                discard part
-                                return Error (sprintf "could not read back what was shared as %s" name)
-                            | Some digest ->
-                                Fs.rename part landed
-                                let fact =
-                                    { ArtifactShared.MessageId = mintMessageId ()
-                                      ArtifactShared.Ref = ref
-                                      ArtifactShared.MediaType = ArtifactRef.mediaType ref
-                                      ArtifactShared.Bytes = landedBytes
-                                      ArtifactShared.Digest = digest
-                                      ArtifactShared.Actor = actor }
-                                let! _ = log.Append actor (SessionEvent.ArtifactShared fact)
-                                return Ok fact
+                        | Some landedBytes -> return! settle log artifactsDir actor ref source landedBytes
         }
 
     { SessionArtifacts.Share = share
+      SessionArtifacts.Receive = receive log artifactsDir
       SessionArtifacts.Read = read artifactsDir
       SessionArtifacts.Versions = versions artifactsDir
       SessionArtifacts.Names = fun () -> names artifactsDir }

@@ -953,6 +953,45 @@ let private fetchPullHead (repo: RepoRef) (number: int) : Async<Result<PullHead,
             return Codec.fromString RepoPages.pullHead reply.Body
     }
 
+// --- Uploads into the artifacts ------------------------------------------------------------
+// The bytes of every file a person handed this page to send, kept until the model lets them go
+// (`ClientEffect.ForgetUpload`), with the request carrying them while one is out. What happens
+// to them is the model's (`Uploads`); this keeps them and sends them, through the one request
+// that reports progress (`Fable.BrowserExtras.Requests`).
+
+let private keptUploads = Collections.Generic.Dictionary<string, Browser.Types.File * (unit -> unit) option> ()
+
+/// Send the bytes kept under `id` as the next version of `name`. The session's 4xx is a
+/// refusal a second try would meet again; no answer, or a 5xx, is a try that may yet go.
+let private sendUpload (peer: PeerId) (id: string) (name: string) (onProgress: int64 -> unit) : Async<UploadAnswer> =
+    match keptUploads.TryGetValue id, Content.ArtifactRef.directoryOf name with
+    | (false, _), _ -> async.Return (UploadAnswer.Refused "this page no longer has the file — choose it again")
+    | _, Error reason -> async.Return (UploadAnswer.Refused reason)
+    | (true, (file, _)), Ok content ->
+        Async.FromContinuations (fun (resolve, _, _) ->
+            let answered (status: int) (said: string) =
+                let said = if String.IsNullOrWhiteSpace said then sprintf "the session answered %d" status else said
+                if status >= 200 && status < 300 then resolve UploadAnswer.Uploaded
+                elif status >= 400 && status < 500 then resolve (UploadAnswer.Refused said)
+                else resolve (UploadAnswer.Failed said)
+            let abort =
+                Fable.BrowserExtras.Requests.put
+                    (Page.href (ContentUpload content))
+                    [ SessionRoute.uploaderHeader, PeerId.value peer ]
+                    file
+                    (fun loaded -> onProgress (int64 loaded))
+                    answered
+                    (fun reason -> resolve (UploadAnswer.Failed reason))
+            keptUploads.[id] <- (file, Some abort))
+
+let private forgetUpload (id: string) : unit =
+    match keptUploads.TryGetValue id with
+    | true, (_, Some abort) ->
+        keptUploads.Remove id |> ignore
+        abort ()
+    | true, (_, None) -> keptUploads.Remove id |> ignore
+    | false, _ -> ()
+
 // --- The read surface's stream (Plan 15) --------------------------------------------------
 // `EventSource` rather than the repo's fetch-based SSE reader: it is the browser's own SSE
 // client, it reconnects on its own, and it carries the session cookie same-origin — which
@@ -1107,7 +1146,13 @@ let private start () =
               TypeIntoTerminal =
                 fun id data -> connectionRef |> Option.iter (fun c -> c.TypeIntoTerminal id data)
               SendTerminalDraft =
-                fun terminal author -> connectionRef |> Option.iter (fun c -> c.SendTerminalDraft terminal author) }
+                fun terminal author -> connectionRef |> Option.iter (fun c -> c.SendTerminalDraft terminal author)
+              Upload =
+                fun files ->
+                    for file in files do
+                        let id = mintId "upload"
+                        keptUploads.[id] <- (file, None)
+                        dispatchRef (UploadPickedMsg (id, file.name, int64 file.size)) }
 
         let el = appRoot ()
         // Take over the server-rendered shell: from here Lit owns it. lit-html's `render`
@@ -1179,7 +1224,9 @@ let private start () =
                         match! httpGet (Page.href (TerminalKeyframe (TerminalId.value terminal, seq))) with
                         | Error _ -> return None
                         | Ok answer -> return Codec.fromString Transcripts.keyframe answer.Body |> Result.toOption
-                    } }
+                    }
+              Client.Ports.Uploads =
+                Some { Client.UploadPort.Send = sendUpload peerId; Client.UploadPort.Forget = forgetUpload } }
             doc
             initial
         |> Client.withTimers Timer.system

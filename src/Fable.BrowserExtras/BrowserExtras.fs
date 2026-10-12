@@ -287,6 +287,55 @@ module ObjectUrls =
 
     [<Emit("URL.revokeObjectURL($0)")>]
     let revoke (url: string) : unit = jsNative
+
+/// The files an event carries — a file input's choice, a paste, a drop — as an array, empty
+/// where it carries none. `Fable.Browser.Dom` types neither `clipboardData` nor `dataTransfer`,
+/// and a `FileList` is not an array; each is read and converted once, here.
+module CarriedFiles =
+
+    [<Emit("Array.from($0.files || [])")>]
+    let ofInput (input: HTMLInputElement) : File array = jsNative
+
+    [<Emit("(function (e) { return Array.from((e.clipboardData && e.clipboardData.files) || []); })($0)")>]
+    let ofPaste (e: Event) : File array = jsNative
+
+    [<Emit("(function (e) { return Array.from((e.dataTransfer && e.dataTransfer.files) || []); })($0)")>]
+    let ofDrop (e: Event) : File array = jsNative
+
+    /// Whether a drag carries files — what `dragover` must cancel for, so that a drop of them
+    /// lands here rather than the browser navigating to the first one. Asked of the types,
+    /// because a drag's files are not readable until it is dropped.
+    [<Emit("(function (e) { return !!(e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')); })($0)")>]
+    let inDrag (e: Event) : bool = jsNative
+
+/// A `PUT` that says how much of its body has gone — which `fetch` cannot, and which is the
+/// only progress a person waiting on a large file has. Exactly one of `answered` (a status and
+/// the response's text) or `unanswered` (why there was none) is called, unless the returned
+/// abort is called first, which cancels it and then reports it unanswered.
+module Requests =
+
+    [<Emit("new XMLHttpRequest()")>]
+    let private create () : obj = jsNative
+
+    let put
+        (url: string)
+        (headers: (string * string) list)
+        (body: Blob)
+        (sent: float -> unit)
+        (answered: int -> string -> unit)
+        (unanswered: string -> unit)
+        : unit -> unit =
+        let request = create ()
+        request?``open`` ("PUT", url)
+        for name, value in headers do
+            request?setRequestHeader (name, value)
+        request?upload?onprogress <- fun (e: obj) -> sent (e?loaded : float)
+        request?onload <- fun (_: obj) -> answered (request?status : int) (request?responseText : string)
+        request?onerror <- fun (_: obj) -> unanswered "the session could not be reached"
+        request?onabort <- fun (_: obj) -> unanswered "the send was cut short"
+        request?send body
+        fun () -> request?abort ()
+
 /// What `Fable.Browser.Dom` leaves off `Node`.
 module Nodes =
 

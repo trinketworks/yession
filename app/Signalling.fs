@@ -539,6 +539,7 @@ let start
         | Some (GitHubPullHead _)
         | Some Queries
         | Some (Content _)
+        | Some (ContentUpload _)
         | None -> handleWithExtraRoutes ()
 
     let server = createServer handler

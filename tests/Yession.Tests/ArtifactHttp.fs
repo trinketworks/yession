@@ -55,6 +55,7 @@ let private version (name: string) (seq: int) = ArtifactRef.create name seq stam
 /// forgot to compose would 404 here exactly as it would in production.
 let private serving (files: (ArtifactRef * string) list) =
     async {
+        let log = Yession.Session.InMemoryEventLog.create (SessionId.create "artifact-http" |> expect) (fun () -> System.DateTimeOffset.UtcNow)
         let dir = TestFiles.tempDir "artifacts-http"
         for (ref, body) in files do
             TestFiles.ensureDir (sprintf "%s/%s" dir (ArtifactRef.name ref))
@@ -66,7 +67,7 @@ let private serving (files: (ArtifactRef * string) list) =
                 None
                 None
                 None
-                (Some (Artifacts.routes (stubAuth ()) dir ""))
+                (Some (Artifacts.routes (stubAuth ()) (Artifacts.receive log dir) dir ""))
                 (fun _ -> "no peer token is minted here")
                 ""
                 None
@@ -76,6 +77,103 @@ let private serving (files: (ArtifactRef * string) list) =
         let at (ref: ContentRef) = SessionRoute.at origin (SessionRoute.Content ref)
         return dir, origin, at, (fun () -> async { server.close ignore })
     }
+
+/// An empty store served for writing, with the log the writes are recorded on and the URL a
+/// `PUT` of a name goes to.
+let private receiving () =
+    async {
+        let log = Yession.Session.InMemoryEventLog.create (SessionId.create "artifact-upload" |> expect) (fun () -> System.DateTimeOffset.UtcNow)
+        let dir = TestFiles.tempDir "artifacts-upload"
+        let! server, _ =
+            Signalling.start
+                (SessionId.create "artifact-upload" |> expect)
+                ignore
+                None
+                None
+                None
+                (Some (Artifacts.routes (stubAuth ()) (Artifacts.receive log dir) dir ""))
+                (fun _ -> "no peer token is minted here")
+                ""
+                None
+                false
+                0
+        let origin = sprintf "http://127.0.0.1:%d" (serverPort server)
+        let named (name: string) =
+            SessionRoute.at origin (SessionRoute.ContentUpload (ArtifactRef.directoryOf name |> expect))
+        let shared () =
+            async {
+                let! page = log.Read None 1000
+                return
+                    page.Events
+                    |> List.choose (fun e ->
+                        match e.Event with
+                        | SessionEvent.ArtifactShared fact -> Some fact
+                        | _ -> None)
+            }
+        return dir, origin, named, shared, (fun () -> async { server.close ignore })
+    }
+
+let private uploadTests =
+    testList "sending a file in" [
+
+        testCaseAsync "a name put is that name's next version, recorded as the sender's" <|
+            async {
+                let! _, origin, named, shared, stop = receiving ()
+                let! first = TestHttp.put ada "the first" (named "notes.md")
+                Expect.equal first.Status 201 "the store took it"
+                Expect.isTrue (first.Body.StartsWith "file:///artifacts/notes.md/0000-") "answered with the version it minted"
+                let! second = TestHttp.put ada "the second" (named "notes.md")
+                Expect.equal second.Status 201 "and a second time, as another version"
+                let! facts = shared ()
+                Expect.equal (facts |> List.map (fun f -> ArtifactRef.seq f.Ref)) [ 0; 1 ] "two versions, never one overwritten"
+                Expect.equal
+                    (facts |> List.map (fun f -> f.Actor))
+                    [ UserRef (UserId.create "ada" |> expect); UserRef (UserId.create "ada" |> expect) ]
+                    "each the cookie's user's"
+                // Read back through the surface it was put to: what a browser put is where it
+                // then reads it.
+                let! latest = TestHttp.getNoStore ada (sprintf "%s/content/artifacts/notes.md" origin)
+                Expect.equal latest.Body "the second" "the name now resolves to what was sent last"
+                do! stop ()
+            }
+
+        testCaseAsync "no identity, no upload" <|
+            async {
+                let! _, _, named, shared, stop = receiving ()
+                let! reply = TestHttp.put [] "anything" (named "notes.md")
+                Expect.equal reply.Status 401 "the write is gated like the read"
+                let! facts = shared ()
+                Expect.isEmpty facts "and nothing was recorded"
+                do! stop ()
+            }
+
+        testCaseAsync "a version is never written to" <|
+            async {
+                let! _, origin, _, shared, stop = receiving ()
+                let! reply = TestHttp.put ada "other bytes" (sprintf "%s/content/artifacts/notes.md/0000-7f2a91" origin)
+                Expect.equal reply.Status 409 "an artifact is immutable; the store picks the next version"
+                let! facts = shared ()
+                Expect.isEmpty facts "and nothing was recorded"
+                do! stop ()
+            }
+
+        testCaseAsync "a body said to be past the cap is refused before a byte is kept" <|
+            async {
+                // The store itself, handed a body whose declared length is too big: a fetch
+                // will not send a length its body disagrees with, and the point is that the
+                // declaration alone is enough to refuse on.
+                let log = Yession.Session.InMemoryEventLog.create (SessionId.create "artifact-cap" |> expect) (fun () -> System.DateTimeOffset.UtcNow)
+                let dir = TestFiles.tempDir "artifacts-cap"
+                let source = TestFiles.tempDir "artifacts-cap-source" + "/body"
+                TestFiles.write source "short"
+                let! outcome =
+                    Artifacts.receive log dir ActorRef.Agent "huge.bin" (Some (ArtifactRef.cap + 1L)) (openFileStream source)
+                match outcome with
+                | Error (Artifacts.UploadRefusal.Refused said) -> Expect.stringContains said "at most 100 MB" "the refusal quotes the cap"
+                | other -> failwithf "expected a refusal, got %A" other
+                Expect.isEmpty (Artifacts.listing dir) "and no version on disk"
+            }
+    ]
 
 let private routeTests =
     testList "the content surface" [
@@ -268,4 +366,4 @@ let private readTests =
             }
     ]
 
-let tests = testList "ArtifactHttp" [ routeTests; readTests ]
+let tests = testList "ArtifactHttp" [ routeTests; uploadTests; readTests ]

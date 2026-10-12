@@ -259,6 +259,35 @@ module ArtifactRef =
     /// The first version: what a share that names something new mints.
     let first (name: string) (stamp: ArtifactStamp) : Result<ArtifactRef, string> = create name 0 stamp
 
+    /// The most one version may weigh. Decimal, because `ContentSize.render` is decimal and a
+    /// refusal that disagrees with the number printed beside it is the worse answer. Here
+    /// rather than in the store, because a browser refuses a file past it before sending a
+    /// byte, and two copies of the number would be two answers to "is this too big?".
+    let cap = 100_000_000L
+
+    /// The name a file a person picked is shared under: its own name, with every character a
+    /// name may not hold turned into `-` and any leading dots dropped, cut to the segment
+    /// bound with the extension kept — the extension is what the media type is read from. A
+    /// name with nothing left in it is `file`. So `Screen Shot 1.png` is `Screen-Shot-1.png`,
+    /// and what a person picked is never refused for its spelling.
+    let nameFor (fileName: string) : string =
+        let raw = if isNull (box fileName) then "" else fileName.Trim ()
+        let cleaned =
+            raw
+            |> String.map (fun c ->
+                if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c = '-' || c = '_' || c = '.'
+                then c
+                else '-')
+            |> fun s -> s.TrimStart '.'
+        let bound = 120
+        let fitted =
+            if cleaned.Length <= bound then cleaned
+            else
+                let dot = cleaned.LastIndexOf '.'
+                let ext = if dot > 0 && cleaned.Length - dot <= 16 then cleaned.Substring dot else ""
+                cleaned.Substring (0, bound - ext.Length) + ext
+        if fitted = "" then "file" else fitted
+
     let name (ref: ArtifactRef) = ref.Name
     let seq (ref: ArtifactRef) = ref.Seq
     let stamp (ref: ArtifactRef) = ref.Stamp

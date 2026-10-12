@@ -1240,6 +1240,40 @@ type Preference =
     /// What this browser had open in one session's pane (`ClientModel.paneToRemember`).
     | Pane of SessionId * PaneMemory
 
+/// Where one file this browser is sending into the session's artifacts has got to.
+[<RequireQualifiedAccess>]
+type UploadState =
+    /// On its way, `sent` bytes of it so far.
+    | Sending of sent: int64
+    /// This try did not go through, and another might: the session was out of reach, or
+    /// could not take it this time. What the row offers is to try again.
+    | Failed of reason: string
+    /// It will not go through however often it is sent — past the cap, say. What the row
+    /// offers is to put it away.
+    | Refused of reason: string
+
+/// One file on its way into the session's artifacts, as this browser holds it. Local, like the
+/// clipboard's confirmation: the bytes are on this machine, and nobody else has anything to
+/// see until the store records the version — which every peer then learns as `ArtifactShared`,
+/// so a finished upload needs no row of its own.
+type Upload =
+    { /// Minted by whoever kept the bytes (`Client.Ports.Uploads`), which is what an effect
+      /// names them by.
+      Id : string
+      /// The name it will be shared under (`ArtifactRef.nameFor`).
+      Name : string
+      Bytes : int64
+      State : UploadState }
+
+/// How one try at an upload ended, as the session answered it.
+[<RequireQualifiedAccess>]
+type UploadAnswer =
+    | Uploaded
+    /// The session will not take these bytes (a 4xx): sending them again changes nothing.
+    | Refused of reason: string
+    /// The try did not land — no answer, or the session failing (a 5xx).
+    | Failed of reason: string
+
 type ClientModel =
     { Peer          : PeerState
       Connection    : ConnectionState
@@ -1628,6 +1662,9 @@ type ClientModel =
       /// again a moment later, taken back by the wait the model declares for it
       /// (`ClientModel.timers`), because what it says is "just now".
       Copied        : Copy option
+      /// The files this browser is sending into the artifacts, oldest first, until each is
+      /// recorded or put away.
+      Uploads       : Upload list
       /// The Claude connection panel's state (Plan 08), driven by the /claude routes.
       Claude        : ClaudeViewState
       /// The GitHub connection panel's state (Plan 14), driven by the /github routes.
@@ -2117,6 +2154,18 @@ type ClientMsg =
     /// so this is dispatched only where the write SUCCEEDED. A confirmation the reducer
     /// could set on its own would be a claim about a clipboard nothing here has read.
     | CopiedMsg of string option
+    /// A person picked, pasted or dropped a file to share, and whoever keeps its bytes named
+    /// them `id` (`Client.Ports.Uploads`). Whether it is sent at all is decided here: one past
+    /// the cap is refused before a byte leaves.
+    | UploadPickedMsg of id: string * fileName: string * bytes: int64
+    /// How much of an upload has gone so far.
+    | UploadProgressMsg of id: string * sent: int64
+    /// How a try at an upload ended.
+    | UploadAnsweredMsg of id: string * UploadAnswer
+    /// Send a failed upload again.
+    | RetryUploadMsg of id: string
+    /// Put an upload away — one that will not go, or one nobody wants to wait on.
+    | DismissUploadMsg of id: string
     /// Ensure the composer slot for (terminal, author) exists, carrying the queue key it
     /// becomes when sent. The author's own call, exactly as for a message draft.
     | EnsureTerminalDraftMsg of TerminalId * PeerId * QueueId
@@ -2227,6 +2276,63 @@ type ClientEffect =
     | Remember of Preference
     | Copy of box: string * text: string
     | RetryNow
+    /// Send the bytes kept under `id` as the next version of `name`, answered as
+    /// `UploadProgressMsg`s and one `UploadAnsweredMsg`.
+    | Upload of id: string * name: string
+    /// Let go of the bytes kept under `id`: they are recorded, or nobody wants them sent.
+    | ForgetUpload of id: string
+
+/// The rules of the files this browser is sending: what is sent, when it is let go, and what a
+/// person can do about one that did not go. The bytes are kept elsewhere (`Client.Ports`);
+/// this decides what happens to them.
+module Uploads =
+
+    let private find (id: string) (uploads: Upload list) = uploads |> List.tryFind (fun u -> u.Id = id)
+
+    let private set (id: string) (state: UploadState) (uploads: Upload list) =
+        uploads |> List.map (fun u -> if u.Id = id then { u with State = state } else u)
+
+    let private without (id: string) (uploads: Upload list) = uploads |> List.filter (fun u -> u.Id <> id)
+
+    /// One upload message against the list: the list after it, and what it asks of the world.
+    /// A message about an id the list does not hold changes nothing — an answer can arrive
+    /// for one put away while it was out.
+    let update (msg: ClientMsg) (uploads: Upload list) : Upload list * ClientEffect list =
+        match msg with
+        | UploadPickedMsg (id, fileName, bytes) ->
+            let name = ArtifactRef.nameFor fileName
+            if bytes > ArtifactRef.cap then
+                let reason =
+                    sprintf
+                        "%s is %s, and a file may be at most %s"
+                        name
+                        (ContentSize.render bytes)
+                        (ContentSize.render ArtifactRef.cap)
+                uploads @ [ { Id = id; Name = name; Bytes = bytes; State = UploadState.Refused reason } ],
+                [ ClientEffect.ForgetUpload id ]
+            else
+                uploads @ [ { Id = id; Name = name; Bytes = bytes; State = UploadState.Sending 0L } ],
+                [ ClientEffect.Upload (id, name) ]
+        | UploadProgressMsg (id, sent) ->
+            match find id uploads with
+            | Some { State = UploadState.Sending _ } -> set id (UploadState.Sending sent) uploads, []
+            | Some _ | None -> uploads, []
+        | UploadAnsweredMsg (id, answer) ->
+            match find id uploads, answer with
+            | None, _ -> uploads, []
+            | Some _, UploadAnswer.Uploaded -> without id uploads, [ ClientEffect.ForgetUpload id ]
+            | Some _, UploadAnswer.Refused reason -> set id (UploadState.Refused reason) uploads, [ ClientEffect.ForgetUpload id ]
+            | Some _, UploadAnswer.Failed reason -> set id (UploadState.Failed reason) uploads, []
+        | RetryUploadMsg id ->
+            match find id uploads with
+            | Some ({ State = UploadState.Failed _ } as upload) ->
+                set id (UploadState.Sending 0L) uploads, [ ClientEffect.Upload (id, upload.Name) ]
+            | Some _ | None -> uploads, []
+        | DismissUploadMsg id ->
+            match find id uploads with
+            | Some _ -> without id uploads, [ ClientEffect.ForgetUpload id ]
+            | None -> uploads, []
+        | _ -> uploads, []
 
 /// What each of the Claude panel's presses asks the session for, or why it asks nothing.
 /// One function for both halves of a press — the state it moves to and the effect it
@@ -2395,6 +2501,7 @@ module ClientModel =
           DatedBreaks = Set.empty
           QueueDeleteArmed = None
           Copied = None
+          Uploads = []
           Claude =
             { Status = None
               Flow = ClaudeIdle
@@ -5060,6 +5167,13 @@ module ClientModel =
         | ReattachTerminalMsg _
         | InterruptTerminalMsg _
         | ApproveRepoCapabilitiesMsg _ -> model
+        // `update` hands these to `Uploads`, which says both halves — the list and the effects
+        // — at once; they reach here from nowhere else.
+        | UploadPickedMsg _
+        | UploadProgressMsg _
+        | UploadAnsweredMsg _
+        | RetryUploadMsg _
+        | DismissUploadMsg _ -> model
         // A request of the session like those above, and also a press whose control the
         // answer will take away: remembered, so the close that answers it can say where the
         // hand goes next (`KillPending`).
@@ -5422,4 +5536,11 @@ module ClientModel =
             match killPress terminal model with
             | Some press -> apply press model
             | None -> model, []
+        | UploadPickedMsg _
+        | UploadProgressMsg _
+        | UploadAnsweredMsg _
+        | RetryUploadMsg _
+        | DismissUploadMsg _ ->
+            let uploads, effects = Uploads.update msg model.Uploads
+            { model with Uploads = uploads }, effects
         | _ -> apply msg model
