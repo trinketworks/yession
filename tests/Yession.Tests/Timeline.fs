@@ -1233,6 +1233,24 @@ let private statusTests =
                 |> List.exactlyOne
             Expect.stringContains label "failed" "a screen reader hears that it failed"
 
+        // The one red word on a surface is the newest wrong thing; an older failure is a
+        // record by then (docs/visual-design.md, "Colour").
+        testCase "of two failed commands, the newer is the one a terminal holds as wrong" <| fun () ->
+            let model =
+                clientOf
+                    [ at 1L 0.0 (opened terminalA "build")
+                      at 2L 1.0 (started terminalA "1" byAda "false" 1)
+                      at 3L 2.0 (completed terminalA "1" (CommandFailed 1) 3)
+                      at 4L 3.0 (started terminalA "2" byAda "false" 4)
+                      at 5L 4.0 (completed terminalA "2" (CommandFailed 1) 6)
+                      at 6L 5.0 (started terminalA "3" byAda "true" 7)
+                      at 7L 6.0 (completed terminalA "3" (CommandSucceeded 0) 8) ]
+            let view = Projection.tryFind terminalA model.Terminals |> Option.get
+            Expect.equal
+                (ClientModel.newestWrongBlock view |> Option.map BlockId.value)
+                (view.Blocks |> List.item 1 |> fun block -> Some (BlockId.value block.BlockId))
+                "the second, not the first, and a success after it changes nothing"
+
         testCase "a failed block's mark is heard in words in the pane, not as a number" <| fun () ->
             let mark = textAt Dom.Hooks.blockMark (markupAt (Dom.attr Dom.Hooks.terminalBlock "b-1") (endedAs (CommandFailed 1)))
             Expect.stringContains mark "failed" "the glyph is a picture; the words are for whoever cannot see it"
