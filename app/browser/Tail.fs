@@ -155,19 +155,33 @@ let mutable private tell : ClientMsg -> unit = ignore
 /// time it is asked. Set once, by `attach`.
 let mutable private away : unit -> Set<TailSurface> = fun () -> Set.empty
 
-/// Tell the model about every reader whose following it has wrong — the same answer the
-/// scroll is kept by, so the control is on screen exactly when the surface is not being kept
-/// at its end. Gathered first and told after, because telling renders, and a render rebuilds
-/// `readers`.
+/// Whether a surface's reader is to be offered the way back: not following its end, and far
+/// enough from it (`TailSurface.farBehind`). Following decides where the scroll is KEPT;
+/// this decides only whether a control is shown, so a reader a line short of the end is no
+/// longer followed and is still not offered anything.
+let private offered (el: HTMLElement) : bool =
+    let following =
+        match readers.TryGetValue (keyOf el) with
+        | true, reader -> reader.Following
+        | false, _ -> true
+    not following && TailSurface.farBehind (el.scrollHeight - el.scrollTop - el.clientHeight) el.clientHeight
+
+/// Tell the model about every surface whose "jump to latest" it has wrong. Gathered first and
+/// told after, because telling renders, and a render rebuilds `readers`.
+///
+/// Cheap to call on every scroll: it reads three numbers per surface and tells the model only
+/// what changed, so a reader scrolling within the near region or the far one renders nothing.
 let private report () : unit =
     let held = away ()
     let changed =
-        [ for KeyValue (key, reader) in readers do
-              match TailSurface.ofKey key with
-              | Some surface when Set.contains surface held = reader.Following -> yield surface, reader.Following
-              | Some _ | None -> () ]
-    for surface, following in changed do
-        tell (ReaderMovedMsg (surface, following))
+        [ for el in surfaces () do
+              match TailSurface.ofKey (keyOf el) with
+              | Some surface ->
+                  let now = offered el
+                  if Set.contains surface held <> now then yield surface, now
+              | None -> () ]
+    for surface, now in changed do
+        tell (ReaderMovedMsg (surface, now))
 
 /// Where each surface's reader stands, taken before a render moves anything.
 type Before = private Before of Map<string, float option>
@@ -336,7 +350,7 @@ let attach (dispatch: ClientMsg -> unit) (awayNow: unit -> Set<TailSurface>) : u
                     elif top < was.Top - 1.0 then false
                     else was.Following
                 readers.[key] <- { Following = now; Top = top }
-                if now <> was.Following then report ()
+                report ()
             | _ -> ()),
         true)
     document.addEventListener (

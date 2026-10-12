@@ -1086,6 +1086,17 @@ module TailSurface =
             | None, Some id -> Some (TailSurface.Screen id)
             | None, None -> None
 
+    /// Whether a reader `behind` pixels short of a surface's end, in a box `box` pixels tall,
+    /// is far enough back to be offered the way to it: more than a screen.
+    ///
+    /// Leaving the end is not reason enough. A reader a line or two up — reading the last
+    /// paragraph again, or nudged by a thumb — can see the end from where they are, and a
+    /// control appearing for that is one appearing for nothing, and tracking every nudge.
+    /// A screen away is where the end has gone out of sight and a fling no longer reliably
+    /// reaches it. Measured in the surface's OWN box so a phone and a desktop each get their
+    /// own screen, and a short terminal pane its own.
+    let farBehind (behind: float) (box: float) : bool = behind > box
+
 /// Which of its two faces the sidebar column shows.
 [<RequireQualifiedAccess>]
 type ColumnFace =
@@ -1532,10 +1543,11 @@ type ClientModel =
       /// itself is `ClientModel.paneSplit`, and there is none until the browser has measured
       /// the window, which a server rendering the shell never does.
       PaneRoom : PaneRoom
-      /// The surfaces read from their end whose reader has scrolled away from it — what puts
-      /// each one's "jump to latest" on screen. A surface not here is being followed, which is
-      /// where every reader arrives. WHETHER a reader moved is the document's to see (`Tail`,
-      /// in the browser); what that means for what is drawn is this.
+      /// The surfaces read from their end whose reader has left it AND gone far enough back to
+      /// be offered the way to it (`TailSurface.farBehind`) — what puts each one's "jump to
+      /// latest" on screen. A surface not here is being followed, or nearly, which is where
+      /// every reader arrives. WHETHER a reader moved is the document's to see (`Tail`, in the
+      /// browser); what that means for what is drawn is this.
       Away : Set<TailSurface>
       /// Which timeline item has its actions menu open, if any. View state for the same
       /// reason the column above is: a menu one person opened is not a thing anybody else
@@ -2049,8 +2061,9 @@ type ClientMsg =
     /// The width this browser kept from an earlier visit, put back at boot. The reader's own
     /// choice, so it holds like one — but not a new one, so it is not written back.
     | PaneKeptMsg of width: float
-    /// The reader of a surface read from its end left that end, or came back to it.
-    | ReaderMovedMsg of TailSurface * following: bool
+    /// The reader of a surface read from its end went far enough back from it to be offered
+    /// the way to it (`TailSurface.farBehind`), or came back within reach.
+    | ReaderMovedMsg of TailSurface * away: bool
     /// Close the content column, and never open it: the shell's half of "on a phone, two
     /// sheets never cover the chat at once". The nav drawer and the pane are both overlays
     /// there, and opening the drawer over an open pane opened it UNDER the pane (both z-40,
@@ -4848,8 +4861,8 @@ module ClientModel =
         | RevealSettingsMsg -> columnOn { model with Column = { model.Column with Face = ColumnFace.Settings } }
         | ViewportMsg wide -> { model with Column = { model.Column with Wide = wide } }
         | PaneSplitMsg wanted -> choosing wanted model
-        | ReaderMovedMsg (surface, following) ->
-            { model with Away = (if following then Set.remove surface model.Away else Set.add surface model.Away) }
+        | ReaderMovedMsg (surface, away) ->
+            { model with Away = (if away then Set.add surface model.Away else Set.remove surface model.Away) }
         | PaneNudgedMsg by ->
             match paneSplit model with
             | Some split -> choosing (float split.Width + by) model
