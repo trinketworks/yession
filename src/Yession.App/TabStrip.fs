@@ -84,11 +84,15 @@ module TabStrip =
     /// the left at the left, which is what keeps a walk along the strip from jumping the row
     /// under the reader on every step. A tab wider than the window shows its start, where its
     /// name is.
+    ///
+    /// Rounded OUTWARD, to the whole pixel past the edge it is moving towards: a browser keeps
+    /// a scroll offset in whole pixels, so a fractional target lands short of it, and a tab
+    /// whose width is not a whole number of pixels was left a fraction under the fade.
     let reveal (port: Scrollport) (start: float) (stop: float) : float option =
         let from, upto = start - edge, stop + edge
         let target =
-            if from < port.Scrolled then from
-            elif upto > port.Scrolled + port.Shown then min from (upto - port.Shown)
+            if from < port.Scrolled then floor from
+            elif upto > port.Scrolled + port.Shown then min (floor from) (ceil (upto - port.Shown))
             else port.Scrolled
         let furthest = max 0.0 (port.Holds - port.Shown)
         let target = target |> max 0.0 |> min furthest
