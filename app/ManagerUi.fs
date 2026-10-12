@@ -50,12 +50,14 @@ module private Col =
     /// One `h-8` control, full-bleed in its column, plus the cell's left gutter (the MCP
     /// table's Withdraw).
     let actions = "w-[128px]"
-    /// The session rail carries two BORDERLESS verbs at most: a word (`stop`, or `unarchive`,
-    /// the longer of the two at 83px in the caps voice) and the 24px archive icon, 10px apart
-    /// (its 44px hit area overhangs the box by 10, into that gap and the page's gutter),
-    /// plus the cell's left gutter. Everything the rail gave up when its verbs lost their
-    /// rectangles, the name gained: on a 390px phone the name has 238px where it had 160.
-    let rail = "w-[128px]"
+    /// The session rail is its widest row and not a pixel more, plus the cell's 16px left
+    /// gutter. MEASURED: an active row is Stop (43px) and the 24px archive icon, 10px apart
+    /// (its 44px hit area overhangs the box by 10, into that gap and the page's gutter) — 93px;
+    /// an archived row is Unarchive alone (87px rendered at 390px, no icon), unclipped at
+    /// 100px. It was 128px, sized as if
+    /// one row could hold Unarchive AND the icon, which none can, and on a phone that was a
+    /// 35px hole in front of Stop that the name could have had.
+    let rail = "w-[100px]"
 
 /// The row's second line: the session's state, and beside it the one line the session says
 /// about ITSELF. Plain small text, at every width — this is the answer to the question the
