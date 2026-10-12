@@ -1,792 +1,379 @@
-# Marks
-
-Sixteen logo directions on one brief: a Y with three points, two green for the humans and one
-blue for the agent. Nothing here is chosen yet — this is the broad pass, kept so the rejected
-directions stay legible next to whichever one wins.
-
-Every mark is drawn in tokens `app/tokens.css` already defines — `#a8dd00` (green, human),
-`#1ba1e2` (blue, agent) — on the product's black, at a 64px grid with a 5px safe margin. The
-lockups are the same mark against `yession` set in Noto Sans 200, the weight the shell writes
-its wordmark in.
-
-Noto Sans is the brand's face and the machine's voice — the chrome, and the agent, which is part
-of it. It is not the product's only one: what a person writes — their messages, drafts and the
-composer — is set in Source Serif 4, at 15px and weight 350. Attribution is said by the typeface
-before the author line is read, and a serif drawn as Source Sans's companion keeps the
-difference one of class alone, so a conversation reads as one voice in two registers rather than
-two typefaces arguing. It is declared in `app/tailwind.css` (`@font-face 'Source Serif 4'`) and named in
-`app/tokens.css` (the `--font-human` token, beside `--font-ui`/`--font-agent` for the sans) and vendored under
-`app/fonts/` (`source-serif-4-latin-{350,400,600}-normal.woff2`, SIL OFL 1.1); the 350 is an
-instance cut from the variable font, weighted by eye against Noto Sans 300 on black. The face
-story in full is the comment above those declarations. The terminal keeps Monaspace Neon.
-
-| File | Direction |
-| --- | --- |
-| `trifoil.svg` | Three peers 120° apart; the hub is a gap, not a joint. |
-| `letter.svg` | A true Y at letterform proportions — humans as one V, agent as the stem. |
-| `stencil.svg` | One solid Y cut into three by hairlines. |
-| `lowercase.svg` | The word's own lowercase y; the agent is the descender. |
-| `blades.svg` | Tapered arms — weight and direction instead of a monoline. |
-| `nodes.svg` | The three points drawn as points; strokes are only the relation. |
-| `inward.svg` | Three arrowheads converging on a place none has reached. |
-| `blend.svg` | Arms overlap rather than abut; the hub screens to near-white. |
-| `beam.svg` | Two green strokes in, one gradient stroke out, with bloom. |
-| `bloom.svg` | One continuous gradient stroke, heavy glow — the Zune end. |
-| `tile.svg` | Metro's crop: the mark set far larger than its frame. |
-| `room.svg` | The session as a ring the three arms reach. |
-| `counterform.svg` | Three fields in a disc; the Y exists only as the cut between them. |
-| `index.svg` | The square app mark, for the 16px end. |
-| `lockup.svg` | Mark beside the word. |
-| `substitute.svg` | Mark as the word's y. |
-
-What the pass established: two humans read as two only when the arms stay separate (`letter`
-and `bloom` join them and lose the count); green outweighs blue at equal area, so the agent's
-stroke wants slightly more of it; only `letter`, `stencil`, `lowercase` and `index` survive
-16px; and green on a light ground is 1.9:1, so any mark leaving the black app needs a plate
-under it or a dark variant.
-
-## Second pass: the cube and its projection
-
-`cube/` narrows to the one direction worth pursuing. An isometric cube shows three faces
-meeting at one interior vertex, and the three edges radiating from that vertex sit at exactly
-120° — so the cube and the counterform disc are the same drawing with different silhouettes,
-and neither draws the Y: it is the cut left between the fields.
-
-| File | Variation |
-| --- | --- |
-| `cube.svg` | Baseline: blue top face, two green walls, 3.6px cut. |
-| `cube-swap.svg` | Agent moved off the top plane onto a wall. |
-| `cube-shaded.svg` | Two greens at two values — a lit solid instead of a flat one. |
-| `cube-seam.svg` | Interior cut stops short of the silhouette; the outline stays whole. |
-| `cube-round.svg` | Every corner taken off the same amount. |
-| `cube-open.svg` | Faces pushed apart along their own normals. |
-| `cube-inset.svg` | Faces inset on all edges — three panels holding a cube's shape. |
-| `cube-wire.svg` | Hairline silhouette, colour spent only on the Y. |
-| `cube-hollow.svg` | The agent's face drawn, not filled. |
-| `cube-plate.svg` | App-icon build on its own dark ground. |
-| `disc.svg` | The projection: same fields, circular silhouette. |
-| `disc-hair.svg` / `disc-wide.svg` | The cut at 1.6px and at 7px. |
-| `disc-weighted.svg` | Agent's field widened to 135° to balance green's luminance. |
-| `square.svg` | Tile field; the Y travels three different distances. |
-| `ring.svg` | Disc hollowed — one band divided three ways. |
-| `partial.svg` | Cuts stop short of the rim; the fields stay one disc at the edge. |
-| `lockup-cube.svg` | The solid against `yession` in Noto Sans 200. |
-
-What this pass established: the agent belongs on the **top** face — with blue on a wall the two
-greens become one L-shaped mass and the count goes, which is the failure `letter` and `bloom`
-had; the hexagon holds at 16px where the circle becomes a dot; 3.6px on the 64px grid is where
-the cut is both legible and quiet; and unlike the first pass's stroke marks, a field mark
-survives a light ground, because the cut takes whatever is behind it.
-
-## Third pass: the seam, expressed
-
-`form/` keeps the seam — three faces cut apart where they meet and continuous at the outline,
-so the Y is a gap the silhouette never opens — and treats it as the only fixed thing. Each face
-is a quad with two kinds of edge: the two running from the hub are the seam and stay straight in
-every study, because they are what the reader resolves the Y from; the two outer edges are the
-silhouette, and that is where the expression is spent.
-
-The levers are edge bow (perpendicular displacement of an edge's midpoint, positive outward),
-per-corner radius, cut taper, and whether the faces sit in one plane at all.
-
-| File | Register |
-| --- | --- |
-| `swell.svg` | generous — silhouette bowed out, seam straight |
-| `petal.svg` | alive — bow pushed until each face is a leaf |
-| `pebble.svg` | worn — no curves, corners taken off at increasing radii |
-| `lean.svg` | leaning in — human faces widened at the shoulder |
-| `draw.svg` | held — the bow inverted, mass pulled toward the hub |
-| `crest.svg` | load-bearing — convex top, concave walls |
-| `converge.svg` | closing in — the cut wide at the hub, closing at the rim |
-| `turn.svg` | working — faces rotated, leading and trailing edges |
-| `spiral.svg` | in motion — faces still, the cut bends |
-| `forward.svg` | momentum — the whole solid sheared |
-| `stack.svg` | layered — each face pushed a different distance out |
-| `lift.svg` | arriving — the agent's plane floated off the solid |
-| `breathe.svg` | opening — the cut hairline at the hub, wide at the rim |
-| `hold.svg` | protective — the agent's face shrunk inside the human ones |
-| `chamfer.svg` | machined — flats instead of radii |
-| `bevel.svg` | engineered — a hairline run inside every face |
-| `fold.svg` | made by hand — every plane creased, two values each |
-| `still.svg` | composed — the control: no bow, minimal radius, hairline seam |
-
-What this pass established: curvature is the loudest lever by a distance — four degrees of bow
-moves the mark from a rendering of a solid to something with a temperament. Keeping the seam
-straight is what keeps the set siblings. `stack`, `lift` and `breathe` still say
-three-parties-in-one-thing at 16px, where `petal` and `draw` collapse into a blob and a star.
-And `hold` changes the argument rather than the mood: a shrunken agent face says authority is
-scoped and the small thing is held, which is a claim, not a style.
-
-## Fourth pass: the folded Y
-
-`fold/` takes the crease from `form/fold.svg` and treats it as the construction. Creasing each
-face gives six triangles, so the hexagon's interior has six edges: three are the Y (60°, 180°,
-300°) and three are folds (0°, 120°, 240°). The Y is cut; the folds exist only as a step in
-value. Every study is a way of spending or saving that difference.
-
-**The Y as a letter.** The cut now stops inside the field — run it to the silhouette and a
-terminal has nowhere to exist, which is why the first attempt's variations were all the same
-drawing. `modul` (pen weight, thick at the junction), `sheared` (terminals cut on an angle),
-`flared` (glyphic, widening in the last tenth), `joint` (a fillet where the strokes pool),
-`penned` (arms bowed as a written Y's are), `stemmed` (short arms, long stem — a Y's actual
-proportion), `offaxis` (arms at 44° instead of the isometric 60°).
-
-**Quieter.** `whisper` (hairline), `tone` (no cut at all — the fold values arranged so the step
-across the Y beats the step across a crease), `emboss` (hairline with a light edge under it),
-`step` (half the hexagon 1.6px smaller, so the Y is a misalignment).
-
-**The triangles.** `gem` (every corner radiused), `hub` (radius only at the centre, so the
-junction softens and the rim stays sharp), `alternate` (colour by triangle, not by face),
-`pinwheel` (the lit half rotated one step, so shading circles instead of describing a solid),
-`deep` (fold contrast doubled on one face, halved on another).
-
-**Light and depth.** `lit` (one light source resolved per facet, six gradients), `sweep` (each
-face bleeding toward its neighbour's hue along the seam), `extrude` (a dark copy behind — the
-only build here that still works in one colour).
-
-Findings: `stemmed` and `offaxis` are the two that read as a letter rather than a construction,
-at the price of the cube being geometrically true. `tone` is the quietest and the only mark with
-no holes in it. Six flats survive 16px and six gradients do not — `lit` and `sweep` want a
-second, flatter build rather than a compromise. And radius at the hub buys more than radius at
-the rim, because the junction is the part a reader looks at.
-
-## Fifth pass: Noto's own Y against the solid
-
-`glyph/` stops drawing a Y and uses the one the shell already serves. The outline is read
-straight out of `app/fonts/noto-sans-latin-<weight>-normal.woff2` with fontTools, junction
-placed on the solid's hub.
-
-The measurement that drives the whole pass: **Noto Sans cuts its capital Y with the arms 33°
-off vertical and the junction at 39% of the cap height** (junction at 283,277 on a 1000 em, cap
-at 714). An isometric cube puts its three interior edges at 60° and the junction dead centre.
-27° apart, and every mark here is a position on that argument.
-
-The solid is no longer fixed either. Any three vectors out of a hub are a legitimate parallel
-projection of a cube corner, so the *view* is a free variable — which is what lets the geometry
-move toward the letter instead of the letter being bent to fit 120°.
-
-- **The ladder** — `arm60`, `arm52`, `arm45`, `arm38`, `arm33`: one variable, the arm angle,
-  from the isometric down to Noto's own, with the solid re-derived at each step.
-- **The shipped glyph** — `iso400`, `iso600`, `iso200`: three weights of the real letter as the
-  cut, over the true isometric solid, so the cut crosses the folds.
-- **Moving the view** — `wide66`, `wide72` (flattened: the top face widens until the letter has
-  room), `rot7`, `rot14` (solid turned under an upright letter), `dimetric` (arms at 54° and 68°,
-  so the cube is turned toward the viewer while the letter stays symmetrical).
-- **Manipulating the letter** — `stretch17` (glyph at 170% width: arms walk out to ~50°),
-  `stretch27` (at 267%: arms land exactly on the solid's 60° edges).
-- **Finish** — `inlay` (the letter as a lightened region, nothing cut away), `hub` (Noto 300
-  over a flattened solid with radiused hub corners), `overshoot` (letter larger than the solid,
-  cutting out through the silhouette).
-- **Retained** — `retained-whisper`, `retained-modulated`, carried unchanged from `fold/`.
-
-Findings: 45° is the floor for the solid — below it the hexagon becomes a leaf, so pulling the
-geometry all the way to the letter costs the thing the letter was sitting on. Flattening the
-view to 66° is the move that works, because nothing has to be falsified: you are simply standing
-higher up. Stretching the glyph is cheaper than bending the cube — at 170% it is still
-recognisably Noto's Y. Seven degrees of rotation reads as intent and fourteen reads as an
-accident. And semibold is the weight that survives 16px: a counterform has to read as a gap,
-not a scratch.
-
-## Sixth pass: the held cube
-
-`pair/` follows `glyph/overshoot.svg` — where the letter is set larger than the solid and cuts
-out through the silhouette — and puts something in the fork it opens. The mark becomes two
-objects and one relationship: a green solid with Noto's Y cut through it, and a blue solid it
-has hold of.
-
-Built in three steps: the folded solid, the letter cut through it overshooting the silhouette,
-then the second solid dropped in with its own clearance punched out of the first — so the gap
-around it is the big cube's material removed, not a stroke drawn on top.
-
-- **Held** — `cradle`, `tight` (0.9px clearance), `perch` (larger, breaking the silhouette),
-  `float` (2.6px, nothing touching), `sunk` (behind the solid, revealed only by the cut).
-- **Gripped** — `prongs` (narrow cut, the wedge between the arms survives and the small cube
-  sits on it), `grip` (cube at the junction, arms rising from behind it), `bracket`, `claw`,
-  `deepfork` (arms reaching past it on both sides), `core` (at the junction, behind).
-- **Ratio, colour, orientation** — `small30`, `small60`, `twin` (green: a session inside a
-  session), `socket` (unfilled: the space kept for one), `turned` (18° off the large one's
-  axis), `mixed` (the large solid keeping its blue top — two things claiming to be the agent).
-- **Without the cut** — `stack`: the same two solids corner to corner, no Y anywhere.
-- `lockup.svg` — the pair against the name, the small solid sitting where an ascender would.
-
-Findings: `prongs` is the one that keeps both readings, because a narrow cut leaves the large
-solid whole. Past about 40px of reach the cut severs it, and `bracket`/`claw`/`deepfork` stop
-being one object holding another and become two green pieces flanking a blue one — which is the
-original brief (two humans either side of an agent) arrived at from the opposite direction, and
-worth keeping as its own line. Clearance does more work than size: `tight` and `float` are the
-same solids in the same places, and one is holding while the other is merely near. And the
-large solid has to give up blue entirely, or the pair has two agents in it.
-
-## Seventh pass: cube minus cube
-
-`pair/` drew the second cube as a literal object perched in the fork. `void/` makes it the piece
-that was taken away.
-
-Remove a cube-shaped corner from the cube facing you. In an isometric projection the three edge
-vectors sum to zero, so the void's inner corner lands exactly on the outer one and its three
-faces project as a small hexagon — the silhouette of a small cube. Nothing is drawn twice: the
-second solid is the absence, and the three edges running out of it are already the Y. The
-construction is the same at both scales, with the small cube's interior Y rotated 180° from the
-large one's.
-
-- **The void** — `bite` (34% of the edge), `bite-small` (22%), `bite-deep` (50%, the solid
-  reduced to three L-plates), `folded` (each plate creased, six greens and three blues),
-  `hollow` (the void punched through to the ground), `open` (hole and seams together).
-- **Which way it reads** — `flip` (the void's values in the outer order, so it reads convex: a
-  small cube in front rather than a hole), `rimmed` (clearance around the opening so the two
-  never touch), `suggested` (the void in the solid's own colours, a shade off), `ghost` (blue
-  mixed back toward green until it is a tint).
-- **With the letter** — `seamed` (the three edges the bite leaves, opened into a cut — both Y's
-  visible at once and nothing added), `glyphed` (Noto's Y arriving at the void).
-- **Elsewhere** — `corner`: the same subtraction at the top vertex, where it notches the
-  silhouette.
-- `lockup.svg` — seamed against the name.
-
-Findings: blue belongs to the void. The solid is green throughout and the only blue in the mark
-is the part that was removed, which is a more precise claim about a scoped agent than a small
-cube perched on top. The concave/convex reading is genuinely ambiguous — `bite` and `flip` are
-the same polygons and differ only in the order of three values, so some readers will see the
-other one; `rimmed` settles it. And it holds at 16px better than `pair/` did: one silhouette
-instead of two, with the void a solid shape rather than a gap between things.
-
-## Eighth pass: the cube in the fork
-
-`pair/` perched the second cube above the mark; `void/` made it the piece removed. `fork/` puts
-it where it was asked for: seated in the fork of the cut Y.
-
-It needs no fitting. The Y cut out of an isometric solid leaves a fork of exactly 120°, and 120°
-is what a hexagon's bottom corner measures — so the held cube's two lower edges lie along the
-arms' own inner edges. Both the fork and the cube are the same construction; they were always
-going to meet.
-
-- **In the fork** — `fit` (seated, filled), `clear` (1.3px of ground opened around it), `fit-hole`
-  (the opening left empty and still cube-shaped), `fit-tint` (blue mixed back toward green),
-  `fit-edges` (three strokes in the hole — the cube's own interior Y and nothing else),
-  `concave` (values reversed, so it reads as a socket).
-- **How big, how high** — `snug` (30%), `flush` (46%: the held cube's top vertex lands exactly on
-  the large one's), `filling` (52%), `raised` (lifted off the junction), `brim` (arms running past
-  its shoulders and out through the silhouette), `short` (arms stopping at its shoulders, so the
-  cut is one shape — a Y with a cube for a head).
-- **Finish** — `folded` (the large solid creased, six greens), `tapered` (the cut given a pen's
-  taper rather than parallel sides).
-- `lockup.svg` — against the name.
-
-Findings: `flush` is the only ratio that is not a preference — at 46% the two silhouettes share a
-corner and the top face fills edge to edge. Clearance is what decides whether the mark reads as
-one object or two: `fit` and `clear` are the same geometry 1.3px apart. `fit-edges` is the most
-suggested build that still reads — nine lines, two cubes, nothing drawn that the cut did not
-already imply. And unlike `pair/`, it holds at 16px, because the held cube is a solid shape with
-its own colour rather than a gap between things.
-
-## Ninth pass: the narrow fork
-
-`fork/` used the isometric Y, whose fork is 120° — so the held cube seated in its corner.
-`narrow/` uses the letter's fork instead. Noto's capital Y opens at about 33° off vertical, and a
-hexagon's bottom corner is 120°, so it cannot descend into a V that tight: it is caught on the
-two inner edges and wedged high, held rather than seated.
-
-The seat is solved rather than nudged. Contact is linear in the cube's height, so one Newton step
-from the support function lands it exactly tangent to both inner edges — `seat()` in the
-generator. For the shipped glyph the inner V's apex and edge direction come from Noto's own
-outline (the inner apex is at (283, 363) in font units, the left inner terminal at (98, 714)).
-
-- **How narrow** — `a24`, `a30`, `a33`, `a42`: the fork angle as the single variable. The
-  narrower it is the higher the cube rests; by 42° it has started to descend toward the corner.
-- **The shipped letter** — `noto400`, `noto600` (heavier arms raise the inner V and lift the cube
-  with it), `noto200` (barely an arm to hold anything), `wide13`, `stretched` (155%, which opens
-  the fork enough to take a larger cube and still keep it inside the silhouette).
-- **How big it sits** — `flush` (the held cube's centre lands 1.83 edge lengths above the apex, so
-  its top vertex is 2.83 above: set the edge to 30% of the big solid's and the two silhouettes
-  share a top corner exactly), `contained` (wholly inside the outline — the favicon build),
-  `deep`, `proud`, `clear` (1.2px of ground around it).
-- **Finish** — `hole`, `tint`, `edges` (the held cube's own interior Y, inside the big one's).
-- `lockup.svg` — against the name it came from.
-
-Findings: weight moves the seat, so a cut that is going to hold something wants weight — 600
-holds, 200 does not. `flush` is decided by the construction rather than by taste. `contained` is
-the one for 16px, because anything larger breaks the outline and a broken outline at that size is
-two specks rather than one mark. And `stretched` is the compromise worth testing: a wider letter
-buys a bigger held cube without it leaving the silhouette.
-
-## Tenth pass: eleven dice
-
-The shortlist is `fold/whisper.svg` and `fold/modul.svg`, and they differ in exactly one property
-— so the property list is the instrument. `dice/` breaks the mark into eleven dimensions, every
-one of them something those two already decide silently, and throws all of them independently.
-
-| Dimension | Levels |
-| --- | --- |
-| silhouette | hexagon, rounded hexagon, circle, chamfered, squircle |
-| arm angle | 60° (isometric), 45°, 33° (letterform), Noto glyph |
-| cut weight | none, hairline 1.2, light 2.4, medium 3.8, heavy 5.4 |
-| cut profile | parallel, tapered, reverse taper, flared, round-ended |
-| cut reach | short, to the rim, overshoot |
-| corners | sharp, soft 1.6, round 3.2, hub only |
-| fold | flat, subtle, normal, strong, inverted |
-| colour | blue top, blue right, blue left, split, green + blue cut |
-| surface | flat, per-face gradient, sweep, glow |
-| extra | none, bevel, rim, shadow |
-| rotation | 0, −7, +7, −14 |
-
-Seed 7, eighteen throws, no curation — `rolls.json` records what each one drew, so any result can
-be reproduced, half-kept, or bred with another. Re-roll by changing `SEED` in the generator.
-
-What the dice turned up that nine deliberate passes had not: **a blue Y drawn INTO the cut on an
-all-green solid** (rolls 01, 04, 05, 08, 14). Every previous mark made the letter an absence;
-none of them made it an object. Roll 14 is the striking one. The **squircle** is also better than
-expected (06, 09, 12, 14) — the only silhouette that reads as a made object rather than a diagram
-of a solid. Rotation is worth more under a glyph cut than a symmetric one: roll 11 at −14° looks
-placed, roll 03 at the same angle looks broken. Roll 13 draws "no cut" with every other dimension
-working and says nothing at all, which settles whether the letter is decoration. And glow and
-heavy round-ended cuts are the two levels to retire — every roll carrying them is muddier for it
-and worst at 16px.
-
-## Eleventh pass: seven ideas from a tile
-
-The dice turned up the squircle, so `tile/` chases what that silhouette unlocks rather than
-re-permuting the cube. A hexagon is a drawing of a solid; a squircle is an object — a key, a
-window, a lens, a card — and each of those is a different family. Drawn as real superellipses
-(n = 4, sampled), not rounded rectangles.
-
-- **Panes** — `panes`, `panes-inset`, `panes-asym`, `panes-chrome`: the tile as a window, the Y as
-  the gutter between three panes. The only family here that draws what the product IS rather than
-  what its initial looks like.
-- **Aperture** — `aperture`, `aperture-open`: three blades swung in from the rim like a lens iris.
-  The opening is the junction, the seams are the arms, and the mark has a state.
-- **Object** — `keycap` (base, dished top, letter cut into it), `keycap-pressed`, `keycap-lit`
-  (the Y filled in blue: a lit key), `emboss` (the letter pressed into one green surface, no cut
-  and no second colour), `chip`.
-- **Overlap** — `overlap`, `overlap-tight`, `overlap-loose`: three tiles cleared of each other, the
-  Y in the gap. Kept as a negative result — at every arrangement tried it reads as a face.
-- **Bars** — `bars`, `bars-gap`, `bars-hub`, `bars-tile`: the letter built out of three
-  squircle-ended bars rather than cut into a shape.
-- **Contained** — `contained`, `bleed`: the folded solid given the tile as a ground, at icon
-  padding and cropped.
-- **Stack** — `stack`: the tile repeated, newest in front.
-
-Worth taking further: `panes` (the Y falls out of a shared window split three ways — the first
-mark that is about the product rather than the letter), `aperture` (the best drawing here, and the
-only one with an honest animation in it), `keycap-lit` (answers the dice's discovery — the Y as a
-lit object rather than an absence), and `bars` (three separate objects meeting, so the two humans
-are finally plainly two). `overlap` and `chip` are recorded as failures: a face and a costume.
-
-## Twelfth pass: lighting whisper
-
-`neon/` returns to `fold/whisper.svg` and lights its cut. A lit tube is not one blur: the core is
-nearly white and thinner than expected, the falloff comes in stages rather than one, the hue
-shifts deeper as it spreads, and — the part usually missed — it lights whatever stands next to
-it. Each family below isolates one of those mechanisms; the last puts them back together.
-
-- **Painted light** (no filters at all) — `spill`, `spill-deep`, `spill-cold`. Every facet of this
-  mark is bounded by exactly one slot and one crease, so light from the cut is a linear gradient
-  running between them. Resolution-independent, free to render, and works in any pipeline that
-  can draw a gradient.
-- **The tube** — `tube` (three stages: near-white core, tight halo at the hue, wide dim wash),
-  `chroma` (outermost stage pushed to a deeper, more saturated blue), `faint`.
-- **A lighting model** — `pointlit` (feDiffuseLighting with a point source in the junction),
-  `twolight` (green source up the arms, blue down the stem), `specular` (feSpecularLighting, so
-  the facets read as having a finish).
-- **The room** — `ambient` (wash under the whole mark), `halo` (wash outside the silhouette only),
-  `grain` (feTurbulence in the bloom, because a perfectly smooth falloff bands on a real screen
-  and reads as a gradient rather than as light).
-- **State** — `unlit` (a recessed grey slot, no wash), `warm` (lit green), `pulse` (gradient along
-  the run, as an unevenly excited tube does).
-- **Assembled** — `assembled` (all of it, each layer weak), `dual` (arms green, stem blue, each
-  facet washed by whichever lights it), `slot` (the cut given thickness: dark inner edge, bright
-  lip), `edge` (no bloom at all — two bright hairlines on the lips plus painted spill).
-
-Findings: `spill` costs nothing and is the mechanism to build on. `dual` is the only lighting that
-keeps the mark's argument — lighting everything one colour throws away the two-humans-and-an-agent
-reading. `edge` is the one to trust: it reads as lit, survives print, and is the only assembled
-build still legible at 16px. Note that every tube, lighting and room build depends on SVG filters,
-which are slow at scale, render differently across engines and are dropped by several icon and
-email pipelines. And none of the glow builds survive 16px — which is the right answer: lit at the
-sizes where light is visible, flat where it is not.
-
-Two filter gotchas found the hard way, both the same bug: an `objectBoundingBox` region is
-degenerate for a zero-width shape. A vertical line takes neither a default `linearGradient` nor a
-default filter region — both need `userSpaceOnUse`.
-
-## Thirteenth pass: blue in the fork
-
-`bluefork/` returns to the narrow letter's fork (`narrow/`) and removes the green from it. Instead
-of a cube resting in a green V, the V itself is blue — a cube corner that does not have to be
-geometrically true, pointing out of the letter at you.
-
-- **The fork, filled** — `two` (the V split down the axis into two values), `three` (a point on the
-  axis and three facets meeting at it: a cube corner drawn without the geometry closing),
-  `three-low`, `three-high` (the corner at 40% and 74% of the way up).
-- **The letter's own counter** — `noto`, `noto-bold`, `noto-wide`: Noto's capital Y as the cut with
-  its actual inner V filled, apex and arm angle read off the glyph outline. `noto-seam` leaves the
-  glyph's arms uncut, so the counter is the only blue and the stem the only slot.
-- **A cube with its edges on the arms** — `emerge` (a sheared cube whose lower edges lie along the
-  arms, side vertices at the rim, top rising clear of the solid), `emerge-short` (arms cut only
-  to its side vertices), `emerge-both`, `flush` (sized so its top vertex lands on the big solid's).
-- **Seams** — `seam` (no slots for the arms: the upper strokes are where blue meets green, the stem
-  a hairline), `seam-two`, `seam-none` (nothing cut at all — the stem is the big solid's own fold),
-  `seam-lit` (the top face washed from the blue outward, painted).
-
-Findings: `seam` is the one — a green solid with a blue corner driven into its top, the Y simply
-the outline of the blue, and the first build in fourteen passes where nothing is cut away to make
-the letter. `seam-none` works, which was the surprise: with the arms as seams the stem is already
-the boundary between the two green walls. The letter's own counter is a gift — fill Noto's inner V
-and the blue is exactly the kite the type designer left there, and it holds at 16px better than
-any drawn wedge. `emerge` is the loud one: a crystal coming out of the fork, a splash screen
-rather than a favicon.
-
-## Fourteenth pass: seam lit, and the sketch as an object
-
-Two threads.
-
-`seamlit/` takes `bluefork/seam-two.svg` — the blue wedge driven into the green solid, one
-crease up its middle, arms as seams, stem a hairline — and lights it with the mechanisms from
-`neon/`. The only slot in the mark is the stem, so that is where a tube can go; the seams and
-the crease are edges, and take light the way edges do. `parent` (unlit), painted (`spill`,
-`spill-deep`, `source` — the wedge lit from its own crease), tube (`stem-tube`, `crease-tube`,
-`both-tubes` — one bright axis from the top corner to the bottom vertex), assembled (`assembled`,
-`dual`, `edge`, `unlit`). `crease-tube` is the find: the wedge's near edge lit and the stem
-dark, so the cube in the fork finally looks like a cube because its nearest edge catches light.
-`edge` still wins on cost.
-
-`blocks/` reads a pen sketch as a thing rather than a drawing: four tall blocks in a two-by-two,
-the near one missing, hairline kerfs between the three that remain. Rendered through an actual
-orthographic camera in the generator — azimuth, elevation, back-face culling, painter's sort —
-so every view is the same object and the Y is what it looks like from there: two kerfs on top
-and the concave corner the far block shows through. `sketch` (as drawn: h = 1.8× footprint,
-θ = 45°, φ = 35.26°), `cubes`, `tall`, `nogap` (the arms vanish into the top surface and only the
-concave stem survives as shading), `wide`; `blue-right`, `blue-left`, `stepped`, `low-far`;
-`above`, `low`, `turned` (θ = 32°), `turned-more` (θ = 20°); `ghost` (the missing near block's
-top drawn as a faint plate — three stand around a space shaped exactly like one of them) and
-`plinth`.
-
-Height is the dial that matters for the blocks: as cubes it is a stair, at 1.8 it is three things
-standing, at 2.6 it is pillars and the letter shrinks to a notch. The sketch's proportion is
-about right. And a camera is the honest instrument here — `turned` is the same object as
-`sketch`, which no drawn mark can claim.
-
-## Fifteenth pass: the chevron
-
-`chevron/` takes `blocks/` from above and thins the green blocks to half width. Same object,
-same camera — the generator imports `blocks`' camera and renderer — with two new dials: the
-slabs' width and which half of their quadrant they keep. From above the greens become two arms
-hanging off the blue cube and the whole thing is an upward chevron with the agent at its apex.
-
-- **From above, as cubes** — `cubes-48`, `cubes-62`, `cubes-plan` (straight down: three squares,
-  two hairlines, the third arm of the Y the corner they leave open), `tall-55`.
-- **Half width** — `chevron` (48°), `chevron-62`, `chevron-plan` (flat: two bars and a diamond,
-  stencil-cuttable), `chevron-30`, `chevron-turned` (θ = 32°).
-- **Where the slabs sit** — `inner` (inner halves: the concave stem survives, the chevron's
-  outline does not), `centred`, `slabs-tall` (walls with a cube tucked between them), `slabs-low`
-  (the cube stands proud), `thin` (quarter width).
-- **The kerf** — `nokerf`, `widekerf`.
-- **The Y in it** — it is the cube's two near top edges and its near vertical edge. `y-lit`
-  (those three edges given a hairline and a weak halo), `y-floor` (the third stroke as a thin
-  blue strip laid on the ground out through the empty quadrant), `y-shadow` (the cube casting
-  forward between the slabs — nothing added a light would not add), `y-plan`, `y-plan-thin`
-  (the flat chevron with a stroke down into the V).
-
-Findings: `chevron-62` is the mark — two bars meeting at a square, and the first silhouette in
-the whole exploration that is a symbol rather than a solid. Plan is a second mark for free, and
-provably the same object as the dimensional one. The stem wants to be on the floor: lighting the
-edges makes a Y but leaves the chevron as it was; the floor strip turns the chevron into the
-letter. Outer halves or inner halves is the fork in the road — a chevron without a stem, or a
-stem without a chevron. Slab height reads as a claim: taller than the cube says the agent is
-inside the humans' space, lower says it stands proud, level is neutral and the only clean one.
-
-## Sixteenth pass: panels, and a lens
-
-`panels/` takes the half width on the other axis. The green blocks keep the cube's full width and
-lose half their depth, so they lie against the cube's two near faces as panels with a kerf
-between, rather than running out from it as arms. Same object and camera as `blocks/`.
-
-- **The other way** — `hug` (48°), `hug-62` (the panels a thick V wrapped round the cube's near
-  corner, the kerfs drawing the fork of the Y where a letter would put it), `hug-plan` (a square
-  with two bars along its lower edges — the chevron inverted), `hug-30`.
-- **How the panels stand** — `hug-tall` (two walls, the cube seen over them), `hug-low` (the cube
-  on a V-shaped step), `far` (pushed to the far ends of their quadrants, ground between),
-  `hug-thin` (fins).
-- **Through a lens** — a barrel term applied after projection, every edge subdivided first so
-  straight edges come out as shallow arcs: `blocks-lens` (the sketch, k = 0.14), `chevron-lens`,
-  `hug-lens`, `cubes-lens`, `plan-lens` (k = 0.2), `chevron-lens-strong` (k = 0.32, a fisheye —
-  past the edge, kept to show where it is).
-
-Findings: the panels make it one solid — `hug-62` is the tightest three-part mark in the set and
-the first where the Y sits exactly where a letter would put it. Plan inverts the chevron. The lens
-works only because the edges bow: a radial scale alone swells the mark, and subdividing every
-edge before warping is what turns straight lines into arcs — the whole difference between plotted
-and photographed. The tighter the arrangement, the better it takes the bulge.
-
-## Seventeenth pass: convex, lit, glossed
-
-`convex/` corrects the lens and lights the object. The previous pass's barrel term had the sign
-reversed — magnification rising with radius is pincushion, and an off-centre straight line bows
-toward the centre. With magnification falling with radius the line bows away: outward, convex.
-
-- **Convex** — `hug-convex`, `chevron-convex`, `blocks-convex` (the sketch; its vertical edges
-  have the most to bow), `cubes-convex`, `hug-convex-strong` (k = 0.3, a fisheye, past the edge).
-- **Neon on the kerfs** — the three kerfs are the cube's two near top edges and its near vertical
-  edge, which is to say they are the Y. `hug-neon`, `chevron-neon`, `blocks-neon` (the stem a long
-  vertical tube seen down the slot between the front blocks), `hug-warm` (lit green — a blue tube
-  along a blue cube's edge loses the arm; green keeps all three strokes), `hug-spill` (the light
-  the junction would throw, painted), `hug-assembled` (tubes, spill, halo, each weak).
-- **Gradient flourishes** — `hug-graded` (a gradient per face: tops lighter toward their far end,
-  sides darker toward the ground), `hug-gloss` (plus a specular on the cube's far corner — a
-  moulded, polished solid), `chevron-gloss`, `hug-sheen` (one diagonal sheen over the whole
-  object), `hug-rim` (a hairline along the top edges plus a little spill — the only lit build
-  that still reads at 16px).
-
-The lens lines bow with the object: the neon strokes go through the same subdivided warp as
-the faces.
-
-## Eighteenth pass: flat and a little 3D, the Zune way
-
-`zune/` drops the lens and dresses the panels-on-a-cube the way Zune dressed a tile: a hue sweep
-inside each shape that runs saturated to more saturated (green to `#d8f54a`, blue to `#6fd8ff`)
-and never to white, and each piece's own colour bloomed softly behind it on black.
-
-- **Flat** — the object straight down (φ = 89.5°): `flat`, `flat-glow` (per-piece glow: the blue
-  glows blue beside two greens, so the count survives), `flat-gradient`, `flat-gradient-glow` (the
-  Zune tile), `flat-sweep` (one green-to-blue gradient under the whole mark — the prettiest and
-  the least honest, since the blue corner is just where the sweep ends), `flat-drop` (a deeper
-  copy of each piece 1.6px under it — 3D without a camera), `chevron-flat-glow`, `cubes-flat-glow`.
-- **A little 3D** — φ = 66°, a sliver of side under each top: `shallow`, `shallow-glow`,
-  `shallow-gradient` (tops sweep hot-to-hue, sides run to deep), `shallow-thin` (height at a third
-  — three tiles with a little thickness, the Zune's own physical vocabulary), `shallow-chevron`,
-  `shallow-lit` (a faint white wash on the tops where the three meet — the kerfs are the Y and this
-  is where they join).
-
-Findings: `flat-gradient-glow` is the Zune tile and the same object as everything since the
-sketch. The glow has to be per piece. `shallow-thin` is the build that belongs beside a Metro
-surface. `flat-drop` does most of what the shallow elevation does while staying a flat SVG with
-no projection in it.
-
-## Nineteenth pass: lower for the stem, then lit in stages
-
-`ladder/` drops the camera on the panels-on-a-cube and builds the glow back up one mechanism at
-a time.
-
-- **The angle** — the stem of the implied Y is the corner slot between the two panels, and its
-  length is the elevation. `a66` (a stub), `a54`, `a46` (the stem as long as the arms are wide —
-  the angle the rest uses), `a40` (the arms begin to foreshorten), `a46-tall` (blocks at 1.3×
-  their footprint, which lengthens the stem without dropping further).
-- **The glow, one mechanism at a time** — eight stages, each keeping every one before it:
-  `g0` base (graded faces), `g1` + bloom (each piece's own colour blurred behind it — where most
-  "add a glow" stops), `g2` + halo on the kerfs (the light gains a source), `g3` + core (a
-  near-white hairline down each kerf; without it the halo reads as paint), `g4` + spill (a radial
-  wash at the junction, clipped to the object), `g5` + chromatic wash (a wider bloom in a deeper,
-  more saturated colour — light shifts hue as it spreads), `g6` + grain (noise multiplied into the
-  wide wash at very low amplitude), `g7` + ambient.
-- **On the others** — `chevron-full`, `cubes-full`: the top of the ladder on the chevron and on
-  the sketch's own arrangement.
-
-One rule, found the hard way twice: everything that spreads must reach zero inside the canvas.
-A wide blur lifts the whole viewport by a percent or two and the edge clips it into a faint
-rectangle. The wide washes are masked by a radial that hits black at r = 30, and the ambient
-gradient stops there too.
-
-## Twentieth pass: the implied Y, measured
-
-`proportion/` holds the anchor (46°, blocks at 1.3× their footprint, half-depth panels, kerf at
-0.11) and one proportion varied at a time. Every build is measured on screen: projected stem
-against projected arm, the fork's half-angle off vertical, and the silhouette's width for one
-of height.
-
-- **Anchor** — `anchor`: stem : arm 0.98, fork 54°, silhouette 1.02 : 1. A 1 : 1 letter; a
-  capital Y in most text faces runs about √φ stem to arm and 30–35° off vertical, so the anchor
-  is a wide, short Y — which is what makes it read as an object first.
-- **Stem against arm** — block height solved for the ratio, camera fixed: `ratio-0_62` (1 : φ,
-  h 0.82), `ratio-1_00` (h 1.32, the anchor's own), `ratio-1_27` (√φ : 1, h 1.68, where most
-  capital Ys sit), `ratio-1_62` (φ : 1, h 2.14, a lowercase y's tail).
-- **The fork** — nothing symmetric narrows it except skewing the plan axes toward the diagonal:
-  `fork-00`, `fork-08` (fork 46°, the cube still a cube), `fork-15` (39°, a lozenge), `fork-22`
-  (31°, past a letter). The cube pays for every degree the Y gains.
-- **The chevron** — the two panels and the cube's near faces read from above: `chev-shallow`
-  (depth 1/φ², two strokes and a cube), `chev-golden` (depth 1/φ — the panel faces and the
-  cube's exposed faces divide the arms golden, silhouette 1.07 : 1), `chev-40` (six degrees
-  lower: longer stem, thinner tops), `chev-52` (six higher: the stem back toward a stub).
-- **Golden** — `golden` (stem √φ, depth 1/φ, kerf 1/φ⁵ ≈ 0.09), `golden-fork` (the same with
-  the plan skewed 12°: stem 1.36, fork 42° — the nearest this object comes to a typographic Y
-  while still being a cube).
-
-Findings: the stem is cheap (grow the blocks) and the fork is not (skew the plan, lose the
-cube); 8° is the far end. The chevron wants 1/φ panels. 46° stays the angle: six degrees down
-buys stem and loses the top faces that carry the gradient. Golden is a candidate, not a proof —
-its value is that every proportion is on one ratio.
-
-## Twenty-first pass: letter first, then the block
-
-`letter/` starts from the typeface's capital Y, bends it for the block, and lays it over the
-block as the feedback while the block's parameters move.
-
-- **The letter** — `noto` (Noto Sans's own capital: fork 28.6° off vertical, box √φ tall, stem
-  0.126 of cap, stem 0.62 of arm — golden already), `rebuilt` (the same letter regenerated from
-  four numbers — fork, weight, stem : arm = 1/φ, mitred junction — so it can be bent; its box
-  comes out √φ on its own). Opening the fork forces a choice: `golden-box` (39°, box held — the
-  stem grows tall, arms too short to leave a block) or `golden-stem` (39°, stem held — the box
-  goes wide and the arms run long). `mid-stem` (42°), `open-stem` (45°). The stem wins.
-- **Why the anchor is not a letter** — `anchor-y`: the 39° letter over last pass's anchor, stem
-  to stem. The camera cannot narrow a square plan's fork below 45°; at 46° elevation it is 54°.
-- **Kerfs turned** — the plan stays square and only the kerfs turn: each arm kerf leaves the
-  near corner a few degrees into the cube's quadrant and exits through the SIDE of the block,
-  not at a corner, so the arm tips are lost off the edge and the angle says they continue. The
-  blue piece becomes a kite prism; the green panels taper to keep the kerf a hairline.
-  `turned-39` (kerfs turned 15° in plan, cube corner 60°), `turned-42` (12°, 66°), `turned-45`
-  (9°, 71°), each with a `-y` twin carrying the letter at 34% white. `turned-39-tall` (1.7×).
-- **Two other ways** — `flare-39` (panels kept as true blocks, the kerf widening toward the
-  tips — reads as ground showing through, not a stroke), `weight-39` (kerf widened to the
-  letter's own stroke — the Y becomes a blue positive between two green blocks: the blue-fork
-  idea arriving by another road).
-
-Findings: Noto's Y is golden in the stem and √φ in the box, and opening the fork makes those
-part company; holding the stem is what lets the arms run 1.7× the visible kerf. Turning the
-kerfs rather than the plan keeps the square silhouette and charges the whole cost to the blue
-top's near corner. 42° is the balance: the top still reads as a square seen from a corner, the
-fork still reads as a letter's. A 24-cell grid (fork × elevation × height × mode) was judged
-on a sheet; only these cells said something.
-
-## Twenty-second pass: a lens instead of a skew
-
-`lens/` narrows the fork by the camera rather than by the object, the letter laid over each
-build at the fork it actually produces (`-y` twins).
-
-- **A real lens** — `wide`: a pinhole camera two block-widths away, aimed above the block so the
-  junction sits well below the optical axis. At the picture centre every camera is orthographic;
-  off it the arms run to the horizon's vanishing points and the fork closes to 41° with every line
-  straight — and the same lens sends the verticals to the nadir, so the stem is a quarter of the
-  arm and the block a plate.
-- **The anamorphic** — every parallel projection of the block is the orthographic one followed
-  by an affine map of the picture, and the symmetric ones are vertical stretches: every angle off
-  vertical tightens by its tangent, lines stay lines, the block gets taller by the same factor.
-  `stretch-13` (1.3×, fork 47°, silhouette 0.79 : 1), `stretch-13-low` (the same on blocks a
-  footprint tall, so the stem is the anchor's and only the tops carry the stretch — the one lens
-  build that keeps the block a block), `stretch-145` (44°; already a stretched picture).
-- **The bent lenses** — a radial term about a centre on the stem's axis bends whatever misses
-  that centre. `bowed` (pincushion 0.08 about the stem's foot over 1.15×: the arms leave the
-  junction at 44° and bow outward toward the block's own angle, the tops pinch into a gem),
-  `cushioned` (barrel 0.10 about the junction over 1.3×: all three kerfs are radial so they stay
-  straight; the outline swells — a flourish, not a fix).
-
-Findings: the only lens that narrows the fork and keeps the lines is the anamorphic, and it is
-the same thing as an oblique parallel projection; its cost is the block's proportion. Against
-the turned kerfs of the pass before: the turn gets 42° with the plan square and the cube's
-corner at 66°, the lens gets 47° with a cube that is a tall box. Two honest routes; the lens
-costs the block's proportion, the turn costs the cube's corner. A 24-cell pinhole/fisheye grid
-and a 15-cell picture-space grid were judged on sheets.
-
-The far corner, pressed. What `cushioned` has that the others do not is the blue far corner
-brought down; a radial lens cannot do that without bringing the greens' outer corners in too,
-because they sit at the same radius (`fisheye`, a stereographic mapping about the junction, is
-the cushion again). A lens with curvature in ONE axis can: `pressed` is the cushioned build's
-barrel with its horizontal term removed — a cylindrical lens, y' = y(1 − k y²) with x untouched —
-so vertical edges stay straight, the greens keep their sides, and the far corner, being the
-highest point, drops most; `pressed-soft` at six hundredths; `pressed-foot` centred on the stem's
-foot so nothing below moves, where the fork pays instead (vertical compression at the junction
-flattens the arms).
-
-## Twenty-third pass: jelly, not glass
-
-`jelly/` cuts the foot cylinder down until the blocks read as cubes, then dresses the result as a
-material: acrylic, or agar jelly — semi-translucent, never glass. Built by `gen25.py`.
-
-- **The height** — the cylinder about the foot (`pressed-foot`'s lens: 1.4× squeeze, barrel
-  0.02 about the stem's foot) on shorter blocks. A block reads as a cube when the green's full
-  face is square, which under the squeeze is at 0.75× the footprint: `cube` (stem : visible arm
-  0.76, the letter's own is 0.62; `cube-y` with the letter over), `cube-tall` (0.9×, still a
-  tall block), `cube-low` (0.62×, a tile). The press and the fork (48°) are unchanged by the
-  height because the cylinder is scaled to the stem. A 16-cell grid over stretch × press × height
-  was judged on a sheet; barrel 0.04 folds the top at any height.
-- **The material, built up** — one mechanism per rung, each keeping the ones below: `j0` body
-  (tops sweep hot to hue, sides deepen downward), `j1` + bloom (the glow, kept), `j2` + rim
-  (each piece's edges brightened from inside in its own hot colour — the layer that says jelly:
-  light entering a turbid body leaves at the nearest edge, so edges are brighter than the middle,
-  which is the opposite of glass), `j3` + sheen (one broad soft highlight per top toward the
-  light; a hard reflection would say glass), `j4` + depth (the hidden edges through the body and
-  the cube's near faces leaking blue through the panels, blurred at a fifth — crisp they read as
-  wireframe), `j5` + inner light (the kerfs' halo and core from the neon ladder, wider, dimmer
-  and clipped to the object with a spill at the junction: the light is in the block, not on it),
-  `j6` + turbidity (fine noise overlaid into the body at a fifth; felt above 64px, not seen; the
-  first attempt overlaid a constant mid-grey, which is the identity — the noise must carry the
-  luminance), `j7` + ground (a reflection under the foot, fading fast).
-- **The top of the ladder** — `jelly`, every layer but the ground, for the lockup and the
-  favicon; `j7` with it, for presentation.
-
-Findings: the rim is the material and everything above it refines; the mark survives to 16px
-with the rim and bloom alone doing the work there. Each piece is rendered as one filtered group,
-which is sound here because the cube sits wholly behind both panels in depth and the panels do
-not overlap on screen.
-
-The wide lens, in jelly. `wide-jelly` is the lens pass's pinhole build (eye two block-widths
-away, aimed two above centre, fork 41° with every line straight) given the material whole, with
-the neon ladder's core line cut from the lighting: the kerfs are lit by the halo, a wide soft
-stroke clipped into the object, and the spill at the junction. `wide-spill` drops the halo too
-and strokes nothing. `wide-ground` adds the reflection, which under this lens has to anchor on
-the object's lowest point on screen rather than the stem's foot — the panels' near corners sit
-below it. Built by `gen26.py`, whose material is written against a projector so the pinhole
-needed one adapter: a face is visible when it faces the eye, not one view direction.
-
-Clearer, with pizazz. `clear` draws the body at 0.72 opaque over its own back faces at 0.35, in
-the deep colour, so the far edges of each piece show through it — lowering opacity alone only
-darkens a body against black; what reads as see-through is the hidden geometry underneath.
-`clearer` is 0.6 over 0.45 with a heavier rim, the far end of the range. On the clearer body,
-one at a time: `clear-lit` adds three points of light on the corners that face the light (the
-apex and the two outer corners; one on every corner read as an effect), each hue thrown into
-the other across the kerfs (green in the blue across the arms, blue in the greens across the
-stem — the pieces colour each other where they meet), and a wet gleam across the blue top as a
-band twice as wide and twice as blurred as the first attempt, which read as the core line
-coming back; `clear-caustic` pools each piece's colour on the ground under it, the one layer
-that shows the material without touching the object; `clear-ground` adds the reflection to
-that. Built by `gen27.py`.
-
-Locked. The mark lives in `assets/logo/` — `logo.svg` — and is DEFINED as the last frame of the
-intro beside it (`intro.svg`): the clearer body without its sparkle, bleed, gleam and caustics,
-lit by the intro's lamp, built as a static file from the same code at t = 1 by
-`assets/logo/gen.py`, so the two agree by construction. That generator is the one file the
-mark, the intro, the lockup, the 16px cut and the app icon all come from, and the ladder under
-`jelly/` stays as the record of how it was reached; `clearer` there is the body it was chosen
-from. On black the agent's own sides are then taken down a fifth against its top: the Y is the
-two kerfs and the cube's near vertical corner, and all three are read off the step from a top
-to the side beside it, which the jelly had been softening. On paper the sides already read
-against the ground, so `logo-light.svg` keeps the diffuse shading unaltered.
-
-The pull back. `intro` is the mark's intro as one SVG, no script, framed on the agent. Three
-clocks, overlapping: the material over the opening 40% of 2.4s — a top-down view of the agent as
-a solid blue diamond, a flat copy on top that fades out while the jelly underneath fades in, and
-from above what that reveals is the bottom face and its edges through the body; the camera from
-8%, as the edges begin to show, pulling up and back into the wide lens (its ease-in keeps it near
-still while the block is still becoming one — a pause before it moved read as a pause); the
-collaborators from 30%, behind a gate that checks they are wholly inside the frame at their far
-position (0.1 of a block width out) with room for their glow from then on, so nothing fades in
-cropped. The pull is one arc: the eye's path was already near a straight line in the world, but
-with the lens scale lerped the agent shrank in the first third and tilted in the rest, which read
-as up, then back; the scale is solved per frame so the agent's width on screen changes evenly
-(33 to 28 units) and the tilt, whose visible sign is the sides growing, keeps pace. The end frame
-is fitted with 7 units of air rather than the ladder's 5, which is what lets the arriving panels
-and their bloom clear the edge — so the mark sits a little smaller in its box than `clearer`.
-The run is SMIL with the easing baked into the samples: every face is one path whose `d` carries
-49 keyframes on uniform `keyTimes`, and the clips, bloom, back faces, hidden edges and solid start
-are each a `use` of it. That last one is a performance rule as much as a tidiness one: interpolating
-a `d` is the expensive thing SMIL does per frame, and the hidden edges used to be a polyline apiece
-with its own morph — 22 of them against the faces' 18, more than half the budget for a layer that
-sits at 0.3 under a blur. A face turned away is bounded by exactly the edges that are hidden, so
-stroking it says the same thing off a path that is already morphing. Measured on the starting
-screen's own layout at 224px and a 3x pixel ratio, under a 10x CPU throttle (a phone-class budget,
-paired runs): 25.9 fps before, 30.0 after, and the file goes from 135 KB to 97 KB. Neither the
-filters nor the keyframe count is what costs — stripping every filter buys 2 fps at that size, and
-rebuilding at 17 keyframes instead of 49 measures the same. a face's visibility flips discretely, which is safe because a face only turns over
-when it is edge-on. Everything is sampled through cubic-bezier(0.42, 0, 0.58, 1), CSS's
-symmetric ease-in-out: Tailwind's (0.4, 0, 0.2, 1) left faster than it landed. The sheen is the
-reflection of one fixed point light in the shared top plane — the eye's line to the lamp's
-mirror image meets the plane at one point, and that is where the highlight is, clipped into
-whichever tops it falls across — so it slides over the surface as the camera moves instead of
-riding on it, and each top's graded fill runs from its corner nearest the lamp; the lamp is not
-part of the material, so the sheen is there from the first frame. The straight lens needs no
-subdivision, so the faces are four points each. The eye also dollies: it starts three times
-DIST out and eases to DIST, and because the scale is already solved per frame the framing does
-not move — only the strength of the perspective. That is not a flourish. At two block-widths a
-collaborator's near vertical corner projects through horizontal around 1.7s, putting a flat
-four-unit edge under the panel where the mark itself holds that edge at 43 degrees, and a
-horizontal edge under a form reads as a slice rather than a corner. Further out it stays a
-corner the whole way; the eye is back at DIST by the last frame, so the mark is untouched.
-About 135 KB, 18 KB gzipped; SMIL cannot read
-`prefers-reduced-motion`, so a page that respects it shows `mark.svg` instead. Click to replay.
-Built by `gen28.py`.
+# The yession mark
+
+This file records why the yession mark looks as it does. Part one describes the current mark:
+what it is, how the generator builds it, the constraints it meets, and the rules for using it.
+Part two lists the directions that lost, and why. Git history holds the full pass-by-pass log.
+
+`assets/logo/gen.py` generates the mark and every file derived from it. `assets/logo/README.md`
+lists each file and the surface it serves. The study files that part two names are the SVG
+files in the directories of this folder, one directory per pass.
+
+## The current mark
+
+### What it is
+
+The brief was a Y with three points: two green for the humans and one blue for the agent. The
+mark answers with one object instead of a letter.
+
+A blue cube, the agent, stands in the far quadrant of a two-by-two plan. Two green panels, the
+people, lie against the cube's two near faces. Each panel has half the cube's depth. A hairline
+kerf separates each piece from the next. The Y is the two kerfs and the cube's near vertical
+corner. The stem of the Y is the corner slot between the two panels. Its length is the camera
+elevation.
+
+A camera renders the object, so a turned view is the same object as the front view. A drawn
+mark cannot claim that.
+
+The colours are the product's own tokens in `app/tokens.css`: `#a8dd00` (green, human) and
+`#1ba1e2` (blue, agent). They sit on the product's black.
+
+### Construction
+
+`gen.py` holds these values (`H`, `GK`, `DD`, `DIST`, `UP1`, `PHI1`, `LAMP`). Change them there.
+The block is 1 unit wide.
+
+| Quantity | Value | Reason |
+| --- | --- | --- |
+| Block height | 1.3 | The stem is cheap: taller blocks lengthen it. Under a parallel view at 46°, stem : arm is 0.98. |
+| Panel depth | 0.5 | The panels keep the cube's full width and lose half their depth. They lie against the cube, so the three pieces read as one solid. |
+| Kerf | 0.11 | A hairline. `logo-16.svg` cuts the kerfs twice as wide. |
+| Piece height | one height for all three | Slab height reads as a claim. Taller panels say the agent is inside the humans' space. Lower panels say it stands proud. Level is neutral and the only clean choice. |
+| Camera | pinhole at 45° azimuth and 46° elevation, with the eye 2 block-widths from the aim point | See "Camera and fork". |
+| Aim point | 2 above the cube's centre | The junction sits well below the optical axis. |
+| Lamp | one fixed point light, behind-left and high | The logo and the intro share the lamp. |
+| Box | 64 units, with 7 units of air around the object | The bloom and the arriving panels need room. Earlier passes used 5. |
+
+### Camera and fork
+
+The fork is the half-angle of the arms off vertical, measured on screen. A parallel camera
+cannot narrow a square plan's fork below 45°. At 46° elevation the fork is 54°. A capital Y in
+most text faces runs 30° to 35° off vertical. The parallel anchor has a stem : arm of 0.98 and a
+silhouette of 1.02 : 1. It is a wide, short Y. That makes it read as an object first.
+
+The mark uses a pinhole lens instead. At the picture centre every camera is orthographic. Off
+the centre, the arms run to the horizon's vanishing points, and the fork closes to 41° with
+every line straight. The plan stays square, so the cube stays a cube.
+
+The lens has one cost. It sends the verticals to the nadir. In the lens study this made the
+stem a quarter of the arm and the block a plate.
+
+The elevation stays at 46°. Six degrees lower gives a longer stem and thinner top faces. The top
+faces carry the gradient. Six degrees higher shrinks the stem toward a stub. At 40° the arms
+start to foreshorten.
+
+Any change to the plan that narrows the fork costs the cube. Eight degrees of skew is the far
+end. See pass 20 below.
+
+### Material
+
+The material is jelly, not glass. It is semi-translucent acrylic or agar jelly.
+
+- **Body.** Each piece is translucent over its own back faces. On black, the body is 0.6 opaque
+  over back faces at 0.45, in the deep colour. Lowering opacity alone only darkens a body
+  against black. The hidden geometry under the body makes it read as see-through. Tops sweep
+  from the hot colour to the hue. Sides deepen downward.
+- **Rim.** Each piece's edges are brighter than its middle, in its own hot colour. Light that
+  enters a turbid body leaves at the nearest edge. Glass behaves the opposite way. The rim is the
+  material, and every other layer refines it.
+- **Sheen.** One broad soft highlight sits on each top. The highlight is the reflection of the
+  fixed lamp in the shared top plane. The eye's line to the lamp's mirror image meets the plane
+  at one point, and the highlight sits there, clipped into whichever tops it crosses. It slides
+  over the surface as the camera moves. Each top's graded fill runs from its corner nearest the
+  lamp. The lamp is not part of the material, so the sheen shows from the first frame. A hard
+  reflection would say glass.
+- **Depth.** The hidden edges show through the body at 0.3, under a blur. Crisp, they read as
+  wireframe.
+- **Spill.** The generator clips a radial wash at the junction to the object. The light is in
+  the block, not on it.
+- **Turbidity.** Fine noise is overlaid into the body at a fifth strength. A viewer feels it
+  above 64px and does not see it. The noise must carry the luminance. A constant mid-grey overlay
+  is the identity and does nothing.
+- **Bloom.** A blur of each piece's own colour sits behind it, at 0.3 on black. The glow must be
+  per piece. The blue glows blue beside two greens, so the count survives.
+- **Hue.** Each hue runs to a hotter self and never to white: green `#a8dd00` to `#d8f54a`, blue
+  `#1ba1e2` to `#6fd8ff`. Each hue also runs to a deep shade: `#6f9a00` and `#0f6ea3`.
+- **Agent sides on black.** The generator darkens the agent's own sides by a fifth against its
+  top. The eye reads the Y off the step in value from a top to the side beside it, and the jelly
+  softens that step. On paper the sides already read against the ground, so `logo-light.svg`
+  leaves them unaltered.
+
+Three build rules keep the material sound:
+
+1. Everything that spreads must reach zero inside the canvas. A wide blur lifts the whole
+   viewport by a percent or two, and the edge clips it into a faint rectangle.
+2. A zero-width shape has a degenerate `objectBoundingBox`. A vertical line takes neither a
+   default `linearGradient` nor a default filter region. Both need `userSpaceOnUse`.
+3. Each piece is one filtered group. This is sound only while the cube sits wholly behind both
+   panels in depth and the panels do not overlap on screen.
+
+### The intro
+
+`intro.svg` is one SVG with no script. It runs 2.4s and frames the agent. `logo.svg` is its last
+frame. The generator builds both from the same code, and builds the logo at t = 1. The two
+cannot disagree. Three clocks overlap:
+
+- **Material.** The material runs over the opening 40%. The agent starts as a solid blue diamond
+  seen from above. A flat copy on top fades out while the jelly underneath fades in. From above,
+  the jelly reveals the bottom face and its edges through the body.
+- **Camera.** The camera runs from 8%, as the edges start to show. It pulls up and back into the
+  wide lens. Its ease-in keeps it near still while the block is still becoming one. A pause
+  before it moved read as a pause.
+- **Collaborators.** The panels start at 30%. A gate checks that they are wholly inside the frame
+  at their far position (0.1 of a block width out), with room for their glow from then on.
+  Nothing fades in cropped.
+
+The pull is one arc. The eye's path is already near a straight line in the world. With the lens
+scale lerped, the agent shrank in the first third and tilted in the rest. That read as up, then
+back. The generator solves the scale per frame, so the agent's width on screen changes evenly
+(33 to 28 units). The tilt keeps pace. Its visible sign is the sides growing. The end frame has
+7 units of air, not the 5 of the earlier build. The arriving panels and their bloom then clear
+the edge, so the mark sits a little smaller in its box.
+
+The eye also dollies. It starts three times `DIST` out and eases to `DIST`. The scale is already
+solved per frame, so the framing does not move. Only the strength of the perspective changes.
+The dolly has one reason. At two block-widths, a collaborator's near vertical corner projects
+through horizontal around 1.7s. That puts a flat four-unit edge under the panel, where the mark
+itself holds the edge at 43 degrees. A horizontal edge under a form reads as a slice, not a
+corner. Further out, the edge stays a corner the whole way. The eye is back at `DIST` by the last
+frame, so the mark does not change.
+
+The run is SMIL with the easing baked into the samples. The ease is `cubic-bezier(0.42, 0, 0.58,
+1)`, CSS's symmetric ease-in-out. Tailwind's `(0.4, 0, 0.2, 1)` left faster than it landed. Every
+face is one path whose `d` carries 49 keyframes on uniform `keyTimes`. The clips, bloom, back
+faces, hidden edges and solid start are each a `use` of it. The straight lens needs no
+subdivision, so each face has four points.
+
+Interpolating a `d` is the most expensive thing SMIL does per frame, so the file holds the count
+down. The hidden edges were once a polyline apiece, each with its own morph. That made 22 morphs
+against the faces' 18, which is more than half the budget for a layer at 0.3 under a blur. A
+face turned away has exactly the hidden edges as its boundary. The file strokes that face
+instead, and the faces already morph. The measurement used the starting screen's own layout at
+224px and a 3x pixel ratio, under a 10x CPU throttle (a phone-class budget, paired runs):
+
+- Frame rate rose from 25.9 fps to 30.0 fps.
+- File size fell from 135 KB to 97 KB.
+- Stripping every filter buys 2 fps at that size.
+- Rebuilding at 17 keyframes instead of 49 measures the same.
+
+So neither the filters nor the keyframe count is what costs. A face's visibility flips
+discretely. This is safe, because a face only turns over when it is edge-on.
+
+### Constraints it meets
+
+- **The count.** Two humans must read as two. They read as two only when their pieces stay
+  separate. Green outweighs blue at equal area, so the agent's share of the mark needs slightly
+  more area.
+- **The top plane.** Blue holds the top. With blue on a wall, the two greens became one L-shaped
+  mass and the count was lost.
+- **A light ground.** Green on a light ground is 1.9:1. A mark that leaves the black app needs a
+  plate under it or a darker variant. `logo-light.svg` is the variant for light grounds. Its
+  geometry is the same, and its material changes. A field mark survives a light ground better
+  than a stroke mark, because the cut takes whatever is behind it.
+- **Small sizes.** Glow does not survive 16px. The mark is lit at the sizes where light is
+  visible and flat where it is not.
+- **Filters.** SVG filters are slow at scale. They render differently across engines, and
+  several icon and email pipelines drop them. The mark depends on filters. The 16px cut has none.
+- **One lit object.** The brand mark is the one lit object in the product. Nothing else may
+  look lit. `docs/visual-design.md` (Form) states the rule.
+
+### Type
+
+Sans is the machine: the chrome, and the agent, which is part of it. Serif is the person. Noto
+Sans sets the chrome and the agent. Source Serif 4 sets a person's words: messages, drafts, and
+the composer. It uses 15px at weight 350. The terminal keeps Monaspace Neon.
+
+The typeface says who is speaking before a reader reaches the author line. Source Serif 4 is the
+companion of Source Sans, so the difference between the two registers is one of class alone. A
+conversation then reads as one voice in two registers, not two typefaces arguing.
+
+The 350 is an instance cut from the variable font and weighted by eye against Noto Sans 300 on
+black. `app/tailwind.css` declares the face (`@font-face 'Source Serif 4'`). `app/tokens.css`
+names it (`--font-human`, beside `--font-ui` and `--font-agent`). The files sit in `app/fonts/`
+(`source-serif-4-latin-{350,400,600}-normal.woff2`, SIL OFL 1.1). The comment above the
+declarations in `app/tailwind.css` holds the full face story.
+
+### Rules for use
+
+1. Take every mark file from `assets/logo/`. Regenerate all files together with `gen.py`. Do
+   not hand-edit one generated file.
+2. Use `logo.svg` on black and dark surfaces. Use `logo-light.svg` on paper and light surfaces.
+3. Use `logo-16.svg` for anything under 24px, and as the SVG favicon.
+4. Show `logo.svg`, not the intro, to a page that respects `prefers-reduced-motion`. SMIL cannot
+   read that preference.
+5. Do not make anything else in the product look lit.
+6. Set the agent and the chrome in the sans. Set a person's words in the serif.
+7. For file sizes, the wordmark and the icon, read `assets/logo/README.md`.
+
+## Rejected directions
+
+Each entry gives the pass, its directory, the idea, and why it lost. Some entries also record
+what the pass gave to the current mark. The study files are static. This repository holds no
+generator for them.
+
+- **Pass 1, the SVG files in this folder.** Sixteen stroke and field marks on the brief:
+  `trifoil.svg`, `letter.svg`, `stencil.svg`, `lowercase.svg`, `blades.svg`, `nodes.svg`,
+  `inward.svg`, `blend.svg`, `beam.svg`, `bloom.svg`, `tile.svg`, `room.svg`, `counterform.svg`,
+  `index.svg`, `lockup.svg` and `substitute.svg`. Lost: `letter` and `bloom` join the arms and
+  lose the count of two. Only `letter`, `stencil`, `lowercase` and `index` survive 16px. Green
+  on a light ground is 1.9:1.
+- **Pass 2, `cube/`.** An isometric cube. Its three interior edges sit at 120°, and the Y is the
+  cut between the fields. Lost: with blue on a wall (`cube-swap`), the greens merge into one
+  L-shaped mass. The disc projection (`disc.svg`) becomes a dot at 16px, and the hexagon holds.
+  A cut of 3.6px on the 64px grid is legible and quiet.
+- **Pass 3, `form/`.** Edge bow, radius, taper, shear and layering on a solid with a straight
+  seam. Curvature is the loudest lever: four degrees of bow turns a rendering of a solid into
+  something with a temperament. Lost: `petal` and `draw` collapse into a blob and a star at
+  16px. The straight seam keeps the set consistent. `hold` shrank the agent's face inside the
+  human ones. That changes the argument, not the mood: authority is scoped, and the small thing
+  is held.
+- **Pass 4, `fold/`.** A crease in each hexagon face gives six triangles. Three interior edges
+  are the Y and three are folds, which show only as a step in value. Lost: `stemmed` and
+  `offaxis` read as a letter, but the cube stops being geometrically true. Six flats survive
+  16px and six gradients do not. Radius at the hub buys more than radius at the rim, because
+  the junction is what a reader looks at.
+- **Pass 5, `glyph/`.** Noto Sans's own capital Y as the cut. Noto cuts its Y with the arms 33°
+  off vertical and the junction at 39% of the cap height. An isometric cube puts its interior
+  edges at 60° and the junction at the centre. The two are 27° apart. Lost: moving the solid
+  toward the letter costs the solid. 45° is the floor, and below it the hexagon becomes a leaf.
+  Flattening the view to 66° works, because it falsifies nothing. Stretching the glyph costs
+  less than bending the cube: at 170% it is still Noto's Y. Seven degrees of rotation reads as
+  intent and fourteen reads as an accident. Semibold survives 16px, because a counterform must
+  read as a gap, not a scratch.
+- **Pass 6, `pair/`.** A green solid with Noto's Y cut through it and a blue cube held in the
+  fork. `prongs` keeps both readings, because a narrow cut leaves the large solid whole. Lost:
+  past about 40px of reach, the cut severs the solid. `bracket`, `claw` and `deepfork` then read
+  as two green pieces flanking a blue one. That is the original brief from the opposite
+  direction. Clearance does more work than size: `tight` holds and `float` is merely near. The
+  large solid must give up blue, or the pair has two agents.
+- **Pass 7, `void/`.** The second cube as a cube-shaped corner removed from the first. In an
+  isometric projection the void's inner corner lands on the outer one, so nothing is drawn
+  twice. The solid is green, and the only blue is the removed part. Lost: the concave and convex
+  readings are ambiguous. `bite` and `flip` are the same polygons and differ only in the order
+  of three values, so some readers see the other one. `rimmed` settles it. The void holds at
+  16px better than `pair/`.
+- **Pass 8, `fork/`.** The held cube seated in the isometric Y's 120° fork. A hexagon's bottom
+  corner measures 120°, so the held cube's lower edges lie along the arms' inner edges. `flush`
+  (46%) is the one ratio that is not a preference, because the top vertex lands on the large
+  cube's. Clearance decides one object or two: `fit` and `clear` are the same geometry 1.3px
+  apart. It holds at 16px. Not pursued further. `narrow/` used the letter's fork instead.
+- **Pass 9, `narrow/`.** The same held cube in the letter's fork, about 33° off vertical. A
+  hexagon's 120° corner cannot descend into a V that tight, so the two inner edges catch the
+  cube and wedge it high, held rather than seated. Weight moves the seat: 600 holds and 200 does
+  not. With the held edge at 30% of the large solid's, the two silhouettes share a top corner
+  exactly (`flush`). `contained` is the 16px build, because a larger cube breaks the outline.
+  `stretched` (155%) buys a bigger cube inside the silhouette. Not pursued further.
+- **Pass 10, `dice/`.** The shortlist (`fold/whisper.svg` and `fold/modul.svg`) broken into
+  eleven dimensions and thrown independently: silhouette, arm angle, cut weight, cut profile,
+  cut reach, corners, fold, colour, surface, extra and rotation. The pass used seed 7 and
+  eighteen throws with no curation. `rolls.json` records each throw. Lost: glow and heavy
+  round-ended cuts. Every roll that carries them is muddier, and worst at 16px. A blue Y drawn
+  into the cut on an all-green solid (rolls 01, 04, 05, 08, 14) makes the letter an object, not
+  an absence. The squircle is the only silhouette that reads as a made object. A glyph cut gains
+  from rotation: roll 11 at −14° looks placed, and roll 03 at the same angle looks broken. Roll
+  13 has no cut and says nothing, so the letter is not decoration.
+- **Pass 11, `tile/`.** Superellipse tiles (n = 4). A hexagon draws a solid, and a squircle is
+  an object: a key, a window, a lens, a card. The families are `panes`, `aperture`, `keycap`,
+  `overlap`, `bars`, `contained` and `stack`. Lost: `overlap` reads as a face at every
+  arrangement, and `chip` is a costume. Worth taking further: `panes` (the Y is the gutter
+  between three panes, so the mark is about the product), `aperture` (an honest animation),
+  `keycap-lit` (the Y as a lit object) and `bars` (three separate objects, so the two humans
+  are plainly two).
+- **Pass 12, `neon/`.** A lit cut on `fold/whisper.svg`: painted spill, a tube, lighting
+  filters, a room, and assembled states. Painted `spill` costs nothing and works in any
+  pipeline that draws a gradient. `dual` (arms green, stem blue) keeps the
+  two-humans-and-an-agent reading, and lighting everything one colour loses it. `edge` reads as
+  lit, survives print, and is the only assembled build legible at 16px. Lost: the tube, lighting
+  and room builds. They depend on SVG filters. None of the glow builds survive 16px.
+- **Pass 13, `bluefork/`.** The narrow letter's fork filled blue, as a cube corner that need
+  not be geometrically true. `seam` is the best: a green solid with a blue corner driven into its
+  top, and the Y is the outline of the blue. It is the first build where nothing is cut away.
+  Noto's own inner V filled gives a kite that holds at 16px better than any drawn wedge. Lost:
+  `emerge`, a crystal coming out of the fork. It suits a splash screen, not a favicon.
+- **Pass 14, `seamlit/` and `blocks/`.** `seamlit/` lit `bluefork/seam-two.svg` with the `neon/`
+  mechanisms. `crease-tube` lights the wedge's near edge and leaves the stem dark, and then the
+  cube looks like a cube. `edge` still wins on cost. `blocks/` read a pen sketch as four tall
+  blocks in a two-by-two with the near one missing, and hairline kerfs between the three that
+  remain. A camera renders it, and that approach stays. `sketch` uses a height of 1.8 times the
+  footprint, θ = 45° and φ = 35.26°. Height is the dial. Cubes make a stair, 1.8 makes three
+  things standing, and 2.6 makes pillars with the letter shrunk to a notch.
+- **Pass 15, `chevron/`.** The green blocks thinned to half width and seen from above. Two arms
+  hang off the blue cube, and the whole is a chevron with the agent at the apex. `chevron-62` is
+  the first silhouette that is a symbol, not a solid. The plan view is a second mark and is
+  provably the same object. Lost: the chevron has no stem. Lighting the cube's three edges makes
+  a Y and leaves the chevron as it was. A thin blue strip on the ground (`y-floor`) turns the
+  chevron into the letter. Outer halves or inner halves is the fork in the road: a chevron
+  without a stem, or a stem without a chevron.
+- **Pass 16, `panels/`.** The green blocks keep the cube's full width and lose half their
+  depth. These are the panels of the current mark. `hug-62` is the tightest three-part mark in
+  the set, and the Y sits where a letter would put it. Not chosen: `hug-tall` (walls), `hug-low`
+  (a V-shaped step), `far` (panels at the far ends of their quadrants) and `hug-thin` (fins).
+  Lost: the barrel lens (`hug-lens` at k = 0.14, `plan-lens` at k = 0.2). A radial scale alone
+  swells the mark. Every edge needs subdividing before the warp, and then straight edges come
+  out as arcs. The tighter the arrangement, the better it takes the bulge. `chevron-lens-strong`
+  (k = 0.32) is a fisheye, kept to show where the edge is.
+- **Pass 17, `convex/`.** The pass fixed the lens. Pass 16 had the sign reversed: magnification
+  that rises with radius is pincushion, and an off-centre straight line bows toward the centre.
+  Magnification that falls with radius bows the line outward. The pass also lit the kerfs
+  (`hug-neon`, `chevron-neon`, `blocks-neon`) and glossed the faces (`hug-graded`, `hug-gloss`,
+  `hug-sheen`). `hug-warm` is lit green, because a blue tube along a blue cube's edge loses the
+  arm and green keeps all three strokes. `hug-rim` (a hairline along the top edges plus a
+  little spill) is the only lit build that still reads at 16px. Lost: the bent lens. Pass 22
+  found it a flourish, not a fix. `hug-convex-strong` (k = 0.3) is a fisheye, past the edge.
+- **Pass 18, `zune/`.** Flat, and a little 3D at φ = 66°, in the manner of a Zune tile. A hue
+  sweep runs inside each shape, from saturated to more saturated and never to white. Each
+  piece's own colour blooms behind it. Kept: the hot hues and the per-piece glow.
+  `flat-gradient-glow` is the Zune tile. Lost: `flat-sweep`, one green-to-blue gradient under the
+  whole mark. It is the prettiest and the least honest, because the blue corner is just where
+  the sweep ends. `flat-drop` does most of what the shallow elevation does, as a flat SVG.
+  `shallow-thin` (height at a third) belongs beside a Metro surface.
+- **Pass 19, `ladder/`.** The elevation sets the stem's length: `a66` is a stub, `a46` has a stem
+  as long as the arms are wide, and `a40` starts to foreshorten the arms. Kept: 46°. The pass
+  also built a glow in eight stages, one mechanism per stage and each keeping the ones before
+  it: bloom, a halo on the kerfs, a near-white core, a spill at the junction, a deeper chromatic
+  wash, grain, and ambient light. Kept: the rule that everything that spreads must reach zero
+  inside the canvas. The jelly material replaced the stack, and the core line was cut.
+- **Pass 20, `proportion/`.** One proportion varied at a time from the anchor (46°, blocks 1.3
+  times the footprint, half-depth panels, kerf 0.11). The pass measured every build on screen.
+  Stem against arm ran from `ratio-0_62` (1 : φ) to `ratio-1_62` (φ : 1). `ratio-1_27` (√φ : 1)
+  is where most capital Ys sit. Skewing the plan narrows the fork at the cube's expense.
+  `fork-08` has a 46° fork and keeps the cube a cube. `fork-15` (39°) is a lozenge. `fork-22`
+  (31°) is past a letter. Lost: golden proportions. `golden` uses stem √φ, depth 1/φ and kerf
+  1/φ⁵ ≈ 0.09. `golden-fork` skews the plan 12° for stem 1.36 and fork 42°. Golden is a
+  candidate, not a proof. Its one value is that every proportion sits on one ratio. The chevron
+  wants 1/φ panels.
+- **Pass 21, `letter/`.** Noto's capital Y bent for the block and laid over it. Noto's Y has its
+  fork 28.6° off vertical, a box √φ tall, and a stem of 0.126 of the cap and 0.62 of the arm.
+  Opening the fork forces a choice. If the box holds, the stem grows tall and the arms run too
+  short to leave a block. If the stem holds, the box goes wide and the arms run long. The stem
+  wins. Turning only the kerfs keeps the plan square: `turned-42` gives a 42° fork, with the
+  kerfs turned 12° in plan and the cube corner at 66°. At 42° the top still reads as a square
+  seen from a corner, and the fork still reads as a letter's. Lost: the turn charges its whole
+  cost to the blue top's near corner. `flare-39` reads as ground showing through, not a stroke.
+  `weight-39` makes the Y a blue positive between two green blocks, which is the blue-fork
+  idea by another road.
+- **Pass 22, `lens/`.** The fork narrowed by the camera, not the object. The wide pinhole won
+  and part one describes it. Lost: the anamorphic lens, an affine vertical stretch that keeps
+  lines straight and equals an oblique parallel projection. `stretch-13` gives a 47° fork and a
+  silhouette of 0.79 : 1. `stretch-145` gives 44°. `stretch-13-low` keeps the block a block. The
+  cost is the block's proportion, which becomes a tall box. The turned kerfs of pass 21 cost the
+  cube's corner instead. Also lost: the bent lenses. `bowed` (pincushion 0.08) and `cushioned`
+  (barrel 0.10, with radial kerfs that stay straight) are flourishes, not fixes. A radial lens
+  cannot press the blue far corner without pulling in the greens' outer corners. `fisheye` is
+  the cushion again. A cylindrical lens, y′ = y(1 − k y²) with x untouched, can. `pressed`
+  keeps the vertical edges straight and the greens' sides, and drops the far corner most.
+  `pressed-soft` uses 0.06. `pressed-foot` centres on the stem's foot so nothing below moves,
+  and the fork pays: vertical compression at the junction flattens the arms.
+- **Pass 23, `jelly/`.** The cylinder about the foot (the `pressed-foot` lens, a 1.4× squeeze
+  with barrel 0.02) on shorter blocks. A block reads as a cube when the green's full face is
+  square, which under the squeeze happens at 0.75 times the footprint. `cube-tall` is 0.9 times
+  and `cube-low` is 0.62 times, a tile. Barrel 0.04 folds the top at any height. Lost: the wide
+  pinhole lens replaced the cylinder, and the jelly material stayed. Also lost: `clear` (0.72
+  over 0.35), which `clearer` (0.6 over 0.45, with a heavier rim) replaced. `clearer` is the
+  body the mark was chosen from. Four layers stay out of the mark:
+  - The sparkle: three points of light on the corners that face the light. One on every corner
+    read as an effect.
+  - The bleed: each hue thrown into the other across the kerfs.
+  - The gleam: a wet band across the blue top. The first try read as the core line coming back,
+    so the band is twice as wide and twice as blurred.
+  - The caustics: each piece's colour pooled on the ground under it. `clear-ground` adds a
+    reflection to them.
