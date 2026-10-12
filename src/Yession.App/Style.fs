@@ -2864,7 +2864,15 @@ module Style =
     /// whose gutter comes free from its buttons' own `px-3`, this row is the model control
     /// alone, so the row itself has to carry it. Without it the picker sits flush against the
     /// viewport edge, outside the gutter every other line in the composer keeps.
-    let draftLead = "shrink-0 flex items-center pl-4 md:order-first"
+    let draftLead = "shrink-0 flex items-center gap-4 pl-4 md:order-first"
+
+    /// The files on the open draft, under its words: one line of them that wraps, in the
+    /// input's own gutter.
+    let draftFiles = "flex flex-wrap gap-x-4 gap-y-1 px-4 pb-2"
+    /// One file: its name, then what it weighs or where it has got to, then its verbs.
+    let draftFile = "min-w-0 inline-flex items-center gap-2"
+    let draftFileName = "min-w-0 max-w-[16rem] truncate font-ui font-light text-small text-ink"
+    let draftFileSize = "shrink-0 font-ui font-light text-small text-ink-faint tabular-nums"
 
     /// The picker (`draftLead`) and Send's row (`draftCommit`/`draftCommitReady`) ride
     /// together as ONE line on a phone, not two: `draftBox`'s `max-md:flex-col` makes every
@@ -3191,6 +3199,9 @@ module Style =
     let paneToolbarAct =
         cls [ "h-11 px-1.5 shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer no-underline"
               caps; "whitespace-nowrap text-ink-dim hover:text-ink transition-colors motion-reduce:transition-none"; focusRingInset ]
+    /// The composer's way to attach a file, beside the model picker on `draftLead`: an act, in
+    /// this voice, and a thumb's height on a phone like the picker's.
+    let draftAttach = cls [ paneAct; "phone:min-h-11" ]
     /// The one act a surface is FOR — the empty pane's way to make a terminal: blue, which is
     /// what interactive means here, and nothing louder than that.
     let paneActPrimary = cls [ paneActBase; "text-pivot leading-6 text-blue hover:text-blue-up-1" ]
