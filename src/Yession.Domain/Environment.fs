@@ -300,7 +300,8 @@ type EnvironmentSpec =
       /// A SEED and not a guarantee: the sandbox may overwrite or delete any of it, because
       /// the home is its own. What this buys is a tool finding what it expects on first run
       /// — the case it exists for is a toolchain whose first use does something a sandbox
-      /// cannot (see docs/GAPS.md on NuGet's migration marker).
+      /// cannot (.NET's NuGet takes a named mutex under /tmp until its migration marker
+      /// exists).
       ///
       /// Inert content only. There is no `SecretRef` here and there should not be: a
       /// secret's whole handling is that it is resolved at spawn and never written down,

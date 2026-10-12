@@ -846,7 +846,7 @@ let private sandboxPolicyTests =
         // A sandbox finds what it declared it needs, before anything runs in it. The case
         // this exists for is a toolchain whose FIRST use does something a sandbox cannot —
         // .NET taking a named mutex under /tmp, which NuGet only does when its migration
-        // marker is missing (docs/GAPS.md).
+        // marker is missing.
         testCase "a sandbox's home is made holding what it asked to find there" <| fun () ->
             let home = tempDir () + "/home"
             let path = HomePath.create ".local/share/NuGet/Migrations/1" |> expect

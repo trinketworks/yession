@@ -24,8 +24,9 @@ module Yession.Tests.NixSource
 // ignores — rather than a list of the artefacts that leaked. A new build output added to
 // .gitignore next month is covered without touching this file.
 //
-// Needs the `Nix` capability: `check` probes for the nix CLI and drops it when absent, so this
-// reports a skip rather than an error on a box without Nix.
+// Needs the `Nix` capability. A run that asks for it (`check Nix`) refuses to start on a box
+// without the nix CLI, and says so before any test runs (`requireCapabilities` in tasks.fsx). A
+// run that does not ask for it reports a skip for this suite.
 
 open Fable.Core
 open Fable.Core.JsInterop

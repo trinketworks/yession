@@ -2055,9 +2055,10 @@ module SrtSandbox =
     // A sandbox that denies every read denies the interpreter its own commands run on, so
     // the deny is only half of a read scope: the other half is the host runtime, named
     // here. It is deployment-specific by nature — the interpreter can be anywhere — so it
-    // is assembled from three sources rather than guessed at: the platform's ordinary
-    // locations, the prefix whatever is ALREADY running was installed under, and an
-    // operator's override for a toolchain neither of those finds.
+    // is assembled from two sources rather than guessed at: the platform's ordinary
+    // locations and the prefix whatever is ALREADY running was installed under. A
+    // toolchain neither of those finds is a resource the operator declares and a sandbox
+    // selects, and it arrives through the policy rather than through this list.
 
     /// The ordinary locations a Linux host keeps its runtime in. Coarse for executables and
     /// their libraries — those are the files every PATH lookup already reaches — and fine
@@ -2083,7 +2084,8 @@ module SrtSandbox =
     /// suite on darwin (pr.yaml's macos job builds the package and enters the dev shell),
     /// and the box that verified the Linux list is Linux. It is what a Seatbelt profile
     /// conventionally allows back; if it is short, the failure is loud and local — a
-    /// command cannot find its interpreter — and `YESSION_SESSION_READ` is the answer.
+    /// command cannot find its interpreter — and the answer is a resource the operator
+    /// declares and the sandbox selects.
     let darwinRuntimePaths : string list =
         [ "/usr"; "/bin"; "/sbin"; "/System"; "/Library"; "/opt/homebrew"; "/nix"
           "/private/etc"; "/private/var/db"; "/private/var/select" ]
@@ -2126,8 +2128,9 @@ module SrtSandbox =
     /// `~/node_modules`, whose owning prefix is the home itself — so the allow-back would
     /// hand back the entire region this scope exists to deny, and it would do it silently.
     /// Refusing it fails the other way instead: that layout cannot start a command until an
-    /// operator names a narrower path in `YESSION_SESSION_READ`. An explicitly
-    /// configured path is never dropped — an operator naming their home means it.
+    /// operator declares a narrower path as a resource and the sandbox selects it. That path
+    /// arrives through the policy and not through this list, so nothing here drops it — an
+    /// operator granting their home means it.
     let runtimeReadPaths (platform: Node.Base.Platform) (installed: string list) (ambient: Map<string, string>) : string list =
         let platformPaths =
             match platform with

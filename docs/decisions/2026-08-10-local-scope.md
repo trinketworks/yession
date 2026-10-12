@@ -85,8 +85,9 @@ name. That would destroy the one distinction an unattributed deployment can stil
   path. Left half-live, a stale token in the peer scope of some old browser would shadow the new one
   at turn time. The operator clicks Connect once. A migration would only have tried to save that
   click.
-- **`PeerScope` remains a first-class scope for generic secrets.** It has only stopped being a place
-  where a *connection* lives.
+- **`PeerScope` was kept for generic secrets, and then removed on 2026-09-14.** This decision only
+  moved *connections* out of it. No deployment held an entry in it, so the scope and the peer
+  witnessing that served it left the secrets vocabulary altogether. `Secrets.fs` records why.
 
 ### What would change this decision
 
