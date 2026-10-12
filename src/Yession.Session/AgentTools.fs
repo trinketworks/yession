@@ -732,7 +732,7 @@ module AgentTools =
     let private verbs (capabilities: AgentCapabilities) : (ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>)) list =
         [ tool
             ToolName.ExecuteCommand
-            "Run a shell command in a session terminal — the only way to run anything, seen by everyone and on the record. Always pass `description`: a few words saying what the command is for, which everyone sees as its title. Not for reading or editing files: use read_file and edit_file, which record WHICH file, unless a dedicated tool genuinely cannot do it — avoid cat, sed, awk, head, tail, grep -n and heredocs here. `sandbox`: a named work sandbox (start_work_sandbox); omit for the default one. `terminal`: a terminal from open_terminal, to run beside something long (each terminal runs one command at a time). For anything long-running pass background: true — it returns a handle at once, you end your turn, and you're woken when it finishes; otherwise it waits and hands back a check_pending handle if the command outlasts the wait. No stdin unless stdin: true (readers get EOF), so pass flags, not prompts. Scratch under $TMPDIR; /tmp is denied. Rewriting a file, write the new content before deleting the old — a delete-then-write can be refused halfway. Read the answer: it says which happened."
+            "Run a shell command in a session terminal — the only way to run anything, seen by everyone and on the record. Always pass `description`: several words or fewer, in the past tense, saying what the command did — the transcript shows it after \"ran\". Not for reading or editing files: use read_file and edit_file, which record WHICH file, unless a dedicated tool genuinely cannot do it — avoid cat, sed, awk, head, tail, grep -n and heredocs here. `sandbox`: a named work sandbox (start_work_sandbox); omit for the default one. `terminal`: a terminal from open_terminal, to run beside something long (each terminal runs one command at a time). For anything long-running pass background: true — it returns a handle at once, you end your turn, and you're woken when it finishes; otherwise it waits and hands back a check_pending handle if the command outlasts the wait. No stdin unless stdin: true (readers get EOF), so pass flags, not prompts. Scratch under $TMPDIR; /tmp is denied. Rewriting a file, write the new content before deleting the old — a delete-then-write can be refused halfway. Read the answer: it says which happened."
             (toolArgs {
                 let! command = ToolArgs.text "command" "the shell command line to run, e.g. \"npm test -- --watch=false\""
                 and! terminal = ToolArgs.textOption "terminal" "the id of a terminal to run in, as open_terminal or list_terminals gave it; omit for your own terminal in the sandbox"
@@ -745,10 +745,12 @@ module AgentTools =
                     ToolArgs.flag
                         "stdin"
                         "true to let the command read the terminal's input, for the rare command that has to prompt; omit it and anything that reads stdin gets end-of-file at once"
+                // The transcript prefixes this with "ran" (`Dom.Text.ran` in Yession.App):
+                // change both together.
                 and! description =
                     ToolArgs.textOption
                         "description"
-                        "a few words saying what this command is for, as people will read it — \"Fetch master and show its tip\", \"Run the unit tests\". Everyone sees it as the command's title. Pass one on every call."
+                        "several words or fewer, in the past tense, saying what the command did — \"fetched master\", \"built the app\". People read it after \"ran\". Pass one on every call."
                 return command, terminal, sandbox, background, stdin, description
              })
             (fun (command, terminal, sandbox, background, stdin, description) ->

@@ -428,9 +428,6 @@ module Dom =
         /// not minted with ids, and one terminal can have many stretches.
         let chatBlock = "data-chat-block"
         let chatBlockStatus = "data-chat-block-status"
-        /// Which terminal a command chip ran in, by name, on the chip — the hook's value is the
-        /// terminal id, so a test finds the name without knowing what it is.
-        let chatBlockTerminal = "data-chat-block-terminal"
         let chatStretch = "data-chat-stretch"
         let chatStretchEnd = "data-chat-stretch-end"
         /// A turn's tool calls in the CHAT (Plan 16, part C). A `<details>` per RUN of
@@ -967,6 +964,11 @@ module Dom =
         /// alike as well as seen alike.
         let commandChip (command: string) (status: string) (terminal: string) =
             sprintf "%s, %s, in %s" command status terminal
+        /// The verb a command chip opens with, before its description: "ran Run the unit
+        /// tests" is what a present-tense description would read as. If this word changes,
+        /// change the execute_command guidance in `Yession.Session/AgentTools.fs` with it —
+        /// that prompt tells the agent to write its description to follow this word.
+        let ran = "ran"
         /// The strip's `+`, when there is a choice behind it.
         let openSomethingNew = "Open something new"
         /// The same control when there is only one thing it could make, and the word the

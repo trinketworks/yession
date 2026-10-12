@@ -2039,6 +2039,13 @@ module Style =
     /// The command itself: mono, truncated to one line. A chip that wrapped to three would
     /// stop being a chip.
     let chatChipCommand = "font-terminal text-code-sm text-ink-dim truncate min-w-0 flex-1"
+    /// A ran command's line: "ran" and what ran, truncated together as one sentence.
+    let chatChipLine = "truncate min-w-0 flex-1"
+    /// "ran" — the act's voice, the step `actNoteText` gives "started sandbox".
+    let chatChipVerb = "font-light text-small text-ink-dim"
+    /// What ran, when its author described it: prose a step brighter than its verb, as an
+    /// act's named thing (`entityName`) is beside its deed.
+    let chatChipName = "text-small text-ink"
     /// A stretch item's sentence — prose, not mono: nothing was typed that we recorded.
     let chatChipText = "font-light text-small text-ink-dim truncate min-w-0 flex-1"
 
