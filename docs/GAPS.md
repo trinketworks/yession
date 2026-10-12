@@ -137,9 +137,11 @@ against each other. The last section holds trust boundaries as sharp as the firs
   401 on every UI route, and the default `--auth none` denies everything. Under `--auth localhost`
   anyone with local access can still manage sessions. That is the localhost trust rule working as
   stated, not an oversight.
-- **Sandboxes confine by default. `host` is the opt-out.** Both sandboxes default to `srt`
+- **Sandboxes confine by default. `host` is the opt-out.** The WorkSandbox defaults to `srt`
   (bubblewrap on Linux, Seatbelt on macOS). Unless an operator asks for something else, OS
-  confinement applies to agent-issued commands and to the agent CLI.
+  confinement applies to agent-issued commands. It does not apply to the agent CLI. The
+  AgentSandbox defaults to `host` (`YESSION_SESSION_AGENT_BACKEND`, read once in
+  `app/SessionMain.fs`). The agent CLI entry below says why.
 
   `YESSION_SESSION_WORK_BACKEND=host` still exists. It gives no filesystem or network
   confinement, only the env allowlist, which the credential-leak regression test pins. An
@@ -233,25 +235,29 @@ against each other. The last section holds trust boundaries as sharp as the firs
       unreadable config is declared instead (`NIX_CONFIG` in `yession.yaml`). The
       [2026-08-28 ADR](decisions/2026-08-28-no-srt-fork-for-symlink-metadata.md) argues this, and
       its argument stands.
-    - **A `Socket` grant is path-scoped on macOS and unenforceable on Linux.** #335 gave a socket
-      its own axis. srt honours it as `network.allowUnixSockets`. That is a list of paths, which
-      the Seatbelt profile turns into `network-outbound` rules. On Linux, srt filters unix sockets
-      with seccomp-bpf, which cannot read a socket path out of user-space memory. So
+    - **A `Socket` grant is path-scoped on macOS and widens to every socket on Linux.** #335 gave
+      a socket its own axis. srt honours it as `network.allowUnixSockets`. That is a list of paths,
+      which the Seatbelt profile turns into `network-outbound` rules. On Linux, srt filters unix
+      sockets with seccomp-bpf, which cannot read a socket path out of user-space memory. So
       `wrapCommandWithSandboxLinux` takes `allowAllUnixSockets` and never reads the path list at
       all. Every `AF_UNIX` socket is blocked, or none is.
 
-      An operator who declares the nix daemon socket therefore gets a sandbox that can talk to it
-      on a Mac and cannot on Linux. Nothing says so. The resource resolves, the approval prompt
-      names the socket, the sandbox starts, and the first tool to use the socket fails. The
-      Srt-tier case that pins the macOS behaviour reports a visible skip on Linux. It asserts
-      neither way.
+      Yession lets every socket through when a policy grants one, and says so. `limitsFor` records
+      that srt on Linux cannot scope a socket by path, so the host realises a `Socket` leaf as
+      `Coarsened "sock:*"`. The policy carries that in `Realisation`. `SrtSandbox.configFor` reads
+      it and sets `allowAllUnixSockets`, and only for a policy that reported the widening. The
+      grant therefore works on Linux, but the sandbox holds every unix socket and not only the one
+      the operator named. The report reaches three places:
+      - The approval prompt shows `sock:<path> ~> sock:*` (`RealisedClosure.describeOn`).
+      - The `WorkSandboxStarted` event records the lines, and the start note shows them as
+        "adjusted".
+      - The `work_sandboxes` panel has a `degraded` column for the running sandbox.
 
-      Two ways out exist. Neither is taken here:
-      - Set `allowAllUnixSockets` when a policy grants any socket. This makes the grant WORK on
-        Linux, but it widens the grant from the named socket to every socket. That is a
-        degradation. The thing that reports a degradation (`SandboxDegraded`, plan increment 5)
-        does not exist yet. So doing this now would widen confinement silently.
-      - Wait for srt to gain a path-scoped mechanism on Linux. Seccomp cannot give it one.
+      The widening itself is not fixed. A socket the operator meant to scope is every socket on
+      Linux, and the report only tells people so. Scoping by path there needs a mechanism that
+      seccomp cannot give srt. The Srt-tier case that pins the macOS path scoping reports a visible
+      skip on Linux. The cheap tier pins the Linux side: the policy reports the widening, and
+      `configFor` sets `allowAllUnixSockets` only for that report.
     - **A granted executable that cannot RUN is invisible to the start-up checks.** Measured: the
       `nix` an operator would name on nix-darwin (`/run/current-system/sw/bin/nix`, canonically
       `…-nix-2.34.6+1/bin/nix`) aborts under Seatbelt on every subcommand, including `--version`.
@@ -393,8 +399,9 @@ against each other. The last section holds trust boundaries as sharp as the firs
   - **No AMBIENT scope.** `LocalScope` is deployment-wide but not ambient. It is authorized
     against unattributed access that the Manager recorded for that launch. It holds connection
     credentials only: generic `SecretAction`s on it deny. User-scoped GENERIC secrets still have
-    no writer (see the connection-broker entry above). User↔launch, peer↔launch and local↔launch
-    bindings are all launch-lifetime. A re-login re-forms them.
+    no writer (see the connection-broker entry above). There is deliberately no peer scope
+    (`Secrets.fs` says why). User↔launch and local↔launch bindings are both launch-lifetime. A
+    re-login re-forms them.
   - **Two deliberate value-returning routes, both resolve-shaped:**
     - `/control/connections/resolve` (Plan 08) returns a connection credential to the calling
       session, because an agent turn needs the token in-process.
@@ -652,10 +659,14 @@ the document wins (see its "Deciding" section). This section records each disagr
 code matches the doctrine. Each entry names the rule and the sites.
 
 - **Three rounded rectangles, against a form rule that has none.** The doctrine's form is two
-  primitives: a sharp rectangle and a round point. A rounded rectangle is neither.
-  `Style.remoteCursor` wears `rounded-sm` (`Style.fs`), and the tool-output box under `monoOut`
-  wears a bare `rounded`. The status dots (`rounded-full`) are points and are correct. Fix: drop
-  the two radii, and say in each comment which primitive the thing is.
+  primitives: a sharp rectangle and a round point. A rounded rectangle is neither. There are three:
+  - `Style.remoteCursor` wears `rounded-sm` (`Style.fs`)
+  - the tool-output box, `Style.chatToolIoBody`, wears a bare `rounded` (`Style.fs`)
+  - the editor's presence-caret name label, `.pm-caret-label`, wears `border-radius: 3px`
+    (`app/tailwind.css`)
+
+  The status dots (`rounded-full`) are points and are correct. Fix: drop the three radii, and say
+  in each comment which primitive the thing is.
 - **Three `disabled:` faces, against a state rule that has none.** The doctrine says a control
   with nothing to do yet is not `disabled`: it stays in focus order and its border carries the
   waiting. `Style.fs` says the same twice, in so many words. Then it wears `disabled:*` on three
@@ -682,11 +693,13 @@ code matches the doctrine. Each entry names the rule and the sites.
   `Style.fs` or `tailwind.css`. They are the wordless empty chat, the breathing mark instead of a
   spinner, and the arrow that replaced `SEND →`. No statement generalises them. The doctrine
   leaves empty states ungoverned on purpose. It does not address waits or icon-versus-word at all.
-- **The skill and the stylesheet disagreed about the breakpoint.** `ui-exploration/SKILL.md` named
-  `max-md` = 768px and two anchors. `tailwind.css` had already said that width alone was the wrong
-  question and named 844×390 as the case that broke. The skill now says three anchors and the
-  `phone:`/`wide:` pair. The browser tier has three cases at 844×390 and should have one per shell
-  surface.
+- **The browser tier tests the sideways phone in three cases, and should have one per shell
+  surface.** The skill and the stylesheet once disagreed about the breakpoint.
+  `ui-exploration/SKILL.md` named `max-md` = 768px and two anchors. `tailwind.css` had already said
+  that width alone was the wrong question and named 844×390 as the case that broke. That is
+  settled. The skill now says three anchors and the `phone:`/`wide:` pair, and keeps `max-md` for
+  reading-column rules only. What is left is the coverage. `Browser.fs` has three cases at 844×390
+  (`thumbSized`, `navOverPane` and the chat-width case).
 
 ## Agent
 
@@ -957,9 +970,10 @@ code matches the doctrine. Each entry names the rule and the sites.
     foreign tool directly.
 - **Per-user agent credentials landed** (Plan 08). A human signs into their Claude account from the
   session's Connections panel: "this session only" (`SessionScope`) or "all my sessions" (their
-  user/peer scope). The Manager brokers the OAuth exchange as pure standards and never learns the
-  provider. Each agent turn runs on the TURN ACTOR's credential (session-scoped ▸ actor's own ▸
-  ambient env), resolved fresh per turn with Manager-side lazy refresh. Remaining, deliberate:
+  user scope, or the local scope under `--auth localhost`). The Manager brokers the OAuth exchange
+  as pure standards and never learns the provider. Each agent turn runs on the TURN ACTOR's
+  credential (session-scoped ▸ actor's own ▸ ambient env), resolved fresh per turn with
+  Manager-side lazy refresh. Remaining, deliberate:
   - The ambient `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN` process env stays as the documented
     last resort. It is how CI's LiveAgent tier feeds the agent, and it applies to ANY actor.
   - A refresh failure surfaces only as the turn's failure. No panel-level health indicator exists.

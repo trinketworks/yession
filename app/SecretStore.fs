@@ -176,9 +176,10 @@ module SecretResolution =
     type Observe = SessionId -> SecretName -> InjectOutcome -> unit
 
     /// The explicit lowest-precedence fallback: the Manager's OWN process environment —
-    /// the pre-Plan-06 "smallest local-dev store" (docs/GAPS.md), kept so existing
-    /// flows work unseeded. Inside the Manager's trust boundary; any store entry
-    /// shadows it.
+    /// what a `SecretRef` meant before Plan 06 gave it a store, kept so existing flows
+    /// work unseeded. docs/GAPS.md ("Secrets are a real Manager-owned store now") lists
+    /// it last in the precedence order. Inside the Manager's trust boundary; any store
+    /// entry shadows it.
     let processEnv : ResolveSecret =
         fun _sessionId name ->
             async {
