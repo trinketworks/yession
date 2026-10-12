@@ -1049,7 +1049,7 @@ module Style =
     let queryField = "flex flex-col"
     /// Field labels carry `ink-dim`, not `ink-faint`: they are 11px caps, which is below
     /// the 24px/19px-bold threshold where 3:1 would do, so they need the 4.5:1 ratio
-    /// against `surface` that `ink-dim` gives (CLAUDE.md, UI baseline).
+    /// against `surface` that `ink-dim` gives (WCAG 2.0 AA, pinned by Phase4's "Theme contrast").
     ///
     /// `overflow-wrap:anywhere` — not the `break-words` a value wears — is what makes the
     /// cap above unconditional: it is the form that lowers min-content, and `fit-content`
