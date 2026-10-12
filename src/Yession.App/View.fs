@@ -1639,6 +1639,7 @@ module View =
                     | Error _ -> DismissUploadMsg id
                 html $"""
                     <span class="{Style.draftFile}" role="listitem" data-draft-file="{name}" data-upload-state="{token}">
+                      <span class="{Style.entityMark}" aria-hidden="true">{Icon.fileSm}</span>
                       <span class="{Style.draftFileName}">{name}</span>
                       <span role="status">{status}</span>
                       {retry}
