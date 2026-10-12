@@ -3,66 +3,68 @@
 > The state-machine fix below — terminal history as **position × fidelity** — has since
 > shipped, along with items 1–3. Items 4–7 are the ones still open.
 
-How this was exercised: real app booted in the dev container (`node app/out/Main.js --auth
-localhost`, scratch `YESSION_DATA_DIR`, `YESSION_NESTED_SANDBOX=weak`), one session, one
-terminal, three block commands (`ls -la`, a colored `printf`, `echo … && sleep 1 && echo …`),
-terminal killed from the list. Then every playback path clicked through in headless Chromium
-over CDP (real mouse/key events, focus emulation on), at 1440×900 and a true 390×844 viewport.
-All positions/timers below were read from the live page, and the recording/keyframe bytes from
-the transcript sidecars.
+Method: I booted the real app in the dev container (`node app/out/Main.js --auth localhost`, scratch
+`YESSION_DATA_DIR`, `YESSION_NESTED_SANDBOX=weak`). It had one session, one terminal, and three
+block commands (`ls -la`, a colored `printf`, `echo … && sleep 1 && echo …`). I killed the terminal
+from the list. Then I clicked through every playback path in headless Chromium over CDP. I used real
+mouse and key events, with focus emulation on, at 1440×900 and at a true 390×844 viewport. The
+paths:
 
-What was tried: chat chip → block tab → *Play recording* → *Back to output* → *Play whole
-terminal* → *Back to blocks*; closed terminal's *↑ play the recording*; the terminal list's
-closed-row verbs; the same flows on the phone viewport.
+- Chat chip → block tab → *Play recording* → *Back to output* → *Play whole terminal* → *Back to
+  blocks*.
+- The *↑ play the recording* of a closed terminal.
+- The closed-row verbs of the terminal list.
+
+I read positions and timers from the live page, and recording and keyframe bytes from the
+transcript sidecars.
 
 ## Broken
 
-1. **Every replay renders staircased garbage.** Block-mode output is recorded with bare `\n`
-   (no `\r`): transcript records read `"total 4\ndrwxr-xr-x …"`, and the keyframe sidecar
-   serializes the resulting screen with the staircase baked in
-   (`\x1b[7C`/`\x1b[49C` line starts in `…keys.jsonl`). A VT — the player, and the Session
-   Process emulator producing keyframes — moves down WITHOUT carriage return on LF, so every
-   line starts where the previous one ended and wraps off the right edge. The text views split
-   on `\n` and look right; every player view (block range, whole terminal, on both desktop and
-   phone) shows the garble. Upstream fix is at transcript append (or pty-ize block exec);
-   downstream, the emulator feeding keyframes has the same bytes and the same problem.
+1. **Every replay renders staircased garbage.** Block-mode output is recorded with bare `\n` (no
+   `\r`). Transcript records read `"total 4\ndrwxr-xr-x …"`. The keyframe sidecar serializes the
+   resulting screen with the staircase baked in (`\x1b[7C`/`\x1b[49C` line starts in `…keys.jsonl`).
+   A VT moves down WITHOUT a carriage return on LF. The player does this, and so does the Session
+   Process emulator that produces keyframes. Every line starts where the previous one ended and
+   wraps off the right edge. The text views split on `\n` and look right. Every player view (block
+   range, whole terminal, desktop and phone) shows the garble. The upstream fix is at transcript
+   append (or pty-ize block exec). The downstream emulator has the same bytes and the same problem.
 
-2. **A chat chip tapped while the pane shows the terminal list looks dead.**
-   `OpenPaneTabMsg` (Model.fs:1440) sets `PaneChoice` but does not clear `TerminalList`, so the
-   pane header retitles and the body keeps showing the list — no tab, no block, nothing
-   apparent. `SelectFromListMsg` right below it clears the flag, and its comment states exactly
-   why. Measured: chip click → `data-pane-panel` absent, list still mounted. This is the state
-   the phone screenshot in the task was taken from (list face up), so it is a path a real
-   reader actually hits.
+2. **A chat chip tapped while the pane shows the terminal list looks dead.** `OpenPaneTabMsg`
+   (Model.fs:1440) sets `PaneChoice` but does not clear `TerminalList`. The pane header retitles,
+   and the body keeps showing the list: no tab, no block, nothing apparent. `SelectFromListMsg`,
+   right below it, clears the flag, and its comment states exactly why. Measured: chip click →
+   `data-pane-panel` absent, list still mounted. The phone screenshot in the task came from this
+   state (list face up), so a real reader hits this path.
 
-3. **“Play whole terminal” does not land on the block.** Three desktop runs: playback starts
-   at ~01:45 when the printf block's marker sits at 02:06, and the ~21s gap plays as dead air
-   in real time. One phone run instead landed at/near the final frame. Never once on the
-   block. Related observations from the same mounts: `idleTimeLimit 2` (Replay.fs) has no
-   visible effect — the 0:23 and 1:44 idle gaps play out at 1×, total duration shows raw 02:07
-   — and only 2 of the 3 block markers render (`.ap-marker` count; the `echo` marker at
-   ~127.6s of a ~128.6s cast is missing). Suspect the raw-clock `startAt`/`markers` and
-   `idleTimeLimit` disagree about whose timeline they are on; needs a look at how
-   asciinema-player 3.x combines those options.
+3. **"Play whole terminal" does not land on the block.** In three desktop runs, playback starts at
+   ~01:45. The marker of the printf block sits at 02:06, so the ~21s gap plays as dead air in real
+   time. One phone run landed at or near the final frame. No run landed on the block. Related
+   observations from the same mounts:
+   - `idleTimeLimit 2` (Replay.fs) has no visible effect. The 0:23 and 1:44 idle gaps play out at
+     1×, and the total duration shows raw 02:07.
+   - Only 2 of the 3 block markers render (`.ap-marker` count). The `echo` marker at ~127.6s of a
+     ~128.6s cast is missing.
 
-   *(Follow-up, confirmed live:)* **the terminal list's rewind verb does nothing but
-   select.** Its click dispatches `RewindTerminalMsg` then `SelectFromListMsg`
-   (View.fs:2048-2051), and the second reducer clears the `PanePlaying`/`PaneRewound` the
-   first just set — verified on an open terminal with recorded output: no player, no
-   *Jump to live*, no behind-label; the ordinary blocks view and composer render. The pane's
-   own `↑ replay from the start` (one message) works: player, *Jump to live*, "behind live",
-   focus handed on.
+   Suspect that the raw-clock `startAt`/`markers` and `idleTimeLimit` disagree about whose timeline
+   they are on. It needs a look at how asciinema-player 3.x combines those options.
+
+   *(Follow-up, confirmed live:)* **the rewind verb of the terminal list does nothing but select.**
+   Its click dispatches `RewindTerminalMsg` then `SelectFromListMsg` (View.fs:2048-2051). The second
+   reducer clears the `PanePlaying`/`PaneRewound` that the first just set. On an open terminal with
+   recorded output, I saw no player, no *Jump to live*, and no behind-label. The ordinary blocks
+   view and the composer rendered. The `↑ replay from the start` of the pane itself (one message)
+   works: player, *Jump to live*, "behind live", focus handed on.
 
 ## The play state machine, as it stands
 
-Four model fields have to agree for the pane to show the right thing, and every control
-writes a different subset of them:
+Four model fields have to agree for the pane to show the right thing. Every control writes a
+different subset of them:
 
-- `PaneChoice : PaneTab option` — which tab shows; doubles as the preview slot.
-- `PanePlaying : (PaneTab * int option) option` — "watch this tab's recording"; the `int` is
-  a transcript line only the `TerminalTab` mount ever reads (the step-out's start hint).
+- `PaneChoice : PaneTab option` — which tab shows. It doubles as the preview slot.
+- `PanePlaying : (PaneTab * int option) option` — "watch the recording of this tab". The `int` is a
+  transcript line that only the `TerminalTab` mount reads (the start hint of the step-out).
 - `PaneRewound : (TerminalId * int) option` — the DVR pin.
-- `TerminalList : bool` — the census face; while true it masks whatever the rest says.
+- `TerminalList : bool` — the census face. While true, it masks whatever the rest says.
 
 | control → message | Choice | Playing | Rewound | List |
 |---|---|---|---|---|
@@ -75,119 +77,116 @@ writes a different subset of them:
 | list row → `SelectFromListMsg` | terminal | ∅ | ∅ | false |
 | list rewind → `RewindTerminalMsg` **then** `SelectFromListMsg` | terminal | set, then ∅ | set, then ∅ | false |
 
-And whether a player is actually on screen (`playsRecording`) answers differently per tab
-kind: a `BlockTab` plays only when `PanePlaying` names it; a `StretchTab` always plays
-(replay is its only read); a `TerminalTab` plays when named OR when the affordance fold says
-`ReplayIsTheRead` (closed, no blocks) — plus `TerminalList` overriding all of it at render.
+Whether a player is actually on screen (`playsRecording`) depends on the tab kind:
+
+- A `BlockTab` plays only when `PanePlaying` names it.
+- A `StretchTab` always plays, because replay is its only read.
+- A `TerminalTab` plays when `PanePlaying` names it, or when the affordance fold says
+  `ReplayIsTheRead` (closed, no blocks).
+- `TerminalList` overrides all of it at render.
 
 Why it reads as a mess in the hand:
 
-- **One message, two different acts.** `PlayRecordingMsg` on a `BlockTab` swaps the view
-  INSIDE the tab (way back: *Back to output*, bottom action row, relabels in place); on a
-  `TerminalTab` it REPLACES the tab (way back: *Back to blocks*, floating overlay). Same
-  verb, different blast radius, different exit control in a different slot.
-- **The step-out eats your place.** The block tab is the preview; *Play whole terminal*
-  replaces the preview with the terminal tab, so *Back to blocks* lands on the terminal's
-  scrollback — the block tab you stepped out of no longer exists, and the only way back to
-  it is finding the chip in the chat again. A chip → block → whole → back round trip does
-  not return.
-- **Partial clears.** Each reducer resets the subset of fields its author was thinking
-  about: `OpenPaneTabMsg` clears playing+pin but not the list face (bug 2); the list's
-  rewind pairs two messages whose clear-sets cancel (bug above); `PlayRecordingMsg` clears
-  nothing, relying on every path into it having cleaned up first.
-- **Four ways into a player** — block play, chip step-out, closed-terminal play, DVR rewind
-  — each with its own back-affordance, focus target and clear-set; three ways for a player
-  to be "on" (`PanePlaying`, stretch-always, `ReplayIsTheRead`).
+- **One message, two different acts.** `PlayRecordingMsg` on a `BlockTab` swaps the view INSIDE the
+  tab. The exit is *Back to output*, in the bottom action row, which relabels in place. On a
+  `TerminalTab`, the same message REPLACES the tab. The exit is *Back to blocks*, a floating
+  overlay. Same verb, different blast radius, different exit control in a different slot.
+- **The step-out eats your place.** The block tab is the preview. *Play whole terminal* replaces it
+  with the terminal tab, so *Back to blocks* lands on the scrollback of the terminal. The block tab
+  no longer exists. Only the chip in the chat leads back to it. A chip → block → whole → back round
+  trip does not return.
+- **Partial clears.** Each reducer resets only the fields that its author had in mind.
+  `OpenPaneTabMsg` clears playing and pin but not the list face (bug 2). The list rewind pairs two
+  messages whose clear-sets cancel. `PlayRecordingMsg` clears nothing and relies on every path into
+  it having cleaned up first.
+- **Four ways into a player** — block play, chip step-out, closed-terminal play, DVR rewind. Each
+  has its own back-affordance, focus target and clear-set. A player can be "on" in three ways
+  (`PanePlaying`, stretch-always, `ReplayIsTheRead`).
 
-The shape suggests one explicit mode instead of four fields agreeing — e.g.
-`PaneMode = Reading of PaneTab | Watching of {Tab; StartLine option; Pin option}` with the
-list face as a fifth `PaneTab`-like destination rather than a boolean mask — so every
-transition states the whole next mode and a control cannot half-clear its way into a state
-no one designed.
+The shape suggests one explicit mode instead of four fields that must agree. For example:
+`PaneMode = Reading of PaneTab | Watching of {Tab; StartLine option; Pin option}`. The list face
+would become a fifth, `PaneTab`-like destination and not a boolean mask. Every transition then
+states the whole next mode, and a control cannot half-clear its way into a state that no one
+designed.
 
 ## Step back: what is the reader actually trying to do?
 
-The controls name the implementation's nouns — *blocks*, *recording*, *whole terminal* — and
-none of those is a thing a user has in their head. "Back to blocks" answers the question
-"which projection of the transcript am I mounted on", which is the developer's question. A
-reader in this flow only ever has three intents:
+The controls name the nouns of the implementation: *blocks*, *recording*, *whole terminal*. A user
+has none of these in their head. "Back to blocks" answers the developer's question "which projection
+of the transcript am I mounted on". A reader in this flow has only three intents:
 
-1. **"What did this command print?"** — the chip's promise. Answered by text: skimmable,
+1. **"What did this command print?"** — the promise of the chip. Text answers it: skimmable,
    copyable, searchable. The block tab does this well.
-2. **"What was going on around it?"** — context. The natural answer is the terminal's
-   scrollback, *scrolled to that command* — more of the same text. Today the step-out
-   answers it with a VIDEO that opens twenty seconds of dead air away (bug 3): the most
-   expensive presentation, at the wrong position, for an intent that wanted cheap text.
-3. **"Show me what actually happened, as it happened"** — behavior: a TUI session, a
-   progress bar, timing, the thing text cannot carry. This is the only intent that wants a
-   player at all.
+2. **"What was going on around it?"** — context. The natural answer is the scrollback of the
+   terminal, *scrolled to that command* — more of the same text. Today the step-out answers it with
+   a VIDEO that opens twenty seconds of dead air away (bug 3). That is the most expensive
+   presentation, at the wrong position, for an intent that wanted cheap text.
+3. **"Show me what actually happened, as it happened"** — behavior: a TUI session, a progress bar,
+   timing, the thing that text cannot carry. Only this intent wants a player at all.
 
-Which exposes the real structure: the reader is always looking at ONE thing — this
-terminal's history — at a **position** (which command / how far in) and in one of two
-**fidelities** (text, or playback). Those are orthogonal, and every confusion in the state
-machine above comes from encoding them as *destinations you travel between*:
+The reader always looks at ONE thing: the history of this terminal. They look at a **position**
+(which command, or how far in), in one of two **fidelities** (text, or playback). The axes are
+orthogonal. Every confusion above comes from encoding them as *destinations you travel between*:
 
-- "Play recording" / "Back to output" is a fidelity toggle wearing navigation words — and it
-  behaves like the toggle it is (same slot, focus kept). Fine, mislabeled.
-- "Play whole terminal" is a POSITION change (this command → its surroundings) fused to a
-  fidelity change (text → playback), which is why coming "back" has nowhere to return to:
-  the trip mutated two axes and the exit only restores one.
-- "Back to blocks" is the fidelity toggle again, but because entry conflated the axes, exit
-  must be a different control with a different name in a different slot — and the name it
-  got is the internal noun.
-- The DVR is the same fidelity swap on a live terminal (position pinned at "now"); "Jump to
-  live" is fidelity back to text/live. Same toggle, third and fourth spellings.
+- "Play recording" / "Back to output" is a fidelity toggle in navigation words. It behaves like the
+  toggle it is (same slot, focus kept). Its label is wrong.
+- "Play whole terminal" fuses a POSITION change (this command → its surroundings) to a fidelity
+  change (text → playback). The trip mutates two axes and the exit restores one, so "back" has
+  nowhere to return to.
+- "Back to blocks" is the fidelity toggle again. Entry conflated the axes, so exit is a different
+  control with a different name in a different slot. The name is the internal noun.
+- The DVR is the same fidelity swap on a live terminal (position pinned at "now"), and "Jump to
+  live" is its way back.
 
-So the reframe: **position is navigation, fidelity is a mode, and the mode never moves
-you.** Concretely —
+The reframe: **position is navigation, fidelity is a mode, and the mode never moves you.**
+Concretely:
 
-- A chip's context intent gets its own verb: **"Show in terminal"** — the closed terminal's
-  ordinary text scrollback, scrolled to and highlighting that command. No player. This is
-  what "play whole terminal" was reaching for, and text answers it instantly with none of
-  bug 3's dead air.
-- One **watch/read toggle**, one label pair everywhere (*Watch* / *Show output* — words a
-  user has), one slot, focus kept — on a block, on a closed terminal, on a live one (where
-  *Watch* means the DVR and the way back is *Live*). Toggling fidelity NEVER changes
+- The context intent of a chip gets its own verb: **"Show in terminal"**. It opens the ordinary text
+  scrollback of the closed terminal, scrolled to that command and highlighting it, with no player.
+  This is what "play whole terminal" was reaching for. Text answers it instantly, with none of the
+  dead air of bug 3.
+- One **watch/read toggle**, with one label pair everywhere (*Watch* / *Show output* — words that a
+  user has), in one slot, with focus kept. It works on a block, on a closed terminal, and on a live
+  one (where *Watch* means the DVR and the way back is *Live*). Toggling fidelity NEVER changes
   position, so every "where did my tab go" case disappears without a rule to remember.
-- The player, when entered from a command, starts AT that command because position carried
-  over — not because a `startAt` hint rode a message and survived the right subset of
-  reducers.
+- The player, when entered from a command, starts AT that command because position carried over. No
+  `startAt` hint needs to ride a message and survive the right subset of reducers.
 
-That is also the state-machine fix from the previous section arrived at from the user's
-side: `position × fidelity` is exactly the `PaneMode` record, and the reason four fields
-keep half-agreeing today is that the UI's own vocabulary never decided these were two axes.
+`position × fidelity` is the `PaneMode` record above, reached from the side of the user. Four fields
+keep half-agreeing today because the vocabulary of the UI never named these two axes.
 
 ## Rough edges
 
 4. **The first row of a chat group hides under its sticky author header.** The header
-   (`sticky top-0 z-10 bg-bg pt-6 -mt-6`) paints over the top 16px of the first chip even with
-   the scroller at `scrollTop 0` (measured: header box 112–160, chip 144–172;
-   `elementFromPoint` at the chip's upper half returns the header, so those pixels also
-   swallow the tap). Visible in every desktop screenshot as `$ ls -la` clipped behind
-   WARM-IBEX. Phone overlaps by a few px (max-md paddings) — visually fine, tap target thinned.
+   (`sticky top-0 z-10 bg-bg pt-6 -mt-6`) paints over the top 16px of the first chip. This holds
+   even with the scroller at `scrollTop 0`. Measured: header box 112–160, chip 144–172.
+   `elementFromPoint` at the upper half of the chip returns the header. Those pixels also swallow
+   the tap. This is visible in every desktop screenshot as `$ ls -la` clipped behind WARM-IBEX. The
+   phone overlaps by a few px (max-md paddings). That is visually fine, but the tap target is
+   thinner.
 
-5. **Focus strands on the two swaps that replace the pressed control with a different
-   surface.** After *Play whole terminal* (block tab → terminal tab player) and after killing
-   a terminal from the list, `document.activeElement` is `<body>`. The neighbours do it right:
-   *Play recording*/*Back to output* relabel in place and keep focus; *Back to blocks* hands
-   focus to *↑ play the recording*; a chip hands focus to the panel. UI-baseline rule: a swap
-   that removes the focused element refocuses its replacement.
+5. **Focus strands on two swaps.** Both replace the pressed control with a different surface. After
+   *Play whole terminal* (block tab → terminal tab player) and after a kill of a terminal from the
+   list, `document.activeElement` is `<body>`. The neighbours do it right. *Play recording*/*Back to
+   output* relabel in place and keep focus. *Back to blocks* hands focus to *↑ play the recording*.
+   A chip hands focus to the panel. UI-baseline rule: a swap that removes the focused element
+   refocuses its replacement.
 
-6. **“CLOSED — CLOSED BY A PEER” discards who.** `Commands.fs:55` hardcodes the reason string
-   `"closed by a peer"`; the closing `peerId` is in scope and dropped, so no client can ever
-   attribute the close. The attribution invariant (a thing that was done is attributed to
-   whoever did it) says this should be a name.
+6. **"CLOSED — CLOSED BY A PEER" discards who.** `Commands.fs:55` hardcodes the reason string
+   `"closed by a peer"`. The `peerId` of the closer is in scope and dropped, so no client can ever
+   attribute the close. The attribution invariant (a thing that was done is attributed to whoever
+   did it) says this should be a name.
 
-7. **Sub-second commands make zero-length recordings.** A fast block's scrub bar reads
-   `00:00-00:00` and play is a flash. Text-first design absorbs it, but the player timeline
-   reads broken; consider not offering *Play recording* under some minimum recorded duration,
-   or showing the range's wall-clock span.
+7. **Sub-second commands make zero-length recordings.** The scrub bar of a fast block reads
+   `00:00-00:00`, and play is a flash. The text-first design absorbs it, but the player timeline
+   reads broken. Consider not offering *Play recording* under some minimum recorded duration, or
+   showing the wall-clock span of the range.
 
 ## Worked well
 
-- Closed terminal's read: full scrollback with colors, *↑ play the recording* at the top of
-  history, *Back to blocks* floating in the reader's slot, closed band at the bottom.
-- Chip → block tab → output-as-text-first, recording one press away; pin/preview semantics;
-  the pane on the phone (column swap, actions reachable, focus into the panel).
-- Player chrome: control bar, keyboard shortcuts, fullscreen; chapters concept (when the
-  markers render).
+- The read of a closed terminal: full scrollback with colors. *↑ play the recording* sits at the top
+  of history. *Back to blocks* floats in the slot of the reader. The closed band sits at the bottom.
+- Chip → block tab → output as text first, with the recording one press away. The pin/preview
+  semantics. The pane on the phone (column swap, actions reachable, focus into the panel).
+- Player chrome: control bar, keyboard shortcuts, fullscreen. The chapters concept (when the markers
+  render).

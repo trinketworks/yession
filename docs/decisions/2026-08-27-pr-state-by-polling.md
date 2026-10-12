@@ -1,128 +1,131 @@
 # A session learns about its pull requests by asking GitHub, not by being told
 
-> Decided 2026-08-27 · Supersedes nothing · Related:
-> [app/PrWatches.fs](../../app/PrWatches.fs) — the poll, the verbs and the query,
-> [app/GitHubPrs.fs](../../app/GitHubPrs.fs) — the two endpoints behind them,
-> [src/Yession.Domain/PrFacts.fs](../../src/Yession.Domain/PrFacts.fs) — the vocabulary,
-> [src/Yession.Domain/PrWatches.fs](../../src/Yession.Domain/PrWatches.fs) — the durable
-> baseline, [deployment.md](../deployment.md) §GitHub — how an operator registers the App
+> Decided 2026-08-27 · Supersedes nothing · Related: [app/PrWatches.fs](../../app/PrWatches.fs) —
+> the poll, the verbs and the query. [app/GitHubPrs.fs](../../app/GitHubPrs.fs) — the two endpoints
+> behind them. [src/Yession.Domain/PrFacts.fs](../../src/Yession.Domain/PrFacts.fs) — the
+> vocabulary. [src/Yession.Domain/PrWatches.fs](../../src/Yession.Domain/PrWatches.fs) — the durable
+> baseline. [deployment.md](../deployment.md) §GitHub — how an operator registers the App
+
+## Context
+
+A session needs to know when a pull request that it watches changes: merged, closed, reopened,
+checks green, checks red. Either GitHub tells the session, or the session asks GitHub.
 
 ## Decision
 
-A session watches a pull request by **polling GitHub for it**, with two conditional GETs
-(the pull request, then its head commit's check runs), spending the credential of whoever
-started the watch. Every 15 seconds while its checks are pending, every 60 otherwise. Transitions — merged, closed, reopened, checks
-green, checks red — are appended to the session's own log and read back on the timeline;
-current state is the `pull_requests` query.
+A session watches a pull request by **polling GitHub for it**. Each poll makes two conditional GETs:
+the pull request, then the check runs of its head commit. The poll spends the credential of whoever
+started the watch. It runs every 15 seconds while the checks are pending and every 60 otherwise. The
+session appends each transition (merged, closed, reopened, checks green, checks red) to its own log
+and reads it back on the timeline. Current state is the `pull_requests` query.
 
-We do **not** register webhooks, and the Manager gains nothing: it brokers a credential it
-still cannot name, and its Session-notification channel stays the producerless transport it
-was. `FetchPr` is a one-function seam, so a pushed transport later replaces an
-implementation rather than a design.
+We do **not** register webhooks, and the Manager gains nothing. It brokers a credential that it
+still cannot name, and its Session-notification channel stays the producerless transport it was.
+`FetchPr` is a one-function seam, so a pushed transport later replaces an implementation and not a
+design.
 
-## Why not webhooks?
+### Why two intervals
 
-Three separate reasons. The third has since been answered — see below — and the first two
-still stand, which is why polling remains the mechanism rather than the fallback.
+The two waits are not the same wait. A settled watch waits for something that has not started, such
+as a push or a merge. Nobody acts on either inside a minute. A watch whose checks are PENDING is one
+that somebody sits in front of, with a suite in flight that is about to say something. There,
+fifteen seconds is the difference between noticing and having moved on.
 
-- **A repo webhook needs admin on that repo.** The ordinary case is contributing to a
-  repository you do not administer, where `POST /repos/{o}/{r}/hooks` is simply refused.
-  A feature that works only on repos you own is not the feature.
-- **Inbound delivery needs a deployment GitHub can reach.** The zero-configuration
-  deployment is loopback (`http://127.0.0.1:{port}`, see deployment.md §Addressing), which
-  github.com cannot POST to. Webhooks would have served the fronted deployments and
-  silently not the default one.
-- **It would have put GitHub in the Manager.** Only the Manager has a stable public
-  origin, so ingress would have landed there — and the Manager is the one component that
-  has never learned which provider it brokers.
+Two intervals make the fast cadence affordable. GitHub does not count a `304` against the primary
+rate limit. A settled watch is therefore free at any interval: two conditional requests that both
+answer 304, against a budget of 5000 an hour. A pending watch is not free, because its checks
+endpoint really is moving. It makes four polls a minute, which puts the ceiling around ten pull
+requests with live suites at once per credential. A single interval would have to serve one of those
+two facts and fail the other.
+
+Both halves are always asked. The checks URL names the head sha, but the runs ON a sha go from
+queued to completed while the sha sits still. That is what CI finishing looks like. A short-circuit
+for an unmoved pull request could hold a watch at `pending` for the whole life of a build that had
+already gone green.
+
+The poll honours the `x-ratelimit-reset` of GitHub and uses no backoff invented here. The provider
+names the moment it will answer again, and any number that we picked would be a guess against it.
+
+### Why the baseline is in the log rather than in memory
+
+The process restarts, and both wrong answers are bad. One is to re-announce a merge that the session
+announced yesterday. The other is to swallow, silently, a merge that happened while the process was
+down. A watch therefore records its `Initial` snapshot and every transition that it announces. The
+baseline folds from those events (`PrWatchesProjection`).
+[`src/Yession.Domain/PrWatches.fs`](../../src/Yession.Domain/PrWatches.fs) states the rule.
+
+The log also makes the wake safe. A woken turn is a debt found in the log after the last turn
+started, so one transition can wake at most one turn, ever.
+
+### Why a pull request change wakes the agent, when a tool roster change does not
+
+A watch has an owner. An attributed party started it in a gated act, and the poll that noticed spent
+the credential of that same party. The wake runs as them, on a thing that they explicitly asked to
+be told about. A roster change belongs to `ActorRef.System` and to nobody, and `System` is not an
+authority that the agent can call tools on. The `WakeReason` comments in
+[`src/Yession.Domain/AgentFacts.fs`](../../src/Yession.Domain/AgentFacts.fs) state both halves of
+this rule.
+
+## Alternatives rejected
+
+### Webhooks
+
+Three separate reasons. The first two still stand, which is why polling remains the mechanism and
+not the fallback. The Manager has since answered the third (see below).
+
+- **A repo webhook needs admin on that repo.** The ordinary case is a contribution to a repository
+  that you do not administer. There, `POST /repos/{o}/{r}/hooks` is simply refused. A feature that
+  works only on repos you own is not the feature.
+- **Inbound delivery needs a deployment that GitHub can reach.** The zero-configuration deployment
+  is loopback (`http://127.0.0.1:{port}`, see deployment.md §Addressing), and github.com cannot POST
+  to it. Webhooks would have served the fronted deployments and silently not the default one.
+- **It would have put GitHub in the Manager.** Only the Manager has a stable public origin, so
+  ingress would have landed there. The Manager is the one component that has never learned which
+  provider it brokers.
 
   **Answered, 2026-08-29.** The Manager now relays hooks it cannot read
-  ([ADR](2026-08-29-the-manager-relays-hooks-it-cannot-read.md)): a session declares a
-  filter — data, a conjunction of equalities over paths — and the Manager verifies a
-  signature and matches without knowing what any of it means. The string
-  `body.repository.full_name` lives in `GitHubPrs.fs`, on its way past. What the Manager
-  gained is one header name, one HMAC and a JSON walk, bounded to one file, and a GitHub App
-  has exactly one webhook so ingress had to land somewhere stable regardless.
+  ([ADR](2026-08-29-the-manager-relays-hooks-it-cannot-read.md)). A session declares a filter —
+  data, a conjunction of equalities over paths. The Manager verifies a signature and matches without
+  knowing what any of it means. The string `body.repository.full_name` lives in `GitHubPrs.fs`, on
+  its way past. The Manager gained one header name, one HMAC and a JSON walk, bounded to one file. A
+  GitHub App has exactly one webhook, so ingress had to land somewhere stable regardless.
 
-The GitHub **Events** API is not the fallback it looks like: it omits `check_run`,
-`check_suite` and `status`, which is most of what a watcher is waiting for.
+### The GitHub Events API
 
-## Where would webhooks belong, then?
+It is not the fallback that it looks like. It omits `check_run`, `check_suite` and `status`, which
+is most of what a watcher waits for.
 
-With a **hosted dispatching service**, which is also what would let somebody run Yession
-without registering a GitHub App of their own. The shape: one App-level webhook on the
-hosted App, a relay each session dials **out** to, and deliveries matched to the sessions
-entitled to them. Outbound means it works in every deployment shape, loopback included —
-which is exactly what inbound ingress could not do.
+### Where webhooks would belong: a hosted dispatching service
 
-That service does not exist, and until it does, registering your own App is not the
-fallback path but the only one — and the one a security-conscious operator would choose
-anyway.
+Webhooks would belong with a hosted dispatching service. The same service would let somebody run
+Yession without registering a GitHub App of their own. The shape has three parts:
 
-## Why two intervals?
+- One App-level webhook on the hosted App.
+- A relay that each session dials **out** to.
+- Deliveries matched to the sessions entitled to them.
 
-Because the two waits are not the same wait. A settled watch is waiting for something that
-has not started — a push, a merge — and nobody acts on either inside a minute. A watch whose
-checks are PENDING is one somebody is sitting in front of, with a suite in flight that is
-about to say something, and fifteen seconds there is the difference between noticing and
-having moved on.
+Outbound means it works in every deployment shape, loopback included. Inbound ingress could not do
+that.
 
-Splitting them is what makes the fast cadence affordable. GitHub does not count a `304`
-against the primary rate limit, so a settled watch is free at any interval: two conditional
-requests that both answer 304, against a budget of 5000 an hour. A pending watch is not
-free, because its checks endpoint really is moving — four polls a minute, which puts the
-ceiling around ten pull requests with live suites at once per credential. A single interval
-would have had to pick one of those two facts to serve.
+That service does not exist. Until it does, registering your own App is the only path and not a
+fallback. A security-conscious operator would choose it anyway.
 
-Both halves are always asked, and an earlier version of this document said the opposite: it
-claimed an unmoved pull request "short-circuits its checks request entirely (the checks URL
-is keyed by the head sha, so an unmoved PR cannot have moved checks)". That is false. The
-runs ON a sha go queued to completed while the sha sits still, which is precisely what CI
-finishing looks like — so the short-circuit could hold a watch at `pending` for the whole
-life of a build that had already gone green.
+### Session-direct ingress
 
-Rate limiting is honoured by GitHub's own `x-ratelimit-reset` rather than a backoff invented
-here: the provider names the moment it will answer again, and any number we picked would be
-a guess against it.
+A fronted session is publicly addressable, so a hook could POST straight at it. That is wrong on the
+facts. A GitHub App has exactly ONE webhook, auto-created and not deletable, so it can never point
+at a session. Only a repository or organization hook can, and creating one needs admin on the repo —
+the first reason above. It is still the route for repos you administer. It is not built.
 
-## Why is the baseline in the log rather than in memory?
+## Consequences
 
-Because the process restarts, and both wrong answers are bad: re-announcing a merge that was
-announced yesterday, or silently swallowing one that happened while the process was down.
+### What would change this decision
 
-So a watch records its `Initial` snapshot and every transition it announces, and the
-comparison baseline is folded from those events (`PrWatchesProjection`). A restart re-folds
-the same log and lands in the same place: nothing already said is said twice, and anything
-that changed in the gap is still detected, because the log still says the state before it.
-
-That is also what makes the wake safe — a woken turn is a debt found in the log after the
-last turn started, so one transition can wake at most one turn, ever.
-
-## Why does a pull request changing wake the agent, when a tool roster changing does not?
-
-`AgentFacts.fs` refuses to wake on an MCP roster change, and the reason is credentials: that
-event belongs to `ActorRef.System`, and `System` is not an authority the agent can call
-tools on. Waking on it would mean acting on somebody's credential for something they never
-asked for.
-
-A watch is the opposite. It was started by an attributed party, in a gated act, and the poll
-that noticed spent that same party's credential. The wake runs as them, on a thing they
-explicitly asked to be told about — which is the property the roster change lacked, not a
-rule being bent for it.
-
-## What would change it
-
-- **The dispatching service existing.** Then `FetchPr` gains a second implementation, and
-  polling becomes the fallback for deployments that do not use it — not deleted, because
-  a self-hosted operator with no relay still needs it.
-- **Session-direct ingress.** An earlier version of this bullet proposed it, reasoning that
-  a fronted session is publicly addressable so a hook could POST straight at it. That is
-  wrong on the facts: a GitHub App has exactly ONE webhook, auto-created and not deletable,
-  so it can never point at a session. Only a repository or organization hook can, and
-  creating one needs admin on the repo — which is the first reason above. It is still the
-  route for repos you administer, and it is not built.
-- **GitHub streaming PR state.** If the provider offered a subscription a client could hold
-  open, this becomes the reconnect path rather than the mechanism.
-- **A watcher that needs seconds, not fifteen.** Lowering the pending interval again
-  spends the ceiling above rather than buying latency for free, so the answer at that point
-  is a pushed transport, not a smaller number.
+- **The dispatching service exists.** `FetchPr` then gains a second implementation. Polling becomes
+  the fallback for deployments that do not use the service. We would not delete it, because a
+  self-hosted operator with no relay still needs it.
+- **GitHub streams PR state.** Suppose the provider offered a subscription that a client could hold
+  open. That would become the reconnect path and not the mechanism.
+- **A watcher needs seconds, not fifteen.** A lower pending interval spends the ceiling above and
+  does not buy latency for free. The answer at that point is a pushed transport, not a smaller
+  number.
