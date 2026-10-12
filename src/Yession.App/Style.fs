@@ -2551,11 +2551,26 @@ module Style =
     ///
     /// `px-4` is the composer's gutter, so interrupt's glyph starts on the model picker's
     /// edge and the jump's ends on Send's. 44px on a phone, a thumb's target; 40 elsewhere.
-    let composerTray = "shrink-0 flex items-center h-10 max-md:h-11 px-4 bg-panel"
+    let composerTray = "flex items-center h-10 max-md:h-11 px-4 bg-panel"
+
+    /// The strip's fold, which is what lets it ARRIVE rather than appear: it grows up out of
+    /// the composer from nothing and fades in, on the pace every fold here takes
+    /// (`Motion.unfold`), and runs back the same way. No slide: it is anchored to the
+    /// composer's rule, and a nudge either way would cross it. `Tail` keeps a reader at the
+    /// latest message there through every frame of the growth, as through any change of the
+    /// conversation's box.
+    let composerTrayFold = cls [ "shrink-0"; Motion.unfold ]
+    let composerTrayShut = "grid-rows-[0fr] opacity-0 invisible"
+    let composerTrayOpen = "grid-rows-[1fr] opacity-100 visible"
+    let composerTrayInner = Motion.unfoldInner
 
     let private trayVerb =
         cls [ "h-full min-w-11 shrink-0 inline-flex items-center gap-1.5 p-0 bg-transparent border-0 cursor-pointer font-ui"
-              capsLg; "text-ink-dim transition-colors"; focusRing ]
+              capsLg; "text-ink-dim"
+              // A control arriving in a strip already open fades in on the same pace
+              // (`starting:`, the style it is first drawn from), so the second of the two
+              // turning up does not pop where the first arrived.
+              "transition-[color,opacity] starting:opacity-0"; Motion.pace; focusRing ]
 
     /// Ink at rest, err under the hand — the face every destructive verb here wears. Err AT
     /// rest is this product's tone for *something is wrong*, and a turn running is the normal

@@ -1460,7 +1460,8 @@ module View =
 
     /// The strip on the composer's top edge (`Style.composerTray`): the way to stop the turn
     /// that is running at its leading edge, the way back to the latest message at its
-    /// trailing one, and nothing at all — no strip — while neither has anything to do.
+    /// trailing one, and nothing at all — the strip folded to nothing — while neither has
+    /// anything to do.
     ///
     /// Interrupt is the only control here that DOES something about a running turn rather
     /// than report it: whether one is running is said by the caret in the timeline, and to a
@@ -1499,8 +1500,14 @@ module View =
                       <button type="button" class="{Style.trayJump}" aria-label="{Dom.Text.jumpToLatest}"
                               @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.JumpToLatest TailSurface.Conversation)))}>latest{Icon.down}</button>
                     </div>"""
-        if model.Agent.ActiveTurn.IsNone && not away then Lit.nothing
-        else html $"""<div class="{Style.composerTray}" data-composer-tray>{interrupt}{jump}</div>"""
+        // MOUNTED ALWAYS and folded shut while there is nothing in it, so it has somewhere to
+        // grow from: an element that is inserted at its full height has no first frame to
+        // animate out of.
+        let fold = if model.Agent.ActiveTurn.IsNone && not away then Style.composerTrayShut else Style.composerTrayOpen
+        html $"""
+            <div class="{Style.composerTrayFold} {fold}" data-composer-tray>
+              <div class="{Style.composerTrayInner}"><div class="{Style.composerTray}">{interrupt}{jump}</div></div>
+            </div>"""
 
     /// The composer: ONE draft open, everyone else's as a line you can open.
     ///
