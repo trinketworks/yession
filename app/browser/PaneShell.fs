@@ -118,7 +118,7 @@ let private toSwitcher () : unit =
     if not inside then
         find "[data-content-list] [data-terminal-list-row][aria-current=\"true\"]"
         |> Option.orElseWith (fun () -> find "[data-content-list] [data-terminal-list-row], [data-content-list] [data-artifact-list-row]")
-        |> Option.orElseWith (fun () -> find "[data-pane-panel]")
+        |> Option.orElseWith (fun () -> find "[data-pane-panel=\"all\"]")
         |> Option.orElseWith (fun () -> find "[data-pane-switcher]")
         |> focusOn
 

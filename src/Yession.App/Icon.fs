@@ -58,6 +58,8 @@ module Icon =
     let private playPath = "M5.75 3.5 L12 8 L5.75 12.5 Z"
     /// Stop, in the one shape that has always meant it.
     let private stopPath = "M4 4 L12 4 L12 12 L4 12 Z"
+    /// A list: three rules, the mark of the door to every terminal and file.
+    let private listPath = "M2.5 4.5 L13.5 4.5 M2.5 8 L13.5 8 M2.5 11.5 L13.5 11.5"
     /// Back through what happened: two chevrons pointing behind, the `rights` mark turned round.
     let private rewindPath = "M8.25 3.5 L3.75 8 L8.25 12.5 M12.75 3.5 L8.25 8 L12.75 12.5"
     /// A keyboard: a frame, a row of keys as zero-length subpaths (the dot trick `morePath`
@@ -144,11 +146,12 @@ module Icon =
 
     /// Stop: the interrupt beside a running turn. It was also the terminal list's kill, and
     /// a square beside a command reads as stopping the command, not ending the terminal —
-    /// the list says its verbs as words now (`Dom.Text.rewind`, `kill`, `reattach`).
+    /// the list says its verbs as words now (`Dom.Text.kill`, `reattach`).
     let stop = stroked "w-3.5 h-3.5" stopPath
     /// A terminal's acts in the pane's toolbar: taking the keyboard, going back through its
     /// recording, and playing a closed one's.
     let keyboard = stroked "w-3.5 h-3.5" keyboardPath
+    let list = stroked "w-3.5 h-3.5" listPath
     let rewind = stroked "w-3.5 h-3.5" rewindPath
     let play = stroked "w-3.5 h-3.5" playPath
     /// The switcher's door, before the head's name (P2-2).

@@ -2454,11 +2454,8 @@ let private dvrTests =
             Expect.isTrue ((Support.render closedPlaying).Contains subtitle) "a recording says what last ran"
             Expect.isFalse ((Support.render (rewoundWithBlocks ())).Contains subtitle) "a rewind does not"
 
-        testCase "the rewind has one word on every surface: the footer says what the all page row says" <| fun () ->
-            let live = withRecords (clientOf liveWithBlocks)
-            let footer = textAt (Dom.attr Dom.Hooks.terminalWatch "watch") (Support.render live)
-            let row = textAt (Dom.attr Dom.Hooks.terminalListRewind "term-a") (Support.render (Support.step ToggleSwitcherMsg live))
-            Expect.equal (footer.ToLowerInvariant ()) (row.ToLowerInvariant ()) "one word for one act"
+        // (The rewind had a second home on the list's row, and a case here held the two to one
+        // word. It has one home now, the terminal's toolbar.)
 
         testCase "a CLOSED terminal is not rewindable — it is simply a recording" <| fun () ->
             let closed =
@@ -3182,27 +3179,36 @@ let private listTests =
 
         // --- The switcher's doors (P2-2) -------------------------------------------------------
 
-        // These replaced the strip's `+N` overflow count, which opened the switcher only while
-        // tabs were scrolled past the strip's edge, and the head's name, which opened it
-        // always: `all` is both doors, as the pivot's last item — outside the part of the
-        // pivot that scrolls, so no number of tabs can carry it off the edge.
-        testCase "the pivot ends with all, outside the part that scrolls" <| fun () ->
+        // The door to every terminal is a button at the strip's end, outside the part that
+        // scrolls, so no number of tabs can carry it off the edge.
+        testCase "the list's door is outside the part of the strip that scrolls" <| fun () ->
             let model = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
-            let pivot = markupAt Dom.Hooks.panePivot (Support.render model)
-            Expect.isTrue (pivot.Contains Dom.Hooks.paneSwitcher) "all is a pivot item"
-            Expect.isFalse ((markupAt Dom.Hooks.paneStrip pivot).Contains Dom.Hooks.paneSwitcher) "and does not scroll"
+            let html = Support.render model
+            Expect.isTrue (html.Contains Dom.Hooks.paneSwitcher) "the door is there"
+            Expect.isFalse ((markupAt Dom.Hooks.paneStrip html).Contains Dom.Hooks.paneSwitcher) "and does not scroll"
 
-        testCase "on the all page, all is the one selected pivot item" <| fun () ->
+        // The list is a sheet over the pane, not a place the pane goes to: the tab under it
+        // stays the selected one, to go back to.
+        testCase "with the list down, the tab under it is still the selected one" <| fun () ->
             let model =
                 clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
                 |> Support.step (ShowInPaneMsg (Reading terminalA))
                 |> Support.step ToggleSwitcherMsg
             let pivot = markupAt Dom.Hooks.panePivot (Support.render model)
             Expect.equal
-                (attributeOf "role=\"tab\"" "aria-selected" pivot |> List.filter ((=) "true") |> List.length,
-                 attributeOf Dom.Hooks.paneSwitcher "aria-selected" pivot)
-                (1, [ "true" ])
-                "one item selected, and it is all"
+                (attributeOf Dom.Hooks.paneTab "aria-selected" pivot |> List.filter ((=) "true") |> List.length)
+                1
+                "one tab selected"
+
+        testCase "the list's door says whether the list is down" <| fun () ->
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+                |> Support.step ToggleSwitcherMsg
+            Expect.equal
+                (attributeOf Dom.Hooks.paneSwitcher "aria-expanded" (Support.render model))
+                [ "true" ]
+                "expanded"
 
         testCase "the switcher's shortcut is Ctrl or Cmd with the backquote key" <| fun () ->
             Expect.equal

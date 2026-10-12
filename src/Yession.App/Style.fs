@@ -3079,7 +3079,7 @@ module Style =
     /// and lift a step (`surface`) under the hand. Ink follows, a step quieter on the tabs not
     /// chosen; both inks clear 4.5:1 on every ground here (Phase4). Selecting moves no text.
     let private pivotItemBase =
-        cls [ "shrink-0 border-0 cursor-pointer h-11 min-w-11 px-3 inline-flex items-center justify-center gap-1.5"
+        cls [ "shrink-0 border-0 cursor-pointer h-11 min-w-11 px-3 phone:px-2 inline-flex items-center justify-center gap-1.5"
               "font-ui font-normal text-body whitespace-nowrap transition-colors duration-150 ease-out"
               "motion-reduce:transition-none"; focusRingInset ]
     let pivotItem = cls [ pivotItemBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
@@ -3100,17 +3100,22 @@ module Style =
     /// The pivot's one way to make something: a `+` in the pivot's own type, unboxed, faint at
     /// rest like every item not chosen. The cell is the positioning context its menu hangs
     /// from, outside the scroller, because a menu hung inside an `overflow-x-auto` box is
-    /// clipped to that box.
-    ///
-    /// A DESKTOP control. On a phone the row is 390px for `all`, the tabs and the way back,
-    /// and a 44px `+` in it was a tab the strip could not show; there the `all` page carries
-    /// the same press (`allNewCell`), and exactly one of the two is ever on screen.
+    /// clipped to that box. The same press on a phone as on a desktop: the list has no door
+    /// of its own to make a terminal.
     /// A square act at the strip's end — `+`, and the way back to the chat: the strip's
     /// height square, its glyph in the tabs' resting ink.
     let paneStripAct =
         cls [ "shrink-0 w-11 h-11 grid place-items-center bg-transparent border-0 cursor-pointer p-0"
               "text-ink-dim hover:text-ink hover:bg-surface transition-colors motion-reduce:transition-none"; focusRingInset ]
-    let terminalTabNewCell = "relative shrink-0 flex items-center phone:hidden"
+    /// The same, while what it opens is open: the list button with its sheet down.
+    let paneStripActOn =
+        cls [ "shrink-0 w-11 h-11 grid place-items-center border-0 cursor-pointer p-0"
+              "bg-surface-2 text-ink transition-colors motion-reduce:transition-none"; focusRingInset ]
+
+    /// Everything under the strip — the toolbar, the body, and the list's sheet when it is down,
+    /// which is laid over the first two from the strip's edge.
+    let paneUnderStrip = "relative flex-1 min-h-0 flex flex-col"
+    let terminalTabNewCell = "relative shrink-0 flex items-center"
     let terminalTabNew = paneStripAct
     /// The empty pane's button's cell: the positioning context its menu hangs from.
     let terminalEmptyNewCell = "relative"
@@ -3258,26 +3263,43 @@ module Style =
     /// divider under every row and a foot that made terminals; it is a page now, the way a
     /// Zune list is a page — names in large light type down the left, no rule between them,
     /// the air doing the separating.
-    let allPage = "flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col py-2 select-none"
+    let allPage = "flex flex-col pb-3 select-none"
+
+    /// The list's sheet: dropped from the strip's edge over the pane, which goes on showing the
+    /// terminal under it. A step up the ground (`surface`), because it is a layer over the
+    /// pane, and opaque, because rows read over a terminal's text are rows nobody can read; its
+    /// rim is at the foot, where it ends over the terminal. As tall as it needs and no taller
+    /// than the pane, scrolling inside itself.
+    let allSheet =
+        cls [ "absolute inset-x-0 top-0 max-h-full z-30 overflow-y-auto overscroll-contain"
+              "bg-surface border-b border-edge"
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue focus-visible:-outline-offset-2" ]
+
+    /// The sheet's head, the manager page's section head: the name of what is listed in the
+    /// caps voice, then its filters, then its one act.
+    let allHead = "shrink-0 h-11 flex items-center gap-2 px-3 min-w-0"
+    let allHeadLabel = caps + " text-ink-dim shrink-0 mr-2"
 
     /// One row: its name (and the marks beside it) over what it last ran, its verbs at the
     /// right. The names line up down the page because every mark sits AFTER its name — a
     /// leading column of marks of four different widths is what made the old list's left
     /// edge ragged.
-    let terminalListRow = "group/row flex items-center gap-3 px-3 py-2 phone:py-1"
+    let terminalListRow =
+        cls [ "group/row flex items-center gap-3 px-3 py-2 min-h-14 phone:py-1"
+              "hover:bg-surface has-[[aria-current=true]]:bg-surface-2"; Stroke.dividerBottom ]
 
     /// The row's own control: its name, which opens it — the pivot's type, so the page reads
     /// as the pivot's names written out in full. Ink at rest so the page reads as a list of
     /// names, blue under the pointer because that is what interactive means here.
     let terminalListName =
-        cls [ "min-w-0 truncate bg-transparent border-0 cursor-pointer text-left p-0 phone:min-h-11"
-              "font-ui font-light text-[22px] leading-7 text-ink hover:text-blue transition-colors"; focusRing ]
+        cls [ "min-w-0 truncate bg-transparent border-0 cursor-pointer text-left p-0 phone:min-h-11 phone:min-w-11"
+              "font-ui font-light text-body text-ink transition-colors"; focusRing ]
 
     /// A closed row's name: dimmer, which says which half of the list it is in by its tone
     /// rather than by repeating the word — its mark says the rest.
     let terminalListNameClosed =
-        cls [ "min-w-0 truncate bg-transparent border-0 cursor-pointer text-left p-0 phone:min-h-11"
-              "font-ui font-light text-[22px] leading-7 text-ink-dim hover:text-blue transition-colors"; focusRing ]
+        cls [ "min-w-0 truncate bg-transparent border-0 cursor-pointer text-left p-0 phone:min-h-11 phone:min-w-11"
+              "font-ui font-light text-body text-ink-dim transition-colors"; focusRing ]
 
     /// A row's name line: the name, then its marks, on one line that gives way in the name.
     let terminalListNameLine = "min-w-0 flex items-center gap-2"
@@ -3327,11 +3349,7 @@ module Style =
     /// width the command under the name was cut short by. There, the row is how to reach them:
     /// it opens its terminal, whose own surface carries every one of these, and the row it was
     /// opened from wears them when the reader comes back.
-    let terminalListVerbsAtRest =
-        cls [ terminalListVerbs
-              "opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100"
-              "[@media(hover:none)]:[&:not(:focus-within)]:sr-only"
-              "transition-opacity duration-150 ease-out motion-reduce:transition-none" ]
+    let terminalListVerbsAtRest = terminalListVerbs
 
     /// The page's filters (F5), at its head over the rows: `all` and each kind of terminal
     /// there is, with how many. ONE line, never wrapped: a filter arriving or leaving as
@@ -3339,7 +3357,7 @@ module Style =
     /// outgrow it pan inside it rather than wrap or push the page sideways. The first word
     /// on the rail, as every name under it is.
     let allFilters =
-        "shrink-0 flex items-center gap-x-4 px-3 pb-2 phone:gap-x-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        "min-w-0 flex items-center gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
 
     /// One filter: the pivot's idiom at the section label's size — a word, lowercase and
     /// light, told apart from the others by INK alone: the one the page is narrowed to in
@@ -3349,9 +3367,10 @@ module Style =
     /// `aria-pressed`, so what is drawn and what is announced are one attribute. A thumb's 44
     /// on a phone, with the word kept on the rail.
     let allFilter =
-        cls [ "shrink-0 inline-flex items-center gap-1 bg-transparent border-0 cursor-pointer p-0 phone:min-h-11 phone:min-w-11"
-              "font-ui font-light text-body lowercase whitespace-nowrap text-ink-faint hover:text-ink aria-pressed:text-ink"
-              "transition-colors duration-150 ease-out motion-reduce:transition-none"; focusRingFar ]
+        cls [ "shrink-0 h-7 phone:h-11 px-2.5 inline-flex items-center gap-1.5 bg-transparent cursor-pointer"
+              caps; "whitespace-nowrap text-ink-dim hover:text-ink aria-pressed:text-ink"
+              Stroke.ring; "border-edge hover:border-ink-faint aria-pressed:border-ink-dim"
+              "transition-colors duration-150 ease-out motion-reduce:transition-none"; focusRing ]
 
     /// A filter's count: figures that do not shift the words beside them as they change.
     let allFilterCount = "tabular-nums"
@@ -3363,25 +3382,12 @@ module Style =
     /// fills it — a thumb's height on a phone, like every press in this column.
     let terminalEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center phone:[&_button]:min-h-11"
 
-    /// The `all` page's way to make a terminal, at its head — on a phone only, the other half
-    /// of `terminalTabNewCell`: the `+` is a desktop control, and the two are one press, so
-    /// each is hidden wherever the other shows. The empty pane's own act in look (blue, the
-    /// pivot's size), not a row: a row that MAKES a thing drawn like one that SELECTS one is
-    /// what the old switcher's foot was removed for. The cell is what its menu hangs from,
-    /// left-aligned under it as the page is.
-    let allNewCell = "wide:hidden relative self-start px-3 pb-2"
-    let allNew = cls [ paneActPrimary; "min-h-11" ]
-    let allNewMenu =
-        cls [ "absolute left-3 top-full z-30 py-1 select-none bg-panel text-left"
-              "min-w-[14rem]"
-              Stroke.ring
-              Stroke.hair ]
 
     /// What a section of the page is called: the pivot's lowercase, small, faint. The rows
     /// are the content, and a heading that competed with them would make a page of three
     /// terminals read as two lists. Present only when there is more than one kind to tell
     /// apart (`listSections`).
-    let listSectionLabel = "px-3 pt-4 pb-1 font-ui font-light text-small lowercase text-ink-faint select-none"
+    let listSectionLabel = cls [ "h-11 flex items-end px-3 pb-2 mt-4 select-none text-ink-dim"; caps; Stroke.dividerBottom ]
 
     /// An artifact's row: the same row as a terminal's, so the two sections read as one list
     /// of things rather than two designs.
@@ -3393,11 +3399,10 @@ module Style =
 
     /// A file on its way in: the name a shared one's row will carry, in its type, but `ink-dim`
     /// and not a control — there is nothing to open until the store has it.
-    let uploadName = "min-w-0 truncate font-ui font-light text-[22px] leading-7 text-ink-dim"
+    let uploadName = "min-w-0 truncate font-ui font-light text-body text-ink-dim"
 
-    /// The page's way to send a file in, at its head on every screen: an act (`paneAct`), not
-    /// the blue one — the page is for choosing — and on the same left edge as `allNewCell`.
-    let uploadCell = "self-start px-3 pb-2 phone:[&>button]:min-h-11"
+    /// The sheet's way to send a file in, at the right end of its head.
+    let uploadCell = "ml-auto shrink-0 flex items-center"
 
     /// The block history's scroll box, and the stream inside it.
     ///

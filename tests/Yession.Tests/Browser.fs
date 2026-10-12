@@ -958,7 +958,10 @@ let tests =
                 let hasTab = """!!document.querySelector('[data-terminal-tab]')"""
                 let! _ = await (pageA.WaitForFunctionAsync hasTab)
                 do! awaitU (pageB.Locator("[data-content-toggle='show']").First.ClickAsync ())
-                do! awaitU (pageB.Locator("[data-pane-switcher]").First.ClickAsync ())
+                // The pane may already land on the list (a strip with nothing of B's in it), and
+                // its door toggles, so it is pressed only while the list is not down.
+                do! awaitU (pageB.EvaluateAsync "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+                do! awaitU (pageB.EvaluateAsync "() => document.querySelector(\"[data-pane-switcher][aria-expanded='false']\")?.click()")
                 let! _ = await (pageB.WaitForSelectorAsync "[data-content-list] [data-terminal-list-row]")
                 do! awaitU (pageB.Locator("[data-content-list] [data-terminal-list-row]").First.ClickAsync ())
                 let! _ = await (pageB.WaitForFunctionAsync hasTab)
@@ -1013,7 +1016,10 @@ let tests =
                 let hasTab = """!!document.querySelector('[data-terminal-tab]')"""
                 let! _ = await (pageA.WaitForFunctionAsync hasTab)
                 do! awaitU (pageB.Locator("[data-content-toggle='show']").First.ClickAsync ())
-                do! awaitU (pageB.Locator("[data-pane-switcher]").First.ClickAsync ())
+                // The pane may already land on the list (a strip with nothing of B's in it), and
+                // its door toggles, so it is pressed only while the list is not down.
+                do! awaitU (pageB.EvaluateAsync "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+                do! awaitU (pageB.EvaluateAsync "() => document.querySelector(\"[data-pane-switcher][aria-expanded='false']\")?.click()")
                 let! _ = await (pageB.WaitForSelectorAsync "[data-content-list] [data-terminal-list-row]")
                 do! awaitU (pageB.Locator("[data-content-list] [data-terminal-list-row]").First.ClickAsync ())
                 let! _ = await (pageB.WaitForFunctionAsync hasTab)
@@ -6971,10 +6977,11 @@ let editorTests =
                 Expect.isEmpty faults (sprintf "nothing wider than the screen: %s" (String.Join (", ", faults)))
             }
 
-        // The `all` page is over the preview AND its terminal, so the head that names the
-        // preview goes with the rest of what it covers. Asked of the pane's own text rather
-        // than of a hook, because the fault was the preview's name shown by another surface (a
-        // strip item) than the one that names it now.
+        // The list's sheet is over the preview AND its terminal, so the head that names the
+        // preview is covered with the rest of what it lies over. Asked of the pane's own text
+        // rather than of a hook, because the fault was the preview's name shown by another
+        // surface (a strip item) than the one that names it now — and asked by hit-test,
+        // because the covered head is still laid out under the sheet.
         editorCaseIn 390 844 "on a phone, the all page does not show the preview it is over" <| fun page ->
             async {
                 do! previewSettled page
@@ -6985,7 +6992,11 @@ let editorTests =
                     await (page.EvaluateAsync<bool> (
                             """name => [...document.querySelectorAll('#shell [data-content-panel] *')]
                                  .filter(e => e.children.length === 0 && e.textContent.includes(name))
-                                 .some(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 })""",
+                                 .some(e => {
+                                   const r = e.getBoundingClientRect()
+                                   if (!r.width || !r.height) return false
+                                   const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+                                   return hit !== null && e.contains(hit) })""",
                             box name))
                 Expect.isFalse shown (sprintf "%s is not on the all page" name)
             }
@@ -7057,26 +7068,8 @@ let editorTests =
                 return ()
             }
 
-        // And from a phone's `all` page, whose door stands in for the `+` there. Over that page
-        // the document holds both doors — the `+` hidden by the stylesheet, the page's shown —
-        // so the cursor handed back has to go to the one on the screen: a `display: none`
-        // control takes no focus, and a hand-back to the first door in the document left it on
-        // `body`.
-        editorCaseIn 390 844 "on a phone the all page's door opens the menu, and gives focus back when it shuts" <| fun page ->
-            async {
-                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let door = "#shell [data-content-list] [data-terminal-new]"
-                let! _ = await (page.WaitForSelectorAsync door)
-                do! awaitU (page.Locator(door).PressAsync "Enter")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-pane-new-menu]")
-                do! awaitU (page.Locator("#shell [data-content-list] [data-sandbox-new]").First.FocusAsync ())
-
-                do! awaitU (page.Keyboard.PressAsync "Escape")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-pane-new-menu]")""")
-                do! waitFor "focus back on the page's door" page
-                        (sprintf "document.activeElement?.matches(%s) === true" (System.Text.Json.JsonSerializer.Serialize door))
-            }
+        // (A phone's door used to be the `all` page's, standing in for a `+` the strip hid
+        // there; the strip's `+` is the one door on every screen now, and the case above is it.)
 
         // The menu fits the screen it is on. Only a browser can answer it and the markup is
         // innocent either way: the menu's entries carry what a repo's file says its sandbox is
@@ -7090,15 +7083,12 @@ let editorTests =
         // harness fixture, because the version of this that shipped broken was green against
         // a fixture that said "day-to-day work".
         //
-        // A phone's door is the `all` page's (the pivot's `+` is a desktop control there), so
-        // the menu measured is the one hung from it — scoped to the page, because the hidden
-        // `+` carries a hidden copy that measures nothing and would fit any screen.
+        // The menu measured is the one the strip's `+` hangs, the one door on a phone too.
         editorCaseIn 375 812 "the menu of things to open fits the phone it is on" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                do! awaitU (page.ClickAsync "#shell [data-content-list] [data-terminal-new]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-pane-new-menu]")
+                do! awaitU (page.ClickAsync "#shell [data-pane-new]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-new-menu]")
 
                 // The note is what can push it wide, so a fixture that stopped carrying a long
                 // one would make this pass over nothing. A NAME can push it too, by about
@@ -7107,19 +7097,19 @@ let editorTests =
                 // name with its end cut off.
                 let! longestNote =
                     await (page.EvaluateAsync<int> """() => Math.max(0, ...[...document.querySelectorAll(
-                        "#shell [data-content-list] [data-pane-new-menu] [role='menuitem']")].map(e => e.textContent.trim().length))""")
+                        "#shell [data-pane-new-menu] [role='menuitem']")].map(e => e.textContent.trim().length))""")
                 Expect.isTrue
                     (longestNote > 90)
                     (sprintf "an entry says what its sandbox is for, at length; longest is %d" longestNote)
 
                 let! fits =
                     await (page.EvaluateAsync<bool> """() => {
-                        const m = document.querySelector("#shell [data-content-list] [data-pane-new-menu]").getBoundingClientRect();
+                        const m = document.querySelector("#shell [data-pane-new-menu]").getBoundingClientRect();
                         return m.left >= 0 && m.right <= window.innerWidth;
                     }""")
                 let! box =
                     await (page.EvaluateAsync<string> """() => {
-                        const m = document.querySelector("#shell [data-content-list] [data-pane-new-menu]").getBoundingClientRect();
+                        const m = document.querySelector("#shell [data-pane-new-menu]").getBoundingClientRect();
                         return `left ${Math.round(m.left)}, right ${Math.round(m.right)}, in a ${window.innerWidth}px screen`;
                     }""")
                 Expect.isTrue fits (sprintf "the menu is on the screen: %s" box)
@@ -7279,12 +7269,12 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-list-replay]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-close]")
                 let verbs = "#shell [data-content-list] [role=listitem] button:not([data-terminal-list-row])"
                 let! offered =
                     await (page.EvaluateAsync<string[]> (sprintf """() => [...document.querySelectorAll("%s")]
                         .map(b => b.outerHTML.slice(0, b.outerHTML.indexOf('>')))""" verbs))
-                Expect.isTrue (offered.Length >= 3) (sprintf "a page with verbs on it, or this proves nothing: %A" offered)
+                Expect.isTrue (offered.Length >= 2) (sprintf "a page with verbs on it, or this proves nothing: %A" offered)
                 do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-list-row]")
                 let reached = System.Collections.Generic.HashSet<string> ()
                 let inside = ref true
@@ -7313,14 +7303,19 @@ let editorTests =
                     Expect.isTrue (reached.Contains verb) (sprintf "Tab reaches %s" verb)
             }
 
-        // F5. A closed row's recording is one press from the list, as it is from the closed
-        // tab's own footer: the replay mounts that terminal's recording in the pane.
-        editorCase "a closed row on the all page offers its replay" <| fun page ->
+        // F5. A closed row's recording is reachable from the list: the row opens its terminal,
+        // whose toolbar plays the recording.
+        editorCase "a closed row on the all page leads to its replay" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-list-replay='term-done']")
+                do! awaitU (page.EvaluateAsync "() => document.querySelector(\"#shell [data-pane-switcher][aria-expanded='false']\")?.click()")
+                do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-list-row='term-done']")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
+                // Opened, it is either playing already or one press from it.
+                let! _ =
+                    await (page.WaitForSelectorAsync
+                        "#shell [data-pane-replay='terminal:term-done'], #shell [data-terminal-watch='watch']")
+                do! awaitU (page.EvaluateAsync "() => document.querySelector(\"#shell [data-terminal-watch='watch']\")?.click()")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-replay='terminal:term-done']")
                 return ()
             }
