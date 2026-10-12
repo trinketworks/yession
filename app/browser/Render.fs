@@ -589,7 +589,7 @@ let create (deps: Deps) : Renderer =
     /// The live screens (Plan 14, stage 6): one emulator per terminal this client has a
     /// snapshot for, folded forward from the records the model already holds — and the
     /// size of each terminal's box, measured into the model (which decides what reaches a pty).
-    let screens = Screens.create dispatch
+    let screens = Screens.create dispatch (fun () -> latest)
 
     // The publication rule, one subscription per open terminal. Started when a terminal
     // appears and stopped when it goes, so a closed terminal's rule cannot republish a
