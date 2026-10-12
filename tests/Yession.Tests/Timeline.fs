@@ -3061,13 +3061,13 @@ let private listTests =
             let model = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step ToggleSwitcherMsg
             Expect.isFalse (Support.step ToggleContentMsg model).Switcher "shut with the pane"
 
-        // --- The strip's × (P2-2) ------------------------------------------------------------
+        // --- A terminal's stop, on its row of the list (P2-2) ---------------------------------
 
-        testCase "the strip's × arms a kill on its first press" <| fun () ->
+        testCase "a stop arms on its first press" <| fun () ->
             let model = clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
             Expect.equal (ClientModel.killPress terminalA model) (Some (ArmKillMsg (Some terminalA))) "the first press asks"
 
-        testCase "the strip's × kills on the press after the arming" <| fun () ->
+        testCase "a stop ends the terminal on the press after the arming" <| fun () ->
             let armed =
                 clientOf [ at 1L 0.0 (opened terminalA "build") ]
                 |> Support.step (ShowInPaneMsg (Reading terminalA))
@@ -3141,12 +3141,16 @@ let private listTests =
                 (Dom.attr Dom.Hooks.terminalListDismiss "term-a")
                 "the closed tab's ×, from its row"
 
-        testCase "a running terminal's tab cannot be put away" <| fun () ->
-            // Only a kill ends a tab that holds something running (P2-2); the refusal is the
-            // reducer's, so no control can get round it.
+        testCase "a running terminal's tab can be put away" <| fun () ->
             let model =
                 clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
-            Expect.equal (Support.step (DismissTabMsg terminalA) model).Tabs [ terminalA ] "still there"
+            Expect.equal (Support.step (DismissTabMsg terminalA) model).Tabs [] "gone from the strip"
+
+        testCase "putting a running terminal's tab away ends nothing" <| fun () ->
+            let model =
+                clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let _, effects = ClientModel.update (DismissTabMsg terminalA) model
+            Expect.isFalse (List.contains (ClientEffect.CloseTerminal terminalA) effects) "the terminal still runs"
 
         testCase "the selected closed tab wears a way to put it away, and no kill" <| fun () ->
             let html =
@@ -3161,14 +3165,15 @@ let private listTests =
                 (true, false)
                 "put away, not killed"
 
-        testCase "the selected tab wears its terminal's kill" <| fun () ->
-            // The acceptance: there is no control that drops a tab and leaves its terminal
-            // running. The tab's one destructive control IS the kill.
+        testCase "the selected tab's × closes the tab and offers no kill" <| fun () ->
+            // A × on a tab means close the tab; the stop is the list's.
             let html = Support.render (clientOf [ at 1L 0.0 (opened terminalA "build") ] |> Support.step (ShowInPaneMsg (Reading terminalA)))
-            Expect.stringContains
-                (markupAt "role=\"tablist\"" html)
-                (Dom.attr Dom.Hooks.terminalClose (TerminalId.value terminalA))
-                "the × on the tab is the kill"
+            let pivot = markupAt Dom.Hooks.panePivot html
+            Expect.equal
+                (pivot.Contains (Dom.attr Dom.Hooks.paneTabDismiss (TerminalId.value terminalA)),
+                 pivot.Contains (Dom.attr Dom.Hooks.terminalClose (TerminalId.value terminalA)))
+                (true, false)
+                "closed, not killed"
 
         // --- The switcher's doors (P2-2) -------------------------------------------------------
 
