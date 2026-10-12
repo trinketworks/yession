@@ -52,11 +52,12 @@ Each principle has a test. Apply the test before you change a surface.
 
 Three faces, one rule: **sans is the machine, serif is the person, mono is the terminal.**
 `font-ui` is the chrome and the agent's voice. `font-human` is what a person wrote.
-`font-terminal` is the shell. The typeface says who is talking before a reader reaches the author line.
+`font-terminal` is the shell. The typeface says who is talking before a reader reaches the
+author line.
 
 Every size is a step on the ramp (`text-label` … `text-wordmark`, and `text-code` for mono).
-A step sets the size and the line box together, on the 4px rhythm. Nothing sits off the
-ramp.
+A step sets the size and the line box together, on the rhythm that `app/tokens.css` names for
+the ramp. Nothing sits off the ramp.
 
 The caps voice — `text-label`, `tracking-caps`, semibold — is for short labels, statuses and
 buttons. A stack of caps lines is a wall of text. Where it would form one, let a surface say
@@ -72,19 +73,25 @@ step is one level of nesting or a selection. Three hues mean three things:
 - `err` is wrong. There is at most one red word on screen.
 
 Blue is never a status. A wait is `ink-dim` text. Reconnecting, catching up, queued, looking
-and no agent yet are waits. A wait may lead with a dot. The dot beats if the wait is live. Live
-is `green` text. A running command, a connected peer and a session that runs are live. A record
-of something that finished is `ink`. Wrong is `err`. The one red word on a surface is the
-newest wrong thing. An older wrong thing is a record and wears `ink-dim`.
+and no agent yet are waits. A wait may lead with a dot. The dot beats if the wait is live.
+
+Live is `green` text. A running command, a connected peer and a session that runs are live. A
+record of something that finished is `ink`.
+
+Wrong is `err`. The one red word on a surface is the newest wrong thing. An older wrong thing
+is a record and wears `ink-dim`.
 *Test: count the red words. The count is one or zero.*
 
-People are told apart by square display pics, never by a name colour. The blue→green
-gradient exists exactly once, on the composer's focus edge. It marks the one place where the
-person and the agent meet.
+People are told apart by square display pics, never by a name colour.
 
-A status is text in its colour, with at most a dot. It is never a filled badge and never a boxed
-one. Dimming is a role (`ink-dim`, `ink-faint`), never opacity: opacity breaks the contrast
-floor and dims the focus ring with it.
+The blue→green gradient exists exactly once, on the composer's focus edge. It marks the one
+place where the person and the agent meet.
+
+A status is text in its colour, with at most a dot. It is never a filled badge and never a
+boxed one.
+
+Dimming is a role (`ink-dim`, `ink-faint`), never opacity. Opacity breaks the contrast floor
+and dims the focus ring with it.
 
 ### Form
 
@@ -114,20 +121,23 @@ target. Rows align on the text baseline. Padding is spent outward, so text sits 
 column's rail.
 
 Every column has one rail at `spacing-rail` from its edge. On a phone it is
-`spacing-rail-phone`. Every line of text in the column starts on it. A mark that leads a line hangs in the gutter to the left of the rail. A prompt, a
-reply mark, a fold arrow and a dot are such marks. A mark never pushes the words in. The header
-band is `spacing-band` tall. On a phone it is `spacing-band-phone`. Every head on a surface
-shares the band. The hairline under it runs across every column at one height.
+`spacing-rail-phone`. Every line of text in the column starts on it. A mark that leads a line
+hangs in the gutter to the left of the rail. A prompt, a reply mark, a fold arrow and a dot
+are such marks. A mark never pushes the words in.
 *Test: draw a vertical line on the rail. Every first letter touches it.*
+
+The header band is `spacing-band` tall. On a phone it is `spacing-band-phone`. Every head on a
+surface shares the band. The hairline under it runs across every column at one height.
 
 ### Motion
 
 One vocabulary. Things arrive by sliding a little and fading in, at `pace`, eased out. Press
-is a tilt: in fast, back with a hair of overshoot. Pressed is *held* — the `pressed`
-variant covers `:active` and `aria-busy` — and the control stays filled until the act lands.
+is a tilt: in fast, back with a hair of overshoot. A pressed control is *held* (see State).
+The `pressed` variant covers `:active` and `aria-busy`.
+
 A wait is a beat (`animate-beat`), not a spinner. A dot that beats animates its colour between
-a role and its dim, never its opacity. `motion-reduce` rides every one of them. It
-keeps the fill and drops the geometry.
+a role and its dim, never its opacity. `motion-reduce` rides every one of them. It keeps the
+fill and drops the geometry.
 
 ### State
 
@@ -137,9 +147,8 @@ landing is `aria-busy`. It wears the *held* face, which is the `pressed` variant
 lands. Neither is `disabled`. The attribute `disabled` does not exist in this product.
 *Test: search for `disabled`. It appears nowhere.*
 
-An armed
-control — a destructive act one tap from done — wears the `err` fill at rest. Live is green
-text. Wrong is the one red word.
+An armed control is a destructive act that is one tap from done. It wears the `err` fill at
+rest.
 
 ## Hierarchy of controls
 
@@ -158,9 +167,10 @@ the one closer to the surface's verb keeps its weight, and the other drops one.
 
 There is one bordered face. It is `ring` in the `edge` tone, with `ink` text. Interaction
 brightens the ring. There is no blue-ringed button. Blue text belongs to a link (`askLink`), to
-the fill, and to the composer's Send, which says its verb as a bare blue word. While a flow is under way, its awaited step wears the fill. Every other verb on
-that surface drops to bordered or bare. A verb that rides a listed row is bare and `ink-dim` at
-rest.
+the fill, and to the composer's Send, which says its verb as a bare blue word.
+
+While a flow is under way, its awaited step wears the fill. Every other verb on that surface
+drops to bordered or bare. A verb that rides a listed row is bare and `ink-dim` at rest.
 *Test: list every button face on a surface. Filled, bordered, bare: three at most, each drawn
 one way.*
 
