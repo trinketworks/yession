@@ -1,123 +1,126 @@
 # A session chooses its repository from inside; the Manager offers nothing
 
 > Decided 2026-09-12 · Supersedes nothing · Related:
-> [src/Yession.App/Launch.fs](../../src/Yession.App/Launch.fs) — the surface's state and
-> when it is offered,
-> [app/GitHubRepos.fs](../../app/GitHubRepos.fs) — the listing it chooses from,
-> [app/Commands.fs](../../app/Commands.fs) — `launchRepo`, the act a choice becomes,
+> [src/Yession.App/Launch.fs](../../src/Yession.App/Launch.fs) — the state of the surface and when
+> it is offered. [app/GitHubRepos.fs](../../app/GitHubRepos.fs) — the listing it chooses from.
+> [app/Commands.fs](../../app/Commands.fs) — `launchRepo`, the act that a choice becomes.
 > [2026-08-29-the-manager-relays-hooks-it-cannot-read.md](2026-08-29-the-manager-relays-hooks-it-cannot-read.md)
-> — why the Manager is kept ignorant, which this keeps
+> — why the Manager is kept ignorant, which this decision keeps.
+
+## Context
+
+A session is FOR a repository, and someone must say which one. The create form of the Manager is one
+press with no fields.
+
+Plan 15 retired the add, remove and switch buttons of the Repos panel. Commands mutate and belong to
+the agent, and a human who wants a repo added asks. Before any turn has run, there is nobody to ask.
+The person came to say which repository the session is for, so that choice is theirs to make.
 
 ## Decision
 
-Which repository a session is FOR is chosen **inside the session**, on its first screen,
-by the person who opened it. The Manager's create form stays one press with no fields: it
-launches an empty session, and the session's own launch surface — the repositories the
-person's credential reaches, a search of the provider by name, a link pasted from the
-provider's own pages — produces the one command that begins it (`AddRepo`), through the
-same gate the agent's `add_repo` goes through, attributed to the person.
+The person who opened a session chooses its repository **inside the session**, on its first screen.
+The create form of the Manager stays one press with no fields. It launches an empty session.
 
-The Manager learns nothing new. It does not list repositories, does not hold a
-provider's credential, does not carry a choice into a launch, and does not remember what
-earlier sessions chose.
+The launch surface of the session gives the person three sources:
 
-## What was weighed
+- The repositories that their credential reaches.
+- A search of the provider by name.
+- A link pasted from the pages of the provider.
 
-Three shapes were on the table.
+A choice produces the one command, `AddRepo`, that gives the session its repository. The command
+goes through the same gate as the `add_repo` of the agent, and it is attributed to the person.
 
-**The Manager collects and offers.** Sessions report "launch options" over the control
-channel — opaque `kind/value/label` triples, the `sessionSummaryReport` posture — the
-Manager renders them beside Create, and a pick rides into the launch envelope for the
-session to interpret. One click on the roster for a repeat. But the first session ever has
-nothing to pick; the Manager cannot browse a provider it holds no credential for; every
-new dimension of a launch (a branch, a pull request) is either an opaque string the
-Manager's page cannot validate — a wrong one fails inside the session, far from where it
-was typed — or a shape the Manager has to learn. And a roster page showing "repo: x"
-labels is a Manager that knows what a repo is in every way but the type signature.
+The Manager learns nothing new. It does not list repositories, hold the credential of a provider,
+carry a choice into a launch, or remember what earlier sessions chose.
 
-**A launch surface inside the session.** Everything provider-shaped stays where the
-provider already is: the credential, the sign-in panel, the git gateway, `GitHubPrs.fs`.
-The listing is the person's own recently-pushed repositories, so "recents" cost nothing
-and are never cold; search reaches anything public without the session being told its
-exact name; branches come from the same place. A second forge is a second listing file,
-and "start from pull request #123" is a session change the Manager never sees. What it
-costs is a second press — Create, then choose — and that the picker knows nothing about
-what OTHER sessions chose.
+### Why a human may run this one command
 
-**Both: the surface, plus an opaque "recreate me" relay** the Manager stores and returns
-without parsing, for a "create like…" button on the roster. Deferred rather than refused:
-it is only worth building if roster-page repeat creation proves wanted once the surface
-has been lived with, and the provider's own recency ordering is expected to make it moot.
-Recorded here so the next person does not re-derive it.
+The Plan 15 line stays. One act changes, at one moment. `AddRepo` is admitted only while the session
+has no repo at all. A second repo is still the agent's to add. The surface does not return once
+anything happens. It is the same gated `add_repo` — classified, attributed, on the timeline — with a
+second caller and not a second implementation.
 
-The second shape is what was built.
+### An ask card, not a form
 
-## Why a human may run this one command
+The surface is an **ask card**, docked above the composer where the bands of the queue dock. Its
+anatomy: *who asks · the question · rows to hold · one button · a way out*. The header of
+`Launch.fs` states the principle: choosing is a STATE, and the one button is the only PRESS that
+sends. The anatomy is deliberately general. The agent will use the same shape to ask a person a
+question with several answers.
 
-Plan 15 retired the Repos panel's add, remove and switch buttons: commands mutate and
-belong to the agent, and a human who wants a repo added asks. That line is kept. What
-changes is one act, at one moment: before any turn has run, there is nobody to ask, and
-which repository the session is for is the person's to say — it is the thing they came to
-say. So `AddRepo` is admitted only while the session has no repo at all; a second one is
-still the agent's to add, and the surface does not come back once anything has happened.
-It is the same gated `add_repo` — classified, attributed, on the timeline — with a second
-caller rather than a second implementation.
+- A tap on a row holds it (blue edge, a mark, a lifted ground) and sends nothing. The held row grows
+  a branch field where its description was. Holding several rows later is a list where an option is,
+  not a redesign.
+- The card shows four rows, then "N more".
+- A bare `owner/name` typed into the field searches. A half-typed name still parses as one. An exact
+  name is looked up and answered under the current name that the provider gives it.
+- A link copied from the provider resolves to a row and is held, on the branch it named. The link
+  can be a page, a `tree/<branch>` page, a `pull/<n>` page, or a clone URL. The card asks about a
+  pull request first, because only the provider knows which fork holds its branch.
+- The branch is a field with the branches of the provider to choose from, not a menu. A hundred
+  branches is a list that nobody scrolls. Three letters and a pick is how a person names one. A name
+  that the provider does not have yet is typed the same way (`switch_branch` creates it).
+- The card wears the blue leading edge that a queued command wears, because it means the same thing
+  there: waiting on you. ✕ dismisses it for this client.
 
-## An ask card, not a form
+### What the surface promises, and what it does not
 
-The first cut of the surface was a wizard: choose a row, then a branch, then Start, with
-Back beside it and "start without a repository" below — three stages and three buttons
-over a paragraph explaining them, in a product whose every other act is one line said to
-a composer. The second was a list at the foot of the timeline whose rows launched on tap;
-it read as history rather than a decision, its rows did not look pressable, and thirty of
-them was a page. What stands now is an **ask card**, docked above the composer where the
-queue's bands dock: *who asks · the question · rows to hold · one button · a way out*.
+- **Offer.** Only a client that is connected, has read the log to its end, and found no repo and
+  nothing said sees the surface. A client that is still reading has an empty projection too, and a
+  launch screen that flashed over every cold open of an old session would teach people that it means
+  nothing. `Launch.fs` states this rule.
+- **Names.** A repository chosen here carries the name that the provider gives it. A clone follows a
+  renamed repository through the redirect of the provider. It then keeps an `origin` that the
+  provider no longer answers to by that name. The session that prompted this decision did exactly
+  that, on a guess. The listing is the provider's, so a stale name cannot be picked. `add_repo`
+  asked by name now checks the same fact before it clones.
+- **Sandbox.** The surface does not choose one. What the checkout declares is what runs, as it would
+  for a repo that the agent added.
 
-The anatomy is deliberately general. It is the session asking which repository today, and
-it is the shape the agent will use to ask a person a question with several answers. So
-holding a row is a STATE and starting is a PRESS: tapping a row holds it (blue edge, a
-mark, a lifted ground) and sends nothing; the held row grows a branch field where its
-description was; START is the one thing that sends. Holding several rows later is a list
-where an option is, not a redesign. Four rows are shown, then "N more"; a bare
-`owner/name` typed into the field searches (a name half typed still parses as one, and an
-exact one is looked up and answered under the provider's current name); a link copied
-from the provider — a page, a `tree/<branch>` page, a `pull/<n>` page, a clone URL — is
-resolved to a row and held, on the branch it named. A pull request is asked about first,
-because which fork its branch lives in only the provider knows.
+## Alternatives rejected
 
-The branch is a field with the provider's branches to choose from, not a menu of them: a
-hundred branches is a list nobody scrolls, three letters and a pick is how a person names
-one, and a name the provider has not got yet is typed the same way (`switch_branch`
-creates it).
+**The Manager collects and offers.** Sessions report "launch options" over the control channel, as
+opaque `kind/value/label` triples (the `sessionSummaryReport` posture). The Manager renders them
+beside Create. A pick rides into the launch envelope for the session to interpret. A repeat is one
+click on the roster. It lost for these reasons:
 
-The card wears the blue leading edge a queued command wears, because it means the same
-thing there: waiting on you. ✕ dismisses it for this client; a session that is not about
-a repository begins the way it always did, by saying something.
+- The first session ever has nothing to pick.
+- The Manager cannot browse a provider for which it holds no credential.
+- Every new dimension of a launch (a branch, a pull request) is an opaque string or a new shape. The
+  page of the Manager cannot check an opaque string, so a wrong one fails inside the session, far
+  from where someone typed it. A new shape is something the Manager has to learn.
+- A roster page that shows "repo: x" labels is a Manager that knows what a repo is in every way but
+  the type signature.
 
-## What the surface promises, and what it does not
+**Both: the surface, plus an opaque "recreate me" relay.** The Manager would store the relay and
+return it without parsing it. It would serve a "create like…" button on the roster. We deferred this
+and did not refuse it. It is worth building only if people want repeat creation from the roster page
+after they use the surface for a while. We expect the recency ordering of the provider to make it
+moot.
 
-It is offered only to a client that is connected, has read the log to where the session
-says it ends, and found no repo and nothing said. A client still reading has an empty
-projection too, and a launch screen that flashed over every cold open of an old session
-would teach people it means nothing.
+**Two earlier cuts of the surface.** The first was a wizard. It had three stages (choose a row,
+choose a branch, press Start) and three buttons, with Back beside it and "start without a
+repository" below. A paragraph explained all of that. Every other act in the product is one line
+said to a composer. The second was a list at the foot of the timeline, whose rows launched on tap.
+It read as history and not as a decision. Its rows did not look pressable, and thirty of them made a
+page.
 
-A repository chosen from it is named as the provider names it. That is not a nicety: a
-clone follows a renamed repository's old name through the provider's redirect and keeps an
-`origin` the provider no longer answers to by that name, and the session that prompted all
-this had done exactly that on a guess. The listing is the provider's, so a stale name
-cannot be picked; `add_repo` asked by name now checks the same fact before it clones.
+The surface inside the session won. Everything provider-shaped stays where the provider already is:
+the credential, the sign-in panel, the git gateway, and `GitHubPrs.fs`. The listing is the
+recently-pushed repositories of the person, so "recents" cost nothing and are never cold. Search
+reaches anything public without being told the exact name. Branches come from the same place. A
+second forge is a second listing file. "Start from pull request #123" is a session change that the
+Manager never sees.
 
-It does not choose a sandbox. What the checkout declares is what runs, as it would for a
-repo the agent added.
+## Consequences
 
-## What this costs
-
-A person's command has no tool result for a failure to come back in, so the log gained a
-sibling of `CommandRefused`: `GatedCommandFailed`, recorded by the Host for a launch that
-ran and did not succeed. The agent reads a failure in its tool result and everyone else on
-the `ToolUseFinished` line, which is why the gate records nothing for the agent's commands
-and this is recorded only where nothing else would say it.
-
-And the session's first screen is now a screen, where it used to be a caret. A session
-that is not about a repository — a conversation, a terminal on this machine — begins the
-way it always did, by saying something, with a list above the composer it did not ask for.
+- **A second press.** The person presses Create, then chooses.
+- **No memory across sessions.** The picker knows nothing about what OTHER sessions chose.
+- **A new log event.** A command of a person has no tool result for a failure to come back in. The
+  log therefore gained a sibling of `CommandRefused`: `GatedCommandFailed`. The Host records it for
+  a launch that ran and did not succeed. The agent reads a failure in its tool result. Everyone else
+  reads it on the `ToolUseFinished` line. For that reason the gate records nothing for the commands
+  of the agent, and this event exists only where nothing else would say the failure.
+- **A first screen that is a screen.** It used to be a caret. A session that is not about a
+  repository (a conversation, a terminal on this machine) proceeds the way it always did, by saying
+  something. It now has a list above the composer that it did not ask for.
