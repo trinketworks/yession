@@ -2310,8 +2310,8 @@ let private uiChecklistTests =
                 ((before.Substring named).StartsWith (Dom.attr Dom.Hooks.messageAuthor Dom.Text.agent))
                 "and it is the agent's, because the agent is what queued this"
 
-        // The structure an answer owes a screen reader (CLAUDE.md, UI baseline). Held in the
-        // renderer, so it is held for every query — the reason the surface is generated.
+        // The structure an answer owes a screen reader (src/Yession.App/AGENTS.md, UI baseline).
+        // Held in the renderer, so it is held for every query — the reason the surface is generated.
         //
         // A description list, since a row became a record: at 280px there are no columns to
         // compare down, so a `<table>` would claim a structure the eye cannot see, and it is
@@ -3252,8 +3252,8 @@ let private chromeTests =
                 let isBare = classes.Contains "border-0"
                 Expect.isTrue (isField || isBare) (sprintf "an input is neither the field face nor bare: %s" classes)
 
-        // Every pressable thing has a visible keyboard focus state (AGENTS.md's UI baseline).
-        // The failure this pins is silent by nature: a control with `outline-2` and no
+        // Every pressable thing has a visible keyboard focus state (src/Yession.App/AGENTS.md,
+        // UI baseline). The failure this pins is silent by nature: a control with `outline-2` and no
         // `outline` draws nothing, and you only find out with a keyboard.
         testCase "every button and link declares a visible focus ring" <| fun () ->
             for classes in classesOf [ "button"; "a "; "summary" ] (shell + settingsShell + deviceShell + listShell + noticeShell) do
