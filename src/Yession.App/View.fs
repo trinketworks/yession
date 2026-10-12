@@ -1821,6 +1821,7 @@ module View =
         | BlockFinished (CommandExecutionFailed _) -> Dom.Text.failed
         | BlockFinished (CommandNotRun _) -> Dom.Text.blockDidNotRun
         | BlockFinished (CommandOutcomeUnknown _) -> Dom.Text.blockEnded
+        | BlockRejected ((ActorRef.Session | ActorRef.System), _) -> Dom.Text.blockRefusedPlain
         | BlockRejected (by, _) -> Dom.Text.blockRefusedBy (Entity.actorName model by)
         | BlockEnded _ -> Dom.Text.blockEnded
 
@@ -1863,8 +1864,30 @@ module View =
         // Named, not merely absent. "refused by nick" in line with the commands that ran
         // is the whole reason a refusal mints a block at all — so it is a NAME, resolved like
         // every other person on screen, not the id the hook carries.
+        // The session's own refusals name nobody: there is no person to name, and its token is
+        // internal (`Dom.Text.blockRefusedPlain`).
+        | BlockRejected ((ActorRef.Session | ActorRef.System), _) ->
+            html $"""<span class="{wrong}" data-block-mark="{token}">{Dom.Text.blockRefusedPlain}</span>"""
         | BlockRejected (by, _) ->
             html $"""<span class="{wrong}" data-block-mark="{token}">{Dom.Text.blockRefused} {Entity.render model by (EntityRef.Actor by)}</span>"""
+
+    /// Whether this block is the one its terminal's loss left open (`Projection.openAtLoss`).
+    let private openAtLoss (model: ClientModel) (terminal: TerminalId) (block: Block) : bool =
+        Projection.tryFind terminal model.Terminals
+        |> Option.exists (fun view -> Projection.openAtLoss view block)
+
+    /// A block's hook token where it is drawn — `unknown` for the one a loss left open, which
+    /// is not running so far as anyone can say.
+    let private terminalBlockTokenIn (model: ClientModel) (terminal: TerminalId) (block: Block) : string =
+        if openAtLoss model terminal block then Dom.Text.blockUnknown else terminalBlockStatusLabel block.Status
+
+    /// `terminalBlockStatusIn`, for a block in its terminal: the one a loss left open says it
+    /// may have run, in words and without the pulse, rather than spinning for as long as the
+    /// loss lasts. Waiting, not wrong — the banner says what to do about it.
+    let private terminalBlockStatusAt (current: bool) (model: ClientModel) (terminal: TerminalId) (block: Block) : TemplateResult =
+        if openAtLoss model terminal block then
+            html $"""<span class="{Style.statusWait}" data-block-mark="{Dom.Text.blockUnknown}">{Dom.Text.blockMayHaveRun}</span>"""
+        else terminalBlockStatusIn current model block.Status
 
     let private stretchEndLabel =
         function
@@ -1885,21 +1908,18 @@ module View =
     /// Which hold a queued command is under, and how that hold reads.
     ///
     /// One function because two surfaces say this one fact — the chip in the chat and the
-    /// card in the terminal's own band — and a three-way verdict written twice agrees only
+    /// card in the terminal's own band — and a two-way verdict written twice agrees only
     /// until somebody edits one of them.
     ///
     /// A held act is a WAIT, and the pulse dot is the wait — the word only names the blocker
-    /// (the same status voice every other wait in the product wears). The not-marking banner
-    /// over a held queue already says what resolves it.
+    /// (the same status voice every other wait in the product wears). A terminal whose shell
+    /// cannot run commands holds nothing: the loss refuses its queue, so it has no status here.
     let private pendingStatus (model: ClientModel) (entry: PendingAct) : string * TemplateResult =
-        if ClientModel.awaitsIntegration entry model then
-            Dom.Text.queuedAwaitingIntegration,
-            html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>not marking</span>"""
-        elif ClientModel.awaitsTerminal entry model then
+        if ClientModel.awaitsTerminal entry model then
             Dom.Text.queuedAwaitingTerminal,
             html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>terminal busy</span>"""
         else
-            // Queued is a WAIT, like the two holds above it, so it wears their voice and their
+            // Queued is a WAIT, like the hold above it, so it wears its voice and its
             // dot rather than live green (docs/visual-design.md, Colour). Green said the
             // opposite of what it meant: a queued command is the one thing in the terminal
             // that is NOT running, and it was the only status on the surface wearing live's
@@ -2873,7 +2893,7 @@ module View =
         // in the accessible name and one tap away, not on the line.
         let blockChip (chip: string) (terminalId: TerminalId) (block: Block) =
             let blockId = block.BlockId
-            let status = terminalBlockStatusLabel block.Status
+            let status = terminalBlockTokenIn model terminalId block
             let where = Entity.terminalName model terminalId |> Option.defaultValue (TerminalId.value terminalId)
             let what =
                 match block.Description |> Option.bind BlockDescription.ofProse with
@@ -2887,7 +2907,7 @@ module View =
                         aria-label="{Dom.Text.commandChip (BlockLabel.ofBlock block) (terminalBlockStatusWord model block.Status) where}"
                         @click={Ev(fun _ -> dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Block (terminalId, blockId)))))}>
                   <span class="{Style.chatChipLine}" title="{block.Command}"><span class="{Style.chatChipVerb}">{Dom.Text.ran}</span> {what}</span>
-                  <span class="shrink-0">{terminalBlockStatus model block.Status}</span>
+                  <span class="shrink-0">{terminalBlockStatusAt true model terminalId block}</span>
                 </button>"""
         let stretchItem (stretch: TerminalStretch) =
             let length = durationText (TerminalStretch.duration stretch)
@@ -3174,6 +3194,37 @@ module View =
             ClientModel.pendingActs model
             |> List.map (fun entry ->
                 Some (Authority.author entry.Authority), pendingChip actions dispatch model entry)
+        // The agent's commands a loss refused, said where a person reads the conversation —
+        // which is often not the pane. The refused blocks are on the timeline already, one
+        // chip each; this is the sentence about them, and the way to the terminal. The
+        // terminal's name is the control, never the sentence's subject: a name is often a
+        // long command line, and "dotnet fsi … is paused" read as nonsense.
+        let refusedRows : (ActorRef option * TemplateResult) list =
+            Projection.openTerminals model.Terminals
+            |> List.choose (fun view ->
+                match view.Lost with
+                | None -> None
+                | Some lost ->
+                    let agents =
+                        lost.Refused
+                        |> List.filter (fun act -> Authority.author act.Authority = ActorRef.Agent)
+                    if List.isEmpty agents then None
+                    else
+                        let id = TerminalId.value view.TerminalId
+                        let where = Entity.terminalName model view.TerminalId |> Option.defaultValue id
+                        Some (
+                            None,
+                            html $"""
+                                <article class="{Style.chatPaused}" data-chat-refused="{id}" role="status">
+                                  <span class="{Style.terminalPausedTitle}">{Dom.Text.chatRefused agents.Length}</span>
+                                  <div class="{Style.terminalChoice}">
+                                    <button type="button" class="{Style.bandAct}" data-chat-refused-open="{id}"
+                                            aria-label="{Dom.Text.showTerminal}: {where}"
+                                            @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading view.TerminalId)))}>{Dom.Text.showTerminal}</button>
+                                    <span class="{Style.chatChipSubject}">{where}</span>
+                                  </div>
+                                </article>"""
+                        ))
         let entries : (ActorRef option * TemplateResult) list =
             (rows
              |> List.collect (fun row ->
@@ -3183,6 +3234,7 @@ module View =
                          [ None, chapterRule item ]
                      | _ -> []
                  rule @ Option.toList (entryOf row)))
+            @ refusedRows
             @ pending
         // Consecutive acts by ONE actor fold under one author line — the avatar and name a
         // message used to repeat per turn, said once where the speaker changes. The line is
@@ -3460,7 +3512,7 @@ module View =
             // The shell's own words, which are the whole of why: the line never ran, so there
             // is no output under it to read them in.
             | BlockFinished (CommandNotRun said) ->
-                let said = if said = "" then "the shell refused the line without saying why" else said
+                let said = if said = "" then "The shell rejected the line and gave no reason." else said
                 html $"""<span class="{Style.terminalBlockFact}" data-terminal-block-not-run>{said}</span>"""
             | BlockRunning
             | BlockFinished _
@@ -3490,11 +3542,11 @@ module View =
             | _ -> ""
         html $"""
             <article class="{Style.terminalBlock}" data-terminal-block="{BlockId.value block.BlockId}" style="{landed}"
-                     data-terminal-block-status="{terminalBlockStatusLabel block.Status}">
+                     data-terminal-block-status="{terminalBlockTokenIn model terminal block}">
               <div class="{Style.terminalBlockSummary}" data-terminal-block-command>
                 <div class="{Style.terminalBlockByline}" data-terminal-block-byline>
                   {author}
-                  <span class="{Style.terminalBlockWhen}">{ago}{terminalBlockStatusIn (newestWrong = Some block.BlockId) model block.Status}</span>
+                  <span class="{Style.terminalBlockWhen}">{ago}{terminalBlockStatusAt (newestWrong = Some block.BlockId) model terminal block}</span>
                 </div>
                 <span class="{Style.terminalBlockLine}">
                   <span class="{Style.terminalPrompt}">$</span>
@@ -3769,10 +3821,7 @@ module View =
         let mine = model.Peer.PeerId
         let lease =
             Projection.tryFind terminal model.Terminals |> Option.bind (fun view -> view.Lease)
-        let integrationLost =
-            Projection.tryFind terminal model.Terminals
-            |> Option.map (fun view -> view.IntegrationLost)
-            |> Option.defaultValue false
+        let view = Projection.tryFind terminal model.Terminals
         let editors (author: PeerId) =
             ClientModel.terminalEditorsOf terminal author model
             |> List.map (fun (editor, name) ->
@@ -3871,20 +3920,68 @@ module View =
         // the input comes back. The queue and the lease bar stay — they are about the
         // terminal, which goes on running.
         let commandLines = if ClientModel.isRewound terminal model then rewoundBar else commandInput
-        // Named, not shown as a stall. The queue is held because a command written here could
-        // not be bounded — we would not know when it started or finished — and saying that is
-        // the difference between a terminal that looks broken and one that says what to do.
+        // A terminal that cannot run commands, and the loss refused what was
+        // queued here. Top to bottom, what a person has to know: that, and since when, after
+        // which command; the shell's own words, in the detail note; that the open command may
+        // have run; what was refused; that they can still type here; and the one way on —
+        // a new terminal, where the commands can run.
         let lostBanner =
-            if not integrationLost then Lit.nothing
-            else
+            match view |> Option.bind (fun view -> view.Lost) with
+            | None -> Lit.nothing
+            | Some lost ->
+                let id = TerminalId.value terminal
+                let blocks = view |> Option.map (fun view -> view.Blocks) |> Option.defaultValue []
+                let openBlock = lost.BlockId |> Option.bind (fun blockId -> blocks |> List.tryFind (fun b -> b.BlockId = blockId))
+                // The command the loss happened after, by the name a block wears, cut to a head a
+                // sentence can carry: a long agent command line would otherwise be the banner.
+                let head (block: Block) =
+                    let label = (BlockLabel.ofBlock block).TrimStart ([| '$'; ' ' |])
+                    if label.Length <= 48 then label else label.Substring (0, 47) + "…"
+                let since =
+                    Dom.Text.terminalCannotRunSince
+                        (lost.Evidence |> Option.map (fun evidence -> Moment.stamp evidence.WrittenAt))
+                        (openBlock |> Option.map head)
+                let unknown =
+                    match openBlock with
+                    | Some block when block.Status = BlockRunning ->
+                        html $"""<span class="{Style.small}">{Dom.Text.terminalOpenUnknown (head block)}</span>"""
+                    | _ -> Lit.nothing
+                let printed = lost.Evidence |> Option.map (fun evidence -> Dom.Text.terminalShellPrinted evidence.Said)
+                // The refusals are blocks of their own, on the record beside the loss: the
+                // list reads them, so it says what was actually refused and by whom it was
+                // queued, never what this client guesses was in the queue.
+                let refusedIds = lost.Refused |> List.map (fun act -> Some act.QueueId)
+                let refused =
+                    blocks
+                    |> List.filter (fun b ->
+                        List.contains b.QueueId refusedIds
+                        && (match b.Status with BlockRejected _ -> true | _ -> false))
+                let refusedList =
+                    match refused with
+                    | [] -> Lit.nothing
+                    | refused ->
+                        let line (block: Block) =
+                            let author = Authority.author block.Authority
+                            html $"""
+                                <li class="{Style.terminalHeldRow}" data-terminal-refused="{BlockId.value block.BlockId}">
+                                  <code class="{Style.chatChipCommand}" title="{block.Command}">{BlockLabel.ofBlock block}</code>
+                                  <span class="{Style.small}">{Entity.render model author (EntityRef.Actor author)}</span>
+                                </li>"""
+                        html $"""
+                            <span class="{Style.small}">{Dom.Text.terminalRefusedHere refused.Length}</span>
+                            <ul class="{Style.terminalHeldList}">{refused |> List.map line}</ul>"""
+                let sandbox = view |> Option.bind (fun view -> view.Sandbox) |> Option.defaultValue SandboxRef.defaultRef
                 html $"""
-                    <div class="{Style.terminalBandRow}" data-terminal-lost="{TerminalId.value terminal}" aria-live="polite">
-                      <span class="{Style.smallErr} shrink-0">not marking</span>
-                      <span class="{Style.small}">{Dom.Text.terminalNotMarking}</span>
-                      {detailNote "terminal-lost" [ Dom.Text.terminalNotMarkingWhy ]}
-                      <div class="ml-auto flex items-center gap-2">
-                        <button type="button" class="{Style.bandActPrimary}" data-terminal-rearm="{TerminalId.value terminal}"
-                                @click={Ev(fun _ -> dispatch (RearmTerminalMsg terminal))}>Re-arm</button>
+                    <div class="{Style.terminalPaused}" data-terminal-lost="{id}" role="status" aria-live="polite">
+                      <span class="{Style.terminalPausedTitle}">{Dom.Text.terminalCannotRun}</span>
+                      <span class="{Style.small}">{since}</span>
+                      {detailNote "terminal-lost" ([ Dom.Text.terminalCannotRunWhy ] @ Option.toList printed)}
+                      {unknown}
+                      {refusedList}
+                      <span class="{Style.small}">{Dom.Text.terminalStillTypes}</span>
+                      <div class="{Style.terminalChoice}">
+                        <button type="button" class="{Style.bandActPrimary}" data-terminal-lost-new="{id}"
+                                @click={Ev(fun _ -> dispatch (OpenTerminalMsg ("", sandbox)))}>{Dom.Text.openNewTerminal}</button>
                       </div>
                     </div>"""
         // Stop: ^C to the command running here, the terminal left standing. On top of the
@@ -4111,7 +4208,7 @@ module View =
                         <span class="{Style.terminalPrompt}">$</span>
                         <code class="{Style.terminalCommandText}">{block.Command}</code>
                       </span>
-                      <span class="ml-auto shrink-0">{terminalBlockStatus model block.Status}</span>
+                      <span class="ml-auto shrink-0">{terminalBlockStatusAt true model terminalId block}</span>
                     </div>
                   </div>
                   {body}
@@ -5127,7 +5224,7 @@ module View =
                             if terminalRead model view <> TerminalRead.Blocks && not (ClientModel.isRewound terminal model) then
                                 match Projection.runningBlock view |> Option.orElse (List.tryLast view.Blocks) with
                                 | Some block ->
-                                    html $"""<span class="contents" data-pane-subtitle="terminal"><code class="{Style.panePivotSubtitleCommand}" title="{block.Command}">{BlockLabel.ofBlock block}</code><span class="shrink-0">{terminalBlockStatus model block.Status}</span></span>"""
+                                    html $"""<span class="contents" data-pane-subtitle="terminal"><code class="{Style.panePivotSubtitleCommand}" title="{block.Command}">{BlockLabel.ofBlock block}</code><span class="shrink-0">{terminalBlockStatusAt true model terminal block}</span></span>"""
                                 | None -> Lit.nothing
                             elif not view.IsOpen then html $"""<span class="shrink-0">{Dom.Text.markClosed}</span>"""
                             elif Option.isSome (Projection.runningBlock view) then

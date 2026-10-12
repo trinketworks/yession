@@ -525,20 +525,36 @@ module Events =
                   LostEvidence.Due = get.Required.Field "due" Codec.timestamp.Decode
                   LostEvidence.Said = get.Required.Field "said" Decode.string }) }
 
+    /// One queued act a fact names: its entry, and its authority on the three keys every
+    /// other act carries.
+    let private queuedAct : Codec<QueuedAct> =
+        { Encode =
+            fun (act: QueuedAct) -> Encode.object ([ "queueId", Codec.queueId.Encode act.QueueId ] @ Codec.authorityFields act.Authority)
+          Decode =
+            Decode.map2
+                (fun id authority -> { QueuedAct.QueueId = id; QueuedAct.Authority = authority })
+                (Decode.field "queueId" Codec.queueId.Decode)
+                Codec.authorityOf }
+
     let private terminalIntegrationLost : Codec<TerminalIntegrationLost> =
         { Encode =
             fun (p: TerminalIntegrationLost) ->
                 Encode.object
                     [ "terminalId", Codec.terminalId.Encode p.TerminalId
                       "blockId", Encode.option Codec.blockId.Encode p.BlockId
-                      "evidence", Encode.option lostEvidence.Encode p.Evidence ]
+                      "evidence", Encode.option lostEvidence.Encode p.Evidence
+                      "refused", Encode.list (p.Refused |> List.map queuedAct.Encode) ]
           Decode =
             Decode.object (fun get ->
                 { TerminalIntegrationLost.TerminalId = get.Required.Field "terminalId" Codec.terminalId.Decode
                   TerminalIntegrationLost.BlockId = get.Optional.Field "blockId" Codec.blockId.Decode
                   // Optional on the wire because a log written before the detector said
                   // what it saw has no evidence to read, not because a new one may omit it.
-                  TerminalIntegrationLost.Evidence = get.Optional.Field "evidence" lostEvidence.Decode }) }
+                  TerminalIntegrationLost.Evidence = get.Optional.Field "evidence" lostEvidence.Decode
+                  // Absent from a log written before a loss refused its queue — when it held
+                  // it instead. Empty is what such a line recorded: it refused nothing.
+                  TerminalIntegrationLost.Refused =
+                    get.Optional.Field "refused" (Decode.list queuedAct.Decode) |> Option.defaultValue [] }) }
 
     let private terminalMarkedLate : Codec<TerminalMarkedLate> =
         { Encode =
@@ -592,7 +608,9 @@ module Events =
                 { TerminalIntegrationRestored.TerminalId = get.Required.Field "terminalId" Codec.terminalId.Decode
                   // Absent only from a log written before a terminal could come back on its
                   // own — when the re-arm control was the one way back, so `Rearmed` is what
-                  // such a line recorded, not a guess at it.
+                  // such a line recorded, not a guess at it. The control is gone; the case
+                  // stays for these lines, and so does the `rearmed` spelling above. Nothing
+                  // writes either now.
                   TerminalIntegrationRestored.How =
                     get.Optional.Field "how" integrationRestoredBy.Decode |> Option.defaultValue Rearmed }) }
 

@@ -139,11 +139,11 @@ module TerminalQueueDrain =
         | AwaitingTerminal
         /// A block is already running here. One at a time, per terminal.
         | AwaitingBlock
-        /// The shell stopped emitting marks (Plan 13, stage 2f). Sits beside `AwaitingTerminal`
-        /// because both say the same thing — the pty is not ours to type into — but it is
-        /// reported apart because they resolve differently: one ends when a person finishes,
-        /// this one when somebody re-arms the instrumentation.
-        | AwaitingIntegration
+        /// The shell stopped emitting marks (Plan 13, stage 2f). Why is not known — another
+        /// program may read this pty now, or a venv's `activate` may have overwritten the
+        /// prompt hook. Nothing waits on it — the drain refuses what is queued here
+        /// (`CannotRun`) — so this is only ever seen between an entry landing and its refusal.
+        | CannotRunHere
         /// The terminal is closed, or has nothing queued.
         | NotWaiting
 
@@ -163,7 +163,21 @@ module TerminalQueueDrain =
           /// closing as the reason: the same durable shape a classifier's refusal takes, so
           /// the entry is consumed exactly as a start or a refusal consumes one, and a
           /// replica that never saw the doc removal cannot run it.
-          Orphaned : (TerminalId * PendingAct) list }
+          Orphaned : (TerminalId * PendingAct) list
+          /// Entries queued on a terminal that CANNOT RUN COMMANDS (Plan 13, stage 2f): its
+          /// marks stopped, and nothing can bound a command there. Often some other program —
+          /// ssh, a REPL, `exec sh` — reads its pty now, and a command typed there would go to
+          /// that program, loan and all; the session cannot tell which. They are refused, on
+          /// the record, for `Orphaned`'s reason and that one. Refused rather than
+          /// held, so nobody has to decide later whether an old command is still wanted —
+          /// its author does, by sending it again somewhere else.
+          CannotRun : (TerminalId * PendingAct) list }
+
+    /// Why the drain refused an entry on a terminal that cannot run commands: the reason on
+    /// its `TerminalCommandRejected`, which the agent reads back as the refusal's words and
+    /// a person reads on the block. One sentence of fact, one instruction.
+    let cannotRunReason =
+        "The session cannot tell when commands start or end in this terminal, so it did not run this command. Run the command in a different terminal."
 
 
     /// The gate for ONE terminal, shared by `plan` and `holdOf` so what runs and what the
@@ -193,7 +207,7 @@ module TerminalQueueDrain =
             // Marks are gone, so a command written here could not be bounded: we would not
             // know when it started or finished. Holding is the honest answer — draining into
             // an unmarked shell would produce blocks that never close.
-            elif Set.contains (TerminalId.value terminal) lost then Choice2Of2 AwaitingIntegration
+            elif Set.contains (TerminalId.value terminal) lost then Choice2Of2 CannotRunHere
             else Choice1Of2 (terminal, entry)
 
     /// Why a terminal's head is not running — `None` when it IS about to run. Pure, and asked
@@ -256,6 +270,13 @@ module TerminalQueueDrain =
           Orphaned =
             untaken
             |> List.filter (fun e -> not (isOpen e.Terminal))
+            |> List.sortBy (fun e -> TerminalId.value e.Terminal, e.Order)
+            |> List.map (fun e -> e.Terminal, e)
+          // Every entry, not just the head, and whatever else holds the terminal: the block
+          // the loss left open still makes it busy, and a refusal waits on nothing.
+          CannotRun =
+            untaken
+            |> List.filter (fun e -> isOpen e.Terminal && Set.contains (TerminalId.value e.Terminal) lost)
             |> List.sortBy (fun e -> TerminalId.value e.Terminal, e.Order)
             |> List.map (fun e -> e.Terminal, e) }
 
@@ -361,9 +382,9 @@ module TerminalCommandWait =
             | Some TerminalQueueDrain.AwaitingBlock ->
                 if deadlineElapsed || observation.AheadOutranDeadline then Return (TerminalCommandAwaitingTerminal BehindBlock)
                 else KeepWaiting
-            // Marks are gone here and only a person re-arming brings them back — an unbounded
-            // wait, like an approval, so it returns at once rather than burning a deadline.
-            | Some TerminalQueueDrain.AwaitingIntegration -> Return (TerminalCommandAwaitingTerminal UnmarkedShell)
+            // This terminal cannot run commands, and the drain is about to refuse this entry: the
+            // answer is that refusal, a moment away, so it is waited for like a run.
+            | Some TerminalQueueDrain.CannotRunHere -> if deadlineElapsed then Return TerminalCommandRunning else KeepWaiting
             // Nothing is holding it — it is about to run, or has just been consumed and the
             // block event has not landed yet. Bounded by the process deadline, because what is
             // being waited for is the run.
@@ -678,17 +699,6 @@ module SessionTerminals =
     let internal linesIn (command: string) : int = (command |> Seq.filter ((=) '\n') |> Seq.length) + 1
 
 
-    /// What clears a shell's line editor before the rc is retyped into it on a re-arm. A
-    /// long command line that readline mis-wraps can leave a quote unbalanced, and the
-    /// shell then sits at its PS2 continuation waiting for a close that never comes —
-    /// swallowing every line typed after as more of that command, the rc a re-arm sends
-    /// included, so the re-arm's own instrumentation never runs and the terminal stays
-    /// wedged until it is closed. `^C` abandons the continuation; `^U` clears any partial
-    /// line the editor still holds. Both are controls a shell reads as INPUT — which is
-    /// why the alternate screen and bracketed-paste modes a dead TUI leaves behind are
-    /// NOT reset here: those are the emulator's to clear, and the sequences that do are
-    /// output the shell would only echo back as the next command's first characters.
-    let internal unwedge : string = "\u0003\u0015"
     /// What a block is lent for its act, in the sandbox its terminal runs in. The manager
     /// asks once per block, after the classifier has approved it and before the line is
     /// typed, and puts the answer at the head of the line (`Marks.envLine`) — so a loan is
@@ -758,10 +768,11 @@ module SessionTerminals =
           /// something the caller can do before or after the whole run.
           RunBlock : TerminalId -> PendingAct -> string -> (unit -> unit) -> Async<unit>
           /// Refuse one drained queue entry without running it, on the record: the drain's
-          /// answer to an entry whose terminal closed under it. The same durable shape a
-          /// classifier's refusal takes, attributed to the session, so the entry is consumed
-          /// exactly as a start or a refusal consumes one.
-          Refuse : TerminalId -> PendingAct -> string -> string -> Async<unit>
+          /// answer to an entry whose terminal closed under it, or cannot run commands.
+          /// The same durable shape a classifier's refusal takes, so the entry is consumed
+          /// exactly as a start or a refusal consumes one. `by` is who refused it: the system
+          /// for a closed terminal, the session for one that cannot run commands.
+          Refuse : TerminalId -> PendingAct -> string -> ActorRef -> string -> Async<unit>
           /// Take the terminal's stdin (Plan 13, stage 2e), stealing it from whoever holds it.
           /// Refused only when there is nothing to hold: a terminal that is not open, or a
           /// degraded one with no persistent shell to type into.
@@ -817,9 +828,6 @@ module SessionTerminals =
           /// when it OPENED — and that is held nowhere else. `None` for a terminal that is
           /// not open, whose blocks are not running.
           Activity : TerminalId -> int -> BlockActivity option
-          /// Type the instrumentation into the shell that is there now. Refused when the
-          /// terminal is not lost, or has no persistent shell to type into.
-          Rearm : TerminalId -> Async<Result<unit, string>>
           /// Set (or clear) where a shell opened in one sandbox starts, from now on (Plan 25).
           ///
           /// ONE verb, because the three things it does cannot be separated: an actor able to
@@ -882,7 +890,7 @@ module SessionTerminals =
           Close = fun _ _ _ -> async { return Error "this session has no terminals" }
           Interrupt = fun _ _ -> async { return Error "this session has no terminals" }
           RunBlock = fun _ _ _ _ -> async { return () }
-          Refuse = fun _ _ _ _ -> async { return () }
+          Refuse = fun _ _ _ _ _ -> async { return () }
           Take = fun _ _ -> async { return Error "this session has no terminals" }
           Release = fun _ _ -> async { return Error "this session has no terminals" }
           PeerGone = fun _ -> async { return () }
@@ -895,7 +903,6 @@ module SessionTerminals =
           Lost = fun () -> Set.empty
           Interactive = fun _ -> false
           Activity = fun _ _ -> None
-          Rearm = fun _ -> async { return Error "this session has no terminals" }
           SetProfile = fun _ _ _ -> async { return Error "this session has no terminals" }
           ClearProfilesUnder = fun _ _ -> async { return [] }
           Profiles = fun () -> ShellProfileProjection.empty
@@ -970,6 +977,11 @@ module SessionTerminals =
         // now". Without it those debts sat in the log until some unrelated event looked: a
         // block elsewhere finishing, a turn ending, a restart.
         (mayOweWake: unit -> unit)
+        // What is queued on a terminal and not yet taken, in run order (Plan 13, stage 2f):
+        // what a loss refuses, named on the loss so the wake can read whose it was. The queue
+        // is the doc's and the drain reads the doc, so it is passed down rather than read
+        // here — the manager owns processes, and asks.
+        (queuedOn: TerminalId -> QueuedAct list)
         // How a foreign byte stream is reached (Plan 16, part D). Injected like every other
         // capability, so a session given no provider simply cannot attach one — rather than
         // carrying a client for a thing it will never talk to.
@@ -1034,9 +1046,6 @@ module SessionTerminals =
         /// or by the integration detector giving up, so a shell that never marks the start
         /// cannot have its output swallowed for good.
         let awaitingStart = Collections.Generic.HashSet<string> ()
-        /// The re-arm closure per terminal, built in `openShell` because it needs that
-        /// terminal's nonce and rc — the same ones its output scanner is bound to.
-        let rearmers = Collections.Generic.Dictionary<string, unit -> Async<bool>> ()
         /// Terminals whose shell is idle at a prompt: the last mark seen was `A` with no `C`
         /// after it. The one state a lease can type its loan into — typed into a program
         /// the shell is running it is keystrokes for that program, and the `C` that ends the
@@ -1077,7 +1086,7 @@ module SessionTerminals =
         let nonces = Collections.Generic.Dictionary<string, string> ()
         /// What each open terminal's source declared it can do (Plan 16, part D). Consulted
         /// where a capability is actually USED — before running a block, before resizing —
-        /// rather than being re-derived from whether a rearmer happens to exist.
+        /// rather than being re-derived from whether a shell happens to exist.
         ///
         /// Never removed when a terminal closes. A source's declaration is a fact about the
         /// RECORDING, not about the live device: the questions that read this — can it be
@@ -1321,9 +1330,11 @@ module SessionTerminals =
         /// be invented, and "did not run" would be a guess the agent then acts on by sending
         /// the command again. A block whose start mark DID turn up late is not touched: its
         /// own `D` finishes it with the code the shell gave. Left open instead, as it used to
-        /// be, it held the terminal busy, so even a re-arm released a queue that could not
-        /// move.
-        let restore (id: TerminalId) (how: IntegrationRestoredBy) : Async<unit> =
+        /// be, it held the terminal busy, so the terminal could not run blocks again.
+        ///
+        /// The only way back is the prompt returning (`PromptReturned`). Nothing the loss
+        /// refused is queued again: its author decides whether to send it.
+        let restore (id: TerminalId) : Async<unit> =
             async {
                 let key = TerminalId.value id
                 lost <- Set.remove key lost
@@ -1333,16 +1344,11 @@ module SessionTerminals =
                     awaitingStart.Remove key |> ignore
                     answers.Remove key |> ignore
                     complete (
-                        CommandOutcomeUnknown (
-                            match how with
-                            | Rearmed ->
-                                "the terminal was re-armed before this command was seen to start, so whether it ran is not known"
-                            | PromptReturned ->
-                                "the shell came back to its prompt without this command ever being seen to start, so whether it ran is not known"
-                        )
+                        CommandOutcomeUnknown
+                            "The shell showed its prompt again. The command did not show that it started. It may have run."
                     )
                 | _ -> ()
-                do! append (SessionEvent.TerminalIntegrationRestored { TerminalId = id; How = how })
+                do! append (SessionEvent.TerminalIntegrationRestored { TerminalId = id; How = PromptReturned })
                 reDrain ()
             }
 
@@ -1512,7 +1518,7 @@ module SessionTerminals =
                                         if primary then answers.[key] <- LineAnswer.answered answer
                                 | _ ->
                                     if primary && Set.contains key lost && PromptLedger.caughtUp after then
-                                        Async.StartImmediate (restore id PromptReturned)
+                                        Async.StartImmediate (restore id)
                             for piece in scanned do
                                 match piece with
                                 // What the shell prints between being handed a block's line
@@ -1677,32 +1683,6 @@ module SessionTerminals =
                                 match! started with
                                 | Ok () ->
                                     terminal.Shell <- Some pty
-                                    // The same bootstrap, typed into whatever shell is there
-                                    // NOW. Warp's move for the same problem, minus the rc-file
-                                    // edit — ours is a few lines and the shell is in front of
-                                    // us. Bounded, unlike the open: the shell is already there
-                                    // and a re-arm that does not answer is a shell that will
-                                    // not.
-                                    rearmers.[key] <-
-                                        fun () ->
-                                            async {
-                                                ready.Value <- false
-                                                carry.Value <- ""
-                                                let armed = awaitStart true pty.Exited said
-                                                // Typed into a shell in a state nobody knows,
-                                                // so how many prompts answer it is not known
-                                                // either (`PromptLedger.Unknown`).
-                                                ledgers.[key] <- PromptLedger.Unknown
-                                                // Clear the line editor before the rc goes in: a wedged shell (a PS2
-                                                // continuation left by a mis-wrapped line) swallows the rc otherwise, and
-                                                // the re-arm meant to reclaim the terminal never answers. See `unwedge`.
-                                                pty.Write unwedge
-                                                for line in rc.Split '\n' do
-                                                    pty.Write (line + "\r")
-                                                match! armed with
-                                                | Ok () -> return true
-                                                | Error _ -> return false
-                                            }
                                 | Error (SandboxExited code) when code = profileExit && cwd.IsSome ->
                                     // The directory can go away between being set and being
                                     // opened in — an `rm -rf` in a terminal, an unmounted
@@ -1738,7 +1718,6 @@ module SessionTerminals =
                                             (said ()))
                                     pty.Kill ()
                                     terminal.Shell <- None
-                                    rearmers.Remove key |> ignore
                         }
                     return! start profileCwd
             }
@@ -2019,7 +1998,6 @@ module SessionTerminals =
                     answers.Remove (TerminalId.value id) |> ignore
                     ledgers.Remove (TerminalId.value id) |> ignore
                     nonces.Remove (TerminalId.value id) |> ignore
-                    rearmers.Remove (TerminalId.value id) |> ignore
                     // The SOURCE stays. Everything else here is about a terminal that is
                     // running and this is not: "did its output resolve into blocks" is asked
                     // of the recording too, and answering the default (`true`, for the shells
@@ -2085,16 +2063,16 @@ module SessionTerminals =
         /// with the command snapshotted because the doc entry goes the moment this lands. Two
         /// callers: the classifier saying no inside a run, and the drain finding an entry
         /// whose terminal has closed.
-        let refuse (terminalId: TerminalId) (entry: PendingAct) (command: string) (reason: string) : Async<unit> =
+        let refuse (terminalId: TerminalId) (entry: PendingAct) (command: string) (by: ActorRef) (reason: string) : Async<unit> =
             let entry = attributed entry
             appendAs
-                ActorRef.System
+                by
                 (SessionEvent.TerminalCommandRejected
                     { TerminalId = terminalId
                       QueueId = entry.QueueId
                       BlockId = mintBlockId ()
                       Authority = entry.Authority
-                      RejectedBy = ActorRef.System
+                      RejectedBy = by
                       Command = command
                       Description = entry.Description
                       Reason = Some reason })
@@ -2131,7 +2109,7 @@ module SessionTerminals =
                     // because the queue is editable until this moment.
                     match! classifier (Authority.author entry.Authority) (TerminalAct (terminalId, command)) with
                     | Rejected reason ->
-                        do! refuse terminalId entry command reason
+                        do! refuse terminalId entry command ActorRef.System reason
                         onStarted ()
                         busy <- Set.remove key busy
                         runningAuthor.Remove key |> ignore
@@ -2326,7 +2304,10 @@ module SessionTerminals =
                                                                       Some
                                                                           { WrittenAt = writtenAt
                                                                             Due = writtenAt + integrationWindow
-                                                                            Said = said } })
+                                                                            Said = said }
+                                                                    // Named before the drain
+                                                                    // refuses them, below.
+                                                                    Refused = queuedOn terminalId })
                                                       reDrain ()
                                                       mayOweWake ()
                                                   | _ -> ()
@@ -2410,23 +2391,6 @@ module SessionTerminals =
                     let blockRunning = Set.contains (TerminalId.value id) busy
                     if TerminalLeaseIdle.shouldReclaim idleFor blockRunning (holdOf id) then
                         do! applyLease (TerminalLeases.reclaimIdle id (seqNow id) leases)
-            }
-
-        /// Type the instrumentation into the shell that is there NOW, and report whether it
-        /// answered. On success the queue is released and the drain re-armed.
-        let rearm (id: TerminalId) : Async<Result<unit, string>> =
-            async {
-                let key = TerminalId.value id
-                if not (Set.contains key lost) then return Error "this terminal is not waiting to be re-armed"
-                else
-                    match rearmers.TryGetValue key with
-                    | false, _ -> return Error "this terminal has no interactive shell"
-                    | true, rearmer ->
-                        match! rearmer () with
-                        | false -> return Error "the shell did not answer the instrumentation"
-                        | true ->
-                            do! restore id Rearmed
-                            return Ok ()
             }
 
         let take (id: TerminalId) (by: ActorRef) : Async<Result<unit, string>> =
@@ -3066,7 +3030,6 @@ module SessionTerminals =
                         (clock.Now () - terminal.OpenedAt).TotalSeconds
                         (readTranscript id fromSeq None)
                 | _ -> None
-          Rearm = rearm
           SetProfile = setProfile
           ClearProfilesUnder = clearProfilesUnder
           Profiles = fun () -> profiles
@@ -3121,7 +3084,10 @@ module TerminalScheduler =
           /// Reclaim any lease idle with something queued behind it (Plan 13, stage 3c).
           /// Lives here rather than on the manager because the decision needs the QUEUE, and
           /// the doc is the scheduler's to read — the manager owns processes, not policy.
-          ReclaimIdleLeases : unit -> unit }
+          ReclaimIdleLeases : unit -> unit
+          /// What is queued on a terminal and not yet taken, in run order — what a loss
+          /// refuses. The manager's `queuedOn`, answered here because the queue is the doc's.
+          Queued : TerminalId -> QueuedAct list }
 
     /// `initialConsumed` seeds the log-anchored exactly-once set from the durable log at
     /// boot — every `QueueId` a `TerminalBlockStarted` already names.
@@ -3177,7 +3143,18 @@ module TerminalScheduler =
                     claim entry
                     Async.StartImmediate (
                         async {
-                            do! terminals.Refuse terminal entry command "the terminal was closed before it ran"
+                            do! terminals.Refuse terminal entry command ActorRef.System "the terminal was closed before it ran"
+                            recorded entry
+                        })
+                // Then what is queued on a terminal that cannot run commands: refused by the
+                // session, which is the party that knows the shell is gone, and with words that
+                // say where to run it instead. Consumed as an orphan is.
+                for terminal, entry in plan.CannotRun do
+                    let command = SyncedStateSync.terminalQueuedText doc entry.QueueId
+                    claim entry
+                    Async.StartImmediate (
+                        async {
+                            do! terminals.Refuse terminal entry command ActorRef.Session TerminalQueueDrain.cannotRunReason
                             recorded entry
                         })
                 for terminal, entry in plan.Ready do
@@ -3217,7 +3194,14 @@ module TerminalScheduler =
                     terminal
             Async.StartImmediate (terminals.ReclaimIdle holdOf)
 
-        { Drain = drain; ReclaimIdleLeases = reclaimIdleLeases }
+        let queued (terminal: TerminalId) : QueuedAct list =
+            (SyncedStateSync.ofDoc doc).Pending
+            |> TerminalQueueOrder.sortedFor terminal
+            |> List.filter (fun entry ->
+                not (Set.contains (QueueId.value entry.QueueId) consumed || Set.contains (QueueId.value entry.QueueId) claimed))
+            |> List.map (fun entry -> { QueueId = entry.QueueId; Authority = entry.Authority })
+
+        { Drain = drain; ReclaimIdleLeases = reclaimIdleLeases; Queued = queued }
 
 /// The agent's ONE execution path (Plan 13, stage 3b): queue a command where everyone can see
 /// it, wait as long as it is worth waiting, and answer with what happened.
@@ -3468,7 +3452,11 @@ module TerminalCommands =
                             request.Background
                             request.Stdin
                             request.Description
-                        if not request.Background then return! awaitOutcome terminal handle (clock.Now ()) None None
+                        // A terminal that cannot run commands refuses at once, and the refusal
+                        // is the answer — background or not, because "started" about a
+                        // command that never will is the wrong thing to walk away with.
+                        if not request.Background || Set.contains (TerminalId.value terminal) (terminals.Lost ()) then
+                            return! awaitOutcome terminal handle (clock.Now ()) None None
                         else
                             // Answer with what is true NOW rather than waiting: the caller
                             // said it is not waiting, and the outcome reaches it as a wake

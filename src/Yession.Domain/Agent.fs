@@ -199,9 +199,6 @@ type TerminalHeldBy =
     | BehindQueue
     /// A person holds its stdin. Ends when they finish; not the caller's to hurry.
     | HeldByPerson
-    /// The shell stopped answering the session's marks, so nothing can be bounded there until
-    /// a person re-arms it.
-    | UnmarkedShell
 
 type TerminalCommandStatus =
     /// It ran to an outcome. The ordinary answer.
@@ -1195,6 +1192,15 @@ module AgentWake =
         | CommandFinished -> 3
         | PrChanged _ -> 4
 
+    /// Whose an act a loss refused is, as a wake runs: the principal behind the AGENT's act,
+    /// and nobody for anyone else's. A person's refused command is news to that person, who
+    /// is looking at the banner saying so, not a turn for the agent.
+    let private agentOwner (act: QueuedAct) : Principal option =
+        match act.Authority with
+        | Authority.AgentFor owner -> Some owner
+        | Authority.Own _
+        | Authority.ConfiguredBy _ -> None
+
     /// Why a turn is owed and who it would run as, or `None` when nothing is.
     let pendingReason (events: SessionEvent list) : (WakeReason * Principal) option =
         // Owed reasons are collected rather than short-circuited, because precedence is across
@@ -1293,11 +1299,18 @@ module AgentWake =
                         | Some blk -> pendingCommands |> List.filter (fun (id, _) -> id <> BlockId.value blk)
                         | None -> pendingCommands
                     background, lastAgent, pendingCommands, owed
-                // Only a terminal the agent has worked in, and only the loss — the RESTORE
-                // needs no turn, because a queue that started moving again says so by moving.
+                // A terminal the agent has worked in, or one where the loss refused an act of
+                // the agent's: the second is the agent's queued work refused in somebody
+                // else's terminal, which nothing else would tell it — its turn may have ended
+                // long before. The restore needs no turn: nothing it does is the agent's news,
+                // because nothing the loss refused is run again.
                 | SessionEvent.TerminalIntegrationLost e ->
-                    let owed =
+                    let owner =
                         match Map.tryFind (TerminalId.value e.TerminalId) lastAgent with
+                        | Some owner -> Some owner
+                        | None -> e.Refused |> List.tryPick agentOwner
+                    let owed =
+                        match owner with
                         | Some owner -> better (IntegrationLost e.TerminalId, owner) owed
                         | None -> owed
                     background, lastAgent, pendingCommands, owed

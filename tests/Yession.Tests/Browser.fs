@@ -2591,6 +2591,61 @@ let private paneOnBlocks (page: IPage) : Async<unit> =
 let private numberedLines (prefix: string) (count: int) : string =
     [ for i in 1 .. count -> sprintf "%s %d" prefix i ] |> String.concat "\r\n"
 
+/// `term-harness` stops being able to run commands while a person's build runs there and the
+/// agent's command waits in its queue: the build's start, the loss, and the session's refusal
+/// of the queued command, as the session records them — folded in as they would arrive — and
+/// the queue entry the session takes out of the doc with that refusal.
+let private harnessReplaced (page: IPage) : Async<unit> =
+    let at = DateTimeOffset (2026, 10, 12, 11, 8, 0, TimeSpan.Zero)
+    let expect r = Result.defaultWith failwith r
+    let queued = Yession.Domain.QueueId.create "queue-harness" |> expect
+    let agent =
+        Yession.Domain.Authority.agentFor (Yession.Domain.Principal.Peer (Yession.Domain.PeerId.create "ada" |> expect))
+    let openBlock = Yession.Domain.BlockId.create "block-open" |> expect
+    async {
+      do!
+        foldHarness
+          page
+          [ 899L,
+            Yession.Domain.SessionEvent.TerminalBlockStarted
+                { TerminalId = harnessTerminal "term-harness"
+                  BlockId = openBlock
+                  QueueId = None
+                  Authority = Yession.Domain.Authority.ofAuthor (Yession.Domain.Principal.Peer (Yession.Domain.PeerId.create "ada" |> expect))
+                  Command = "dotnet fsi tasks.fsx build 2>&1 | tail -30"
+                  FromSeq = 0
+                  Background = false
+                  Description = None }
+            900L,
+            Yession.Domain.SessionEvent.TerminalIntegrationLost
+                { TerminalId = harnessTerminal "term-harness"
+                  BlockId = Some openBlock
+                  Evidence = Some { WrittenAt = at; Due = at.AddSeconds 2.0; Said = "sh-5.2$ " }
+                  Refused = [ { QueueId = queued; Authority = agent } ] }
+            901L,
+            Yession.Domain.SessionEvent.TerminalCommandRejected
+                { TerminalId = harnessTerminal "term-harness"
+                  QueueId = queued
+                  BlockId = Yession.Domain.BlockId.create "block-refused" |> expect
+                  Authority = agent
+                  RejectedBy = Yession.Domain.ActorRef.Session
+                  Command = "npm run lint"
+                  Description = Some "Inspect lint and check logs"
+                  Reason = Some Yession.Session.TerminalQueueDrain.cannotRunReason } ]
+      do! Harness.run1 page HarnessPage.withdraw "queue-harness"
+    }
+
+/// How many elements matching `selector` a person can SEE: on the page, scrolled to, and the
+/// thing painted at their centre theirs. Not the count in the markup — a mount clipped to
+/// nothing still measures, and a duplicate in a shut column still matches.
+let private visibleCount (page: IPage) (selector: string) : Async<int> =
+    async {
+        // Brought to the middle of what scrolls it first: one clipped below the fold is still
+        // something a person would see by scrolling, and `visible` only looks at the window.
+        let! _ = Probe.ask page Yession.App.Probes.reveal (selector, "center")
+        return! Probe.visible page selector
+    }
+
 /// The harness terminal's blocks made taller than their box: a running command's three hundred
 /// lines, and every fold in the history open, so the lines are on the page to be scrolled past.
 let private blocksFilled (page: IPage) : Async<unit> =
@@ -4824,6 +4879,82 @@ let editorTests =
         // link's heartbeat on a phone — a busy peer dropped as dead. These used to be one case
         // in the cheap tier, when the CONNECTION held records for a frame; the rule is the
         // render's now, and renders are only countable where there is a page.
+        // A terminal whose shell was replaced (Plan 13, stage 2f): what a person must be able
+        // to READ off the screen, and the way on they must be able to REACH. Hooks and hit
+        // tests, never the words — the copy is the design's to change.
+        testList "A terminal that cannot run commands, on screen" [
+            editorCaseIn 1440 900 "its banner names the command it stopped after" <| fun page ->
+                async {
+                    do! paneOnBlocks page
+                    do! harnessReplaced page
+                    let! said = await (page.Locator("#shell [data-terminal-lost='term-harness']").InnerTextAsync ())
+                    Expect.stringContains said "dotnet fsi tasks.fsx build" "the open command, by its head"
+                }
+
+            editorCaseIn 390 844 "once refused, the agent's command is not shown as queued anywhere" <| fun page ->
+                async {
+                    do! harnessReplaced page
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-refused='term-harness']")
+                    let! chips = visibleCount page "#shell [data-chat-pending='queue-harness'], #shell [data-terminal-queued='queue-harness']"
+                    Expect.equal chips 0 "no queued chip or card for a refused command"
+                }
+
+            editorCaseIn 390 844 "a refusal by the session names no internal actor" <| fun page ->
+                async {
+                    do! harnessReplaced page
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-refused='term-harness']")
+                    let! shown = await (page.Locator("#shell").InnerTextAsync ())
+                    let text = shown.ToLowerInvariant ()
+                    Expect.isFalse (text.Contains "session-process") "the session's token is not a name"
+                }
+            editorCaseIn 1440 900 "its banner lists what the session refused, where a person can see it" <| fun page ->
+                async {
+                    do! paneOnBlocks page
+                    do! harnessReplaced page
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-lost='term-harness']")
+                    let! listed = visibleCount page "#shell [data-terminal-lost='term-harness'] [data-terminal-refused='block-refused']"
+                    Expect.equal listed 1 "the agent's refused command is on the banner, once"
+                }
+
+            editorCaseIn 1440 900 "its banner offers a new terminal, in the same sandbox" <| fun page ->
+                async {
+                    do! paneOnBlocks page
+                    do! harnessReplaced page
+                    do! awaitU (page.ClickAsync "#shell [data-terminal-lost='term-harness'] button[data-terminal-lost-new='term-harness']")
+                    let! opened = Harness.read page HarnessPage.opened
+                    Expect.equal (opened |> Option.map Array.length) (Some 1) "one press, one terminal asked for"
+                }
+
+            // The person who never opens the pane is the one the incident was about: the agent
+            // blocked for hours behind a terminal nobody was looking at.
+            editorCaseIn 390 844 "with the terminal out of sight, the chat says the agent's command was refused" <| fun page ->
+                async {
+                    do! harnessReplaced page
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-refused='term-harness']")
+                    let! said = visibleCount page "#shell [data-chat-refused='term-harness']"
+                    Expect.equal said 1 "the conversation carries it, once"
+                }
+
+            editorCaseIn 390 844 "the chat's row reaches the terminal" <| fun page ->
+                async {
+                    do! harnessReplaced page
+                    do! awaitU (page.ClickAsync "#shell [data-chat-refused-open='term-harness']")
+                    do! waitPresent "the pane to show the terminal" page "#shell [data-terminal-lost='term-harness']"
+                }
+
+            // The word a person never needs: the marks are the session's mechanism, and a queue
+            // chip that said "not marking" named it to someone with nothing to do about it.
+            editorCaseIn 390 844 "nothing on screen says marking or re-arm" <| fun page ->
+                async {
+                    do! harnessReplaced page
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-refused='term-harness']")
+                    let! shown = await (page.Locator("#shell").InnerTextAsync ())
+                    let text = shown.ToLowerInvariant ()
+                    Expect.isFalse (text.Contains "marking") "no marking"
+                    Expect.isFalse (text.Contains "re-arm") "no re-arm"
+                }
+        ]
+
         testList "The page draws at most once a frame" [
             editorCase "a burst of live records costs a render per frame, not one per record" <| fun page ->
                 async {

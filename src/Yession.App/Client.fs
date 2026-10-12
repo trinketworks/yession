@@ -254,7 +254,6 @@ module Client =
             match effect with
             | ClientEffect.TakeTerminal terminal -> ask (TakeTerminalLease terminal)
             | ClientEffect.ReleaseTerminal terminal -> ask (ReleaseTerminalLease terminal)
-            | ClientEffect.RearmTerminal terminal -> ask (RearmTerminal terminal)
             | ClientEffect.ReattachTerminal terminal -> ask (ReattachTerminal terminal)
             | ClientEffect.CloseTerminal terminal -> ask (CloseTerminal terminal)
             | ClientEffect.InterruptTerminal terminal -> ask (InterruptTerminal terminal)

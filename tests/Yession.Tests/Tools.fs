@@ -336,10 +336,32 @@ let private sessionTests =
             Expect.stringContains said "open_terminal" "but the agent can work elsewhere"
         }
 
-        test "the four waits read as four different answers" {
+        test "the three waits read as three different answers" {
             let says wait = AgentTools.renderOutcome { elided None with Status = TerminalCommandAwaitingTerminal wait; Output = "" }
-            let answers = [ BehindBlock; BehindQueue; HeldByPerson; UnmarkedShell ] |> List.map says
-            Expect.equal (List.distinct answers |> List.length) 4 "none collapses into another"
+            let answers = [ BehindBlock; BehindQueue; HeldByPerson ] |> List.map says
+            Expect.equal (List.distinct answers |> List.length) 3 "none collapses into another"
+        }
+
+        // Refused because its terminal cannot run commands, the command itself is fine: the agent is
+        // told to run it elsewhere — not, as a classifier's refusal says, not to run it at all.
+        test "a command refused because its terminal cannot run commands says where to run it instead" {
+            let said =
+                AgentTools.renderOutcome
+                    { elided None with
+                        Status = TerminalCommandRefused (ActorRef.Session, Some TerminalQueueDrain.cannotRunReason)
+                        Output = "" }
+            Expect.stringContains said "REFUSED" "the verdict an agent keys on"
+            Expect.stringContains said TerminalQueueDrain.cannotRunReason "with the reason, whole"
+            Expect.stringContains said "open_terminal" "and the tool that opens somewhere it can run"
+        }
+
+        test "a command refused because its terminal cannot run commands is not told never to run it" {
+            let said =
+                AgentTools.renderOutcome
+                    { elided None with
+                        Status = TerminalCommandRefused (ActorRef.Session, Some TerminalQueueDrain.cannotRunReason)
+                        Output = "" }
+            Expect.isFalse (said.Contains "do not try to run it another way") "running it elsewhere is the point"
         }
 
         // Two invariants, because they fail at different times and their reds mean different

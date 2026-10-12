@@ -3318,10 +3318,10 @@ module Style =
     /// The one act a surface is FOR — the empty pane's way to make a terminal: blue, which is
     /// what interactive means here, and nothing louder than that.
     let paneActPrimary = cls [ paneActBase; "text-pivot leading-6 text-blue hover:text-blue-up-1" ]
-    /// An act inside a line of the command band (the lease bar, "not marking"): the same word
+    /// An act inside a line of the command band (the lease bar, the cannot-run notice): the same word
     /// at the size of the line it sits in, so it reads as part of the sentence it ends.
     let bandAct = cls [ paneActBase; "text-body text-ink-dim hover:text-ink phone:min-h-11" ]
-    /// The band act the line is asking for: handing the keyboard back, re-arming marking.
+    /// The band act the line is asking for: handing the keyboard back, opening a new terminal.
     let bandActPrimary = cls [ paneActBase; "text-body text-blue hover:text-blue-up-1 phone:min-h-11" ]
 
     /// A state said in words, in the pane: lowercase as written, small and light — a caption,
@@ -3780,9 +3780,25 @@ module Style =
     /// its own row is not showing (`composer`, above).
     let terminalComposer = composerBand + " phone:pb-4"
 
-    /// A row in the band that is not the command line — the lease bar, the "not marking"
+    /// A row in the band that is not the command line — the lease bar, the cannot-run
     /// notice. They used to inherit the section's padding; the band has none.
     let terminalBandRow = "flex items-center gap-2 px-3 py-2 phone:[&>button]:min-h-11"
+
+    /// A terminal that cannot run commands: not one line but a short read, top to bottom —
+    /// what happened, when, what was refused, and the way on. Stacked rather than squeezed
+    /// onto the band's one row, because a phone has no room for it beside a control.
+    let terminalPaused = "flex flex-col gap-1.5 px-3 py-2 min-w-0"
+    /// Its first sentence: the caption's size in full ink — it is news, not a state at rest.
+    let terminalPausedTitle = "min-w-0 font-ui font-normal text-small text-ink"
+    /// What was refused: an indented list, no rule beside it — borders are for fields and
+    /// buttons.
+    let terminalHeldList = "m-0 pl-3 list-none flex flex-col gap-1 min-w-0"
+    /// One refused command: what it was, and who queued it.
+    let terminalHeldRow = "flex items-center gap-2 flex-wrap min-w-0"
+    /// An act and its label, on one line that wraps on a phone.
+    let terminalChoice = "flex items-baseline gap-2 flex-wrap min-w-0 phone:[&>button]:min-h-11"
+    /// The chat's row for the agent's refused commands: the same read, in the column.
+    let chatPaused = "flex flex-col gap-1.5 py-2 min-w-0"
 
     /// The notice to the person a terminal's keyboard was taken from (`ClientModel.Stolen`),
     /// in the lease bar's place: one sentence and the two answers to it. Said in full ink and

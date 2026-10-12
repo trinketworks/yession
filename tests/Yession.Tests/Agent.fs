@@ -965,10 +965,14 @@ let private blockStartedIn (id: TerminalId) (n: string) (background: bool) (owne
           Background = background }
 
 let private integrationLost (id: TerminalId) =
-    SessionEvent.TerminalIntegrationLost { TerminalId = id; BlockId = None; Evidence = None }
+    SessionEvent.TerminalIntegrationLost { TerminalId = id; BlockId = None; Evidence = None; Refused = [] }
 
 let private closedNow (id: TerminalId) =
     SessionEvent.TerminalClosed { TerminalId = id; Reason = "the source went away"; By = None }
+
+/// A loss that refused these acts.
+let private lostRefusing (id: TerminalId) (refused: QueuedAct list) =
+    SessionEvent.TerminalIntegrationLost { TerminalId = id; BlockId = None; Evidence = None; Refused = refused }
 
 let private prWatcher = Principal.Peer (PeerId.create "ada" |> expect)
 let private watchedPr = PrRef.create (RepoRef.create "octo/hello" |> expect) 12 |> expect
@@ -1186,6 +1190,32 @@ let private vocabularyTests =
                  |> Option.map snd)
                 (Some (Principal.Peer bob))
                 "still bob's, one turn on"
+
+        // The incident: the agent's command queued in a terminal it never ran anything in,
+        // which a person's command then lost. The loss was owed only to an agent that had
+        // worked there, so nothing told this one its command would never run.
+        testCase "a loss that refused the agent's queued command owes it a turn, though it never ran there" <| fun () ->
+            Expect.equal
+                (AgentWake.pendingReason
+                    [ turnStarted "1"
+                      openedIn terminalB (Some SandboxRef.defaultRef)
+                      lostRefusing
+                          terminalB
+                          [ { QueueId = QueueId.create "q-1" |> expect; Authority = Authority.ofAuthor (Principal.Peer ada) }
+                            { QueueId = QueueId.create "q-2" |> expect; Authority = Authority.agentFor (Principal.Peer bob) } ] ])
+                (Some (IntegrationLost terminalB, Principal.Peer bob))
+                "told its command was refused, as the party it was queued for"
+
+        testCase "a loss that refused only a person's command owes the agent nothing" <| fun () ->
+            // The person is looking at a banner saying so; the agent has no work there.
+            Expect.isNone
+                (AgentWake.pendingReason
+                    [ turnStarted "1"
+                      openedIn terminalB (Some SandboxRef.defaultRef)
+                      lostRefusing
+                          terminalB
+                          [ { QueueId = QueueId.create "q-1" |> expect; Authority = Authority.ofAuthor (Principal.Peer ada) } ] ])
+                "not the agent's news"
     ]
 
 // --- The arm (Plan 20, stage 2): the wake, wired to the scheduler that runs it -------------

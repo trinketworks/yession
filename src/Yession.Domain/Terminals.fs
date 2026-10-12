@@ -187,10 +187,12 @@ type TerminalView =
       /// live mode: there is no separate mode flag, because a mode nobody holds and a lease
       /// nobody holds would be two names for one fact, free to disagree.
       Lease : ActorRef option
-      /// Whether the shell has stopped emitting marks (Plan 13, stage 2f). While true the
-      /// Process cannot tell when a command starts or finishes here, so the queue is held and
-      /// the surface says so — a stall with a name beats a stall.
-      IntegrationLost : bool
+      /// The loss, while the shell has stopped emitting marks (Plan 13, stage 2f). While it
+      /// lasts the Process cannot tell when a command starts or finishes here, so nothing
+      /// queued runs here — the loss refuses it — and the surface says so. The fact
+      /// itself rather than a flag, because a person deciding what to do about it needs what
+      /// it carries: when, after which command, and what the shell said.
+      Lost : TerminalIntegrationLost option
       /// Blocks in the order they ran.
       Blocks : Block list
       /// Output this terminal produced that the transcript did not keep. Non-zero means
@@ -340,7 +342,7 @@ module Projection =
                           IsOpen = true
                           Closed = None
                           Lease = None
-                          IntegrationLost = false
+                          Lost = None
                           Blocks = []
                           DroppedBytes = 0 } ] }
         | SessionEvent.TerminalClosed e ->
@@ -430,9 +432,9 @@ module Projection =
                                   StoppedBy = None
                                   StartedAt = at } ] })
         | SessionEvent.TerminalIntegrationLost e ->
-            proj |> updateTerminal e.TerminalId (fun t -> { t with IntegrationLost = true })
+            proj |> updateTerminal e.TerminalId (fun t -> { t with Lost = Some e })
         | SessionEvent.TerminalIntegrationRestored e ->
-            proj |> updateTerminal e.TerminalId (fun t -> { t with IntegrationLost = false })
+            proj |> updateTerminal e.TerminalId (fun t -> { t with Lost = None })
         | SessionEvent.TerminalTranscriptTruncated e ->
             proj |> updateTerminal e.TerminalId (fun t -> { t with DroppedBytes = t.DroppedBytes + e.DroppedBytes })
         | _ -> proj
@@ -449,6 +451,15 @@ module Projection =
     /// directory and environment mean anything from one command to the next.
     let runningBlock (view: TerminalView) : Block option =
         view.Blocks |> List.tryFind (fun b -> b.Status = BlockRunning)
+
+    /// Whether `block` is the one a loss left open: still running on the record, which is
+    /// exactly what was lost — nothing will say how it ended while the loss lasts, and whether
+    /// it started at all is not known either. A surface drawing it as running would be a
+    /// spinner over something that may long be over; the restoration settles it
+    /// (`CommandOutcomeUnknown`) or its own late marks do.
+    let openAtLoss (view: TerminalView) (block: Block) : bool =
+        block.Status = BlockRunning
+        && view.Lost |> Option.exists (fun lost -> lost.BlockId = Some block.BlockId)
 
 /// What a block is CALLED on a screen: the part of its command that does the work.
 ///

@@ -318,7 +318,19 @@ and TerminalIntegrationLost =
       BlockId : BlockId option
       /// What the detector had in hand when it fired. `None` only for a log written before
       /// it said — there is no honest value to invent for a moment nobody recorded.
-      Evidence : LostEvidence option }
+      Evidence : LostEvidence option
+      /// What was queued here when the loss was declared, in run order — every act the loss
+      /// refuses (`TerminalCommandRejected`, by the session, beside this). Recorded here as
+      /// well because the one party who most needs to know an act of theirs did not run — the
+      /// agent, woken for it (`AgentWake`) — reads whose it was off this fact. Empty for a log
+      /// written before the loss said.
+      Refused : QueuedAct list }
+
+/// A queued act, as a fact can name it: which entry, and whose. The command line is not here:
+/// it is collaborative text until the act runs, and the refusal snapshots it.
+and QueuedAct =
+    { QueueId : QueueId
+      Authority : Authority }
 
 /// What was known at the moment a terminal was declared lost — enough to say, off the log
 /// alone, which side was silent. The fact without it read the same for a shell that had
@@ -364,7 +376,8 @@ and TerminalBlockInterrupted =
     { TerminalId : TerminalId
       BlockId : BlockId
       By : ActorRef }
-/// Marking is back (Plan 13, stage 2f), and `How` says what showed it.
+/// Marking is back (Plan 13, stage 2f), and `How` says what showed it. The terminal runs
+/// blocks again from here. Nothing the loss refused is queued again: its author decides.
 
 and TerminalIntegrationRestored =
     { TerminalId : TerminalId
@@ -372,9 +385,12 @@ and TerminalIntegrationRestored =
 
 /// What brought a lost terminal's marks back.
 and IntegrationRestoredBy =
-    /// A peer used the re-arm control and the shell that is actually there now answered the
-    /// instrumentation typed into it. Every restoration before the other case existed was
-    /// this one, which is what a log that does not say reads as.
+    /// A person typed the instrumentation into the shell that was there, and it answered.
+    /// Only in a log written while that control existed — it no longer does, because a
+    /// terminal whose marks stopped may be read by some other program (ssh, a REPL, `exec sh`),
+    /// and typing our rc into it would hand that program every later block's loan. Kept so
+    /// those logs still read; a line that does not say how decodes as this, the one way
+    /// back there then was.
     | Rearmed
     /// Nobody did anything to the instrumentation: the shell printed a primary prompt with
     /// this terminal's nonce in it, having answered every line it was handed — which only

@@ -382,7 +382,6 @@ module Refusal =
         | InterruptTerminal _
         | TakeTerminalLease _
         | ReleaseTerminalLease _
-        | RearmTerminal _
         | ReattachTerminal _ -> true
         | InterruptAgentTurn _
         | ApproveRepoCapabilities _
@@ -2192,9 +2191,6 @@ type ClientMsg =
     /// Hand a terminal this peer holds back to block mode. Refused by the session unless this
     /// peer is the holder.
     | ReleaseTerminalMsg of TerminalId
-    /// Type the shell instrumentation in again after a terminal stopped marking (Plan 13,
-    /// stage 2f). Any peer may — it repairs rather than takes.
-    | RearmTerminalMsg of TerminalId
     /// Ask the provider for a closed terminal's stream again (Plan 19, step 4).
     | ReattachTerminalMsg of TerminalId
     /// End a terminal — the one verb that stops what runs in it, the list's stop (P2-2).
@@ -2251,7 +2247,6 @@ type ClientMsg =
 type ClientEffect =
     | TakeTerminal of TerminalId
     | ReleaseTerminal of TerminalId
-    | RearmTerminal of TerminalId
     | ReattachTerminal of TerminalId
     | CloseTerminal of TerminalId
     | InterruptTerminal of TerminalId
@@ -3593,15 +3588,6 @@ module ClientModel =
         Projection.tryFind entry.Terminal model.Terminals
         |> Option.bind (fun view -> view.Lease)
         |> Option.isSome
-
-    /// Whether a queued command is held because its terminal's shell stopped emitting marks
-    /// (Plan 13, stage 2f) rather than because a peer is typing there. Apart again for the
-    /// same reason: they resolve differently — one when a person finishes, this one when
-    /// somebody repairs the terminal.
-    let awaitsIntegration (entry: PendingAct) (model: ClientModel) : bool =
-        Projection.tryFind entry.Terminal model.Terminals
-        |> Option.map (fun view -> view.IntegrationLost)
-        |> Option.defaultValue false
 
     /// Who is editing a terminal composer right now, by their live caret.
     let terminalEditorsOf (terminal: TerminalId) (author: PeerId) (model: ClientModel) : (ActorRef * string) list =
@@ -5229,7 +5215,6 @@ module ClientModel =
             { model with Agent = { model.Agent with Interrupting = Some turn } }
         | TakeTerminalMsg _
         | ReleaseTerminalMsg _
-        | RearmTerminalMsg _
         | ReattachTerminalMsg _
         | InterruptTerminalMsg _
         | ApproveRepoCapabilitiesMsg _ -> model
@@ -5444,7 +5429,6 @@ module ClientModel =
                 |> Option.map (fun stolen -> ClientEffect.Move (DomMove.FocusCommandLine stolen.Terminal))
                 |> Option.toList
             | ReleaseTerminalMsg terminal -> [ ClientEffect.ReleaseTerminal terminal ]
-            | RearmTerminalMsg terminal -> [ ClientEffect.RearmTerminal terminal ]
             | ReattachTerminalMsg terminal -> [ ClientEffect.ReattachTerminal terminal ]
             | CloseTerminalMsg terminal -> [ ClientEffect.CloseTerminal terminal ]
             // Asked only of a terminal with a block running: Ctrl-C in an empty command line
