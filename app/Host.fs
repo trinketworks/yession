@@ -31,6 +31,10 @@ let private activityBeat = TimeSpan.FromSeconds 30.0
 /// Well under `TerminalLeaseIdle.window`, so the overshoot is bounded by the beat.
 let private idleLeaseBeat = TimeSpan.FromSeconds 30.0
 
+/// How often the attachment rules are asked what to delete (`StagedAttachments.sweep`). Well
+/// under `Attachments.grace`, so an orphan outlives its grace by at most this.
+let private attachmentSweepBeat = TimeSpan.FromMinutes 1.0
+
 type SessionHost =
     { SessionId : SessionId
       /// Mint an unattributed peer token valid for this process — what tests/headless
@@ -78,6 +82,12 @@ type SessionHost =
       /// should happen to a notification is composed later — out of the services the entry
       /// module builds after the Host is up. Until it is set, a notification is logged.
       SetNotificationHandler : NotificationHandler -> unit
+      /// Where attached files wait for their message (`StagedAttachments.Staging`). Set once,
+      /// from SessionMain, which composes the artifact store a layer above this.
+      SetStaging : StagedAttachments.Staging -> unit
+      /// Look at the message queue now. For the one thing outside the doc that can make a
+      /// waiting message sendable: an attached file arriving.
+      Drain : unit -> unit
       /// Ask the scheduler to look for owed work now (Plan 20). Exposed for the one
       /// producer that appends outside every path that already wakes: the pull-request
       /// poller, whose transitions land on a timer rather than behind a block or a turn.
@@ -722,9 +732,21 @@ let startFull
         // The queue drain and turn scheduler (Phase 3) — the real machinery lives in
         // `Scheduler` (shared with the property harness); the Host wires it to this
         // session's doc, log, environment capabilities, and command surface.
+        // Where attached files wait for their message (`StagedAttachments`). Set from
+        // SessionMain, which composes the artifact store after this host is up; until then
+        // nothing has arrived, and a message with an attachment waits.
+        let stagingRef = ref StagedAttachments.none
+        let staging : StagedAttachments.Staging =
+            { Arrived = fun upload -> stagingRef.Value.Arrived upload
+              Share = fun actor name upload -> stagingRef.Value.Share actor name upload
+              Listed = fun () -> stagingRef.Value.Listed ()
+              Discard = fun upload -> stagingRef.Value.Discard upload }
         let scheduler =
-            Scheduler.create sessionId doc log runAgent capabilitiesFor emitUsage mintTurnId mintMessageId principalFor transcripts.ReadRange Yession.Domain.Chat.TurnPolicy.addressed initialConsumed
+            Scheduler.create sessionId doc log runAgent capabilitiesFor emitUsage mintTurnId mintMessageId principalFor transcripts.ReadRange Yession.Domain.Chat.TurnPolicy.addressed staging initialConsumed
         let drain () = scheduler.Drain ()
+        let sweepAttachments () = StagedAttachments.sweep doc staging (clock.Now ())
+        // The attachment rules decide what goes; this beat is only how often they are asked.
+        let stopAttachmentSweep = Clock.every clock attachmentSweepBeat sweepAttachments
         let requestInterrupt = scheduler.RequestInterrupt
         wakeScheduler <- scheduler.Wake
 
@@ -1172,6 +1194,14 @@ let startFull
               SetApproveCapabilities = fun approve -> approveCapabilitiesRef.Value <- approve
               SetLaunchRepo = fun launch -> launchRepoRef.Value <- launch
               SetNotificationHandler = fun handle -> notificationHandler.Value <- Some handle
+              SetStaging =
+                fun store ->
+                    stagingRef.Value <- store
+                    // What a previous process left: entries and files nothing wants now,
+                    // and messages whose files arrived before it stopped.
+                    sweepAttachments ()
+                    drain ()
+              Drain = drain
               // Both looks, because both wait on the same thing a caller has: a credential
               // that has just arrived is work for the scheduler AND work for the namer, and
               // a caller that had to know which is a caller that will pick one.
@@ -1185,6 +1215,7 @@ let startFull
                 fun () ->
                     async {
                         stopIdleLeaseBeat ()
+                        stopAttachmentSweep ()
                         // Before the connections close, because a pass in flight is still
                         // sending carets down them and `closeConnections` waits for each to
                         // report itself closed — a writer that went on writing into a

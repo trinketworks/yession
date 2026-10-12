@@ -124,6 +124,25 @@ module BodyKey =
     /// already names its terminal, and the key must not change when the text is edited.
     let terminalQueued (id: QueueId) : string = "term-queue:" + QueueId.value id
 
+/// A file attached to a message that has not been sent yet.
+///
+/// Attached to the message's QUEUE KEY rather than to its author's slot: a draft carries the
+/// key it becomes when sent (`DraftState.QueueId`), so a send moves nothing here — the same
+/// entry is the draft's attachment before the send and the queued message's after it, and a
+/// co-editor's send carries it exactly as it carries the body.
+///
+/// The bytes are not here. They go to the session over HTTP (`UploadId` names them on the way)
+/// and wait in a staging area nobody else can see until the drain makes them artifacts.
+type Attachment =
+    { Upload   : UploadId
+      QueueId  : QueueId
+      /// The artifact name the file is shared under when the message is sent
+      /// (`ArtifactRef.nameFor` of what was picked).
+      Name     : string
+      Bytes    : int64
+      /// Who attached it — and the only browser that holds its bytes until they arrive.
+      Uploader : PeerId }
+
 type SharedBrief = { Body : string }
 
 /// Collaborative state synced via Ylmish.
@@ -175,7 +194,10 @@ type SyncedSessionState<'Text> =
       /// a repo added and a message sent each retire the card for everybody, so "none" does
       /// too, and it stays answered across a reload rather than being asked again of a
       /// person who already said no. Only ever set; the agent can still add a repo later.
-      LaunchDismissed : bool }
+      LaunchDismissed : bool
+      /// Files attached to drafts and queued messages, keyed by the id the uploading browser
+      /// minted — so two people attaching at once, even across a partition, never collide.
+      Attachments : Map<UploadId, Attachment> }
 
 module SyncedSessionState =
 
@@ -190,7 +212,77 @@ module SyncedSessionState =
           Pending = Map.empty
           Model = None
           Chapters = Map.empty
-          LaunchDismissed = false }
+          LaunchDismissed = false
+          Attachments = Map.empty }
+
+/// What the session does about attached files, as rules over the synced state: when a queued
+/// message may be sent, what it says about its files when it is, and which files nothing wants
+/// any more. The staging store and the sweep that act on these answers are mechanisms; the
+/// answers are the attachment feature's, and live with the state they are about.
+module Attachments =
+
+    /// How long a staged file nothing refers to is kept before it is deleted. An upload and
+    /// the doc edit that names it travel separately — HTTP and the data channel — so the bytes
+    /// can land first, and must not be swept in the moment before their entry arrives.
+    let grace = System.TimeSpan.FromMinutes 10.0
+
+    /// One message's attachments, in the order its addresses are written: by name, the id
+    /// breaking a tie, so every replica and every retry of a drain says them in one order.
+    let ofMessage (queueId: QueueId) (attachments: Map<UploadId, Attachment>) : Attachment list =
+        attachments
+        |> Map.toList
+        |> List.map snd
+        |> List.filter (fun a -> a.QueueId = queueId)
+        |> List.sortBy (fun a -> a.Name, UploadId.value a.Upload)
+
+    /// The queue keys an attachment can still be sent with: every draft's and every queued
+    /// message's. An attachment to anything else belongs to a draft that was thrown away or a
+    /// message that has already gone.
+    let private live (state: SyncedSessionState<'Text>) : Set<QueueId> =
+        Set.union
+            (state.Drafts |> Map.toSeq |> Seq.map (fun (_, d) -> d.QueueId) |> Set.ofSeq)
+            (state.Queue |> Map.toSeq |> Seq.map fst |> Set.ofSeq)
+
+    /// Entries in the doc nothing can send any more.
+    let dead (state: SyncedSessionState<'Text>) : UploadId list =
+        let live = live state
+        state.Attachments
+        |> Map.toList
+        |> List.filter (fun (_, a) -> not (Set.contains a.QueueId live))
+        |> List.map fst
+
+    /// Whether a queued message may be sent: every file attached to it has arrived. A message
+    /// is never sent without what its author attached — it waits, in the queue where everyone
+    /// can see why, and anyone can remove the attachment or the message.
+    let ready (staged: UploadId -> bool) (attachments: Map<UploadId, Attachment>) (queueId: QueueId) : bool =
+        ofMessage queueId attachments |> List.forall (fun a -> staged a.Upload)
+
+    /// The staged files to delete: those no live attachment names, once they are older than
+    /// `grace`. `staged` is every staged file with when it landed.
+    let orphans
+        (now: System.DateTimeOffset)
+        (state: SyncedSessionState<'Text>)
+        (staged: (UploadId * System.DateTimeOffset) list)
+        : UploadId list =
+        let live = live state
+        let wanted =
+            state.Attachments
+            |> Map.toSeq
+            |> Seq.filter (fun (_, a) -> Set.contains a.QueueId live)
+            |> Seq.map fst
+            |> Set.ofSeq
+        staged
+        |> List.filter (fun (id, landed) -> not (Set.contains id wanted) && now - landed >= grace)
+        |> List.map fst
+
+    /// What a sent message says: its body, then each attachment's address on a line of its
+    /// own — the pinned version, so what the message pointed at is what it points at for good.
+    let said (body: string) (addresses: string list) : string =
+        match addresses with
+        | [] -> body
+        | _ ->
+            let files = String.concat "\n\n" addresses
+            if body.Trim () = "" then files else body.TrimEnd () + "\n\n" + files
 
 /// The queue's total order. `Order` is a float register; ties (possible when two peers
 /// mint concurrently) are broken by `QueueId`, so the order is always a total,

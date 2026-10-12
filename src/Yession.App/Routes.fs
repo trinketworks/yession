@@ -265,6 +265,11 @@ type SessionRoute =
     /// where it then reads it. Only an artifact's bare name takes one — a version is
     /// immutable, and the store, not the caller, says which version comes next.
     | ContentUpload of ref: ContentRef
+    /// A file attached to a message that has not been sent: its bytes, put where only the
+    /// session can see them until the message is (`StagedAttachments`). Keyed by the id the
+    /// browser minted, so sending the same file again is the same request, and parsed here
+    /// because the id becomes a file name.
+    | StagedUpload of upload: UploadId
     /// One of the Claude panel's write actions.
     | Claude of action: ClaudeAction
     /// One of the GitHub panel's write actions.
@@ -361,6 +366,7 @@ module SessionRoute =
           | TerminalKeyframe (terminal, seq) -> sprintf "terminals/%s/keyframes/%d" terminal seq
           | Content ref
           | ContentUpload ref -> contentPrefix + ContentRef.value ref
+          | StagedUpload upload -> "staged/" + UploadId.value upload
           | Claude action -> "claude/" + claudeSegment action
           | GitHub action -> "github/" + githubSegment action
           | GitHubRepos -> "github/repos"
@@ -459,6 +465,7 @@ module SessionRoute =
             ContentRef.create (String.concat "/" path) |> Result.toOption |> Option.map Content
         | "PUT", "content" :: path ->
             ContentRef.create (String.concat "/" path) |> Result.toOption |> Option.map ContentUpload
+        | "PUT", [ "staged"; upload ] -> UploadId.create upload |> Result.toOption |> Option.map StagedUpload
         | "POST", [ "claude"; "begin" ] -> Some (Claude ClaudeAction.Begin)
         | "POST", [ "claude"; "complete" ] -> Some (Claude ClaudeAction.Complete)
         | "POST", [ "claude"; "token" ] -> Some (Claude ClaudeAction.Token)

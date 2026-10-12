@@ -1223,7 +1223,7 @@ let private armedSchedulerOver (doc: Y.Doc) (seed: SessionEvent list) (duringTur
     let scheduler =
         Scheduler.create sessionId doc log (fun () -> Some runner)
             (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId Principal.Peer
-            (fun _ _ _ -> []) TurnPolicy.addressed Set.empty
+            (fun _ _ _ -> []) TurnPolicy.addressed StagedAttachments.none Set.empty
     scheduler, log
 
 let private armedScheduler (seed: SessionEvent list) (duringTurn: EventLog<SessionEvent> -> unit) =
@@ -1520,7 +1520,7 @@ let private schedulerOverPickedModel (choice: ModelId option) =
     let scheduler =
         Scheduler.create (SessionId.create "model-session" |> expect) doc log (fun () -> Some runner)
             (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) (fun () -> turnId) (fun () -> agentMessageId) Principal.Peer
-            (fun _ _ _ -> []) TurnPolicy.addressed Set.empty
+            (fun _ _ _ -> []) TurnPolicy.addressed StagedAttachments.none Set.empty
     scheduler, (fun () -> seen)
 
 let private modelChoiceTests =

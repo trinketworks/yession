@@ -215,6 +215,7 @@ let private reposDir = Sandboxes.SessionLayout.prepareReposDir dataDir
 // and a drop box that appeared only when something was first shared would be one the
 // sandboxes running by then could not see.
 let private artifactsDir = Sandboxes.SessionLayout.prepareArtifactsDir dataDir
+let private stagedDir = Sandboxes.SessionLayout.prepareStagedDir dataDir
 
 // Prepared HERE, at module scope beside the repos directory, because srt reads
 // `CLAUDE_CODE_TMPDIR` off this process at every wrap: it has to be settled before the
@@ -1211,7 +1212,13 @@ Async.StartImmediate (
                 match auth with
                 // Read at the request, not here: the store is composed once the Host is up.
                 | Some a ->
-                    Some (Artifacts.routes a (fun actor name declared body -> artifacts.Receive actor name declared body) artifactsDir sessionMount)
+                    Some (
+                        Artifacts.routes
+                            a
+                            (fun actor name declared body -> artifacts.Receive actor name declared body)
+                            (fun upload declared body -> artifacts.Stage upload declared body)
+                            artifactsDir
+                            sessionMount)
                 | None -> None
             [ claudeRoutes; githubRoutes; queryRoutes; repoRoutes; contentRoutes ]
             |> List.choose id
@@ -1404,6 +1411,8 @@ Async.StartImmediate (
             Artifacts.create
                 host.Log
                 artifactsDir
+                stagedDir
+                host.Drain
                 host.Sandboxes.EnvironmentFor
                 // The store as each sandbox sees it: the bind mount's target under docker, the
                 // directory itself otherwise — the same answer `withSessionShares` mounts by,
@@ -1415,6 +1424,7 @@ Async.StartImmediate (
                 (Sandboxes.artifactsVisibleTo workBackend artifactsDir)
                 (fun sandbox -> ShellProfileProjection.workingDirectory sandbox (terminals.Profiles ()))
                 TerminalShell.posix
+        host.SetStaging artifacts.Staging
         terminalCommands <- host.TerminalCommands
         repoSandboxes <-
             RepoSandboxes.create

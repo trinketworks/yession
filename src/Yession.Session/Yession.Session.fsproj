@@ -31,6 +31,8 @@
     <Compile Include="CommandGates.fs" />
     <Compile Include="Agent.fs" />
     <Compile Include="Auth.fs" />
+    <!-- Before the scheduler, whose drain shares a message's attached files. -->
+    <Compile Include="Attachments.fs" />
     <Compile Include="Scheduler.fs" />
     <!-- Beside the scheduler because it is the same shape of thing: a doc update might have
          made work, so look and see. -->

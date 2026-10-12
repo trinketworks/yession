@@ -185,12 +185,58 @@ type UploadRefusal =
     /// The store could not take them this time.
     | Failed of reason: string
 
-/// A file a person sent, streamed off `body` into the store as the next version of `name` and
-/// recorded as theirs. The browser's way in, beside `share`, which is the sandbox's.
+let private tooBig (name: string) (bytes: int64) =
+    UploadRefusal.Refused (
+        sprintf "%s is %s, and an artifact may be at most %s" name (ContentSize.render bytes) capSaid)
+
+/// Stream a request body into `part` (in `dir`, made if it is not there), and answer with how
+/// many bytes landed. The one way a browser's bytes reach this disk, for an artifact and for a
+/// staged attachment alike.
 ///
 /// Streamed and counted as it comes rather than read whole, for `serveVersion`'s reason in the
 /// other direction — and the count stops it AT the cap, so a body that lied about its length,
-/// or never said one, costs at most the cap in disk and nothing in this process's heap.
+/// or never said one, costs at most the cap in disk and nothing in this process's heap. What a
+/// refusal leaves behind is deleted; `name` is how a refusal names the file.
+let private landBody (dir: string) (part: string) (name: string) (body: Readable) : Async<Result<int64, UploadRefusal>> =
+    Async.FromContinuations (fun (resolve, _, _) ->
+        let fd =
+            try
+                Fs.ensureDir dir
+                Ok (fs.openSync (U2.Case1 part, U2.Case1 "w"))
+            with e -> Error e.Message
+        match fd with
+        | Error why ->
+            body.resume ()
+            resolve (Error (UploadRefusal.Failed (sprintf "could not make room for %s: %s" name why)))
+        | Ok fd ->
+            let mutable received = 0L
+            // Once: the first of an end, an error, or the cap reached settles it, and
+            // whatever the stream says after that is about a request already answered.
+            let mutable settled = false
+            let finish (outcome: Result<int64, UploadRefusal>) =
+                if not settled then
+                    settled <- true
+                    (try fs.closeSync fd with _ -> ())
+                    (match outcome with
+                     | Error _ -> discard part
+                     | Ok _ -> ())
+                    resolve outcome
+            body.onData (fun chunk ->
+                if not settled then
+                    received <- received + int64 chunk.length
+                    if received > ArtifactRef.cap then
+                        body.destroy ()
+                        finish (Error (tooBig name received))
+                    else
+                        try fs.writeSync (fd, chunk) |> ignore
+                        with e ->
+                            body.destroy ()
+                            finish (Error (UploadRefusal.Failed (sprintf "could not write %s: %s" name e.Message))))
+            body.onError (fun e -> finish (Error (UploadRefusal.Failed (sprintf "%s did not arrive whole: %s" name e.message))))
+            body.onEnd (fun () -> finish (Ok received)))
+
+/// A file a person sent, streamed off `body` into the store as the next version of `name` and
+/// recorded as theirs. The browser's way in, beside `share`, which is the sandbox's.
 /// `declared` is the length the request said, refused up front when it is already too big.
 let receive
     (log: EventLog<SessionEvent>)
@@ -200,59 +246,104 @@ let receive
     (declared: int64 option)
     (body: Readable)
     : Async<Result<ArtifactShared, UploadRefusal>> =
-    let tooBig (bytes: int64) =
-        UploadRefusal.Refused (
-            sprintf "%s is %s, and an artifact may be at most %s" name (ContentSize.render bytes) capSaid)
     match nextVersion artifactsDir name actor, declared with
     | Error e, _ ->
         body.resume ()
         async { return Error (UploadRefusal.Refused e) }
     | Ok _, Some bytes when bytes > ArtifactRef.cap ->
         body.resume ()
-        async { return Error (tooBig bytes) }
+        async { return Error (tooBig name bytes) }
     | Ok ref, _ ->
-        let part = partOf artifactsDir ref
-        Async.FromContinuations (fun (resolve, _, _) ->
-            let fd =
+        async {
+            match! landBody (sprintf "%s/%s" artifactsDir (ArtifactRef.name ref)) (partOf artifactsDir ref) name body with
+            | Error refusal -> return Error refusal
+            | Ok received ->
+                match! settle log artifactsDir actor ref name received with
+                | Ok fact -> return Ok fact
+                | Error why -> return Error (UploadRefusal.Failed why)
+        }
+
+// --- Staged attachments -------------------------------------------------------------------
+//
+// A file attached to a message waits here, by its upload id, until the message is sent. Not
+// under the content root: nothing serves this directory and no sandbox has it, so a file a
+// person attached and then removed was never anybody else's to see.
+
+let private stagedPathOf (stagedDir: string) (upload: UploadId) : string =
+    sprintf "%s/%s" stagedDir (UploadId.value upload)
+
+/// Take an attachment's bytes. Idempotent by id: bytes already here whole are the answer to a
+/// retry, and the retry's body is drained unread. Landed under a `.part` leaf and renamed, so a
+/// file here is a file that arrived whole — which is what `Arrived` answers.
+let stage (stagedDir: string) (upload: UploadId) (declared: int64 option) (body: Readable) : Async<Result<unit, UploadRefusal>> =
+    let path = stagedPathOf stagedDir upload
+    let said = "the attached file"
+    match sizeOf path, declared with
+    | Some _, _ ->
+        body.resume ()
+        async { return Ok () }
+    | None, Some bytes when bytes > ArtifactRef.cap ->
+        body.resume ()
+        async { return Error (tooBig said bytes) }
+    | None, _ ->
+        async {
+            let part = path + ".part"
+            match! landBody stagedDir part said body with
+            | Error refusal -> return Error refusal
+            | Ok _ ->
+                Fs.rename part path
+                return Ok ()
+        }
+
+/// Make a staged attachment the next version of `name`: COPIED in, so the staged file stays
+/// until the sweep finds nothing wants it, and a drain that dies before its message is on the
+/// log shares it again rather than finding it gone.
+let private shareStaged
+    (log: EventLog<SessionEvent>)
+    (artifactsDir: string)
+    (stagedDir: string)
+    (actor: ActorRef)
+    (name: string)
+    (upload: UploadId)
+    : Async<Result<ArtifactShared, string>> =
+    async {
+        match nextVersion artifactsDir name actor with
+        | Error e -> return Error e
+        | Ok ref ->
+            let part = partOf artifactsDir ref
+            let copied =
                 try
                     Fs.ensureDir (sprintf "%s/%s" artifactsDir (ArtifactRef.name ref))
-                    Ok (fs.openSync (U2.Case1 part, U2.Case1 "w"))
-                with e -> Error e.Message
-            match fd with
-            | Error why ->
-                body.resume ()
-                resolve (Error (UploadRefusal.Failed (sprintf "could not make room for %s: %s" name why)))
-            | Ok fd ->
-                let mutable received = 0L
-                // Once: the first of an end, an error, or the cap reached settles it, and
-                // whatever the stream says after that is about a request already answered.
-                let mutable settled = false
-                let finish (outcome: Async<Result<ArtifactShared, UploadRefusal>>) =
-                    if not settled then
-                        settled <- true
-                        (try fs.closeSync fd with _ -> ())
-                        Async.StartImmediate (async { let! result = outcome in resolve result })
-                let failWith (refusal: UploadRefusal) =
-                    finish (async {
-                        discard part
-                        return Error refusal })
-                body.onData (fun chunk ->
-                    if not settled then
-                        received <- received + int64 chunk.length
-                        if received > ArtifactRef.cap then
-                            body.destroy ()
-                            failWith (tooBig received)
-                        else
-                            try fs.writeSync (fd, chunk) |> ignore
-                            with e ->
-                                body.destroy ()
-                                failWith (UploadRefusal.Failed (sprintf "could not write %s: %s" name e.Message)))
-                body.onError (fun e -> failWith (UploadRefusal.Failed (sprintf "%s did not arrive whole: %s" name e.message)))
-                body.onEnd (fun () ->
-                    finish (async {
-                        match! settle log artifactsDir actor ref name received with
-                        | Ok fact -> return Ok fact
-                        | Error why -> return Error (UploadRefusal.Failed why) })))
+                    copyFile (stagedPathOf stagedDir upload) part
+                    sizeOf part
+                with _ -> None
+            match copied with
+            | None ->
+                discard part
+                return Error "its bytes are not on this session any more"
+            | Some bytes -> return! settle log artifactsDir actor ref name bytes
+    }
+
+/// Every staged attachment that arrived whole, with when it landed. A leaf that is not an
+/// upload id — a `.part` among them — is skipped rather than refused, for `versions`' reason.
+let private stagedListing (stagedDir: string) : (UploadId * System.DateTimeOffset) list =
+    readdirSafe stagedDir
+    |> Array.toList
+    |> List.choose (fun leaf ->
+        match UploadId.create leaf with
+        | Error _ -> None
+        | Ok upload ->
+            try
+                let stat = fs.statSync (U2.Case1 (stagedPathOf stagedDir upload))
+                Some (upload, System.DateTimeOffset (stat.mtime.ToUniversalTime ()))
+            with _ -> None)
+
+/// The staging store as the drain and the sweep use it.
+let staging (log: EventLog<SessionEvent>) (artifactsDir: string) (stagedDir: string) : StagedAttachments.Staging =
+    { Arrived = fun upload -> (sizeOf (stagedPathOf stagedDir upload)).IsSome
+      Share = shareStaged log artifactsDir stagedDir
+      Listed = fun () -> stagedListing stagedDir
+      Discard = fun upload -> discard (stagedPathOf stagedDir upload) }
 
 /// One version as a reader sees it: what it is called, which version it is, whether it is the
 /// one a bare name resolves to, and how big it is. Read from the directory each time — the
@@ -455,14 +546,36 @@ let read (artifactsDir: string) (ref: ContentRef) : Async<Result<FileContent, st
 let routes
     (auth: SessionAuth.Auth)
     (receive: ActorRef -> string -> int64 option -> Readable -> Async<Result<ArtifactShared, UploadRefusal>>)
+    (stage: UploadId -> int64 option -> Readable -> Async<Result<unit, UploadRefusal>>)
     (artifactsDir: string)
     (mount: string)
     : IncomingMessage -> ServerResponse -> bool =
     let answer (res: ServerResponse) (status: int) (text: string) =
         res.writeHead (status, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
         res.``end`` text
+    let declaredOf (req: IncomingMessage) =
+        headerOf req "content-length"
+        |> Option.bind (fun raw ->
+            match System.Int64.TryParse raw with
+            | true, n -> Some n
+            | false, _ -> None)
     fun req res ->
         match SessionRoute.parseUnder mount req.``method`` (req.url.Split('?').[0]) with
+        // An attachment's bytes. Nobody is recorded here: who attached it is on its doc entry,
+        // and the act everyone sees is the message it is sent with.
+        | Some (SessionRoute.StagedUpload upload) ->
+            if (auth.IdentityOf req).IsNone then
+                req.resume ()
+                answer res 401 "unauthorized"
+            else
+                Async.StartImmediate (
+                    async {
+                        match! stage upload (declaredOf req) req with
+                        | Ok () -> answer res 204 ""
+                        | Error (UploadRefusal.Refused why) -> answer res 400 why
+                        | Error (UploadRefusal.Failed why) -> answer res 500 why
+                    })
+            true
         | Some (SessionRoute.ContentUpload ref) ->
             let refuse status text =
                 req.resume ()
@@ -483,15 +596,9 @@ let routes
                     refuse 409 "a version's bytes never change — send the name, and the store adds the next version"
                 | Ok _, Error why -> refuse 404 why
                 | Ok actor, Ok (ArtifactAddress.Name name) ->
-                    let declared =
-                        headerOf req "content-length"
-                        |> Option.bind (fun raw ->
-                            match System.Int64.TryParse raw with
-                            | true, n -> Some n
-                            | false, _ -> None)
                     Async.StartImmediate (
                         async {
-                            match! receive actor name declared req with
+                            match! receive actor name (declaredOf req) req with
                             | Ok fact ->
                                 let pinned = RelativeUrl.under mount (SessionRoute.relative (SessionRoute.Content (ArtifactRef.content fact.Ref)))
                                 res.writeHead (
@@ -548,6 +655,12 @@ type SessionArtifacts =
       /// Take a file a person sent (`receive`) as the next version of `name`, and record it
       /// as theirs: the browser's way in, beside `Share`, which is the sandbox's.
       Receive : ActorRef -> string -> int64 option -> Readable -> Async<Result<ArtifactShared, UploadRefusal>>
+      /// Take an attachment's bytes into staging (`stage`), and tell the queue they are here —
+      /// one verb, because bytes that landed without the queue looking again would leave the
+      /// message waiting on them waiting until something else happened.
+      Stage : UploadId -> int64 option -> Readable -> Async<Result<unit, UploadRefusal>>
+      /// The staging store, for the drain and the sweep (`StagedAttachments.Staging`).
+      Staging : StagedAttachments.Staging
       /// One artifact back, by its address — the text, or the picture. The sibling of
       /// `Share`, and the only way anything that is not a browser reads this store.
       Read : ContentRef -> Async<Result<FileContent, string>>
@@ -598,6 +711,11 @@ let unavailable : SessionArtifacts =
         fun _ _ _ body ->
             body.resume ()
             async { return Error (UploadRefusal.Failed "this session has nowhere to keep artifacts") }
+      SessionArtifacts.Stage =
+        fun _ _ body ->
+            body.resume ()
+            async { return Error (UploadRefusal.Failed "this session has nowhere to keep artifacts") }
+      SessionArtifacts.Staging = StagedAttachments.none
       SessionArtifacts.Read = fun _ -> async { return Error "this session has no artifacts to read" }
       SessionArtifacts.Versions = fun _ -> []
       SessionArtifacts.Names = fun () -> [] }
@@ -607,6 +725,10 @@ let create
     // landed and were measured, so the log never carries an artifact that is not there.
     (log: EventLog<SessionEvent>)
     (artifactsDir: string)
+    // Where attachments wait for their message: outside the content root, so nothing serves it.
+    (stagedDir: string)
+    // Look at the message queue again — called when an attachment's bytes have landed.
+    (arrived: unit -> unit)
     (environmentFor: SandboxRef -> SessionEnvironment.SessionEnvironment)
     // The same directory as the sandbox sees it — the bind mount's target under docker, the
     // directory itself otherwise (`Sandboxes.artifactsVisibleAt`).
@@ -722,6 +844,14 @@ let create
 
     { SessionArtifacts.Share = share
       SessionArtifacts.Receive = receive log artifactsDir
+      SessionArtifacts.Stage =
+        fun upload declared body ->
+            async {
+                let! staged = stage stagedDir upload declared body
+                if Result.isOk staged then arrived ()
+                return staged
+            }
+      SessionArtifacts.Staging = staging log artifactsDir stagedDir
       SessionArtifacts.Read = read artifactsDir
       SessionArtifacts.Versions = versions artifactsDir
       SessionArtifacts.Names = fun () -> names artifactsDir }

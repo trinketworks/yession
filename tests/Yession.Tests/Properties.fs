@@ -172,7 +172,7 @@ let private runSchedule (ops: ScheduleOp list) : CaseResult =
 
     /// The oracle's prediction for the next drain, from the shadow replica.
     let expectedBatch () : (string * string) list =
-        (QueueDrain.plan (consumedNow ()) (SyncedStateSync.ofDoc shadowDoc).Queue).Batch
+        (QueueDrain.plan (consumedNow ()) (fun _ -> true) (SyncedStateSync.ofDoc shadowDoc).Queue).Batch
         |> List.map (fun m -> QueueId.value m.QueueId, SyncedStateSync.queuedBodyMarkdown shadowDoc m.QueueId)
 
     /// Run an action that may drain, recording predicted vs actual consumption.
@@ -195,7 +195,7 @@ let private runSchedule (ops: ScheduleOp list) : CaseResult =
             Scheduler.create sessionId processDoc log (fun () -> Some runner)
                 (fun _ _ -> AgentCapabilities.none) (fun _ _ -> ()) mintTurnId mintMessageId Principal.Peer
                 // No terminals in this harness, so no transcript to read back.
-                (fun _ _ _ -> []) TurnPolicy.addressed (consumedNow ())
+                (fun _ _ _ -> []) TurnPolicy.addressed StagedAttachments.none (consumedNow ())
         scheduler <- sched
         let thisProcess = processDoc
         let thisShadow = shadowDoc
