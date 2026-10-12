@@ -11,7 +11,3 @@ WCAG 2.0 AA is the floor for every surface, not a follow-up. No central test pin
   Enter and Space operate it. A DOM swap that replaces the focused element must refocus its
   replacement. Never strand focus.
 - **Structure**: inputs have `<label>`s, tables have `th scope`, pages declare `lang` and a title.
-
-Tests already pin text contrast for the tokens (Phase4, "Theme contrast"), a visible focus ring on
-every button and link, and an accessible name on every button (`Acceptance.fs`, "Chrome
-consistency" and "UI checklist").
