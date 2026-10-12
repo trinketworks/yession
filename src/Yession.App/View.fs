@@ -2722,13 +2722,18 @@ module View =
         // the grouping fold needs the block's authority before it can place the chip — a
         // chip whose block a page boundary withheld never becomes an entry at all.
         //
-        // It says WHERE, in the place and voice its queued self said it (`pendingChip`): a
-        // chat of commands across three terminals otherwise reads as one terminal, and the
-        // chip that becomes this one already named it.
+        // It reads as an act does — "ran" in the act's voice, then what was run as the thing
+        // named, the way "started sandbox dev" does: the description its author gave, or for a
+        // person's command, the command's meaningful part in mono. Which terminal it ran in is
+        // in the accessible name and one tap away, not on the line.
         let blockChip (chip: string) (terminalId: TerminalId) (block: Block) =
             let blockId = block.BlockId
             let status = terminalBlockStatusLabel block.Status
             let where = Entity.terminalName model terminalId |> Option.defaultValue (TerminalId.value terminalId)
+            let what =
+                match block.Description |> Option.bind BlockDescription.ofProse with
+                | Some description -> html $"""<span class="{Style.chatChipName}">{description}</span>"""
+                | None -> html $"""<code class="{Style.chatChipCommand}">{BlockLabel.ofCommand block.Command}</code>"""
             html $"""
                 <button type="button" class="{chip}"
                         data-chat-block="{BlockId.value blockId}"
@@ -2736,8 +2741,7 @@ module View =
                         data-terminal-id="{TerminalId.value terminalId}"
                         aria-label="{Dom.Text.commandChip (BlockLabel.ofBlock block) (terminalBlockStatusWord model block.Status) where}"
                         @click={Ev(fun _ -> dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Block (terminalId, blockId)))))}>
-                  <code class="{Style.chatChipCommand}" title="{block.Command}">{BlockLabel.ofBlock block}</code>
-                  <span class="{Style.chatChipSubject}" data-chat-block-terminal="{TerminalId.value terminalId}">{where}</span>
+                  <span class="{Style.chatChipLine}" title="{block.Command}"><span class="{Style.chatChipVerb}">{Dom.Text.ran}</span> {what}</span>
                   <span class="shrink-0">{terminalBlockStatus model block.Status}</span>
                 </button>"""
         let stretchItem (stretch: TerminalStretch) =
