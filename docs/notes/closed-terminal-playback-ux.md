@@ -1,7 +1,9 @@
 # Closed-terminal playback — UX tryout notes (2026-08-21)
 
 > The state-machine fix below — terminal history as **position × fidelity** — has since
-> shipped, along with items 1–3. Items 4–7 are the ones still open.
+> shipped, along with items 1–6. Item 7 is the only one still open. The text records the code
+> as it stood on 2026-08-21. The four pane fields and the messages named below are gone.
+> `PaneMode` (`src/Yession.App/Model.fs:817`) replaced them.
 
 Method: I booted the real app in the dev container (`node app/out/Main.js --auth localhost`, scratch
 `YESSION_DATA_DIR`, `YESSION_NESTED_SANDBOX=weak`). It had one session, one terminal, and three
@@ -30,8 +32,9 @@ transcript sidecars.
    append (or pty-ize block exec). The downstream emulator has the same bytes and the same problem.
 
 2. **A chat chip tapped while the pane shows the terminal list looks dead.** `OpenPaneTabMsg`
-   (Model.fs:1440) sets `PaneChoice` but does not clear `TerminalList`. The pane header retitles,
-   and the body keeps showing the list: no tab, no block, nothing apparent. `SelectFromListMsg`,
+   (`Model.fs` at that date, since removed) sets `PaneChoice` but does not clear `TerminalList`.
+   The pane header retitles, and the body keeps showing the list: no tab, no block, nothing
+   apparent. `SelectFromListMsg`,
    right below it, clears the flag, and its comment states exactly why. Measured: chip click →
    `data-pane-panel` absent, list still mounted. The phone screenshot in the task came from this
    state (list face up), so a real reader hits this path.
@@ -40,7 +43,8 @@ transcript sidecars.
    ~01:45. The marker of the printf block sits at 02:06, so the ~21s gap plays as dead air in real
    time. One phone run landed at or near the final frame. No run landed on the block. Related
    observations from the same mounts:
-   - `idleTimeLimit 2` (Replay.fs) has no visible effect. The 0:23 and 1:44 idle gaps play out at
+   - `idleTimeLimit 2` (now `src/Yession.App/Codecs/Transcripts.fs:189`, passed to the player by
+     `app/browser/Replay.fs`) has no visible effect. The 0:23 and 1:44 idle gaps play out at
      1×, and the total duration shows raw 02:07.
    - Only 2 of the 3 block markers render (`.ap-marker` count). The `echo` marker at ~127.6s of a
      ~128.6s cast is missing.
@@ -49,8 +53,8 @@ transcript sidecars.
    they are on. It needs a look at how asciinema-player 3.x combines those options.
 
    *(Follow-up, confirmed live:)* **the rewind verb of the terminal list does nothing but select.**
-   Its click dispatches `RewindTerminalMsg` then `SelectFromListMsg` (View.fs:2048-2051). The second
-   reducer clears the `PanePlaying`/`PaneRewound` that the first just set. On an open terminal with
+   Its click dispatched `RewindTerminalMsg` then `SelectFromListMsg` (`View.fs` at that date).
+   The second reducer clears the `PanePlaying`/`PaneRewound` that the first just set. On an open terminal with
    recorded output, I saw no player, no *Jump to live*, and no behind-label. The ordinary blocks
    view and the composer rendered. The `↑ replay from the start` of the pane itself (one message)
    works: player, *Jump to live*, "behind live", focus handed on.
@@ -172,10 +176,12 @@ keep half-agreeing today because the vocabulary of the UI never named these two 
    A chip hands focus to the panel. UI-baseline rule: a swap that removes the focused element
    refocuses its replacement.
 
-6. **"CLOSED — CLOSED BY A PEER" discards who.** `Commands.fs:55` hardcodes the reason string
-   `"closed by a peer"`. The `peerId` of the closer is in scope and dropped, so no client can ever
-   attribute the close. The attribution invariant (a thing that was done is attributed to whoever
-   did it) says this should be a name.
+6. **"CLOSED — CLOSED BY A PEER" discards who.** `src/Yession.Session/Commands.fs:102` hardcodes
+   the reason string `"closed by a peer"`. At that date the `peerId` of the closer was dropped, so
+   no client could attribute the close. The attribution invariant (a thing that was done is
+   attributed to whoever did it) says this should be a name. It is one now. The close records the
+   closer (`By = Some by`, `src/Yession.Session/Terminals.fs:1908`), and the closed band says "you
+   killed" or "killed by" (`closedFor` in `src/Yession.App/View.fs`).
 
 7. **Sub-second commands make zero-length recordings.** The scrub bar of a fast block reads
    `00:00-00:00`, and play is a flash. The text-first design absorbs it, but the player timeline

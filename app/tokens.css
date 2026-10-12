@@ -104,6 +104,9 @@
   /* --- Structure: lengths that layouts must agree on, so they compose a name rather than repeat a number. --- */
   --spacing-control: 32px;  /* every button, field and select — a row is things of one height */
   --spacing-band: 88px;     /* the header band every head shares, so baselines align across the hairline */
+  /* TODO: docs/visual-design.md "Space" names `spacing-rail`, `spacing-rail-phone` and `spacing-band-phone`, and
+     this file defines none of them: the rail is `ml-8`/`phone:ml-3` and the phone band `phone:h-14`, literals in
+     Style.fs. (`pace` is `Style.Motion.pace`, not a CSS token.) Settle by adding the tokens or by rewording the doctrine. */
   --spacing-side: 280px;    /* the sidebar column */
   --spacing-term: 420px;    /* the terminals column: 80 columns of mono */
   --spacing-touch: 44px;    /* the touch target: what a control grows to on a phone */

@@ -32,7 +32,7 @@ allowed transitions. Where possible, the check happens at compile time. Yjs is n
 product model. JSON blobs, Y maps, and stringly-typed payloads remain boundary formats.
 They must not leak into application logic.
 
-### Ylmish as the sync boundary
+### Ylmish is the sync boundary
 
 Elmish owns the model and update loop. Ylmish encodes selected Elmish state into Yjs and
 decodes synced Yjs state back into Elmish state.
@@ -421,13 +421,14 @@ Verification is automated end-to-end, not manual.
 
 `Ylmish is the encoding/sync boundary` has one deliberate exception. It is narrow enough to
 name. Message bodies and terminal command lines are top-level Yjs roots that the app
-co-manages directly (`src/Yession.App/Collab/Bodies.fs`). Ylmish's structural decode cannot
-traverse a `Y.XmlFragment`: it recurses into the fragment's cyclic internals and crashes the
-decode. The app keys these roots by `BodyKey`. It never nests them in the encoded tree, and no
-whole-doc structural decode reads them.
+co-manages directly (`src/Yession.App/Collab/Bodies.fs`). The Ylmish schema cannot hold a
+body: a custom nested in a keyed `Encode.map` cannot round-trip Ylmish's structural decode, so
+the value would never decode. The app keys these roots by `BodyKey`. It never nests them in the
+encoded tree, and the structural reader skips them. The header of `Bodies.fs` gives the full
+reason.
 
 Everything else still crosses through the codec. Folding a body back into the Ylmish schema
-breaks decoding for every peer at once.
+leaves a value that never decodes, for every peer.
 
 ---
 
