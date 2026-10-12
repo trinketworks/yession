@@ -541,8 +541,9 @@ gh run watch "$(gh run list --workflow=verify.yml -L1 --json databaseId -q '.[0]
 
 Use it when a suite you write needs a capability this box lacks, or a release run failed inside one
 and you need another look. Narrow it with `only`. That turns a 9-minute gate into a run that answers
-one question. It also keeps a live case inside the Node suite's shared 240s budget (`tasks.fsx`). A
-long per-case deadline otherwise blows that budget for every suite at once.
+one question. It also keeps a live case inside the Node suite's shared budget (`nodeBudgetMs` in
+`tasks.fsx`: a base plus an allowance per capability). A long per-case deadline otherwise blows
+that budget for every suite at once.
 
 Two edges to know before the first attempt:
 
