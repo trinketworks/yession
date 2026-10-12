@@ -239,6 +239,14 @@ module SessionLayout =
         Fs.ensureDir dir
         dir
 
+    /// Where files attached to unsent messages wait (`StagedAttachments`): in the session's
+    /// data directory and NOT under the content root, so no route serves them and no sandbox
+    /// is given them. Made here, for `prepareArtifactsDir`'s reason.
+    let prepareStagedDir (dataDir: string) : string =
+        let dir = sprintf "%s/staged" dataDir
+        Fs.ensureDir dir
+        dir
+
     /// What the SESSION gives a sandbox of its own filesystem, and what it leaves to the
     /// backend.
     ///

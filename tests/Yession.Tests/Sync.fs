@@ -756,6 +756,9 @@ let private queueUnitTests =
         { QueueId = qid id; Author = ada; Order = order }
     let queueOf (entries: QueuedMessage list) : Map<QueueId, QueuedMessage> =
         entries |> List.map (fun e -> e.QueueId, e) |> Map.ofList
+    let upid (s: string) = UploadId.create s |> expect
+    let attachment (upload: string) (queueId: string) (name: string) : UploadId * Attachment =
+        upid upload, { Upload = upid upload; QueueId = qid queueId; Name = name; Bytes = 3L; Uploader = ada }
 
     testList "Queue order and drain plan" [
         testCase "the queue order is (Order, QueueId): total and deterministic under ties" <| fun () ->
@@ -778,7 +781,7 @@ let private queueUnitTests =
             let queue = queueOf [ entry "q2" 2.0; entry "q1" 1.0; entry "q3" 3.0 ]
             // q2 was already consumed (a crash between append and removal left it in
             // the doc): it must be repaired out, never consumed twice.
-            let plan = QueueDrain.plan (Set.ofList [ "q2" ]) queue
+            let plan = QueueDrain.plan (Set.ofList [ "q2" ]) (fun _ -> true) queue
             Expect.equal
                 (plan.Batch |> List.map (fun m -> QueueId.value m.QueueId))
                 [ "q1"; "q3" ]
@@ -789,8 +792,51 @@ let private queueUnitTests =
                 "every snapshot key leaves the doc, including the repair"
 
         testCase "a deleted entry is simply absent from the snapshot: never consumed" <| fun () ->
-            let plan = QueueDrain.plan Set.empty (queueOf [ entry "kept" 1.0 ])
+            let plan = QueueDrain.plan Set.empty (fun _ -> true) (queueOf [ entry "kept" 1.0 ])
             Expect.equal (plan.Batch |> List.map (fun m -> QueueId.value m.QueueId)) [ "kept" ] "only present entries consume"
+
+        testCase "a message waiting on its files holds itself and everything behind it, and stays in the doc" <| fun () ->
+            let queue = queueOf [ entry "q1" 1.0; entry "q2" 2.0; entry "q3" 3.0; entry "q0" 0.5 ]
+            let plan = QueueDrain.plan (Set.ofList [ "q0" ]) (fun m -> QueueId.value m.QueueId <> "q2") queue
+            Expect.equal (plan.Batch |> List.map (fun m -> QueueId.value m.QueueId)) [ "q1" ] "q3 does not overtake q2"
+            Expect.equal
+                (plan.Removals |> List.map QueueId.value)
+                [ "q0"; "q1" ]
+                "the repair and the batch leave; the waiting messages stay"
+
+        testCase "a message is ready when every file attached to it has arrived, and only its own count" <| fun () ->
+            let attachments = Map.ofList [ attachment "u1" "q1" "a.png"; attachment "u2" "q1" "b.txt"; attachment "u3" "q2" "c.png" ]
+            let arrived (set: string list) (id: UploadId) = List.contains (UploadId.value id) set
+            Expect.isFalse (Attachments.ready (arrived [ "u1" ]) attachments (qid "q1")) "b.txt has not arrived"
+            Expect.isTrue (Attachments.ready (arrived [ "u1"; "u2" ]) attachments (qid "q1")) "both have"
+            Expect.isTrue (Attachments.ready (arrived []) attachments (qid "q9")) "nothing attached is nothing to wait for"
+
+        testCase "a sent message names its files after its body, one address to a line" <| fun () ->
+            Expect.equal (Attachments.said "look  \n" [ "file:///artifacts/a.png/0000-abcdef" ]) "look\n\nfile:///artifacts/a.png/0000-abcdef" "after the body"
+            Expect.equal (Attachments.said "" [ "x"; "y" ]) "x\n\ny" "a message of files alone is its files"
+            Expect.equal (Attachments.said "words" []) "words" "nothing attached changes nothing"
+
+        testCase "only files nothing can send are deleted, and only once their grace has passed" <| fun () ->
+            let state =
+                { SyncedSessionState.empty CollabText.ylmish with
+                    Drafts = Map.ofList [ ada, { Author = ada; QueueId = qid "draft-q" } ]
+                    Queue = queueOf [ entry "queued-q" 1.0 ]
+                    Attachments =
+                        Map.ofList
+                            [ attachment "on-draft" "draft-q" "a.png"
+                              attachment "on-queued" "queued-q" "b.png"
+                              attachment "on-nothing" "thrown-away-q" "c.png" ] }
+            let now = System.DateTimeOffset (2026, 10, 12, 12, 0, 0, System.TimeSpan.Zero)
+            let old = now - Attachments.grace
+            let fresh = now - System.TimeSpan.FromMinutes 1.0
+            let staged =
+                [ upid "on-draft", old; upid "on-queued", old; upid "on-nothing", old
+                  upid "unnamed-old", old; upid "unnamed-fresh", fresh ]
+            Expect.equal
+                (Attachments.orphans now state staged |> List.map UploadId.value)
+                [ "on-nothing"; "unnamed-old" ]
+                "a draft's and a queued message's files stay; a fresh upload may still be named"
+            Expect.equal (Attachments.dead state |> List.map UploadId.value) [ "on-nothing" ] "the entry nothing can send"
 
         testCase "MessageSent projects into the conversation" <| fun () ->
             let ada = PeerId.create "ada" |> expect

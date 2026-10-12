@@ -14,6 +14,7 @@ open Fable.Pyxpecto
 open Yjs
 open Ylmish
 open Yession.Domain
+open Yession.Domain.Content
 open Yession.Domain.Agent
 open Yession.Domain.Link
 open Yession.Domain.Collab
@@ -304,6 +305,77 @@ let private crashRepairTests =
             }
     ]
 
+/// An attachment entry, written straight into a doc the way the codec lays one out.
+let private attach (doc: Y.Doc) (upload: string) (queueKey: string) (name: string) (uploader: string) : unit =
+    doc.transact (
+        (fun _ ->
+            let attachments : Y.Map<obj> = doc.getMap "attachments"
+            let entry : Y.Map<obj> = Y.Map.Create ()
+            attachments.set (upload, box entry) |> ignore
+            entry.set ("queueId", box queueKey) |> ignore
+            entry.set ("name", box name) |> ignore
+            entry.set ("bytes", box 6.0) |> ignore
+            entry.set ("uploader", box uploader) |> ignore),
+        box "test-attach")
+
+/// A staging store that holds nothing but a set of ids the test says have arrived, and shares
+/// each as a first version, recording what it was asked to share.
+let private fakeStaging () =
+    let arrived = ResizeArray<string> ()
+    let shared = ResizeArray<string * string> ()
+    let staging : StagedAttachments.Staging =
+        { Arrived = fun upload -> arrived.Contains (UploadId.value upload)
+          Share =
+            fun actor name upload ->
+                async {
+                    shared.Add (name, UploadId.value upload)
+                    let ref = ArtifactRef.first name (ArtifactStamp.ofActor actor) |> expect
+                    return
+                        Ok
+                            { Yession.Domain.Artifacts.ArtifactShared.MessageId = MessageId.create ("shared-" + UploadId.value upload) |> expect
+                              Yession.Domain.Artifacts.ArtifactShared.Ref = ref
+                              Yession.Domain.Artifacts.ArtifactShared.MediaType = None
+                              Yession.Domain.Artifacts.ArtifactShared.Bytes = 6L
+                              Yession.Domain.Artifacts.ArtifactShared.Digest =
+                                ContentDigest.create (String.replicate 64 "a") |> expect
+                              Yession.Domain.Artifacts.ArtifactShared.Actor = actor }
+                }
+          Listed = fun () -> []
+          Discard = ignore }
+    staging, arrived, shared
+
+let private attachmentTests =
+    testList "A message with files attached" [
+        testCaseAsync "waits for its files, then is sent naming the versions they became" <|
+            async {
+                let sessionId = SessionId.create "phase3-attachments" |> expect
+                let! h = Host.start sessionId 0
+                let staging, arrived, shared = fakeStaging ()
+                h.SetStaging staging
+                let o = offlinePeer 17.0 "olive" "Olive"
+                attach h.Doc "u-1" "q-att" "shot.png" "olive"
+                let _ = enqueue o "d-1" "q-att" "look at this"
+                deliver o.Doc h.Doc
+
+                let! waiting = sentMessages h.Log
+                Expect.isEmpty waiting "not sent while its file is still on its way"
+                Expect.isFalse (Map.isEmpty (hostQueue h)) "and still in the queue, where everybody can see it waiting"
+
+                arrived.Add "u-1"
+                h.Drain ()
+                let! sent = sentMessages h.Log
+                match sent with
+                | [ message ] ->
+                    Expect.isTrue (message.Body.StartsWith "look at this") "the body as written"
+                    Expect.stringContains message.Body "file:///artifacts/shot.png/0000-" "then the version its file became"
+                | other -> failwithf "expected one message, got %A" other
+                Expect.equal (List.ofSeq shared) [ "shot.png", "u-1" ] "the file was shared once, under its name"
+                Expect.isTrue (Map.isEmpty (hostQueue h)) "the message left the queue"
+                Expect.isTrue (Map.isEmpty (SyncedStateSync.ofDoc h.Doc).Attachments) "and took its attachment entry with it"
+                do! h.Stop ()
+            }
+    ]
+
 let private interruptTests =
     testList "Interrupt (Step 17)" [
         testCaseAsync "interrupt keeps the partial response, is the turn's terminal event, and drains the waiting queue immediately" <|
@@ -573,6 +645,7 @@ let tests =
     testList "Phase3" [
         raceTests
         crashRepairTests
+        attachmentTests
         docPersistenceTests
         // Interrupt runs over real WebRTC clients: needs ports.
         Tag.needs "Interrupt (Step 17)" [ Tag.Ports; Tag.Native ] (fun () -> interruptTests)

@@ -106,6 +106,9 @@ module Scheduler =
         // Whether a drained batch starts a turn, and which message it answers. The policy,
         // handed in: this scheduler is the mechanism that appends, asks, and runs.
         (turnPolicy: TurnPolicy)
+        // Where attached files wait until their message is sent. The drain holds a message
+        // until its files have arrived, and shares them as it sends it.
+        (staging: StagedAttachments.Staging)
         (initialConsumed: Set<string>)
         : SessionScheduler =
 
@@ -139,10 +142,13 @@ module Scheduler =
             if drainBusy || Option.isSome running then () else
             let synced = SyncedStateSync.ofDoc doc
             if Map.isEmpty synced.Queue then () else
-                let plan = QueueDrain.plan consumed synced.Queue
+                let ready (entry: QueuedMessage) = Attachments.ready staging.Arrived synced.Attachments entry.QueueId
+                let plan = QueueDrain.plan consumed ready synced.Queue
                 if List.isEmpty plan.Batch then
                     // Everything present is already in the log (a crash between
-                    // append and removal): repair the doc, consume nothing twice.
+                    // append and removal): repair the doc, consume nothing twice. Or
+                    // the head is waiting on its files, and an upload landing drains
+                    // again.
                     SyncedStateSync.removeQueued doc plan.Removals
                 else
                     drainBusy <- true
@@ -155,11 +161,14 @@ module Scheduler =
                             //    leftover, never a lost or doubled message.
                             let mutable sent : MessageSent list = []
                             for entry in plan.Batch do
+                                // Its files become artifacts first, so the message can
+                                // point at the versions they became.
+                                let! files = StagedAttachments.share staging actorFor synced.Attachments entry.QueueId
                                 let message =
                                     { MessageId = mintMessageId ()
                                       QueueId = Some entry.QueueId
                                       Author = actorFor entry.Author
-                                      Body = SyncedStateSync.queuedBodyMarkdown doc entry.QueueId }
+                                      Body = Attachments.said (SyncedStateSync.queuedBodyMarkdown doc entry.QueueId) files }
                                 let! _ = log.Append (Principal.toActor message.Author) (MessageSent message)
                                 consumed <- Set.add (QueueId.value entry.QueueId) consumed
                                 sent <- sent @ [ message ]

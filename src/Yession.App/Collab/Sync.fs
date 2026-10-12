@@ -42,7 +42,8 @@ type AdaptiveSyncedState =
       Pending : cmap<string, PendingAct>
       Model : cval<ModelId option>
       Chapters : cmap<string, ChapterMark<Text>>
-      LaunchDismissed : cval<unit option> }
+      LaunchDismissed : cval<unit option>
+      Attachments : cmap<string, Attachment> }
 
 module SyncedStateSync =
 
@@ -86,6 +87,9 @@ module SyncedStateSync =
     let private launchDismissedOf (m: SyncedSessionState<Text>) : unit option =
         if m.LaunchDismissed then Some () else None
 
+    let private attachmentsByKey (m: SyncedSessionState<Text>) : HashMap<string, Attachment> =
+        m.Attachments |> Map.toSeq |> Seq.map (fun (k, v) -> UploadId.value k, v) |> HashMap.ofSeq
+
     /// `Create` for Ylmish's options: build the adaptive companion from a model.
     let create (m: SyncedSessionState<Text>) : AdaptiveSyncedState =
         { Drafts = cmap (draftsByKey m)
@@ -96,7 +100,8 @@ module SyncedStateSync =
           Pending = cmap (pendingByKey m)
           Model = cval m.Model
           Chapters = cmap (chaptersByKey m)
-          LaunchDismissed = cval (launchDismissedOf m) }
+          LaunchDismissed = cval (launchDismissedOf m)
+          Attachments = cmap (attachmentsByKey m) }
 
     /// `Update` for Ylmish's options: fold the next model into the companion. Setting
     /// `cmap.Value` yields keyed deltas, so only changed entries re-encode.
@@ -110,6 +115,7 @@ module SyncedStateSync =
         a.Model.Value <- m.Model
         a.Chapters.Value <- chaptersByKey m
         a.LaunchDismissed.Value <- launchDismissedOf m
+        a.Attachments.Value <- attachmentsByKey m
 
     /// Per-draft encoding: the map key *is* the author (one draft per client), so `author` is
     /// re-stated only because an empty object would write no Yjs key at all (Ylmish creates a
@@ -226,6 +232,16 @@ module SyncedStateSync =
     let private encodeModel (m: aval<ModelId>) : Encoded =
         Encode.string (m |> AVal.map ModelId.value)
 
+    /// An attached file: the message it rides, what it is called, how big it is, and who
+    /// holds its bytes. The id is the map key. Every field is fixed when the entry is written,
+    /// so there is nothing here two peers could edit at once.
+    let private encodeAttachment (a: Attachment) : Encoded =
+        Encode.object
+            [ "queueId", Encode.string (AVal.constant (QueueId.value a.QueueId))
+              "name", Encode.string (AVal.constant a.Name)
+              "bytes", Encode.float (AVal.constant (float a.Bytes))
+              "uploader", Encode.string (AVal.constant (PeerId.value a.Uploader)) ]
+
     /// Which parts of the session sync, and how each merges. Everything else in the
     /// models — the conversation projection above all — is app-only by omission. Rich bodies
     /// are deliberately absent: they live as sibling `Y.XmlFragment` roots the app manages
@@ -246,7 +262,8 @@ module SyncedStateSync =
               "chapters", Encode.map encodeChapter (a.Chapters :> amap<_, _>)
               // A flat register like `model`: the word says what happened to the question,
               // so a later answer of another kind is another word rather than another key.
-              "launch", Encode.option (fun (_: aval<unit>) -> Encode.string (AVal.constant "dismissed")) a.LaunchDismissed ]
+              "launch", Encode.option (fun (_: aval<unit>) -> Encode.string (AVal.constant "dismissed")) a.LaunchDismissed
+              "attachments", Encode.map encodeAttachment (a.Attachments :> amap<_, _>) ]
 
     /// Every entry of a keyed map that decodes, and none that does not. An entry that fails is
     /// SKIPPED rather than failing the map around it, which is what plain `Decode.map` does: the
@@ -375,6 +392,42 @@ module SyncedStateSync =
             return opens, defaultArg name Text.empty
         }
 
+    /// The doc-side attachment, before its ids are checked.
+    type private AttachmentFields =
+        { QueueId : string
+          Name : string
+          Bytes : float
+          Uploader : string }
+
+    let private decodeAttachment<'m> : Decoder<'m, AttachmentFields> =
+        Decode.object {
+            let! queueId = Decode.object.required "queueId" Decode.string
+            let! name = Decode.object.required "name" Decode.string
+            let! bytes = Decode.object.optional "bytes" Decode.float
+            let! uploader = Decode.object.required "uploader" Decode.string
+            return
+                { QueueId = queueId
+                  Name = name
+                  Bytes = defaultArg bytes 0.0
+                  Uploader = uploader }
+        }
+
+    /// Same totality rule as every other entry: one whose ids do not parse is skipped.
+    let private attachmentsToDomain (h: HashMap<string, AttachmentFields>) : Map<UploadId, Attachment> =
+        (Map.empty, HashMap.toSeq h)
+        ||> Seq.fold (fun acc (key, f) ->
+            match UploadId.create key, QueueId.create f.QueueId, PeerId.create f.Uploader with
+            | Ok upload, Ok queueId, Ok uploader ->
+                acc
+                |> Map.add
+                    upload
+                    { Upload = upload
+                      QueueId = queueId
+                      Name = f.Name
+                      Bytes = int64 f.Bytes
+                      Uploader = uploader }
+            | _ -> acc)
+
     /// A model register the smart constructor refuses reads back as ABSENT — the provider's
     /// default — rather than as a model nothing can run: the fallback is always something a
     /// turn can actually do.
@@ -494,6 +547,7 @@ module SyncedStateSync =
             let! model = slot "model" Decode.string
             let! chapters = slot "chapters" (entries decodeChapter)
             let! launch = slot "launch" Decode.string
+            let! attachments = slot "attachments" (entries decodeAttachment)
             return
                 { Drafts = drafts |> Option.map draftsToDomain |> Option.defaultValue Map.empty
                   Queue = queue |> Option.map queueToDomain |> Option.defaultValue Map.empty
@@ -507,7 +561,8 @@ module SyncedStateSync =
                   // Only the one word this codec writes counts: anything else in the slot is
                   // a question still open, which is the answer that asks a person again
                   // rather than the one that hides the card from them for good.
-                  LaunchDismissed = (launch = Some "dismissed") }
+                  LaunchDismissed = (launch = Some "dismissed")
+                  Attachments = attachments |> Option.map attachmentsToDomain |> Option.defaultValue Map.empty }
         }
 
     open Fable.Core
@@ -531,6 +586,7 @@ module SyncedStateSync =
         if doc.share.has "terminalDrafts" then (doc.getMap "terminalDrafts" : Yjs.Y.Map<obj>) |> ignore
         if doc.share.has "pending" then (doc.getMap "pending" : Yjs.Y.Map<obj>) |> ignore
         if doc.share.has "chapters" then (doc.getMap "chapters" : Yjs.Y.Map<obj>) |> ignore
+        if doc.share.has "attachments" then (doc.getMap "attachments" : Yjs.Y.Map<obj>) |> ignore
 
     /// The live `Y.Text` a chapter's name IS, found by the message its chapter opens at —
     /// what a caret in that name is measured against (`FocusField.ChapterName`).
@@ -580,12 +636,35 @@ module SyncedStateSync =
     /// a single transaction under the process origin (Phase 3 drain, step 2 — the doc
     /// removal after the durable append). Boundary code may touch Y types; application
     /// logic still never does. Removing an already-removed key merges as a CRDT no-op.
+    ///
+    /// A removed entry's attachments go in the same transaction: they were the message's, the
+    /// message has been sent (or was already), and an entry left behind would be one nothing
+    /// could send.
     let removeQueued (doc: Yjs.Y.Doc) (ids: QueueId list) : unit =
         if not (List.isEmpty ids) then
+            let gone = Set.ofList ids
+            let attached =
+                (ofDoc doc).Attachments
+                |> Map.toList
+                |> List.filter (fun (_, a) -> Set.contains a.QueueId gone)
+                |> List.map fst
             doc.transact (
                 (fun _ ->
                     let queue : Yjs.Y.Map<obj> = doc.getMap "queue"
-                    ids |> List.iter (fun id -> queue.delete (QueueId.value id))),
+                    ids |> List.iter (fun id -> queue.delete (QueueId.value id))
+                    if not (List.isEmpty attached) then
+                        let attachments : Yjs.Y.Map<obj> = doc.getMap "attachments"
+                        attached |> List.iter (fun id -> attachments.delete (UploadId.value id))),
+                processOrigin)
+
+    /// Remove attachment entries, in one transaction under the process origin — what the
+    /// attachments sweep does with entries nothing can send any more (`Attachments.dead`).
+    let removeAttachments (doc: Yjs.Y.Doc) (ids: UploadId list) : unit =
+        if not (List.isEmpty ids) then
+            doc.transact (
+                (fun _ ->
+                    let attachments : Yjs.Y.Map<obj> = doc.getMap "attachments"
+                    ids |> List.iter (fun id -> attachments.delete (UploadId.value id))),
                 processOrigin)
 
     /// The chapters a doc holds, read through `ofDoc`.
@@ -828,11 +907,18 @@ module SyncedStateSync =
         if not (doc.share.has "drafts") then []
         else
             let drafts : Yjs.Y.Map<obj> = doc.getMap "drafts"
+            // A slot with files attached and no words is a draft somebody is writing — the
+            // files are what they have put in it so far.
+            let synced = ofDoc doc
+            let attached (author: PeerId) =
+                match Map.tryFind author synced.Drafts with
+                | Some draft -> not (List.isEmpty (Attachments.ofMessage draft.QueueId synced.Attachments))
+                | None -> false
             let empty =
                 mapKeys drafts
                 |> Array.choose (fun key ->
                     match PeerId.create key with
-                    | Ok author when (draftBodyMarkdown doc author).Trim () = "" -> Some author
+                    | Ok author when (draftBodyMarkdown doc author).Trim () = "" && not (attached author) -> Some author
                     | _ -> None)
                 |> List.ofArray
             if not (List.isEmpty empty) then

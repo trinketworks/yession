@@ -540,6 +540,7 @@ let start
         | Some Queries
         | Some (Content _)
         | Some (ContentUpload _)
+        | Some (StagedUpload _)
         | None -> handleWithExtraRoutes ()
 
     let server = createServer handler

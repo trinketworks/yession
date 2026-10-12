@@ -100,6 +100,24 @@ module QueueId =
         normalize "QueueId" raw |> Result.map QueueId
     let value (QueueId s) = s
 
+/// One file a person attached to a message, named by the browser that picked it before a
+/// byte has gone anywhere — so the doc entry, the bytes on their way, and a retry of them
+/// all agree on what they are about without asking the session first.
+///
+/// Stricter than the other ids because it is also a FILE NAME in the staging directory and a
+/// segment of the URL that uploads it: letters, digits and `-`, at most 64, which is a GUID
+/// with room to spare and nothing a path or a URL has to escape.
+type UploadId = private UploadId of string
+
+module UploadId =
+    let create (raw: string) : Result<UploadId, string> =
+        let s = if isNull (box raw) then "" else raw.Trim ()
+        if s <> "" && s.Length <= 64
+           && String.forall (fun c -> (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c = '-') s then
+            Ok (UploadId s)
+        else Error "an upload id is 1 to 64 letters, digits and '-'"
+    let value (UploadId s) = s
+
 type MessageId = private MessageId of string
 
 module MessageId =

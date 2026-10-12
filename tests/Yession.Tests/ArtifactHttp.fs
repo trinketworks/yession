@@ -67,7 +67,7 @@ let private serving (files: (ArtifactRef * string) list) =
                 None
                 None
                 None
-                (Some (Artifacts.routes (stubAuth ()) (Artifacts.receive log dir) dir ""))
+                (Some (Artifacts.routes (stubAuth ()) (Artifacts.receive log dir) (Artifacts.stage (TestFiles.tempDir "artifacts-http-staged")) dir ""))
                 (fun _ -> "no peer token is minted here")
                 ""
                 None
@@ -91,7 +91,7 @@ let private receiving () =
                 None
                 None
                 None
-                (Some (Artifacts.routes (stubAuth ()) (Artifacts.receive log dir) dir ""))
+                (Some (Artifacts.routes (stubAuth ()) (Artifacts.receive log dir) (Artifacts.stage (TestFiles.tempDir "artifacts-upload-staged")) dir ""))
                 (fun _ -> "no peer token is minted here")
                 ""
                 None
@@ -172,6 +172,87 @@ let private uploadTests =
                 | Error (Artifacts.UploadRefusal.Refused said) -> Expect.stringContains said "at most 100 MB" "the refusal quotes the cap"
                 | other -> failwithf "expected a refusal, got %A" other
                 Expect.isEmpty (Artifacts.listing dir) "and no version on disk"
+            }
+    ]
+
+/// A staging directory and an artifacts directory, served for attachment uploads, with the
+/// store the drain and the sweep would be handed.
+let private staging () =
+    async {
+        let log = Yession.Session.InMemoryEventLog.create (SessionId.create "artifact-staging" |> expect) (fun () -> System.DateTimeOffset.UtcNow)
+        let dir = TestFiles.tempDir "artifacts-staging"
+        let stagedDir = TestFiles.tempDir "artifacts-staged"
+        let! server, _ =
+            Signalling.start
+                (SessionId.create "artifact-staging" |> expect)
+                ignore
+                None
+                None
+                None
+                (Some (Artifacts.routes (stubAuth ()) (Artifacts.receive log dir) (Artifacts.stage stagedDir) dir ""))
+                (fun _ -> "no peer token is minted here")
+                ""
+                None
+                false
+                0
+        let origin = sprintf "http://127.0.0.1:%d" (serverPort server)
+        let upload (id: string) = SessionRoute.at origin (SessionRoute.StagedUpload (UploadId.create id |> expect))
+        let recorded () =
+            async {
+                let! page = log.Read None 1000
+                return page.Events
+            }
+        return dir, Artifacts.staging log dir stagedDir, upload, recorded, (fun () -> async { server.close ignore })
+    }
+
+let private stagingTests =
+    testList "attaching a file to a message" [
+
+        testCaseAsync "an attachment's bytes wait where nobody can see them, and a retry is the same upload" <|
+            async {
+                let! dir, store, upload, recorded, stop = staging ()
+                let id = UploadId.create "u-1" |> expect
+                let! first = TestHttp.put ada "pixels" (upload "u-1")
+                Expect.equal first.Status 204 "staged"
+                Expect.isTrue (store.Arrived id) "and arrived whole"
+                let! again = TestHttp.put ada "pixels" (upload "u-1")
+                Expect.equal again.Status 204 "a retry of an upload that landed is answered, not refused"
+                Expect.equal (store.Listed () |> List.map (fst >> UploadId.value)) [ "u-1" ] "one file, not two"
+                Expect.isEmpty (Artifacts.listing dir) "not an artifact yet"
+                let! events = recorded ()
+                Expect.isEmpty events "and nothing on the log: nobody else has seen it"
+                do! stop ()
+            }
+
+        testCaseAsync "no identity, no attachment" <|
+            async {
+                let! _, store, upload, _, stop = staging ()
+                let! reply = TestHttp.put [] "pixels" (upload "u-2")
+                Expect.equal reply.Status 401 "gated like every other write"
+                Expect.isFalse (store.Arrived (UploadId.create "u-2" |> expect)) "and nothing kept"
+                do! stop ()
+            }
+
+        testCaseAsync "sharing a staged file makes it the next version, and leaves the staged copy for the sweep" <|
+            async {
+                let! dir, store, upload, recorded, stop = staging ()
+                let id = UploadId.create "u-3" |> expect
+                let! _ = TestHttp.put ada "pixels" (upload "u-3")
+                match! store.Share ActorRef.Agent "shot.png" id with
+                | Ok fact ->
+                    Expect.equal (ArtifactRef.name fact.Ref) "shot.png" "under the name it was attached as"
+                    Expect.equal fact.Bytes 6L "all of it"
+                | Error why -> failwithf "expected a share, got %s" why
+                let! events = recorded ()
+                Expect.equal (List.length events) 1 "recorded once, as an artifact everybody can now see"
+                Expect.equal (Artifacts.listing dir |> List.length) 1 "in the store"
+                Expect.isTrue (store.Arrived id) "the staged copy stays, so a drain that dies can share it again"
+                store.Discard id
+                Expect.isFalse (store.Arrived id) "until it is discarded"
+                match! store.Share ActorRef.Agent "shot.png" id with
+                | Error _ -> ()
+                | Ok _ -> failwith "a discarded upload has nothing to share"
+                do! stop ()
             }
     ]
 
@@ -366,4 +447,4 @@ let private readTests =
             }
     ]
 
-let tests = testList "ArtifactHttp" [ routeTests; uploadTests; readTests ]
+let tests = testList "ArtifactHttp" [ routeTests; uploadTests; stagingTests; readTests ]

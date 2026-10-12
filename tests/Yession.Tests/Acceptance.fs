@@ -121,7 +121,8 @@ let private representativeModel : ClientModel =
                     Size = None } ]
           Model = Some pickedModel
           Chapters = Map.empty
-          LaunchDismissed = false }
+          LaunchDismissed = false
+          Attachments = Map.empty }
       Conversation =
         ConversationProjection.ofItems
             [ { MessageId = MessageId.create "msg-1" |> expect

@@ -153,10 +153,19 @@ module QueueDrain =
           /// repaired here rather than consumed twice).
           Removals : QueueId list }
 
-    let plan (consumed: Set<string>) (queue: Map<QueueId, QueuedMessage>) : DrainPlan =
+    /// `ready` answers whether an entry may be sent now (`Attachments.ready`: its files have
+    /// arrived). The batch stops at the first entry that may not, so a message never overtakes
+    /// one queued before it; what waits stays in the doc, where everyone can see it waiting.
+    let plan (consumed: Set<string>) (ready: QueuedMessage -> bool) (queue: Map<QueueId, QueuedMessage>) : DrainPlan =
         let snapshot = QueueOrder.sorted queue
-        { Batch = snapshot |> List.filter (fun m -> not (Set.contains (QueueId.value m.QueueId) consumed))
-          Removals = snapshot |> List.map (fun m -> m.QueueId) }
+        let isConsumed (m: QueuedMessage) = Set.contains (QueueId.value m.QueueId) consumed
+        let batch = snapshot |> List.filter (isConsumed >> not) |> List.takeWhile ready
+        let taken = batch |> List.map (fun m -> m.QueueId) |> Set.ofList
+        { Batch = batch
+          Removals =
+            snapshot
+            |> List.filter (fun m -> isConsumed m || Set.contains m.QueueId taken)
+            |> List.map (fun m -> m.QueueId) }
 
     /// The consumed-set contribution of one event: drains dedup against every
     /// `MessageSent` that names a queue entry.
