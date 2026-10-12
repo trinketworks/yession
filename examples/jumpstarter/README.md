@@ -1,63 +1,66 @@
 # A Jumpstarter provider
 
-An MCP server that lends a [Jumpstarter](https://jumpstarter.dev) exporter — and the hardware
-behind it — to an agent. Point any MCP client at it and the agent gets five tools: power the
-board and call anything else the exporter exports. Its console is not a tool — it is offered
-as a stream, and Yession turns that into a terminal people can watch and type into.
+An MCP server that lends a [Jumpstarter](https://jumpstarter.dev) exporter, and the hardware
+behind it, to an agent. Point any MCP client at it and the agent gets five tools: power the
+board and call anything else the exporter exports. The console is not a tool. The server
+offers it as a stream, and Yession turns that stream into a terminal that people can watch and
+type into.
 
-It is here as the counterpart to [serial](../serial/): that one is written in this
-repository's language, longhand, and owns a device. This one is written in **Python** on
-**somebody else's SDK**, and owns a **service**. Between them they make the claim the
-`examples/` directory exists to make — a provider is not a plugin, it is a server, and it can
-be written in whatever the thing you are integrating is written in.
+This example is the counterpart to [serial](../serial/). The serial example is written
+longhand in this repository's language and owns a device. This example is written in
+**Python** on **somebody else's SDK** and owns a **service**. Together they make the claim
+that the `examples/` directory exists to make: a provider is not a plugin, it is a server, and
+you can write it in whatever language the thing you integrate uses.
 
 ## What it demonstrates
 
-**A provider does not have to be in the host's language.** Yession is F# on Node; jumpstarter
-is Python. Nothing in either knows about the other, because the seam between them is HTTP and
-a JSON schema. Reimplementing jumpstarter's gRPC in F# would have been a protocol
-reimplementation to maintain forever; using its own SDK is ~600 lines and upstream keeps it
-working.
+**A provider does not have to be in the host's language.** Yession is F# on Node, and
+jumpstarter is Python. Neither knows about the other, because the seam between them is HTTP
+and a JSON schema. A reimplementation of jumpstarter's gRPC in F# would be a protocol to
+maintain forever. This provider uses the jumpstarter SDK in about 600 lines, and upstream
+keeps the SDK working.
 
 **Why not `jmp mcp serve`.** Jumpstarter ships an MCP server of its own, and it is the first
-thing to reach for. It does not fit twice over: it speaks stdio, which is not a transport
-Yession declares servers over, and it resolves a *controller-backed* client config — an
-endpoint and a token — so it cannot address a direct-mode exporter at all. Both halves would
-have to change upstream. Writing the bridge is what makes the claim and the console stream
-this provider's to own.
+thing to try. It does not fit, for two reasons. First, it speaks stdio, and Yession does not
+declare servers over stdio. Second, it resolves a *controller-backed* client config (an
+endpoint and a token), so it cannot address a direct-mode exporter at all. Both halves would
+have to change upstream. Writing the bridge makes the claim and the console stream this
+provider's to own.
 
 **Arbitration is yours when the service does not do it.** Jumpstarter arbitrates with
 *leases*, and leases live in its Kubernetes controller. A direct-mode exporter has none, so
-this server claims it: one holder, named in refusals, released when its MCP session goes
-quiet. See [Who holds it](#who-holds-it).
+this server claims the exporter itself: one holder, named in refusals, released when its MCP
+session goes quiet. See [Who holds it](#who-holds-it).
 
 **A blocking SDK, on a server that cannot block.** The jumpstarter client is a synchronous
-context manager, and so is the serial console inside it; MCP is an event loop answering
-requests. So the SDK lives on a thread of its own with a command queue
+context manager, and so is the serial console inside it. MCP is an event loop that answers
+requests. The SDK therefore lives on a thread of its own with a command queue
 ([src/jumpstarter_provider/exporter.py](src/jumpstarter_provider/exporter.py)), entered once
-and exited once, and the tools hand it work. That is the whole trick, and it is the part
-worth stealing for any provider wrapping a library that was not written for a server.
+and exited once. The tools hand work to that thread. The header of that file explains the
+arrangement. Reuse this pattern for any provider that wraps a library that was not written for
+a server.
 
 **Introspection has to be honest, or it sends the caller somewhere worse.** A driver client
-carries thirty names and six of them are the driver's; the rest is the SDK's plumbing. So one
+carries thirty names, and six of them are the driver's. The rest is the SDK's plumbing. One
 function ([src/jumpstarter_provider/introspect.py](src/jumpstarter_provider/introspect.py))
-answers *what does this offer* for both the listing and every refusal, and it answers from the
-CLASS — because `getattr(client, "status")` runs the getter, and `status` is a property. A
-refusal that says only "no such method" and then lists names the listing hides is how a caller
-ends up invoking `get_status_async` and being handed an un-awaited coroutine. Streaming methods
-are drained to their first few items rather than described as `<generator object …>`, which is
-what makes `driver_call power read` the answer to "what is the board doing".
+therefore answers *what does this offer* for both the listing and every refusal. It answers
+from the CLASS, because `getattr(client, "status")` runs the getter and `status` is a
+property. The header of that file gives both rules and the defects behind them.
+
+The provider also drains streaming methods to their first few items, instead of describing
+them as `<generator object …>`. This is what makes `driver_call power read` the answer to
+"what is the board doing".
 
 **Bytes do not ride tool calls, so they get a leg of their own.** The console is a stream, and
-there are two ways to reach it here — both of them useful, and the difference between them is
-who is asking:
+there are two ways to reach it here. Both are useful, and the difference between them is who
+is asking:
 
 | leg | transport | carries |
 |---|---|---|
 | control | MCP over HTTP at `/mcp` | the five tools |
 | data | WebSocket at `/attach/<token>` | the console's bytes, both ways |
 
-joined one way by a ticket, which `acquire` hands back in the result's `_meta`:
+A ticket joins the legs one way. `acquire` returns the ticket in the result's `_meta`:
 
 ```json
 "_meta": {
@@ -69,33 +72,31 @@ joined one way by a ticket, which `acquire` hands back in the result's `_meta`:
 }
 ```
 
-That object is the whole of what a provider implements to have its console become a terminal
-a person can watch and type into. It is in `_meta` rather than in the content because a ticket
-is for the *client*, not for the model — a client that has never heard of the key ignores it,
-still gets the prose, and still has the three console tools.
+That object is all a provider implements to have its console become a terminal that a person
+can watch and type into. It is in `_meta` and not in the content, because a ticket is for the
+*client* and not for the model. A client that has never heard of the key ignores it, still gets
+the prose, and still has the three console tools.
 
-The contract behind that url — which two rules are load-bearing and which are courtesies — is
-[docs/streams.md](../../docs/streams.md).
+[docs/streams.md](../../docs/streams.md) describes the contract behind that URL, including
+which two rules are load-bearing and which are courtesies.
 
-*Waiting for a prompt* is the thing console interaction is mostly made of, and it is a
-request/response question even though a console is not. This provider used to answer it with
-`serial_expect`; `read_terminal`'s `wait_for` / `wait_for_pattern` answers it on the terminal
-instead, for every backend rather than the one that happened to implement it.
+*Waiting for a prompt* is most of console interaction. It is a request/response question even
+though a console is not. `read_terminal`'s `wait_for` and `wait_for_pattern` answer it on the
+terminal, for every backend.
 
-**A console is not a tool, and this is the part worth stealing.** This provider used to offer
-`serial_send`, `serial_read` and `serial_expect` beside the stream, and keeping the two in
-step cost real machinery: the SDK's console is a `pexpect` spawn, so whoever reads it consumes
-it, and the drain feeding the socket had to tee every chunk into a capped buffer with an
-arrival event so the tools were not starved of the bytes they existed to return.
+**A console is not a tool, and this is the part worth stealing.** An agent reads the console
+through `read_terminal`, on the terminal that this stream becomes. `read_terminal` works
+against a durable transcript, not a handle that reading consumes. It anchors to the reader's
+own position, so output that the reader already received cannot satisfy a later wait. The write
+lease arbitrates who types. These features belong to Yession and not to this provider, and
+every backend gets them.
 
-All of it is gone, and nothing was lost. What an agent reads it reads through
-`read_terminal` on the terminal this stream becomes — against a durable transcript rather
-than a handle consumed by looking at it, anchored to the reader's own position so output it
-has already been given cannot satisfy a later wait, and with the write lease arbitrating who
-types. That is Yession's, not this provider's, and every backend gets it.
+The tools `serial_send`, `serial_read`, and `serial_expect` once needed a tee into a capped
+buffer, because the SDK's console is a `pexpect` spawn and whoever reads it consumes it. They
+are gone, and nothing was lost.
 
-The lesson generalises: if you are building a tee so your own tools can read alongside the
-stream you offer, you are reimplementing something the host already does better.
+The lesson generalises: if you build a tee so that your own tools can read alongside the
+stream you offer, you reimplement something that the host already does better.
 
 ## The tools
 
@@ -107,29 +108,29 @@ stream you offer, you are reimplementing something the host already does better.
 | `power` | yes | `on`, `off`, or `cycle` |
 | `driver_call` | yes | any method on any driver in the tree — the general case. Call it with no method to be told what that driver offers |
 
-Every answer is prose, because a model is what reads it. A refusal names the holder: "in use,
+Every answer is prose, because a model reads it. A refusal names the holder, because "in use,
 not broken" is a different instruction from "unavailable".
 
 ## Who holds it
 
-One claim over the **whole exporter**, not one per driver — powering the board off cuts the
-console out from under anybody else, so per-driver claims would promise an isolation the
-hardware does not keep.
+There is one claim over the **whole exporter**, not one per driver. Powering the board off cuts
+the console out from under anybody else, so per-driver claims would promise an isolation that
+the hardware does not keep.
 
-The holder is the **MCP session id**, and the claim follows a live session: every request
-under that id keeps it (including the `tools/list` a client polls with), and a client that
-goes quiet for `JUMPSTARTER_PROVIDER_TTL` loses it. One rule, and it covers both a client
-that says goodbye and a client that is killed — which is the case a goodbye cannot cover.
+The holder is the **MCP session id**, and the claim follows a live session. Every request
+under that id keeps the claim, including the `tools/list` that a client polls with. A client
+that goes quiet for `JUMPSTARTER_PROVIDER_TTL` loses the claim. One rule covers both a client
+that says goodbye and a client that is killed. A goodbye cannot cover the second case.
 
 ## Running it
 
-The exporter first, in direct mode — no Kubernetes:
+Start the exporter first, in direct mode (no Kubernetes):
 
 ```bash
 jmp run --exporter-config exporter.yaml --tls-grpc-listener 127.0.0.1:8815 --tls-grpc-insecure
 ```
 
-Then the provider:
+Then start the provider:
 
 ```bash
 uv run --project examples/jumpstarter jumpstarter-provider
@@ -139,7 +140,7 @@ uv run --project examples/jumpstarter jumpstarter-provider
 jumpstarter-provider 0.1.0: MCP at http://127.0.0.1:7334/mcp, exporter at 127.0.0.1:8815
 ```
 
-Configured entirely by the environment:
+The environment configures the provider entirely:
 
 | variable | default | |
 |---|---|---|
@@ -150,18 +151,18 @@ Configured entirely by the environment:
 | `JUMPSTARTER_PROVIDER_TTL` | `300` | seconds of client silence that release a claim |
 | `JUMPSTARTER_PROVIDER_ORIGIN` | the bound address | the `ws://` origin clients should attach to, when the provider sits behind something |
 
-**Loopback is the only deployment this is honest about**, twice over: the MCP leg is
-unauthenticated, and the exporter's gRPC leg runs insecure with no passphrase. Either one
-bound wider hands the hardware to the network.
+**Loopback is the only deployment this example is honest about**, for two reasons. The MCP leg
+is unauthenticated, and the exporter's gRPC leg runs insecure with no passphrase. If you bind
+either leg wider, you hand the hardware to the network.
 
-To use it from Yession: declare `http://127.0.0.1:7334/mcp` in the management UI's MCP form,
-which is the same form any third party's server is declared in.
+To use it from Yession, declare `http://127.0.0.1:7334/mcp` in the management UI's MCP form.
+This is the same form that declares any third party's server.
 
 ## An exporter to point it at
 
-[tests/exporter.yaml](tests/exporter.yaml) is the no-hardware one the suite runs against —
-upstream's `MockPower` and a pyserial `loop://` line that echoes what you write. Real hardware
-is the same file with a device in it:
+[tests/exporter.yaml](tests/exporter.yaml) is the no-hardware exporter that the suite runs
+against. It uses upstream's `MockPower` and a pyserial `loop://` line that echoes what you
+write. Real hardware needs the same file with a device in it:
 
 ```yaml
 export:
@@ -173,9 +174,9 @@ export:
       url: "/dev/ttyUSB0"
 ```
 
-Everything upstream exports — [fifty-odd driver
-packages](https://jumpstarter.dev/main/reference/package-apis/index.html) — works through
-`driver_call` without this provider knowing they exist.
+Everything that upstream exports works through `driver_call`, without this provider knowing
+that it exists. See the [fifty-odd driver
+packages](https://jumpstarter.dev/main/reference/package-apis/index.html).
 
 ## Testing it
 
@@ -183,15 +184,15 @@ packages](https://jumpstarter.dev/main/reference/package-apis/index.html) — wo
 dotnet fsi tasks.fsx example jumpstarter
 ```
 
-That syncs the locked environment, runs the pytest suite against a REAL exporter (spawned per
-session, no hardware), and boots the provider to prove it starts.
+This command syncs the locked environment, runs the pytest suite against a REAL exporter
+(spawned per session, no hardware), and boots the provider to prove that it starts.
 
 The suite is deliberately two-layered, and the second layer is not here:
 
 | where | what only it can prove |
 |---|---|
-| [tests/](tests/) | the claim, the tools, the console — driven by a hand-written HTTP client, because a client from the same SDK as the server agrees with it by construction |
-| `tests/Yession.Tests/Jumpstarter.fs` | that **Yession's own MCP client** can drive this server. Two implementations that never checked against each other agreeing is the only evidence either read the protocol right. Runs under the `Jumpstarter` capability |
+| [tests/](tests/) | the claim, the tools, the console. A hand-written HTTP client drives them, because a client from the same SDK as the server agrees with it by construction |
+| `tests/Yession.Tests/Jumpstarter.fs` | that **Yession's own MCP client** can drive this server. Two implementations that never checked against each other can agree. That agreement is the only evidence that either read the protocol right. Runs under the `Jumpstarter` capability |
 
 ## The files
 
