@@ -132,11 +132,7 @@ let private measure (box: HTMLElement) : (int * int) option =
 type private Live =
     { Emulator : Emulator
       /// The transcript position the emulator has been fed through.
-      mutable Through : int
-      /// The last screen dispatched, so an unchanged screen is not re-dispatched into a
-      /// render loop that would then ask for it again. The cursor is part of it: a caret
-      /// moving along a line the program did not redraw is still the screen moving.
-      mutable Rendered : LiveScreen option }
+      mutable Through : int }
 
 type Screens =
     { /// The Process's screen for a terminal: the transcript position it represents, and the
@@ -175,13 +171,18 @@ let create (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) :
     /// Serialize and dispatch, if the screen moved. `Serialize` waits on the emulator's own
     /// write barrier, so this reads a screen that has been drawn rather than one that is
     /// still being parsed.
+    ///
+    /// Moved means different from what the LATEST model holds (`TerminalScreens`), asked
+    /// once the screen is read rather than when it was asked for: an unchanged screen told
+    /// again is a message, an update and a render for nothing, into a render loop that would
+    /// then ask for it again. The cursor is part of it: a caret moving along a line the
+    /// program did not redraw is still the screen moving.
     let publish (id: TerminalId) (entry: Live) =
         Async.StartImmediate (
             async {
                 let! screen = entry.Emulator.Screen ()
-                if Some screen <> entry.Rendered then
-                    entry.Rendered <- Some screen
-                    dispatch (TerminalScreenMsg (id, screen))
+                let held = current () |> Option.bind (fun model -> Map.tryFind id model.TerminalScreens)
+                if held <> Some screen then dispatch (TerminalScreenMsg (id, screen))
             })
 
     /// Measure what this reader is looking at, and tell the model — for every terminal, held or
@@ -253,7 +254,7 @@ let create (dispatch: ClientMsg -> unit) (current: unit -> ClientModel option) :
             // enough to matter.
             let emulator = Emulator.openEmulator keyframe.Cols keyframe.Rows
             emulator.Write keyframe.Screen
-            let entry = { Emulator = emulator; Through = keyframe.Seq; Rendered = None }
+            let entry = { Emulator = emulator; Through = keyframe.Seq }
             live.[key] <- entry
             publish id entry
       Sync =
