@@ -3814,15 +3814,22 @@ let private tabTests =
                 [ PaneSplit.side; PaneSplit.natural; PaneSplit.chatReadable - 2 * 32 ]
                 "the sidebar, the pane's floor and the reading measure"
 
-        // Whether a reader is following a surface's end is the document's to see; what that
-        // puts on screen is the model's (`Away`), drawn from what `Tail` reports.
+        // Where a reader is is the document's to see; what that puts on screen is the model's
+        // (`Away`), drawn from what `Tail` reports.
         testCase "a reader away from a surface's end is offered the way back, and one who returns is not" <| fun () ->
-            let away = clientOf [] |> Support.step (ReaderMovedMsg (TailSurface.Blocks terminalA, false))
-            let back = away |> Support.step (ReaderMovedMsg (TailSurface.Blocks terminalA, true))
+            let away = clientOf [] |> Support.step (ReaderMovedMsg (TailSurface.Blocks terminalA, true))
+            let back = away |> Support.step (ReaderMovedMsg (TailSurface.Blocks terminalA, false))
             Expect.equal
                 (Set.toList away.Away, Set.toList back.Away)
                 ([ TailSurface.Blocks terminalA ], [])
                 "away, then following again"
+
+        // A reader who can still see the end is not offered a way to it.
+        testCase "a reader less than a screen from a surface's end is not offered the way back" <| fun () ->
+            Expect.isFalse (TailSurface.farBehind 600.0 640.0) "within a screen of the end"
+
+        testCase "a reader more than a screen from a surface's end is offered the way back" <| fun () ->
+            Expect.isTrue (TailSurface.farBehind 700.0 640.0) "a screen and more from the end"
 
         testCase "a surface's name in the document reads back as that surface" <| fun () ->
             let surfaces = [ TailSurface.Conversation; TailSurface.Blocks terminalA; TailSurface.Screen terminalA ]

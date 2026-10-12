@@ -5820,6 +5820,19 @@ let editorTests =
                     let! top = await (page.EvaluateAsync<float> "() => document.querySelector(\"#shell [data-tail='chat']\").scrollTop")
                     Expect.equal top 0.0 "the reader is still at the line they scrolled back to"
                 }
+            // Leaving the end is not reason enough to be offered the way back to it: a reader a
+            // few lines up can see it from where they are. A control appearing for that appears
+            // for every nudge of a thumb.
+            editorCaseIn 1440 900 "a reader a few lines back from the latest message is not offered the way to it" <| fun page ->
+                async {
+                    let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+                    do! toTheEnd page "chat"
+                    do! awaitU (page.EvaluateAsync "() => { document.querySelector(\"#shell [data-tail='chat']\").scrollTop -= 120 }")
+                    do! twoFrames page
+                    do! twoFrames page
+                    let! offered = await (page.EvaluateAsync<bool> (jumpOffered "chat"))
+                    Expect.isFalse offered "no way back while the end is a few lines away"
+                }
             // …and is told there is more below, over a terminal as over the chat. Output a reader
             // scrolled away from used to arrive with nothing on screen to say so.
             editorCaseIn 1440 900 "a reader who scrolled back through a terminal's blocks is offered the way to the latest" <| fun page ->
