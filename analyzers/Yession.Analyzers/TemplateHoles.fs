@@ -11,15 +11,22 @@ open FSharp.Compiler.Symbols
 /// Both compile, both render, and the page is wrong in a way no test of the model can see.
 ///
 /// The compiler cannot object — the box is an explicit `box`, not a conversion the
-/// implicit-conversion warnings model — and `%s` cannot help either: F# rejects a format
-/// specifier in a `FormattableString` outright (FS3376), which is exactly the type Lit's
-/// tag takes. So the hole is the one place in a template where the type is known to the
-/// compiler and to nobody else.
+/// implicit-conversion warnings model — and `%s` cannot help either: FS3579 fires on every
+/// hole and offers `%s` as its only remedy, but F# rejects a format specifier in a
+/// `FormattableString` outright (FS3376), which is exactly the type Lit's tag takes. So the
+/// hole is the one place in a template where the type is known to the compiler and to
+/// nobody else.
 ///
 /// The typed tree still has it. A template compiles to
 /// `FormattableStringFactory.Create(fmt, [| box<'T> hole; ... |])`, and `'T` there is the
 /// type whose stringification a reader of the page actually gets. This asks what each one
 /// is, and admits only the six things Lit renders on purpose.
+///
+/// The six are a string, a `TemplateResult`, a sequence of renderable values, a listener, an
+/// `int` and a `bool`. The list is closed, and widening it is deliberate: a hole holding
+/// anything else is an error until somebody adds the type here and says in the fixture what
+/// the widening means. The failure mode of this rule is silence, and a closed list fails
+/// loudly.
 module private Renderable =
 
     // Lit binds a hole in an `@event=` position to a listener. Nothing else in a template
