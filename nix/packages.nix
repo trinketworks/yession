@@ -90,12 +90,17 @@ let
       unignored = pkgs.nix-gitignore.gitignoreFilter (builtins.readFile ../.gitignore) root;
       notConsumed = [
         "nix" ".github" "docs" ".claude" ".agents"
-        "flake.nix" "flake.lock" "devenv.nix" "devenv.yaml" ".gitignore" "AGENTS.md" "CLAUDE.md"
+        "flake.nix" "flake.lock" "devenv.nix" "devenv.yaml" ".gitignore"
       ];
+      # Agent notes live beside the code they govern (`tests/AGENTS.md`, …), so they are matched
+      # by name at any depth: editing one must not invalidate the build either.
+      agentNotes = [ "AGENTS.md" "CLAUDE.md" ];
       # A directory is matched as itself, not only through its contents: returning false for the
       # directory prunes the walk there and leaves no empty `nix/` and `docs/` behind to suggest
       # the filter half-worked.
-      isNotConsumed = rel: lib.any (entry: rel == entry || lib.hasPrefix (entry + "/") rel) notConsumed;
+      isNotConsumed = rel:
+        lib.any (entry: rel == entry || lib.hasPrefix (entry + "/") rel) notConsumed
+        || lib.elem (baseNameOf rel) agentNotes;
     in lib.cleanSourceWith {
       src = lib.cleanSource root;
       filter = path: type:

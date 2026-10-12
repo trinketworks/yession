@@ -90,11 +90,17 @@ let private consumed =
       ".config/dotnet-tools.json"
       "README.md" ]
 
-/// Tracked, but not consumed: editing CI, docs, the agent notes or the devenv config must not
-/// invalidate the (slow) F#/Fable build.
+/// Tracked, but not consumed: editing CI, docs or the devenv config must not invalidate the
+/// (slow) F#/Fable build.
 let private notConsumed =
     [ "nix/"; ".github/"; "docs/"; ".claude/"; ".agents/"
-      "flake.nix"; "flake.lock"; "devenv.nix"; "devenv.yaml"; "AGENTS.md"; "CLAUDE.md" ]
+      "flake.nix"; "flake.lock"; "devenv.nix"; "devenv.yaml" ]
+
+/// The agent notes, matched by file name at any depth: they sit beside the code they govern, so
+/// a directory being consumed does not make its notes a build input.
+let private agentNotes = set [ "AGENTS.md"; "CLAUDE.md" ]
+
+let private isAgentNote (path: string) = agentNotes.Contains (path.Substring (path.LastIndexOf '/' + 1))
 
 let tests =
     testList "the Nix build source" [
@@ -138,9 +144,10 @@ let tests =
             let files =
                 entries.Value
                 |> List.filter (fun p ->
-                    notConsumed
-                    |> List.exists (fun excluded ->
-                        if excluded.EndsWith "/" then p.StartsWith excluded else p = excluded))
+                    isAgentNote p
+                    || notConsumed
+                       |> List.exists (fun excluded ->
+                           if excluded.EndsWith "/" then p.StartsWith excluded else p = excluded))
             Expect.isTrue
                 (List.isEmpty files)
                 (sprintf
