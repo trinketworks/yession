@@ -367,9 +367,9 @@ needs it and give the result a type immediately. Never carry `obj` onward. Examp
 
 ## Testing
 
-Tests gated by CAPABILITIES the run declares, not folders (`tests/Yession.Tests/Tags.fs`). A
-suite runs only when this environment has every capability it needs; otherwise it reports a
-skip — never an error. Pass the caps THIS box has as args:
+Capabilities that the run declares gate tests, not folders (`tests/Yession.Tests/Tags.fs`). A
+suite runs only when this environment has every capability it needs. Otherwise it reports a skip,
+never an error. Pass the capabilities THIS box has as arguments:
 
 ```
 check                        # cheap tier: pure/model/protocol on Node. Every PR. Fast.
@@ -412,245 +412,110 @@ check Browser --runtime clr  # run ONE of the two runtimes (node | clr), and com
                              #   all the `node` tier's too (`VerifyTiers` holds it to that).
 ```
 
-`lint` is separate from `check` because it guards a different thing: source judged without
-running it, where running it would never reach the fault. GitHub only validates a workflow file
-when it RUNS, and `release.yml` runs on master — after a merge — so a syntax error there is
-invisible to PR CI and lands already broken. And a Lit template hole (`html $"""{x}"""`) is
-boxed before Lit sees it, so a record or a union in one renders whatever it happens to
-stringify — no test of the model can see it and no compiler warning covers it (FS3579 fires on
-every hole and its only remedy, `%s`, is FS3376-illegal in a `FormattableString`). The typed
-tree still knows, so `analyzers/Yession.Analyzers` asks it: the reasoning is in
-`TemplateHoles.fs`.
+To eyeball a rich-editor change in a real browser without any WebRTC machinery, run
+`check Browser`. It drives Chromium against `tests/browser/editor-harness.html`. The full two-peer
+WebRTC E2E runs where the Nix-built `Native` addon is present (CI, `verify`).
 
-The second rule there reads an `[<Emit>]` macro against the binding it sits on
-(`EmitMacro.fs`). The string and the signature are two lines nothing checks together: name a
-`$N` past the last argument and the emitted JavaScript reads `undefined`; leave an argument
-unnamed and its expression is never emitted, so whatever it was going to do does not happen.
-F# type-checks the signature and treats the string as a literal, the JavaScript that comes out
-is valid either way, and an interop binding usually has one call site — so a test catches it
-only by running that exact binding on the platform it targets. A parameter kept for a reason
-other than being emitted says so with a leading underscore, which is the whole suppression
-story and deliberately the language's own convention rather than one this rule invents.
+To inspect or iterate on a server-rendered surface (the manager page) with real screenshots, read
+`.agents/skills/ui-exploration/SKILL.md` first. Headless Chromium's window-size clamp makes naive
+mobile screenshots lie. The camera that the skill uses (`frames --boot --still`) does not.
 
-The third reads the same macro from the other end (`EmitBody.fs`): Fable substitutes `$N` with
-the caller's argument TEXT and pastes the result into the caller's scope, so a body that
-declares a JavaScript binding can collide with a variable the caller happens to have named the
-same (`const pc = $0` emitting `const pc = pc`, a temporal dead zone error that took the shell
-down and reported as eight unrelated browser timeouts), and a placeholder written twice
-evaluates its argument twice (a fresh peer id minted three times, so a first visit stored one
-and returned another). Both are unrepresentable when the substitutions arrive as parameters of
-a real function, which is what the rule asks for. Its third case is `new` over a placeholder:
-`new $0($1)` handed `ndc().PeerConnection` emits `new ndc().PeerConnection(name)`, which is
-`(new ndc()).PeerConnection(name)` to JavaScript — the class called without `new`, red on
-every suite that opened a real connection and green on the cheap tier that opens none — so a
-constructed placeholder is written `new ($0)($1)`. It was a suite that matched `[<Emit(...)>]`
-in F# source with a hand-kept list of directories to walk; that scan could not write its own
-fixtures — a violating macro quoted literally in a scanned file would have been a real
-violation — and needed a case asserting it had matched at least 300 emits, because a pattern
-that has stopped seeing them and a codebase that obeys the rule read identically in a green
-run. Reading the attribute's value off the typed tree costs none of that.
+`lint` is separate from `check` because it judges source without running it. Running the code
+would never reach some faults. GitHub checks a workflow file only when it runs, and
+`release.yml` runs on master after the merge. A syntax error there is invisible to PR CI and lands
+broken. A Lit template hole is boxed before Lit sees it, so a record or a union in one renders
+whatever it stringifies to. No test of the model sees that, and no compiler warning covers it.
 
-The fourth is not about interop at all (`RecordShapes.fs`): two record types carrying the same
-field names make a bare `{ … = … }` build whichever was declared last, silently, at every
-warning level, so a record added today re-points constructions written months ago in files its
-author never opened. The remedy is `[<RequireQualifiedAccess>]` on every type in the group, and
-the rule is what says which groups there are. It replaced a suite that read F# source with
-regular expressions — a brace-balancer for the record body, an indent scan for where it ended,
-a walk back up over doc comments for the attribute — six of whose eight cases tested that
-reader rather than the rule. Two holes came with the text and the tree closes both: its label
-pattern required an initial capital, so a lowercase-labelled record was invisible, and it had
-no model of accessibility, so it counted records against each other that no scope can hold at
-once. The population is now the assembly graph rather than a hand-kept list of directories,
-which is also what lets it see a collision the old one structurally could not: neither
-`Yession.Domain` nor the serial example references the other, so the pair only meets in
-`tests/Yession.Tests`, which references both.
+`lint` takes its verdict from a SARIF report that it names, not from the analyzer's exit code. A
+killed analyzer prints nothing and exits non-zero like a finding. The fixture check reads the same
+report, so one reader serves both. `tasks.fsx` (`lint`, `analyze`) holds the reasoning.
 
-The fifth is the same fault on a different axis (`NamespaceShadowing.fs`): `open Yession.Domain`
-puts every sub-namespace of it in front of a file by short name, so given a module `Terminals`
-in scope and an opened namespace `Terminals`, a reference to `Terminals.foo` resolves to the
-NAMESPACE when the namespace has a `foo` and falls through to the module when it does not, with
-nothing said either way. Two scopes may share a short name; they may not also share a member —
-which is what keeps `Yession.Domain` beside `Yession.Tests.Domain` legal. It replaced a scan
-whose member pattern was anchored `^(?:type|and|module)` with no leading whitespace, so every
-member of every nested module was invisible to it and a nested module never became a scope at
-all; between them `Yession.App.App` did not exist as far as it was concerned, while it and the
-namespace holding it both exported `Connection`. Note what a namespace is NOT: FCS gives the one
-a file declares as a chain of one entity per segment, each holding no children, so the rule
-derives a namespace from its members rather than reading it — which is also the only shape that
-works for a referenced assembly, where namespaces do hold theirs.
+### Analyzer rules
 
-The sixth is the other half of that hazard (`DomainExports.fs`), and stricter for a reason: the
-domain is split so a file opens the two or three slices it needs, in no order anything fixes, and
-a namespace is opened for its CONTENTS — so if two `Yession.Domain.*` namespaces both exported a
-`Projection`, a file opening both would get whichever was opened last. No two of them may export
-the same name at all. That is what makes the short names affordable: `TerminalProjection` and
-`AuthzSubject` were prefixed to clear a flat namespace of 267 types and came off once each slice
-had a namespace, and what stops `Projection` and `Subject` being ambiguous is not luck but this.
-Its population is NAMED rather than derived, deliberately — `Yession.Domain.*` is the one family
-this repository expects a file to open several of at once, which is a fact about how the domain
-is meant to be used and not one the assembly graph knows.
+`lint` runs the F# analyzers in `analyzers/Yession.Analyzers`. Each rule file starts with a header
+comment that says why the rule exists. Read it before you change a rule or fix its finding.
 
-The seventh is not about names at all (`EnvWrites.fs`): a process has ONE environment, so a
-write to it is a write for everything that runs after — and the half that is easy to forget is
-putting back what was there. A test suite is one process, and `Phase2`'s credential-leak
-regression planted `ANTHROPIC_API_KEY` and DELETED it on the way out, which is a clear rather
-than a restore: every `LiveAgent` suite after it ran with no credential, `SessionMain` answers
-no credential by starting NO AGENT, and the live clone case got a session that accepted a
-message and never replied. Nothing said why, four times. So the writes stay in one file per
-assembly, which is the unit that becomes a process, and that file owns the give-back
-(`Support.withEnv`). Guarding the write rather than its consequence is deliberate: the mutation
-is in the cheap tier and only the consequence needs `LiveAgent`, so a guard on the consequence
-fires on a tier almost nobody runs, months later. It replaced a suite whose patterns could not
-tell a write from the mention of one — they matched an `[<Emit>]` macro's TEXT, so declaring the
-JavaScript that assigns counted the same as running it, which is why it had to be scoped by hand
-to one directory and why the product's own `Interop.setEnv` was invisible to it either way. On
-the tree a declaration is a declaration and a call is a call.
+- `TemplateHoles.fs` — A Lit template hole (`html $"""{x}"""`) holds only a string, a
+  `TemplateResult`, a sequence of these, a listener, an `int` or a `bool`. Render any other type
+  to a string first. **Adding a renderable type is deliberate.** Widen the list and say in the
+  fixture what the widening means. A closed list fails loudly, and this rule fails by silence.
+- `EmitMacro.fs` — Each `$N` in an `[<Emit>]` string names an argument that its binding takes,
+  and each argument appears in the string. Prefix a parameter that you keep but do not emit
+  with `_`.
+- `EmitBody.fs` — An `[<Emit>]` body must not declare a JavaScript binding that can collide with
+  the caller's variable, and must not write a placeholder twice. Pass the substitutions as
+  parameters of a real function. Write a constructed placeholder as `new ($0)($1)`.
+- `RecordShapes.fs` — Two record types with the same field names make a bare `{ … = … }` build the
+  type declared last. No diagnostic says so. Put `[<RequireQualifiedAccess>]` on every type in the
+  group and name the type at each construction.
+- `NamespaceShadowing.fs` — A namespace and a module with the same short name may not share a
+  member. Otherwise `Terminals.foo` resolves to the namespace with no diagnostic. Rename the
+  member on one side, or give the namespace a short name that nothing else uses.
+- `DomainExports.fs` — No two `Yession.Domain.*` namespaces may export the same name, because a
+  file that opens both gets the last one opened. This keeps short names such as `Projection` and
+  `Subject` unambiguous. Rename one export, or put the shared concept in the kernel. The rule
+  names its family and does not derive it from the assembly graph.
+- `EnvWrites.fs` — Write the process environment from one file per assembly, and let that file
+  restore what it found. The test suite writes through `Support.withEnv`. The rule guards the
+  write because its consequence shows only in tiers that few people run.
+- `EnvReaders.fs` — Read each environment variable in one file per assembly and pass the value
+  down. A second reader is a second default, and two defaults that disagree resolve unnoticed.
+- `AwaitSeam.fs` — In every project that can name `Interop.awaitPromise`, await through it and
+  never call `Async.AwaitPromise` raw. A raw await can lose its rejection handler to Fable's
+  trampoline, and Node then kills the process. The browser client has no seam and is not judged.
+- `EmitHome.fs` — Declare an `[<Emit>]`, or any `EmitMethod`, `EmitConstructor`, `EmitIndexer` or
+  `EmitProperty`, only in a binding project. A binding project references nothing Yession
+  (`src/Fable.*`, the serial example, the analyzer fixtures). Write other code in F#.
+  `[<Import>]` is not an emit. A text search for `[<Emit` misses the fully spelled
+  `[<Fable.Core.Emit(...)>]`, and the rule does not.
+- `Population.fs`, `Surfaces.fs`, `Expressions.fs`, `Environs.fs` — The shared readers.
+  Population reads what a project can name. Surfaces reads what an `open` puts in front of a file.
+  Expressions reads the calls that a project makes. Environs finds the calls that touch the
+  process environment. A verdict over a whole population is reported once, on the project's last
+  hand-written source file.
+- `Unjudged.fs` (YES000) — Reports the first compile error in a file. A declaration that the
+  compiler could not build is missing from the tree that every rule reads. `lint` then exits 2, and
+  the next step is `build`.
+- `Kept.fs` — Holds one project's answer at a time. `lint` analyzes every project in ONE process,
+  so a per-project cache that never evicts grew the analyzer to 10.5 GB. Use `Kept.Answer` for a
+  per-project cache.
 
-The eighth reads the same expressions from the other end (`EnvReaders.fs`): a variable is read
-from the environment in ONE place, and everywhere else is handed the value. A second reader is a
-second DEFAULT, and two that disagree resolve into whichever the deployment reaches without
-anybody choosing it. `YESSION_SESSION_AGENT_BACKEND` had two — `SessionMain` parsed it at boot
-defaulting to `srt` and validated srt's tools on the strength of it, `Agent.fs` read it again
-where the CLI is spawned defaulting to `host` — so a deployment that set nothing ran the agent
-CLI unconfined while every statement the session made about itself said srt. Nothing was wrong at
-either site; the fault was that there were two. It replaced a suite that could only ask which
-files NAMED a variable, a question with false answers both ways (a comment, a list of names to
-forward into a child, a `Map.tryFind` over somebody else's env), so it had to be told the two
-variables it knew about and the one file each was allowed in. Reading which files READ it needs
-no such table, and the population is every variable this repository names: thirty-three, two of
-which were being read twice with a default apiece while the suite watched the two it had. What
-makes that count honest is following a wrapper — `Tags.getEnv` chooses between the two forms by
-runtime, so a rule seeing only direct reads would find it reading a variable it cannot name three
-times — and stopping at bindings, which is what keeps `Support.withEnv` out of it.
+Declare a dependency on the project that uses it. `[<Emit>]` binds an API this repository does
+not own. Do not use it to avoid a reference. A reference costs `lint` seconds. If a population walk
+grows to an hour, fix the analyzer.
 
-`AwaitSeam.fs` is not about a name at all, and it is the one rule whose population decides
-whether it speaks. Fable's async trampoline hijacks a workflow onto a `setTimeout` every 2000
-steps, and `Async.AwaitPromise` attaches its rejection handler only once the workflow REACHES
-the await — so a promise that rejects inside that window has no handler when Node checks at the
-end of the turn, and Node kills the process. A `try/with` or an `Async.Catch` around the await
-cannot help: the handler is on the side of the gap that has not run yet. That is how a routine
-"no such container" 404, caught and ignored on every other run, killed a whole suite.
-`Interop.awaitPromise` closes it by settling the promise in the tick that created it, and 176
-awaits were converted to go through it across two sweeps. Nothing stopped the 177th being
-written raw: the seam is not a type anything is forced through, it is a function somebody has
-to remember, and which call the trampoline happens to expose is not a property of the call —
-the step counter carries ACROSS test cases, so the same await is fine for a year and fatal the
-day an unrelated case lands ahead of it. Its population is derived, and the derivation is the
-rule's own sentence: a project is judged when it can NAME a seam. `Yession.Host` declares one
-and the suite references it; the serial example owns its own copy, as the examples rule
-requires, and is judged against that. The browser client references none and is not judged —
-it is not Node, where an unhandled rejection is a dead process rather than a console warning,
-and `Yession.Host.Interop` is Node-only, so the exemption is the same fact as the absence. That
-silence is half of what the rule says, and no project that declares a seam can demonstrate it,
-which is why this rule has two fixtures.
+Every rule carries a fixture at `analyzers/fixtures/<Rule>Fixture`. Its `// YES00n` markers say
+which lines the rule must report. On every run `lint` compares the markers with that rule's own
+diagnostics in both directions. It counts only that rule's diagnostics, because the two emit
+rules read the same macros and have opinions on each other's cases.
 
-`EmitHome.fs` is about where an emit is DECLARED rather than what is in it: an `[<Emit>]` — or
-any of its family, `EmitMethod`, `EmitConstructor`, `EmitIndexer`, `EmitProperty` — lives in a
-binding project and nowhere else. The residue outside `src/Fable.*` was driven to zero by a
-long sweep, one binding at a time: a hundred-odd lines of JavaScript in `PaneShell.fs`, a
-65-line program in `AttachWs.fs`, twelve tool definitions inside one macro in the Domain. Then
-nothing kept it there — and its first run found three more that every text search for
-`[<Emit` had walked past, because they spelled the attribute in full, `[<Fable.Core.Emit(...)>]`. `Type safety` above says not to write one, and the two emit rules read
-every macro they find, but neither asks where a macro is written — a new emit in `app/` that
-names its arguments and declares nothing in its body is clean to both. The population is
-derived, not listed: a binding project is one with nothing Yession in its reach, neither its
-own name nor any reference, because a binding is a thing that knows nothing of the product it
-serves. That exempts `src/Fable.*`, the serial example (which owns its copies and references
-nothing of the product, both by the examples rule) and the analyzer fixtures, with no list for
-any of them to be missing from — and still judges `Yession.Domain`, which references nothing
-at all but IS the product. `[<Import>]` is not an emit: it names a module and an export and
-carries no JavaScript. Three fixtures, because the verdict is per project and has three
-answers: a project reaching Yession by reference, a Yession project reaching nothing, and a
-binding, silent over the same emits the first is reported for.
+A rule about how many files do something has fixture cases in several files. One file can neither
+break that rule nor prove that it still sees a break. The fixtures stop a rule from going silently
+blind. Each of these faults reports a clean product:
 
-`Population.fs` is what the scoping rules read: every declaration one project could name, of
-the code this repository builds — its own contents entire, plus what it references, bounded to
-the repository and cached per project. `Surfaces.fs` is the half the two namespace rules share:
-what an `open` puts in front of a file, read once because both break the same way if it is
-read wrong. `Expressions.fs` is the other side of the same idea, for a rule about what the code
-DOES rather than what it could name: every call the project makes, and the binding each is
-written inside — its own files only, because a referenced assembly hands over its declarations
-and never its bodies, and a use is always somewhere. `Environs.fs` is what the environment rules
-share on top of it: whether a call touches the process environment and which argument carries
-the variable's name, which under Fable means reading the `[<Emit>]` macro, since the `$0` in
-`process.env[$0]` is exactly that answer. A verdict over a whole population is the same for
-every file in it, so it is reported once, on the project's last authored source file, anchored
-at the declaration or the call it is about.
+- a loader that no longer matches the assembly name
+- a compiler upgrade that moves the typed-tree shape
+- a project that failed to restore
 
-A third exit says the run itself did not happen. The CLI exits non-zero for a finding and for
-its own death alike, and a process that is KILLED — a runner reclaimed, a container out of
-memory — prints nothing on its way out, so "a rule rejected your source" and "the analyzer
-never finished" arrived as one sentence with an empty body under it. That reached CI twice in
-one day, each time sending a reader to hunt a rule that had never fired. So the verdict is read
-from a SARIF report `lint` asks for and names, rather than inferred from the exit code: a run
-that finishes writes one whether or not it found anything, and a run that is killed writes none.
-The same report is what the fixture check compares against, so there is one reader of what the
-analyzers said rather than a second one scraping their stdout.
+A YES000 can also appear in CI alone. It is a phantom type mismatch, anchored at a column past the
+end of its line. The file compiles cleanly under `build`, `fsharp-analyzers`, Fable and a
+from-scratch `lint` on this box. Every case so far was a name shadowed across an option boundary.
+For example, `secret : string option` was rebound as `secret : string` in the branch that resolved
+it. Renaming the inner binding to `launchSecret` cleared CI.
 
-One rule answers for the others (`Unjudged.fs`). A declaration the compiler could not build is
-not in the typed tree, so no rule sees it, each correctly reports nothing, and the run ends in
-exactly the shape a clean one has — which is how `lint` came to report a product clean, and
-exit 0, over a file carrying a macro that violated both emit rules. The break was one stray
-indentation: a `let` at column 0 under a `namespace` is dropped along with the attribute on it,
-while everything else in the file is still judged, so the run is not empty — it is short by
-exactly the declaration nobody could read. The compiler already knows, and its diagnostics come
-free with the type-check every rule depends on, so this reports the first error in the file and
-`lint` exits 2 rather than 1: "these rules did not read this" must not arrive looking like
-"these rules found nothing", and the next step is `build`, not a rule to go and fix.
-
-There is a second way to earn a YES000, and it is stranger: CI's whole-solution `lint` has
-reported one — a phantom type mismatch, anchored at a column past the end of the line it names —
-on a file that compiles cleanly under `build`, `fsharp-analyzers`, Fable, and even a from-scratch
-`lint` on this box, none of which reproduce it. Every case so far has been a name shadowed across
-an option boundary: a `secret : string option` read from a header and rebound as `secret :
-string` in the branch that resolved it cost three commits before renaming the inner one to
-`launchSecret` cleared CI, changing nothing a test could see. So a YES000 whose location is
-impossible and whose error will not reproduce is a shadow to find, not a mismatch to fix as
-written — the tell is one name meaning an option in the outer scope and its contents in the
-inner. Do not give a binding two types under one name; why CI's checker minds when nothing here
-does is not yet known, and until it is, the rename is the fix.
-
-This file used to say that a reference is what CI's `lint` cannot afford, and that a one-line
-`[<Emit>]` beside the use was the way around it. That was wrong, and the correction is worth
-keeping because the reasoning failed in a way that is easy to repeat. Two new references in
-`View.fs` were blamed for a `lint` step that ran past 48 minutes twice; the fault was an
-analyzer leak. `Population` and `Expressions` each kept a dictionary keyed by project that
-never evicted, and those entries hold FCS symbols, which retain a project's whole check
-results — so a whole-solution run held all 23 projects at once, climbed to 10.5 GB, and was
-killed by GitHub's 16 GB runners four times in one day. `Kept.fs` fixed it the next day and
-records the measurements: 4.1 GB, half the wall-clock. Measured since, the two references
-cost **seven seconds**.
-
-So: declare the dependency on the project that uses it. `[<Emit>]` is for binding an API this
-repository does not own — not for avoiding a reference, which was never the cost it was
-charged with. The population a scoping rule walks is a real expense measured in seconds; a
-defect that turns it into an hour is a defect to fix in the analyzer.
-
-Every rule carries a fixture — `analyzers/fixtures/<Rule>Fixture` — whose source says in
-`// YES00n` markers which of its cases must be reported (across several files where the rule is
-about how many files do something, since one file could then neither break it nor prove the rule
-still sees a break), and `lint` checks the verdicts
-against them in both directions on every run, counting only that rule's own diagnostics — the
-two emit rules read the same macros from opposite ends, so a case one is asking about is
-routinely something the other has an opinion on. That is what stops a rule going silently blind:
-a loader that no longer matches the assembly name, a typed-tree shape moved by a compiler
-upgrade, a project that failed to restore — each of those reports a clean product and passes.
-
-**Adding a renderable type is deliberate.** The allow-list is closed — string, `TemplateResult`,
-a sequence of them, a listener, `int`, `bool` — so a hole holding anything else is an error
-until somebody widens the list and says in the fixture what widening it means. That is the
-point: the failure mode of this rule is silence, and a closed list fails loudly.
+If a YES000 has an impossible location and will not reproduce, look for that shadow. Do not give a
+binding two types under one name. The cause is not yet known, so until it is, the rename is the
+fix.
 
 ### Running a tier this box cannot host (`verify.yml`, on demand)
 
-`Docker` and `LiveAgent` need a daemon and a real model credential, so no laptop reliably has
-both and no pull request runs either. Before `verify.yml` existed the only thing that ever ran
-them was a master push, which meant developing anything that needed one by merging it and
-watching the release gate. Do not do that: a red master stops everybody else releasing, and the
-live clone suite cost two of them and produced no diagnosis either time.
+`Docker` and `LiveAgent` need a daemon and a real model credential. No laptop reliably has both,
+and no pull request runs either. Do not develop against them by merging and watching the release
+gate. A red master stops every release, and the live clone suite cost two releases without a
+diagnosis.
 
-Dispatch the gate against the branch instead. Same job the release gate runs — `release.yml`
-calls the same file — so a green run here means what a green master means:
+Dispatch the gate against the branch instead. It is the job that the release gate runs, because
+`release.yml` calls the same file. A green run here therefore means what a green master means:
 
 ```
 gh workflow run verify.yml --ref <branch>                      # the whole gate
@@ -661,242 +526,224 @@ gh workflow run verify.yml --ref <branch> \
 gh run watch "$(gh run list --workflow=verify.yml -L1 --json databaseId -q '.[0].databaseId')"
 ```
 
-(Or the Actions tab → verify → Run workflow, which takes the same two fields.)
+(You can also use the Actions tab → verify → Run workflow, which takes the same two fields.)
 
-**Reach for it when** a suite you are writing needs a capability this box lacks, or a release
-run failed inside one and you need another look. **Narrow it with `only`** — that is the
-difference between a 9-minute gate and a run that answers one question, and it is also how a
-live case stays inside the Node suite's shared 240s budget (`tasks.fsx`), which a long
-per-case deadline otherwise blows for every suite at once.
+Use it when a suite you write needs a capability this box lacks, or a release run failed inside one
+and you need another look. Narrow it with `only`. That turns a 9-minute gate into a run that answers
+one question. It also keeps a live case inside the Node suite's shared budget (`nodeBudgetMs` in
+`tasks.fsx`: a base plus an allowance per capability). A long per-case deadline otherwise blows
+that budget for every suite at once.
 
-Two edges worth knowing before the first attempt. GitHub only offers a `workflow_dispatch` for
-workflows on the DEFAULT branch, so the file must be on master before a branch can be
-dispatched against it — a new dispatchable workflow lands on its own, ahead of whatever needs
-it. And the credential is a repository secret, so a run dispatched from a fork gets none: the
-tier fails rather than skipping, which is the point (see below).
+Two edges to know before the first attempt:
 
-**Asking for a capability requires it.** A tier names what it wants, and `check` refuses to
-start — naming every missing one and how to get it — when this box cannot host something it
-was asked for. It does NOT quietly drop the capability and let its suites report a skip: that
-reads as prudence and behaves as a blind spot (a release workflow naming a secret this
-repository does not have shipped every version up to v5.0.0-beta.0 with the live agent suite
-skipped, green, and never once a real agent turn). So `check Docker` on a daemon-less box is
-an error, not a skip, and `verify` runs only where the whole gate can run — which is what a
-release gate means. What is still a skip is the capability a tier never asked for, and the
-RUNTIME partition (a Node suite on the .NET CLR and vice versa).
+- GitHub offers a `workflow_dispatch` only for workflows on the DEFAULT branch, so the file must
+  be on master before you dispatch a branch against it. Land a new dispatchable workflow on its
+  own, ahead of whatever needs it.
+- The credential is a repository secret, so a run dispatched from a fork gets none. The tier then
+  fails and does not skip, by design (see below).
 
-Capabilities:
-- `Browser` — Chromium via the .NET Playwright driver. Pins the .NET CLR runtime.
-- `Ports` — binds TCP ports / spawns processes.
-- `Native` — the native `node-datachannel` WebRTC addon, loaded by the real Session.
-  Present under Nix (built from source, baked into the `nodeModules` derivation the dev shell
-  symlinks in), so `Native`-tagged suites (all host-spawning ones, incl. the real WebRTC
-  data-channel E2E) RUN here. Outside Nix the addon is absent and they skip cleanly.
-- `Docker` — a reachable daemon, probed with `docker info` (the same socket / DOCKER_HOST the
-  backend uses, so it answers the question the suites care about rather than "is the socket
-  file there"). The dev container has none, so ask for `Docker` here and the run refuses.
+**Asking for a capability requires it.** `check` refuses to start when a tier names a capability
+that this box cannot host. It names every missing capability and how to get it. So `check Docker` on
+a box without a daemon is an error, and `verify` runs only where the whole gate can run.
+
+`check` never drops a capability quietly to let its suites report a skip. A skip reads as prudence
+and behaves as a blind spot. A release workflow that named a secret the repository lacked shipped
+every version up to v5.0.0-beta.0 with the live agent suite skipped and green. No real agent turn
+ever ran. Two things still skip: a capability that the tier did not ask for, and the RUNTIME
+partition. The partition means a Node suite on the .NET CLR, and the reverse.
+
+Capabilities: `Need` in `tests/Yession.Tests/Tags.fs` declares each one. `requireCapabilities` in
+`tasks.fsx` calls the probes and holds the refusal messages.
+
+- `Browser` — Chromium through the .NET Playwright driver. Pins the .NET CLR runtime.
+- `Ports` — binds TCP ports or spawns processes.
+- `Native` — the native `node-datachannel` WebRTC addon, loaded by the real Session. Nix builds it
+  from source into the `nodeModules` derivation that the dev shell symlinks as `node_modules`. So
+  the `Native` suites (all host-spawning ones, including the real WebRTC data-channel E2E) run here.
+  Outside Nix the addon is absent and they skip.
+- `Pty` — the native `node-pty` addon: a real pseudo-terminal, not a pipe.
+- `Serial` — a real serial engine: the `serialport` addon, `udevadm`, and socat for a PTY pair.
+- `Docker` — a reachable daemon, probed with `docker info`. The probe uses the socket or
+  `DOCKER_HOST` that the backend uses, so it asks the question the suites ask. The dev container
+  has none, so `check Docker` here refuses.
 - `LiveAgent` — real model credentials: `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`.
-  release.yml passes the repository secret; absent, a tier that asked for it fails.
-- `LiveGitHub` — a `GITHUB_TOKEN` GitHub accepts, probed by asking GitHub with it. The live
-  GitHub suite (`LiveGitHub.fs`) asks the real API what the product asks, read-only, against
-  this repository — the contract every stubbed GitHub suite assumes and none can check.
-  verify.yml passes the run's own `secrets.GITHUB_TOKEN`. In a Claude Code container the
-  variable is a placeholder the agent proxy swaps for the real credential, which is why it
-  works only through `HTTPS_PROXY` — as `check` and the product's requests both go. The
-  proxy authenticates EVERY request to GitHub, so an anonymous case cannot be run there.
+  `release.yml` passes the repository secret. If it is absent, a tier that asked for it fails.
+- `LiveGitHub` — a `GITHUB_TOKEN` that GitHub accepts, probed by asking GitHub with it.
+  `LiveGitHub.fs` asks the real API, read-only and against this repository, the contract that
+  every stubbed GitHub suite assumes and none can check. `verify.yml` passes the run's own
+  `secrets.GITHUB_TOKEN`. In a Claude Code container the variable is a placeholder that the agent
+  proxy swaps for the real credential. That works only through `HTTPS_PROXY`. The proxy
+  authenticates EVERY request to GitHub, so no anonymous case can run there.
 - `Keyring` — a usable OS credential manager (the secrets KEK lives there). On a desktop,
-  `check Keyring` drives the genuine Keychain / Credential Manager / Secret Service; headless
-  (this container, CI), it re-execs itself under a private D-Bus session + gnome-keyring
+  `check Keyring` drives the genuine Keychain, Credential Manager or Secret Service. Headless
+  (this container, CI), it re-executes itself under a private D-Bus session and a gnome-keyring
   unlocked with an empty password (both from devenv).
-- `Srt` — OS-level confinement: bubblewrap + socat on Linux, Seatbelt on macOS. Probed by
-  RUNNING it, not by looking for it — installed is not the same as permitted. This container
-  cannot create the nested user namespace the strict profile needs, so the suites run here
-  only under `YESSION_NESTED_SANDBOX=weak check Srt`; unset, `check Srt` refuses to start.
+- `Srt` — OS-level confinement: bubblewrap and socat on Linux, Seatbelt on macOS. The probe RUNS
+  the sandbox, because installed is not the same as permitted. This container cannot create the
+  nested user namespace that the strict profile needs. Here the suites run only under
+  `YESSION_NESTED_SANDBOX=weak check Srt`. Unset, `check Srt` refuses to start.
 
-  **`Srt` is not only the escape probes.** The default work sandbox IS srt, so every suite
-  that runs a real command needs it — including the browser case that types one into a
-  terminal composer. On a box that cannot host a sandbox those do not fail, they HANG: the
-  command never runs, the block never reaches `ok`, and a Playwright timeout eventually
-  reports, in effect, "this machine is not a machine this test can run on". Which is what a
-  capability says in one line and a skip. If a suite you are writing runs a command, it needs
-  `Srt`.
+  **`Srt` is not only the escape probes.** The default work sandbox IS srt, so every suite that runs
+  a real command needs it. That includes the browser case that types a command into a terminal
+  composer. Without a sandbox, these suites hang and do not fail, because the command never runs and
+  the block never reaches `ok`. A Playwright timeout eventually reports that this machine cannot run
+  the test. A capability tag turns that hang into a one-line skip. If a suite you write runs a
+  command, tag it `Srt`.
 
-  **When to set the variable, and when it is a lie.** Set it to give a suite a sandbox to
-  RUN in — `YESSION_NESTED_SANDBOX=weak check Browser Ports Native Srt` is how this container
-  runs the whole PR tier, and what is under test there (a composer binding, a command really
-  having run) is untouched by profile strength. Do NOT set it to turn a red run green when
-  the CONFINEMENT is the thing under test: `weak` is srt's `enableWeakerNestedSandbox`, so a
-  green escape probe under it is a green for a profile production never uses. Strict is CI's
-  job — `pr.yaml` clears `kernel.apparmor_restrict_unprivileged_userns` so the probes run for
-  real there — and weaker confinement in production is the operator's decision, never a way
-  to get a passing session here.
+  **Set the variable only to give a suite a sandbox to RUN in.**
+  `YESSION_NESTED_SANDBOX=weak check Browser Ports Native Srt` runs the whole PR tier in this
+  container. Profile strength does not touch what those suites test (a composer binding, a command
+  that really ran). Do NOT set it when the CONFINEMENT is the thing under test.
 
-  **On a Mac, `vm-check <caps>` runs the Srt tier under STRICT nesting.** The Mac is
-  Seatbelt and the dev container cannot nest a user namespace, so neither hosts what CI runs
-  — but the Colima VM is a bare Linux host that can. The verb compiles here and runs the
-  (portable) suite there, on a cached Node 24 + Linux `node_modules`, in seconds rather than a
-  `verify.yml` round-trip: `vm-check Srt --only "<text>"`. The target is a parameter behind
-  `LinuxTarget` in `tasks.fsx`; today Colima is the only one.
-- `Jumpstarter` — uv, and an interpreter it can resolve the `examples/jumpstarter` lock
-  against. Probed by BUILDING that environment (`uv sync --frozen`), because "uv is on PATH"
-  and "this box can assemble that environment" are different questions and only the second
-  one is the suite's. devenv provides uv and a CPython, and pins the interpreter through
-  `UV_PYTHON`/`UV_PYTHON_DOWNLOADS=never` so uv never fetches a second, unpinned toolchain.
+  `weak` is srt's `enableWeakerNestedSandbox`, so a green escape probe under it is a green for a
+  profile that production never uses. Strict is CI's job: `pr.yaml` clears
+  `kernel.apparmor_restrict_unprivileged_userns`, so the probes run for real there. Weaker
+  confinement in production is the operator's decision, never a way to get a passing session here.
+
+  **On a Mac, `vm-check <caps>` runs the Srt tier under STRICT nesting.** The Mac uses Seatbelt
+  and the dev container cannot nest a user namespace, so neither hosts what CI runs. The Colima VM
+  is a bare Linux host that can. The verb compiles here and runs the (portable) suite there, on a
+  cached Node 24 and Linux `node_modules`. That takes seconds, not a `verify.yml` round trip:
+  `vm-check Srt --only "<text>"`. `LinuxTarget` in `tasks.fsx` sets the target, and Colima is the
+  only one today.
+- `Jumpstarter` — `uv`, and an interpreter that can resolve the `examples/jumpstarter` lock. The
+  probe BUILDS that environment (`uv sync --frozen`), because "uv is on PATH" does not mean this
+  box can assemble it. devenv provides `uv` and a CPython, and pins the interpreter with
+  `UV_PYTHON`/`UV_PYTHON_DOWNLOADS=never` so `uv` never fetches a second, unpinned toolchain.
 - `Caddy` — the `caddy` binary, probed by running it. The fronted-deployment browser case runs
-  `examples/proxy/caddy/Caddyfile` — the file the README tells an operator to deploy — in front
-  of a real Manager, with Chromium playing `tailscale serve`; without it that file is only ever
-  read. devenv provides caddy on both platforms.
-- `Dogfood` — consent to the LONG self-hosting case (`tests/Yession.Tests/DevContainer.fs`):
-  the suite re-running itself inside the dev container this repo declares. Needs `Docker`
-  beside it; its own probe is egress to cache.nixos.org, because the in-container devshell
-  substitutes from there and a box that cannot reach it would source-build for hours.
-  Deliberately outside `verify` — the gate already proves each seam piecewise, and the
-  fast per-seam probes in the same file run in the ordinary `Docker` tier. On a macOS
-  host whose daemon is Colima, the suite's fixtures live under `$HOME` because Colima
-  shares only `$HOME` into its VM — a bind source outside it mounts empty.
-- `Nix` — the nix CLI (probed like Docker). Covers the ONE thing no CI job can: the
-  derivations built against the WORKING TREE.
-  Every CI route (`nix build .#yession`, darwin-package, package-nix) evaluates a flake, whose
-  source copy git already filtered — so a `src` filter that lets the dev shell's `node_modules`
-  symlink or 176MB of `obj/`/Fable output into the derivation is green everywhere in CI and
-  broken on the laptop. `check Nix` asserts the source contract (`NixSource.fs`) against the
-  tree this run built; `NixBuild` builds `nix/worktree.nix` and boot-smokes the result — which
-  is also what re-checks the dotnet-tools FOD hash, the other thing a devenv-only `check` cannot see.
-  Two capabilities because they are two costs: the contract is an evaluation that belongs
-  beside the suites that built the tree it reads, the build is minutes of sandboxed compile
-  that belongs on a runner of its own.
-
-To eyeball a rich-editor change in a real browser without any of the WebRTC machinery:
-`check Browser` (drives Chromium against `tests/browser/editor-harness.html`). The full
-two-peer WebRTC E2E runs where the Nix-built `Native` addon is present (CI, `verify`).
-
-To inspect or iterate on a server-rendered surface (the manager page) with real
-screenshots, read `.agents/skills/ui-exploration/SKILL.md` first — headless Chromium's
-window-size clamp makes naive mobile screenshots lie; the camera it points at
-(`frames --boot --still`) does not.
+  `examples/proxy/caddy/Caddyfile`, the file the README tells an operator to deploy, in front of
+  a real Manager. Without the capability, nothing runs that file. devenv provides caddy.
+- `Dogfood` — consent to the LONG self-hosting case (`tests/Yession.Tests/DevContainer.fs`): the
+  suite re-runs itself inside the dev container this repo declares. It needs `Docker` beside it. Its
+  own probe is egress to cache.nixos.org, because the in-container devshell substitutes from there
+  and a box without it would source-build for hours. It sits outside `verify` on purpose
+  (`Tags.fs`). On a macOS host whose daemon is Colima, the suite's fixtures live under `$HOME`.
+  Colima shares only `$HOME` into its VM, so a bind source outside it mounts empty.
+- `Nix` — the nix CLI (probed like Docker). It covers the ONE thing no CI job can: the
+  derivations built against the WORKING TREE, because every CI route evaluates a git-filtered
+  flake copy. `check Nix` asserts the source contract (`NixSource.fs`), an evaluation of seconds.
+  `NixBuild` builds `nix/worktree.nix` and boot-smokes the result, which also re-checks the
+  dotnet-tools FOD hash that a devenv-only `check` cannot see. They are two capabilities because
+  they cost differently: the build is minutes of sandboxed compile that belongs on a runner of
+  its own.
 
 ### Writing tests
 
-**A test pins one invariant, and goes red only when that invariant breaks.** Two promises, and
-a test earns its place by keeping both. The first is what it PROVES; the second is what its red
-MEANS. A suite whose red can also mean "something moved" is a suite people re-run instead of
-read.
+**A test pins one invariant and goes red only when that invariant breaks.** A test earns its
+place by keeping two promises: what it PROVES, and what its red MEANS. A suite whose red can also
+mean "something moved" is a suite that people re-run instead of read.
 
-One invariant is one arrangement, one action, one assertion of the consequence — and a name
-that says which invariant. A case that asserts three things fails as one, so its red names
-none of them, and the two behaviours nobody touched get dragged into every revision of the
-third. Split it: three cases cost three names and buy three verdicts. What may repeat across
-them is the SETUP, hoisted into a helper — asserting that a call both succeeded and returned
-the right body is one invariant seen from two angles, but asserting that an open terminal reads
-back, a closed one still does, and a shell refuses, is three tests wearing one name.
+One invariant is one arrangement, one action, and one assertion of the consequence, under a name
+that says which invariant. A case that asserts three things fails as one, so its red names none
+of them. Each revision of one behaviour also drags in the two behaviours that nobody touched.
+Split it: three cases cost three names and buy three verdicts. Hoist the shared SETUP into a
+helper. A call that both succeeded and returned the right body is one invariant seen from two
+angles. An open terminal that reads back, a closed one that still does, and a shell that refuses
+are three tests wearing one name.
 
-Then, so that red means what it says:
+So that red means what it says:
 
-- Assert observable behavior and contracts, not implementation detail (private state, call
-  order, exact log text, incidental DOM structure). A refactor that preserves behavior must
+- Assert observable behavior and contracts. Do not assert implementation detail (private state,
+  call order, exact log text, incidental DOM structure). A refactor that preserves behavior must
   not break a green test.
-- Deterministic: no real-time sleeps, no ordering luck, no reliance on anything a declared
-  capability doesn't provide. A flaky test is worse than none — it trains everyone to
-  ignore red.
-- When verifying interesting behavior by hand (a bug fix, a protocol edge, a rendering
-  quirk), write the check down as a lasting test instead: the manual run proves it once, the
-  test keeps proving it. Verify-once throwaways stay out.
-- Tag suites with the MINIMUM capabilities they truly need, so they run in the cheapest tier
-  that can host them and skip (never error) everywhere else.
+- Make tests deterministic: no real-time sleeps, no ordering luck, and no reliance on anything
+  that a declared capability does not provide. A flaky test is worse than none, because it trains
+  everyone to ignore red.
+- Write a manual check of interesting behavior (a bug fix, a protocol edge, a rendering quirk)
+  down as a lasting test. The manual run proves it once. The test keeps proving it. Verify-once
+  throwaways stay out.
+- Tag each suite with the MINIMUM capabilities it truly needs. It then runs in the cheapest tier
+  that can host it and skips, never errors, everywhere else.
 
-**A failure that cannot say why is a failure you will pay for repeatedly.** Most tiers here
-fail legibly — an assertion prints what it expected. The browser tier does not: a case can only
-fail by a wait never settling, so its red says which wait, never which fault. Three unrelated
-defects in one feature (a call eliminated as dead code, an opaque redirect, a precache that
-could not have happened) all printed the same thirty-second timeout, and each cost a full run
-of the gate to tell apart — while the page had been saying which was which the whole time.
+**A failure that cannot say why is a failure you will pay for repeatedly.** Most tiers fail
+legibly, because an assertion prints what it expected. The browser tier does not. A case can only
+fail by a wait that never settles, so its red names the wait and never the fault. Three unrelated
+defects in one feature printed the same thirty-second timeout, and each cost a full gate run to
+tell apart. The page had said which was which all along.
 
-So instrument the boundary rather than guessing across it, and instrument it to STAY:
+Instrument the boundary instead of guessing across it, and instrument it to STAY:
 
-- **Fixtures keep what the thing under test said** — console, page errors, failed requests —
-  and print it when a case fails (`Browser.fs`: `watching` / `reporting`). Free on green, and
-  it is the only way to read a red run in CI, where nothing can be attached afterwards.
-- **Anything that decides silently is made to say so.** A service worker choosing between the
-  network and a kept copy leaves no trace anywhere; one `console.debug` at that branch is the
-  difference between reading the answer and inferring it.
-- **Throwaway instrumentation is a smell.** If you add a probe to answer a question, and the
-  question could be asked again, the probe belongs in the fixture — not in a scratch file you
-  delete. The rule is the same one the tests follow: what was verified once by hand is written
-  down so it keeps being verified.
+- **Fixtures keep what the thing under test said** — console, page errors, failed requests — and
+  print it when a case fails (`Browser.fs`: `watching` / `reporting`). It costs nothing on green.
+  It is the only way to read a red run in CI, where nothing can be attached afterwards.
+- **Make anything that decides silently say so.** A service worker that chooses between the
+  network and a kept copy leaves no trace anywhere. One `console.debug` at that branch lets you
+  read the answer and not infer it.
+- **Throwaway instrumentation is a smell.** If a probe answers a question that someone could ask
+  again, put it in the fixture, not in a scratch file. What you verified once by hand stays
+  verified.
 
-The tell that you are about to pay for this: you are about to run the gate again to test a
-hypothesis. When looking is expensive, guessing and verifying cost the same, so guessing wins
-each time and loses overall. Make looking cheap first — `check --only "<part of a test name>"`
-narrows both runtimes to the cases that match.
+Before you run the gate again to test a hypothesis, make looking cheap. When looking is
+expensive, guessing and verifying cost the same, so guessing wins each time and loses overall.
+`check --only "<part of a test name>"` narrows both runtimes to the cases that match.
 
-**A UI test pins an invariant, never a design.** A rendered surface is the most-revised thing
-in the product. A test that asserts what it currently LOOKS like will be deleted by the next
-person to improve it, and until they do, its red says "your redesign is wrong" when it means
-"something moved" — which is how a suite stops being believed. So test only what has to hold
-true no matter how the screen is redrawn:
+**A UI test pins an invariant, never a design.** A rendered surface is the most-revised thing in the
+product. The next person to improve it deletes a test that asserts what it currently LOOKS like.
+Until then, its red says "your redesign is wrong" when it means "something moved". Test only what
+holds however the screen is redrawn:
 
-- **Availability** — a destructive control is not offered over nothing; the composer is never
-  taken away by a network fault; an action a person is entitled to is reachable.
-- **Identity and attribution** — one person wears one name on every surface at once; an
-  author is never a raw id; a thing that was said is attributed to whoever said it.
-- **The accessibility floor** — keyboard-operable controls, accessible names, contrast held.
-  Pinned ONCE and centrally (the chrome-consistency and theme-contrast suites), never
-  re-asserted per surface.
+- **Availability** — a destructive control is not offered over nothing. A network fault never
+  takes the composer away. An action that a person may take is reachable.
+- **Identity and attribution** — one person wears one name on every surface at once. An author is
+  never a raw id. A thing that was said is attributed to whoever said it.
+- **The accessibility floor** — keyboard-operable controls, accessible names, held contrast. Pin
+  it ONCE and centrally (the chrome-consistency and theme-contrast suites). Never re-assert it
+  per surface.
 
-Not: which element marks an empty state, what a style token's Tailwind string contains,
-whether a control recedes by border or by opacity, the presence of a decorative mark, the copy
-of a label that is not itself a promise. Those are the design changing, which is what a design
-is FOR.
+Do not test any of these:
 
-The tell that you are about to write one anyway: the assertion quotes a class name, or it
-would still pass if the surface rendered upside down in the dark. Both mean the test knows how
-the view is BUILT rather than what it PROMISES. Write the promise, or write nothing.
+- which element marks an empty state
+- what a style token's Tailwind string contains
+- whether a control recedes by border or by opacity
+- the presence of a decorative mark
+- the copy of a label that is not itself a promise
 
-**A screenshot and a test answer different questions.** The screenshot answers *is this any
-good* — is it crowded, is the hierarchy right, does the eye land where it should. That is a
-judgement about the design as it stands today, it has no answer that stays true, and writing
-it down as an assertion is how the suite fills up with tests nobody believes. Go and look
-(the `ui-exploration` skill drives real ones), decide, and move on without writing anything.
+Those are the design changing, which is what a design is FOR.
 
-A test answers *is this still true* — and needing a browser to SEE the answer says nothing
-about whether it is worth pinning. Visibility, focus, stacking, overflow, contrast: these are
-promises that only a rendered page can settle, and they are exactly the promises that break
-silently, because every cheap tier reads the markup and the markup still looks right. A
-whole-page render contains both mounts of a notice and calls it fine; a person sees a screen
-saying the same thing twice. So when the invariant is real and only a browser can observe it,
-the browser tier is where it goes. "I looked once and it was fine" is not a substitute — it
-is the state every regression starts from.
+Stop if the assertion quotes a class name, or would still pass if the surface rendered upside down
+in the dark. Both mean the test knows how the view is BUILT and not what it PROMISES. Write the
+promise, or write nothing.
 
-(This paragraph replaced a rule that said the opposite — *if a screenshot would settle it, it
-is not a test* — which read as licence to delete one. The invariant deleted under it was
-"whatever is wrong with the connection is on the screen exactly once", verified by eye across
-four states and then thrown away. It was a promise, and one no markup test can reach.)
+**A screenshot and a test answer different questions.** A screenshot answers *is this any good*:
+is it crowded, is the hierarchy right, does the eye land where it should. That judgement belongs
+to the design as it stands today and has no answer that stays true. Written down as an assertion,
+it fills the suite with tests that nobody believes. Go and look (the `ui-exploration` skill drives
+real screenshots), decide, and move on without writing anything.
 
-**What makes a browser test brittle is the COUPLING, not the browser.** That deleted test
-failed on its first run for a reason that had nothing to do with its invariant: it counted
-occurrences of the words *not connected* and *reconnecting*, and the surface that was showing
-said *session stopped*. The invariant was right; the assertion had been written against the
-copy. Assert on what a browser can measure that a redesign does not move:
+A test answers *is this still true*. Needing a browser to SEE the answer says nothing about whether
+it is worth pinning. Visibility, focus, stacking, overflow and contrast are promises that only a
+rendered page can settle. They break silently, because every cheap tier reads markup that still
+looks right.
 
-- **Hooks, and how many of them are VISIBLE** — one `data-*` per report, however many mounts
-  it has. Count the mounts a person can see, never the words in them. Beware the cheap
-  visibility checks: `offsetParent` is null for anything `position: fixed`, and a bounding
-  rect stays non-zero for an element clipped to nothing by an `overflow-hidden` parent (this
-  is how a collapsed nav's contents measure as on screen). Hit-test the element's own centre
-  and ask whether what is painted there belongs to it.
-- **Geometry** — that a fixed bar does not cover the header under it, that nothing overflows
-  the viewport sideways. Compare measurements, never pixel-match a screenshot: a reference
-  image fails on a font tweak, which is the coupling all over again.
-- **Computed values** — that a focus ring actually paints, that a token resolves to the
-  contrast it promises.
+For example, a whole-page render contains both mounts of a notice and passes, while a person sees a
+screen that says the same thing twice. "Whatever is wrong with the connection is on the screen
+exactly once" is a promise that no markup test can reach. When the invariant is real and only a
+browser can observe it, the browser tier is where the test goes. "I looked once and it was fine" is
+not a substitute, because it is the state every regression starts from.
 
-The same "regress it and watch it go red" rule applies, and it is worth more here than
-anywhere: a browser test that cannot fail is expensive silence.
+**What makes a browser test brittle is the COUPLING, not the browser.** One such test failed on
+its first run because it counted the words *not connected* and *reconnecting*, while the surface
+said *session stopped*. The invariant was right. The assertion was written against the copy.
+Assert what a browser can measure and a redesign does not move:
 
-One caveat, because loosening a UI assertion is how it quietly stops testing: a whole-page
-render contains every surface at once, so a bare `.Contains "swift-heron"` is satisfied by the
-ROSTER while the element under test still prints a raw id. Scope the assertion — to the
-element, or to the phrase around it — then confirm it by REGRESSING the behaviour and watching
-it go red. Decoupling from incidental copy is only an improvement while the test still fails
-for the right reason; a test loosened into vacuity is worse than the brittle one it replaced,
-because it reads as coverage.
+- **Hooks, and how many of them are VISIBLE** — one `data-*` per report, however many mounts it has.
+  Count the mounts a person can see, never the words in them. Beware the cheap visibility checks.
+  `offsetParent` is null for anything `position: fixed`. A bounding rect stays non-zero for an
+  element that an `overflow-hidden` parent clips to nothing. This is how a collapsed nav's contents
+  measure as on screen. Hit-test the element's own centre and ask whether what is painted there
+  belongs to it.
+- **Geometry** — a fixed bar does not cover the header under it, and nothing overflows the
+  viewport sideways. Compare measurements. Never pixel-match a screenshot, because a reference
+  image fails on a font tweak, which is the coupling again.
+- **Computed values** — a focus ring actually paints, and a token resolves to the contrast it
+  promises.
+
+Regress the behaviour and watch the test go red. This rule is worth more here than anywhere: a
+browser test that cannot fail is expensive silence.
+
+Do not loosen a UI assertion until it tests nothing. A whole-page render contains every surface at
+once. So a bare `.Contains "swift-heron"` passes on the ROSTER while the element under test still
+prints a raw id. Scope the assertion to the element, or to the phrase around it. Then confirm it by
+REGRESSING the behaviour and watching it go red. Decoupling from incidental copy is an improvement
+only while the test still fails for the right reason. A test loosened into vacuity is worse than the
+brittle one it replaced, because it reads as coverage.
