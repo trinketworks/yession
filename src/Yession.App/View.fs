@@ -1720,17 +1720,24 @@ module View =
     ///
     /// The glyph and the number are a picture; the words beside them are for whoever cannot
     /// see it (`terminalBlockStatusWord`). A mark that IS a word says it once.
-    let private terminalBlockStatus (model: ClientModel) (status: BlockStatus) : TemplateResult =
+    let rec private terminalBlockStatus (model: ClientModel) (status: BlockStatus) : TemplateResult =
+        terminalBlockStatusIn true model status
+
+    /// The same, said as a RECORD when `current` is false: a wrong thing that is no longer the
+    /// newest one wears `ink-dim`, the record's ink, rather than the one red word the surface
+    /// keeps for the newest (`ClientModel.newestWrongBlock`).
+    and private terminalBlockStatusIn (current: bool) (model: ClientModel) (status: BlockStatus) : TemplateResult =
+        let wrong = if current then Style.statusErr else Style.statusWait
         let token = terminalBlockStatusLabel status
         let pictured (voice: string) (mark: TemplateResult) =
             html $"""<span class="{voice}" data-block-mark="{token}"><span aria-hidden="true">{mark}</span><span class="{Style.srOnly}">{terminalBlockStatusWord model status}</span></span>"""
         match status with
         | BlockRunning -> pictured Style.statusOk (html $"""<span class="{Style.statusDotLive}"></span>""")
         | BlockFinished (CommandSucceeded code) -> pictured Style.statusDone (html $"""{Icon.checkSm} {code}""")
-        | BlockFinished (CommandFailed code) -> pictured Style.statusErr (html $"""{Icon.crossSm} {code}""")
+        | BlockFinished (CommandFailed code) -> pictured wrong (html $"""{Icon.crossSm} {code}""")
         | BlockFinished CommandTimedOut
         | BlockFinished (CommandExecutionFailed _) ->
-            html $"""<span class="{Style.statusErr}" data-block-mark="{token}">{terminalBlockStatusWord model status}</span>"""
+            html $"""<span class="{wrong}" data-block-mark="{token}">{terminalBlockStatusWord model status}</span>"""
         // A record, not a wrong thing: nothing says it failed, so it is not red. Faint like
         // any other status with nothing to report, and the block's facts carry why it ended.
         | BlockEnded _ ->
@@ -1739,7 +1746,7 @@ module View =
         // is the whole reason a refusal mints a block at all — so it is a NAME, resolved like
         // every other person on screen, not the id the hook carries.
         | BlockRejected (by, _) ->
-            html $"""<span class="{Style.statusErr}" data-block-mark="{token}">{Dom.Text.blockRefused} {Entity.render model by (EntityRef.Actor by)}</span>"""
+            html $"""<span class="{wrong}" data-block-mark="{token}">{Dom.Text.blockRefused} {Entity.render model by (EntityRef.Actor by)}</span>"""
 
     let private stretchEndLabel =
         function
@@ -3261,6 +3268,7 @@ module View =
         (model: ClientModel)
         (feed: TerminalFeed)
         (terminal: TerminalId)
+        (newestWrong: BlockId option)
         (showAuthor: bool)
         (block: Block)
         : TemplateResult =
@@ -3342,7 +3350,7 @@ module View =
                   <span class="{Style.terminalPrompt}">$</span>
                   <code class="{Style.terminalCommandText}">{block.Command}</code>
                 </span>
-                <span class="ml-auto shrink-0">{terminalBlockStatus model block.Status}</span>
+                <span class="ml-auto shrink-0">{terminalBlockStatusIn (newestWrong = Some block.BlockId) model block.Status}</span>
                 {stop}
               </div>
               {facts}
@@ -3372,6 +3380,7 @@ module View =
         (model: ClientModel)
         (feed: TerminalFeed)
         (terminal: TerminalId)
+        (newestWrong: BlockId option)
         (leader: Block)
         (rest: Block list)
         : TemplateResult =
@@ -3412,7 +3421,7 @@ module View =
                   <span class="{Style.terminalBlockRunMark}" aria-hidden="true">›</span>
                 </summary>
                 <div class="{Style.terminalBlockRunBody}" data-terminal-block-run-body>
-                  {blocks |> List.map (terminalBlockView dispatch model feed terminal false)}
+                  {blocks |> List.map (terminalBlockView dispatch model feed terminal newestWrong false)}
                 </div>
               </details>
             </article>"""
@@ -4670,6 +4679,7 @@ module View =
                 </div>"""
         let terminalBody (view: TerminalView) =
             let feed = ClientModel.terminalFeed view.TerminalId model
+            let newestWrong = ClientModel.newestWrongBlock view
             let truncated =
                 if view.DroppedBytes > 0 then
                     html $"""<div class="{Style.terminalTruncated}" data-terminal-truncated="{string view.DroppedBytes}">{view.DroppedBytes} bytes dropped</div>"""
@@ -4685,8 +4695,8 @@ module View =
                 if not (List.isEmpty view.Blocks) then
                     BlockGroup.ofBlocks feed view.Blocks
                     |> List.map (function
-                        | BlockGroup.Alone block -> terminalBlockView dispatch model feed view.TerminalId true block
-                        | BlockGroup.Run (leader, rest) -> terminalBlockRun dispatch model feed view.TerminalId leader rest)
+                        | BlockGroup.Alone block -> terminalBlockView dispatch model feed view.TerminalId newestWrong true block
+                        | BlockGroup.Run (leader, rest) -> terminalBlockRun dispatch model feed view.TerminalId newestWrong leader rest)
                 elif view.IsOpen then []
                 else [ html $"""<div class="{Style.terminalOutputEmpty}"><span class="{Style.terminalPrompt}">$</span></div>""" ]
             // A terminal's two reads, and the ONE control between them (Plan 14, stage 7;

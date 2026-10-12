@@ -3448,7 +3448,11 @@ module Style =
     /// Sticky within its block, so the next block's command takes over as it arrives rather
     /// than stacking beneath; painted with the pane's own ground, so the lines going under it
     /// go under it rather than through it.
-    let terminalBlockSummary = cls [ terminalBlockCommand; "sticky top-0 z-10 bg-panel" ]
+    ///
+    /// A strip a step up the ground (`surface`), edge to edge of the column: the chrome says
+    /// where one command's group begins before a word of it is read (docs/visual-design.md,
+    /// principle 2).
+    let terminalBlockSummary = cls [ terminalBlockCommand; "sticky top-0 z-10 bg-surface -mx-3 px-3 min-h-6" ]
     /// A run's fold ("ran N commands") — a real `<summary>`, so the disclosure is the
     /// browser's and arrives keyboard-operable and correctly announced. Not sticky: the
     /// commands inside it are, and two rows held at one edge is one row hidden.
@@ -3481,7 +3485,7 @@ module Style =
     /// the name. `shrink-0` with a bounded name, because the command beside it is the longer
     /// thing and the one that should give way; `min-w-0` lets the name itself give way before
     /// the row does, on a phone where neither fits.
-    let terminalBlockAuthor = "shrink-0 min-w-0 max-w-[40%] inline-flex items-baseline"
+    let terminalBlockAuthor = "shrink-0 min-w-0 max-w-[40%] inline-flex items-baseline font-ui font-light text-small text-ink-dim"
 
     let terminalPrompt = "shrink-0 font-terminal text-code text-green select-none"
     /// A command breaks where a shell would let you: at its spaces. `anywhere` is the last resort
@@ -3501,7 +3505,9 @@ module Style =
     let terminalOutputElided = small
     /// Open a block in the pane's history to all its output, or shut it: the bare verb in
     /// words, on the output's own gutter and 44px on a phone, like Stop beside it.
-    let terminalOutputExpand = cls [ btnBare; "-ml-1 phone:min-h-11" ]
+    let terminalOutputExpand =
+        cls [ "h-6 shrink-0 self-start inline-flex items-center bg-transparent border-0 cursor-pointer p-0 phone:min-h-11"
+              "font-ui font-light text-small lowercase text-ink-dim hover:text-ink transition-colors"; focusRing ]
     /// The truncation notice: a stated gap in the record. Stated, because a missing audit
     /// trail is not a neutral fact — but in the pane's caption voice, in `ink-dim` rather
     /// than the error red: nobody can do anything about bytes the cap already dropped, and
@@ -3583,7 +3589,7 @@ module Style =
 
     /// The button in it: an opaque square, so it reads over whatever is scrolling under it.
     let terminalJumpToLatest =
-        cls [ "w-8 h-8 flex items-center justify-center bg-surface"
+        cls [ "w-8 h-8 phone:w-11 phone:h-11 flex items-center justify-center bg-surface"
               "text-ink-dim hover:text-ink cursor-pointer transition-colors"
               Stroke.ring; Stroke.rim; focusRing ]
 

@@ -2697,6 +2697,22 @@ module ClientModel =
     /// not up, and no preview covers it. What a list of terminals marks as current, so the
     /// sidebar points at the terminal the strip's selected tab is showing, and at none while
     /// the pane is shut — a choice kept for when it reopens is not something on the screen.
+    /// The newest command in a terminal that went wrong — failed, timed out, could not run, or
+    /// was refused — which is the one its scrollback says in the error red. Every older wrong
+    /// thing is a record by then, and wears a record's ink: a column of red exit codes is an
+    /// alarm about the past nobody can answer (docs/visual-design.md, "Colour").
+    let newestWrongBlock (view: TerminalView) : BlockId option =
+        view.Blocks
+        |> List.filter (fun block ->
+            match block.Status with
+            | BlockFinished (CommandSucceeded _)
+            | BlockRunning
+            | BlockEnded _ -> false
+            | BlockFinished _
+            | BlockRejected _ -> true)
+        |> List.tryLast
+        |> Option.map (fun block -> block.BlockId)
+
     let shownTerminal (model: ClientModel) : TerminalId option =
         if model.TerminalsOpen && not model.Switcher && Option.isNone (preview model) then
             selectedTerminal model
