@@ -4212,7 +4212,7 @@ module View =
     /// `door` is the phone's way to make a terminal: the pivot's `+` is a desktop control
     /// (`Style.terminalTabNewCell`), so on a phone this page — the door to everything — carries
     /// the press instead, at its head.
-    let private allPage (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) (door: TemplateResult) : TemplateResult =
+    let private allPage (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let selected = ClientModel.selectedTerminal model
         let row (view: TerminalView) =
             let id = TerminalId.value view.TerminalId
@@ -4244,17 +4244,6 @@ module View =
                     html $"""
                         <span class="{Style.draftEditorDot}" style="background:{Entity.presenceColour model who}"
                               title="{name}" data-terminal-tab-peer="{ActorRef.token who}"></span>""")
-            let rewind =
-                if not affords.CanRewind then Lit.nothing
-                else
-                    html $"""
-                        <button type="button" class="{Style.terminalListAct}" data-terminal-list-rewind="{id}"
-                                aria-label="{Dom.Text.rewindTerminal name}" title="{Dom.Text.rewindTerminal name}"
-                                @click={Ev(fun _ ->
-                                              // ONE message, which states the whole face — the
-                                              // `all` page left included.
-                                              dispatch (RewindTerminalMsg view.TerminalId)
-                                              dispatch (MoveMsg DomMove.FocusPane))}>{Dom.Text.rewind}</button>"""
             let reattach =
                 if not affords.CanReattach then Lit.nothing
                 else
@@ -4262,14 +4251,6 @@ module View =
                         <button type="button" class="{Style.terminalListAct}" data-terminal-reattach="{id}"
                                 aria-label="Attach {name} again" title="Attach {name} again"
                                 @click={Ev(fun _ -> dispatch (ReattachTerminalMsg view.TerminalId))}>{Dom.Text.reattach}</button>"""
-            // A closed terminal's recording, played: the closed tab's own `replay`, from here.
-            let replay =
-                if not affords.CanReplay then Lit.nothing
-                else
-                    html $"""
-                        <button type="button" class="{Style.terminalListAct}" data-terminal-list-replay="{id}"
-                                aria-label="{Dom.Text.replayTerminal name}" title="{Dom.Text.replayTerminal name}"
-                                @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Watching view.TerminalId)))}>{Dom.Text.replayRow}</button>"""
             // A closed terminal's tab, put away — the closed tab's ×, from here. Only while it
             // HAS a tab: a closed terminal nobody opened here has nothing to put away.
             let putAway =
@@ -4306,7 +4287,7 @@ module View =
                     </span>
                     {subtitle}
                   </span>
-                  <span class="{verbs}">{rewind}{replay}{reattach}{putAway}{killControl dispatch model Style.terminalListKill Style.btnKillArmed killWord view}</span>
+                  <span class="{verbs}">{reattach}{putAway}{killControl dispatch model Style.terminalListKill Style.btnKillArmed killWord view}</span>
                 </div>"""
         // A file's row, in the same shape as a terminal's. Reachability is the whole point of
         // it: a file is otherwise findable only by its chip in a message, so one shared two
@@ -4400,19 +4381,19 @@ module View =
             html $"""
                 <div class="{Style.uploadCell}">
                   <input type="file" class="border-0" multiple hidden data-artifact-upload-input @change={Ev(picked)}>
-                  <button type="button" class="{Style.paneAct}" data-artifact-upload
+                  <button type="button" class="{Style.paneToolbarAct}" data-artifact-upload
                           aria-label="{Dom.Text.uploadNamed}" @click={Ev(choose)}>{Dom.Text.upload}</button>
                 </div>"""
-        // Headings only when there are two kinds to tell apart: over a list of terminals alone,
-        // "terminals" names the only thing on screen, which is a word that says nothing.
-        let heading (label: string) =
-            if List.isEmpty terminals || (List.isEmpty artifacts && List.isEmpty uploads) then Lit.nothing
-            else html $"""<div class="{Style.listSectionLabel}" data-list-section="{label}">{label}</div>"""
-        let section (label: string) (rows: TemplateResult list) =
+        // The terminals are named by the sheet's head, over their filters; the files by a
+        // heading of their own, as the manager's page names each of its sections.
+        let section (label: string) (heading: bool) (rows: TemplateResult list) =
             if List.isEmpty rows then Lit.nothing
             else
+                let named =
+                    if heading then html $"""<div class="{Style.listSectionLabel}" data-list-section="{label}">{label}</div>"""
+                    else Lit.nothing
                 html $"""
-                    {heading label}
+                    {named}
                     <div role="list" aria-label="{label}">{rows}</div>"""
         // The filters, each a button that says whether the page is narrowed to it — and none
         // at all where there is nothing to narrow (`listFilters`).
@@ -4461,15 +4442,17 @@ module View =
                 html $"""<span class="{Style.contentListEmptyWord}">{Dom.Text.nothingOpenedYet}</span>"""
             else Lit.nothing
         html $"""
-            <div class="{Style.panePanel}" role="tabpanel" tabindex="-1"
-                 id="{Dom.panePanelId}" aria-labelledby="{Dom.paneTabId allKey}" data-pane-panel="{allKey}">
+            <div class="{Style.allSheet}" role="region" tabindex="-1" aria-label="{Dom.Text.terminalsAndFiles}"
+                 id="{Dom.paneSheetId}" data-pane-panel="{allKey}">
               <div class="{Style.allPage}" data-content-list aria-label="{Dom.Text.terminalsAndFiles}"
                    @keydown={Ev(walk)} @paste={Ev(pasted)} @dragover={Ev(dragged)} @drop={Ev(dropped)}>
-                {door}
-                {uploadControl}
-                {filters}
-                {section "terminals" (terminals |> List.map row)}
-                {section "files" ((artifacts |> List.map artifactRow) @ (uploads |> List.map uploadRow))}
+                <div class="{Style.allHead}">
+                  <span class="{Style.allHeadLabel}">{Dom.Text.terminalsHeading}</span>
+                  {filters}
+                  {uploadControl}
+                </div>
+                {section "terminals" false (terminals |> List.map row)}
+                {section "files" true ((artifacts |> List.map artifactRow) @ (uploads |> List.map uploadRow))}
                 {empty}
               </div>
             </div>"""
@@ -4495,7 +4478,7 @@ module View =
         // `all` while it is up, else the terminal the pane is about, preview or not. A preview
         // is not an item of the pivot (F3): it is laid over its terminal, and the strip holds
         // only terminals, so a strip with room for three spends none of it on a glance.
-        let onTerminal (terminal: TerminalId) = not onAll && selected = Some terminal
+        let onTerminal (terminal: TerminalId) = selected = Some terminal
         // The empty pane — nothing open, nothing previewed, `all` not up — is where a session
         // with nothing is sent, and it carries its own press to make something. So it is the
         // one state the pivot's `+` stays away from: one door per state.
@@ -4530,10 +4513,12 @@ module View =
                 html $"""
                     <span class="{Style.paneViewerDot}" style="border-color:{Entity.presenceColour model who}"
                           title="{name} is watching" data-pane-viewer="{ActorRef.token who}"></span>""")
-        // The roving stop: the one item Tab reaches, which is the selected one — and `all`
-        // when nothing is, so the pivot is never a row Tab cannot enter.
-        let stopAt (on: bool) = if on then "0" else "-1"
-        let nothingOn = not onAll && not (tabs |> List.exists (fun view -> onTerminal view.TerminalId))
+        // The roving stop: the one tab Tab reaches, which is the selected one — and the first
+        // when none is, so the strip is never a row Tab cannot enter.
+        let nothingOn = not (tabs |> List.exists (fun view -> onTerminal view.TerminalId))
+        let firstTab = tabs |> List.tryHead |> Option.map (fun view -> view.TerminalId)
+        let stopAt (terminal: TerminalId) (on: bool) =
+            if on || (nothingOn && firstTab = Some terminal) then "0" else "-1"
         let terminalItem
             (activate: unit -> unit)
             (activateKey: Browser.Types.Event -> unit)
@@ -4598,14 +4583,14 @@ module View =
                 html $"""
                     <div role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-tab="{id}"
                          id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
-                         aria-selected="{if on then "true" else "false"}" tabindex="{stopAt on}" title="{tooltip}"
+                         aria-selected="{if on then "true" else "false"}" tabindex="{stopAt view.TerminalId on}" title="{tooltip}"
                          @keydown={Ev(activateKey)}
                          @click={Ev(fun _ -> activate ())}><span class="{Style.pivotName}" data-terminal-tab-name>{name}</span>{mark}{peers}{dismiss}</div>"""
             else
                 html $"""
                     <div role="tab" class="{klass}" data-pane-tab="{key}" data-terminal-closed-tab="{id}"
                          id="{Dom.paneTabId key}" aria-controls="{Dom.panePanelId}"
-                         aria-selected="{if on then "true" else "false"}" tabindex="{stopAt on}" title="{tooltip}"
+                         aria-selected="{if on then "true" else "false"}" tabindex="{stopAt view.TerminalId on}" title="{tooltip}"
                          @keydown={Ev(activateKey)}
                          @click={Ev(fun _ -> activate ())}><span class="{Style.pivotName}" data-terminal-tab-name>{name}</span>{mark}{peers}{dismiss}</div>"""
         // What a preview is CALLED — its name under the pivot, its close's, and so its
@@ -4656,18 +4641,17 @@ module View =
                     pressed.preventDefault ()
                     dispatch (DismissTabMsg terminal)
             terminalItem activate activateKey view
-        // `all`, the pivot's FIRST item: the door to every terminal and file, as a page. A
-        // real button, because it carries nothing of its own — and pressed while it is up it
-        // does nothing, as a selected tab pressed again does; Escape is the way back. It leads
-        // the row, outside the scroller, so it is in one place however many tabs follow it —
-        // and first in the document too, so the arrow walk meets it where the eye does.
-        let allItem =
+        // The door to every terminal and file: a button at the strip's end, beside `+`, that
+        // drops the list down as a sheet over whatever the pane is showing. Not a tab: the
+        // list is not a place the pane goes to, and the tab under it stays selected. Pressed
+        // again, or Escape, puts it away.
+        let listButton =
             html $"""
-                <button type="button" role="tab" class="{if onAll then Style.pivotItemOn else Style.pivotItem}"
-                        data-pane-switcher id="{Dom.paneTabId allKey}" aria-controls="{Dom.panePanelId}"
-                        aria-selected="{if onAll then "true" else "false"}" tabindex="{stopAt (onAll || nothingOn)}"
-                        title="{Dom.Text.switchTerminal}"
-                        @click={Ev(fun _ -> if not onAll then dispatch ToggleSwitcherMsg)}>{Dom.Text.all}</button>"""
+                <button type="button" class="{if onAll then Style.paneStripActOn else Style.paneStripAct}"
+                        data-pane-switcher aria-controls="{Dom.paneSheetId}"
+                        aria-expanded="{if onAll then "true" else "false"}"
+                        aria-label="{Dom.Text.switchTerminal}" title="{Dom.Text.switchTerminal}"
+                        @click={Ev(fun _ -> dispatch ToggleSwitcherMsg)}>{Icon.list}</button>"""
         let previewBody (preview: Preview) =
             match preview.Subject with
             | PreviewSubject.Block (terminalId, blockId) -> paneBlockView model preview terminalId blockId
@@ -4842,23 +4826,8 @@ module View =
                 e.stopPropagation ()
                 dispatch ClosePaneMenuMsg
                 dispatch (MoveMsg DomMove.FocusPaneNew)
-        // The `all` page's door, on a phone only: there the pivot's row is the tabs' room,
-        // and a `+` in it cost the strip a tab. The same press as the `+`, with its menu hung
-        // under it, and hidden wherever the `+` is shown — so a screen still holds one door.
-        let allDoor =
-            html $"""
-                <div class="{Style.allNewCell}" @keydown={Ev shutsOnEscape}>
-                  <button type="button" class="{Style.allNew}" data-terminal-new
-                          aria-haspopup="{if newAsks then "menu" else "false"}"
-                          aria-expanded="{if model.PaneMenu then "true" else "false"}"
-                          @click={Ev(fun _ -> pressingNew ())}>{Dom.Text.aNewTerminal}</button>
-                  {if model.PaneMenu then newMenu Style.allNewMenu else Lit.nothing}
-                </div>"""
         let body () =
             match previewing, selected with
-            // `all`, over whatever the pane was showing — which stays selected under it, to go
-            // back to.
-            | _ when onAll -> allPage actions dispatch model allDoor
             // A preview, laid over the selected terminal: the thing itself. Not the terminal's
             // composer — the reader is reading, not typing, and its close restores it.
             //
@@ -4932,7 +4901,6 @@ module View =
         // strip does not say so, its acts, and its close.
         let toolbar =
             match previewing, selected with
-            | _ when onAll -> Lit.nothing
             | Some preview, _ ->
                 let key = PreviewSubject.key preview.Subject
                 let label, hint = previewLabel preview.Subject
@@ -4997,9 +4965,6 @@ module View =
         // In every state but the empty pane (P1-4), whose own button is this same press;
         // offering both put two New terminal controls on one screen, and a reader has to work
         // out that they are one act.
-        //
-        // And on a desktop only (`Style.terminalTabNewCell`): on a phone this row is the tabs'
-        // room, and the `all` page carries the press there instead (`allDoor`).
         let newCell =
             if empty then Lit.nothing
             else
@@ -5021,15 +4986,14 @@ module View =
                 <div class="{Style.panePivotRow}">
                   <div class="{Style.panePivotList}" role="tablist" aria-label="{Dom.Text.paneItems}" data-pane-pivot
                        @keydown={Ev(fun (e: Browser.Types.Event) ->
-                                        // The arrow walk, over every item — `all` and the
-                                        // tabs. Delete is each tab's own (it arms that tab's
-                                        // kill), because it needs the terminal.
+                                        // The arrow walk, over the tabs. Delete is each
+                                        // tab's own, because it needs the terminal.
                                         moveTabFocus (e :?> Browser.Types.KeyboardEvent))}>
-                    {allItem}
                     <div class="{Style.panePivotScroller}" data-pane-strip>
                       {strip}
                     </div>
                   </div>
+                  {listButton}
                   {newCell}
                   <button type="button" class="{Style.paneStripAct}" aria-label="{Dom.Text.backToChat}"
                           title="{Dom.Text.backToChat}" data-content-toggle="hide"
@@ -5066,9 +5030,12 @@ module View =
                                         if onAll then dispatch CloseSwitcherMsg
                                         elif Option.isSome previewing then dispatch ClosePreviewMsg)}>
                 {pivot}
-                {toolbar}
-                {refusalNotice dispatch model RefusalMount.Pane}
-                {body ()}
+                <div class="{Style.paneUnderStrip}">
+                  {toolbar}
+                  {refusalNotice dispatch model RefusalMount.Pane}
+                  {body ()}
+                  {if onAll then allPage actions dispatch model else Lit.nothing}
+                </div>
               </div>
             </aside>"""
 

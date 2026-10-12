@@ -59,6 +59,8 @@ module Dom =
     /// selected tab back (`paneTabId`) in `aria-labelledby`. That pair is what tells assistive
     /// technology which tab the region under the strip belongs to.
     let panePanelId = "pane-panel"
+    /// The sheet the list drops down as, over the pane (`View.allPage`).
+    let paneSheetId = "pane-sheet"
 
     /// The `id` of a preview's name, in the line under the pivot: what its panel is labelled
     /// by, after the tab of the terminal it is laid over (`View.contentPane`).
@@ -573,18 +575,12 @@ module Dom =
         /// One row, carrying its terminal's id — and the control that shows that terminal,
         /// so a row is keyboard-operable by construction rather than by a handler on a div.
         let terminalListRow = "data-terminal-list-row"
-        /// The rewind, on a row. Its own hook because the pane keeps a watch toggle of its own
-        /// (`terminalWatch`) for the terminal it is showing, and the two are different
-        /// controls in different places — unlike the kill and the attach-again, which the
-        /// list is now the ONLY home of (Plan 20, stage 1) and which therefore keep the names
-        /// they have always had: `terminalClose`, `terminalReattach`.
+        /// A closed row's tab, put away (the closed tab's ×, `DismissTabMsg`) while it has one.
+        /// A row's recording is not its verb: rewind and replay are the terminal's own, on its
+        /// toolbar (`terminalWatch`), and a row opens its terminal.
         ///
         /// Every row verb is rendered ONLY where `Affordances` says it applies, so a
         /// test asserting one is absent is asserting the fold, not a template's mood.
-        let terminalListRewind = "data-terminal-list-rewind"
-        /// A closed row's verbs: play its recording (the closed tab's `replay`), and put its
-        /// tab away (the closed tab's ×, `DismissTabMsg`) while it has one.
-        let terminalListReplay = "data-terminal-list-replay"
         let terminalListDismiss = "data-terminal-list-dismiss"
         /// One of the `all` page's filters (`ClientModel.listFilters`): `all`, or a kind of
         /// terminal — `attention`, `running`, `idle` or `closed`. `aria-pressed` says which
@@ -897,14 +893,13 @@ module Dom =
         /// the text it ran, and the live edge. Named after what the reader gets.
         ///
         /// Two words for two acts, and each act has ONE word on every surface it is on.
-        /// Going back from a terminal that is still LIVE is a rewind — the `all` page's verb
-        /// (`rewind`), its accessible name (`rewindTerminal`), this control's face while the
-        /// terminal runs (`rewindAct`), and the way back is `live`. A recording of something
+        /// Going back from a terminal that is still LIVE is a rewind — this control's face while
+        /// the terminal runs (`rewindAct`), and the way back is `live`. A recording of something
         /// that has ENDED — a closed terminal, a command's output — has no live edge to be
         /// behind, so it is a replay, and the way back is `output`.
         let replay = "Replay"
         /// The footer control's face on a terminal that is still live: what it does is
-        /// `RewindTerminalMsg`, and the row on the `all` page says the same word (`rewind`).
+        /// `RewindTerminalMsg`.
         let rewindAct = "Rewind"
         let output = "Output"
         let live = "Live"
@@ -912,17 +907,11 @@ module Dom =
         /// said as what it is. The way out is `backToLive`.
         let watchingRecording = "Watching a recording"
         let backToLive = "Back to live"
-        /// The list's rewind, named for its terminal: watching it from a moment ago.
-        let rewindTerminal (title: string) = "Rewind " + title
         /// The `all` page's row verbs, as the words they are drawn as — the accessible names
         /// above say which terminal each is about.
-        let rewind = "rewind"
         let kill = "stop"
         let reattach = "attach"
-        let replayRow = "replay"
         let putAway = "put away"
-        /// The list's replay, named for its terminal.
-        let replayTerminal (title: string) = "Replay " + title
         /// The `all` page's filters (`ClientModel.listFilters`): every terminal, or one kind,
         /// by what it needs of the person reading.
         let filterTerminals = "Show terminals"
@@ -1035,6 +1024,8 @@ module Dom =
         let switchTerminal = "Every terminal and file (Ctrl+` or ⌘`)"
         /// The `all` page's own name, as a list.
         let terminalsAndFiles = "Terminals and files"
+        /// The list sheet's head, over its filters.
+        let terminalsHeading = "terminals"
         /// The pivot itself, as a tablist.
         let paneItems = "Open in this pane"
         /// The way out of the pane, back to the conversation.

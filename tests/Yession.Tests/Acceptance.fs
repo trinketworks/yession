@@ -2355,13 +2355,8 @@ let private terminalListTests =
                 ((listed closedTerminalModel).Contains (Dom.attr Dom.Hooks.terminalClose id))
                 "a closed one has nothing left to kill"
 
-        testCase "a row offers the rewind while its terminal is live, and never over a recording" <| fun () ->
-            Expect.isTrue
-                ((listed representativeModel).Contains (Dom.attr Dom.Hooks.terminalListRewind id))
-                "a live terminal with something recorded can be stepped back through"
-            Expect.isFalse
-                ((listed closedTerminalModel).Contains (Dom.attr Dom.Hooks.terminalListRewind id))
-                "a closed terminal is replayed, not rewound"
+        // (A row used to offer its terminal's rewind, and a closed one its replay. Both are the
+        // terminal's own now, on its toolbar; the row opens the terminal.)
 
         testCase "a row offers the way back only where a provider said there is one" <| fun () ->
             Expect.isTrue
@@ -3309,7 +3304,6 @@ let private chromeTests =
                   Dom.Hooks.paneNew
                   Dom.Hooks.paneTabDismiss
                   Dom.Hooks.panePreviewClose
-                  Dom.Hooks.terminalListRewind
                   Dom.Hooks.terminalReattach
                   Dom.Hooks.terminalClose ] do
                 let tags = tagsWith hook
