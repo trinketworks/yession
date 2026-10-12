@@ -3,9 +3,9 @@
 Integrations, built the way somebody outside this repository would build them.
 
 Everything here is **standalone**. An example references nothing from `Yession.Domain` or
-`Yession.Host`, has its own project and its own bundle, and is not carried by the npm package
-or the Nix installable. That separation is the whole point: an example that quietly reaches
-into the product's internals demonstrates a path only this repository can walk.
+`Yession.Host`. It has its own project and its own bundle. The npm package and the Nix
+installable do not carry it. This separation matters because an example that reaches into the
+product's internals demonstrates a path that only this repository can walk.
 
 Build one from the repository root, whichever ecosystem it belongs to:
 
@@ -18,19 +18,19 @@ dotnet fsi tasks.fsx example nix-store     # shell scripts; nothing to build, so
 
 | | |
 |---|---|
-| [serial](serial/) | An MCP server that lends the host's serial devices to an agent. Shows the shape of a provider that owns a **resource**: arbitration, a session-scoped claim, and a second transport for the bytes a tool call cannot carry. |
-| [jumpstarter](jumpstarter/) | An MCP server that lends a [Jumpstarter](https://jumpstarter.dev) exporter to an agent. Shows a provider that owns a **service**, written in the language that service's SDK is written in — Python here, and none the worse for it. |
-| [proxy](proxy/) | The other direction: not something a session talks to, but what a deployment's **reverse proxy** is fed by. Renders the registry stream into the proxy's own config through a template, and shows one Caddy composition — behind `tailscale serve`, translating its identity headers — end to end. |
-| [nix-store](nix-store/) | Not an integration at all but an operator's half of one: the `pin` a session runs inside each sandbox holding a shared Nix store, and the `sweep` that collects the store without taking any sandbox's shell with it. |
+| [serial](serial/) | An MCP server that lends the host's serial devices to an agent. Shows the shape of a provider that owns a **resource**: arbitration, a session-scoped claim, and a second transport for bytes that tool calls cannot carry. |
+| [jumpstarter](jumpstarter/) | An MCP server that lends a [Jumpstarter](https://jumpstarter.dev) exporter to an agent. Shows a provider that owns a **service** and is written in the language of that service's SDK: Python here. |
+| [proxy](proxy/) | The other direction: a session does not talk to it. It feeds a deployment's **reverse proxy**. It renders the registry stream into the proxy's own config through a template. It also shows one complete Caddy composition, behind `tailscale serve`, that translates the Tailscale identity headers. |
+| [nix-store](nix-store/) | Not an integration but an operator's half of one. It has the `pin` that a session runs inside each sandbox holding a shared Nix store. It also has the `sweep` that collects the store without deleting the shell of any sandbox. |
 
 ## Why a provider rather than a feature
 
-Yession declares MCP servers by url, and a session's own MCP client does the rest. Nothing in
-the product knows what serial is — which means a provider is not a plugin with a blessed
+Yession declares MCP servers by URL, and a session's own MCP client does the rest. Nothing in
+the product knows what serial is. A provider is therefore not a plugin with a blessed
 interface to conform to. It is a server. If your integration can answer `initialize`,
-`tools/list` and `tools/call` over HTTP, it is already declarable.
+`tools/list`, and `tools/call` over HTTP, you can already declare it.
 
-The interesting design questions are therefore not about Yession at all. They are the ones the
-serial example works through: who owns a resource the OS hands out exactly once, what happens
-to that claim when the client crashes, and how you carry a stream when your protocol is
+The interesting design questions are therefore not about Yession. The serial example works
+through them: who owns a resource that the OS hands out exactly once, what happens to that
+claim when the client crashes, and how you carry a stream when your protocol is
 request/response.
