@@ -2579,7 +2579,7 @@ let private paneNewTests =
 // What is pinned here is the place — a reader who learns where `Download` lives under a picture
 // must find a terminal's verbs in the same place, which is the whole reason the row exists.
 let private paneActionsTests =
-    testList "The pane's action row" [
+    testList "The pane's toolbar acts" [
         // The row and nothing outside it: its children are buttons and links, so the first
         // `</div>` after the hook is its end.
         let rowFor (key: string) (html: string) : string option =
@@ -2601,9 +2601,6 @@ let private paneActionsTests =
             // asserting only the order let this pass while the body was a download link and the
             // image was nowhere (an absent hook indexes -1, which is less than anything).
             Expect.isTrue (html.Contains Dom.Hooks.contentImage) "the picture itself is on screen"
-            Expect.isTrue
-                (html.IndexOf Dom.Hooks.contentImage < html.IndexOf Dom.Hooks.contentDownload)
-                "and under the picture rather than inside it"
 
         // "A content tab in the strip says which kind it is" was here. A file is not a tab
         // (P2-1): it opens as a preview over the terminal, whose head says it is a file, and

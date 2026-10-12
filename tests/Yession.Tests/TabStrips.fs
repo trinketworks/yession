@@ -97,6 +97,10 @@ let tests =
         testCase "a tab wider than the window shows its start" <| fun () ->
             Expect.equal (TabStrip.reveal (port 0.0) 400.0 800.0) (Some (400.0 - TabStrip.edge)) "where its name is"
 
+        testCase "a tab with a fractional edge is brought fully clear, not a fraction short" <| fun () ->
+            // A scroll offset is whole pixels; a fractional target would land short of the edge.
+            Expect.equal (TabStrip.reveal (port 0.0) 400.0 500.6) (Some (ceil (500.6 + TabStrip.edge - 360.0))) "rounded past it"
+
         testCase "the fade is on whichever ends have tabs past them" <| fun () ->
             Expect.equal (TabStrip.hidden { port 0.0 with TabStrip.Scrollport.Holds = 300.0 }) TabStrip.Hidden.Neither "it all fits"
             Expect.equal (TabStrip.hidden (port 0.0)) TabStrip.Hidden.After "at the start"

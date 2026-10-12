@@ -895,7 +895,7 @@ module Dom =
         /// takes nothing from anyone, and the two are not the same act. Said as what it LETS
         /// you do rather than as a grab: "control" is the model's word for a lease, and what a
         /// person wants from the press is to type.
-        let typeHere = "Type here"
+        let typeHere = "Interactive"
         /// The one control between a terminal's two reads (`terminalWatch`): its recording,
         /// the text it ran, and the live edge. Named after what the reader gets.
         ///

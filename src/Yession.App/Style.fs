@@ -3033,29 +3033,20 @@ module Style =
               "transition-opacity duration-200 ease-out motion-reduce:transition-none"
               "phone:[.term-closed_&]:opacity-0 phone:[.term-closed_&]:pointer-events-none"; focusRing ]
 
-    /// The column's head: a PIVOT, the one row this pane is navigated by: big light words,
-    /// no boxes.
+    /// The column's head is the header band (`spacing-band`) in two rows: this strip of tabs,
+    /// and under it the toolbar of whatever is on screen (`paneToolbar`), whose hairline is the
+    /// band's, level with the chat header's.
     ///
-    /// It was three layers — a 40px bar naming the selected terminal and opening a boxed
-    /// popover of every terminal, under it a strip of uppercase tabs with a `+` and a `+N`,
-    /// then the content — and the name of where you were sat ABOVE the row you moved between
-    /// places with, so the hierarchy read upside down and there were two ways to make a
-    /// terminal. Now every name is in one row, in big light type, the selected one in full ink
-    /// and the rest in the faintest ink the floor admits; `all` leads it, then the tabs, then — on a desktop — the
-    /// one `+`, then the way back to the chat. Nothing in it is boxed.
-    ///
-    /// On a phone every control in it is a thumb's 44 (`phone:min-h-11` on each). The row's
-    /// right padding there is the `›`'s own negative margin paid back (`navChevronBase`'s
-    /// `-m-1.5`) and no less: at `pr-1` the chevron's box ran 2px past the pane's edge, which
-    /// clips it and makes the whole column 2px wider than the phone. No left padding there:
-    /// the pane stops short of the screen for the chat's edge (`paneGrabEdge`), `all` has its
-    /// own, and the row needs those 6px to show three whole tabs.
-    let panePivotRow = "shrink-0 flex items-center gap-1 pl-1.5 pr-3 pt-2 phone:pt-1 phone:pl-0 phone:pr-1.5"
+    /// The strip is the ground (`bg`), black like the chat's head beside it, and the selected
+    /// tab wears the pane's own ground (`panel`), so it runs on into the toolbar and the body
+    /// under it: the chrome says which tab the page belongs to, before a word is read
+    /// (docs/visual-design.md, principle 2). Every control in it is 44px tall, so the strip is
+    /// a thumb's height on a phone and the same on a desktop, and it needs no padding of its own.
+    let panePivotRow = "shrink-0 h-11 flex items-stretch bg-bg"
     /// The tablist: `all`, then the scroller of tabs. `all` stays put at the row's head however
-    /// many tabs follow it — a door to every terminal that scrolled away with them would be no
-    /// door, and one that moved along every time a tab opened would be a door to hunt for.
-    /// `min-w-0` so the scroller is what gives way when the names outgrow the row.
-    let panePivotList = "flex-1 min-w-0 flex items-center gap-1"
+    /// many tabs follow it. `min-w-0` so the scroller is what gives way when the names outgrow
+    /// the row.
+    let panePivotList = "flex-1 min-w-0 flex items-stretch"
     /// The tabs' own scroll box, and nothing else that moves.
     ///
     /// When names run past an end, that end fades (`TabStrip.hidden`, written by the browser
@@ -3069,28 +3060,27 @@ module Style =
     /// the names by 16px): the row there is 390px for `all`, the tabs and the way back, and
     /// at `gap-2` it showed under two of them.
     let panePivotScroller =
-        cls [ "min-w-0 flex items-center gap-2 phone:gap-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        cls [ "min-w-0 flex items-stretch overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               "data-[pane-strip-hidden=end]:[mask-image:linear-gradient(to_right,#000_calc(100%_-_1.5rem),transparent)]"
               "data-[pane-strip-hidden=start]:[mask-image:linear-gradient(to_left,#000_calc(100%_-_1.5rem),transparent)]"
               "data-[pane-strip-hidden=both]:[mask-image:linear-gradient(to_right,transparent,#000_1.5rem,#000_calc(100%_-_1.5rem),transparent)]" ]
-    /// One pivot item: a name, as it was written — never cased or tracked into a label — in
-    /// light 22px type. A flex ROW rather than a truncating box, because it carries a mark and,
-    /// selected, the terminal's kill; the bound and the ellipsis are the name's.
+    /// One tab: a name, as it was written, at the body's size. A flex ROW rather than a
+    /// truncating box, because it carries a mark and, selected, its ×; the bound and the
+    /// ellipsis are the name's.
     ///
-    /// Told apart by INK alone, which is how Zune did it: the selected item in full ink, the
-    /// rest in `ink-faint`, the dimmest ink that still clears 4.5:1 on every surface
-    /// (app/tailwind.css) — so an item not chosen is quieter and still readable, never a
-    /// ghost. Selecting moves no text: there is no rule to grow and no weight to change.
+    /// Told apart by GROUND: the selected tab wears the pane's (`panel`), the rest the strip's,
+    /// and lift a step (`surface`) under the hand. Ink follows, a step quieter on the tabs not
+    /// chosen; both inks clear 4.5:1 on every ground here (Phase4). Selecting moves no text.
     let private pivotItemBase =
-        cls [ "shrink-0 bg-transparent border-0 cursor-pointer px-1.5 py-1 phone:min-h-11 phone:min-w-11 inline-flex items-center justify-center gap-1.5"
-              "font-ui font-light text-[22px] leading-7 whitespace-nowrap transition-colors duration-150 ease-out"
+        cls [ "shrink-0 border-0 cursor-pointer h-11 min-w-11 px-3 inline-flex items-center justify-center gap-1.5"
+              "font-ui font-normal text-body whitespace-nowrap transition-colors duration-150 ease-out"
               "motion-reduce:transition-none"; focusRingInset ]
-    let pivotItem = cls [ pivotItemBase; "text-ink-faint hover:text-ink" ]
-    let pivotItemOn = cls [ pivotItemBase; "text-ink" ]
+    let pivotItem = cls [ pivotItemBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
+    let pivotItemOn = cls [ pivotItemBase; "bg-panel text-ink" ]
     /// A pivot item's name: as much of it as fits, and an ellipsis for the rest — capped so
     /// that at the narrowest pane the splitter allows, the selected item and its × still fit
     /// beside `all` whole. The `all` page writes the name out in full.
-    let pivotName = "max-w-32 truncate"
+    let pivotName = "max-w-28 truncate"
     /// A mark beside a name (`View.terminalMark`): the running pulse, a failed exit, a closed
     /// terminal. Sized to the small type, sat on the name's line.
     let pivotMark = "inline-flex items-center self-center"
@@ -3108,10 +3098,13 @@ module Style =
     /// A DESKTOP control. On a phone the row is 390px for `all`, the tabs and the way back,
     /// and a 44px `+` in it was a tab the strip could not show; there the `all` page carries
     /// the same press (`allNewCell`), and exactly one of the two is ever on screen.
+    /// A square act at the strip's end — `+`, and the way back to the chat: the strip's
+    /// height square, its glyph in the tabs' resting ink.
+    let paneStripAct =
+        cls [ "shrink-0 w-11 h-11 grid place-items-center bg-transparent border-0 cursor-pointer p-0"
+              "text-ink-dim hover:text-ink hover:bg-surface transition-colors motion-reduce:transition-none"; focusRingInset ]
     let terminalTabNewCell = "relative shrink-0 flex items-center phone:hidden"
-    let terminalTabNew =
-        cls [ "shrink-0 w-8 h-8 phone:w-11 phone:h-11 grid place-items-center bg-transparent border-0 cursor-pointer p-0"
-              "font-ui font-extralight text-[26px] leading-none text-ink-faint hover:text-ink transition-colors"; focusRing ]
+    let terminalTabNew = paneStripAct
     /// The empty pane's button's cell: the positioning context its menu hangs from.
     let terminalEmptyNewCell = "relative"
     /// A tab's presence marks: one dot per peer whose caret is in THAT terminal, so a
@@ -3119,12 +3112,14 @@ module Style =
     /// the pivot rather than only from inside it.
     let terminalTabPeers = "inline-flex items-center gap-0.5 self-center"
 
-    /// The one line under the pivot, about the selected item — present only when the body
-    /// does not already say it (`View.paneSubtitle`). Small and faint: it is a caption to the
-    /// name over it, aligned with it, never a second heading.
-    let panePivotSubtitle =
-        "shrink-0 flex items-center gap-2 min-w-0 px-3 pb-2 font-ui text-small text-ink-faint"
-    /// A command inside it, in the terminal's own face, cut short rather than wrapped.
+    /// The band's second row: what is on screen, said small on the left, and the acts about it
+    /// on the right — the acts used to stand at the column's foot, under the composer, a long
+    /// way from the name of what they act on. Its hairline is the band's.
+    let paneToolbar =
+        cls [ "shrink-0 h-11 flex items-center gap-4 min-w-0 pl-3 pr-1.5 font-ui"; Stroke.dividerBottom ]
+    /// The toolbar's words about the thing on screen: where it runs, what it is doing.
+    let paneToolbarSays = "min-w-0 flex-1 flex items-center gap-2 truncate text-small font-light text-ink-faint"
+    /// A command inside them, in the terminal's own face, cut short rather than wrapped.
     let panePivotSubtitleCommand = "min-w-0 truncate font-terminal text-code-sm text-ink-dim"
     /// A preview's line under the pivot (F3) — `$ seq 1 40 ×`: its name and its close. The
     /// preview is a layer OF the terminal it is laid over, whose tab stays selected in the
@@ -3133,7 +3128,7 @@ module Style =
     /// subtitle's place, at the body's size rather than the caption's: this is the one line
     /// that names what is on screen, and the action row's verbs under it are never louder
     /// than the name of what they act on.
-    let panePreviewHead = "shrink-0 flex items-center gap-1.5 min-w-0 px-3 pb-2 font-ui text-body"
+    let panePreviewHead = "min-w-0 flex-1 flex items-center gap-1.5 font-ui text-body"
     /// Where a previewed command lives, beside its name when the strip does not say it: a
     /// caption, faint and small, and the first thing to give up its room.
     let panePreviewWhere = "min-w-0 shrink-[4] truncate text-small text-ink-faint"
@@ -3160,10 +3155,13 @@ module Style =
         cls [ "shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer p-0 no-underline"
               "font-ui font-light lowercase whitespace-nowrap"
               "transition-colors duration-150 ease-out motion-reduce:transition-none"; focusRingFar ]
-    /// An act at the foot of the column (`paneActions`), at the body's size: no louder than
-    /// the name of the thing it acts on (`panePreviewHead`). It was the pivot's size, and
-    /// under a block preview `show in <terminal>` became the largest type on a phone.
+    /// An act as a word at the body's size, where it ends a line of the body's own type.
     let paneAct = cls [ paneActBase; "text-body text-ink-dim hover:text-ink" ]
+    /// An act in the toolbar: its mark and its word in the caps voice, the face the agent's
+    /// interrupt wears — a verb about the whole thing on screen, not a word in a sentence.
+    let paneToolbarAct =
+        cls [ "h-11 px-1.5 shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer no-underline"
+              caps; "whitespace-nowrap text-ink-dim hover:text-ink transition-colors motion-reduce:transition-none"; focusRingInset ]
     /// The one act a surface is FOR — the empty pane's way to make a terminal: blue, which is
     /// what interactive means here, and nothing louder than that.
     let paneActPrimary = cls [ paneActBase; "text-pivot leading-6 text-blue hover:text-blue-up-1" ]
@@ -3228,19 +3226,9 @@ module Style =
         + "[&_.ap-tooltip]:wrap-anywhere [&_.ap-tooltip]:line-clamp-2"
     /// A stretch's facts, above whatever renders its recording.
     let paneFacts = "shrink-0 flex flex-col gap-1 px-3 py-3 " + Stroke.dividerBottom
-    /// A read-only tab's verbs, under whatever it is showing: the way to the recording, and
-    /// the way back. A row rather than a column, because they are alternatives to each other
-    /// rather than a list of facts.
-    ///
-    /// On a phone every verb in it is a thumb's 44 each way (`[&>*]`), whatever face it wears —
-    /// a button, or a download link. The width too, since the verbs went to the body's size:
-    /// `replay` in it is 41px of word, and the box grows past the word's end rather than
-    /// centring it, so the word stays on the rail.
-    ///
-    /// Words (`paneAct`) with air between them, and no rule over them: the band above ends on
-    /// its own ground, and a hairline between it and a row of light type was a box's edge with
-    /// the rest of the box taken away.
-    let paneActions = "shrink-0 flex flex-wrap items-center gap-x-7 gap-y-1 px-3 pt-2.5 pb-3 phone:py-1 phone:[&>*]:min-h-11 phone:[&>*]:min-w-11"
+
+    /// The acts in the toolbar, at its right end, after the words about the thing.
+    let paneActions = "shrink-0 flex items-center gap-1"
 
     // --- Content: a file the pane shows rather than a terminal ---------------------------
 

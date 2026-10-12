@@ -3776,20 +3776,20 @@ module View =
         // pinning its edge, and the pin is read off the feed there rather than by whoever
         // remembered to look it up first.
         let offer =
-            if rewound then Some ("live", Dom.Text.live, Some (Reading terminal))
+            if rewound then Some ("live", html $"""{Icon.rights}{Dom.Text.live}""", Some (Reading terminal))
             elif playing then
                 // Back to the text, where there is text to go back to.
-                if List.isEmpty view.Blocks then None else Some ("output", Dom.Text.output, Some (Reading terminal))
+                if List.isEmpty view.Blocks then None else Some ("output", html $"""{Icon.rights}{Dom.Text.output}""", Some (Reading terminal))
             elif view.IsOpen then
-                if feed.KnownLength > 0 then Some ("watch", Dom.Text.rewindAct, None) else None
-            elif ClientModel.terminalPlayable terminal model then Some ("watch", Dom.Text.replay, Some (Watching terminal))
+                if feed.KnownLength > 0 then Some ("watch", html $"""{Icon.rewind}{Dom.Text.rewindAct}""", None) else None
+            elif ClientModel.terminalPlayable terminal model then Some ("watch", html $"""{Icon.play}{Dom.Text.replay}""", Some (Watching terminal))
             else None
         match offer with
         | None -> None
         | Some (face, label, next) ->
             Some (
                 html $"""
-                <button type="button" class="{Style.paneAct}" data-terminal-watch="{face}"
+                <button type="button" class="{Style.paneToolbarAct}" data-terminal-watch="{face}"
                         @click={Ev(fun _ ->
                                       match next with
                                       | Some mode -> dispatch (ShowInPaneMsg mode)
@@ -3995,7 +3995,7 @@ module View =
     let private contentDownloadLink (ref: ContentRef) : TemplateResult =
         let url = RelativeUrl.inDocument DocumentBase.shell (SessionRoute.relative (SessionRoute.Content ref))
         html $"""
-            <a class="{Style.paneAct}" href="{url}" download="{ContentName.ofRef ref}"
+            <a class="{Style.paneToolbarAct}" href="{url}" download="{ContentName.ofRef ref}"
                data-content-download="{ContentRef.value ref}">{Dom.Text.download}</a>"""
 
     let private paneContentView (ref: ContentRef) : TemplateResult =
@@ -4054,8 +4054,8 @@ module View =
                 if not view.IsOpen || Option.isSome view.Lease then []
                 else
                     [ html $"""
-                        <button type="button" class="{Style.paneAct}" data-terminal-take="{TerminalId.value view.TerminalId}"
-                                @click={Ev(fun _ -> dispatch (TakeTerminalMsg view.TerminalId))}>{Dom.Text.typeHere}</button>""" ]
+                        <button type="button" class="{Style.paneToolbarAct}" data-terminal-take="{TerminalId.value view.TerminalId}"
+                                @click={Ev(fun _ -> dispatch (TakeTerminalMsg view.TerminalId))}>{Icon.keyboard}{Dom.Text.typeHere}</button>""" ]
             take @ Option.toList (terminalWatchToggle dispatch model view)
 
     /// What a preview on screen affords, for the action row: a command's recording and its
@@ -4077,9 +4077,11 @@ module View =
                 if not (ClientModel.previewPlayable preview.Subject model) then []
                 else
                     let face = if playing then "output" else "watch"
-                    let label = if playing then Dom.Text.output else Dom.Text.replay
+                    let label =
+                        if playing then html $"""{Icon.rights}{Dom.Text.output}"""
+                        else html $"""{Icon.play}{Dom.Text.replay}"""
                     [ html $"""
-                        <button type="button" class="{Style.paneAct}" data-pane-watch="{face}"
+                        <button type="button" class="{Style.paneToolbarAct}" data-pane-watch="{face}"
                                 @click={Ev(fun _ ->
                                               dispatch (ShowPreviewMsg { preview with Preview.Plays = not playing }))}>{label}</button>""" ]
             // The reader's OTHER question about this command: not what it printed, which
@@ -4096,7 +4098,7 @@ module View =
                 else
                     let where = Entity.terminalName model terminalId |> Option.defaultValue (TerminalId.value terminalId)
                     [ html $"""
-                        <button type="button" class="{Style.paneAct}" data-pane-show-in-terminal="{BlockId.value blockId}"
+                        <button type="button" class="{Style.paneToolbarAct}" data-pane-show-in-terminal="{BlockId.value blockId}"
                                 aria-label="{Dom.Text.showInTerminalNamed where}" title="{Dom.Text.showInTerminalNamed where}"
                                 @click={Ev(fun _ ->
                                               dispatch (ShowInTerminalMsg (terminalId, blockId)))}>{Dom.Text.showInTerminal}</button>""" ]
@@ -4917,36 +4919,14 @@ module View =
                          data-pane-panel="{key}">
                       {inner}
                     </div>"""
-        // The acts about the thing on screen are the ACTION ROW's, at the foot of the column
-        // (`paneActionsView`): one place for every kind's verbs. The `all` page has its verbs
-        // on its rows.
-        let paneActions =
-            match previewing, selected with
-            | _ when onAll -> Lit.nothing
-            | Some preview, _ -> paneActionsView (PreviewSubject.key preview.Subject) (previewVerbs dispatch model preview)
-            | None, Some terminal -> paneActionsView (ClientModel.tabKey terminal) (terminalVerbs dispatch model terminal)
-            | None, None -> Lit.nothing
-        // The one line under the pivot (`paneSubtitle`), about the selected item — and only
-        // what nothing under it already says. A terminal whose BLOCKS are the read has its
-        // commands there, each with how it went and the top one held in place as the history
-        // scrolls (`terminalBlockSummary`) — directly under the pivot, which is this line's
-        // own place — so a second copy here would be the same fact twice, one above the other.
-        // A screen or a recording says neither, so for those this says what is running, or
-        // last ran, and how it went.
+        // The band's second row (`Style.paneToolbar`): what is on screen, and the acts about
+        // it. It used to be two things in two places — a caption under the pivot, and an
+        // action row at the column's foot, under the composer, a long way from the name of
+        // what its verbs act on. The `all` page has its verbs on its rows, and no toolbar.
         //
-        // Under a preview this line is the PREVIEW's (F3): its name and its close — `$ seq 1
-        // 40 ×` — and nothing else. Not on `all`, which is over both.
-        //
-        // It used to lead with a way back, `‹ term 2 /`, which was the selected tab's press
-        // (`showTerminal`, landing on the read the preview is laid over) — and the close lands
-        // on that same read (`ClosePreviewMsg`). Two exits to one place, under a tab that is a
-        // third, and on a phone the line named the terminal a second time between the tab
-        // that names it and the action row that named it again. The other place a reader can
-        // ask for — this command, in its terminal's history — is the action row's
-        // `show in terminal`, which is a different destination and the only control for it.
-        let subtitle =
-            let line (hook: string) (content: TemplateResult) =
-                html $"""<div class="{Style.panePivotSubtitle}" data-pane-subtitle="{hook}">{content}</div>"""
+        // Under a preview the row is the PREVIEW's (F3): its name, where it lives when the
+        // strip does not say so, its acts, and its close.
+        let toolbar =
             match previewing, selected with
             | _ when onAll -> Lit.nothing
             | Some preview, _ ->
@@ -4955,8 +4935,7 @@ module View =
                 // Where the command lives, said only where the strip does not already say it:
                 // a command of a terminal the reader put away is laid over whichever terminal
                 // they are on, whose tab is the selected one, so the strip names the wrong
-                // terminal and this is the only place the right one is. Context, not a control —
-                // the act of going there is `show in terminal`.
+                // terminal and this is the only place the right one is.
                 let whereabouts =
                     match preview.Subject with
                     | PreviewSubject.Block (terminal, _) when Some terminal <> selected ->
@@ -4965,27 +4944,47 @@ module View =
                                        title="{Dom.Text.inTerminal name}">{Dom.Text.inTerminal name}</span>"""
                     | PreviewSubject.Block _ | PreviewSubject.Stretch _ | PreviewSubject.Content _ -> Lit.nothing
                 html $"""
-                    <div class="{Style.panePreviewHead}" data-pane-subtitle="preview">
-                      <span class="{Style.panePreviewName}" id="{Dom.panePreviewNameId}" data-pane-preview-name="{key}"
-                            title="{hint}">{label}</span>
-                      {whereabouts}
-                      <button type="button" class="{Style.panePreviewClose}" data-pane-preview-close
+                    <div class="{Style.paneToolbar}">
+                      <div class="{Style.panePreviewHead}" data-pane-subtitle="preview">
+                        <span class="{Style.panePreviewName}" id="{Dom.panePreviewNameId}" data-pane-preview-name="{key}"
+                              title="{hint}">{label}</span>
+                        {whereabouts}
+                      </div>
+                      {paneActionsView key (previewVerbs dispatch model preview)}
+                      <button type="button" class="{Style.paneStripAct}" data-pane-preview-close
                               aria-label="{Dom.Text.closePreview label}" title="{Dom.Text.closePreview label}"
                               @click={Ev(fun _ -> dispatch ClosePreviewMsg)}>{Icon.close}</button>
                     </div>"""
             | None, Some terminal ->
-                match Projection.tryFind terminal model.Terminals with
-                // Not while rewound: the recording under the reader is a moment ago, and the
-                // newest command and its status are the live terminal's, which it is not.
-                | Some view when terminalRead model view <> TerminalRead.Blocks && not (ClientModel.isRewound terminal model) ->
-                    let latest = Projection.runningBlock view |> Option.orElse (List.tryLast view.Blocks)
-                    match latest with
-                    | Some block ->
-                        line
-                            "terminal"
-                            (html $"""<code class="{Style.panePivotSubtitleCommand}" title="{block.Command}">{BlockLabel.ofBlock block}</code><span class="shrink-0">{terminalBlockStatus model block.Status}</span>""")
+                // Where it runs, then what it is doing. A terminal whose BLOCKS are the read has
+                // its commands right under this, each with how it went, so it says only where
+                // and whether anything is running; a screen or a recording says neither, so for
+                // those this names what is running, or last ran, and how it went. Not while
+                // rewound: the newest command is the live terminal's, and the reader is behind it.
+                let says =
+                    match Projection.tryFind terminal model.Terminals with
                     | None -> Lit.nothing
-                | Some _ | None -> Lit.nothing
+                    | Some view ->
+                        let place =
+                            match TerminalName.place view with
+                            | Some where -> html $"""<span class="shrink-0">{where}</span>"""
+                            | None -> Lit.nothing
+                        let doing =
+                            if terminalRead model view <> TerminalRead.Blocks && not (ClientModel.isRewound terminal model) then
+                                match Projection.runningBlock view |> Option.orElse (List.tryLast view.Blocks) with
+                                | Some block ->
+                                    html $"""<span class="contents" data-pane-subtitle="terminal"><code class="{Style.panePivotSubtitleCommand}" title="{block.Command}">{BlockLabel.ofBlock block}</code><span class="shrink-0">{terminalBlockStatus model block.Status}</span></span>"""
+                                | None -> Lit.nothing
+                            elif not view.IsOpen then html $"""<span class="shrink-0">{Dom.Text.markClosed}</span>"""
+                            elif Option.isSome (Projection.runningBlock view) then
+                                html $"""<span class="shrink-0 text-green">{Dom.Text.blockRunning}</span>"""
+                            else html $"""<span class="shrink-0">{Dom.Text.killIdle}</span>"""
+                        html $"""{place}{doing}"""
+                html $"""
+                    <div class="{Style.paneToolbar}">
+                      <div class="{Style.paneToolbarSays}">{says}</div>
+                      {paneActionsView (ClientModel.tabKey terminal) (terminalVerbs dispatch model terminal)}
+                    </div>"""
             | None, None -> Lit.nothing
         // The pivot's one `+`, outside the scroller, so it is where it was last time whatever
         // the pivot holds, and inside a positioned cell of its own, because a menu hung inside
@@ -5028,7 +5027,7 @@ module View =
                     </div>
                   </div>
                   {newCell}
-                  <button type="button" class="{Style.navChevronForward}" aria-label="{Dom.Text.backToChat}"
+                  <button type="button" class="{Style.paneStripAct}" aria-label="{Dom.Text.backToChat}"
                           title="{Dom.Text.backToChat}" data-content-toggle="hide"
                           @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.right}</button>
                 </div>"""
@@ -5063,10 +5062,9 @@ module View =
                                         if onAll then dispatch CloseSwitcherMsg
                                         elif Option.isSome previewing then dispatch ClosePreviewMsg)}>
                 {pivot}
-                {subtitle}
+                {toolbar}
                 {refusalNotice dispatch model RefusalMount.Pane}
                 {body ()}
-                {paneActions}
               </div>
             </aside>"""
 

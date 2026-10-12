@@ -58,6 +58,11 @@ module Icon =
     let private playPath = "M5.75 3.5 L12 8 L5.75 12.5 Z"
     /// Stop, in the one shape that has always meant it.
     let private stopPath = "M4 4 L12 4 L12 12 L4 12 Z"
+    /// Back through what happened: two chevrons pointing behind, the `rights` mark turned round.
+    let private rewindPath = "M8.25 3.5 L3.75 8 L8.25 12.5 M12.75 3.5 L8.25 8 L12.75 12.5"
+    /// A keyboard: a frame, a row of keys as zero-length subpaths (the dot trick `morePath`
+    /// uses), and the space bar.
+    let private keyboardPath = "M1.5 4 L14.5 4 L14.5 12 L1.5 12 Z M4.5 7 L4.5 7 M7 7 L7 7 M9.5 7 L9.5 7 M12 7 L12 7 M5 9.5 L11 9.5"
     /// A caret pointing down: this opens something beneath it (the pane head's switcher).
     let private caretPath = "M4 6.25 L8 10.25 L12 6.25"
     /// An archive box: a lid across the top, the body under it, and a notch in the middle of
@@ -141,6 +146,11 @@ module Icon =
     /// a square beside a command reads as stopping the command, not ending the terminal —
     /// the list says its verbs as words now (`Dom.Text.rewind`, `kill`, `reattach`).
     let stop = stroked "w-3.5 h-3.5" stopPath
+    /// A terminal's acts in the pane's toolbar: taking the keyboard, going back through its
+    /// recording, and playing a closed one's.
+    let keyboard = stroked "w-3.5 h-3.5" keyboardPath
+    let rewind = stroked "w-3.5 h-3.5" rewindPath
+    let play = stroked "w-3.5 h-3.5" playPath
     /// The switcher's door, before the head's name (P2-2).
     let caret = stroked "w-3 h-3 shrink-0" caretPath
     /// Retire this session from the working list. A row-riding verb that needs no word: it is
