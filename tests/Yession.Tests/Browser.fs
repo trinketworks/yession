@@ -6258,6 +6258,36 @@ let editorTests =
                 let! drafted = await (page.EvaluateAsync<string> where)
                 Expect.equal drafted empty "the draft line, the picker and the composer's edge stand where they stood"
             }
+        // The same promise from the reader's side. A draft beginning is the composer's
+        // business; the conversation above it has no reason to move, and when Send arriving
+        // nudged the composer's box the newest line slid up under the reader's eye. Measured
+        // where the reader sees it — the newest item's place on screen and the conversation's
+        // own bottom edge — at the end of the conversation, where a nudge is never absorbed.
+        let conversationStillAsDraftBegins (page: IPage) =
+            async {
+                do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
+                let line = """#shell [data-draft-input] .ProseMirror"""
+                let! _ = await (page.WaitForSelectorAsync line)
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+                do! toTheEnd page "chat"
+                let where =
+                    """() => {
+                         const c = document.querySelector('#shell [data-conversation]')
+                         const newest = c.lastElementChild.getBoundingClientRect()
+                         const r = v => Math.round(v * 10) / 10
+                         return JSON.stringify({ newest: r(newest.top + scrollY), bottom: r(c.getBoundingClientRect().bottom + scrollY) })
+                       }"""
+                do! awaitU (page.ClickAsync line)
+                do! twoFrames page
+                let! empty = await (page.EvaluateAsync<string> where)
+                do! awaitU (page.Keyboard.TypeAsync "s")
+                let! _ = await (page.WaitForSelectorAsync """#shell [data-send-draft][data-send-ready="yes"]""")
+                do! twoFrames page
+                let! drafted = await (page.EvaluateAsync<string> where)
+                Expect.equal drafted empty "the newest item and the conversation's edge stand where they stood"
+            }
+        editorCaseIn 390 844 "on a phone the conversation stands still as a draft begins" <| conversationStillAsDraftBegins
+        editorCaseIn 1440 900 "the conversation stands still as a draft begins" <| conversationStillAsDraftBegins
         // The other half of Send coming and going: with nothing to send there is no Send to
         // press. It is present for the focus order, but a finger on the place it will stand
         // reaches whatever is under it, never the control.
