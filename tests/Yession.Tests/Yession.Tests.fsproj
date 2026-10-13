@@ -140,6 +140,9 @@
     <!-- Where things live: the layout rules that were sentences in AGENTS.md, read from the
          files git would commit. Beside DomainReferences, whose lockfile technique it uses. -->
     <Compile Include="RepoLayout.fs" />
+    <!-- The hook that keeps agents on the task verbs (.claude/direct-tool-hook.sh), spawned with
+         payloads. Beside RepoLayout, whose allowlist it is the reason for. -->
+    <Compile Include="DirectToolHook.fs" />
     <!-- Where each control call goes: the one spelling both ends of the channel read. -->
     <Compile Include="ControlRoutes.fs" />
     <!-- The setup this repository declares for its own work sandbox: a committed-file

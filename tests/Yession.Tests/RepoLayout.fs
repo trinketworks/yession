@@ -7,8 +7,9 @@ module Yession.Tests.RepoLayout
 //     truncates a repo's `AGENTS.md` at `Repos.agentsMdCharCap`, and this repository is one
 //     that sessions are given; a file that grows past the cap loses its tail to every agent
 //     working here, without a failure anywhere.
-//   * The only helper script is `.claude/setup.sh`. Build, dev and repo functionality is a
-//     `tasks.fsx` verb, so there is one build interface that knows what runs after what.
+//   * The only helper scripts are the ones `allowedScripts` names, each with the reason it
+//     cannot be a verb. Build, dev and repo functionality is a `tasks.fsx` verb, so there is
+//     one build interface that knows what runs after what.
 //   * `docs/plans` does not exist. A plan is right on the day it is written and drifts after.
 //   * An example is standalone, in both directions: it lists nothing of Yession, and nothing
 //     of the product lists it.
@@ -93,10 +94,11 @@ let private under (prefix: string) (files: string list) : string list =
 
 // --- helper scripts ----------------------------------------------------------------------
 
-/// The one helper script this repository keeps. It exists because it must run where `dotnet`
-/// cannot: before Nix and devenv do, in a fresh Claude Code container. Nothing else has that
-/// excuse.
-let private allowedScripts = [ ".claude/setup.sh" ]
+/// The helper scripts this repository keeps, each with the reason it runs where `dotnet`
+/// cannot. Nothing else has an excuse.
+let private allowedScripts : (string * string) list =
+    [ ".claude/setup.sh", "it runs before Nix and devenv do, in a fresh Claude Code container"
+      ".claude/direct-tool-hook.sh", "hooks the harness runs per tool call cannot start dotnet" ]
 
 /// A script: named for a shell, or starting with a shebang. The shebang is what catches the
 /// extensionless ones. `examples/` is not looked at: an example is built the way somebody
@@ -168,23 +170,25 @@ let tests =
                     length
                     cap)
 
-        testCase "the only helper script outside examples/ is .claude/setup.sh" <| fun () ->
-            let extra = helperScripts checkout.Value |> List.filter (fun path -> not (List.contains path allowedScripts))
+        testCase "the only helper scripts outside examples/ are the ones allowed" <| fun () ->
+            let allowed = allowedScripts |> List.map fst
+            let extra = helperScripts checkout.Value |> List.filter (fun path -> not (List.contains path allowed))
             Expect.isEmpty
                 extra
                 (sprintf
-                    "%s: a script beside the build. New build, dev or repo functionality is a verb in tasks.fsx (`dotnet fsi tasks.fsx <verb>`): the devenv scripts, the workflows and the Nix outputs wrap it, and `make` builds each Target once, after what it stands on. A script of its own is a second build interface that nothing orders. Add a Target and a verb; to run it from devenv, wrap the verb. .claude/setup.sh is the one exception, because it runs before dotnet, Nix and devenv exist. Scripts under examples/ are exempt: an example is built the way somebody outside this repository would build it"
-                    (String.concat ", " extra))
+                    "%s: a script beside the build. New build, dev or repo functionality is a verb in tasks.fsx (`dotnet fsi tasks.fsx <verb>`): the devenv scripts, the workflows and the Nix outputs wrap it, and `make` builds each Target once, after what it stands on. A script of its own is a second build interface that nothing orders. Add a Target and a verb; to run it from devenv, wrap the verb. The exceptions run where dotnet cannot, and `allowedScripts` in RepoLayout.fs names each with its reason: %s. Scripts under examples/ are exempt: an example is built the way somebody outside this repository would build it"
+                    (String.concat ", " extra)
+                    (allowedScripts |> List.map (fun (path, reason) -> sprintf "%s (%s)" path reason) |> String.concat "; "))
 
         // The population, asserted beside the rule: a scan that stopped seeing scripts finds no
         // extra one either, and reads exactly like a tree that obeys.
-        testCase "the scan for helper scripts still finds the one it allows" <| fun () ->
+        testCase "the scan for helper scripts still finds the ones it allows" <| fun () ->
             let found = helperScripts checkout.Value
-            let missing = allowedScripts |> List.filter (fun path -> not (List.contains path found))
+            let missing = allowedScripts |> List.map fst |> List.filter (fun path -> not (List.contains path found))
             Expect.isEmpty
                 missing
                 (sprintf
-                    "%s is allowed as a helper script and the scan did not find it. If it moved or was renamed, change `allowedScripts` in RepoLayout.fs; if it is still there, the scan (a .sh name, or a #! on the first line) stopped seeing scripts, and `the only helper script` above proves nothing"
+                    "%s is allowed as a helper script and the scan did not find it. If it moved or was renamed, change `allowedScripts` in RepoLayout.fs; if it is still there, the scan (a .sh name, or a #! on the first line) stopped seeing scripts, and `the only helper scripts` above proves nothing"
                     (String.concat ", " missing))
 
         testCase "docs/plans holds no file" <| fun () ->
