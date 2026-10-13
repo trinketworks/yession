@@ -93,7 +93,7 @@ let openLog (path: string) (sessionId: SessionId) (clock: unit -> System.DateTim
             // drain would need an explicit mutex before it could tolerate one.
             writeAndSync fd (Codec.toString Events.sessionEventEnvelope envelope + "\n")
             events.Add envelope
-            return { Offset = offset }
+            return { Offset = offset; Timestamp = envelope.Timestamp }
         }
 
     // By position, not by filtering the whole log: the offset `append` assigns above is the

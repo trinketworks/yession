@@ -19,6 +19,8 @@ open Yession.Peer
 type private ManualClock () =
     let mutable now = 0
     let armed = ResizeArray<int * (unit -> unit) * bool ref> ()
+    /// How far it has been turned, in milliseconds.
+    member _.Now = now
     member _.Clock : Timer.Clock =
         fun after callback ->
             let live = ref true
@@ -98,6 +100,18 @@ let private program () =
     let runner = Harness.run (Client.makeProgram Client.Ports.offline (Y.Doc.Create ()) (ClientModel.init (peer "ada" "Ada")) |> Client.withTimers clock.Clock)
     clock, (fun msg -> runner.Dispatch (user msg)), runner.Model
 
+/// The real client program with the page's clock on a hand-turned one, its time read off how
+/// far that has been turned from `clockStart`.
+let private clockStart = DateTimeOffset (2026, 10, 14, 8, 0, 0, TimeSpan.Zero)
+let private clocked () =
+    let clock = ManualClock ()
+    let now () = clockStart.AddMilliseconds (float clock.Now)
+    let runner =
+        Harness.run
+            (Client.makeProgram Client.Ports.offline (Y.Doc.Create ()) (ClientModel.init (peer "ada" "Ada"))
+             |> Client.withClock now clock.Clock)
+    clock, runner.Model
+
 /// The real client program over a clipboard that answers `written` — the platform's half of a
 /// copy, which only it can know.
 let private copying (written: bool) =
@@ -115,6 +129,17 @@ let private available (offset: int64) : ClientMsg = EventsAvailableMsg (EventOff
 
 let tests =
     testList "Timers" [
+        // "4m ago" is told against this, so a page that has not been told the time says how
+        // long ago against nothing at all.
+        testCase "the page knows what time it is as soon as it runs" <| fun () ->
+            let _, model = clocked ()
+            Expect.equal (model ()).Now (Some clockStart) "told at once"
+
+        testCase "the page is told the time again every minute" <| fun () ->
+            let clock, model = clocked ()
+            clock.Advance (2 * Client.clockPeriodMs)
+            Expect.equal (model ()).Now (Some (clockStart.AddMinutes 2.0)) "two minutes on, two minutes later"
+
         testCase "before its first word, the agent reads as thinking" <| fun () ->
             Expect.isTrue (thinking (fold [ opened ])) "an empty message is a turn that has said nothing yet"
 

@@ -1580,6 +1580,11 @@ type ClientModel =
       /// default: they are the record, and a session that has run forty commands has forty
       /// of them to push its live terminals' rows apart.
       ClosedShown   : bool
+      /// What time the page says things happened against — "4m ago" on a command's line.
+      /// The composition root's clock (`Client.withClock`), told at once and every minute
+      /// after; `None` until it has said, which is a server render and nothing else, and
+      /// where nothing says how long ago rather than saying it against a guess.
+      Now           : System.DateTimeOffset option
       /// The last thing the session REFUSED, in its own words.
       ///
       /// A command answers `CommandAccepted` or `CommandRejected`, and until now only the
@@ -2130,6 +2135,8 @@ type ClientMsg =
     | CloseSwitcherMsg
     /// Unfold the list's closed terminals, or fold them away again (`ClosedShown`).
     | ToggleClosedMsg
+    /// The clock says what time it is (`Now`).
+    | ClockMsg of System.DateTimeOffset
     /// Something was copied to the clipboard (`Some` the hook of the box it came from), or
     /// the moment for saying so has passed (`None`).
     ///
@@ -2484,6 +2491,7 @@ module ClientModel =
           Switcher = false
           ListHeld = Set.empty
           ClosedShown = false
+          Now = None
           Refused = None
           Stolen = None
           Asked = Map.empty
@@ -4331,7 +4339,7 @@ module ClientModel =
                     model.Launch
             let terminals =
                 freshEvents
-                |> List.fold (fun proj e -> Projection.applyEvent proj e.Event) model.Terminals
+                |> List.fold (fun proj e -> Projection.applyEvent proj e.Timestamp e.Event) model.Terminals
             // The roster keeps departed peers: a draft's author may have left while their words
             // are still in the composer, and "who wrote this" must still have an answer.
             let peers =
@@ -5022,6 +5030,7 @@ module ClientModel =
         | OpenAllMsg -> drawerShut { model with Switcher = true; PaneMenu = false; TerminalsOpen = true }
         | CloseSwitcherMsg -> { model with Switcher = false }
         | ToggleClosedMsg -> { model with ClosedShown = not model.ClosedShown }
+        | ClockMsg at -> { model with Now = Some at }
         | EnsureTerminalDraftMsg (terminal, author, queueId) ->
             // Typing changes nothing about the strip: a terminal being typed in is on screen
             // already, which is the whole of what it needs.

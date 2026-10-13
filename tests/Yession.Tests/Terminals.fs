@@ -236,8 +236,9 @@ let private started (id: TerminalId) (b: string) (command: string) (fromSeq: int
 let private completed (id: TerminalId) (b: string) (result: CommandResult) (toSeq: int) =
     SessionEvent.TerminalBlockCompleted { TerminalId = id; BlockId = block b; Result = result; ToSeq = toSeq }
 
+/// Folded as one moment: what these cases ask of a block is never when it ran.
 let private fold events =
-    events |> List.fold Projection.applyEvent Projection.empty
+    events |> List.fold (fun proj event -> Projection.applyEvent proj (fixedClock ()) event) Projection.empty
 
 let private projectionTests =
     testList "Terminal projection" [
@@ -1043,6 +1044,16 @@ let private rejectionTests =
             Expect.equal (Authority.author refusal.Authority) ActorRef.Agent "and whose command it was"
             Expect.equal (refusal.FromSeq, refusal.ToSeq) (0, Some 0) "an empty range, because it produced nothing"
 
+        testCase "a block started when the log stamped its start" <| fun () ->
+            let ranAt = DateTimeOffset (2026, 8, 2, 9, 30, 0, TimeSpan.Zero)
+            let proj =
+                Projection.applyEvent
+                    (fold [ opened terminalA "build" ])
+                    ranAt
+                    (started terminalA "1" "make" 0)
+            let block = (Projection.tryFind terminalA proj |> Option.get).Blocks |> List.exactlyOne
+            Expect.equal block.StartedAt ranAt "the moment on its start"
+
         testCase "the rejection fold is idempotent, so overlapping pages are safe" <| fun () ->
             let events = [ opened terminalA "build"; rejectedEvent terminalA "a1" "2" bob None ]
             let twice = fold (events @ events)
@@ -1416,7 +1427,8 @@ let private blockOf (status: BlockStatus) : Block =
       FromSeq = 0
       ToSeq = None
       Status = status
-      StoppedBy = None }
+      StoppedBy = None
+      StartedAt = fixedClock () }
 
 /// The observation of a request that is the head of its terminal's queue, held for `hold`.
 let private waitingOn (hold: TerminalQueueDrain.TerminalHold option) : TerminalCommandWait.Observation =
@@ -4172,7 +4184,8 @@ let private affordanceTests =
                             FromSeq = 1
                             ToSeq = Some 3
                             Status = BlockFinished (CommandSucceeded 0)
-                            StoppedBy = None } ] }
+                            StoppedBy = None
+                            StartedAt = fixedClock () } ] }
             Expect.isTrue (afforded RecordingKnown.Recorded (viewOf false false)) "closed, recorded, and nothing ran in it"
             Expect.isFalse (afforded RecordingKnown.Recorded ran) "the commands it ran are the read instead"
             Expect.isFalse (afforded RecordingKnown.NotRecorded (viewOf false false)) "and a recording the cap ate is no read at all"
@@ -4207,7 +4220,8 @@ let private affordanceTests =
                             FromSeq = 1
                             ToSeq = Some 3
                             Status = BlockFinished (CommandSucceeded 0)
-                            StoppedBy = None } ] }
+                            StoppedBy = None
+                            StartedAt = fixedClock () } ] }
             Expect.isFalse (afforded instrumented) "it has a cheaper read of the same history"
     ]
 

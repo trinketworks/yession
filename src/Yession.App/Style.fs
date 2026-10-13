@@ -3469,7 +3469,9 @@ module Style =
     /// its output scrolls (`terminalBlockSummary`) is held at the box's content edge, and a
     /// padded box held it 12px down with the output it was hiding showing above it.
     let terminalScrollback = "relative flex-1 min-h-0 overflow-y-auto flex flex-col px-3"
-    let terminalStream = "flex flex-col gap-2 py-3"
+    /// A query container (`@container`), so a block lays out by the PANE's width — set by its
+    /// splitter — rather than the screen's (`terminalBlockSummary`).
+    let terminalStream = "@container flex flex-col gap-2 py-3"
     /// The commands inside a run's fold: the stream's rhythm, without its edges.
     let terminalBlockRunBody = "flex flex-col gap-2 phone:gap-0"
 
@@ -3501,7 +3503,24 @@ module Style =
     /// A strip a step up the ground (`surface`), edge to edge of the column: the chrome says
     /// where one command's group begins before a word of it is read (docs/visual-design.md,
     /// principle 2).
-    let terminalBlockSummary = cls [ terminalBlockCommand; "sticky top-0 z-10 bg-surface -mx-3 px-3 min-h-6" ]
+    ///
+    /// Two lines: who ran it, when, and how it went (`terminalBlockByline`), over the command,
+    /// which then has the column's whole width. In a pane 40rem wide or more the byline is a
+    /// gutter beside the command instead, the author over the time — the width a short
+    /// command leaves empty at its end is put to use, and the commands stand in one column.
+    let terminalBlockSummary =
+        cls [ "sticky top-0 z-10 bg-surface -mx-3 px-3 py-1.5 flex flex-col gap-0.5"
+              "@min-[40rem]:flex-row @min-[40rem]:items-baseline @min-[40rem]:gap-3" ]
+    /// Who ran it at the start, when and how it went at the end: one line, or the gutter.
+    let terminalBlockByline =
+        cls [ "flex items-center gap-2 min-w-0 min-h-6"
+              "@min-[40rem]:w-30 @min-[40rem]:shrink-0 @min-[40rem]:flex-col @min-[40rem]:items-start @min-[40rem]:gap-0 @min-[40rem]:min-h-0" ]
+    /// When it ran and its state, at the byline's far end; under the author in the gutter.
+    let terminalBlockWhen =
+        "ml-auto shrink-0 inline-flex items-baseline gap-2 font-ui font-light text-small text-ink-faint tabular-nums @min-[40rem]:ml-0"
+    /// What a block says under its command, held to the command's column when the byline is
+    /// a gutter beside it.
+    let terminalBlockBody = "flex flex-col min-w-0 @min-[40rem]:pl-33"
     /// A run's fold ("ran N commands") — a real `<summary>`, so the disclosure is the
     /// browser's and arrives keyboard-operable and correctly announced. Not sticky: the
     /// commands inside it are, and two rows held at one edge is one row hidden.
@@ -3534,7 +3553,7 @@ module Style =
     /// the name. `shrink-0` with a bounded name, because the command beside it is the longer
     /// thing and the one that should give way; `min-w-0` lets the name itself give way before
     /// the row does, on a phone where neither fits.
-    let terminalBlockAuthor = "shrink-0 min-w-0 max-w-[40%] inline-flex items-baseline font-ui font-light text-small text-ink-dim"
+    let terminalBlockAuthor = "shrink-0 min-w-0 max-w-[60%] @min-[40rem]:max-w-full inline-flex items-baseline font-ui font-light text-small text-ink-dim"
 
     let terminalPrompt = "shrink-0 font-terminal text-code text-green select-none"
     /// A command breaks where a shell would let you: at its spaces. `anywhere` is the last resort

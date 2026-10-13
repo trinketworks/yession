@@ -83,6 +83,17 @@ let tests =
             Expect.equal (Elapsed.describe (TimeSpan.FromSeconds 4.0)) "1m" "never 0m"
             Expect.equal (Elapsed.inWords (TimeSpan.FromSeconds 4.0)) "1 minute" "nor no minutes"
 
+        // A minute's count would round a moment just gone up to one; a reader's clock a few
+        // seconds behind the log's would read "-1m".
+        testCase "how long ago is \"just now\" under a minute, and the terse count past it" <| fun () ->
+            Expect.equal
+                [ Elapsed.ago (TimeSpan.FromSeconds 20.0)
+                  Elapsed.ago (TimeSpan.FromSeconds -5.0)
+                  Elapsed.ago (TimeSpan.FromMinutes 4.0)
+                  Elapsed.ago (TimeSpan.FromHours 7.0) ]
+                [ "just now"; "just now"; "4m ago"; "7h ago" ]
+                "a moment, a moment ahead, minutes, hours"
+
         // One spelling of a moment, because the screen shows a person the same string the
         // agent was given — UTC and to the minute, so neither has to translate.
         testCase "a moment is spelled to the minute in UTC" <| fun () ->

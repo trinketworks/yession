@@ -188,7 +188,8 @@ let private representativeModel : ClientModel =
                       FromSeq = 0
                       ToSeq = Some 2
                       Status = BlockFinished (CommandSucceeded 0)
-                      StoppedBy = None } ]
+                      StoppedBy = None
+                      StartedAt = System.DateTimeOffset (2026, 6, 14, 0, 0, 0, System.TimeSpan.Zero) } ]
                 DroppedBytes = 0 } ] }
       // The transcript this client has: one coloured line, so the SSR render exercises the
       // ANSI path rather than only the plain one.
@@ -231,6 +232,7 @@ let private representativeModel : ClientModel =
       Switcher = false
       ListHeld = Set.empty
       ClosedShown = false
+      Now = None
       Refused = None
       Stolen = None
       Asked = Map.empty
@@ -375,7 +377,8 @@ let private runBlock (authority: Authority) (n: int) (status: BlockStatus) : Blo
       FromSeq = 0
       ToSeq = Some 1
       Status = status
-      StoppedBy = None }
+      StoppedBy = None
+      StartedAt = System.DateTimeOffset (2026, 6, 14, 0, 0, 0, System.TimeSpan.Zero) }
 
 /// The representative session holding these terminals instead of its one, each a copy of the
 /// fixture's terminal under another id, its last command `last` (`None`: never ran one), and

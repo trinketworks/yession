@@ -156,7 +156,12 @@ type Block =
       /// Who interrupted it, when somebody did (`TerminalBlockInterrupted`). Beside the
       /// status rather than in it: the block still ends however its shell says, and an
       /// interrupt that came too late to matter is still somebody's act.
-      StoppedBy : ActorRef option }
+      StoppedBy : ActorRef option
+      /// When it started — the moment its start was recorded, or for a command refused
+      /// before it ran, the moment of the refusal. Taken from the event's envelope, which is
+      /// where the log keeps time, so a block says when it ran without the fact being
+      /// written twice.
+      StartedAt : System.DateTimeOffset }
 
 /// One terminal, as the UI knows it.
 type TerminalView =
@@ -314,7 +319,10 @@ module Projection =
 
     /// Fold one event into the projection. Only terminal events matter; everything else
     /// passes through, so this composes with the other folds over the same page.
-    let applyEvent (proj: Projection) (event: SessionEvent) : Projection =
+    ///
+    /// With the moment the log stamped on it (`EventEnvelope.Timestamp`, or an append's
+    /// `AppendResult.Timestamp`): a block's time is the log's (`StartedAt`).
+    let applyEvent (proj: Projection) (at: System.DateTimeOffset) (event: SessionEvent) : Projection =
         match event with
         | SessionEvent.TerminalOpened e ->
             // Re-opening an id that already exists is not a second terminal: ids are minted
@@ -388,7 +396,8 @@ module Projection =
                                   FromSeq = e.FromSeq
                                   ToSeq = None
                                   Status = BlockRunning
-                                  StoppedBy = None } ] })
+                                  StoppedBy = None
+                                  StartedAt = at } ] })
         | SessionEvent.TerminalBlockCompleted e ->
             proj
             |> updateTerminal e.TerminalId (fun t ->
@@ -418,7 +427,8 @@ module Projection =
                                   FromSeq = 0
                                   ToSeq = Some 0
                                   Status = BlockRejected (e.RejectedBy, e.Reason)
-                                  StoppedBy = None } ] })
+                                  StoppedBy = None
+                                  StartedAt = at } ] })
         | SessionEvent.TerminalIntegrationLost e ->
             proj |> updateTerminal e.TerminalId (fun t -> { t with IntegrationLost = true })
         | SessionEvent.TerminalIntegrationRestored e ->

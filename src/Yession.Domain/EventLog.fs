@@ -7,9 +7,12 @@ type EventPage<'event> =
       LastOffset : EventOffset option
       IsEnd      : bool }
 
-/// The result of appending an event: the monotonic offset assigned to it.
+/// The result of appending an event: the monotonic offset assigned to it, and the moment the
+/// log stamped on it — what a fold over the appended event reads as its time, so a reader
+/// folding as it appends and one folding the log back agree to the instant.
 type AppendResult =
-    { Offset : EventOffset }
+    { Offset : EventOffset
+      Timestamp : System.DateTimeOffset }
 
 /// How much of the append-only log one HTTP answer carries (Plan 20).
 ///

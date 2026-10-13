@@ -41,6 +41,32 @@ module Client =
                 [ existing model
                   ClientModel.timers model |> Timer.subscribe clock |> Sub.map "timers" Ylmish.Program.Message.User ])
 
+    /// How often the page's clock says the time again (`ClientModel.Now`): a minute, the
+    /// finest step "how long ago" is told in.
+    let clockPeriodMs = 60_000
+
+    /// Tell the model what time it is (`ClockMsg`): once at once, then every
+    /// `clockPeriodMs` on `clock`. A composition root's, as `withTimers` is — the root owns
+    /// both the time (`now`) and the wait, and a test hands in its own of each.
+    let withClock
+        (now: unit -> System.DateTimeOffset)
+        (clock: Timer.Clock)
+        (program: Program<'arg, ClientModel, Ylmish.Program.Message<ClientMsg>, 'view>)
+        =
+        let tell (dispatch: ClientMsg -> unit) : System.IDisposable =
+            let armed : System.IDisposable option ref = ref None
+            let rec say () =
+                dispatch (ClockMsg (now ()))
+                armed.Value <- Some (clock clockPeriodMs say)
+            say ()
+            { new System.IDisposable with
+                member _.Dispose () = armed.Value |> Option.iter (fun wait -> wait.Dispose ()) }
+        program
+        |> Program.mapSubscription (fun existing model ->
+            Sub.batch
+                [ existing model
+                  [ [ "clock" ], tell ] |> Sub.map "clock" Ylmish.Program.Message.User ])
+
     /// A wired client connection: the frame pump to run, plus the actions that speak
     /// over it.
     type Connection =

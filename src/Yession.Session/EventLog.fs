@@ -124,7 +124,7 @@ module InMemoryEventLog =
                               Event = event }
 
                         events.Add envelope
-                        { Offset = offset })
+                        { Offset = offset; Timestamp = envelope.Timestamp })
             }
 
         let read (after: EventOffset option) (limit: int) : Async<EventPage<'event>> =

@@ -297,7 +297,7 @@ let startFull
                             recordAttribution event
                             let! appended = inner.Append actor event
                             latestOffset <- Some appended.Offset
-                            terminalProjection <- Projection.applyEvent terminalProjection event
+                            terminalProjection <- Projection.applyEvent terminalProjection appended.Timestamp event
                             broadcastEventsAvailable appended.Offset
                             notifyChanged ()
                             return appended
@@ -320,7 +320,7 @@ let startFull
             replayed.Events |> List.choose (fun e -> TerminalQueueDrain.consumedOf e.Event) |> Set.ofList
         let replayedTerminals =
             replayed.Events
-            |> List.fold (fun proj e -> Projection.applyEvent proj e.Event) Projection.empty
+            |> List.fold (fun proj e -> Projection.applyEvent proj e.Timestamp e.Event) Projection.empty
         terminalProjection <- replayedTerminals
         // Where a shell opened in each sandbox starts (Plan 25), from the same replay — which
         // is what makes a restarted session open its next terminal where the last one started.
