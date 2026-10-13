@@ -190,3 +190,40 @@ let reportsHere (ctx: CliContext) =
     with
     | [] -> false
     | own -> Path.GetFullPath (List.last own) = Path.GetFullPath ctx.FileName
+
+/// Whether an assembly is the product's own.
+let private isProduct (assembly: string) =
+    assembly = "Yession" || assembly.StartsWith "Yession."
+
+let private reached = Kept.Answer<string list> ()
+
+/// Every `Yession.*` assembly in this project's reach, itself included: the project's own name
+/// when it is one, and each referenced assembly that is. Empty for a BINDING project.
+///
+/// That is the structural definition of "an API we do not own, bound for our use": a binding
+/// knows nothing of the product it serves, so it is not itself a `Yession.*` project and
+/// references none. It is derived rather than listed, which exempts the `src/Fable.*` projects,
+/// the serial example (which owns its copies, as the examples rule requires, and references
+/// nothing of the product by the same rule) and the analyzer fixtures with no list for any of
+/// them to be missing from — and it judges the Domain, which references nothing at all but IS
+/// the product. A rule about where something may be declared (`EmitHome`, `BindingOnly`) asks
+/// this, and it is asked here so that two rules never hold two definitions of the line.
+///
+/// One answer per project, so it is computed once and kept while that project is the one being
+/// analyzed — it holds names, not symbols, but `Kept` is the shape the rules share.
+let reach (ctx: CliContext) : string list =
+    let project = ctx.ProjectOptions.ProjectFileName
+
+    reached.For (
+        project,
+        fun () ->
+            let own = Path.GetFileNameWithoutExtension project
+
+            let referenced =
+                [ for assembly in ctx.CheckProjectResults.ProjectContext.GetReferencedAssemblies () do
+                      match (try Some assembly.SimpleName with _ -> None) with
+                      | Some name -> yield name
+                      | None -> () ]
+
+            own :: referenced |> List.filter isProduct |> List.distinct |> List.sort
+    )
