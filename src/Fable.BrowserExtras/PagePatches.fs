@@ -23,7 +23,7 @@ module PagePatches =
     /// Replace the global constructor `name` with one that builds the original and hands each
     /// instance to `made` before the page sees it. The replacement keeps the original's
     /// prototype, so `instanceof` and every static still answer as before.
-    [<Emit("""((name, made) => {
+    [<Emit("""(function (name, made) {
         const Native = globalThis[name]
         const Patched = function (...args) { const built = new Native(...args); made(built); return built }
         Patched.prototype = Native.prototype
@@ -34,7 +34,7 @@ module PagePatches =
 
     /// Wrap the asynchronous method `methodName` of the global class `className` so `after`
     /// runs once the original's promise has settled successfully, for every instance.
-    [<Emit("""((className, methodName, after) => {
+    [<Emit("""(function (className, methodName, after) {
         const prototype = globalThis[className].prototype
         const original = prototype[methodName]
         prototype[methodName] = async function (...args) {
@@ -47,7 +47,7 @@ module PagePatches =
 
     /// Call `changed` on every change under `target` — children, subtrees and attributes —
     /// synchronously with the change, before the frame that would paint it.
-    [<Emit("""((target, changed) => {
+    [<Emit("""(function (target, changed) {
         const watch = new MutationObserver(() => changed())
         watch.observe(target, { subtree: true, childList: true, attributes: true })
         return watch
