@@ -2610,6 +2610,40 @@ let private topOf (page: IPage) (selector: string) : Async<float> =
         | _ -> return failwithf "nothing at %s to measure" selector
     }
 
+/// The pane's box and the window it is laid out in, read together.
+let private paneAndWindow (page: IPage) () : Async<Yession.App.Probes.Box option * Yession.App.Probes.Window> =
+    async {
+        let! pane = Probe.boxes page [ "#shell [data-content-panel]" ]
+        let! window = Probe.window page
+        return List.tryHead pane |> Option.flatten, window
+    }
+
+/// Wait for the pane to stand off the right of the screen, as a shut one does on a phone.
+let private paneOffScreenAs (what: string) (page: IPage) : Async<unit> =
+    Wait.until what (paneAndWindow page) (fun (pane, window) ->
+        pane |> Option.exists (fun pane -> pane.Left >= window.InnerWidth - 1.0))
+
+let private paneOffScreen (page: IPage) = paneOffScreenAs "the pane to stand off the screen" page
+
+/// Wait for the pane to take the column: flush with the screen's right edge, over its left half.
+let private paneCovers (what: string) (page: IPage) : Async<unit> =
+    Wait.until what (paneAndWindow page) (fun (pane, window) ->
+        pane |> Option.exists (fun pane -> abs (pane.Right - window.InnerWidth) <= 1.0 && pane.Left < window.InnerWidth / 2.0))
+
+/// Whether the document is wider than its window: a sideways overflow a phone cannot scroll away.
+let private overflowsSideways (page: IPage) : Async<bool> =
+    async {
+        let! window = Probe.window page
+        return window.DocumentWidth > window.InnerWidth + 1.0
+    }
+
+/// How wide the page's window is, as the page itself measures it.
+let private windowWidth (page: IPage) : Async<int> =
+    async {
+        let! window = Probe.window page
+        return int window.InnerWidth
+    }
+
 let editorTests =
     testList "Editor rendering (browser)" [
         editorCase "Markdown typed in the rich editor renders formatted and round-trips to Markdown" <| fun page ->
@@ -2683,10 +2717,7 @@ let editorTests =
                 do! awaitU (page.ClickAsync ".ProseMirror")
                 do! awaitU (page.Keyboard.TypeAsync "hello")
                 do! awaitU (page.Keyboard.PressAsync "Tab")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        "!document.querySelector('#host').contains(document.activeElement)")
-                ()
+                do! Wait.until "focus to have left the editor" (fun () -> Read.focused page "#host, #host *") not
             }
 
         editorCase "Ctrl+Enter sends, Shift+Enter breaks the line, Enter opens a paragraph" <| fun page ->
@@ -2737,12 +2768,10 @@ let editorTests =
         editorCase "an empty composer offers its prompt without it becoming content" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#host .ProseMirror [data-placeholder]")
-                let! prompt =
-                    await (page.EvaluateAsync<string>
-                        "() => document.querySelector('#host .ProseMirror [data-placeholder]').getAttribute('data-placeholder')")
-                let! text = await (page.EvaluateAsync<string> "() => document.querySelector('#host .ProseMirror').textContent")
-                Expect.equal prompt Yession.App.Dom.Text.composerPlaceholder "the empty composer carries its prompt"
-                Expect.equal text "" "and the prompt is not in the document"
+                let! prompt = Read.attr page "#host .ProseMirror [data-placeholder]" "data-placeholder"
+                let! text = Read.text page "#host .ProseMirror"
+                Expect.equal prompt (Some Yession.App.Dom.Text.composerPlaceholder) "the empty composer carries its prompt"
+                Expect.equal text (Some "") "and the prompt is not in the document"
             }
 
         editorCase "a composer written in stops offering its prompt" <| fun page ->
@@ -2984,12 +3013,9 @@ let editorTests =
                 // gap has played out in real time.
                 // The terminal's text, not the mount's: a chapter's label on the bar names the
                 // same command from the moment the recording loads, wherever it landed.
-                let! _ =
-                    await (page.WaitForFunctionAsync (
-                        "document.querySelector('#replay-gappy .ap-term-text').textContent.includes('second')",
-                        null,
-                        PageWaitForFunctionOptions (Timeout = 10_000f)))
-                return ()
+                do! Wait.within 10_000.0 "the gap played out, and the second command on the screen"
+                        (fun () -> Read.text page "#replay-gappy .ap-term-text")
+                        (Option.exists (fun t -> t.Contains "second"))
             }
 
         // A block's command is recorded as its input record — the shell's echo is not kept —
@@ -3002,8 +3028,8 @@ let editorTests =
                 // Its output first, so the screen has been drawn when the command is looked for;
                 // the terminal's text rather than the mount's, which also holds the chapter's label.
                 do! Wait.until "the recording's output on the screen" (fun () -> Read.text page "#replay .ap-term-text") (Option.exists (fun t -> t.Contains "total 0"))
-                let! screen = await (page.EvaluateAsync<string> "() => document.querySelector('#replay .ap-term-text').textContent")
-                Expect.stringContains screen "ls -la" "the command, on the screen above what it printed"
+                let! screen = Read.text page "#replay .ap-term-text"
+                Expect.isTrue (screen |> Option.exists (fun s -> s.Contains "ls -la")) (sprintf "the command, on the screen above what it printed: %A" screen)
             }
 
         // Each command's chapter is a mark on the bar, labelled with the command. The player draws
@@ -3013,18 +3039,20 @@ let editorTests =
             async {
                 do! Harness.run page HarnessPage.chapters
                 do! waitCount "the three chapters on the bar" page "#replay-chapters .ap-marker-container" 3
-                do! awaitU (page.EvaluateAsync "() => document.querySelector('#replay-chapters').scrollIntoView()")
-                let! labels =
-                    await (page.EvaluateAsync<string[]> """() =>
-                        [...document.querySelectorAll('#replay-chapters .ap-marker-container .ap-tooltip')].map(label => {
-                            const box = label.getBoundingClientRect()
-                            const inside = box.left >= 0 && box.right <= window.innerWidth
-                            const whole = label.scrollWidth <= label.clientWidth
-                            return label.textContent + (inside ? '' : ' [off the screen]') + (whole ? '' : ' [cut off]')
-                        })""")
+                do! Probe.reveal page "#replay-chapters"
+                let tooltips = "#replay-chapters .ap-marker-container .ap-tooltip"
+                let! seen = Probe.seen page tooltips
+                let! scrolls = Probe.scrolls page tooltips
+                let width = float page.ViewportSize.Width
+                let labels =
+                    List.zip seen scrolls
+                    |> List.map (fun (label, scroll) ->
+                        let inside = label.Box.Left >= 0.0 && label.Box.Right <= width
+                        let whole = scroll.Width <= scroll.ClientWidth
+                        label.Text + (if inside then "" else " [off the screen]") + (if whole then "" else " [cut off]"))
                 Expect.equal
-                    (labels |> Array.map (fun label -> label.Substring (label.IndexOf " - " + 3)))
-                    [| "echo one"; "for i in 1 2 3; do echo \"step $i\"; sleep 1; done"; "echo three" |]
+                    (labels |> List.map (fun label -> label.Substring (label.IndexOf " - " + 3)))
+                    [ "echo one"; "for i in 1 2 3; do echo \"step $i\"; sleep 1; done"; "echo three" ]
                     "each label names its command, none of them off the screen or cut off"
             }
 
@@ -3032,19 +3060,16 @@ let editorTests =
             async {
                 do! Harness.run page HarnessPage.chapters
                 do! waitCount "the three chapters on the bar" page "#replay-chapters .ap-marker-container" 3
-                do! awaitU (page.EvaluateAsync "() => document.querySelector('#replay-chapters').scrollIntoView()")
+                do! Probe.reveal page "#replay-chapters"
                 // The last mark's own centre, and only if a press there lands on it: a mark another
                 // is drawn over is not one a thumb can press.
-                let! centre =
-                    await (page.EvaluateAsync<float[]> """() => {
-                        const marks = document.querySelectorAll('#replay-chapters .ap-marker-container')
-                        const mark = marks[marks.length - 1]
-                        const box = mark.getBoundingClientRect()
-                        const x = box.left + box.width / 2, y = box.top + box.height / 2
-                        return mark.contains(document.elementFromPoint(x, y)) ? [x, y] : []
-                    }""")
-                Expect.equal centre.Length 2 "the last chapter's mark is the thing under its own centre"
-                do! awaitU (page.Touchscreen.TapAsync (float32 centre.[0], float32 centre.[1]))
+                let! marks = Probe.seen page "#replay-chapters .ap-marker-container"
+                let mark = List.last marks
+                Expect.isTrue mark.Painted "the last chapter's mark is the thing under its own centre"
+                do! awaitU (
+                        page.Touchscreen.TapAsync (
+                            float32 (mark.Box.Left + Yession.App.Probes.Box.width mark.Box / 2.0),
+                            float32 (mark.Box.Top + Yession.App.Probes.Box.height mark.Box / 2.0)))
                 // Resting at the start, the second command's last line is only on the screen once
                 // the replay has moved past it — which, paused, only a seek can do.
                 do! Wait.until "the replay to move to the last command" (fun () -> Read.text page "#replay-chapters .ap-term-text") (Option.exists (fun t -> t.Contains "step 3"))
@@ -3105,35 +3130,8 @@ let editorTests =
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
                 do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-status=\"running\"] [data-act-running]")
-                let! misplaced =
-                    await (page.EvaluateAsync<string> """() => {
-                        const note = document.querySelector('#shell [data-act-status="running"]')
-                        const mark = note.querySelector('[data-act-running]')
-                        const gutter = mark.parentElement.getBoundingClientRect()
-                        // The title, not the cause's sentence above it (which sits in the same column),
-                        // nor the actions control placed on the title's row.
-                        const title = [...note.querySelectorAll('.col-start-2')].find(e => !e.closest('[data-cause-ref]') && !e.closest('[data-item-actions]'))
-                        const walk = document.createTreeWalker(title, NodeFilter.SHOW_TEXT)
-                        let first = null
-                        while (!first && walk.nextNode()) if (walk.currentNode.textContent.trim()) first = walk.currentNode
-                        if (!first) return 'the title has no words'
-                        const probe = document.createElement('span')
-                        probe.style.cssText = 'display:inline-block;width:0;height:1ex'
-                        first.parentNode.insertBefore(probe, first)
-                        const letters = probe.getBoundingClientRect()
-                        probe.remove()
-                        const at = mark.getBoundingClientRect()
-                        const em = parseFloat(getComputedStyle(first.parentElement).fontSize)
-                        const wrong = []
-                        if (Math.abs(at.bottom - letters.bottom) > 0.05 * em)
-                          wrong.push('its lower point is ' + (at.bottom - letters.bottom) + 'px off the title\'s baseline')
-                        if (Math.abs(at.top - letters.top) > 0.05 * em)
-                          wrong.push('its upper point is ' + (at.top - letters.top) + 'px off the title\'s x-height')
-                        if (at.left < gutter.left || at.right > gutter.right)
-                          wrong.push('it is outside its gutter (' + at.left + '-' + at.right + ' against ' + gutter.left + '-' + gutter.right + ')')
-                        return wrong.join('; ')
-                    }""")
-                Expect.equal misplaced "" "the running act's mark stands on its title's line"
+                let! misplaced = Probe.verdict page Yession.App.Probes.Measure.RunningMarkOnTitle
+                Expect.isEmpty misplaced "the running act's mark stands on its title's line"
             }
 
         // A cause's head is the end of its line, so it paints centred on that line: its tip
@@ -3147,31 +3145,8 @@ let editorTests =
             async {
                 do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-cause-ref] svg")
-                let! off =
-                    await (page.EvaluateAsync<string> """() => {
-                        const d = devicePixelRatio
-                        const heads = [...document.querySelectorAll('#shell [data-cause-ref] svg, #shell [data-cause-chain] svg')]
-                          .filter(svg => !svg.closest('[data-entity]'))
-                        if (heads.length === 0) return 'the page draws no cause heads'
-                        const wrong = []
-                        for (const svg of heads) {
-                          const mark = svg.parentElement.parentElement
-                          const line = [...mark.querySelectorAll('*')].find(e => {
-                            const b = e.getBoundingClientRect()
-                            return b.width === 1 && b.height > 1
-                          })
-                          if (!line) { wrong.push('a head with no line'); continue }
-                          const l = line.getBoundingClientRect()
-                          const lineAt = (Math.round(l.left * d) + Math.round(l.right * d)) / 2
-                          const box = svg.getBoundingClientRect()
-                          const path = svg.querySelector('path').getBBox()
-                          const scale = box.width / svg.viewBox.baseVal.width
-                          const tipAt = Math.round(box.left * d) + (path.x + path.width / 2) * scale * d
-                          if (Math.abs(tipAt - lineAt) > 0.01) wrong.push('a head paints at ' + tipAt + ' and its line at ' + lineAt)
-                        }
-                        return wrong.join('; ')
-                    }""")
-                Expect.equal off "" "each head sits on its line"
+                let! off = Probe.verdict page Yession.App.Probes.Measure.CauseHeadsOnLines
+                Expect.isEmpty off "each head sits on its line"
             }
 
         // A mark in the gutter under a cause's corner hangs from that corner's line, so it is
@@ -3187,23 +3162,8 @@ let editorTests =
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
                 do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-status=\"running\"] [data-cause-ref]")
-                let! off =
-                    await (page.EvaluateAsync<string> """() => {
-                        const note = document.querySelector('#shell [data-act-status="running"]')
-                        const stem = [...note.querySelectorAll('[data-cause-ref] *')].find(e => {
-                          const b = e.getBoundingClientRect()
-                          return b.width === 1 && b.height > 1
-                        })
-                        if (!stem) return 'the cause draws no line'
-                        const painted = e => {
-                          const b = e.getBoundingClientRect(), d = devicePixelRatio
-                          return (Math.round(b.left * d) + Math.round(b.right * d)) / 2
-                        }
-                        const mark = painted(note.querySelector('[data-act-running]'))
-                        const line = painted(stem)
-                        return mark === line ? '' : 'the mark paints at ' + mark + ' and the line at ' + line + ' (device pixels)'
-                    }""")
-                Expect.equal off "" "the mark hangs on the line"
+                let! off = Probe.verdict page Yession.App.Probes.Measure.RunningMarkOnCauseLine
+                Expect.isEmpty off "the mark hangs on the line"
             }
 
         // EVERY fold's arrow sits on the centre of its own title's line, and every arrow on
@@ -3221,24 +3181,8 @@ let editorTests =
             async {
                 do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
-                let! off =
-                    await (page.EvaluateAsync<float[]> """() => {
-                        const folds = [...document.querySelectorAll('#shell [data-fold]')]
-                        const down = folds.map(b => {
-                            const arrow = b.querySelector('svg').getBoundingClientRect()
-                            // The title's FIRST line box, not its whole box: a title that
-                            // wraps is two lines tall, and the arrow belongs on the first.
-                            const line = b.parentElement.querySelector('.col-start-2').getClientRects()[0]
-                            return (arrow.top + arrow.height / 2) - (line.top + line.height / 2)
-                        })
-                        const rails = folds.map(b => {
-                            const arrow = b.querySelector('svg').getBoundingClientRect()
-                            return arrow.left + arrow.width / 2
-                        })
-                        return [ folds.length,
-                                 Math.max(...down.map(Math.abs)),
-                                 Math.max(...rails) - Math.min(...rails) ]
-                    }""")
+                let! reading = Probe.reading page Yession.App.Probes.Measure.FoldArrowsOnRail
+                let off = Array.ofList reading
                 Expect.isTrue (off.[0] >= 2.0) (sprintf "the page must hold folds of both kinds, it held %.0f" off.[0])
                 Expect.isTrue (abs off.[1] < 1.0) (sprintf "one arrow sat %.2fpx off its title's line" off.[1])
                 Expect.isTrue (abs off.[2] < 1.0) (sprintf "the arrows spread %.2fpx across the rail" off.[2])
@@ -3252,24 +3196,8 @@ let editorTests =
             async {
                 do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
-                let! off =
-                    await (page.EvaluateAsync<float[]> """() => {
-                        const folds = [...document.querySelectorAll('#shell [data-fold]')]
-                        const down = folds.map(b => {
-                            const arrow = b.querySelector('svg').getBoundingClientRect()
-                            // The title's FIRST line box, not its whole box: a title that
-                            // wraps is two lines tall, and the arrow belongs on the first.
-                            const line = b.parentElement.querySelector('.col-start-2').getClientRects()[0]
-                            return (arrow.top + arrow.height / 2) - (line.top + line.height / 2)
-                        })
-                        const rails = folds.map(b => {
-                            const arrow = b.querySelector('svg').getBoundingClientRect()
-                            return arrow.left + arrow.width / 2
-                        })
-                        return [ folds.length,
-                                 Math.max(...down.map(Math.abs)),
-                                 Math.max(...rails) - Math.min(...rails) ]
-                    }""")
+                let! reading = Probe.reading page Yession.App.Probes.Measure.FoldArrowsOnRail
+                let off = Array.ofList reading
                 Expect.isTrue (off.[0] >= 2.0) (sprintf "the page must hold folds of both kinds, it held %.0f" off.[0])
                 Expect.isTrue (abs off.[1] < 1.0) (sprintf "one arrow sat %.2fpx off its title's line" off.[1])
                 Expect.isTrue (abs off.[2] < 1.0) (sprintf "the arrows spread %.2fpx across the rail" off.[2])
@@ -3284,16 +3212,8 @@ let editorTests =
             async {
                 do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
-                let! off =
-                    await (page.EvaluateAsync<float[]> """() => {
-                        const folds = [...document.querySelectorAll('#shell section [data-fold]')]
-                        const apart = folds.map(b => {
-                            const avatar = b.closest('section').querySelector('header > span').getBoundingClientRect()
-                            const arrow = b.querySelector('svg').getBoundingClientRect()
-                            return (arrow.left + arrow.width / 2) - (avatar.left + avatar.width / 2)
-                        })
-                        return [ folds.length, Math.max(...apart.map(Math.abs)) ]
-                    }""")
+                let! reading = Probe.reading page Yession.App.Probes.Measure.FoldArrowsOnAvatars
+                let off = Array.ofList reading
                 Expect.isTrue (off.[0] >= 1.0) "the page must hold a fold under an author line"
                 Expect.isTrue (off.[1] < 1.0) (sprintf "an arrow stood %.2fpx off its author's avatar" off.[1])
             }
@@ -3306,15 +3226,17 @@ let editorTests =
             async {
                 do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
-                let visibility = "getComputedStyle(document.querySelector('#shell [data-act-note] [data-fold-body]')).visibility"
-                do! waitFor "the particulars to start hidden" page (visibility + " === 'hidden'")
+                let visibility (what: string) (wanted: string) =
+                    Wait.until what (fun () -> Probe.computed page "#shell [data-act-note] [data-fold-body]" "visibility") ((=) (Some wanted))
+                do! visibility "the particulars to start hidden" "hidden"
                 do! awaitU (page.ClickAsync "#shell [data-act-note] [data-fold]")
-                do! waitFor "the particulars to show once unfolded" page (visibility + " === 'visible'")
-                let! shown =
-                    await (page.EvaluateAsync<float> "() => document.querySelector('#shell [data-act-note] [data-act-said]').getBoundingClientRect().height")
-                Expect.isTrue (shown > 0.0) "and what the agent was told has height on the page"
+                do! visibility "the particulars to show once unfolded" "visible"
+                let! said = Probe.boxes page [ "#shell [data-act-note] [data-act-said]" ]
+                Expect.isTrue
+                    (said |> List.exists (Option.exists (fun box -> Yession.App.Probes.Box.height box > 0.0)))
+                    "and what the agent was told has height on the page"
                 do! awaitU (page.ClickAsync "#shell [data-act-note] [data-fold]")
-                do! waitFor "the particulars to hide once folded" page (visibility + " === 'hidden'")
+                do! visibility "the particulars to hide once folded" "hidden"
             }
 
         // The arrow used to be the only thing that toggled — a square a thumb can miss on a
@@ -3325,14 +3247,15 @@ let editorTests =
             async {
                 do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
-                let visibility = "getComputedStyle(document.querySelector('#shell [data-act-note] [data-fold-body]')).visibility"
-                do! waitFor "the particulars to start hidden" page (visibility + " === 'hidden'")
-                let clickTitle =
-                    "() => document.querySelector('#shell [data-act-note] [data-fold]').nextElementSibling.click()"
-                do! awaitU (page.EvaluateAsync clickTitle)
-                do! waitFor "a press on the title unfolds it" page (visibility + " === 'visible'")
-                do! awaitU (page.EvaluateAsync clickTitle)
-                do! waitFor "and a second press folds it back" page (visibility + " === 'hidden'")
+                let visibility (what: string) (wanted: string) =
+                    Wait.until what (fun () -> Probe.computed page "#shell [data-act-note] [data-fold-body]" "visibility") ((=) (Some wanted))
+                do! visibility "the particulars to start hidden" "hidden"
+                // The DOM's own click, on what follows the arrow: the title, not the arrow.
+                let clickTitle () = awaitU (page.Locator("#shell [data-act-note] [data-fold] + *").First.DispatchEventAsync "click")
+                do! clickTitle ()
+                do! visibility "a press on the title unfolds it" "visible"
+                do! clickTitle ()
+                do! visibility "and a second press folds it back" "hidden"
             }
 
         // The strip scrolls sideways, and nothing about a scroll box keeps what matters in it on
@@ -3344,7 +3267,7 @@ let editorTests =
                 Expect.isTrue overflows "the strip holds more tabs than it shows, or this proves nothing"
                 // Chosen by the DOM's own click rather than Playwright's, which scrolls what it
                 // clicks into view first and would prove nothing about the strip.
-                do! awaitU (page.EvaluateAsync "() => document.querySelector('#shell [data-pane-strip] [role=tab]:last-child').click()")
+                do! awaitU (page.Locator("#shell [data-pane-strip] [role=tab]:last-child").DispatchEventAsync "click")
                 do! Wait.until "the last tab to be selected" (fun () -> Read.attr page "#shell [data-pane-strip] [role=tab]:last-child" "aria-selected") ((=) (Some "true"))
                 // A frame for the reveal, which runs after the render.
                 do! twoFrames page
@@ -3363,31 +3286,34 @@ let editorTests =
                 do! openManyTerminals page
                 let! overflows = stripOverflows page
                 Expect.isTrue overflows "the strip holds more tabs than it shows, or this proves nothing"
-                let! count = await (page.EvaluateAsync<int> "() => document.querySelectorAll('#shell [data-pane-strip] [role=tab]').length")
+                let! count = Read.count page "#shell [data-pane-strip] [role=tab]"
                 do! awaitU (page.FocusAsync "#shell [data-pane-strip] [role=tab][aria-selected=true]")
                 // Where the focused tab is, against the strip's box less a fade on each end that
                 // has tabs past it — read off the scroll position, not the attribute the fade is
                 // keyed on, so the measurement does not trust the thing it is checking.
-                let placed =
-                    sprintf
-                        """() => {
-                             const strip = document.querySelector('#shell [data-pane-strip]')
-                             const s = strip.getBoundingClientRect()
-                             const before = strip.scrollLeft > 1
-                             const after = strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1
-                             if (!strip.contains(document.activeElement)) return 'outside'
-                             const t = document.activeElement.getBoundingClientRect()
-                             const left = s.left + (before ? %f : 0), right = s.right - (after ? %f : 0)
-                             return (t.left >= left - 0.5 && t.right <= right + 0.5)
-                               ? '' : `${document.activeElement.getAttribute('data-pane-tab')} at ${t.left}..${t.right}, shown ${left}..${right}`
-                           }"""
-                        Yession.App.TabStrip.edge Yession.App.TabStrip.edge
-                let! items = await (page.EvaluateAsync<int> "() => document.querySelectorAll('#shell [data-pane-pivot] [role=tab]').length")
+                let strip = "#shell [data-pane-strip]"
+                let placed () =
+                    async {
+                        let! scroll = Probe.scroll page strip
+                        let! measured = Probe.boxes page [ strip; strip + " :focus" ]
+                        let! focused = Read.attr page (strip + " :focus") "data-pane-tab"
+                        match scroll, measured with
+                        | Some scroll, [ Some s; Some t ] ->
+                            let before = scroll.Left > 1.0
+                            let after = scroll.Left + scroll.ClientWidth < scroll.Width - 1.0
+                            let left = s.Left + (if before then Yession.App.TabStrip.edge else 0.0)
+                            let right = s.Right - (if after then Yession.App.TabStrip.edge else 0.0)
+                            return
+                                if t.Left >= left - 0.5 && t.Right <= right + 0.5 then ""
+                                else sprintf "%A at %g..%g, shown %g..%g" focused t.Left t.Right left right
+                        | _ -> return "outside"
+                    }
+                let! items = Read.count page "#shell [data-pane-pivot] [role=tab]"
                 let faults = ResizeArray<string> ()
                 let mutable reached = 0
                 for key in "Home" :: List.replicate (items - 1) "ArrowRight" do
                     do! awaitU (page.Keyboard.PressAsync key)
-                    match! await (page.EvaluateAsync<string> placed) with
+                    match! placed () with
                     | "outside" -> ()
                     | "" -> reached <- reached + 1
                     | fault -> reached <- reached + 1; faults.Add (sprintf "after %s: %s" key fault)
@@ -3406,25 +3332,26 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! waitPresent "an item to be selected beside one that is not" page "#shell [data-pane-strip] [role=tab][aria-selected=true]"
                 do! waitPresent "an item to be selected beside one that is not" page "#shell [data-pane-strip] [role=tab][aria-selected=false]"
-                let! faults =
-                    await (page.EvaluateAsync<string>
-                        """async () => {
-                             const strip = document.querySelector('#shell [data-pane-strip]')
-                             await Promise.all(
-                               strip.getAnimations({ subtree: true })
-                                 .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
-                                 .map(a => a.finished.catch(() => null)))
-                             const s = strip.getBoundingClientRect()
-                             const on = strip.querySelector('[role=tab][aria-selected=true]')
-                             const off = strip.querySelector('[role=tab][aria-selected=false]')
-                             const t = on.getBoundingClientRect()
-                             const faults = []
-                             if (t.top < s.top - 0.5 || t.bottom > s.bottom + 0.5) faults.push('the selected item is cut off vertically')
-                             if (strip.scrollHeight !== strip.clientHeight) faults.push(`the pivot overflows ${strip.scrollHeight - strip.clientHeight}px vertically`)
-                             if (getComputedStyle(on).color === getComputedStyle(off).color) faults.push('the selected item is the same colour as the others')
-                             return faults.join('; ')
-                           }""")
-                Expect.equal faults "" "the selected item is drawn whole and unlike the others"
+                // Where the colours settle: an item's colour transitions.
+                do! Probe.settled page
+                let strip = "#shell [data-pane-strip]"
+                let on = strip + " [role=tab][aria-selected=true]"
+                let off = strip + " [role=tab][aria-selected=false]"
+                let! measured = Probe.boxes page [ strip; on ]
+                let! scroll = Probe.scroll page strip
+                let! onColour = Probe.computed page on "color"
+                let! offColour = Probe.computed page off "color"
+                let faults =
+                    [ match measured with
+                      | [ Some s; Some t ] when t.Top < s.Top - 0.5 || t.Bottom > s.Bottom + 0.5 -> "the selected item is cut off vertically"
+                      | [ Some _; Some _ ] -> ()
+                      | _ -> "the pivot or its selected item is missing"
+                      match scroll with
+                      | Some scroll when scroll.Height <> scroll.ClientHeight ->
+                          sprintf "the pivot overflows %gpx vertically" (scroll.Height - scroll.ClientHeight)
+                      | _ -> ()
+                      if onColour = offColour then "the selected item is the same colour as the others" ]
+                Expect.isEmpty faults "the selected item is drawn whole and unlike the others"
             }
 
         // The focus ring is drawn outside a control's edge by default, and the strip clips at
@@ -3436,31 +3363,32 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 // Showing the pane moves focus to the command line a frame later; wait for it,
                 // or it lands after the focus this case puts on the tab and takes it away.
-                let! _ =
-                    await (page.WaitForFunctionAsync (
-                            "sel => document.activeElement?.matches(sel) === true",
-                            box (commandLine "term-harness")))
+                do! Wait.until "focus to land on the command line" (fun () -> Read.focused page (commandLine "term-harness")) id
                 do! awaitU (page.FocusAsync "#shell [data-pane-strip] [role=tab][aria-selected=true]")
                 do! awaitU (page.Keyboard.PressAsync "ArrowRight")
                 do! Wait.until "the walk to land on another tab, keyboard-focused" (fun () -> Read.focused page "#shell [data-pane-strip] [role=tab][aria-selected=false]:focus-visible") id
-                let! faults =
-                    await (page.EvaluateAsync<string>
-                        """() => {
-                             const s = document.querySelector('#shell [data-pane-strip]').getBoundingClientRect()
-                             const tab = document.activeElement
-                             const ring = getComputedStyle(tab)
-                             const width = parseFloat(ring.outlineWidth)
-                             if (ring.outlineStyle === 'none' || width === 0) return 'no ring is drawn'
-                             const reach = width + parseFloat(ring.outlineOffset)
-                             const t = tab.getBoundingClientRect()
-                             const faults = []
-                             if (t.top - reach < s.top - 0.5) faults.push('cut off at the top')
-                             if (t.bottom + reach > s.bottom + 0.5) faults.push('cut off at the bottom')
-                             if (t.left - reach < s.left - 0.5) faults.push('cut off at the left')
-                             if (t.right + reach > s.right + 0.5) faults.push('cut off at the right')
-                             return faults.join('; ')
-                           }""")
-                Expect.equal faults "" "the ring is drawn wholly inside the strip's box"
+                let strip = "#shell [data-pane-strip]"
+                let tab = strip + " :focus"
+                let! measured = Probe.boxes page [ strip; tab ]
+                let! style = Probe.computed page tab "outline-style"
+                let! width = Probe.computed page tab "outline-width"
+                let! offset = Probe.computed page tab "outline-offset"
+                let px (value: string option) =
+                    value
+                    |> Option.filter (fun v -> v.EndsWith "px")
+                    |> Option.map (fun v -> float (v.Substring (0, v.Length - 2)))
+                let faults =
+                    match measured, style, px width, px offset with
+                    | _, Some "none", _, _
+                    | _, _, Some 0.0, _ -> [ "no ring is drawn" ]
+                    | [ Some s; Some t ], Some _, Some width, Some offset ->
+                        let reach = width + offset
+                        [ if t.Top - reach < s.Top - 0.5 then "cut off at the top"
+                          if t.Bottom + reach > s.Bottom + 0.5 then "cut off at the bottom"
+                          if t.Left - reach < s.Left - 0.5 then "cut off at the left"
+                          if t.Right + reach > s.Right + 0.5 then "cut off at the right" ]
+                    | _ -> [ sprintf "the strip, the focused tab or its ring could not be read: %A" (measured, style, width, offset) ]
+                Expect.isEmpty faults "the ring is drawn wholly inside the strip's box"
             }
 
         // One door per state. The pane used to offer a `+` on its strip, "+ New terminal" at
@@ -3478,14 +3406,7 @@ let editorTests =
             async {
                 let doors (state: string) =
                     async {
-                        let! n =
-                            await (page.EvaluateAsync<int> """() => [...document.querySelectorAll(
-                                '#shell [data-content-panel] [data-pane-new], #shell [data-content-panel] [data-terminal-new]')]
-                                .filter(e => {
-                                    const r = e.getBoundingClientRect()
-                                    if (!r.width || !r.height) return false
-                                    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-                                    return hit !== null && e.contains(hit) }).length""")
+                        let! n = Probe.paintedCount page "#shell [data-content-panel] [data-pane-new], #shell [data-content-panel] [data-terminal-new]"
                         return sprintf "%s: %d" state n
                     }
                 let closed (id: string) =
@@ -3501,7 +3422,7 @@ let editorTests =
                 do! awaitU (page.Keyboard.PressAsync "Escape")
                 do! waitAbsent "#shell [data-content-list] to be gone" page "#shell [data-content-list]"
                 // Chosen, so it is the one the reader is looking at when it ends, and it stays.
-                do! awaitU (page.EvaluateAsync "() => document.querySelector(\"#shell [data-pane-tab='terminal:term-live']\").click()")
+                do! awaitU (page.Locator("#shell [data-pane-tab='terminal:term-live']").DispatchEventAsync "click")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab='terminal:term-live'][aria-selected=true]")
                 do! foldHarness page
                         [ for i, id in List.indexed [ "term-harness"; "term-live"; "term-more-0"; "term-more-1"; "term-more-2"; "term-more-3" ] ->
@@ -3509,8 +3430,7 @@ let editorTests =
                 for left in 5 .. -1 .. 0 do
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab-dismiss]")
                     do! awaitU (page.ClickAsync "#shell [data-pane-tab-dismiss]")
-                    do! waitFor (sprintf "%d tabs left" left) page
-                            (sprintf "document.querySelectorAll('#shell [data-terminal-closed-tab]').length === %d" left)
+                    do! waitCount (sprintf "%d tabs left" left) page "#shell [data-terminal-closed-tab]" left
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-new]")
                 let! empty = doors "an empty pane"
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
@@ -3563,16 +3483,7 @@ let editorTests =
                                 Yession.Domain.Terminals.TerminalClosed.Reason = "closed by a peer"
                                 Yession.Domain.Terminals.TerminalClosed.By = None } ]
                 // In the page, so no round trip decides which frame the hand lands in.
-                let! held =
-                    await (page.EvaluateAsync<bool> (
-                        """body => new Promise(resolve => {
-                             window.__fold(body)
-                             requestAnimationFrame(() => {
-                               const dismiss = document.querySelector("#shell [data-pane-tab-dismiss='term-harness']")
-                               dismiss.focus()
-                               requestAnimationFrame(() => requestAnimationFrame(() => resolve(document.activeElement === dismiss)))
-                             })
-                           })""", box body))
+                let! held = Probe.heldAfterFold page body "#shell [data-pane-tab-dismiss='term-harness']"
                 Expect.isTrue held "focus stays on the × it was put on"
             }
 
@@ -3587,16 +3498,19 @@ let editorTests =
                 // property set by hand lasts only until the next render draws the model's again.
                 do! awaitU (page.FocusAsync "#shell [data-term-resize]")
                 do! awaitU (page.Keyboard.PressAsync "End")
-                do! waitFor "the pane to be 320px wide" page
-                        "Math.round(document.querySelector('#shell [data-content-panel]').getBoundingClientRect().width) === 320"
+                do! Wait.until "the pane to be 320px wide"
+                        (fun () -> Probe.boxes page [ "#shell [data-content-panel]" ])
+                        (function
+                         | [ Some pane ] -> Math.Round (Yession.App.Probes.Box.width pane, MidpointRounding.AwayFromZero) = 320.0
+                         | _ -> false)
                 let faults = ResizeArray<string> ()
                 for which in [ "last-child"; "first-child"; "nth-child(3)"; "last-child" ] do
                     // The DOM's own click, which scrolls nothing into view on its way.
-                    do! awaitU (page.EvaluateAsync (sprintf "() => document.querySelector('#shell [data-pane-strip] [role=tab]:%s').click()" which))
-                    do! waitFor (sprintf "the %s item to be selected" which) page
-                            (sprintf "document.querySelector('#shell [data-pane-strip] [role=tab]:%s')?.getAttribute('aria-selected') === 'true'" which)
+                    let item = sprintf "#shell [data-pane-strip] [role=tab]:%s" which
+                    do! awaitU (page.Locator(item).DispatchEventAsync "click")
+                    do! Wait.until (sprintf "the %s item to be selected" which) (fun () -> Read.attr page item "aria-selected") ((=) (Some "true"))
                     // A frame for the reveal, which runs after the render.
-                    do! awaitU (page.EvaluateAsync "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+                    do! twoFrames page
                     let! inView = selectedTabInsideStrip page
                     if not inView then faults.Add which
                 Expect.isEmpty faults (sprintf "chosen and not shown whole: %s" (String.Join (", ", faults)))
@@ -3636,14 +3550,8 @@ let editorTests =
         editorCaseIn 390 844 "on a phone a press on the session id reaches the id, not the title" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-session-id]")
-                let! idPressable =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const id = document.querySelector('#shell [data-session-id]')
-                                 const r = id.getBoundingClientRect()
-                                 const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-                                 return id.contains(hit)
-                               }""")
+                let! id = Probe.seen page "#shell [data-session-id]"
+                let idPressable = id |> List.tryHead |> Option.exists (fun id -> id.Painted)
                 Expect.isTrue idPressable "a press on the session id reaches the id, so it can be selected"
             }
 
@@ -3656,30 +3564,23 @@ let editorTests =
         editorCaseIn 390 844 "on a phone the pane IS the column, the strip stays, and the chat is one control away" <| fun page ->
             async {
                 // Ground truth first: the viewport really is the width we asked for.
-                let! width = await (page.EvaluateAsync<int> "() => window.innerWidth")
+                let! width = windowWidth page
                 Expect.equal width 390 "a true phone viewport, not a clamped window"
 
                 // The pane starts off screen, as it does for a fresh client.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
+                do! paneOffScreen page
 
                 // A chip brings it on, and it takes the column, short of the edge strip the chat
                 // shows dimmed through (`Style.paneGrabEdge`).
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """(() => {
-                             const r = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
-                             return Math.abs(r.right - window.innerWidth) <= 1 && r.left < window.innerWidth / 2
-                           })()""")
+                do! paneCovers "the pane to take the column" page
                 // …with the tab strip retained, which is what keeps phone and desktop one
                 // mental model rather than two surfaces that happen to share a codebase.
                 let! _ = await (page.WaitForSelectorAsync "#shell [role='tablist'] [data-pane-tab]")
 
                 // Nothing overflows sideways.
                 let! overflows =
-                    await (page.EvaluateAsync<bool> "() => document.documentElement.scrollWidth > window.innerWidth + 1")
+                    overflowsSideways page
                 Expect.isFalse overflows "no horizontal overflow a phone user cannot scroll away"
 
                 // Nor is the header cut off vertically. The phone's band is a compressed one
@@ -3689,22 +3590,17 @@ let editorTests =
                 // phone reads as a heading sliced off by the browser. What is asserted is the
                 // containment, not the number: whatever the band becomes, what it holds has
                 // to fit inside it.
-                let! headerFits =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const band = document.querySelector('#shell header').getBoundingClientRect()
-                                 const title = document.querySelector('#shell [data-session-title]').getBoundingClientRect()
-                                 const id = document.querySelector('#shell [data-session-id]').getBoundingClientRect()
-                                 return title.top > band.top && id.bottom <= band.bottom
-                               }""")
+                let! header = Probe.boxes page [ "#shell header"; "#shell [data-session-title]"; "#shell [data-session-id]" ]
+                let headerFits =
+                    match header with
+                    | [ Some band; Some title; Some id ] -> title.Top > band.Top && id.Bottom <= band.Bottom
+                    | _ -> false
                 Expect.isTrue headerFits "the header's title and id sit inside the band, not on its edges"
 
                 // And the way back to the chat is a control, not a dismissal: it returns
                 // focus to the chip that opened the pane.
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='hide']")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
+                do! paneOffScreen page
                 do! Wait.until "focus on [data-chat-block]" (fun () -> Read.focused page "[data-chat-block]") id
                 return ()
             }
@@ -3727,33 +3623,25 @@ let editorTests =
                           Yession.Domain.Terminals.TerminalOpened.Sandbox = None
                           Yession.Domain.Terminals.TerminalOpened.Renewable = false }
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                let! before = await (page.EvaluateAsync<int> "() => document.querySelectorAll('#shell [data-pane-strip] [role=tab]').length")
+                let! before = Read.count page "#shell [data-pane-strip] [role=tab]"
                 do! foldHarness page [ for i in 0 .. 5 -> 80L + int64 i, untitled (sprintf "term-phone-%d" i) ]
-                do! waitFor "six more tabs in the strip" page
-                        (sprintf "document.querySelectorAll('#shell [data-pane-strip] [role=tab]').length === %d" (before + 6))
-                do! awaitU (page.EvaluateAsync "() => document.querySelector('#shell [data-pane-strip] [role=tab]:last-child').click()")
+                do! waitCount "six more tabs in the strip" page "#shell [data-pane-strip] [role=tab]" (before + 6)
+                do! awaitU (page.Locator("#shell [data-pane-strip] [role=tab]:last-child").DispatchEventAsync "click")
                 do! Wait.until "the last tab to be selected" (fun () -> Read.attr page "#shell [data-pane-strip] [role=tab]:last-child" "aria-selected") ((=) (Some "true"))
-                do! awaitU (
-                        page.EvaluateAsync
-                            """() => Promise.all(
-                                 document.getAnimations()
-                                   .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
-                                   .map(a => a.finished.catch(() => null)))""")
+                do! Probe.settled page
                 let! overflows = stripOverflows page
                 Expect.isTrue overflows "the strip holds more tabs than it shows, or this proves nothing"
-                let! whole =
-                    await (page.EvaluateAsync<string>
-                        """() => {
-                             const s = document.querySelector('#shell [data-pane-strip]').getBoundingClientRect()
-                             const tabs = [...document.querySelectorAll('#shell [data-pane-strip] [role=tab]')]
-                             window.__stripShape = JSON.stringify({ strip: [s.left, s.right], tabs: tabs.map(t => { const r = t.getBoundingClientRect(); return [t.textContent.trim(), Math.round(r.left), Math.round(r.right)] }) })
-                             return JSON.stringify(tabs
-                               .filter(t => { const r = t.getBoundingClientRect(); return r.left >= s.left - 0.5 && r.right <= s.right + 0.5 })
-                               .map(t => t.textContent.trim()))
-                           }""")
-                let whole = System.Text.Json.JsonSerializer.Deserialize<string array> whole
-                let! shape = await (page.EvaluateAsync<string> "() => window.__stripShape")
-                Expect.isTrue (whole.Length >= 3) (sprintf "three whole tabs or more, got %A in %s" whole shape)
+                let! strip = Probe.boxes page [ "#shell [data-pane-strip]" ]
+                let! tabs = Probe.seen page "#shell [data-pane-strip] [role=tab]"
+                let whole =
+                    match strip with
+                    | [ Some s ] ->
+                        tabs
+                        |> List.filter (fun t -> t.Box.Left >= s.Left - 0.5 && t.Box.Right <= s.Right + 0.5)
+                        |> List.map (fun t -> t.Text.Trim ())
+                    | _ -> []
+                let shape = (strip, tabs |> List.map (fun t -> t.Text.Trim (), round t.Box.Left, round t.Box.Right))
+                Expect.isTrue (whole.Length >= 3) (sprintf "three whole tabs or more, got %A in %A" whole shape)
             }
 
         // The room came partly from the `+`, which a phone's row no longer carries — and making
@@ -3766,20 +3654,9 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
-                do! awaitU (
-                        page.EvaluateAsync
-                            """() => Promise.all(
-                                 document.getAnimations()
-                                   .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
-                                   .map(a => a.finished.catch(() => null)))""")
+                do! Probe.settled page
                 let! doors =
-                    await (page.EvaluateAsync<int> """() => [...document.querySelectorAll(
-                        '#shell [data-content-panel] [data-pane-new], #shell [data-content-panel] [data-terminal-new]')]
-                        .filter(e => {
-                            const r = e.getBoundingClientRect()
-                            if (!r.width || !r.height) return false
-                            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-                            return hit !== null && e.contains(hit) }).length""")
+                    Probe.paintedCount page "#shell [data-content-panel] [data-pane-new], #shell [data-content-panel] [data-terminal-new]"
                 Expect.equal doors 1 "one door to a new terminal on the all page"
             }
 
@@ -3793,17 +3670,8 @@ let editorTests =
             async {
                 do! Harness.run page HarnessPage.freshViewer
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! waitFor "the pane to cover the phone's screen" page
-                        """(() => {
-                             const r = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
-                             return Math.abs(r.right - window.innerWidth) <= 1 && r.left < window.innerWidth / 2
-                           })()"""
-                do! awaitU (
-                        page.EvaluateAsync
-                            """() => Promise.all(
-                                 document.getAnimations()
-                                   .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
-                                   .map(a => a.finished.catch(() => null)))""")
+                do! paneCovers "the pane to cover the phone's screen" page
+                do! Probe.settled page
                 let! rows =
                     await (page.EvaluateAsync<string[]> """() => [...document.querySelectorAll(
                         '#shell [data-content-panel] [data-terminal-list-row]')]
@@ -3823,12 +3691,7 @@ let editorTests =
         editorCaseIn 390 844 "on a phone the chat shows dimmed beside the pane and pressing it is the way back" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """(() => {
-                             const r = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
-                             return Math.abs(r.right - window.innerWidth) <= 1 && r.left < window.innerWidth / 2
-                           })()""")
+                do! paneCovers "the pane to take the column" page
                 let! _ =
                     await (page.WaitForFunctionAsync
                         "getComputedStyle(document.querySelector('#shell [data-pane-grab-edge]')).opacity === '1'")
@@ -3845,9 +3708,7 @@ let editorTests =
                 Expect.isTrue (abs shape.[2] <= 1.0) "and the pane begins where it ends, so no chat shows undimmed"
                 Expect.equal shape.[3] 1.0 "and what is painted at its centre is the strip, so pressing there presses it"
                 do! awaitU (page.Mouse.ClickAsync (float32 (shape.[1] / 2.0), float32 shape.[4]))
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
+                do! paneOffScreen page
                 return ()
             }
 
@@ -3855,9 +3716,7 @@ let editorTests =
         // thing the reader came back to, and swallow the first press at the screen's edge.
         editorCaseIn 390 844 "on a phone the pane's edge leaves nothing over the chat once it is shut" <| fun page ->
             async {
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
+                do! paneOffScreen page
                 let! _ =
                     await (page.WaitForFunctionAsync
                         """(() => {
@@ -4072,7 +3931,7 @@ let editorTests =
             }
         editorCaseIn 390 844 "a message no line break fits inside never scrolls the timeline sideways" <| fun page ->
             async {
-                let! width = await (page.EvaluateAsync<int> "() => window.innerWidth")
+                let! width = windowWidth page
                 Expect.equal width 390 "a true phone viewport, not a clamped window"
 
                 // The fixture's wide message is present — otherwise this passes by rendering
@@ -4094,7 +3953,7 @@ let editorTests =
         // above cannot see it: its fixture is prose, and prose is where the fix for prose is.
         editorCaseIn 390 844 "a queued command's terminal name never scrolls the timeline sideways" <| fun page ->
             async {
-                let! width = await (page.EvaluateAsync<int> "() => window.innerWidth")
+                let! width = windowWidth page
                 Expect.equal width 390 "a true phone viewport, not a clamped window"
 
                 // The chip is on screen and carries the name — otherwise this passes by
@@ -4128,7 +3987,7 @@ let editorTests =
             editorCaseIn width height
                 (sprintf "at %dpx the ask card's lines start where the conversation's words do" width) <| fun page ->
                 async {
-                    let! measured = await (page.EvaluateAsync<int> "() => window.innerWidth")
+                    let! measured = windowWidth page
                     Expect.equal measured width "a true viewport, not a clamped window"
 
                     // Where the conversation's words start, read off the page the harness
@@ -4206,12 +4065,7 @@ let editorTests =
                     // hit-tested mid-rise can be under a card that has not finished arriving. The
                     // promise is about where things land once it has, so wait for the entrance to
                     // settle (finite animations only; the carets pulse forever).
-                    do! awaitU (
-                            page.EvaluateAsync
-                                """() => Promise.all(
-                                     document.getAnimations()
-                                       .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
-                                       .map(a => a.finished.catch(() => null)))""")
+                    do! Probe.settled page
                     // Ground truth: the column has more than it can show, so some items start
                     // out of view and bringing them in is something the case has to do.
                     let! overflows =
@@ -5791,12 +5645,7 @@ let editorTests =
                 // rather than on the column under it — the screen not having arrived yet, not a
                 // control a thumb cannot reach. Every animation that ends is waited for (a pulse
                 // or a blink never ends, and is not).
-                do! awaitU (
-                        page.EvaluateAsync
-                            """() => Promise.all(
-                                 document.getAnimations()
-                                   .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
-                                   .map(a => a.finished.catch(() => null)))""")
+                do! Probe.settled page
                 let! unreachable =
                     await (page.EvaluateAsync<string[]>
                             """() => {
@@ -7594,11 +7443,7 @@ let editorTests =
             editorCaseIn width height (sprintf "opening the nav over the pane shows the nav at %dx%d" width height) <| fun page ->
                 async {
                     do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                    do! waitFor "the pane to cover the screen" page
-                            """(() => {
-                                 const r = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
-                                 return Math.abs(r.right - window.innerWidth) <= 1 && r.left < window.innerWidth / 2
-                               })()"""
+                    do! paneCovers "the pane to cover the screen" page
                     do! awaitU (page.FocusAsync "#shell [data-nav-toggle='show']")
                     do! awaitU (page.Keyboard.PressAsync "Enter")
                     do! waitFor "the nav to be what is on screen at its centre" page

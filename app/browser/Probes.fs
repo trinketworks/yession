@@ -96,6 +96,8 @@ let private scrollTo (selector: string, top: float) : Probes.Scroll option =
         element.scrollTop <- top
         scrollOf element)
 
+let private scrolls (selector: string) : Probes.Scroll list = all selector |> List.map scrollOf
+
 let private reveal (selector: string, block: string) : bool =
     match first selector with
     | Some element ->
@@ -169,6 +171,28 @@ let private transitionsOnToggle (rootClass: string) : string list =
     root.toggle rootClass |> ignore
     there @ started ()
 
+let private nextFrame () : JS.Promise<unit> =
+    Promise.create (fun resolve _ -> Browser.Dom.window.requestAnimationFrame (fun _ -> resolve ()) |> ignore)
+
+let private heldAfterFold (body: string, selector: string) : JS.Promise<bool> =
+    match PageGlobal.tryGet HarnessPage.fold with
+    | None -> Promise.reject (exn "this page publishes no fold to hand events to")
+    | Some fold ->
+        fold body
+        nextFrame ()
+        |> Promise.bind (fun () ->
+            match first selector with
+            | None -> Promise.lift false
+            | Some target ->
+                (target :?> HTMLElement).focus ()
+                nextFrame ()
+                |> Promise.bind nextFrame
+                |> Promise.map (fun () -> obj.ReferenceEquals (Browser.Dom.document.activeElement, target)))
+
+let private window (_: int) : Probes.Window =
+    let w = Browser.Dom.window
+    Probes.Window.create w.innerWidth w.innerHeight Browser.Dom.document.documentElement.scrollWidth (Viewport.visualHeight ())
+
 /// Publish a probe that answers at once.
 let private answering (probe: Probes.Probe<'Ask, 'Answer>) (answer: 'Ask -> 'Answer) : unit =
     PageGlobal.set
@@ -204,3 +228,10 @@ answering Probes.newest newest
 answering Probes.openAll openAll
 answering Probes.animating animating
 answering Probes.park park
+answering Probes.scrolls scrolls
+awaiting Probes.heldAfterFold heldAfterFold
+answering Probes.window window
+
+for measure in Probes.Measure.all do
+    Measures.verdict measure |> Option.iter (fun read -> answering (Probes.verdict measure) (fun (_: int) -> read ()))
+    Measures.reading measure |> Option.iter (fun read -> answering (Probes.reading measure) (fun (_: int) -> read ()))

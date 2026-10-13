@@ -68,6 +68,23 @@ module Probe =
     /// The first match's scroll box.
     let scroll (page: IPage) (selector: string) : Async<Probes.Scroll option> = ask page Probes.scroll selector
 
+    /// What is wrong, by a measure's own account; empty when its promise holds.
+    let verdict (page: IPage) (measure: Probes.Measure) : Async<string list> = ask page (Probes.verdict measure) 0
+
+    /// The numbers a measure reads.
+    let reading (page: IPage) (measure: Probes.Measure) : Async<float list> = ask page (Probes.reading measure) 0
+
+    /// Fold events into the harness, focus a selector the frame after, and say whether focus
+    /// is still there two frames on.
+    let heldAfterFold (page: IPage) (body: string) (selector: string) : Async<bool> =
+        ask page Probes.heldAfterFold (body, selector)
+
+    /// The window as the page lays out in it.
+    let window (page: IPage) : Async<Probes.Window> = ask page Probes.window 0
+
+    /// Every match's scroll box.
+    let scrolls (page: IPage) (selector: string) : Async<Probes.Scroll list> = ask page Probes.scrolls selector
+
     /// Scroll the first match to this many pixels from its top.
     let scrollTo (page: IPage) (selector: string) (top: float) : Async<Probes.Scroll option> =
         ask page Probes.scrollTo (selector, top)

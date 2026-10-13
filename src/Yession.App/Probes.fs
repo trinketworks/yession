@@ -314,3 +314,109 @@ module Probes =
           DecodeAsk = Decode.tuple2 Decode.string Decode.bool
           EncodeAnswer = Encode.option Scroll.encode
           DecodeAnswer = Decode.option Scroll.decode }
+
+    /// Every match's scroll box, in document order.
+    let scrolls : Probe<string, Scroll list> =
+        { Name = "__probeScrolls"
+          EncodeAsk = Encode.string
+          DecodeAsk = Decode.string
+          EncodeAnswer = List.map Scroll.encode >> Encode.list
+          DecodeAnswer = Decode.list Scroll.decode }
+
+    /// A measurement one case makes of the page that no general probe answers — a geometry its
+    /// own promise is about. Each is F# in `app/browser/Measures.fs`, named here so a case asks
+    /// for it by a case of this union rather than by a program in a string. A verdict is the
+    /// list of what is wrong, empty when the promise holds; a reading is the numbers the case
+    /// judges itself.
+    [<RequireQualifiedAccess>]
+    type Measure =
+        /// A running act's mark against its title's letters and its gutter.
+        | RunningMarkOnTitle
+        /// Every cause's arrow head against the line it ends, in device pixels.
+        | CauseHeadsOnLines
+        /// A running act's mark against its cause's line, in device pixels.
+        | RunningMarkOnCauseLine
+        /// Every fold: how many, the furthest an arrow sits off its title's first line, and how
+        /// far the arrows spread across the rail.
+        | FoldArrowsOnRail
+        /// Every fold under an author line: how many, and the furthest an arrow stands off its
+        /// author's avatar column.
+        | FoldArrowsOnAvatars
+
+    [<RequireQualifiedAccess>]
+    module Measure =
+        let name (measure: Measure) : string =
+            match measure with
+            | Measure.RunningMarkOnTitle -> "running-mark-on-title"
+            | Measure.CauseHeadsOnLines -> "cause-heads-on-lines"
+            | Measure.RunningMarkOnCauseLine -> "running-mark-on-cause-line"
+            | Measure.FoldArrowsOnRail -> "fold-arrows-on-rail"
+            | Measure.FoldArrowsOnAvatars -> "fold-arrows-on-avatars"
+
+        let all =
+            [ Measure.RunningMarkOnTitle
+              Measure.CauseHeadsOnLines
+              Measure.RunningMarkOnCauseLine
+              Measure.FoldArrowsOnRail
+              Measure.FoldArrowsOnAvatars ]
+
+    /// What is wrong, by the measure's own account; empty when its promise holds.
+    let verdict (measure: Measure) : Probe<int, string list> =
+        { Name = "__probeVerdict-" + Measure.name measure
+          EncodeAsk = Encode.int
+          DecodeAsk = Decode.int
+          EncodeAnswer = List.map Encode.string >> Encode.list
+          DecodeAnswer = Decode.list Decode.string }
+
+    /// The numbers a measure reads, for the case to judge.
+    let reading (measure: Measure) : Probe<int, float list> =
+        { Name = "__probeReading-" + Measure.name measure
+          EncodeAsk = Encode.int
+          DecodeAsk = Decode.int
+          EncodeAnswer = List.map Encode.float >> Encode.list
+          DecodeAnswer = Decode.list Decode.float }
+
+    /// Fold a page of events into the harness (`HarnessPage.fold`), put focus on the selector's
+    /// first match in the first frame after, and answer whether it is still there two frames
+    /// later — all in the page, so no round trip decides which frame the hand lands in.
+    let heldAfterFold : Probe<string * string, bool> =
+        { Name = "__probeHeldAfterFold"
+          EncodeAsk = fun (body, selector) -> Encode.list [ Encode.string body; Encode.string selector ]
+          DecodeAsk = Decode.tuple2 Decode.string Decode.string
+          EncodeAnswer = Encode.bool
+          DecodeAnswer = Decode.bool }
+
+    /// The window as the page lays out in it: its inner size, how wide the document is, and how
+    /// tall the visual viewport is (shorter than the inner height while a keyboard is up).
+    [<RequireQualifiedAccess>]
+    type Window = { InnerWidth: float; InnerHeight: float; DocumentWidth: float; VisualHeight: float }
+
+    [<RequireQualifiedAccess>]
+    module Window =
+        let create innerWidth innerHeight documentWidth visualHeight : Window =
+            { Window.InnerWidth = innerWidth
+              Window.InnerHeight = innerHeight
+              Window.DocumentWidth = documentWidth
+              Window.VisualHeight = visualHeight }
+
+        let encode (window: Window) =
+            Encode.object
+                [ "innerWidth", Encode.float window.InnerWidth
+                  "innerHeight", Encode.float window.InnerHeight
+                  "documentWidth", Encode.float window.DocumentWidth
+                  "visualHeight", Encode.float window.VisualHeight ]
+
+        let decode : Decoder<Window> =
+            Decode.object (fun get ->
+                create
+                    (get.Required.Field "innerWidth" Decode.float)
+                    (get.Required.Field "innerHeight" Decode.float)
+                    (get.Required.Field "documentWidth" Decode.float)
+                    (get.Required.Field "visualHeight" Decode.float))
+
+    let window : Probe<int, Window> =
+        { Name = "__probeWindow"
+          EncodeAsk = Encode.int
+          DecodeAsk = Decode.int
+          EncodeAnswer = Window.encode
+          DecodeAnswer = Window.decode }

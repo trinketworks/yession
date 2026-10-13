@@ -671,3 +671,28 @@ module Transitions =
 module TextRange =
     [<Emit("(function (text, start, finish) { const range = document.createRange(); range.setStart(text, start); range.setEnd(text, finish); return range.getBoundingClientRect() })($0, $1, $2)")>]
     let boxOf (text: Browser.Types.Node) (start: int) (finish: int) : Browser.Types.ClientRect = jsNative
+
+/// The slice of an SVG element's geometry a measurement reads.
+[<RequireQualifiedAccess>]
+module Svg =
+    /// The bounding box of an SVG element's own geometry, in its user units.
+    type Bounds =
+        abstract x : float
+        abstract y : float
+        abstract width : float
+        abstract height : float
+
+    [<Emit("$0.getBBox()")>]
+    let bounds (element: Browser.Types.Element) : Bounds = jsNative
+
+    /// The width of an `<svg>`'s `viewBox`, in its user units.
+    [<Emit("$0.viewBox.baseVal.width")>]
+    let viewBoxWidth (svg: Browser.Types.Element) : float = jsNative
+
+/// The visual viewport, as far as a measurement reads it.
+[<RequireQualifiedAccess>]
+module Viewport =
+    /// The visual viewport's height, which a soft keyboard shortens; the inner height where
+    /// there is no visual viewport to ask.
+    [<Emit("(globalThis.visualViewport ? globalThis.visualViewport.height : globalThis.innerHeight)")>]
+    let visualHeight () : float = jsNative

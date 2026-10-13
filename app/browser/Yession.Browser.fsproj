@@ -44,6 +44,7 @@
     <!-- What the browser cases ask a page that a locator cannot answer (`Yession.App.Probes`):
          bundled only by the test build and installed into the suite's contexts, never
          imported by an app entry, so it does not ship. -->
+    <Compile Include="Measures.fs" />
     <Compile Include="Probes.fs" />
     <!-- The instruments a browser case installs into a page before its scripts run
          (`Yession.App.Shims`): bundled only by the test build, never imported by an app
