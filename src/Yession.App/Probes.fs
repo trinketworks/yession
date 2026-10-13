@@ -363,6 +363,20 @@ module Probes =
         /// Each conversation item that, scrolled to the middle, is not what a press in its
         /// middle lands on.
         | ItemsClearOfCard
+        /// An arrangement, answering nothing: the editor host and the player above the shell
+        /// taken out of the layout, so the shell starts at the top of the page.
+        | HideFixturesAboveShell
+        /// An arrangement: every focus from here on recorded as `pane` or `elsewhere`
+        /// (`focusStops`), and focus put on the last shell control before the pane. Its verdict
+        /// is empty when there was such a control to start from.
+        | FocusBeforePane
+        /// Fifty records of live output into the harness terminal in one turn, as a burst off
+        /// the data channel lands, then the frame after: how many renders that cost, and 1 if
+        /// the burst's last record (`burst-mark 51`) is on the page, else 0.
+        | Burst
+        /// A lone record dispatched from inside a frame nothing has been drawn in yet, and the
+        /// page read back in the same breath: empty when it is already on the page.
+        | LoneRecordInQuietFrame
 
     [<RequireQualifiedAccess>]
     module Measure =
@@ -381,6 +395,10 @@ module Probes =
             | Measure.PastShell -> "past-shell"
             | Measure.AskCardColumn -> "ask-card-column"
             | Measure.ItemsClearOfCard -> "items-clear-of-card"
+            | Measure.HideFixturesAboveShell -> "hide-fixtures-above-shell"
+            | Measure.FocusBeforePane -> "focus-before-pane"
+            | Measure.Burst -> "burst"
+            | Measure.LoneRecordInQuietFrame -> "lone-record-in-quiet-frame"
 
         let all =
             [ Measure.RunningMarkOnTitle
@@ -395,7 +413,19 @@ module Probes =
               Measure.RoomBelowShell
               Measure.PastShell
               Measure.AskCardColumn
-              Measure.ItemsClearOfCard ]
+              Measure.ItemsClearOfCard
+              Measure.HideFixturesAboveShell
+              Measure.FocusBeforePane
+              Measure.Burst
+              Measure.LoneRecordInQuietFrame ]
+
+    /// How many times this document has rendered — published by `app/browser/Render.fs`,
+    /// absent until the first render.
+    let renders : Fable.BrowserExtras.PageGlobal<int> = Fable.BrowserExtras.PageGlobal.named "__yessionRenders"
+
+    /// Where focus has landed since `FocusBeforePane` began recording, in order: `pane` for a
+    /// stop inside the content pane, `elsewhere` for any other.
+    let focusStops : Fable.BrowserExtras.PageGlobal<string array> = Fable.BrowserExtras.PageGlobal.named "__focusStops"
 
     /// What is wrong, by the measure's own account; empty when its promise holds. Asked with
     /// a number the measure may read as a parameter (`EdgeTabOnBand` reads 1 as "on a desktop").
@@ -458,3 +488,20 @@ module Probes =
           DecodeAsk = Decode.int
           EncodeAnswer = Window.encode
           DecodeAnswer = Window.decode }
+
+    /// Where the FIRST occurrence of some words in an element is drawn; `None` where the
+    /// element is not there or does not hold them.
+    let textAt : Probe<string * string, Box option> =
+        { Name = "__probeTextAt"
+          EncodeAsk = fun (selector, words) -> Encode.list [ Encode.string selector; Encode.string words ]
+          DecodeAsk = Decode.tuple2 Decode.string Decode.string
+          EncodeAnswer = Encode.option Box.encode
+          DecodeAnswer = Decode.option Box.decode }
+
+    /// What the document's selection holds, as text.
+    let selection : Probe<int, string> =
+        { Name = "__probeSelection"
+          EncodeAsk = Encode.int
+          DecodeAsk = Decode.int
+          EncodeAnswer = Encode.string
+          DecodeAnswer = Decode.string }

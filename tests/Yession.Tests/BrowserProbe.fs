@@ -86,6 +86,13 @@ module Probe =
     /// The window as the page lays out in it.
     let window (page: IPage) : Async<Probes.Window> = ask page Probes.window 0
 
+    /// Where the first occurrence of some words in an element is drawn.
+    let textAt (page: IPage) (selector: string) (words: string) : Async<Probes.Box option> =
+        ask page Probes.textAt (selector, words)
+
+    /// What the document's selection holds, as text.
+    let selection (page: IPage) : Async<string> = ask page Probes.selection 0
+
     /// Every match's scroll box.
     let scrolls (page: IPage) (selector: string) : Async<Probes.Scroll list> = ask page Probes.scrolls selector
 

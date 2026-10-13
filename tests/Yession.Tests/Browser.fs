@@ -2431,19 +2431,12 @@ let private blocksFilled (page: IPage) : Async<unit> =
 /// turn, as a burst off the data channel lands — then the frame after them, and what `andThen`
 /// reads off the page once it is there. The frame waited for is registered after every render
 /// the burst asked for, so whatever the burst was owed has been drawn by the time it runs.
-let private afterBurst (page: IPage) (andThen: string) : Async<string> =
-    await (
-        page.EvaluateAsync<string> (
-            sprintf
-                """async () => {
-                     const before = globalThis.__yessionRenders ?? 0
-                     for (let seq = 2; seq < 52; seq++)
-                       window.__record('term-harness', seq, 'o', 'burst-mark ' + seq + '\r\n')
-                     await new Promise(done => requestAnimationFrame(() => done()))
-                     const renders = (globalThis.__yessionRenders ?? 0) - before
-                     return String(%s)
-                   }"""
-                andThen))
+let private afterBurst (page: IPage) : Async<int * bool> =
+    async {
+        match! Probe.reading page Yession.App.Probes.Measure.Burst with
+        | [ renders; shown ] -> return int renders, shown = 1.0
+        | other -> return failwithf "the burst read %A, not a count and a verdict" other
+    }
 
 /// Whether the "jump to latest" over a surface is on screen and is what is painted at its own
 /// centre, so a control that is present, shown and buried does not count.
@@ -2622,6 +2615,33 @@ let private boxesOf (page: IPage) (selectors: string list) : Async<Yession.App.P
             |> List.map (fun (selector, box) ->
                 box |> Option.defaultWith (fun () -> failwithf "nothing matches %s to measure" selector))
     }
+
+/// The width the pane's separator says the pane is (`aria-valuenow`).
+let private separatorValue (page: IPage) : Async<float> =
+    async {
+        match! Read.attr page "#shell [data-term-resize]" "aria-valuenow" with
+        | Some said -> return float said
+        | None -> return failwith "the separator says no width"
+    }
+
+/// The pane's width as drawn.
+let private paneWidth (page: IPage) : Async<float> =
+    async {
+        match! boxesOf page [ "#shell [data-content-panel]" ] with
+        | [ pane ] -> return Yession.App.Probes.Box.width pane
+        | _ -> return failwith "unreachable: one selector, one box"
+    }
+
+/// Whether the pane's drawn width has caught up with what its separator says.
+let private paneMeetsSeparator (page: IPage) () : Async<bool> =
+    async {
+        let! said = separatorValue page
+        let! width = paneWidth page
+        return abs (width - said) <= 1.0
+    }
+
+/// An attribute of whatever has focus; `None` when nothing does, or it lacks the attribute.
+let private focusedAttr (page: IPage) (name: string) : Async<string option> = Read.attr page ":focus" name
 
 /// Whether an element is `inert`: out of the keyboard's and the pointer's reach.
 let private inert (page: IPage) (selector: string) : Async<bool> =
@@ -3748,27 +3768,15 @@ let editorTests =
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='show']")
                 // What would be skipped has to be there to skip, or this passes over nothing.
-                let! held =
-                    await (page.EvaluateAsync<int>
-                            """() => document.querySelectorAll('#shell [data-content-panel] button, #shell [data-content-panel] [tabindex="0"]').length""")
+                let! held = Read.count page "#shell [data-content-panel] button, #shell [data-content-panel] [tabindex=\"0\"]"
                 Expect.isTrue (held > 0) "the shut pane still holds controls"
-                let! started =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const pane = document.querySelector('#shell [data-content-panel]')
-                                 const before = [...document.querySelectorAll('#shell button')]
-                                   .filter(b => b.tabIndex >= 0 && !b.disabled
-                                             && (pane.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_PRECEDING))
-                                 window.__stops = []
-                                 document.addEventListener('focusin', e =>
-                                   window.__stops.push(e.target.closest('[data-content-panel]') ? 'pane' : 'elsewhere'))
-                                 for (const b of before.reverse()) { b.focus(); if (document.activeElement === b) return true }
-                                 return false
-                               }""")
+                let! notStarted = Probe.verdict page Yession.App.Probes.Measure.FocusBeforePane
+                let started = List.isEmpty notStarted
                 Expect.isTrue started "focus starts on the last control before the pane"
                 for _ in 1 .. 3 do
                     do! awaitU (page.Keyboard.PressAsync "Tab")
-                let! stops = await (page.EvaluateAsync<string[]> "() => window.__stops")
+                let! recorded = Harness.read page Yession.App.Probes.focusStops
+                let stops = recorded |> Option.defaultValue [||]
                 // The first stop is the start itself; at least one more means Tab moved at all.
                 Expect.isTrue (stops.Length > 1) (sprintf "Tab moved focus (stops: %A)" stops)
                 Expect.isFalse (Array.contains "pane" stops) (sprintf "no stop inside the shut pane (stops: %A)" stops)
@@ -3777,11 +3785,7 @@ let editorTests =
         editorCase "showing the pane puts focus on the command line" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                let! _ =
-                    await (page.WaitForFunctionAsync (
-                            "sel => document.activeElement?.matches(sel) === true",
-                            box (commandLine "term-harness")))
-                return ()
+                do! Wait.until "focus to land on the command line" (fun () -> Read.focused page (commandLine "term-harness")) id
             }
 
         // Nothing in the chat opened what was showing, so there is no chip to go back to — and
@@ -3805,18 +3809,15 @@ let editorTests =
                 do! awaitU (page.FocusAsync "#shell [data-chat-block]")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 do! Wait.until "focus on [data-pane-panel]" (fun () -> Read.focused page "[data-pane-panel]") id
-                let! ring =
-                    await (page.EvaluateAsync<string>
-                            """() => {
-                                 const s = getComputedStyle(document.activeElement)
-                                 return [s.outlineStyle, s.outlineWidth].join(' ')
-                               }""")
-                match ring.Split ' ' with
-                | [| style; width |] ->
+                let! style = Probe.computed page ":focus" "outline-style"
+                let! width = Probe.computed page ":focus" "outline-width"
+                match style, width with
+                | Some style, Some width ->
+                    let ring = sprintf "%s %s" style width
                     // `auto` is the browser's own ring — the one that did not show.
                     Expect.isFalse (style = "none" || style = "auto") (sprintf "a ring of our own paints (%s)" ring)
                     Expect.isTrue (float (width.Replace ("px", "")) >= 2.0) (sprintf "at least 2px (%s)" ring)
-                | _ -> failwithf "the outline answered '%s'" ring
+                | _ -> failwithf "the focused panel's outline could not be read: %A" (style, width)
             }
         // What an agent says does not fit a phone: paths, URLs and fenced commands are all
         // longer than a 326px column and none of them has a space where the break has to go.
@@ -4176,13 +4177,9 @@ let editorTests =
 
                 do! awaitU (page.Keyboard.PressAsync "Enter")
 
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.hasAttribute('data-session-title') !== true""")
-                let! title =
-                    await (page.EvaluateAsync<string>
-                            "() => document.querySelector('#shell [data-session-title]').value")
-                Expect.stringContains title "on a phone" "the committed title is the one that was typed"
+                do! Wait.until "focus to leave the title" (fun () -> Read.focused page "[data-session-title]") not
+                let! title = Read.values page "#shell [data-session-title]"
+                Expect.isTrue (title |> List.exists (fun t -> t.Contains "on a phone")) (sprintf "the committed title is the one that was typed: %A" title)
             }
         // A pane nobody has sized is laid out by the room the chat leaves (`PaneSplit.resolve`).
         // Only a browser can say the boxes land where that arithmetic means them to: the
@@ -4200,22 +4197,20 @@ let editorTests =
                 do! awaitU (page.Keyboard.PressAsync "End")
                 do! awaitU (page.Keyboard.PressAsync "ArrowLeft")
                 do! twoFrames page
-                let! chosen =
-                    await (page.EvaluateAsync<float>
-                            "() => Number(document.querySelector('#shell [data-term-resize]').getAttribute('aria-valuenow'))")
+                let! chosen = separatorValue page
                 do! awaitU (page.SetViewportSizeAsync (1920, 1080))
                 do! twoFrames page
                 // Waited for on the PIXELS meeting the separator again, then read: a pane that
                 // grew would settle too, at the default's width rather than the reader's.
-                do! waitFor "the pane to settle after the resize" page
-                        """(() => {
-                             const pane = document.querySelector('#shell [data-content-panel]')
-                             const said = Number(document.querySelector('#shell [data-term-resize]').getAttribute('aria-valuenow'))
-                             return innerWidth === 1920 && Math.abs(pane.getBoundingClientRect().width - said) <= 1
-                           })()"""
-                let! width =
-                    await (page.EvaluateAsync<float>
-                            "() => document.querySelector('#shell [data-content-panel]').getBoundingClientRect().width")
+                do! Wait.until "the pane to settle after the resize"
+                        (fun () ->
+                            async {
+                                let! window = Probe.window page
+                                let! met = paneMeetsSeparator page ()
+                                return window.InnerWidth = 1920.0 && met
+                            })
+                        id
+                let! width = paneWidth page
                 Expect.isTrue
                     (abs (width - chosen) <= 1.0)
                     (sprintf "the width the reader chose (%.0f), not the room the screen has (now %.0f)" chosen width)
@@ -4239,16 +4234,8 @@ let editorTests =
                 // in it is reachable by scroll, which is fine for a person and a trap for a
                 // test: the assertions here are about a WIDTH, and a click that has to scroll
                 // first is one more thing that can be the reason a width did not change.
-                let! _ =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 for (const id of ['host', 'replay']) {
-                                   const el = document.getElementById(id)
-                                   if (el) el.style.display = 'none'
-                                 }
-                                 document.querySelector('#shell [data-content-toggle="show"]').click()
-                                 return true
-                               }""")
+                let! _ = Probe.verdict page Yession.App.Probes.Measure.HideFixturesAboveShell
+                do! awaitU (page.Locator("#shell [data-content-toggle=\"show\"]").First.DispatchEventAsync "click")
                 // Read on `aria-valuenow`, not on the rendered width.
                 //
                 // Not a convenience: the column animates, so its rendered width spends 200ms
@@ -4265,33 +4252,23 @@ let editorTests =
                 // It is also the thing this test is ABOUT — what a keyboard user is told the
                 // split is. That the pixels follow it is asserted once at the end, where the
                 // target is known and the wait is therefore deterministic.
-                let value () =
-                    page.EvaluateAsync<float>
-                        "() => Number(document.querySelector('#shell [data-term-resize]').getAttribute('aria-valuenow'))"
+                let value () = separatorValue page
 
                 // Showing the pane hands the keyboard to what it shows (the focus contract,
                 // `ClientModel.paneLanding`), a frame AFTER the render. Waited for here, because
                 // focusing the divider before that frame is a focus the landing then takes back:
                 // on a quick box the frame had always come first, and on a loaded runner it did
                 // not, which read as a divider that is not a separator.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                            """() => !!document.activeElement?.closest('#shell [data-content-panel]')""")
+                do! Wait.until "the keyboard to land in the pane" (fun () -> Read.focused page "#shell [data-content-panel] *") id
 
                 // Focusable, and it says what it is: a separator with a value is the one
                 // shape assistive technology can report and move.
-                let! _ =
-                    await (page.EvaluateAsync<bool>
-                            "() => { document.querySelector('#shell [data-term-resize]').focus(); return true }")
-                let! isSeparator =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const h = document.activeElement
-                                 return h?.getAttribute('role') === 'separator'
-                                     && h.hasAttribute('aria-valuenow')
-                               }""")
+                do! awaitU (page.FocusAsync "#shell [data-term-resize]")
+                let! role = focusedAttr page "role"
+                let! said = focusedAttr page "aria-valuenow"
+                let isSeparator = role = Some "separator" && Option.isSome said
                 Expect.isTrue isSeparator "the focused divider is a separator carrying its value"
-                let! before = await (value ())
+                let! before = value ()
 
                 // The two arrows move it, and they are opposites. Which one GROWS the column
                 // is deliberately not asserted: this one is on the right, so left-grows reads
@@ -4302,13 +4279,13 @@ let editorTests =
                 // and that the second press undoes the first.
                 do! awaitU (page.Keyboard.PressAsync "ArrowLeft")
                 do! twoFrames page
-                let! moved = await (value ())
+                let! moved = value ()
                 Expect.isTrue
                     (abs (moved - before) > 1.0)
                     (sprintf "an arrow key must move the split (was %f, still %f)" before moved)
                 do! awaitU (page.Keyboard.PressAsync "ArrowRight")
                 do! twoFrames page
-                let! back = await (value ())
+                let! back = value ()
                 Expect.isTrue
                     (abs (back - before) < abs (moved - before))
                     (sprintf "the opposite arrow must move it back (started %f, went %f, now %f)"
@@ -4319,14 +4296,7 @@ let editorTests =
                 // pixels catching up to the value, not a guess about when a transition ended.
                 // Without this the test would be happy with a separator that narrates a resize
                 // nothing performed.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                            """() => {
-                                 const h = document.querySelector('#shell [data-term-resize]')
-                                 const pane = document.querySelector('#shell [data-content-panel]')
-                                 const said = Number(h.getAttribute('aria-valuenow'))
-                                 return Math.abs(pane.getBoundingClientRect().width - said) <= 1
-                               }""")
+                do! Wait.until "the pane's width to catch up with its separator" (paneMeetsSeparator page) id
                 return ()
             }
         // The live viewport (Plan 14, stage 6). What only a browser can answer here is the
@@ -4343,9 +4313,7 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
                 let screen = "#shell [data-terminal-screen='term-live']"
                 let! _ = await (page.WaitForSelectorAsync screen)
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        (sprintf "document.querySelector(%s).textContent.includes('vim ~/notes')" "\"#shell [data-terminal-screen='term-live']\""))
+                do! waitTextIn "the screen to say vim ~/notes" page "#shell [data-terminal-screen='term-live']" "vim ~/notes"
 
                 // A press on it puts the keyboard there, because its whole purpose is having it.
                 do! awaitU (page.ClickAsync screen)
@@ -4362,9 +4330,7 @@ let editorTests =
                 // records, never in the screen the model was built with — so a client that
                 // rendered the snapshot and folded nothing would fail here.
                 do! Harness.run5 page HarnessPage.snapshot "term-live" 0 "session start\r\n" None None
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        (sprintf "document.querySelector(%s).textContent.includes('earlier output')" "\"#shell [data-terminal-screen='term-live']\""))
+                do! waitTextIn "the screen to say earlier output" page "#shell [data-terminal-screen='term-live']" "earlier output"
 
                 do! awaitU (page.Keyboard.TypeAsync "ls")
                 do! awaitU (page.Keyboard.PressAsync "ArrowUp")
@@ -4376,9 +4342,9 @@ let editorTests =
 
                 // Tab is SENT rather than moving focus out of the terminal mid-session, and
                 // the shift is that `preventDefault` fires for everything the terminal takes.
-                let! before = await (page.EvaluateAsync<string> "() => document.activeElement?.getAttribute('data-terminal-keys')")
+                let! before = focusedAttr page "data-terminal-keys"
                 do! awaitU (page.Keyboard.PressAsync "Tab")
-                let! after = await (page.EvaluateAsync<string> "() => document.activeElement?.getAttribute('data-terminal-keys')")
+                let! after = focusedAttr page "data-terminal-keys"
                 Expect.equal after before "Tab types a tab; it does not leave the terminal"
             }
         // Taking the keyboard is the whole of what live mode is, and the keyboard has to
@@ -4414,15 +4380,11 @@ let editorTests =
                 let line = "#shell " + commandLine "term-harness"
                 let! _ = await (page.WaitForSelectorAsync line)
                 do! awaitU (page.FocusAsync line)
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.getAttribute('data-terminal-input')?.startsWith('term-draft:term-harness:') === true""")
+                do! Wait.until "focus on the harness terminal's command line" (fun () -> Read.focused page "[data-terminal-input^='term-draft:term-harness:']") id
 
                 do! Harness.run1 page HarnessPage.take "term-harness"
-                do! waitFor
-                        "the keyboard on the screen the lease landed on, not on the command line under it"
-                        page
-                        """document.activeElement?.getAttribute('data-terminal-keys') === 'term-harness'"""
+                do! Wait.until "the keyboard on the screen the lease landed on, not on the command line under it"
+                        (fun () -> Read.focused page "[data-terminal-keys='term-harness']") id
             }
         // The other route in, and the reason the focus move lives in the render loop rather
         // than on the press: a block that takes the screen hands its author the keyboard with
@@ -4442,9 +4404,8 @@ let editorTests =
                 // The lease arrives on its own, as the alt-screen flip delivers it.
                 do! Harness.run1 page HarnessPage.take "term-harness"
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-harness']")
-                let! kept =
-                    await (page.EvaluateAsync<string> "() => document.activeElement?.outerHTML?.slice(0, 60) ?? 'NOTHING'")
-                Expect.stringContains kept "data-term-resize" "a lease landing leaves focus that survived the render where it was"
+                let! kept = Read.focused page "[data-term-resize]"
+                Expect.isTrue kept "a lease landing leaves focus that survived the render where it was"
             }
         // The way back out of live mode, and the other DOM swap of the focused element in a
         // terminal. Hand it back removes itself once the release it asked for arrives, and a
@@ -4468,11 +4429,8 @@ let editorTests =
                               Yession.Domain.Terminals.TerminalLeaseReleased.Was = Yession.Domain.ActorRef.PeerRef (Yession.Domain.PeerId.create "ada" |> Result.defaultWith failwith)
                               Yession.Domain.Terminals.TerminalLeaseReleased.Reason = Yession.Domain.Terminals.LeaseReleased
                               Yession.Domain.Terminals.TerminalLeaseReleased.ToSeq = 0 } ]
-                do!
-                    waitFor
-                        "the keyboard on the command line"
-                        page
-                        "document.activeElement?.matches(\"#shell [data-terminal-input^='term-draft:']:not([readonly])\") === true"
+                do! Wait.until "the keyboard on the command line"
+                        (fun () -> Read.focused page "#shell [data-terminal-input^='term-draft:']:not([readonly])") id
             }
         editorCase "a shell dying under the reader leaves the keyboard in the pane" <| fun page ->
             async {
@@ -4487,11 +4445,7 @@ let editorTests =
                             { Yession.Domain.Terminals.TerminalClosed.TerminalId = harnessTerminal "term-harness"
                               Yession.Domain.Terminals.TerminalClosed.Reason = "the shell exited with code -1"
                               Yession.Domain.Terminals.TerminalClosed.By = None } ]
-                do!
-                    waitFor
-                        "the keyboard in the pane's panel"
-                        page
-                        "document.activeElement?.closest('#shell [data-pane-panel]') != null"
+                do! Wait.until "the keyboard in the pane's panel" (fun () -> Read.focused page "#shell [data-pane-panel], #shell [data-pane-panel] *") id
             }
         // Somebody taking the keyboard from the person typing in it (P3-2). The lease bar
         // renamed its holder, and for the person stolen from that was the whole announcement
@@ -4499,11 +4453,7 @@ let editorTests =
         editorCase "a steal tells the person it was taken from, and offers it back" <| fun page ->
             async {
                 do! stolenFromHarness page
-                do!
-                    waitFor
-                        "take back, in a notice about the steal"
-                        page
-                        "!!document.querySelector(\"#shell [data-terminal-stolen='term-harness'] [data-terminal-take='term-harness']\")"
+                do! waitPresent "take back, in a notice about the steal" page "#shell [data-terminal-stolen='term-harness'] [data-terminal-take='term-harness']"
             }
         editorCase "keys typed after a steal do not reach the terminal" <| fun page ->
             async {
@@ -4521,11 +4471,10 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
                 do! Wait.until "focus on [data-terminal-keys='term-harness']" (fun () -> Read.focused page "[data-terminal-keys='term-harness']") id
-                let! ring =
-                    await (page.EvaluateAsync<string> """() => {
-                        const s = getComputedStyle(document.activeElement.closest('[data-terminal-screen]'));
-                        return s.outlineStyle + ' ' + s.outlineWidth; }""")
-                Expect.equal ring "solid 2px" "the screen with the keyboard wears the ring"
+                let held = "[data-terminal-screen]:has(:focus)"
+                let! style = Probe.computed page held "outline-style"
+                let! width = Probe.computed page held "outline-width"
+                Expect.equal (style, width) (Some "solid", Some "2px") "the screen with the keyboard wears the ring"
             }
         // The caret is read off the browser's own emulator — the cursor is not in the
         // serialization in any form a renderer can use, so only a real one can say where it is.
@@ -4536,11 +4485,8 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-harness'] [data-terminal-keys]")
                 // A line typed, then the cursor moved four cells back along it.
                 do! Harness.run5 page HarnessPage.snapshot "term-harness" 50 "$ echo hi\u001b[4D" (Some 80) (Some 24)
-                do!
-                    waitFor
-                        "the caret on the o of echo"
-                        page
-                        "document.querySelector(\"#shell [data-terminal-screen='term-harness'] [data-terminal-caret]\")?.textContent === 'o'"
+                do! Wait.until "the caret on the o of echo"
+                        (fun () -> Read.text page "#shell [data-terminal-screen='term-harness'] [data-terminal-caret]") ((=) (Some "o"))
             }
         // A phone (P3-3). A platform raises its soft keyboard for a focused text field and for
         // nothing else, and the live screen was a focusable div: a tap focused it, nothing came
@@ -4554,12 +4500,8 @@ let editorTests =
                 let screen = "#shell [data-terminal-screen='term-live']"
                 let! _ = await (page.WaitForSelectorAsync screen)
                 do! awaitU (page.TapAsync screen)
-                do!
-                    waitFor
-                        "a text field inside the live screen holding focus"
-                        page
-                        """document.activeElement?.tagName === 'TEXTAREA'
-                           && document.activeElement.closest("[data-terminal-screen='term-live']") !== null"""
+                do! Wait.until "a text field inside the screen to hold focus"
+                        (fun () -> Read.focused page "[data-terminal-screen='term-live'] textarea") id
             }
         // What a phone keyboard sends is mostly not keys: it INSERTS text into the focused
         // field, with a keydown that names no key. `insertText` is exactly that event and no
@@ -4585,29 +4527,18 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        "document.querySelector(\"#shell [data-terminal-screen='term-live']\")?.textContent.includes('vim ~/notes') === true")
+                do! waitTextIn "the screen to say vim ~/notes" page "#shell [data-terminal-screen='term-live']" "vim ~/notes"
                 // Where the words are, so the drag runs across them rather than across padding.
-                let! span =
-                    await (page.EvaluateAsync<float[]>
-                        """() => {
-                             const screen = document.querySelector("#shell [data-terminal-screen='term-live']")
-                             const walker = document.createTreeWalker(screen, NodeFilter.SHOW_TEXT)
-                             let node
-                             while ((node = walker.nextNode()) && !node.textContent.includes('vim ~/notes')) {}
-                             const range = document.createRange()
-                             const at = node.textContent.indexOf('vim ~/notes')
-                             range.setStart(node, at)
-                             range.setEnd(node, at + 'vim ~/notes'.length)
-                             const r = range.getBoundingClientRect()
-                             return [r.left + 1, r.right - 1, (r.top + r.bottom) / 2]
-                           }""")
+                let! words = Probe.textAt page "#shell [data-terminal-screen='term-live']" "vim ~/notes"
+                let span =
+                    match words with
+                    | Some r -> [| r.Left + 1.0; r.Right - 1.0; (r.Top + r.Bottom) / 2.0 |]
+                    | None -> failwith "the screen stopped saying vim ~/notes"
                 do! awaitU (page.Mouse.MoveAsync (float32 span.[0], float32 span.[2]))
                 do! awaitU (page.Mouse.DownAsync ())
                 do! awaitU (page.Mouse.MoveAsync (float32 span.[1], float32 span.[2], MouseMoveOptions (Steps = 5)))
                 do! awaitU (page.Mouse.UpAsync ())
-                let! selected = await (page.EvaluateAsync<string> "() => getSelection().toString()")
+                let! selected = Probe.selection page
                 Expect.stringContains selected "notes" "what was dragged across is still selected"
             }
         // A phone's keyboard takes the bottom of the screen, and the command line and its Run
@@ -4621,19 +4552,18 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync line)
                 do! awaitU (page.TapAsync line)
                 do! awaitU (page.SetViewportSizeAsync (390, 544))
-                do!
-                    waitFor
-                        "the command line and Run inside a viewport 300px shorter"
-                        page
-                        (sprintf
-                            """(() => {
-                                 const line = document.querySelector("%s")
-                                 const run = line?.parentElement.querySelector('[data-terminal-send]')
-                                 return innerHeight === 544 && !!run
-                                   && line.getBoundingClientRect().bottom <= innerHeight
-                                   && run.getBoundingClientRect().bottom <= innerHeight
-                               })()"""
-                            line)
+                let run = sprintf "#shell :has(> %s) [data-terminal-send]" (commandLine "term-harness")
+                do! Wait.until "the command line and Run inside a viewport 300px shorter"
+                        (fun () ->
+                            async {
+                                let! window = Probe.window page
+                                let! placed = Probe.boxes page [ line; run ]
+                                return window, placed
+                            })
+                        (fun (window, placed) ->
+                            match placed with
+                            | [ Some l; Some r ] -> window.InnerHeight = 544.0 && l.Bottom <= 544.0 && r.Bottom <= 544.0
+                            | _ -> false)
             }
         // Moving by WORD, which is most of what navigating a line you have already typed
         // means. Its own case rather than an extra assertion on the one above: that pins the
@@ -4676,21 +4606,18 @@ let editorTests =
             editorCase "a burst of live records costs a render per frame, not one per record" <| fun page ->
                 async {
                     do! twoFrames page
-                    let! renders = afterBurst page "renders"
+                    let! renders, _ = afterBurst page
                     // The frame the burst landed in, drawn as the first record arrived, and the
                     // next, drawn with the other forty-nine.
                     Expect.isTrue
-                        (int renders <= 2)
-                        (sprintf "fifty records across one frame boundary drew %s times; at most two" renders)
+                        (renders <= 2)
+                        (sprintf "fifty records across one frame boundary drew %d times; at most two" renders)
                 }
             editorCase "the last record of a burst is on the page by the next frame" <| fun page ->
                 async {
                     do! paneOnBlocks page
-                    let! shown =
-                        afterBurst
-                            page
-                            "document.querySelector(\"#shell [data-tail='blocks:term-harness']\").textContent.includes('burst-mark 51')"
-                    Expect.equal shown "true" "the record the frame's render was owed is drawn, not the one that asked first"
+                    let! _, shown = afterBurst page
+                    Expect.isTrue shown "the record the frame's render was owed is drawn, not the one that asked first"
                 }
             // A frame later is a frame of latency nobody should pay for one keystroke's worth of
             // change. So the case dispatches from inside a frame in which nothing has been drawn
@@ -4699,25 +4626,8 @@ let editorTests =
             editorCase "a lone message is on the page before the call that dispatched it returns" <| fun page ->
                 async {
                     do! paneOnBlocks page
-                    let! answer =
-                        await (
-                            page.EvaluateAsync<string>
-                                """async () => {
-                                     for (let tries = 0; tries < 60; tries++) {
-                                       const seen = globalThis.__yessionRenders ?? 0
-                                       const answer = await new Promise(done => requestAnimationFrame(() => {
-                                         // A render since the last look may still have its frame
-                                         // open; look again a frame on.
-                                         if ((globalThis.__yessionRenders ?? 0) !== seen) return done(null)
-                                         window.__record('term-harness', 2, 'o', 'lone-mark\r\n')
-                                         const surface = document.querySelector("#shell [data-tail='blocks:term-harness']")
-                                         done(surface.textContent.includes('lone-mark') ? 'on the page' : 'not yet')
-                                       }))
-                                       if (answer !== null) return answer
-                                     }
-                                     return 'the page drew on every one of sixty frames, so none was quiet to ask in'
-                                   }""")
-                    Expect.equal answer "on the page" "a message into an undrawn frame is drawn at once"
+                    let! wrong = Probe.verdict page Yession.App.Probes.Measure.LoneRecordInQuietFrame
+                    Expect.isEmpty wrong "a message into an undrawn frame is drawn at once"
                 }
         ]
         // `ESC[500G` is how a program asks for the last column, whatever that is. The
@@ -4737,18 +4647,21 @@ let editorTests =
                 // Waited for, then MEASURED. A wait that was also the assertion would fail as
                 // a timeout naming neither number, and this tier can only fail by a wait
                 // never settling.
-                let lineEndingIn (mark: string) =
-                    sprintf
-                        """(() => {
-                             const el = document.querySelector("[data-terminal-screen='term-live']")
-                             const line = el.textContent.split('\n').find(l => l.trimEnd().endsWith('%s'))
-                             return line === undefined ? -1 : line.trimEnd().length
-                           })()"""
-                        mark
+                // The width of the screen's line that ends in `mark`, once there is one.
+                let lineEndingIn (mark: string) () =
+                    async {
+                        let! drawn = Read.text page "[data-terminal-screen='term-live']"
+                        return
+                            drawn
+                            |> Option.bind (fun text ->
+                                text.Split '\n' |> Array.tryFind (fun line -> line.TrimEnd().EndsWith mark))
+                            |> Option.map (fun line -> line.TrimEnd().Length)
+                    }
                 let widthOfLineEndingIn (mark: string) =
                     async {
-                        let! _ = await (page.WaitForFunctionAsync (lineEndingIn mark + " > 0"))
-                        return! await (page.EvaluateAsync<int> ("() => " + lineEndingIn mark))
+                        do! Wait.until (sprintf "a line ending in %s" mark) (lineEndingIn mark) Option.isSome
+                        let! width = lineEndingIn mark ()
+                        return width |> Option.defaultValue -1
                     }
                 let! atForty = widthOfLineEndingIn "X"
                 Expect.equal atForty 40 "the last column of a 40-column screen"
@@ -6029,10 +5942,7 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-terminal-rewound-live]")
                 do! waitAbsent "#shell [data-terminal-rewound] to be gone" page "#shell [data-terminal-rewound]"
                 do! waitCommandLine page line "git sta"
-                do! waitFor
-                        "focus on the toggle that replaced the bar"
-                        page
-                        """document.activeElement?.getAttribute('data-terminal-watch') === 'watch'"""
+                do! Wait.until "focus on the toggle that replaced the bar" (fun () -> Read.focused page "[data-terminal-watch='watch']") id
             }
 
         // A long output keeps its command in view. Measured with `seq 1 300`: the block's
@@ -6754,9 +6664,7 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.Locator("#shell [data-pane-switcher]").PressAsync "Enter")
                 // Opened from the keyboard, focus went in with it.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """!!document.activeElement?.closest('#shell [data-content-list]')""")
+                do! Wait.until "focus on #shell [data-content-list], #shell [data-content-list] *" (fun () -> Read.focused page "#shell [data-content-list], #shell [data-content-list] *") id
                 do! awaitU (page.Keyboard.PressAsync "Escape")
                 do! waitAbsent "#shell [data-content-list] to be gone" page "#shell [data-content-list]"
                 do! Wait.until "focus on #shell [data-pane-pivot] [role=tab][aria-selected=true][data-pane-tab]" (fun () -> Read.focused page "#shell [data-pane-pivot] [role=tab][aria-selected=true][data-pane-tab]") id
