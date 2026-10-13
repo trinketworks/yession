@@ -3492,11 +3492,11 @@ module Style =
     /// because this one sits on the pane's own fold rather than the chat's.
     let terminalBlockRunCounts = "flex items-baseline gap-2 shrink-0"
 
-    /// Stop, on a running command's line: the bare danger verb with its glyph, which is what
-    /// the chat's interrupt says too. 44px on a phone, the target this product holds a thumb
-    /// to; the line is a reading line on a desktop and the 24px box stays there.
-    let terminalBlockStop =
-        cls [ btnBareDanger; "shrink-0 gap-1 phone:min-h-11 phone:min-w-11 phone:justify-center" ]
+    /// The strip on top of a terminal's command line while a command runs there: its one
+    /// verb at the trailing edge, as tall as the chat's tray is: a thumb's on a phone.
+    let terminalStopStrip = "flex items-center justify-end h-10 phone:h-11 pr-1.5"
+    /// Stop: the bare danger verb with its glyph, which is what the chat's interrupt says too.
+    let terminalStop = cls [ btnBareDanger; "h-full min-w-11 px-1.5 gap-1.5 justify-center" ]
 
     /// Who ran a command, on the command's own line — a reference, so it carries the mark AND
     /// the name. `shrink-0` with a bounded name, because the command beside it is the longer
