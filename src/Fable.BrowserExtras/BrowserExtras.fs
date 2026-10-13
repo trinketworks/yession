@@ -622,3 +622,10 @@ module PersistentStorage =
     /// asking being the thing that fails.
     [<Emit("(typeof globalThis !== 'undefined' && globalThis.navigator && globalThis.navigator.storage && globalThis.navigator.storage.persist) ? globalThis.navigator.storage : undefined")>]
     let storage () : StorageManager option = jsNative
+
+/// The origin's IndexedDB, as far as anything here reads it.
+[<RequireQualifiedAccess>]
+module IndexedDb =
+    /// The names of the databases this origin holds.
+    [<Emit("indexedDB.databases().then(held => held.map(database => database.name))")>]
+    let names () : JS.Promise<string array> = jsNative

@@ -442,6 +442,47 @@ let private openNewTerminal (page: IPage) : Async<unit> =
             do! awaitU (page.Locator("[data-sandbox-new='default']").First.ClickAsync ())
     }
 
+/// Wait until some element matches a selector.
+let private waitPresent (what: string) (page: IPage) (selector: string) : Async<unit> =
+    Wait.until what (fun () -> Read.count page selector) (fun n -> n > 0)
+
+/// Wait until nothing matches a selector.
+let private waitAbsent (what: string) (page: IPage) (selector: string) : Async<unit> =
+    Wait.until what (fun () -> Read.count page selector) ((=) 0)
+
+/// Wait until exactly this many elements match a selector.
+let private waitCount (what: string) (page: IPage) (selector: string) (count: int) : Async<unit> =
+    Wait.until what (fun () -> Read.count page selector) ((=) count)
+
+/// Wait until some match's text contains this.
+let private waitTextIn (what: string) (page: IPage) (selector: string) (text: string) : Async<unit> =
+    Wait.until what (fun () -> Read.texts page selector) (List.exists (fun t -> t.Contains text))
+
+/// Wait until some match's own text — carets aside — is exactly this.
+let private waitOwnText (what: string) (page: IPage) (selector: string) (text: string) : Async<unit> =
+    Wait.until what (fun () -> Probe.ownTexts page selector) (List.contains text)
+
+/// A block that ran and finished, whatever it ran.
+let private finishedBlock = "[data-terminal-block][data-terminal-block-status='ok']"
+
+/// Press the pane's switcher only while its list is not down: its door toggles, and the pane may
+/// already have landed on the list. A frame or two first, for the pane to settle where it lands.
+let private switcherDown (page: IPage) : Async<unit> =
+    async {
+        do! Probe.frames page 2
+        let shut = "[data-pane-switcher][aria-expanded='false']"
+        let! n = Read.count page shut
+        if n > 0 then do! awaitU (page.Locator(shut).First.DispatchEventAsync "click")
+    }
+
+/// The session this shell says it is, off its `<meta>`.
+let private sessionMeta (page: IPage) : Async<string> =
+    async {
+        match! Read.attr page ("meta" + Sel.hookIs "name" Yession.App.Dom.sessionMetaName) "content" with
+        | Some id -> return id
+        | None -> return failwith "the shell carries no session id"
+    }
+
 let private waitTimeoutMs = 30000.0
 let private waitFor (what: string) (page: IPage) (predicate: string) : Async<unit> =
     async {
@@ -534,24 +575,19 @@ let private commandLine (terminal: string) =
 let private commandLineValue (page: IPage) (selector: string) : Async<string> =
     async {
         let! _ = await (page.WaitForSelectorAsync selector)
-        return! await (page.EvaluateAsync<string> ("sel => document.querySelector(sel)?.value ?? ''", selector))
+        match! Read.values page selector with
+        | value :: _ -> return value
+        | [] -> return failwithf "the command line %s went as it was read" selector
     }
 
 /// Wait for a command line to say something, and when it never does, FAIL SAYING WHAT IT
 /// SAYS. The interesting failures here are lines holding the wrong terminal's text or
 /// wiping themselves as they are typed into, and a bare timeout hides exactly that.
 let private waitCommandLine (page: IPage) (selector: string) (expected: string) : Async<unit> =
-    async {
-        try
-            do!
-                await (page.WaitForFunctionAsync (
-                        "([sel, want]) => document.querySelector(sel)?.value === want",
-                        [| box selector; box expected |]))
-                |> Async.Ignore
-        with _ ->
-            let! actual = commandLineValue page selector
-            failwithf "expected the command line %s to say %A, it says %A" selector expected actual
-    }
+    Wait.until
+        (sprintf "the command line %s to say %A" selector expected)
+        (fun () -> Read.values page selector)
+        (List.tryHead >> (=) (Some expected))
 
 /// Which terminals have a command line ON SCREEN, in the order they are in the document.
 ///
@@ -560,9 +596,19 @@ let private waitCommandLine (page: IPage) (selector: string) (expected: string) 
 /// showing a different terminal" and "the line is not there yet" are different faults, and a
 /// locator timeout says neither.
 let private commandLinesOn (page: IPage) : Async<string[]> =
-    await (page.EvaluateAsync<string[]> ("""() =>
-        [...document.querySelectorAll("[data-terminal-input^='term-draft:']")]
-          .map(i => i.getAttribute('data-terminal-input') + (i.readOnly ? ' (readonly)' : ''))"""))
+    async {
+        let lines = "[data-terminal-input^='term-draft:']"
+        let! keys = Read.attrs page lines "data-terminal-input"
+        let! readonly = Read.attrs page lines "readonly"
+        return
+            // Two looks, so a line that came or went between them is read without its flag
+            // rather than paired with another's.
+            keys
+            |> List.mapi (fun i key ->
+                (key |> Option.defaultWith (fun () -> "(no key)"))
+                + (if List.tryItem i readonly |> Option.flatten |> Option.isSome then " (readonly)" else ""))
+            |> Array.ofList
+    }
 
 /// Show a terminal in the pane, and wait until its own command line is the one on screen.
 ///
@@ -591,8 +637,17 @@ let private showTerminal (page: IPage) (terminal: string) : Async<unit> =
 
 /// The terminals the tab strip is offering, in the order it offers them.
 let private terminalTabs (page: IPage) : Async<string[]> =
-    await (page.EvaluateAsync<string[]> (
-            """() => [...document.querySelectorAll('[data-terminal-tab]')].map(t => t.getAttribute('data-terminal-tab'))"""))
+    async {
+        let! keys = Read.attrs page "[data-terminal-tab]" "data-terminal-tab"
+        return keys |> List.choose id |> Array.ofList
+    }
+
+/// The keys of the pane's tabs, in the strip's order.
+let private terminalTabKeys (page: IPage) : Async<string list> =
+    async {
+        let! keys = Read.attrs page "[data-pane-tab]" "data-pane-tab"
+        return List.choose id keys
+    }
 
 // --- One case, one world -----------------------------------------------------------------
 //
@@ -863,16 +918,18 @@ let tests =
                 // The refused press is an answer, and lands focus where the pane is (a frame
                 // for the move to be asked, a frame for it to be made); let it, so the dismiss
                 // below is pressed from where a person tabbing to it would be.
-                do! awaitU (page.EvaluateAsync
-                                "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r))))")
+                do! Probe.frames page 3
                 do! awaitU (page.FocusAsync "[data-command-refused-dismiss]")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                do! waitFor
+                do! Wait.until
                         "the refusal gone, and focus in the pane it sat in"
-                        page
-                        """!document.querySelector('[data-command-refused]')
-                           && document.activeElement !== document.body
-                           && !!document.activeElement?.closest('[data-content-panel]')"""
+                        (fun () ->
+                            async {
+                                let! refusals = Read.count page refusal
+                                let! inPane = Read.count page (Sel.hook Yession.App.Dom.Hooks.contentPanel + " :focus")
+                                return refusals, inPane
+                            })
+                        (fun (refusals, inPane) -> refusals = 0 && inPane > 0)
             }
 
         sessionPair "markdown typed in the rich composer renders formatted, converges, and sends as markdown" <|
@@ -884,44 +941,43 @@ let tests =
                 let! _ = await (pageA.WaitForSelectorAsync composer)
                 do! awaitU (pageA.ClickAsync composer)
                 do! awaitU (pageA.Keyboard.TypeAsync "# Heading one")
-                let renderedHeading =
-                    sprintf "%s === 'Heading one'" (ownText "[data-rich-readonly=\"false\"] .ProseMirror h1")
-                do! waitFor "A's own typing to render as a heading" pageA renderedHeading
+                do! Wait.until "A's own typing to render as a heading"
+                        (fun () -> Probe.ownTexts pageA "[data-rich-readonly=\"false\"] .ProseMirror h1")
+                        (List.tryHead >> (=) (Some "Heading one"))
 
                 // B converges: it renders A's draft as the same formatted heading.
                 // (Regression guard: pushing presence decorations on every render used to starve
                 // y-prosemirror's rendering of REMOTE content here, so B's mirror stayed blank.)
-                do! waitFor
-                        "B's mirror to render A's remote content"
-                        pageB
-                        (someOwnText ".ProseMirror h1" "Heading one")
+                do! waitOwnText "B's mirror to render A's remote content" pageB ".ProseMirror h1" "Heading one"
 
                 // And B JOINED it rather than opening a rival blank: the composer B is in is A's
                 // draft, which is why the "new message" way out is offered at all.
-                do! waitFor "B to be offered a way out of A's draft" pageB """!!document.querySelector('[data-draft-new]')"""
+                do! waitPresent "B to be offered a way out of A's draft" pageB "[data-draft-new]"
 
                 // B overlays A's live caret in it: A's presence (a base64 relative position over
                 // the draft body) decodes to a caret widget + name label. This lands just after
                 // the content settles (the decoration push is debounced off the active-convergence
                 // window). Guards remote BODY cursors end-to-end.
-                do! waitFor "B to overlay A's caret" pageB """!!document.querySelector('.pm-caret')"""
+                do! waitPresent "B to overlay A's caret" pageB ".pm-caret"
 
                 // B CO-EDITS A's draft — the collaboration the read-only mirror used to forbid —
                 // and A sees the words appear in the draft it started.
                 do! awaitU (pageB.ClickAsync composer)
                 do! awaitU (pageB.Keyboard.PressAsync "End")
                 do! awaitU (pageB.Keyboard.TypeAsync " and two")
-                let coEdited = someOwnText ".ProseMirror h1" "Heading one and two"
-                do! waitFor "A to see B's co-edit" pageA coEdited
+                do! waitOwnText "A to see B's co-edit" pageA ".ProseMirror h1" "Heading one and two"
 
                 // B sends A's draft: any co-editor may. Both timelines show the immutable message.
                 // The durable body is MARKDOWN (`# Heading one and two`, from events not Yjs), but
                 // the timeline RENDERS it as formatted rich text — the same heading the composer
                 // showed — so the sent view mirrors the input: an <h1>, no literal `#`.
                 do! awaitU (pageB.ClickAsync "[data-send-draft]")
-                let inTimeline = """[...document.querySelectorAll('[data-conversation] [data-message-body] h1')].some(h => h.textContent.trim() === 'Heading one and two')"""
-                do! waitFor "A's timeline to show the sent message" pageA inTimeline
-                do! waitFor "B's timeline to show the sent message" pageB inTimeline
+                let sent (what: string) (page: IPage) =
+                    Wait.until what
+                        (fun () -> Read.texts page "[data-conversation] [data-message-body] h1")
+                        (List.exists (fun h -> h.Trim () = "Heading one and two"))
+                do! sent "A's timeline to show the sent message" pageA
+                do! sent "B's timeline to show the sent message" pageB
             }
 
         // Who is in the room is everyone CONNECTED, not everyone editing something: two people
@@ -932,19 +988,19 @@ let tests =
         sessionPair "a peer editing nothing is on the other peer's roster" <|
             fun pageA pageB ->
             async {
-                let oneOther = """document.querySelectorAll('[data-peer-presence]').length === 1"""
-                do! waitFor "A to list B" pageA oneOther
-                do! waitFor "B to list A" pageB oneOther
+                let others = Sel.hook Yession.App.Dom.Hooks.peerPresence
+                do! waitCount "A to list B" pageA others 1
+                do! waitCount "B to list A" pageB others 1
             }
 
         // And the room empties as people go: the link ending is what writes the leave.
         sessionPair "a peer who goes leaves the other peer's roster" <|
             fun pageA pageB ->
             async {
-                let others = """document.querySelectorAll('[data-peer-presence]').length"""
-                do! waitFor "A to list B" pageA (others + " === 1")
+                let others = Sel.hook Yession.App.Dom.Hooks.peerPresence
+                do! waitCount "A to list B" pageA others 1
                 let! _ = await (pageB.GotoAsync "about:blank")
-                do! waitFor "A to stop listing B" pageA (others + " === 0")
+                do! waitCount "A to stop listing B" pageA others 0
             }
 
         // Terminals (Plan 13) in a real browser: the one part of the panel that only a
@@ -972,16 +1028,14 @@ let tests =
                 // learns about it without having asked for anything — on its row in the
                 // switcher, because B's strip holds only what B opened. Choosing the row is how
                 // B goes to watch.
-                let hasTab = """!!document.querySelector('[data-terminal-tab]')"""
-                let! _ = await (pageA.WaitForFunctionAsync hasTab)
+                do! waitPresent "A's terminal in its strip" pageA "[data-terminal-tab]"
                 do! awaitU (pageB.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 // The pane may already land on the list (a strip with nothing of B's in it), and
                 // its door toggles, so it is pressed only while the list is not down.
-                do! awaitU (pageB.EvaluateAsync "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
-                do! awaitU (pageB.EvaluateAsync "() => document.querySelector(\"[data-pane-switcher][aria-expanded='false']\")?.click()")
+                do! switcherDown pageB
                 let! _ = await (pageB.WaitForSelectorAsync "[data-content-list] [data-terminal-list-row]")
                 do! awaitU (pageB.Locator("[data-content-list] [data-terminal-list-row]").First.ClickAsync ())
-                let! _ = await (pageB.WaitForFunctionAsync hasTab)
+                do! waitPresent "the terminal in B's strip" pageB "[data-terminal-tab]"
 
                 // A types a command with REAL key events, so the input's binding is what
                 // writes the CRDT — one minimal edit per keystroke, not a wholesale replace.
@@ -992,32 +1046,24 @@ let tests =
 
                 // B sees A writing it — the terminal's version of watching a draft, and the
                 // proof that the binding pushes a remote edit back into the input's value.
-                let mirrored =
-                    """[...document.querySelectorAll('[data-terminal-input]')].some(i => i.value === 'echo hello-terminal')"""
-                let! _ = await (pageB.WaitForFunctionAsync mirrored)
+                do! Wait.until "B to see A's command being written"
+                        (fun () -> Read.values pageB "[data-terminal-input]") (List.contains "echo hello-terminal")
 
                 // Sending runs it: a human's command needs no approval under the default
                 // mode, so the drain takes it straight away and the sandbox really runs it.
                 do! awaitU (pageA.ClickAsync "[data-terminal-send]")
-                let blockRan =
-                    """[...document.querySelectorAll('[data-terminal-block]')]
-                         .some(b => b.textContent.includes('echo hello-terminal')
-                                 && b.getAttribute('data-terminal-block-status') === 'ok')"""
-                let! _ = await (pageA.WaitForFunctionAsync blockRan)
-                let! _ = await (pageB.WaitForFunctionAsync blockRan)
+                do! waitTextIn "the block to have run, on A" pageA finishedBlock "echo hello-terminal"
+                do! waitTextIn "the block to have run, on B" pageB finishedBlock "echo hello-terminal"
 
                 // And its OUTPUT arrived — over the terminal frames on both, through the same
                 // fold either way.
-                let hasOutput =
-                    """[...document.querySelectorAll('[data-terminal-output]')].some(o => o.textContent.includes('hello-terminal'))"""
-                let! _ = await (pageA.WaitForFunctionAsync hasOutput)
-                do! await (pageB.WaitForFunctionAsync hasOutput) |> Async.Ignore
+                let output = Sel.hook Yession.App.Dom.Hooks.terminalOutput
+                do! waitTextIn "the output, on A" pageA output "hello-terminal"
+                do! waitTextIn "the output, on B" pageB output "hello-terminal"
 
                 // The composer emptied on send, so the next command starts from a clean line.
-                do!
-                    await (pageA.WaitForFunctionAsync
-                            "document.querySelector(\"[data-terminal-input^='term-draft:']:not([readonly])\")?.value === ''")
-                    |> Async.Ignore
+                do! Wait.until "the composer to empty"
+                        (fun () -> Read.values pageA composerInput) (List.tryHead >> (=) (Some ""))
             })
 
         // While somebody else holds a terminal's keyboard the session HOLDS its queue rather
@@ -1030,21 +1076,19 @@ let tests =
             async {
                 do! awaitU (pageA.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 do! openNewTerminal pageA
-                let hasTab = """!!document.querySelector('[data-terminal-tab]')"""
-                let! _ = await (pageA.WaitForFunctionAsync hasTab)
+                do! waitPresent "A's terminal in its strip" pageA "[data-terminal-tab]"
                 do! awaitU (pageB.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 // The pane may already land on the list (a strip with nothing of B's in it), and
                 // its door toggles, so it is pressed only while the list is not down.
-                do! awaitU (pageB.EvaluateAsync "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
-                do! awaitU (pageB.EvaluateAsync "() => document.querySelector(\"[data-pane-switcher][aria-expanded='false']\")?.click()")
+                do! switcherDown pageB
                 let! _ = await (pageB.WaitForSelectorAsync "[data-content-list] [data-terminal-list-row]")
                 do! awaitU (pageB.Locator("[data-content-list] [data-terminal-list-row]").First.ClickAsync ())
-                let! _ = await (pageB.WaitForFunctionAsync hasTab)
+                do! waitPresent "the terminal in B's strip" pageB "[data-terminal-tab]"
 
                 // A takes the keyboard; B sees whose it is.
                 let! _ = await (pageA.WaitForSelectorAsync "[data-terminal-take]")
                 do! awaitU (pageA.Locator("[data-terminal-take]").First.ClickAsync ())
-                do! waitFor "B to see the lease" pageB "!!document.querySelector('[data-terminal-lease]')"
+                do! waitPresent "B to see the lease" pageB "[data-terminal-lease]"
 
                 // B writes the next command anyway, and sends it the way a person does.
                 let line = "[data-terminal-input^='term-draft:']:not([readonly])"
@@ -1052,20 +1096,15 @@ let tests =
                 do! awaitU (pageB.ClickAsync line)
                 do! awaitU (pageB.Keyboard.TypeAsync "echo queued-behind-a-lease")
                 do! awaitU (pageB.Keyboard.PressAsync "Enter")
-                do! waitFor
+                do! waitPresent
                         "B's command held for the terminal, not run and not refused"
                         pageB
-                        (sprintf "!!document.querySelector('[%s=\"%s\"]')"
-                            Yession.App.Dom.Hooks.terminalQueuedStatus Yession.App.Dom.Text.queuedAwaitingTerminal)
+                        (Sel.hookIs Yession.App.Dom.Hooks.terminalQueuedStatus Yession.App.Dom.Text.queuedAwaitingTerminal)
 
                 // A hands it back, and what B queued runs — for both of them.
                 do! awaitU (pageA.ClickAsync "[data-terminal-release]")
-                let ran =
-                    """[...document.querySelectorAll('[data-terminal-block]')]
-                         .some(b => b.textContent.includes('echo queued-behind-a-lease')
-                                 && b.getAttribute('data-terminal-block-status') === 'ok')"""
-                do! waitFor "the queued command to have run, on A" pageA ran
-                do! waitFor "the queued command to have run, on B" pageB ran
+                do! waitTextIn "the queued command to have run, on A" pageA finishedBlock "echo queued-behind-a-lease"
+                do! waitTextIn "the queued command to have run, on B" pageB finishedBlock "echo queued-behind-a-lease"
             })
 
         // Reported from a live session: `+`, a command, then the command's chip in the chat —
@@ -1080,7 +1119,7 @@ let tests =
                 // not choosing a repo would; it stays away for the session.
                 let! _ = await (page.WaitForSelectorAsync "[data-repo-picker-dismiss]")
                 do! awaitU (page.ClickAsync "[data-repo-picker-dismiss]")
-                let! _ = await (page.WaitForFunctionAsync "!document.querySelector('[data-repo-picker]')")
+                do! waitAbsent "the launch card put away" page "[data-repo-picker]"
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 do! openNewTerminal page
                 let composerInput = "[data-terminal-input^='term-draft:']:not([readonly])"
@@ -1091,11 +1130,9 @@ let tests =
                 let! _ = await (page.WaitForSelectorAsync "[data-chat-block]")
                 do! awaitU (page.ClickAsync "[data-chat-block]")
                 let! _ = await (page.WaitForSelectorAsync "[data-pane-preview^='block:']")
-                let! strip =
-                    await (page.EvaluateAsync<string[]> (
-                            """() => [...document.querySelectorAll('[data-pane-tab]')].map(t => t.getAttribute('data-pane-tab'))"""))
+                let! strip = terminalTabKeys page
                 Expect.equal
-                    (strip |> Array.toList |> List.map (fun key -> key.Split(':').[0]))
+                    (strip |> List.map (fun key -> key.Split(':').[0]))
                     [ "terminal" ]
                     (sprintf "the terminal the press opened, and nothing beside it; the strip holds: %s" (String.Join (", ", strip)))
             })
@@ -1109,7 +1146,7 @@ let tests =
             async {
                 let! _ = await (page.WaitForSelectorAsync "[data-repo-picker-dismiss]")
                 do! awaitU (page.ClickAsync "[data-repo-picker-dismiss]")
-                let! _ = await (page.WaitForFunctionAsync "!document.querySelector('[data-repo-picker]')")
+                do! waitAbsent "the launch card put away" page "[data-repo-picker]"
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 // Three terminals, and the MIDDLE one chosen. Not the first: with nothing
                 // remembered the pane lands on the strip's first open terminal, so a kept
@@ -1117,11 +1154,11 @@ let tests =
                 // is how this case stayed green over a reload that came back to the first tab
                 // every time. Not the last either, which is where the last press left it.
                 do! openNewTerminal page
-                do! waitFor "a terminal in the strip" page "document.querySelectorAll('[data-pane-tab]').length === 1"
+                do! waitCount "a terminal in the strip" page "[data-pane-tab]" 1
                 do! openNewTerminal page
-                do! waitFor "a second terminal in the strip" page "document.querySelectorAll('[data-pane-tab]').length === 2"
+                do! waitCount "a second terminal in the strip" page "[data-pane-tab]" 2
                 do! openNewTerminal page
-                do! waitFor "a third terminal in the strip" page "document.querySelectorAll('[data-pane-tab]').length === 3"
+                do! waitCount "a third terminal in the strip" page "[data-pane-tab]" 3
                 let middle = "[data-pane-tab]:nth-child(2)"
                 let! chosen = await (page.GetAttributeAsync (middle, "data-pane-tab"))
                 do! awaitU (page.ClickAsync middle)
@@ -1219,10 +1256,8 @@ let tests =
                     Directory.GetFiles (host.DataDir, "*.cast", SearchOption.AllDirectories)
                     |> Array.sumBy (fun f -> File.ReadAllLines(f).Length)
                 let composerInput = "[data-terminal-input^='term-draft:']:not([readonly])"
-                let printed (n: int) =
-                    sprintf
-                        "[...document.querySelectorAll('[data-terminal-output]')].some(o => o.textContent.includes('line-%d'))"
-                        n
+                let printed (what: string) (n: int) =
+                    waitTextIn what page (Sel.hook Yession.App.Dom.Hooks.terminalOutput) (sprintf "line-%d" n)
 
                 // Output in MANY small writes, because a record is a write and not a line:
                 // `seq 1 300` arrives in a handful of chunks and would seed a handful of
@@ -1245,18 +1280,17 @@ let tests =
                 // take focus at all, by keyboard or by script — so the column is shown first.
                 let seed (first: int) (last: int) =
                     async {
-                        let! shut =
-                            await (page.EvaluateAsync<bool> "() => !!document.querySelector(\"[data-content-toggle='show']\")")
-                        if shut then do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
+                        let! shut = Read.count page "[data-content-toggle='show']"
+                        if shut > 0 then do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                         let! _ = await (page.WaitForSelectorAsync composerInput)
-                        do! awaitU (page.EvalOnSelectorAsync (composerInput, "el => el.focus()"))
+                        do! awaitU (page.FocusAsync composerInput)
                         do!
                             awaitU (page.Keyboard.TypeAsync (
                                 sprintf "for i in $(seq %d %d); do echo line-$i; sleep 0.01; done" first last))
                         do! awaitU (page.Locator("[data-terminal-send]").First.DispatchEventAsync "click")
                         // Seeded when the LAST line is on screen: the command finishing says it
                         // ran, this says the transcript holds what a reopen has to replay.
-                        do! waitFor (sprintf "the terminal to print line-%d" last) page (printed last)
+                        do! printed (sprintf "the terminal to print line-%d" last) last
                     }
 
                 // Reopening. A reload keeps this origin's storage, so the client replays the
@@ -1272,7 +1306,7 @@ let tests =
                     async {
                         let! _ = await (page.ReloadAsync ())
                         do! waitConnectedAs "the reopened session to connect" page
-                        do! waitFor "the reopened session to have replayed its terminal" page (printed upTo)
+                        do! printed "the reopened session to have replayed its terminal" upTo
                         let! settled =
                             await (page.EvaluateAsync<string> """() => new Promise(resolve => {
                               let last = -1, still = 0, waited = 0
@@ -1310,7 +1344,7 @@ let tests =
 
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 do! openNewTerminal page
-                let! _ = await (page.WaitForFunctionAsync "!!document.querySelector('[data-terminal-tab]')")
+                do! waitPresent "a terminal in the strip" page "[data-terminal-tab]"
 
                 let small = 100
                 let large = 400
@@ -1400,15 +1434,16 @@ let tests =
             fun page ->
             async {
                 let opened = 4
-                let enough = sprintf "document.querySelectorAll('[data-terminal-tab]').length >= %d" opened
+                let enough (what: string) =
+                    Wait.until what (fun () -> Read.count page "[data-terminal-tab]") (fun n -> n >= opened)
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 for _ in 1 .. opened do
                     do! openNewTerminal page
-                do! await (page.WaitForFunctionAsync enough) |> Async.Ignore
+                do! enough (sprintf "%d terminals in the strip" opened)
 
                 let! _ = await (page.ReloadAsync ())
                 do! waitConnectedAs "the reopened session to connect" page
-                do! waitFor (sprintf "the reopened session to offer its %d terminals" opened) page enough
+                do! enough (sprintf "the reopened session to offer its %d terminals" opened)
 
                 // Settled when the render count has stopped moving, which is also when the
                 // scans have: they are made in the same pass.
@@ -1489,10 +1524,7 @@ let tests =
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 do! openNewTerminal page
                 do! openNewTerminal page
-                do!
-                    await (page.WaitForFunctionAsync
-                            "document.querySelectorAll('[data-terminal-tab]').length >= 2")
-                    |> Async.Ignore
+                do! Wait.until "two terminals in the strip" (fun () -> Read.count page "[data-terminal-tab]") (fun n -> n >= 2)
                 let! tabs = terminalTabs page
                 Expect.isTrue (tabs.Length >= 2) (sprintf "expected two terminals, the strip offers: %s" (String.Join (", ", tabs)))
                 let one, two = tabs.[0], tabs.[1]
@@ -1539,11 +1571,8 @@ let tests =
                 do! openNewTerminal page
                 do! await (page.WaitForSelectorAsync "[data-terminal-tab]") |> Async.Ignore
                 let! tabs = terminalTabs page
-                do!
-                    await (page.WaitForFunctionAsync (
-                            "sel => document.activeElement?.matches(sel) === true",
-                            box (commandLine tabs.[0])))
-                    |> Async.Ignore
+                do! Wait.until "the first terminal's command line to have focus"
+                        (fun () -> Read.focused page (commandLine tabs.[0])) id
             })
 
         // Stopping one command is not ending the terminal. Before there was a Stop, the only
@@ -1573,10 +1602,7 @@ let tests =
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 do! openNewTerminal page
                 do! openNewTerminal page
-                do!
-                    await (page.WaitForFunctionAsync
-                            "document.querySelectorAll('[data-terminal-tab]').length >= 2")
-                    |> Async.Ignore
+                do! Wait.until "two terminals in the strip" (fun () -> Read.count page "[data-terminal-tab]") (fun n -> n >= 2)
                 let! tabs = terminalTabs page
                 let one, two = tabs.[0], tabs.[1]
                 do! awaitU (page.ClickAsync "[data-pane-switcher]")
@@ -1589,14 +1615,9 @@ let tests =
                     await (page.WaitForSelectorAsync (sprintf "%s[data-terminal-close-armed='true']" kill))
                     |> Async.Ignore
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                do!
-                    await (page.WaitForFunctionAsync ("sel => !document.querySelector(sel)", box kill))
-                    |> Async.Ignore
-                do!
-                    await (page.WaitForFunctionAsync (
-                            "id => document.activeElement?.closest('[data-content-list]') && document.activeElement?.getAttribute('data-terminal-list-row') === id",
-                            box two))
-                    |> Async.Ignore
+                do! waitAbsent "the killed terminal's row to go" page kill
+                do! Wait.until "focus on the next row in the list"
+                        (fun () -> Read.focused page (sprintf "[data-content-list] %s" (Sel.hookIs "data-terminal-list-row" two))) id
             })
 
         // Plan 11. THE discriminating check for the manager origin: this fixture sets no
@@ -1608,15 +1629,17 @@ let tests =
         sessionCase "the shell carries a manager origin that actually answers" <|
             fun pageA ->
             async {
-                let! origin =
-                    await (pageA.EvaluateAsync<string> ("""() => document.querySelector('meta[name="yession-manager"]')?.getAttribute('content')"""))
-                Expect.isFalse (String.IsNullOrEmpty origin) "the bootstrap page must embed the Manager's origin"
+                let! embedded = Read.attr pageA ("meta" + Sel.hookIs "name" Yession.App.Dom.managerMetaName) "content"
+                let origin =
+                    match embedded with
+                    | Some origin when origin <> "" -> origin
+                    | _ -> failwith "the bootstrap page must embed the Manager's origin"
                 Expect.isTrue (origin.StartsWith "http") (sprintf "expected an origin, got: %s" origin)
                 // The client appends `/sessions/{id}/open` to this, so it must be an origin
                 // root with no trailing slash — otherwise the URL it builds has a double one.
                 Expect.isFalse (origin.EndsWith "/") "no trailing slash: the client concatenates a path onto it"
                 let! sessionId =
-                    await (pageA.EvaluateAsync<string> ("""() => document.querySelector('meta[name="yession-session"]')?.getAttribute('content')"""))
+                    sessionMeta pageA
                 // And it is the Manager, not something else that happens to answer: its
                 // management page lists this very session.
                 let! page = await (pageA.Context.APIRequest.GetAsync origin)
@@ -1728,13 +1751,13 @@ let tests =
             async {
                 do! awaitU (pageA.ClickAsync "[data-settings-toggle='open']")
                 let! _ = await (pageA.WaitForSelectorAsync "[data-model-note='unavailable']")
-                let noteText = "() => document.querySelector('[data-model-note]')?.textContent ?? ''"
+                let note = "[data-model-note]"
                 // The precondition, and the sentence a person actually read: this session
                 // has no credential, so the note says so and points at the panel above it.
-                let! before = await (pageA.EvaluateAsync<string> noteText)
+                let! before = Read.text pageA note
                 Expect.isTrue
-                    (before.Contains "no Claude account connected")
-                    (sprintf "with nothing connected the picker says so, it said: %s" before)
+                    (before |> Option.exists (fun said -> said.Contains "no Claude account connected"))
+                    (sprintf "with nothing connected the picker says so, it said: %A" before)
 
                 // Connect one WITHOUT closing the drawer — the flow a person is actually in
                 // when they sign in, and the one that used to leave the note behind.
@@ -1746,11 +1769,9 @@ let tests =
                 // connected. What it says instead is whatever the provider answered this
                 // box — a list, or why there is none — which is the design rather than
                 // something for a test to pin.
-                let! _ =
-                    await (pageA.WaitForFunctionAsync
-                            """!(document.querySelector('[data-model-note]')?.textContent ?? '')
-                                 .includes('no Claude account connected')""")
-                ()
+                do! Wait.until "the note to stop saying nothing is connected"
+                        (fun () -> Read.text pageA note)
+                        (Option.forall (fun said -> not (said.Contains "no Claude account connected")))
             }
 
         sessionCase "the doc store is keyed by session" <|
@@ -1758,12 +1779,11 @@ let tests =
             async {
                 // The store is keyed by SESSION (embedded in the served page), not by address.
                 let! sessionId =
-                    await (pageA.EvaluateAsync<string> ("""() => document.querySelector('meta[name="yession-session"]')?.getAttribute('content')"""))
+                    sessionMeta pageA
                 Expect.isFalse (String.IsNullOrEmpty sessionId) "the bootstrap page must embed the session id"
-                let! dbNames =
-                    await (pageA.EvaluateAsync<string[]> ("""() => indexedDB.databases().then(dbs => dbs.map(d => d.name))"""))
+                let! dbNames = Probe.databases pageA
                 Expect.isTrue
-                    (Array.contains (sprintf "yession/session/%s" sessionId) dbNames)
+                    (List.contains (sprintf "yession/session/%s" sessionId) dbNames)
                     (sprintf "expected a session-keyed doc store, found: %s" (String.Join (", ", dbNames)))
             }
 
@@ -1774,11 +1794,9 @@ let tests =
         sessionCase "a reload keeps the peer's name" <|
             fun page ->
             async {
-                let ownName () =
-                    page.EvaluateAsync<string> """() => document.querySelector('[data-display-name]')?.textContent ?? ''"""
-                    |> await
+                let ownName () = Read.text page (Sel.hook Yession.App.Dom.Hooks.displayName)
                 let! before = ownName ()
-                Expect.isFalse (String.IsNullOrWhiteSpace before) "a connected peer shows its own name"
+                Expect.isTrue (before |> Option.exists (not << String.IsNullOrWhiteSpace)) "a connected peer shows its own name"
                 let! _ = await (page.ReloadAsync ())
                 do! waitConnectedAs "the reloaded page to connect" page
                 let! after = ownName ()
@@ -1806,14 +1824,9 @@ let tests =
 
                 // The flow settles either into the paste-the-code step (the broker minted a
                 // provider authorize URL — no network involved) or into a legible error.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                            """!!document.querySelector('[data-claude-authorize]')
-                               || !!document.querySelector('[data-claude-error]')""")
-                let! error =
-                    await (page.EvaluateAsync<string>
-                            "() => document.querySelector('[data-claude-error]')?.textContent ?? ''")
-                Expect.equal error "" "connecting must not be refused on a first visit"
+                do! waitPresent "the paste-the-code step, or an error" page "[data-claude-authorize], [data-claude-error]"
+                let! error = Read.text page "[data-claude-error]"
+                Expect.isTrue (error |> Option.forall String.IsNullOrEmpty) (sprintf "connecting must not be refused on a first visit, it said: %A" error)
             }
 
         // The offer does not wait for gathering to say it has finished. Headless Chromium here

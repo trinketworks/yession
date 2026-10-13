@@ -71,6 +71,35 @@ module Read =
             return List.ofSeq values
         }
 
+    /// One attribute of every match, in document order; `None` where a match lacks it.
+    let attrs (page: IPage) (selector: string) (name: string) : Async<string option list> =
+        async {
+            let! all = Async.AwaitTask (page.Locator(selector).AllAsync ())
+            let found = ResizeArray<string option> ()
+            for element in all do
+                let! value = Async.AwaitTask (element.GetAttributeAsync (name, snapshot))
+                found.Add (Option.ofObj value)
+            return List.ofSeq found
+        }
+
+    /// Every match's current value, for the inputs a selector names.
+    let values (page: IPage) (selector: string) : Async<string list> =
+        async {
+            let! inputs = Async.AwaitTask (page.Locator(selector).AllAsync ())
+            let values = ResizeArray<string> ()
+            for input in inputs do
+                let! value = Async.AwaitTask (input.InputValueAsync (LocatorInputValueOptions (Timeout = 1000.0f)))
+                values.Add value
+            return List.ofSeq values
+        }
+
+    /// Whether what has focus matches the selector.
+    let focused (page: IPage) (selector: string) : Async<bool> =
+        async {
+            let! n = Async.AwaitTask (page.Locator(selector).And(page.Locator(":focus")).CountAsync ())
+            return n > 0
+        }
+
     /// Where the page is. Read off the driver rather than the page, so it answers across a
     /// navigation as well as between them.
     let url (page: IPage) : Async<Uri> = async { return Uri page.Url }
