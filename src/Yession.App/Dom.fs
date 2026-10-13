@@ -365,9 +365,9 @@ module Dom =
         /// The facts beneath a block's command, as a line — present when there is a fact the
         /// command line does not already say.
         let terminalBlockFacts = "data-terminal-block-facts"
-        /// A running block's Stop — ^C to it, the terminal left standing. Valued with the
-        /// block id, so a test presses the one on the command it means.
-        let terminalBlockStop = "data-terminal-block-stop"
+        /// A terminal's Stop, on top of its command line while a command runs — ^C to it, the
+        /// terminal left standing. Valued with the terminal id.
+        let terminalStop = "data-terminal-stop"
         /// Who stopped a block, on its facts line, valued with their actor token.
         let terminalBlockStoppedBy = "data-terminal-block-stopped-by"
         /// A run of consecutive same-author blocks, folded under one "ran N commands"

@@ -2892,6 +2892,16 @@ let private listTests =
                 |> Support.step ToggleSwitcherMsg
             Expect.equal (foldedRows model) [] "term-a closed, and still above the fold"
 
+        // Stop is offered where it does something: while a command runs in the terminal on
+        // screen, and not once it has finished — a Stop over nothing would send ^C to a prompt.
+        testCase "a terminal offers Stop only while a command runs in it" <| fun () ->
+            let running =
+                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (started terminalA "1" byAda "make" 0) ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let finished = running |> thenFolded [ at 3L 2.0 (completed terminalA "1" (CommandSucceeded 0) 3) ]
+            let offered model = (Support.render model).Contains (Dom.attr Dom.Hooks.terminalStop "term-a")
+            Expect.equal (offered running, offered finished) (true, false) "while make runs, and not after"
+
         testCase "arming a kill asks nothing of the session" <| fun () ->
             // The first press is a question to the person, not a request: nothing leaves.
             let _, effects =

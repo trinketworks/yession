@@ -1396,7 +1396,7 @@ let tests =
         Tag.needs "a command to stop" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
         sessionCase "Stop on a running command ends it, and the terminal runs the next one" <|
             stoppedAndStillThere (fun page ->
-                awaitU (page.Locator("[data-terminal-block-stop]").First.ClickAsync ())))
+                awaitU (page.Locator("[data-terminal-stop]").First.ClickAsync ())))
 
         // With nothing typed, Ctrl-C at the command line has the meaning it has in a terminal.
         Tag.needs "a command to stop" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
@@ -5733,7 +5733,11 @@ let editorTests =
         // Opening a fold of earlier commands with a pointer, from the end of the history, leaves
         // the latest command where the reader was looking at it: what the fold holds came before,
         // so it appears ABOVE. It used to push the latest command off the bottom of the pane.
-        editorCaseIn 1440 900 "clicking open the earlier commands leaves the latest command where a reader at the end saw it" <| fun page ->
+        //
+        // 960px tall: the harness terminal has a command running, so its Stop strip stands over
+        // the command line, and the fold's line has to be on screen at the end for a reader
+        // there to press it.
+        editorCaseIn 1440 960 "clicking open the earlier commands leaves the latest command where a reader at the end saw it" <| fun page ->
             async {
                 do! paneOnBlocks page
                 do! toTheEnd page "blocks:term-harness"
@@ -5781,7 +5785,7 @@ let editorTests =
         // stays: the earlier commands open below it, and the line and its focus ring stay on
         // screen. Held like a pointer's press, Enter took the line off the top of the pane and
         // appeared to do nothing.
-        editorCaseIn 1440 900 "Enter on the earlier commands keeps their line where it was, on screen" <| fun page ->
+        editorCaseIn 1440 960 "Enter on the earlier commands keeps their line where it was, on screen" <| fun page ->
             async {
                 do! paneOnBlocks page
                 do! toTheEnd page "blocks:term-harness"

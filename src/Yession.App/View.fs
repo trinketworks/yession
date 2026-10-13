@@ -3411,23 +3411,6 @@ module View =
             | BlockEnded _, _
             | _, Some _ -> html $"""<div class="{Style.terminalBlockFacts}" data-terminal-block-facts>{reason}{stoppedBy}</div>"""
             | _ -> Lit.nothing
-        // Stop: ^C to this command, the terminal left standing — on the command line it stops,
-        // which stays on screen while its output scrolls, so the control is where the eye is
-        // when the output is the reason to press it. Only while it runs, and named for the
-        // command, because a list of running terminals is a list of Stop buttons otherwise
-        // indistinguishable to a screen reader. Ctrl-C in an empty command line is the same
-        // request, which the shortcut attribute says.
-        let stop =
-            match block.Status with
-            | BlockRunning ->
-                html $"""
-                    <button type="button" class="{Style.terminalBlockStop}" data-terminal-block-stop="{BlockId.value block.BlockId}"
-                            aria-label="{Dom.Text.stopCommand (BlockLabel.ofBlock block)}" title="{Dom.Text.stopCommandHint}"
-                            aria-keyshortcuts="Control+C"
-                            @click={Ev(fun _ -> dispatch (InterruptTerminalMsg terminal))}>{Icon.stop}stop</button>"""
-            | BlockFinished _
-            | BlockRejected _
-            | BlockEnded _ -> Lit.nothing
         // The command a preview settled back into carries the preview's name, so the browser
         // moves the one into the other (`ViewActions.Morph`). Only while nothing is previewed:
         // two elements of one name on one page and there is no morph at all.
@@ -3445,7 +3428,6 @@ module View =
                   <code class="{Style.terminalCommandText}">{block.Command}</code>
                 </span>
                 <span class="ml-auto shrink-0">{terminalBlockStatusIn (newestWrong = Some block.BlockId) model block.Status}</span>
-                {stop}
               </div>
               {facts}
               {body}
@@ -3832,12 +3814,32 @@ module View =
                                 @click={Ev(fun _ -> dispatch (RearmTerminalMsg terminal))}>Re-arm</button>
                       </div>
                     </div>"""
+        // Stop: ^C to the command running here, the terminal left standing. On top of the
+        // command line, as the chat's interrupt is on top of its composer, rather than on the
+        // command's own line: a terminal runs one command at a time and it is always the
+        // newest, so its own line just above already says what and by whom, and this strip
+        // stays where the hand is however far the output scrolls. Only while one runs, and
+        // named for it, because a screen reader hears a list of Stops otherwise
+        // indistinguishable. Ctrl-C in an empty command line is the same request, which the
+        // shortcut attribute says.
+        let stop =
+            match Projection.tryFind terminal model.Terminals |> Option.bind Projection.runningBlock with
+            | None -> Lit.nothing
+            | Some block ->
+                html $"""
+                    <div class="{Style.terminalStopStrip}">
+                      <button type="button" class="{Style.terminalStop}" data-terminal-stop="{TerminalId.value terminal}"
+                              aria-label="{Dom.Text.stopCommand (BlockLabel.ofBlock block)}" title="{Dom.Text.stopCommandHint}"
+                              aria-keyshortcuts="Control+C"
+                              @click={Ev(fun _ -> dispatch (InterruptTerminalMsg terminal))}>{Icon.stop}stop</button>
+                    </div>"""
         // What is left here is what this region is FOR: what is waiting to run, and the line
         // you say the next thing on.
         html $"""
             <section class="{Style.terminalComposer}">
               <span class="{Style.bandRail}"></span>
               <span class="{Style.bandEdge}"></span>
+              {stop}
               {lostBanner}
               {terminalQueue actions dispatch model terminal}
               {leaseBar}
