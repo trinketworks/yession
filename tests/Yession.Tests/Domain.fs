@@ -2504,6 +2504,55 @@ let private configTests =
             let back = ConfigFile.encodeSandbox dev |> ConfigFile.parseSandbox |> expect
             Expect.equal back.Container dev.Container "what `encode` writes, `parseSandbox` reads back whole"
 
+        // compose's byte-value grammar, so a `4g` copied out of a compose file means the same
+        // thing here; a number YAML read without a unit is bytes.
+        testCase "a container's memory is read as compose writes a size, or as bytes" <| fun () ->
+            let memory (value: string) =
+                ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "memory": %s } } } }""" value)
+                |> expect
+                |> fun file -> (file.Sandboxes |> Map.find (sandboxName "dev")).Container |> Option.get |> fun c -> c.Memory
+                |> Option.map ContainerMemory.bytes
+            let gib = 1024L * 1024L * 1024L
+            Expect.equal (memory "\"4g\"") (Some (4L * gib)) "g is GiB"
+            Expect.equal (memory "\"512MB\"") (Some (512L * 1024L * 1024L)) "mb is MiB, in any case"
+            Expect.equal (memory "4294967296") (Some (4L * gib)) "a bare number is bytes"
+
+        testCase "a memory that is not a size, or is under docker's minimum, is refused, saying why" <| fun () ->
+            let parsed (value: string) =
+                ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "memory": %s } } } }""" value)
+            match parsed "\"4 gigs\"" with
+            | Ok _ -> failwith "'gigs' is not a unit"
+            | Error reason -> Expect.stringContains reason "is not a size" "it says what a size is"
+            match parsed "\"1m\"" with
+            | Ok _ -> failwith "docker refuses a ceiling under 6m"
+            | Error reason -> Expect.stringContains reason "6m minimum" "it names the floor"
+
+        testCase "memory survives the round trip the command gate rides" <| fun () ->
+            let dev =
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "memory": "3584m" } } } }"""
+                |> expect
+                |> fun file -> file.Sandboxes |> Map.find (sandboxName "dev")
+            let back = ConfigFile.encodeSandbox dev |> ConfigFile.parseSandbox |> expect
+            Expect.equal back.Container dev.Container "what `encode` writes, `parseSandbox` reads back whole"
+
+        // The ceiling a container is created with, against what the daemon has: the docker
+        // backend asks the daemon and hands the answer here (`ContainerMemory.forDaemon`).
+        testCase "a container that declares no memory gets three quarters of what the daemon has" <| fun () ->
+            let daemon = 8L * 1024L * 1024L * 1024L
+            let limit = ContainerMemory.forDaemon None daemon |> expect
+            Expect.equal (ContainerMemory.bytes limit) (6L * 1024L * 1024L * 1024L) "never no ceiling, which is the whole host"
+
+        testCase "a container's declared memory is its ceiling, when the daemon has that much" <| fun () ->
+            let declared = ContainerMemory.parse "2g" |> expect
+            let limit = ContainerMemory.forDaemon (Some declared) (8L * 1024L * 1024L * 1024L) |> expect
+            Expect.equal limit declared "as declared, not the default share"
+
+        testCase "a container that declares more memory than the daemon has is refused, not left unbounded" <| fun () ->
+            let declared = ContainerMemory.parse "16g" |> expect
+            match ContainerMemory.forDaemon (Some declared) (5L * 1024L * 1024L * 1024L) with
+            | Ok _ -> failwith "a ceiling the host runs out before reaching contains nothing"
+            | Error reason -> Expect.stringContains reason "16g" "the refusal names what was declared"
+
         // A repo saying where the session's checkouts should appear in its own container.
         testCase "a sandbox can say where it wants the checkouts" <| fun () ->
             let file =

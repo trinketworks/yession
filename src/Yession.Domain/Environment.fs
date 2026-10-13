@@ -113,6 +113,108 @@ module SelectionGrant =
           SelectionGrant.Bound = leaves |> List.choose bound |> Map.ofList
           SelectionGrant.WantedOnly = wantedOnly |> Set.toList |> List.choose bound |> List.map fst |> Set.ofList }
 
+/// How much memory a container may hold, in bytes: its cgroup's ceiling, past which the
+/// kernel kills a process INSIDE it rather than choosing a victim from the whole host.
+///
+/// Every container on a daemon shares that daemon's memory — on a Mac, one Colima VM — and
+/// a container with no ceiling can take all of it. When it does, the kernel's global OOM
+/// killer picks by size across every container on the host, so one session's build kills
+/// another session's work: six sessions' devshells building at once on a 5 GiB VM did
+/// exactly that, and the session whose `build` died was told only "exit 137". A ceiling
+/// makes the one that overran its own budget the one that pays.
+///
+/// What a ceiling cannot do is make the host bigger: containers that each stay under theirs
+/// can still add up to more than the host has, and then the global killer is back. That is
+/// the host's size to answer, not this.
+type ContainerMemory = private ContainerMemory of bytes: int64
+
+[<RequireQualifiedAccess>]
+module ContainerMemory =
+
+    /// The least the daemon accepts — docker refuses a ceiling under 6 MiB at create, with
+    /// a sentence that would arrive long after the file was read.
+    let minimum : int64 = 6L * 1024L * 1024L
+
+    let bytes (ContainerMemory b) : int64 = b
+
+    let private units : (string * int64) list =
+        [ "b", 1L
+          "k", 1024L
+          "kb", 1024L
+          "m", 1024L * 1024L
+          "mb", 1024L * 1024L
+          "g", 1024L * 1024L * 1024L
+          "gb", 1024L * 1024L * 1024L ]
+
+    let ofBytes (b: int64) : Result<ContainerMemory, string> =
+        if b < minimum then
+            Error (sprintf "memory: %d bytes is under docker's 6m minimum for a container" b)
+        else Ok (ContainerMemory b)
+
+    /// Compose's byte-value grammar, which is what `mem_limit` and
+    /// `deploy.resources.limits.memory` take: a whole number and an optional unit — `b`,
+    /// `k`/`kb`, `m`/`mb`, `g`/`gb`, any case, binary multiples — so `4g` copied out of a
+    /// compose file means the same thing here. No unit is bytes.
+    let parse (raw: string) : Result<ContainerMemory, string> =
+        let text = raw.Trim().ToLowerInvariant ()
+        let digits = text |> Seq.takeWhile Char.IsDigit |> Seq.length
+        let number, unit = text.Substring (0, digits), text.Substring(digits).Trim ()
+        let refuse () =
+            Error (sprintf "memory: '%s' is not a size — a whole number and an optional unit (b, k, m, g), like 4g" raw)
+        let scale =
+            if unit = "" then Some 1L
+            else units |> List.tryFind (fun (u, _) -> u = unit) |> Option.map snd
+        match scale, Int64.TryParse number with
+        | Some scale, (true, n) when n <= Int64.MaxValue / scale -> ofBytes (n * scale)
+        | _ -> refuse ()
+
+    /// The exact compose spelling — the largest unit that divides it — which `parse` reads
+    /// back as the same number.
+    let render (ContainerMemory b) : string =
+        match units |> List.rev |> List.filter (fun (u, _) -> u.Length = 1) |> List.tryFind (fun (_, scale) -> b % scale = 0L) with
+        | Some (u, scale) when u <> "b" -> sprintf "%d%s" (b / scale) u
+        | _ -> string b
+
+    /// For a person reading a refusal: approximate, in GiB.
+    let describe (b: int64) : string =
+        sprintf "%.1f GiB" (float b / (1024.0 * 1024.0 * 1024.0))
+
+    /// The share of the daemon's memory a container gets when its declaration names none:
+    /// three quarters.
+    ///
+    /// Derived from the daemon rather than fixed, because a fixed number is wrong at both
+    /// ends: above a small VM's total it contains nothing (the ceiling is never reached
+    /// before the host runs out), and on a large host it kills a build that had room. The
+    /// job of the default is that no ONE container can take the host — so a quarter is
+    /// held back for everything else on it (the daemon, every other session's shells) and
+    /// a runaway hits its own ceiling first. It is not a partition: dividing the host by
+    /// how many sessions might run would starve a lone build to guard against a crowd,
+    /// and a crowd is the host's size to answer.
+    ///
+    /// Three quarters rather than a half because of what a work container runs: a
+    /// dotnet build with an MSBuild node per CPU and Fable beside it, and Chromium for a
+    /// browser suite. The one dev container whose cgroup recorded a build on a 4.8 GiB
+    /// Colima VM peaked at 2.3 GiB (`memory.peak`), and that while the global OOM killer
+    /// was already taking processes from it — a floor on what a build needs, not the
+    /// figure. Half that VM is 2.4 GiB, which a build lands on; three quarters is 3.6.
+    let defaultFor (daemonTotal: int64) : ContainerMemory =
+        ContainerMemory (max minimum (daemonTotal / 4L * 3L))
+
+    /// The ceiling a container is created with: what it declared, or the default share of
+    /// what the daemon has. A declaration above the daemon's total is refused rather than
+    /// applied — a ceiling the host runs out before reaching contains nothing, and the
+    /// repo asked for memory this host cannot give.
+    let forDaemon (declared: ContainerMemory option) (daemonTotal: int64) : Result<ContainerMemory, string> =
+        match declared with
+        | None -> Ok (defaultFor daemonTotal)
+        | Some (ContainerMemory b) when b > daemonTotal ->
+            Error (
+                sprintf
+                    "the container declares memory: %s, and the docker daemon has %s in all — a ceiling the host runs out before reaching contains nothing. Give the daemon more memory (Colima: `colima start --memory <GiB>`) or declare less"
+                    (render (ContainerMemory b))
+                    (describe daemonTotal))
+        | Some declared -> Ok declared
+
 /// What a CONTAINER is. Every field here is one only a container has — an image to run, a
 /// filesystem to build, volumes to mount, a process to be.
 type ContainerSpec =
@@ -138,12 +240,17 @@ type ContainerSpec =
       /// backend detect what is on the far side of the entrypoint, most capable first.
       /// Written at the sandbox level as `dialect:`, and carried here because only a
       /// container has a shell to choose.
-      Dialect : string option }
+      Dialect : string option
+      /// The container's memory ceiling, as the repo declared it — compose's
+      /// `deploy.resources.limits.memory`, written `memory:`. `None` — the usual — takes the
+      /// default share of the daemon's memory (`ContainerMemory.defaultFor`): never no
+      /// ceiling, because no ceiling is the whole host.
+      Memory : ContainerMemory option }
 
 module ContainerSpec =
 
     let defaults : ContainerSpec =
-        { Image = None; Build = None; Mounts = []; Command = None; Entrypoint = None; Dialect = None }
+        { Image = None; Build = None; Mounts = []; Command = None; Entrypoint = None; Dialect = None; Memory = None }
 
 /// What the sandbox IS, and the distinction is load-bearing rather than descriptive.
 ///

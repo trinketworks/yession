@@ -58,6 +58,13 @@ sandboxes:
       # and ~4 min of substitution cold, and it was once a `setup:` line whose whole
       # purpose was to be run behind this entrypoint before there was one.
       entrypoint: nix develop --impure --command
+      # No `memory:`, deliberately. Every container gets a memory ceiling — without one,
+      # a container can take the daemon's whole VM, and the kernel then kills processes
+      # in whichever session's container it picks — and with nothing declared it is three
+      # quarters of what the daemon has, so a lone `check` (dotnet build, Fable, Chromium)
+      # has room on a small VM and more on a larger one. A number written here (compose's
+      # grammar: `memory: 4g`) would be the ceiling everywhere, and a host with less than
+      # it refuses the sandbox rather than leave it unbounded.
     # Wishes, not needs. `github` is the operator's GitHub connection, so `git push` works
     # from a terminal where one is offered. Where the operator offers a warm nix store
     # volume under `nix-container-store`, the container mounts it and the first build

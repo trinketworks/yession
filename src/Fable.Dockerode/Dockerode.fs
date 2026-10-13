@@ -87,6 +87,13 @@ type HostConfig =
     abstract CapDrop: string array with get, set
     abstract CapAdd: string array with get, set
     abstract SecurityOpt: string array with get, set
+    /// The container's memory ceiling, in bytes — `docker run --memory`. A float because
+    /// the Engine API reads a JSON number and a ceiling past 2 GiB is past `int`; a whole
+    /// number of bytes is exact in a double up to 8 PiB.
+    abstract Memory: float with get, set
+    /// Memory plus swap, in bytes — `--memory-swap`. Equal to `Memory`, no swap; absent,
+    /// the daemon allows as much swap again as `Memory`.
+    abstract MemorySwap: float with get, set
     /// `/dev/shm`, in bytes.
     abstract ShmSize: int with get, set
 
@@ -245,10 +252,17 @@ type [<AllowNullLiteral>] Modem =
     /// where `err` is `null` — `None` — when it finished well.
     abstract followProgress: source: Stream * onFinished: (Fable.NodeExtras.StreamError option -> Unread -> unit) -> unit
 
+/// What `docker.info()` answers with, of it.
+type [<AllowNullLiteral>] DockerInfo =
+    /// The memory the daemon's host has, in bytes — on a Mac, the VM's, not the Mac's.
+    abstract MemTotal: float
+
 /// The dockerode client, bound to the local daemon socket.
 type [<AllowNullLiteral>] Docker =
     /// Resolves when the daemon answers; rejects when it is unreachable.
     abstract ping: unit -> JS.Promise<Unread>
+    /// The daemon's own description of itself and its host.
+    abstract info: unit -> JS.Promise<DockerInfo>
     abstract createContainer: options: ContainerCreateOptions -> JS.Promise<Container>
     abstract getContainer: id: string -> Container
     abstract createVolume: options: VolumeCreateOptions -> JS.Promise<Unread>

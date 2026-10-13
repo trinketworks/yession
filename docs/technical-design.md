@@ -271,6 +271,7 @@ sandboxes:
       image: node:24
       entrypoint: nix develop --command   # compose's word: what every piece of WORK runs behind
       command: ./serve                    # compose's word for the container's own process (`cmd` still reads)
+      memory: 4g                          # optional: its memory ceiling, else 3/4 of the daemon's
     dialect: bash                         # optional: the shell a terminal opens, else detected
     workdir: ./packages/web
     env:
@@ -368,6 +369,17 @@ instrument, most capable first (`bash`, `zsh`, `sh`). A terminal opens the first
 This also warms a devshell, once, off the first terminal. `dialect:` names a dialect instead.
 A container that does not have that dialect refuses to start, naming what the backend looked
 for.
+
+Every container gets a memory ceiling, its cgroup's `memory.max`, with no swap beyond it. All
+containers on a daemon share its memory, and on a Mac that means one Colima VM. Without a
+ceiling, a container that overruns pushes the whole VM into the kernel's global OOM killer.
+That killer picks its victim from every container on the VM, so one session's build kills
+another session's work. With a ceiling, the container that overran is the one the kernel
+kills. `memory:` declares the ceiling in compose's grammar (`4g`). With nothing declared, the
+backend takes three quarters of what the daemon reports (`ContainerMemory`). A declaration
+above the daemon's total refuses the sandbox, because a ceiling the host never reaches contains
+nothing. A ceiling bounds one container. It does not make the host bigger: containers that
+each stay under theirs can still add up to more than the VM has.
 
 The file has two top-level keys, and one is a version. **The whole file is sandboxes**,
 because a sandbox is the only scope where "two repos both said something" has a total answer.

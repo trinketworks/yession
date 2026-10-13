@@ -234,7 +234,19 @@ module ConfigFile =
                   | Ok words -> Decode.succeed words
                   | Error reason -> Decode.fail (sprintf "%s: %s" field reason)) ]
 
-    let private containerKeys = [ "image"; "build"; "volumes"; "cmd"; "command"; "entrypoint" ]
+    /// `memory:` — the container's ceiling, in compose's byte-value grammar (`4g`), or a
+    /// bare number of bytes, which is what YAML makes of one written without a unit.
+    /// The JSON is read first and judged after, so a size that is refused is refused in
+    /// the one sentence that says why, not beside a second decoder's complaint.
+    let private memory : Decoder<ContainerMemory> =
+        Decode.oneOf
+            [ Decode.string |> Decode.map ContainerMemory.parse
+              Decode.int64 |> Decode.map ContainerMemory.ofBytes ]
+        |> Decode.andThen (function
+            | Ok limit -> Decode.succeed limit
+            | Error reason -> Decode.fail reason)
+
+    let private containerKeys = [ "image"; "build"; "volumes"; "cmd"; "command"; "entrypoint"; "memory" ]
 
     /// The container block. `command` lives HERE and nowhere else, which is the whole reason
     /// the block exists: a sandbox with no container has no place to write one. `cmd` is the
@@ -250,7 +262,8 @@ module ConfigFile =
                   Mounts = get.Optional.Field "volumes" (Decode.list mount) |> Option.defaultValue []
                   Command = (match cmd, command with | Some _, Some _ -> None | Some c, None | None, Some c -> Some c | None, None -> None)
                   Entrypoint = get.Optional.Field "entrypoint" (argv "entrypoint")
-                  Dialect = None },
+                  Dialect = None
+                  Memory = get.Optional.Field "memory" memory },
                 (cmd, command)))
         |> Decode.andThen (fun (spec, (cmd, command)) ->
             match cmd, command with
@@ -467,7 +480,8 @@ module ConfigFile =
                                       Encode.string (match mount.Mode with ReadOnly -> "ro" | ReadWrite -> "rw") ]))
                       if container.Command.IsSome then "command", Encode.string container.Command.Value
                       if container.Entrypoint.IsSome then
-                        "entrypoint", Encode.list (container.Entrypoint.Value |> List.map Encode.string) ])
+                        "entrypoint", Encode.list (container.Entrypoint.Value |> List.map Encode.string)
+                      if container.Memory.IsSome then "memory", Encode.string (ContainerMemory.render container.Memory.Value) ])
         let env =
             decl.EnvironmentVariables
             |> Map.toList

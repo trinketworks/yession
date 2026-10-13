@@ -1640,6 +1640,14 @@ module DockerSandbox =
                     let declared = container
                     let entrypoint = container.Entrypoint
                     let client = DK.create ()
+                    // The memory ceiling, decided before anything is pulled or built: the
+                    // default is a share of what THIS daemon has, which only the daemon can
+                    // say, and a declaration this host cannot give is refused before it
+                    // costs a pull (`ContainerMemory.forDaemon`).
+                    let! daemon = client.info () |> Interop.awaitPromise
+                    match ContainerMemory.forDaemon container.Memory (int64 daemon.MemTotal) with
+                    | Error reason -> return Error reason
+                    | Ok memory ->
                     // Resolve the image: build it from the context, or pull the named image.
                     let! imageResult =
                         async {
@@ -1747,6 +1755,15 @@ module DockerSandbox =
                                             host.CapDrop <- [| "ALL" |]
                                             host.CapAdd <- [| "CHOWN"; "FOWNER"; "DAC_OVERRIDE" |]
                                             host.SecurityOpt <- [| "no-new-privileges" |]
+                                            // A memory ceiling, so a container that
+                                            // overruns is the one the kernel kills
+                                            // (`ContainerMemory` says why, and what it
+                                            // cannot do). Swap equal to it, which is none:
+                                            // swap is the host's as much as memory is, and
+                                            // a build thrashing a shared VM's disk is the
+                                            // overrun moved, not contained.
+                                            host.Memory <- float (ContainerMemory.bytes memory)
+                                            host.MemorySwap <- float (ContainerMemory.bytes memory)
                                             // /dev/shm, above docker's 64MB default.
                                             // Chromium composites through shared memory
                                             // and starves the moment more than one page
@@ -1756,7 +1773,7 @@ module DockerSandbox =
                                             // 1GB, that being the only thing changed. A
                                             // repo cannot reach this from its yession.yaml
                                             // — the container block is image/build/volumes/
-                                            // cmd/entrypoint and nothing else — so a browser
+                                            // cmd/entrypoint/memory, no shm — so a browser
                                             // suite run in here (Playwright, Cypress) could
                                             // not fix a too-small /dev/shm from the outside.
                                             // tmpfs is a ceiling, not a reservation: a

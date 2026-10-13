@@ -101,6 +101,47 @@ let tests =
                 Expect.equal remaining 0 "the sandbox's container is removed on dispose"
             })
 
+            // The memory ceiling (`ContainerMemory`), read where the kernel keeps it: the
+            // container's own cgroup, which cgroup v2 mounts at /sys/fs/cgroup inside it.
+            testCaseAsync "a container is created with the memory ceiling its declaration names" (async {
+                let spec = alpineSpec |> withContainer (fun c -> { c with Memory = Some (ContainerMemory.parse "256m" |> expect) })
+                let! _, sandbox = startOrFail spec
+                let! run, out, err = runInSandbox sandbox "cat" [ "/sys/fs/cgroup/memory.max" ] Map.empty None
+                Expect.equal run (SandboxExited 0) (sprintf "the cgroup was read: %s" err)
+                Expect.equal (out.Trim ()) (string (256 * 1024 * 1024)) "the kernel holds the container to 256m"
+                do! sandbox.Dispose ()
+            })
+
+            // No declaration is the default share, never `max`: no ceiling is the whole
+            // host, and the whole host is what the global OOM killer chooses victims from.
+            // Compared against the host's total as the container sees it in /proc/meminfo,
+            // which is the figure the daemon reports as its own.
+            testCaseAsync "a container that declares no memory still has a ceiling below the host's total" (async {
+                let! _, sandbox = startOrFail alpineSpec
+                let probe =
+                    "limit=$(cat /sys/fs/cgroup/memory.max); total=$(awk '/^MemTotal:/{print $2 * 1024}' /proc/meminfo); "
+                    + "if [ \"$limit\" != max ] && [ \"$limit\" -lt \"$total\" ]; then echo bounded; else echo \"limit=$limit total=$total\"; fi"
+                let! run, out, err = runInSandbox sandbox "sh" [ "-c"; probe ] Map.empty None
+                Expect.equal run (SandboxExited 0) (sprintf "the probe ran: %s" err)
+                Expect.equal (out.Trim ()) "bounded" "the container's ceiling is below what the host has"
+                do! sandbox.Dispose ()
+            })
+
+            // What the ceiling is FOR: an overrun is killed inside the container that made
+            // it, and nothing else. `tail` over /dev/zero holds every byte it reads (it is
+            // waiting for a tenth newline that never comes), so it grows until the kernel
+            // stops it — at 64m, with no swap to spill into. The container itself, and the
+            // next command in it, carry on.
+            testCaseAsync "a process that overruns the container's memory is killed inside it, and the container carries on" (async {
+                let spec = alpineSpec |> withContainer (fun c -> { c with Memory = Some (ContainerMemory.parse "64m" |> expect) })
+                let! _, sandbox = startOrFail spec
+                let! overrun, _, _ = runInSandbox sandbox "sh" [ "-c"; "head -c 512m /dev/zero | tail" ] Map.empty None
+                Expect.equal overrun (SandboxExited 137) "the overrun was SIGKILLed by the kernel"
+                let! after, out, _ = runInSandbox sandbox "echo" [ "still-here" ] Map.empty None
+                Expect.equal (after, out.Trim ()) (SandboxExited 0, "still-here") "and the container runs the next command"
+                do! sandbox.Dispose ()
+            })
+
             // /dev/shm, raised above docker's 64MB default so Chromium's compositor does not
             // starve when more than one page paints (the ShmSize note in Sandboxes.fs). A
             // repo cannot set this from its yession.yaml, so a browser suite run in a work
