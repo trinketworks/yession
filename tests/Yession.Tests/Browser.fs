@@ -2610,6 +2610,26 @@ let private topOf (page: IPage) (selector: string) : Async<float> =
         | _ -> return failwithf "nothing at %s to measure" selector
     }
 
+/// A box as whole pixels, rounded half up as JavaScript's `Math.round` rounds.
+let private px (value: float) : int = int (floor (value + 0.5))
+
+/// The first match of each selector, measured in one frame, every one of them required.
+let private boxesOf (page: IPage) (selectors: string list) : Async<Yession.App.Probes.Box list> =
+    async {
+        let! measured = Probe.boxes page selectors
+        return
+            List.zip selectors measured
+            |> List.map (fun (selector, box) ->
+                box |> Option.defaultWith (fun () -> failwithf "nothing matches %s to measure" selector))
+    }
+
+/// Whether an element is `inert`: out of the keyboard's and the pointer's reach.
+let private inert (page: IPage) (selector: string) : Async<bool> =
+    async {
+        let! held = Read.attr page selector "inert"
+        return Option.isSome held
+    }
+
 /// The pane's box and the window it is laid out in, read together.
 let private paneAndWindow (page: IPage) () : Async<Yession.App.Probes.Box option * Yession.App.Probes.Window> =
     async {
@@ -3096,23 +3116,8 @@ let editorTests =
             async {
                 do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-entity]")
-                let! drift =
-                    await (page.EvaluateAsync<float> """() => {
-                        const note = document.querySelector('#shell [data-act-note]')
-                        const line = note.querySelector('[data-entity]').parentElement
-                        const probe = document.createElement('span')
-                        probe.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline'
-                        line.appendChild(probe)
-                        const baseline = probe.getBoundingClientRect().bottom
-                        probe.remove()
-                        const name = note.querySelector('[data-entity] > span:last-child')
-                        const namesProbe = document.createElement('span')
-                        namesProbe.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline'
-                        name.appendChild(namesProbe)
-                        const nameBaseline = namesProbe.getBoundingClientRect().bottom
-                        namesProbe.remove()
-                        return Math.abs(nameBaseline - baseline)
-                    }""")
+                let! reading = Probe.reading page Yession.App.Probes.Measure.ReferenceBaseline
+                let drift = match reading with [ drift ] -> drift | _ -> infinity
                 Expect.isTrue (drift < 0.5) (sprintf "the name's baseline is the line's, it was %.2fpx off" drift)
             }
 
@@ -3672,15 +3677,13 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! paneCovers "the pane to cover the phone's screen" page
                 do! Probe.settled page
-                let! rows =
-                    await (page.EvaluateAsync<string[]> """() => [...document.querySelectorAll(
-                        '#shell [data-content-panel] [data-terminal-list-row]')]
-                        .filter(e => {
-                            const r = e.getBoundingClientRect()
-                            if (!r.width || !r.height) return false
-                            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-                            return hit !== null && e.contains(hit) })
-                        .map(e => e.getAttribute('data-terminal-list-row'))""")
+                let listed = "#shell [data-content-panel] [data-terminal-list-row]"
+                let! seen = Probe.seen page listed
+                let! ids = Read.attrs page listed "data-terminal-list-row"
+                let rows =
+                    if List.length seen = List.length ids then
+                        List.zip seen ids |> List.filter (fun (row, _) -> row.Painted) |> List.choose snd |> Array.ofList
+                    else [||]
                 Expect.containsAll rows [| "term-harness"; "term-live" |] "both open terminals are rows on the screen"
             }
 
@@ -3692,17 +3695,10 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
                 do! paneCovers "the pane to take the column" page
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        "getComputedStyle(document.querySelector('#shell [data-pane-grab-edge]')).opacity === '1'")
-                let! shape =
-                    await (page.EvaluateAsync<float[]> """() => {
-                        const edge = document.querySelector('#shell [data-pane-grab-edge]')
-                        const e = edge.getBoundingClientRect()
-                        const p = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
-                        const hit = document.elementFromPoint(e.left + e.width / 2, e.top + e.height / 2)
-                        return [e.left, e.width, p.left - e.right, edge.contains(hit) ? 1 : 0, e.top + e.height / 2]
-                    }""")
+                do! Wait.until "the edge to be drawn" (fun () -> Probe.computed page "#shell [data-pane-grab-edge]" "opacity") ((=) (Some "1"))
+                let! reading = Probe.reading page Yession.App.Probes.Measure.GrabEdgeShape
+                let shape = Array.ofList reading
+                Expect.equal shape.Length 5 "the edge and the pane are both there to measure"
                 Expect.equal shape.[0] 0.0 "the strip starts at the screen's edge"
                 Expect.isTrue (shape.[1] >= 20.0) "and is a thumb's width, not a hairline"
                 Expect.isTrue (abs shape.[2] <= 1.0) "and the pane begins where it ends, so no chat shows undimmed"
@@ -3717,14 +3713,8 @@ let editorTests =
         editorCaseIn 390 844 "on a phone the pane's edge leaves nothing over the chat once it is shut" <| fun page ->
             async {
                 do! paneOffScreen page
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """(() => {
-                             const edge = document.querySelector('#shell [data-pane-grab-edge]')
-                             const e = edge.getBoundingClientRect()
-                             const hit = document.elementFromPoint(e.left + 2, e.top + e.height / 2)
-                             return getComputedStyle(edge).opacity === '0' && !edge.contains(hit)
-                           })()""")
+                do! Wait.until "the edge to be gone from over the chat"
+                        (fun () -> Probe.verdict page Yession.App.Probes.Measure.GrabEdgeClear) List.isEmpty
                 return ()
             }
 
@@ -3747,56 +3737,8 @@ let editorTests =
         let edgeTabOnTheBand (desktop: bool) (page: IPage) =
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='show']")
-                let measure =
-                            """(desktop) => {
-                                 const wrong = []
-                                 const tab = document.querySelector('#shell [data-content-toggle="show"]')
-                                 // The harness mounts the shell below its editors, so it is
-                                 // brought on screen first: a point off screen hits nothing.
-                                 tab.scrollIntoView({ block: 'center' })
-                                 const at = tab.getBoundingClientRect()
-                                 const band = document.querySelector('#shell header').getBoundingClientRect()
-                                 if (at.top < band.top || at.bottom > band.bottom || at.left < band.left || at.right > band.right)
-                                   wrong.push('outside the header band: ' + JSON.stringify(at) + ' in ' + JSON.stringify(band))
-                                 if (at.left < 0 || at.right > window.innerWidth)
-                                   wrong.push('outside the viewport: ' + at.left + '..' + at.right + ' of ' + window.innerWidth)
-                                 if (at.width < 24 || at.height < 24)
-                                   wrong.push('too small to press: ' + at.width + 'x' + at.height)
-                                 // What is painted at its centre is the tab, not something over it.
-                                 const hit = document.elementFromPoint(at.left + at.width / 2, at.top + at.height / 2)
-                                 if (!hit || !tab.contains(hit)) wrong.push('covered at its centre by ' + (hit && hit.outerHTML.slice(0, 80)))
-                                 if (desktop) {
-                                   const probe = () => {
-                                     const p = document.createElement('span')
-                                     p.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline'
-                                     return p
-                                   }
-                                   const words = tab.querySelector('[data-terminals-count]')
-                                   const mine = probe()
-                                   words.appendChild(mine)
-                                   const tabBaseline = mine.getBoundingClientRect().bottom
-                                   mine.remove()
-                                   // An input's baseline is its text's, and it lends it to a line
-                                   // box only in flow — so its OFFSET inside the input is read
-                                   // with the wrapper laid out as a block for a moment, and
-                                   // added to where the input really is.
-                                   const title = document.querySelector('#shell [data-session-title]')
-                                   const top = title.getBoundingClientRect().top
-                                   const wrap = title.parentElement
-                                   const was = wrap.style.display
-                                   wrap.style.display = 'block'
-                                   const theirs = probe()
-                                   title.after(theirs)
-                                   const offset = theirs.getBoundingClientRect().bottom - title.getBoundingClientRect().top
-                                   theirs.remove()
-                                   wrap.style.display = was
-                                   const drift = tabBaseline - (top + offset)
-                                   if (Math.abs(drift) > 2) wrong.push('off the title baseline by ' + drift + 'px')
-                                 }
-                                 return wrong.join('; ')
-                               }"""
-                let! wrong = await (page.EvaluateAsync<string> (measure, desktop))
-                Expect.equal wrong "" "the edge tab sits on the header band"
+                let! wrong = Probe.verdictWith page Yession.App.Probes.Measure.EdgeTabOnBand (if desktop then 1 else 0)
+                Expect.isEmpty wrong "the edge tab sits on the header band"
             }
 
         editorCaseIn 1440 900 "the edge tab is on the header's baseline and inside the viewport, on a desktop" <| edgeTabOnTheBand true
@@ -3900,29 +3842,21 @@ let editorTests =
         editorCaseIn 390 844 "typing in the composer with the keyboard up never scrolls the page past the shell" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor] .ProseMirror")
-                do! awaitU (
-                        page.EvaluateAsync
-                            """() => {
-                                 const room = document.createElement('div')
-                                 room.style.height = '400px'
-                                 document.body.appendChild(room)
-                                 document.getElementById('shell').scrollIntoView({ block: 'end' })
-                               }""")
+                let! _ = Probe.verdictWith page Yession.App.Probes.Measure.RoomBelowShell 400
                 do! awaitU (page.ClickAsync "#shell [data-draft-editor] .ProseMirror")
                 let! cdp = await (page.Context.NewCDPSessionAsync page)
                 let scale = Collections.Generic.Dictionary<string, obj> ()
                 scale.["pageScaleFactor"] <- box 1.6
                 let! _ = await (cdp.SendAsync ("Emulation.setPageScaleFactor", scale))
-                let! _ = await (page.WaitForFunctionAsync "visualViewport.height < innerHeight")
+                do! Wait.until "the visual viewport to shrink under the layout" (fun () -> Probe.window page) (fun w -> w.VisualHeight < w.InnerHeight)
 
                 // How far the visible area runs past the shell's foot, in CSS pixels: the gap.
                 let pastShell () =
-                    page.EvaluateAsync<float>
-                        """() => {
-                             const shell = document.getElementById('shell').getBoundingClientRect()
-                             return (visualViewport.offsetTop + visualViewport.height) - shell.bottom
-                           }"""
-                    |> await
+                    async {
+                        match! Probe.reading page Yession.App.Probes.Measure.PastShell with
+                        | [ gap ] -> return gap
+                        | _ -> return failwith "there is no shell to measure past"
+                    }
                 do! awaitU (page.Keyboard.TypeAsync "one")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 do! awaitU (page.Keyboard.TypeAsync "two")
@@ -3937,12 +3871,8 @@ let editorTests =
                 // The fixture's wide message is present — otherwise this passes by rendering
                 // nothing that could have overflowed.
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body] pre")
-                let! sideways =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const timeline = document.querySelector('#shell [data-conversation]')
-                                 return timeline.scrollWidth > timeline.clientWidth + 1
-                               }""")
+                let! timeline = Probe.scroll page "#shell [data-conversation]"
+                let sideways = timeline |> Option.exists Yession.App.Probes.Scroll.overflowsSideways
                 Expect.isFalse sideways "the conversation column does not scroll sideways"
             }
         // The same promise, broken from the other side: not a body's text but a CHIP's. A
@@ -3959,12 +3889,8 @@ let editorTests =
                 // The chip is on screen and carries the name — otherwise this passes by
                 // rendering nothing that could have overflowed.
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-chat-pending] [data-pending-subject]")
-                let! sideways =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const timeline = document.querySelector('#shell [data-conversation]')
-                                 return timeline.scrollWidth > timeline.clientWidth + 1
-                               }""")
+                let! timeline = Probe.scroll page "#shell [data-conversation]"
+                let sideways = timeline |> Option.exists Yession.App.Probes.Scroll.overflowsSideways
                 Expect.isFalse sideways "the conversation column does not scroll sideways"
             }
         // The ask card stands where the conversation will, so it reads on the conversation's
@@ -3993,13 +3919,13 @@ let editorTests =
                     // Where the conversation's words start, read off the page the harness
                     // loads with: the body's own box plus the avatar gutter it carries.
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
-                    let! column =
-                        await (page.EvaluateAsync<int>
-                                """() => {
-                                     const body = document.querySelector('#shell [data-conversation] [data-message-body]')
-                                     const box = body.getBoundingClientRect()
-                                     return Math.round(box.left + parseFloat(getComputedStyle(body).paddingLeft))
-                                   }""")
+                    let body = "#shell [data-conversation] [data-message-body]"
+                    let! bodyBox = Probe.boxes page [ body ]
+                    let! padding = Probe.computed page body "padding-left"
+                    let column =
+                        match bodyBox, padding |> Option.filter (fun p -> p.EndsWith "px") with
+                        | [ Some box ], Some padding -> int (floor (box.Left + float (padding.Substring (0, padding.Length - 2)) + 0.5))
+                        | _ -> failwith "the conversation's first body, or its padding, could not be read"
 
                     // The same session before it began, with a row held — so the branch line
                     // inside a row is on screen as well as the lines outside them.
@@ -4018,24 +3944,7 @@ let editorTests =
                     // off one edge of the card and 16 off the other, which reads as a slab
                     // pushed sideways rather than as a margin. What holds for it instead is
                     // the case below.
-                    let! adrift =
-                        await (page.EvaluateAsync<string[]> (sprintf """() => {
-                            const column = %d
-                            const card = document.querySelector('#shell [data-repo-picker]')
-                            const box = sel => Math.round(card.querySelector(sel).getBoundingClientRect().left)
-                            const inside = sel => {
-                              const el = card.querySelector(sel)
-                              return Math.round(el.getBoundingClientRect().left
-                                                + (parseFloat(getComputedStyle(el).paddingLeft) || 0))
-                            }
-                            return [
-                                    ['the question', box('#repo-picker-title')],
-                                    ['the search field', inside('[data-repo-picker-search]')],
-                                    ['a row’s name', box('[data-repo-candidate-name]')]
-                                  ]
-                                .filter(([_, left]) => left !== column)
-                                .map(([what, left]) => `${what} starts at ${left}px, the conversation at ${column}px`)
-                          }""" column))
+                    let! adrift = Probe.verdictWith page Yession.App.Probes.Measure.AskCardColumn column
                     Expect.isEmpty
                         adrift
                         (sprintf "every line of the ask card starts on the conversation's own column, these did not: %s"
@@ -4068,29 +3977,10 @@ let editorTests =
                     do! Probe.settled page
                     // Ground truth: the column has more than it can show, so some items start
                     // out of view and bringing them in is something the case has to do.
-                    let! overflows =
-                        await (page.EvaluateAsync<bool>
-                                """() => {
-                                     const c = document.querySelector('#shell [data-conversation]')
-                                     return c.scrollHeight > c.clientHeight + 1
-                                   }""")
+                    let! conversation = Probe.scroll page "#shell [data-conversation]"
+                    let overflows = conversation |> Option.exists (fun c -> c.Height > c.ClientHeight + 1.0)
                     Expect.isTrue overflows "the conversation scrolls, so where it ends is a question"
-                    let! hidden =
-                        await (page.EvaluateAsync<string[]>
-                                """() => {
-                                     const items = [...document.querySelectorAll('#shell [data-conversation] [data-message-id]')]
-                                     return items.flatMap(item => {
-                                       // To the middle, as far as the scroll allows: the column
-                                       // pins its author line at the top, and an item scrolled
-                                       // only to the nearest edge stops under that instead.
-                                       item.scrollIntoView({ block: 'center' })
-                                       const box = item.getBoundingClientRect()
-                                       const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
-                                       return hit && item.contains(hit)
-                                         ? []
-                                         : [`${item.getAttribute('data-message-id')} (a press on it lands on ${hit ? hit.outerHTML.slice(0, 60) : 'nothing'})`]
-                                     })
-                                   }""")
+                    let! hidden = Probe.verdict page Yession.App.Probes.Measure.ItemsClearOfCard
                     Expect.isEmpty
                         hidden
                         (sprintf "every item, scrolled into view, is the thing under a press in its middle; these were not: %s"
@@ -4123,24 +4013,24 @@ let editorTests =
                         ReducedMotion = ReducedMotion.Reduce)))
                 (sprintf "at %dpx the launch card keeps its height as repositories load" width) <| fun page ->
                 async {
-                    let shape =
-                        """() => {
-                             const card = document.querySelector('#shell [data-repo-picker]').getBoundingClientRect()
-                             const start = document.querySelector('#shell [data-repo-picker-start]').getBoundingClientRect()
-                             return [Math.round(card.height), Math.round(start.top)]
-                           }"""
+                    let shape () =
+                        async {
+                            match! boxesOf page [ "#shell [data-repo-picker]"; "#shell [data-repo-picker-start]" ] with
+                            | [ card; start ] -> return [| px (Yession.App.Probes.Box.height card); px start.Top |]
+                            | _ -> return failwith "unreachable: two selectors, two boxes"
+                        }
                     // The instant before the repositories land: the card is up, still looking.
                     do! Harness.run page HarnessPage.launchLooking
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
-                    let! looking = await (page.EvaluateAsync<int[]> shape)
+                    let! looking = shape ()
                     // Ground truth that this IS the looking state and not the loaded one already:
                     // nothing to hold yet, so the case measures the step it means to.
-                    let! rows = await (page.EvaluateAsync<int> "() => document.querySelectorAll('#shell [data-repo-picker] [data-repo-candidate]').length")
+                    let! rows = Read.count page "#shell [data-repo-picker] [data-repo-candidate]"
                     Expect.equal rows 0 "the looking state has no repositories in it yet"
                     // The repositories arrive.
                     do! Harness.run1 page HarnessPage.launch true
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate]")
-                    let! loaded = await (page.EvaluateAsync<int[]> shape)
+                    let! loaded = shape ()
                     Expect.equal loaded looking
                         (sprintf "the card held neither its height nor START's place as the listing loaded: looking was height=%d start=%d, loaded is height=%d start=%d"
                             looking.[0] looking.[1] loaded.[0] loaded.[1])
@@ -4153,19 +4043,12 @@ let editorTests =
             async {
                 do! Harness.run1 page HarnessPage.launch true
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker-dismiss]")
-                let! size =
-                    await (page.EvaluateAsync<int[]>
-                            """() => {
-                                 const b = document.querySelector('#shell [data-repo-picker-dismiss]').getBoundingClientRect()
-                                 return [Math.round(b.width), Math.round(b.height)]
-                               }""")
+                let! dismiss = boxesOf page [ "#shell [data-repo-picker-dismiss]" ]
+                let size = dismiss |> List.map (fun b -> [| px (Yession.App.Probes.Box.width b); px (Yession.App.Probes.Box.height b) |]) |> List.head
                 Expect.isTrue (size.[0] >= 44 && size.[1] >= 44) (sprintf "44px each way, got %dx%d" size.[0] size.[1])
-                let! named =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const b = document.querySelector('#shell [data-repo-picker-dismiss]')
-                                 return !!b.getAttribute('aria-label') && !!b.getAttribute('title')
-                               }""")
+                let! label = Read.attr page "#shell [data-repo-picker-dismiss]" "aria-label"
+                let! title = Read.attr page "#shell [data-repo-picker-dismiss]" "title"
+                let named = (label |> Option.exists ((<>) "")) && (title |> Option.exists ((<>) ""))
                 Expect.isTrue named "an accessible name, and a title for a pointer"
             }
         // What a control owes the card's edges, where every line owes the reading rail.
@@ -4179,15 +4062,11 @@ let editorTests =
             async {
                 do! Harness.run1 page HarnessPage.launch true
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
-                let! margins =
-                    await (page.EvaluateAsync<int[]>
-                            """() => {
-                                 const card = document.querySelector('#shell [data-repo-picker]')
-                                 const start = card.querySelector('[data-repo-picker-start]')
-                                 const outer = card.getBoundingClientRect()
-                                 const inner = start.getBoundingClientRect()
-                                 return [Math.round(inner.left - outer.left), Math.round(outer.right - inner.right)]
-                               }""")
+                let! measured = boxesOf page [ "#shell [data-repo-picker]"; "#shell [data-repo-picker] [data-repo-picker-start]" ]
+                let margins =
+                    match measured with
+                    | [ outer; inner ] -> [| px (inner.Left - outer.Left); px (outer.Right - inner.Right) |]
+                    | _ -> failwith "unreachable: two selectors, two boxes"
                 Expect.equal
                     margins.[0]
                     margins.[1]
@@ -4213,31 +4092,26 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-repo-picker] [data-repo-candidate]")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-candidate-branch]")
 
-                let! away =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const card = document.querySelector('#shell [data-repo-picker]')
-                                 const branch = document.querySelector('#shell [data-repo-picker-pane="branch"]')
-                                 return branch.getBoundingClientRect().left >= card.getBoundingClientRect().right - 1
-                               }""")
+                let! cardAndBranch = boxesOf page [ "#shell [data-repo-picker]"; "#shell [data-repo-picker-pane=\"branch\"]" ]
+                let away =
+                    match cardAndBranch with
+                    | [ card; branch ] -> branch.Left >= card.Right - 1.0
+                    | _ -> false
                 Expect.isTrue away "the branch pane starts off the card's right edge"
-                let! reachable =
-                    await (page.EvaluateAsync<bool> """() => !document.querySelector('#shell [data-repo-picker-pane="branch"]').inert""")
+                let! held = inert page "#shell [data-repo-picker-pane=\"branch\"]"
+                let reachable = not held
                 Expect.isFalse reachable "and a keyboard cannot get into it while it is there"
 
                 do! awaitU (page.ClickAsync "#shell [data-repo-candidate-branch]")
 
                 // It arrives, and the pane it came from leaves by the other edge.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                            """(() => {
-                                 const card = document.querySelector('#shell [data-repo-picker]').getBoundingClientRect()
-                                 const branch = document.querySelector('#shell [data-repo-picker-pane="branch"]').getBoundingClientRect()
-                                 const repo = document.querySelector('#shell [data-repo-picker-pane="repo"]').getBoundingClientRect()
-                                 return Math.abs(branch.left - card.left) <= 1 && repo.right <= card.left + 1
-                               })()""")
-                let! trapped =
-                    await (page.EvaluateAsync<bool> """() => !document.querySelector('#shell [data-repo-picker-pane="repo"]').inert""")
+                do! Wait.until "the branch pane to arrive, and the repo pane to leave by the other edge"
+                        (fun () -> boxesOf page [ "#shell [data-repo-picker]"; "#shell [data-repo-picker-pane=\"branch\"]"; "#shell [data-repo-picker-pane=\"repo\"]" ])
+                        (function
+                         | [ card; branch; repo ] -> abs (branch.Left - card.Left) <= 1.0 && repo.Right <= card.Left + 1.0
+                         | _ -> false)
+                let! left = inert page "#shell [data-repo-picker-pane=\"repo\"]"
+                let trapped = not left
                 Expect.isFalse trapped "and the one that left is now the one out of reach"
             }
         // The listing pages as it is read, and READ is the word: no press, no button, and
@@ -4257,30 +4131,28 @@ let editorTests =
                 // Ground truth, both halves: the foot is below the card, and the page it
                 // stands for has not arrived. Without the first, this case passes on a foot
                 // that was visible from the start and proves nothing about reaching it.
-                let! below =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const body = document.querySelector('#shell [data-repo-picker-body]')
-                                 const foot = document.querySelector('#shell [data-repo-picker-foot]')
-                                 return foot.getBoundingClientRect().top > body.getBoundingClientRect().bottom
-                               }""")
+                let! bodyAndFoot = boxesOf page [ "#shell [data-repo-picker-body]"; "#shell [data-repo-picker-foot]" ]
+                let below =
+                    match bodyAndFoot with
+                    | [ body; foot ] -> foot.Top > body.Bottom
+                    | _ -> false
                 Expect.isTrue below "the foot starts below the card, so reaching it is something the reader does"
-                let! arrivedEarly =
-                    await (page.EvaluateAsync<bool> """() => !!document.querySelector('#shell [data-repo-candidate="octo/next-one"]')""")
+                let! early = Read.count page "#shell [data-repo-candidate=\"octo/next-one\"]"
+                let arrivedEarly = early > 0
                 Expect.isFalse arrivedEarly "and the page it stands for has not been asked for"
 
                 // Reaching it. A scroll of the card, which is what a thumb does — never a
                 // call to whatever fetches, which would test the harness rather than the
                 // page.
-                do! awaitU (page.EvaluateAsync
-                                """() => {
-                                     const body = document.querySelector('#shell [data-repo-picker-body]')
-                                     body.scrollTop = body.scrollHeight
-                                   }""")
+                match! Probe.scroll page "#shell [data-repo-picker-body]" with
+                | Some body ->
+                    let! _ = Probe.scrollTo page "#shell [data-repo-picker-body]" body.Height
+                    ()
+                | None -> failwith "the card has no body to scroll"
 
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-candidate='octo/next-one']")
-                let! ended =
-                    await (page.EvaluateAsync<bool> """() => !document.querySelector('#shell [data-repo-picker-foot]')""")
+                let! feet = Read.count page "#shell [data-repo-picker-foot]"
+                let ended = feet = 0
                 Expect.isTrue ended "and a page that carried no cursor is the end of the list, so the foot goes"
             }
         // The title is written per keystroke, so Enter has nothing to save — and that is

@@ -696,3 +696,8 @@ module Viewport =
     /// there is no visual viewport to ask.
     [<Emit("(globalThis.visualViewport ? globalThis.visualViewport.height : globalThis.innerHeight)")>]
     let visualHeight () : float = jsNative
+
+    /// How far the visual viewport is scrolled down the layout viewport; 0 where there is no
+    /// visual viewport to ask.
+    [<Emit("(globalThis.visualViewport ? globalThis.visualViewport.offsetTop : 0)")>]
+    let visualOffsetTop () : float = jsNative
