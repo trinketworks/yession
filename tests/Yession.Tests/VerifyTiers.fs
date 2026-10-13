@@ -116,10 +116,10 @@ let private covers (tier: Tier) (need: Tag.Need list) =
         | Some Runtime.Clr -> onClr
         | Some Runtime.Node -> not onClr
         | Some Runtime.Neither -> false
-    runsIt
-    && need
-       |> List.forall (fun n ->
-           tier.Capabilities |> List.exists (fun name -> Tag.parseNeed name = Some n))
+    // What the tier HAS, not only what it names: `Srt` is a sandbox too (`Tag.withImplied`), so a
+    // tier that names it runs the suites that only need one to run a command in.
+    let has = tier.Capabilities |> List.choose Tag.parseNeed |> Tag.withImplied
+    runsIt && need |> List.forall (fun n -> List.contains n has)
 
 let tests =
     testList "Verify tiers" [
@@ -195,7 +195,10 @@ let tests =
             match declaredTiers () with
             | [] -> ()   // the population case above is what says this
             | tiers ->
-                let named = tiers |> List.collect (fun tier -> tier.Capabilities |> List.choose Tag.parseNeed)
+                let named =
+                    tiers
+                    |> List.collect (fun tier -> tier.Capabilities |> List.choose Tag.parseNeed)
+                    |> Tag.withImplied
                 for need in Tag.allNeeds do
                     Expect.isTrue
                         (List.contains need named)

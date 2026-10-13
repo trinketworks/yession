@@ -228,7 +228,7 @@ let environmentRefusal (model: ClientModel) : string option =
     | EnvironmentFailed reason ->
         Some (
             sprintf
-                "the work sandbox did not start: %s. If this box has no sandbox, the suite needs `Srt` in its `needs`"
+                "the work sandbox did not start: %s. If this box has no sandbox, the suite needs `Sandbox` in its `needs`"
                 reason)
     | EnvironmentNotStarted
     | EnvironmentStarting

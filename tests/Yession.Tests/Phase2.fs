@@ -2475,7 +2475,7 @@ let private askSpawner
 
 /// A wrap that confines nothing: the argv it was handed, back. The srt spawner takes its wrap
 /// as a PARAMETER, so a case about the SEAM needs a wrap rather than a sandbox — which is why
-/// these cases ask for `Ports` alone and never for `Srt`.
+/// these cases ask for `Ports` alone and never for `Sandbox`.
 let private passthroughWrap
     (command: string)
     (arguments: string list)

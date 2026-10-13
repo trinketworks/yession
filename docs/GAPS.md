@@ -346,8 +346,8 @@ against each other. The last section holds trust boundaries as sharp as the firs
   that cannot host it fails at boot instead of quietly running wide open.
 
   An unprivileged container needs `weak`, which is now on the default path rather than an opt-in
-  one. `check` probes whichever profile the run configures before it declares the `Srt`
-  capability.
+  one. `check` probes whichever profile the run configures before it declares the `Sandbox`
+  capability. `Srt`, which is confinement under test, is refused under `weak`.
 - **The Docker backend runs through the `dockerode` SDK and is integration-tested in the verify
   gate.** The session id (a Crockford base32 id, always a valid Docker object name) names the
   containers and a per-sandbox named workspace volume. `EnvironmentSpec` is fully interpreted:

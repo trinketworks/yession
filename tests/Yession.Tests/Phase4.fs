@@ -3597,13 +3597,12 @@ let tests =
         mcpTests
         registryTests
         Tag.needs "Session as an OS process (Step 23)" [ Tag.Ports; Tag.Native ] (fun () -> processTests)
-        // `Srt` because this is the one suite that lets a real child session pick its own
+        // `Sandbox` because this is the one suite that lets a real child session pick its own
         // sandbox DEFAULT, and that default has been srt since "confine by default" (#83).
         // Untagged, on a box that cannot build the nested sandbox, the child's environment
-        // never reaches Running and the suite's `WaitFor` waits out the whole run's budget —
-        // taking every suite after it down with a timeout, which is the least legible way a
-        // missing capability could possibly report itself.
-        Tag.needs "Session-owned environment across real processes" [ Tag.Ports; Tag.Native; Tag.Srt ] (fun () -> controlRpcTests)
+        // fails to start and the suite's `WaitFor` fails at once, quoting the sandbox's own
+        // reason (`Peer.environmentRefusal`) — a red where the tag makes it a skip.
+        Tag.needs "Session-owned environment across real processes" [ Tag.Ports; Tag.Native; Tag.Sandbox ] (fun () -> controlRpcTests)
         // `Ports` only: one bare `node:http` server writing two strings, and the SSE client
         // reading them. Nothing spawns, so nothing here needs `Native`.
         Tag.needs "SSE consumption across read boundaries" [ Tag.Ports ] (fun () -> sseStreamTests)
@@ -3627,9 +3626,10 @@ let tests =
         Tag.needs "Opening a session that is already running" [ Tag.Ports ] (fun () -> openRunningTests)
         Tag.needs "Opening a session that is not running yet" [ Tag.Ports ] (fun () -> openStoppedTests)
         Tag.needs "Idle reaping over the process boundary (Plan 11)" [ Tag.Ports; Tag.Native ] (fun () -> reapingTests)
-        // `Srt` for the same reason: the packaged child picks the sandbox DEFAULT, and this
+        // `Sandbox` for the same reason: the packaged child picks the sandbox DEFAULT, and this
         // suite waits on an environment that reached Running and a command that exited 0 —
-        // neither of which happens on a box that cannot build the nested sandbox.
-        Tag.needs "Executable composition (Step 27/28)" [ Tag.Ports; Tag.Native; Tag.Srt ] (fun () -> compositionTests)
+        // neither of which happens on a box that cannot build the nested sandbox, where the
+        // wait fails at once with the sandbox's own reason instead of skipping.
+        Tag.needs "Executable composition (Step 27/28)" [ Tag.Ports; Tag.Native; Tag.Sandbox ] (fun () -> compositionTests)
         Tag.needs "Telemetry over the process boundary (Plan 04)" [ Tag.Ports; Tag.Native ] (fun () -> telemetryTests)
     ]

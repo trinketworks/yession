@@ -122,7 +122,9 @@ jobs:
       # `Srt` is here rather than only in `verify` because the escape probes are the whole
       # point of the confining backend and they run in seconds. `check` probes for a WORKING
       # bubblewrap first and drops the capability (with a line saying so) where the kernel
-      # refuses one, so this cannot fail a PR on a runner that cannot host it.
+      # refuses one, so this cannot fail a PR on a runner that cannot host it. `Srt` is the
+      # STRICT profile, which is a sandbox too, so it also runs every suite that only needs a
+      # sandbox to run a command in (`Sandbox`; `Tag.withImplied`) — no second name is needed.
       # `Serial` for the same reason and at the same price: the dev shell brings socat and
       # udevadm on Linux, and the engine suite is under a second. A tier that only runs after
       # a merge is a tier nobody fixes before one.
