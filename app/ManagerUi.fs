@@ -752,7 +752,7 @@ let private standalonePage (title: string) (body: string) : string =
 
 /// What `/open` says when it cannot hand the browser over: the refusal, and the way back to
 /// the page that can do something about it.
-let private problemPage (title: string) (detail: string) : string =
+let problemPage (title: string) (detail: string) : string =
     standalonePage
         title
         (sprintf """<p class="%s">%s</p>
@@ -896,7 +896,7 @@ let private openingProgram =
 /// the screen at all: this page is sent before the launch it covers has a port, so the way out
 /// it offers is the open route itself (which redirects once the session runs), and the address
 /// the program goes to is the readiness route's answer.
-let private openingPage (sessionId: SessionId) (target: string) (readyUrl: string) : string =
+let openingPage (sessionId: SessionId) (target: string) (readyUrl: string) : string =
     screenPage
         "Opening session…"
         (sprintf
