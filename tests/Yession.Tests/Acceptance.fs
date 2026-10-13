@@ -229,7 +229,8 @@ let private representativeModel : ClientModel =
       ItemMenu = None
       PaneMenu = false
       Switcher = false
-      ListFilter = ListFilter.All
+      ListHeld = Set.empty
+      ClosedShown = false
       Refused = None
       Stolen = None
       Asked = Map.empty
@@ -2340,7 +2341,9 @@ let private uiChecklistTests =
 // next improvement while saying the design was wrong.
 let private terminalListTests =
     testList "The terminal list" [
-        let listed (model: ClientModel) = Support.render { model with Switcher = true }
+        // Unfolded: which verbs a row offers is the question here, and a closed row's are
+        // under the fold (`ClosedShown`).
+        let listed (model: ClientModel) = Support.render { model with Switcher = true; ClosedShown = true }
         let id = TerminalId.value terminalId
 
         // Every case below is the same shape deliberately: the verb where it works, and its
@@ -2396,6 +2399,13 @@ let private terminalListTests =
             Expect.isTrue
                 ((listed closedTerminalModel).Contains (Dom.attr Dom.Hooks.terminalListRow id))
                 "a closed terminal has a row that opens it"
+
+        // Folded, a closed terminal's row is one press away, and the press is there: a fold
+        // over nothing to open would be a session's record with no door.
+        testCase "a closed terminal the list folds away is under a fold that says it is shut" <| fun () ->
+            let html = Support.render { closedTerminalModel with Switcher = true; Pane = None }
+            let fold = System.Text.RegularExpressions.Regex.Match(html, "<button[^>]*data-list-closed-fold[^>]*>").Value
+            Expect.stringContains fold "aria-expanded=\"false\"" "a fold, shut, over the closed terminal"
 
         // On a phone one tab fits the strip, so the list button's figure is the only thing on
         // screen saying there are others — and a screen reader hears the same number in its
@@ -2472,11 +2482,9 @@ let private contentListTests =
                 ((listed representativeModel).Contains Dom.Hooks.artifactListRow)
                 "a session that has shared nothing grows no rows"
 
-        // The headings exist to tell two kinds apart. Over terminals alone, "Terminals" names
-        // the only thing on screen — a word that says nothing and costs a line.
-        testCase "the sections are named only when there are two kinds to tell apart" <| fun () ->
-            Expect.isTrue ((listed (withShare "chart.png")).Contains "data-list-section") "both kinds present, both named"
-            Expect.isFalse ((listed representativeModel).Contains "data-list-section") "terminals alone need no heading"
+        // "the sections are named only when there are two kinds to tell apart" was here. The
+        // files' heading now carries the way to add one, so it is there with no file under
+        // it; the terminals have no heading, the list button over them says what they are.
 
         // What the `all` page is FOR, which is the question the `New` section the list briefly
         // carried was not an answer to. A census of nothing says there is nothing. Making a

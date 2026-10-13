@@ -577,10 +577,15 @@ module Dom =
         /// Every row verb is rendered ONLY where `Affordances` says it applies, so a
         /// test asserting one is absent is asserting the fold, not a template's mood.
         let terminalListDismiss = "data-terminal-list-dismiss"
-        /// One of the `all` page's filters (`ClientModel.listFilters`): `all`, or a kind of
-        /// terminal — `attention`, `running`, `idle` or `closed`. `aria-pressed` says which
-        /// one the page is narrowed to.
-        let terminalFilter = "data-terminal-filter"
+        /// The list's one row for its closed terminals: the fold they are under, which
+        /// `aria-expanded` says is open or not (`ClientModel.ClosedShown`).
+        let listClosedFold = "data-list-closed-fold"
+        /// A list row's name, inside the row's button with the line under it: the button's
+        /// accessible name (`aria-labelledby`).
+        let terminalListName = "data-terminal-list-name"
+        /// The scrim laid over the pane under the list's sheet: pressed, it puts the sheet
+        /// away. A duplicate of the list button and Escape, so out of the tree.
+        let paneSheetScrim = "data-pane-sheet-scrim"
         /// A closed row whose recording the per-terminal cap ate. The stated gap, where a
         /// play affordance would otherwise be — an audit trail's hole is said, never left to
         /// look like a terminal that printed nothing.
@@ -907,14 +912,11 @@ module Dom =
         let kill = "stop"
         let reattach = "attach"
         let putAway = "put away"
-        /// The `all` page's filters (`ClientModel.listFilters`): every terminal, or one kind,
-        /// by what it needs of the person reading.
-        let filterTerminals = "Show terminals"
-        let filterAll = "all"
-        let filterAttention = "needs a look"
-        let filterRunning = "running"
-        let filterIdle = "idle"
-        let filterClosed = "closed"
+        /// The list's fold over its closed terminals, and its name for a screen reader.
+        let closedHeading = "closed"
+        let closedTerminals (count: int) = sprintf "%d closed %s" count (if count = 1 then "terminal" else "terminals")
+        /// The heading over the list's files, which carries the way to add one.
+        let filesHeading = "files"
         /// A rewound reader, told how far behind the live edge they are — when there is any
         /// distance yet to tell.
         let behindLive (distance: string option) =
@@ -1018,7 +1020,7 @@ module Dom =
             sprintf "%d %s. %s" terminals (if terminals = 1 then "terminal" else "terminals") switchTerminal
         /// The `all` page's own name, as a list.
         let terminalsAndFiles = "Terminals and files"
-        /// The list sheet's head, over its filters.
+        /// The list's terminals above its fold, as a list.
         let terminalsHeading = "terminals"
         /// The pivot itself, as a tablist.
         let paneItems = "Open in this pane"

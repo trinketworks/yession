@@ -720,7 +720,7 @@ let private namingTests =
             let list = Support.render (Support.step ToggleSwitcherMsg model)
             Expect.equal
                 [ textAt Dom.Hooks.terminalTabName (markupAt (Dom.attr Dom.Hooks.terminalTab "term-b") strip)
-                  textAt (Dom.attr Dom.Hooks.terminalListRow "term-b") list ]
+                  textAt Dom.Hooks.terminalListName (markupAt (Dom.attr Dom.Hooks.terminalListRow "term-b") list) ]
                 [ "term 2"; "term 2" ]
                 "one terminal, one name, wherever it is named"
 
@@ -2786,19 +2786,17 @@ let private refusalsDrawn (model: ClientModel) : RefusalMount list =
     |> Seq.map (fun found -> if pane >= 0 && found.Index > pane then RefusalMount.Pane else RefusalMount.Chat)
     |> List.ofSeq
 
-/// Three terminals, two of them running a command: `term-a` idle, `term-b` and `term-c`
-/// running — the `all` page's filters' fixture (F5).
-let private twoRunning : ClientModel =
-    clientOf
-        [ at 1L 0.0 (opened terminalA "idle")
-          at 2L 1.0 (opened terminalB "build")
-          at 3L 2.0 (opened terminalC "logs")
-          at 4L 3.0 (started terminalB "1" byAda "make" 1)
-          at 5L 4.0 (started terminalC "2" byAda "tail -f log" 1) ]
-
-/// The rows the `all` page lists, by id.
+/// The rows the list's sheet shows, by id.
 let private listed (model: ClientModel) : string list =
-    ClientModel.terminalRows model |> List.map (fun t -> TerminalId.value t.TerminalId)
+    ClientModel.listedRows model |> List.map (fun t -> TerminalId.value t.TerminalId)
+
+/// The rows folded under the sheet's closed row, by id.
+let private foldedRows (model: ClientModel) : string list =
+    snd (ClientModel.terminalRows model) |> List.map (fun t -> TerminalId.value t.TerminalId)
+
+/// Two terminals, `term-a` and `term-b`, both open.
+let private twoOpen : ClientModel =
+    clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
 
 let private listTests =
     testList "The terminal list (Plan 20, stage 0)" [
@@ -2806,107 +2804,51 @@ let private listTests =
         testCase "the list reads in open order, as the strip does" <| fun () ->
             // The list and the strip hold the same running terminals, and two surfaces
             // listing them in two orders is a difference a reader has to hold in their head.
-            let model = clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
-            Expect.equal
-                (ClientModel.terminalRows model |> List.map (fun t -> TerminalId.value t.TerminalId))
-                [ "term-a"; "term-b" ]
-                "open order, exactly as the strip"
+            Expect.equal (listed twoOpen) [ "term-a"; "term-b" ] "open order, exactly as the strip"
 
         // This replaced "closed terminals follow the open ones, most recently opened first".
         // That order made every close a reorder: the killed row dropped to the bottom and the
         // next live terminal's kill slid up under the pointer that had just pressed one, so a
         // double-click ended two terminals. A list somebody is pressing in holds still; a
-        // closed row says it is closed by its mark, not by where it went.
-        testCase "a terminal that closes keeps its place in the list" <| fun () ->
-            let rows (model: ClientModel) = ClientModel.terminalRows model |> List.map (fun t -> TerminalId.value t.TerminalId)
-            let before = clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
-            let after = before |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
-            Expect.equal (rows after) (rows before) "the same rows in the same places"
+        // closed row says it is closed by its mark, not by where it went — and is not folded
+        // away while the sheet it was pressed in is down.
+        testCase "a terminal that closes while the sheet is down keeps its place in the list" <| fun () ->
+            let down = twoOpen |> Support.step ToggleSwitcherMsg
+            let after = down |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
+            Expect.equal (listed after) (listed down) "the same rows in the same places"
 
-        // F5. The `all` page is narrowed rather than grouped: a filter per kind of terminal,
-        // each saying how many there are.
-        testCase "a filter counts the terminals of its kind" <| fun () ->
-            Expect.equal
-                (ClientModel.listFilters twoRunning |> List.tryFind (fun (kind, _) -> kind = Some TerminalKind.Running))
-                (Some (Some TerminalKind.Running, 2))
-                "two running"
-
-        testCase "only the kinds there are a terminal of are offered, after all of them" <| fun () ->
-            Expect.equal
-                (ClientModel.listFilters twoRunning |> List.map fst)
-                [ None; Some TerminalKind.Running; Some TerminalKind.Idle ]
-                "all, running, idle — nothing failed, nothing closed"
-
-        // Even where they narrow nothing: filters that arrived with a second kind of terminal
-        // would push every row under them down when, say, one of these two died.
-        testCase "a page of one kind of terminal still offers its filters" <| fun () ->
-            let model = clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
-            Expect.equal (ClientModel.listFilters model) [ None, 2; Some TerminalKind.Idle, 2 ] "all, and idle"
-
-        testCase "choosing a filter lists that kind of terminal, in the order they were opened" <| fun () ->
-            Expect.equal (listed (twoRunning |> Support.step (FilterListMsg (Some TerminalKind.Running)))) [ "term-b"; "term-c" ] "the running two"
-
-        // The stillness rule under a filter: a row does not vanish from under the reader the
-        // moment its terminal stops matching — the same hazard as a row that moves.
-        testCase "a row whose terminal stops matching stays until the filter is chosen again" <| fun () ->
+        testCase "a terminal closed when the sheet comes down is folded" <| fun () ->
             let model =
-                twoRunning
-                |> Support.step (FilterListMsg (Some TerminalKind.Running))
-                |> thenFolded [ at 6L 5.0 (completed terminalB "1" (CommandSucceeded 0) 3) ]
-            Expect.equal (listed model) [ "term-b"; "term-c" ] "term-b finished, and is where it was"
-
-        testCase "choosing the filter again lets go of a row that no longer matches" <| fun () ->
-            let model =
-                twoRunning
-                |> Support.step (FilterListMsg (Some TerminalKind.Running))
-                |> thenFolded [ at 6L 5.0 (completed terminalB "1" (CommandSucceeded 0) 3) ]
-                |> Support.step (FilterListMsg (Some TerminalKind.Running))
-            Expect.equal (listed model) [ "term-c" ] "decided again"
-
-        testCase "opening the page decides its filter again" <| fun () ->
-            let model =
-                twoRunning
-                |> Support.step (FilterListMsg (Some TerminalKind.Running))
-                |> thenFolded [ at 6L 5.0 (completed terminalB "1" (CommandSucceeded 0) 3) ]
+                twoOpen
+                |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
                 |> Support.step ToggleSwitcherMsg
-            Expect.equal (listed model) [ "term-c" ] "the page as it is now"
+            Expect.equal (foldedRows model) [ "term-a" ] "under the closed row"
 
-        testCase "a new terminal that matches the filter joins at the end" <| fun () ->
-            let terminalD = TerminalId.create "term-d" |> expect
+        testCase "a terminal that closed while the sheet was down is folded the next time it comes down" <| fun () ->
             let model =
-                twoRunning
-                |> Support.step (FilterListMsg (Some TerminalKind.Running))
-                |> thenFolded [ at 6L 5.0 (opened terminalD "deploy"); at 7L 6.0 (started terminalD "3" byAda "make deploy" 1) ]
-            Expect.equal (listed model) [ "term-b"; "term-c"; "term-d" ] "after the rows it decided on"
+                twoOpen
+                |> Support.step ToggleSwitcherMsg
+                |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
+                |> Support.step ToggleSwitcherMsg
+                |> Support.step ToggleSwitcherMsg
+            Expect.equal (foldedRows model) [ "term-a" ] "let go of when the sheet went up"
 
-        // Only a terminal it has not judged: one it left out is not added by changing, or a
-        // filter would grow rows in the middle of the list as well as lose them.
-        testCase "a terminal the filter left out is not added when it starts matching" <| fun () ->
-            let model =
-                twoRunning
-                |> Support.step (FilterListMsg (Some TerminalKind.Running))
-                |> thenFolded [ at 6L 5.0 (started terminalA "3" byAda "make" 1) ]
-            Expect.equal (listed model) [ "term-b"; "term-c" ] "term-a was idle when it was decided"
-
-        // The pressed button is never the one that goes.
-        testCase "the chosen filter is offered when nothing is that kind any more" <| fun () ->
-            let model =
-                twoRunning
-                |> Support.step (FilterListMsg (Some TerminalKind.Running))
-                |> thenFolded
-                    [ at 6L 5.0 (completed terminalB "1" (CommandSucceeded 0) 3)
-                      at 7L 6.0 (completed terminalC "2" (CommandSucceeded 0) 3) ]
+        testCase "the closed terminals are listed only once unfolded, after the open ones" <| fun () ->
+            let closed = twoOpen |> thenFolded [ at 3L 2.0 (closedNow terminalA) ] |> Support.step ToggleSwitcherMsg
             Expect.equal
-                (ClientModel.listFilters model |> List.tryFind (fun (kind, _) -> kind = Some TerminalKind.Running))
-                (Some (Some TerminalKind.Running, 0))
-                "running, none"
+                (listed closed, listed (closed |> Support.step ToggleClosedMsg))
+                ([ "term-b" ], [ "term-b"; "term-a" ])
+                "folded, then under the fold"
 
-        // A page narrowed to nothing would be an empty page under a pressed button.
-        testCase "a filter chosen over no terminal of its kind is every terminal" <| fun () ->
-            Expect.equal
-                (twoRunning |> Support.step (FilterListMsg (Some TerminalKind.Closed))).ListFilter
-                ListFilter.All
-                "nothing is closed"
+        // The sheet's current row is the one it says the pane is on; folded away, the sheet
+        // would say the pane is on nothing.
+        testCase "the terminal the pane is on is never folded" <| fun () ->
+            let model =
+                twoOpen
+                |> Support.step (OpenInPaneMsg (ClientModel.chosenRead terminalA twoOpen))
+                |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
+                |> Support.step ToggleSwitcherMsg
+            Expect.equal (foldedRows model) [] "term-a closed, and still above the fold"
 
         testCase "arming a kill asks nothing of the session" <| fun () ->
             // The first press is a question to the person, not a request: nothing leaves.
@@ -3154,6 +3096,7 @@ let private listTests =
                 |> Support.step (ShowInPaneMsg (Reading terminalB))
                 |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
                 |> Support.step ToggleSwitcherMsg
+                |> Support.step ToggleClosedMsg
             Expect.stringContains
                 (markupAt Dom.Hooks.contentList (Support.render model))
                 (Dom.attr Dom.Hooks.terminalListDismiss "term-a")
@@ -3551,10 +3494,7 @@ let private tabTests =
             let model =
                 clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (opened terminalB "logs") ]
                 |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
-            Expect.equal
-                (ClientModel.terminalRows model |> List.map (fun t -> TerminalId.value t.TerminalId))
-                [ "term-a"; "term-b" ]
-                "the list is nobody's working set"
+            Expect.equal (foldedRows model) [ "term-a" ] "under the fold: the list is nobody's working set"
 
         testCase "showing a terminal reached from the chat opens its tab" <| fun () ->
             // "Show in terminal" from a preview of the agent's command: the reader asked for
@@ -4407,7 +4347,7 @@ let private tabTests =
                   "put away", (fun (m, n, c) -> Support.step (DismissTabMsg (latest c)) m, n, c) ]
             let rec walk (depth: int) (path: string list) (state: ClientModel * int64 * int) =
                 let model, _, _ = state
-                let openOrder = ClientModel.terminalRows model |> List.map (fun view -> view.TerminalId)
+                let openOrder = model.Terminals.Terminals |> List.map (fun view -> view.TerminalId)
                 let fault =
                     if List.distinct model.Tabs <> model.Tabs then Some "holds a terminal twice"
                     elif openOrder |> List.filter (fun terminal -> List.contains terminal model.Tabs) <> model.Tabs then

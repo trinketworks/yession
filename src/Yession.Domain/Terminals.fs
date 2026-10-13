@@ -716,7 +716,10 @@ module TerminalName =
 
     /// The line a terminal's list row carries under its name: the block by its NAME
     /// (`BlockLabel.ofBlock`), because that row is scanned and a whole command is a truncation.
-    let summary (view: TerminalView) : string = alongside BlockLabel.ofBlock view
+    /// Not where it runs: on a phone's row that was cut to `in tri…`, which says nothing, and
+    /// it is the hint's to say (`hint`).
+    let summary (view: TerminalView) : string =
+        latest view |> Option.map BlockLabel.ofBlock |> Option.defaultValue ""
 
     /// The same line in full, for the hover that a person asks for more from: the whole command.
     let hint (view: TerminalView) : string = alongside (fun block -> block.Command) view

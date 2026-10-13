@@ -738,9 +738,7 @@ type Unseen =
     | Failed
 
 /// What a terminal is, to the person reading (`ClientModel.terminalState`) — the one answer
-/// its mark wears (`View.terminalMark`) and the `all` page's filters count and choose by
-/// (`TerminalKind.ofState`), so the mark beside a row and the filter it answers to cannot
-/// disagree.
+/// its mark wears (`View.terminalMark`).
 [<RequireQualifiedAccess>]
 type TerminalState =
     /// It has ended. Wins over everything: what a terminal is doing NOW is the first thing
@@ -756,57 +754,6 @@ type TerminalState =
     | Failed
     /// Open, nothing running, nothing new, nothing wrong — most of them.
     | Idle
-
-/// What the `all` page can be narrowed to, besides everything (`ListFilter`): a kind of
-/// terminal, by what it needs of a person.
-[<RequireQualifiedAccess>]
-type TerminalKind =
-    | Attention
-    | Running
-    | Idle
-    | Closed
-
-module TerminalKind =
-    /// The order the filters are offered in: what needs a person first, then what is
-    /// running, then what is idle, then what has ended.
-    let order = [ TerminalKind.Attention; TerminalKind.Running; TerminalKind.Idle; TerminalKind.Closed ]
-
-    /// Something to go and read — news, or a failure — is the attention kind, whether or
-    /// not it has been seen: a seen failure still wears the red mark, and the filter says
-    /// what the mark says. Running and closed are what the terminal is doing now, so they
-    /// win over its news, exactly as on the mark.
-    let ofState (state: TerminalState) : TerminalKind =
-        match state with
-        | TerminalState.UnseenFailed
-        | TerminalState.UnseenOk
-        | TerminalState.Failed -> TerminalKind.Attention
-        | TerminalState.Running -> TerminalKind.Running
-        | TerminalState.Idle -> TerminalKind.Idle
-        | TerminalState.Closed -> TerminalKind.Closed
-
-/// The `all` page's filter (F5): every terminal, or one kind of them — and, under a kind,
-/// WHICH rows it shows, decided rather than read live.
-///
-/// A list somebody is pressing in holds still (`ClientModel.terminalRows`), and a filter read
-/// live would break that the same way the old open-first order did: a running terminal that
-/// finished would vanish from "running" under the pointer, and the next row's kill slide up
-/// into its place. So the rows are decided when the filter is CHOSEN, and again when the page
-/// is opened (`ClientModel.holdFilter`); a row whose terminal changes after that stays where
-/// it is, wearing its new mark, until the reader chooses again or comes back. A terminal that
-/// did not exist when it was decided is added, at the end, the first time it matches — and
-/// once added, it is held like the rest.
-///
-/// View state, and not remembered across a reload (`PaneMemory`): a reload is a fresh look,
-/// and the page is what answers "what is here" to it (`openOfItself`) — a filter nobody
-/// remembers choosing would answer that with some of it. What it narrows by is a moment
-/// besides (running, unseen), not a preference worth keeping.
-[<RequireQualifiedAccess>]
-type ListFilter =
-    | All
-    /// `shown`: the rows it shows. `decided`: every terminal it has judged — those there were
-    /// when it was decided, and each later one it has since taken — so a terminal it already
-    /// left out is never added by changing.
-    | Only of kind: TerminalKind * shown: Set<TerminalId> * decided: Set<TerminalId>
 
 /// The pane's one face (Plan 25, stage 2; P2-1): a terminal, or a preview over one.
 ///
@@ -1609,8 +1556,18 @@ type ClientModel =
       /// so leaving it — Escape, or the item it was opened from — returns to exactly that, and
       /// choosing from it is choosing a tab.
       Switcher      : bool
-      /// What the `all` page is narrowed to, and which rows that decided on (`ListFilter`).
-      ListFilter    : ListFilter
+      /// The terminals the list's sheet holds above its fold however they change while it is
+      /// down (`ClientModel.holdList`): those open when it came down, and each opened since.
+      ///
+      /// A list somebody is pressing in holds still. Read live, a STOP would move its row
+      /// under the fold and slide the next row's STOP up under the pointer that had just
+      /// pressed one. So a row stays where it was, wearing its new mark, until the sheet is
+      /// put away and brought down again. View state: empty while the sheet is up.
+      ListHeld      : Set<TerminalId>
+      /// Whether the list's closed terminals are unfolded under their one row. Folded by
+      /// default: they are the record, and a session that has run forty commands has forty
+      /// of them to push its live terminals' rows apart.
+      ClosedShown   : bool
       /// The last thing the session REFUSED, in its own words.
       ///
       /// A command answers `CommandAccepted` or `CommandRejected`, and until now only the
@@ -2156,9 +2113,8 @@ type ClientMsg =
     /// too, as part of the choice (`ShowInPaneMsg`), and lands focus where the choice put the
     /// reader.
     | CloseSwitcherMsg
-    /// Narrow the `all` page to one kind of terminal, or (`None`) widen it to every one —
-    /// which decides, now, the rows it shows (`ListFilter`).
-    | FilterListMsg of TerminalKind option
+    /// Unfold the list's closed terminals, or fold them away again (`ClosedShown`).
+    | ToggleClosedMsg
     /// Something was copied to the clipboard (`Some` the hook of the box it came from), or
     /// the moment for saying so has passed (`None`).
     ///
@@ -2505,7 +2461,8 @@ module ClientModel =
           ItemMenu = None
           PaneMenu = false
           Switcher = false
-          ListFilter = ListFilter.All
+          ListHeld = Set.empty
+          ClosedShown = false
           Refused = None
           Stolen = None
           Asked = Map.empty
@@ -3414,87 +3371,47 @@ module ClientModel =
         // Nothing to play: a file is drawn, not replayed.
         | PreviewSubject.Content _ -> false
 
-    /// The switcher's terminals, in the order it lists them (Plan 20, stage 0; P2-2): every
-    /// terminal in the order it was OPENED, closed ones where they stood — those its filter
-    /// shows (`ListFilter`), which is every one until the reader narrows it.
+    /// The switcher's terminals, in the order it lists them (Plan 20, stage 0; P2-2): above
+    /// its fold, every open terminal and every one it holds (`ListHeld`), in the order it was
+    /// OPENED; under the fold, the closed rest, in the same order.
     ///
     /// One order, and it never changes under a row. It used to be two — the open terminals
     /// first, then the closed ones newest first — and that made a kill a reorder: the killed
     /// row dropped to the bottom and the next live terminal's kill slid up under the pointer
-    /// that had just pressed one, so a double-click ended two terminals. A list somebody is
-    /// pressing in holds still; whether a row is open is said by its mark and its tone, not
-    /// by where it went. The open terminals still read in the strip's order, because both are
-    /// open order. A filter keeps the promise by deciding its rows rather than reading them
-    /// live (`holdFilter`), so a row does not leave it either.
+    /// that had just pressed one, so a double-click ended two terminals. The fold keeps the
+    /// promise by holding its rows (`holdList`): a terminal that closes while the sheet is
+    /// down stays above it, wearing its closed mark. Whether a row is open is said by its mark
+    /// and its tone, not by where it went.
     ///
     /// Ordered by OPEN order rather than by last activity, which the projection cannot
     /// answer: a `TerminalView` carries no clock, and inventing one from block ranges would
     /// make the list's order a function of how much a terminal printed.
-    let terminalRows (model: ClientModel) : TerminalView list =
-        match model.ListFilter with
-        | ListFilter.All -> model.Terminals.Terminals
-        | ListFilter.Only (_, shown, _) -> model.Terminals.Terminals |> List.filter (fun view -> Set.contains view.TerminalId shown)
+    ///
+    /// The terminal the pane is on is above the fold however it stands: the sheet's current
+    /// row is never the one it hides.
+    let terminalRows (model: ClientModel) : TerminalView list * TerminalView list =
+        let current = selectedTerminal model
+        model.Terminals.Terminals
+        |> List.partition (fun view ->
+            view.IsOpen || Set.contains view.TerminalId model.ListHeld || current = Some view.TerminalId)
 
-    /// Which filter a terminal answers to: its state (`terminalState`), so the filter a row is
-    /// listed under and the mark it wears say one thing.
-    let terminalKind (view: TerminalView) (model: ClientModel) : TerminalKind =
-        TerminalKind.ofState (terminalState view model)
+    /// The rows the sheet shows: those above its fold, then — unfolded — those under it.
+    let listedRows (model: ClientModel) : TerminalView list =
+        let above, folded = terminalRows model
+        if model.ClosedShown then above @ folded else above
 
-    /// `kind` decided over the terminals as they stand: the ones that are it now, and every
-    /// one judged. Nothing being it is no filter at all — a page narrowed to nothing would be
-    /// an empty page with a pressed button over it, saying nothing about what is there.
-    let private decideFilter (kind: TerminalKind) (model: ClientModel) : ListFilter =
-        let views = model.Terminals.Terminals
-        let shown =
-            views
-            |> List.filter (fun view -> terminalKind view model = kind)
-            |> List.map (fun view -> view.TerminalId)
-        if List.isEmpty shown then ListFilter.All
-        else ListFilter.Only (kind, Set.ofList shown, views |> List.map (fun view -> view.TerminalId) |> Set.ofList)
-
-    /// The filter as the reader chose it: decided now.
-    let chooseFilter (kind: TerminalKind option) (model: ClientModel) : ListFilter =
-        match kind with
-        | None -> ListFilter.All
-        | Some kind -> decideFilter kind model
-
-    /// Keep the filter's rows still, after every message (`ListFilter`'s rule): decided again
-    /// when the page comes up — `before` did not have it up, `model` does — and otherwise
-    /// only ever added to, by a terminal it had not judged that now matches. Nothing a
-    /// terminal does takes its row away.
-    let holdFilter (before: ClientModel) (model: ClientModel) : ClientModel =
-        match model.ListFilter with
-        | ListFilter.All -> model
-        | ListFilter.Only (kind, _, _) when model.Switcher && not before.Switcher ->
-            { model with ListFilter = decideFilter kind model }
-        | ListFilter.Only (kind, shown, decided) ->
-            let joining =
+    /// Keep the list's rows still, after every message (`ListHeld`'s rule): while the sheet
+    /// is down, every terminal that is open is held, and nothing a terminal does lets go of
+    /// it; up, nothing is.
+    let holdList (model: ClientModel) : ClientModel =
+        if not model.Switcher then
+            if Set.isEmpty model.ListHeld then model else { model with ListHeld = Set.empty }
+        else
+            let opened =
                 model.Terminals.Terminals
-                |> List.filter (fun view -> not (Set.contains view.TerminalId decided) && terminalKind view model = kind)
-                |> List.map (fun view -> view.TerminalId)
-            if List.isEmpty joining then model
-            else
-                { model with
-                    ListFilter = ListFilter.Only (kind, Set.union shown (Set.ofList joining), Set.union decided (Set.ofList joining)) }
-
-    /// The filters the `all` page offers, each with how many terminals are that kind NOW:
-    /// every one (`None`) and each kind there is a terminal of — plus the chosen one whatever
-    /// its count, because the button that is pressed cannot be the one that goes. Offered
-    /// whenever there is a terminal at all, even of one kind, where they narrow nothing: a row
-    /// of filters that arrived when a second kind did — a terminal dying, say — would push
-    /// every row under it down, which is the move this page exists not to make.
-    let listFilters (model: ClientModel) : (TerminalKind option * int) list =
-        let views = model.Terminals.Terminals
-        let chosen =
-            match model.ListFilter with
-            | ListFilter.All -> None
-            | ListFilter.Only (kind, _, _) -> Some kind
-        let counted =
-            TerminalKind.order
-            |> List.map (fun kind -> kind, views |> List.filter (fun view -> terminalKind view model = kind) |> List.length)
-        let offered = counted |> List.filter (fun (kind, count) -> count > 0 || chosen = Some kind)
-        if List.isEmpty views then []
-        else (None, List.length views) :: (offered |> List.map (fun (kind, count) -> Some kind, count))
+                |> List.filter (fun view -> view.IsOpen && not (Set.contains view.TerminalId model.ListHeld))
+            if List.isEmpty opened then model
+            else { model with ListHeld = Set.union model.ListHeld (opened |> List.map (fun view -> view.TerminalId) |> Set.ofList) }
 
     /// The other item in `items` that takes `gone`'s place once it has gone — the next one,
     /// or at the end the one before: `TabStrip.neighbour`'s rule over what is left.
@@ -3522,7 +3439,7 @@ module ClientModel =
     /// already there, and that tab's × is now the one that puts it away.
     let killLanding (model: ClientModel) (killed: TerminalId) : DomMove =
         if model.Switcher then
-            let rows = terminalRows model |> List.map (fun view -> view.TerminalId)
+            let rows = listedRows model |> List.map (fun view -> view.TerminalId)
             successor rows killed |> Option.defaultValue killed |> DomMove.FocusSwitcherRow
         elif List.contains killed model.Tabs then DomMove.FocusTab killed
         else DomMove.FocusPane
@@ -4257,8 +4174,8 @@ module ClientModel =
     /// and through `landsWhenHeard` after it, so a pane already up when that line is crossed
     /// lands where a pane brought up then would;
     /// and through `notice`, so what this person has looked at is counted from wherever the
-    /// message left the pane; and through `holdFilter` after it, last before `heard`, so the
-    /// `all` page's filter judges a terminal by what it is once that has been counted.
+    /// message left the pane; and through `holdList` after it, last before `heard`, so the
+    /// list's sheet holds a terminal by what it is once that has been counted.
     /// The pane put away — and any popover hanging in it, which does not outlive it.
     let private paneHidden (model: ClientModel) : ClientModel =
         { model with TerminalsOpen = false; Switcher = false; PaneMenu = false }
@@ -4294,7 +4211,7 @@ module ClientModel =
         { model with PaneRoom = { model.PaneRoom with Chosen = Some width } }
 
     let rec private fold (msg: ClientMsg) (model: ClientModel) : ClientModel =
-        heard (holdFilter model (notice (reconcileLaunch (landsWhenHeard (openOfItself model (settle (recall (
+        heard (holdList (notice (reconcileLaunch (landsWhenHeard (openOfItself model (settle (recall (
         match msg with
         | ConnectingMsg ->
             { model with Connection = Connecting }
@@ -5045,7 +4962,7 @@ module ClientModel =
             else fold OpenAllMsg model
         | OpenAllMsg -> drawerShut { model with Switcher = true; PaneMenu = false; TerminalsOpen = true }
         | CloseSwitcherMsg -> { model with Switcher = false }
-        | FilterListMsg kind -> { model with ListFilter = chooseFilter kind model }
+        | ToggleClosedMsg -> { model with ClosedShown = not model.ClosedShown }
         | EnsureTerminalDraftMsg (terminal, author, queueId) ->
             // Typing changes nothing about the strip: a terminal being typed in is on screen
             // already, which is the whole of what it needs.

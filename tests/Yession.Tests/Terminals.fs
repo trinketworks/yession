@@ -432,15 +432,15 @@ let private terminalNameTests =
                 "npm test · in dev"
                 "the command, then the sandbox"
 
-        testCase "a terminal's summary names its block and says where" <| fun () ->
+        testCase "a terminal's summary names its block and leaves where to the hint" <| fun () ->
             let proj =
                 fold
                     [ openedIn (termN 1) devSandbox (TerminalTitle.fromProse "check")
                       started (termN 1) "1" "cd /repo && npm test" 0 ]
             Expect.equal
                 (TerminalName.summary (Projection.tryFind (termN 1) proj |> Option.get))
-                "$ npm test · in dev"
-                "the block's name, then the sandbox"
+                "$ npm test"
+                "the block's name alone"
 
         testCase "a terminal's latest block is the one it is running" <| fun () ->
             let proj =
