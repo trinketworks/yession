@@ -45,7 +45,7 @@ open Yession.Host
 /// read a private detail of the walk below and go quietly vacuous the day the walk changes
 /// shape. This is the walk saying what it did. Read in the page by name, as the render count
 /// is — the scans-per-render case in `Browser.fs` is its one reader.
-let private scansPublished : PageGlobal<int> = PageGlobal.named "__yessionViewportScans"
+let private scansPublished : PageGlobal<int> = Probes.scans
 
 let private countScan () : unit =
     PageGlobal.set

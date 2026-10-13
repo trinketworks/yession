@@ -641,6 +641,38 @@ let private foldedCommandLanded () : string list =
           if not focusOnChip then "focus is not back on the chip" ]
     | _ -> [ "the folded command is not in the scrollback" ]
 
+let private longValueInLane () : string list =
+    match first Root.Document "[data-query-panel=\"work_sandboxes\"]" with
+    | None -> [ "no work_sandboxes panel" ]
+    | Some panel ->
+        for cell in all (Root.Under panel) "[data-query-cell]" do
+            cell.textContent <- "a value far longer than two hundred and eighty pixels of column"
+        let edge = (panel.getBoundingClientRect ()).right
+        all (Root.Under panel) "*"
+        |> List.filter (fun e -> e.scrollWidth > e.clientWidth + 1.0 || (e.getBoundingClientRect ()).right > edge + 1.0)
+        |> List.map (fun e ->
+            let text = e.textContent.Trim ()
+            sprintf "%s: %s" e.tagName (if text.Length > 40 then text.Substring (0, 40) else text))
+
+let private labelCostsValue () : string list =
+    match first Root.Document "[data-query-panel=\"work_sandboxes\"]" with
+    | None -> [ "no work_sandboxes panel" ]
+    | Some panel ->
+        let values () = all (Root.Under panel) "dl [data-query-cell]"
+        // The same long value in every cell, so what is compared across the two measurements is
+        // the LABEL and nothing else.
+        for value in values () do
+            value.textContent <- "/private/etc/ssl/cert.pem, read-only; NIX_SSL_CERT_FILE=/private/etc/ssl/cert.pem"
+        let before = values () |> List.map (fun v -> (v.getBoundingClientRect ()).width)
+        for label in all (Root.Under panel) "dl dt" do
+            label.textContent <- "a label longer than the lane it is asked to share"
+        List.zip (values ()) before
+        |> List.choose (fun (value, was) ->
+            let now = (value.getBoundingClientRect ()).width
+            if abs (was - now) > 1.0 then
+                Some (sprintf "%s: %.0fpx became %.0fpx" (value.getAttribute "data-query-cell") was now)
+            else None)
+
 /// How a measure answers: a verdict (what is wrong) or a reading (numbers), each asked with
 /// its parameter. One match, so a new measure does not compile until it says which it is.
 [<RequireQualifiedAccess>]
@@ -683,6 +715,8 @@ let private implement (measure: Probes.Measure) : Implementation =
     | Probes.Measure.CommandRowHeld -> Implementation.Verdict (fun _ -> commandRowHeld ())
     | Probes.Measure.OutputNodes -> readingNow (fun _ -> outputNodes ())
     | Probes.Measure.FoldedCommandLanded -> verdictNow (fun _ -> foldedCommandLanded ())
+    | Probes.Measure.LongValueInLane -> verdictNow (fun _ -> longValueInLane ())
+    | Probes.Measure.LabelCostsValue -> verdictNow (fun _ -> labelCostsValue ())
 
 /// What is wrong, by a verdict measure's account, asked with its parameter.
 let verdict (measure: Probes.Measure) : (int -> JS.Promise<string list>) option =

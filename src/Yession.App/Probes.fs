@@ -420,6 +420,13 @@ module Probes =
         /// What of a folded command shown in its terminal has not landed: its run open, the
         /// command in view and painted, its mark playing, and focus back on the chip.
         | FoldedCommandLanded
+        /// An arrangement and a verdict: every cell of the `work_sandboxes` panel given a value
+        /// longer than the lane, then each part of the panel that overflows itself or the panel.
+        | LongValueInLane
+        /// An arrangement and a verdict: every value of the `work_sandboxes` panel given one
+        /// long value, measured, then every label given one longer than the lane: each value
+        /// whose width the label changed.
+        | LabelCostsValue
 
     [<RequireQualifiedAccess>]
     module Measure =
@@ -456,6 +463,8 @@ module Probes =
             | Measure.CommandRowHeld -> "command-row-held"
             | Measure.OutputNodes -> "output-nodes"
             | Measure.FoldedCommandLanded -> "folded-command-landed"
+            | Measure.LongValueInLane -> "long-value-in-lane"
+            | Measure.LabelCostsValue -> "label-costs-value"
 
         let all =
             [ Measure.RunningMarkOnTitle
@@ -488,11 +497,17 @@ module Probes =
               Measure.BurstMiddleToTop
               Measure.CommandRowHeld
               Measure.OutputNodes
-              Measure.FoldedCommandLanded ]
+              Measure.FoldedCommandLanded
+              Measure.LongValueInLane
+              Measure.LabelCostsValue ]
 
     /// How many times this document has rendered — published by `app/browser/Render.fs`,
     /// absent until the first render.
     let renders : Fable.BrowserExtras.PageGlobal<int> = Fable.BrowserExtras.PageGlobal.named "__yessionRenders"
+
+    /// How many times this document's view has scanned its viewports for what to draw —
+    /// published by `app/browser/Screens.fs`, absent until the first scan.
+    let scans : Fable.BrowserExtras.PageGlobal<int> = Fable.BrowserExtras.PageGlobal.named "__yessionViewportScans"
 
     /// Where focus has landed since `FocusBeforePane` began recording, in order: `pane` for a
     /// stop inside the content pane, `elsewhere` for any other.
@@ -656,6 +671,44 @@ module Probes =
             |> Decode.map (fun (x, y, selector, attribute) -> (x, y), (selector, attribute))
           EncodeAnswer = Encode.option Encode.string
           DecodeAnswer = Decode.option Decode.string }
+
+    /// A page's render count once it has stood still: polled every 250ms until it has not
+    /// moved for six polls running, or 30s have passed. The render and scan counts as they then
+    /// stand (`None` where the page never published one), and whether it did stand still.
+    [<RequireQualifiedAccess>]
+    type Quiet = { Renders: int option; Scans: int option; Still: bool }
+
+    [<RequireQualifiedAccess>]
+    module Quiet =
+        let encode (quiet: Quiet) =
+            Encode.object
+                [ "renders", Encode.option Encode.int quiet.Renders
+                  "scans", Encode.option Encode.int quiet.Scans
+                  "still", Encode.bool quiet.Still ]
+
+        let decode : Decoder<Quiet> =
+            Decode.object (fun get ->
+                { Quiet.Renders = get.Optional.Field "renders" Decode.int
+                  Quiet.Scans = get.Optional.Field "scans" Decode.int
+                  Quiet.Still = get.Required.Field "still" Decode.bool })
+
+    let quiet : Probe<int, Quiet> =
+        { Name = "__probeQuiet"
+          EncodeAsk = Encode.int
+          DecodeAsk = Decode.int
+          EncodeAnswer = Quiet.encode
+          DecodeAnswer = Quiet.decode }
+
+    /// What the page is, for a failing case to print beside its error: one line per fact —
+    /// where it is, its title, its connection and degraded tokens, the start of its
+    /// conversation, where the keyboard is, and what this client KEPT, store by store and
+    /// address by address with the start of each body.
+    let pageState : Probe<int, string list> =
+        { Name = "__probePageState"
+          EncodeAsk = Encode.int
+          DecodeAsk = Decode.int
+          EncodeAnswer = List.map Encode.string >> Encode.list
+          DecodeAnswer = Decode.list Decode.string }
 
     /// Whether the page's media query matches, as `matchMedia` answers it.
     let media : Probe<string, bool> =
