@@ -147,6 +147,49 @@ let private shows (selector: string, words: string) : bool =
             && e.textContent.Contains words
             && paintedAtCentre e (boxOf e))
 
+let rec private opacityUp (element: Element) : float =
+    let own = float (Css.computedProperty (element :?> HTMLElement) "opacity")
+    match element.parentElement |> Option.ofObj with
+    | Some parent -> own * opacityUp parent
+    | None -> own
+
+let private controlNamed (element: Element) : string =
+    let attributes = element.attributes
+    let names = [ for i in 0 .. int attributes.length - 1 -> attributes.[i].name ]
+    match names |> List.tryFind (fun n -> n.StartsWith "data-" && n <> "data-pane-tab") with
+    | Some name -> name
+    | None ->
+        match element.getAttribute "aria-label" |> Option.ofObj with
+        | Some label -> label
+        | None -> element.tagName
+
+let private opening (element: Element) : string =
+    let attributes = element.attributes
+    let said =
+        [ for i in 0 .. int attributes.length - 1 ->
+              let a = attributes.[i]
+              sprintf " %s=\"%s\"" a.name a.value ]
+    "<" + element.tagName.ToLowerInvariant () + String.concat "" said + ">"
+
+let private controls (selector: string, reveal: bool) : Probes.Control list =
+    all selector
+    |> List.map (fun element ->
+        if reveal then Scrolling.intoView element "center"
+        let box = boxOf element
+        { Probes.Control.Seen = Probes.Seen.create box (paintedAtCentre element box) element.textContent
+          Probes.Control.Opacity = opacityUp element
+          Probes.Control.FontSize = float ((Css.computedProperty (element :?> HTMLElement) "font-size").Replace ("px", ""))
+          Probes.Control.Field = element.matches "select, input:not([type=checkbox]):not([type=radio])"
+          Probes.Control.Exempt = (element.closest "[inert], [aria-hidden=true]").IsSome
+          Probes.Control.Name = controlNamed element
+          Probes.Control.Opening = opening element })
+
+let private attrAt ((x: float, y: float), (selector: string, attribute: string)) : string option =
+    Browser.Dom.document.elementFromPoint (x, y)
+    |> Option.ofObj
+    |> Option.bind (fun hit -> hit.closest selector)
+    |> Option.bind (fun found -> found.getAttribute attribute |> Option.ofObj)
+
 let private newest (selector: string, mark: string) : Probes.Newest option =
     first selector
     |> Option.bind (fun surface ->
@@ -271,6 +314,8 @@ answering Probes.selection selection
 answering Probes.media media
 answering Probes.hitAt hitAt
 answering Probes.shows shows
+answering Probes.controls controls
+answering Probes.attrAt attrAt
 
 for measure in Probes.Measure.all do
     Measures.verdict measure |> Option.iter (awaiting (Probes.verdict measure))

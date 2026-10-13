@@ -5914,7 +5914,7 @@ let editorTests =
                 do! scrollToTop page expand
                 let! before = topOf page (block + " + *")
                 do! clickWhereItIs page expand
-                let! _ = await (page.WaitForFunctionAsync ("selector => document.querySelector(selector).getAttribute('aria-expanded') === 'true'", box expand))
+                do! Wait.until "the output to open" (fun () -> Read.attr page expand "aria-expanded") ((=) (Some "true"))
                 do! twoFrames page
                 let! after = topOf page (block + " + *")
                 Expect.isTrue (abs (after - before) <= 2.0) (sprintf "the command under the block stays put: it was at %.1fpx, and is at %.1fpx" before after)
@@ -5957,8 +5957,7 @@ let editorTests =
                 do! toTheEnd page "blocks:term-harness"
                 let! run = newestRun page
                 do! enterRun page run
-                let! focused =
-                    await (page.EvaluateAsync<bool> ("selector => document.activeElement === document.querySelector(selector)", box (runLine run)))
+                let! focused = Read.focused page (runLine run)
                 Expect.isTrue focused "the keyboard is on the fold's line"
             }
 
@@ -6300,34 +6299,27 @@ let editorTests =
                 // drawer is open — shut, it is only translated off the side — so the entry's
                 // selector matches at once, while the drawer is still sliding in over its
                 // transition. A single read raced that slide and lost on a slower runner.
-                let! covered =
-                    await (page.WaitForFunctionAsync
-                            """(() => {
-                                 const box = document.querySelector('#shell aside').getBoundingClientRect()
-                                 if (box.left < 0) return false
-                                 const at = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
-                                 return !!at?.closest('aside')
-                               })()""")
-                Expect.isNotNull covered "the drawer is up, which is where the environment sits on a phone"
+                do! Wait.until
+                        "the drawer up, which is where the environment sits on a phone"
+                        (fun () -> Probe.seen page "#shell aside")
+                        (function
+                         | drawer :: _ -> drawer.Box.Left >= 0.0 && drawer.Painted
+                         | [] -> false)
 
                 do! awaitU (page.ClickAsync entry)
-                let! shown =
-                    await (page.WaitForFunctionAsync
-                            """(() => {
-                                 const panel = document.querySelector("#shell [data-pane-panel='terminal:term-live']")
-                                 if (!panel) return false
-                                 const box = panel.getBoundingClientRect()
-                                 const at = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
-                                 return !!at && panel.contains(at)
-                               })()""")
-                Expect.isNotNull shown "the drawer stood aside, and the terminal is on the screen"
+                do! Wait.until
+                        "the drawer to stand aside, and the terminal to be on the screen"
+                        (fun () -> Probe.seen page "#shell [data-pane-panel='terminal:term-live']")
+                        (List.exists (fun panel -> panel.Painted))
                 // And it is GONE rather than under the pane: on a phone the pane is the other
                 // sheet, at the same layer and later in the document, so a drawer left open
                 // behind it hides nothing on screen and comes back the moment the pane goes.
-                let! away =
-                    await (page.WaitForFunctionAsync
-                            """document.querySelector('#shell aside').getBoundingClientRect().right <= 0""")
-                Expect.isNotNull away "the drawer has left the screen"
+                do! Wait.until
+                        "the drawer to leave the screen"
+                        (fun () -> Probe.boxes page [ "#shell aside" ])
+                        (function
+                         | [ Some drawer ] -> drawer.Right <= 0.0
+                         | _ -> false)
                 return ()
             }
 
@@ -6356,9 +6348,8 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-close]")
                 let verbs = "#shell [data-content-list] [role=listitem] button:not([data-terminal-list-row])"
-                let! offered =
-                    await (page.EvaluateAsync<string[]> (sprintf """() => [...document.querySelectorAll("%s")]
-                        .map(b => b.outerHTML.slice(0, b.outerHTML.indexOf('>')))""" verbs))
+                let! verbsOffered = Probe.controls page verbs
+                let offered = verbsOffered |> List.map (fun verb -> verb.Opening)
                 Expect.isTrue (offered.Length >= 2) (sprintf "a page with verbs on it, or this proves nothing: %A" offered)
                 do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-list-row]")
                 let reached = System.Collections.Generic.HashSet<string> ()
@@ -6367,23 +6358,19 @@ let editorTests =
                 while inside.Value && presses.Value < 40 do
                     do! awaitU (page.Keyboard.PressAsync "Tab")
                     presses.Value <- presses.Value + 1
-                    let! here =
-                        await (page.EvaluateAsync<string> (sprintf """() => {
-                            const el = document.activeElement;
-                            if (!el?.closest('#shell [data-content-list]')) return 'outside';
-                            return el.matches("%s") ? el.outerHTML.slice(0, el.outerHTML.indexOf('>')) : 'name';
-                        }""" verbs))
-                    if here = "outside" then inside.Value <- false
-                    elif here <> "name" then
+                    let! inList = Read.focused page "#shell [data-content-list], #shell [data-content-list] *"
+                    let! onVerb = Probe.controls page (verbs + ":focus")
+                    match inList, onVerb with
+                    | false, _ -> inside.Value <- false
+                    | true, [] -> ()
+                    | true, verb :: _ ->
                         // Painted: every box from it up to the page fully opaque, once the
                         // fade has run.
-                        let! _ =
-                            await (page.WaitForFunctionAsync """() => {
-                                for (let n = document.activeElement; n; n = n.parentElement)
-                                    if (getComputedStyle(n).opacity !== '1') return false;
-                                return true;
-                            }""")
-                        reached.Add here |> ignore
+                        do! Wait.until
+                                (sprintf "%s to be opaque once focused" verb.Opening)
+                                (fun () -> Probe.controls page (verbs + ":focus"))
+                                (List.exists (fun v -> v.Opacity = 1.0))
+                        reached.Add verb.Opening |> ignore
                 for verb in offered do
                     Expect.isTrue (reached.Contains verb) (sprintf "Tab reaches %s" verb)
             }
@@ -6393,7 +6380,9 @@ let editorTests =
         editorCase "a closed row on the all page leads to its replay" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.EvaluateAsync "() => document.querySelector(\"#shell [data-pane-switcher][aria-expanded='false']\")?.click()")
+                match! Read.count page "#shell [data-pane-switcher][aria-expanded='false']" with
+                | 0 -> ()
+                | _ -> do! awaitU (page.ClickAsync "#shell [data-pane-switcher][aria-expanded='false']")
                 do! awaitU (page.ClickAsync "#shell [data-list-closed-fold][aria-expanded='false']")
                 do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-list-row='term-done']")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
@@ -6401,7 +6390,9 @@ let editorTests =
                 let! _ =
                     await (page.WaitForSelectorAsync
                         "#shell [data-pane-replay='terminal:term-done'], #shell [data-terminal-watch='watch']")
-                do! awaitU (page.EvaluateAsync "() => document.querySelector(\"#shell [data-terminal-watch='watch']\")?.click()")
+                match! Read.count page "#shell [data-terminal-watch='watch']" with
+                | 0 -> ()
+                | _ -> do! awaitU (page.ClickAsync "#shell [data-terminal-watch='watch']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-replay='terminal:term-done']")
                 return ()
             }
@@ -6430,22 +6421,15 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-list-row][aria-current='true']")
                 let! sizes =
-                    await (page.EvaluateAsync<string> """() => {
-                        const row = document.querySelector("#shell [data-content-list] [data-terminal-list-row][aria-current='true']").closest('[role=listitem]');
-                        return JSON.stringify([...row.querySelectorAll('button:not([data-terminal-list-row])')].map(b => {
-                            const r = b.getBoundingClientRect();
-                            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-                            let opacity = 1;
-                            for (let n = b; n; n = n.parentElement) opacity *= Number(getComputedStyle(n).opacity);
-                            return [Math.round(r.width), Math.round(r.height), hit !== null && b.contains(hit) && opacity === 1];
-                        }));
-                    }""")
-                let sizes = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement[]> sizes
+                    Probe.controls
+                        page
+                        "#shell [data-content-list] [role=listitem]:has([data-terminal-list-row][aria-current='true']) button:not([data-terminal-list-row])"
                 Expect.isNonEmpty sizes "the row the pane is about has verbs to wear"
                 for size in sizes do
+                    let width, height = Yession.App.Probes.Box.width size.Seen.Box, Yession.App.Probes.Box.height size.Seen.Box
                     Expect.isTrue
-                        (size.[0].GetInt32 () >= 44 && size.[1].GetInt32 () >= 44 && size.[2].GetBoolean ())
-                        (sprintf "a verb painted, on top, at the touch floor: %O" size)
+                        (px width >= 44 && px height >= 44 && size.Seen.Painted && size.Opacity = 1.0)
+                        (sprintf "a verb painted, on top, at the touch floor: %s %dx%d painted %b opacity %.2f" size.Name (px width) (px height) size.Seen.Painted size.Opacity)
             }
 
         // F5, on a phone: every OTHER row's verbs are out of the way, not merely see-through —
@@ -6455,17 +6439,11 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-list-row][aria-current='false']")
-                let! hidden =
-                    await (page.EvaluateAsync<string[]> """() => [...document.querySelectorAll("#shell [data-content-list] [data-terminal-list-row][aria-current='false']")]
-                        .flatMap(name => [...name.closest('[role=listitem]').querySelectorAll('button:not([data-terminal-list-row])')])
-                        .filter(b => {
-                            const r = b.getBoundingClientRect();
-                            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-                            let opacity = 1;
-                            for (let n = b; n; n = n.parentElement) opacity *= Number(getComputedStyle(n).opacity);
-                            return hit !== null && b.contains(hit) && opacity < 0.5;
-                        })
-                        .map(b => b.outerHTML.slice(0, b.outerHTML.indexOf('>')))""")
+                let! others =
+                    Probe.controls
+                        page
+                        "#shell [data-content-list] [role=listitem]:has([data-terminal-list-row][aria-current='false']) button:not([data-terminal-list-row])"
+                let hidden = others |> List.filter (fun b -> b.Seen.Painted && b.Opacity < 0.5) |> List.map (fun b -> b.Opening)
                 Expect.isEmpty hidden "nothing pressable that is not painted"
             }
 
@@ -6488,31 +6466,24 @@ let editorTests =
                 do! openManyTerminals page
                 let! overflows = stripOverflows page
                 Expect.isTrue overflows "the pivot holds more tabs than it shows, or this proves nothing"
-                let! hidden =
-                    await (page.EvaluateAsync<string> """() => {
-                        const strip = document.querySelector('#shell [data-pane-strip]').getBoundingClientRect();
-                        return JSON.stringify([...document.querySelectorAll('#shell [data-pane-strip] [data-pane-tab]')]
-                            .filter(t => { const r = t.getBoundingClientRect(); return r.left < strip.left - 1 || r.right > strip.right + 1; })
-                            .map(t => t.getAttribute('data-pane-tab').replace('terminal:', '')));
-                    }""")
-                let hidden = System.Text.Json.JsonSerializer.Deserialize<string array> hidden
+                let! strip = boxesOf page [ "#shell [data-pane-strip]" ]
+                let strip = strip.Head
+                let tabs = "#shell [data-pane-strip] [data-pane-tab]"
+                let! tabBoxes = Probe.seen page tabs
+                let! tabNames = Read.attrs page tabs "data-pane-tab"
+                let hidden =
+                    List.zip tabBoxes tabNames
+                    |> List.filter (fun (t, _) -> t.Box.Left < strip.Left - 1.0 || t.Box.Right > strip.Right + 1.0)
+                    |> List.choose (fun (_, name) -> name |> Option.map (fun n -> n.Replace ("terminal:", "")))
                 Expect.isNonEmpty hidden "the pivot is hiding some of its tabs"
                 // On screen, by what is painted at its centre — not by its box, which a clipping
                 // scroller leaves non-zero for something cut to nothing.
-                let! shown =
-                    await (page.EvaluateAsync<bool> """() => {
-                        const all = document.querySelector('#shell [data-pane-switcher]');
-                        const r = all.getBoundingClientRect();
-                        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-                        return hit !== null && all.contains(hit);
-                    }""")
-                Expect.isTrue shown "all is on screen, whatever the tabs beside it"
-                do! awaitU (page.EvaluateAsync "() => document.querySelector('#shell [data-pane-switcher]').click()")
+                let! all = Probe.seen page "#shell [data-pane-switcher]"
+                Expect.isTrue (all |> List.exists (fun a -> a.Painted)) "all is on screen, whatever the tabs beside it"
+                do! awaitU (page.Locator("#shell [data-pane-switcher]").DispatchEventAsync "click")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
-                let! listed =
-                    await (page.EvaluateAsync<string> """() => JSON.stringify([...document.querySelectorAll(
-                        '#shell [data-content-list] [data-terminal-list-row]')].map(r => r.getAttribute('data-terminal-list-row')))""")
-                let listed = System.Text.Json.JsonSerializer.Deserialize<string array> listed |> Set.ofArray
+                let! rows = Read.attrs page "#shell [data-content-list] [data-terminal-list-row]" "data-terminal-list-row"
+                let listed = rows |> List.choose id |> Set.ofList
                 for id in hidden do
                     Expect.isTrue (listed.Contains id) (sprintf "%s, hidden by the pivot, is on the all page" id)
             }
@@ -6532,12 +6503,8 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync (kill + "[data-terminal-close-armed='true']"))
                 // Hit-tested, not compared by rectangle: what matters is what a press at that
                 // point would reach, which is whatever is painted there.
-                let! under =
-                    await (page.EvaluateAsync<string> (
-                            sprintf
-                                "() => document.elementFromPoint(%.1f, %.1f)?.closest('[data-terminal-close]')?.getAttribute('data-terminal-close-armed') ?? 'nothing'"
-                                (float x) (float y)))
-                Expect.equal under "true" "the spot that was pressed is the armed kill"
+                let! under = Probe.attrAt page (float x) (float y) "[data-terminal-close]" "data-terminal-close-armed"
+                Expect.equal under (Some "true") "the spot that was pressed is the armed kill"
                 let! sent = Harness.read page HarnessPage.closed
                 Expect.equal sent None "the first press asked; it sent no kill"
             }
@@ -6594,9 +6561,8 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync (kill + "[data-terminal-close-armed='true']"))
                 do! awaitU (page.Keyboard.PressAsync "Escape")
                 let! _ = await (page.WaitForSelectorAsync (kill + "[data-terminal-close-armed='false']"))
-                let! focused =
-                    await (page.EvaluateAsync<string> "() => document.activeElement?.getAttribute('data-terminal-close') ?? 'nothing'")
-                Expect.equal focused "term-harness" "focus stays on the kill"
+                let! focused = Read.focused page "[data-terminal-close='term-harness']"
+                Expect.isTrue focused "focus stays on the kill"
                 let! sent = Harness.read page HarnessPage.closed
                 Expect.equal sent None "and nothing was killed"
             }
@@ -6641,22 +6607,23 @@ let editorTests =
                               Yession.Domain.Terminals.TerminalOpened.Sandbox = None
                               Yession.Domain.Terminals.TerminalOpened.Renewable = false })
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-close='term-bare']")
-                let rows =
-                    """() => JSON.stringify([...document.querySelectorAll('#shell [data-content-list] [role=listitem]')]
-                        .filter(r => r.querySelector('[data-terminal-list-row]'))
-                        .map(r => {
-                            const b = r.getBoundingClientRect();
-                            return [r.querySelector('[data-terminal-list-row]').getAttribute('data-terminal-list-row'),
-                                    Math.round(b.top), Math.round(b.height)];
-                        })
-                        .sort())"""
-                let! before = await (page.EvaluateAsync<string> rows)
+                let rows () =
+                    async {
+                        let items = "#shell [data-content-list] [role=listitem]:has([data-terminal-list-row])"
+                        let! boxes = Probe.seen page items
+                        let! ids = Read.attrs page (items + " [data-terminal-list-row]") "data-terminal-list-row"
+                        return
+                            List.zip ids boxes
+                            |> List.map (fun (id, row) -> id, px row.Box.Top, px (Yession.App.Probes.Box.height row.Box))
+                            |> List.sort
+                    }
+                let! before = rows ()
                 do! fold 91L (closed "term-harness")
                 do! fold 92L (closed "term-bare")
                 // Landed: a closed terminal offers no kill, and one with nothing kept says so.
                 do! waitAbsent "#shell [data-terminal-close='term-harness'], #shell [data-terminal-close='term-bare'] to be gone" page "#shell [data-terminal-close='term-harness'], #shell [data-terminal-close='term-bare']"
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-list-gone='term-bare']")
-                let! after = await (page.EvaluateAsync<string> rows)
+                let! after = rows ()
                 Expect.equal after before "every row where it was, the size it was"
             }
 
@@ -6688,13 +6655,10 @@ let editorTests =
 
                 // The failed command leads, which is the one thing the ordering promises —
                 // and it is a BUTTON, not a div someone hung a click on.
-                let! first =
-                    await (page.EvaluateAsync<string>
-                        """() => {
-                             const line = document.querySelector('#shell [data-chat-task-card] [data-chat-block]')
-                             return line.tagName + ':' + line.getAttribute('data-chat-block')
-                           }""")
-                Expect.equal first "BUTTON:block-burst-failed" "the failure leads, as a real button"
+                let! first = Read.attr page "#shell [data-chat-task-card] [data-chat-block]" "data-chat-block"
+                Expect.equal first (Some "block-burst-failed") "the failure leads"
+                let! asButton = Read.count page "#shell [data-chat-task-card] [data-chat-block='block-burst-failed']:is(button)"
+                Expect.equal asButton 1 "as a real button"
 
                 // And pressing it does what an ungrouped chip does: opens that block.
                 do! awaitU (page.Keyboard.PressAsync "Tab")
@@ -6725,24 +6689,13 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-settings-toggle='open']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-claude-panel]")
 
-                let! undersized =
-                    await (page.EvaluateAsync<string[]>
-                        """() => {
-                             const els = document.querySelectorAll(
-                               "#shell input, #shell select, #shell textarea, #shell [contenteditable='true']")
-                             const small = []
-                             els.forEach(el => {
-                               const box = el.getBoundingClientRect()
-                               if (box.width === 0 && box.height === 0) return   // not on screen
-                               const size = parseFloat(getComputedStyle(el).fontSize)
-                               if (size < 16) {
-                                 const name = el.id || Object.values(el.attributes)
-                                   .map(a => a.name).find(n => n.startsWith('data-')) || el.tagName
-                                 small.push(name + ': ' + size + 'px')
-                               }
-                             })
-                             return small
-                           }""")
+                let! fields = Probe.controls page "#shell input, #shell select, #shell textarea, #shell [contenteditable='true']"
+                let undersized =
+                    fields
+                    // Not on screen.
+                    |> List.filter (fun f -> not (Yession.App.Probes.Box.width f.Seen.Box = 0.0 && Yession.App.Probes.Box.height f.Seen.Box = 0.0))
+                    |> List.filter (fun f -> f.FontSize < 16.0)
+                    |> List.map (fun f -> sprintf "%s: %gpx" f.Name f.FontSize)
                 Expect.isEmpty undersized
                     (sprintf "these focusable fields render under 16px on a phone and will zoom iOS in on focus: %s"
                         (String.Join (", ", undersized)))
@@ -6777,44 +6730,26 @@ let editorTests =
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='show']")
                     let undersized (face: string) =
                         async {
-                            let! small =
-                                await (page.EvaluateAsync<string[]>
-                                            """() => {
-                                                 const small = []
-                                                 const held = "#shell header, #shell aside, " +
-                                                   "#shell [data-chat-block], #shell [data-chat-pending], #shell [data-chat-stretch]"
-                                                 const pressable = "button, [role=tab], a[href], select, input:not([type=hidden])"
-                                                 const controls = new Set()
-                                                 for (const region of document.querySelectorAll(held)) {
-                                                   if (region.matches(pressable)) controls.add(region)
-                                                   for (const el of region.querySelectorAll(pressable)) controls.add(el)
-                                                 }
-                                                 for (const el of controls) {
-                                                   if (el.closest('[inert], [aria-hidden=true]')) continue
-                                                   el.scrollIntoView({ block: 'center', inline: 'nearest' })
-                                                   const box = el.getBoundingClientRect()
-                                                   if (box.width === 0 || box.height === 0) continue
-                                                   const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
-                                                   if (!hit || !el.contains(hit)) continue
-                                                   const field = el.matches('select, input:not([type=checkbox]):not([type=radio])')
-                                                   if (box.height < 43.5 || (!field && box.width < 43.5)) {
-                                                     const name = Object.values(el.attributes).map(a => a.name)
-                                                       .find(n => n.startsWith('data-') && n !== 'data-pane-tab')
-                                                       || el.getAttribute('aria-label') || el.tagName
-                                                     small.push(name + ' ' + Math.round(box.width) + 'x' + Math.round(box.height))
-                                                   }
-                                                 }
-                                                 return small
-                                               }""")
-                            return small |> Array.map (fun s -> face + ": " + s)
+                            let pressable = [ "button"; "[role=tab]"; "a[href]"; "select"; "input:not([type=hidden])" ]
+                            let regions = [ "#shell header"; "#shell aside" ]
+                            let chips = [ "#shell [data-chat-block]"; "#shell [data-chat-pending]"; "#shell [data-chat-stretch]" ]
+                            let held =
+                                [ for p in pressable do
+                                      for r in regions @ chips -> r + " " + p
+                                  for c in chips do
+                                      for p in pressable -> c + ":is(" + p + ")" ]
+                                |> String.concat ", "
+                            let! controls = Probe.controlsReached page held
+                            return
+                                controls
+                                |> List.filter (fun c -> not c.Exempt && not (Yession.App.Probes.Box.isEmpty c.Seen.Box) && c.Seen.Painted)
+                                |> List.filter (fun c ->
+                                    let w, h = Yession.App.Probes.Box.width c.Seen.Box, Yession.App.Probes.Box.height c.Seen.Box
+                                    h < 43.5 || (not c.Field && w < 43.5))
+                                |> List.map (fun c ->
+                                    sprintf "%s: %s %dx%d" face c.Name (px (Yession.App.Probes.Box.width c.Seen.Box)) (px (Yession.App.Probes.Box.height c.Seen.Box)))
                         }
-                    let settle () =
-                        awaitU (
-                            page.EvaluateAsync
-                                """() => Promise.all(
-                                     document.getAnimations()
-                                       .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
-                                       .map(a => a.finished.catch(() => null)))""")
+                    let settle () = Probe.settled page
                     let onFace (face: string) (press: string) =
                         async {
                             do! awaitU (page.Locator(press).First.ClickAsync ())
@@ -6831,7 +6766,7 @@ let editorTests =
                     let! preview = onFace "a preview" "#shell [data-chat-block]"
                     let! _ = onFace "" "#shell [data-content-toggle='hide']"
                     let! nav = onFace "the nav" "#shell [data-nav-toggle='show']"
-                    let all = Array.concat [ chat; pane; list; preview; nav ]
+                    let all = List.concat [ chat; pane; list; preview; nav ]
                     Expect.isEmpty all
                         (sprintf "these controls are under 44px on a phone: %s" (String.Join (", ", all)))
                 }
@@ -6850,15 +6785,12 @@ let editorTests =
         editorCaseIn 1440 900 "the verb that connects an absent agent stands inside the agent's own row" <| fun page ->
             async {
                 do! noAgentRow page
-                let! inside =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const row = document.querySelector("#shell [data-agent-presence='absent']").getBoundingClientRect()
-                                 const verb = document.querySelector('#shell [data-no-agent-connect]')
-                                 const b = verb.getBoundingClientRect()
-                                 return verb.tagName === 'BUTTON' && b.width > 0
-                                     && b.top >= row.top - 0.5 && b.bottom <= row.bottom + 0.5
-                               }""")
+                let! measured = boxesOf page [ "#shell [data-agent-presence='absent']"; "#shell [data-no-agent-connect]" ]
+                let row, b = measured.[0], measured.[1]
+                let! asButton = Read.count page "#shell button[data-no-agent-connect]"
+                let inside =
+                    asButton = 1 && Yession.App.Probes.Box.width b > 0.0
+                    && b.Top >= row.Top - 0.5 && b.Bottom <= row.Bottom + 0.5
                 Expect.isTrue inside "the connect verb is a button whose box lies within the agent's row"
             }
         editorCaseIn 1440 900 "the verb that connects an absent agent opens settings" <| fun page ->
@@ -6872,13 +6804,8 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
                 do! noAgentRow page
-                let! height =
-                    await (page.EvaluateAsync<float>
-                            """() => {
-                                 const verb = document.querySelector('#shell [data-no-agent-connect]')
-                                 verb.scrollIntoView({ block: 'center' })
-                                 return verb.getBoundingClientRect().height
-                               }""")
+                let! verb = Probe.controlsReached page "#shell [data-no-agent-connect]"
+                let height = verb |> List.tryHead |> Option.map (fun v -> Yession.App.Probes.Box.height v.Seen.Box) |> Option.defaultWith (fun () -> failwith "no connect verb")
                 Expect.isTrue (height >= 43.5) (sprintf "a thumb's 44px, got %.1f" height)
             }
         thumbSized 390 844
@@ -6901,14 +6828,12 @@ let editorTests =
                     do! paneCovers "the pane to cover the screen" page
                     do! awaitU (page.FocusAsync "#shell [data-nav-toggle='show']")
                     do! awaitU (page.Keyboard.PressAsync "Enter")
-                    do! waitFor "the nav to be what is on screen at its centre" page
-                            """(() => {
-                                 const nav = document.querySelector('#shell aside:not([data-content-panel])')
-                                 const r = nav.getBoundingClientRect()
-                                 if (r.right <= 0) return false
-                                 const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-                                 return hit !== null && nav.contains(hit)
-                               })()"""
+                    do! Wait.until
+                            "the nav to be what is on screen at its centre"
+                            (fun () -> Probe.seen page "#shell aside:not([data-content-panel])")
+                            (function
+                             | nav :: _ -> nav.Box.Right > 0.0 && nav.Painted
+                             | [] -> false)
                 }
         navOverPane 390 844
         navOverPane 844 390
@@ -6921,9 +6846,8 @@ let editorTests =
         editorCaseIn 844 390 "a phone on its side keeps the chat the width of the screen" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation]")
-                let! width =
-                    await (page.EvaluateAsync<float>
-                        "() => document.querySelector('#shell [data-conversation]').getBoundingClientRect().width")
+                let! conversation = boxesOf page [ "#shell [data-conversation]" ]
+                let width = Yession.App.Probes.Box.width conversation.Head
                 Expect.isTrue (width >= 600.0) (sprintf "the chat is not squeezed between two columns: %.0fpx of 844" width)
             }
     ]

@@ -596,6 +596,67 @@ module Probes =
           EncodeAnswer = Encode.bool
           DecodeAnswer = Decode.bool }
 
+    /// One control as a thumb or a keyboard meets it: where it is and whether it is what is
+    /// painted at its centre, how opaque it is all the way up to the page, its computed font
+    /// size, whether it is a field (held to a height only), whether `inert` or `aria-hidden`
+    /// takes it out of reach, a short name (its first `data-*` attribute other than
+    /// `data-pane-tab`, else its label, else its tag) and its opening tag, which tells two
+    /// controls with the same name apart.
+    [<RequireQualifiedAccess>]
+    type Control =
+        { Seen: Seen
+          Opacity: float
+          FontSize: float
+          Field: bool
+          Exempt: bool
+          Name: string
+          Opening: string }
+
+    [<RequireQualifiedAccess>]
+    module Control =
+        let encode (control: Control) =
+            Encode.object
+                [ "seen", Seen.encode control.Seen
+                  "opacity", Encode.float control.Opacity
+                  "fontSize", Encode.float control.FontSize
+                  "field", Encode.bool control.Field
+                  "exempt", Encode.bool control.Exempt
+                  "name", Encode.string control.Name
+                  "opening", Encode.string control.Opening ]
+
+        let decode : Decoder<Control> =
+            Decode.object (fun get ->
+                { Control.Seen = get.Required.Field "seen" Seen.decode
+                  Control.Opacity = get.Required.Field "opacity" Decode.float
+                  Control.FontSize = get.Required.Field "fontSize" Decode.float
+                  Control.Field = get.Required.Field "field" Decode.bool
+                  Control.Exempt = get.Required.Field "exempt" Decode.bool
+                  Control.Name = get.Required.Field "name" Decode.string
+                  Control.Opening = get.Required.Field "opening" Decode.string })
+
+    /// Every match of a selector as a control, in document order — each first brought to the
+    /// middle of the screen when asked with `true`, so what is measured is what a thumb that
+    /// scrolled to it would meet.
+    let controls : Probe<string * bool, Control list> =
+        { Name = "__probeControls"
+          EncodeAsk = fun (selector, reveal) -> Encode.list [ Encode.string selector; Encode.bool reveal ]
+          DecodeAsk = Decode.tuple2 Decode.string Decode.bool
+          EncodeAnswer = List.map Control.encode >> Encode.list
+          DecodeAnswer = Decode.list Control.decode }
+
+    /// The value of an attribute on the closest match of a selector to what is painted at a
+    /// point in the viewport; `None` where nothing is painted there or nothing above it matches.
+    let attrAt : Probe<(float * float) * (string * string), string option> =
+        { Name = "__probeAttrAt"
+          EncodeAsk =
+            fun ((x, y), (selector, attribute)) ->
+                Encode.list [ Encode.float x; Encode.float y; Encode.string selector; Encode.string attribute ]
+          DecodeAsk =
+            Decode.tuple4 Decode.float Decode.float Decode.string Decode.string
+            |> Decode.map (fun (x, y, selector, attribute) -> (x, y), (selector, attribute))
+          EncodeAnswer = Encode.option Encode.string
+          DecodeAnswer = Decode.option Decode.string }
+
     /// Whether the page's media query matches, as `matchMedia` answers it.
     let media : Probe<string, bool> =
         { Name = "__probeMedia"
