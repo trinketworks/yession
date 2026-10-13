@@ -160,8 +160,11 @@ let all =
         // That the domain depends on nothing, read from the lockfile locked mode holds it to.
         Tag.needs "Domain references" [] (fun () -> DomainReferences.tests)
         // Where things live, read from the files git would commit: the root AGENTS.md within
-        // what a session reads, the one helper script, no docs/plans, examples standalone.
+        // what a session reads, the allowed helper scripts, no docs/plans, examples standalone.
         Tag.needs "Repo layout" [] (fun () -> RepoLayout.tests)
+        // The PreToolUse hook that keeps agents on the task verbs, spawned with payloads on stdin
+        // the way the harness runs it. Cheap: a shell and `jq`, which a box that runs `check` has.
+        Tag.needs "Direct tool hook" [] (fun () -> DirectToolHook.tests)
         Tag.needs "Control routes" [] (fun () -> ControlRoutes.tests)
         Tag.needs "Declared setup" [] (fun () -> DeclaredSetup.tests)
         // What may publish a release. `release.yml` runs on master alone, so this is the only
