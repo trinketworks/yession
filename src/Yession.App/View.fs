@@ -4525,8 +4525,9 @@ module View =
             let id = TerminalId.value view.TerminalId
             // Under a command's preview, the tab wears the preview's own lifted ground, so the
             // two read as one piece: the command, lifted out of this terminal.
+            // Under the list's sheet it goes quiet: the list button is the one lit thing then.
             let klass =
-                if not on then Style.pivotItem
+                if not on || onAll then Style.pivotItem
                 elif previewing |> Option.exists lifted then Style.pivotItemLifted
                 else Style.pivotItemOn
             let name = TerminalName.display model.Terminals view
@@ -4642,13 +4643,21 @@ module View =
         // drops the list down as a sheet over whatever the pane is showing. Not a tab: the
         // list is not a place the pane goes to, and the tab under it stays selected. Pressed
         // again, or Escape, puts it away.
+        //
+        // It carries how many terminals the list holds. Down, it wears the sheet's ground,
+        // flush with it — the sheet's tab — and the selected tab goes quiet under it, so the
+        // strip has one lit thing and it is the thing in front.
         let listButton =
+            let count = List.length model.Terminals.Terminals
+            let figure =
+                if count = 0 then Lit.nothing
+                else html $"""<span aria-hidden="true">{string count}</span>"""
             html $"""
-                <button type="button" class="{if onAll then Style.paneStripActOn else Style.paneStripAct}"
+                <button type="button" class="{if onAll then Style.paneListButtonOn else Style.paneListButton}"
                         data-pane-switcher aria-controls="{Dom.paneSheetId}"
                         aria-expanded="{if onAll then "true" else "false"}"
-                        aria-label="{Dom.Text.switchTerminal}" title="{Dom.Text.switchTerminal}"
-                        @click={Ev(fun _ -> dispatch ToggleSwitcherMsg)}>{Icon.list}</button>"""
+                        aria-label="{Dom.Text.switchTerminalCount count}" title="{Dom.Text.switchTerminal}"
+                        @click={Ev(fun _ -> dispatch ToggleSwitcherMsg)}>{Icon.list}{figure}</button>"""
         let previewBody (preview: Preview) =
             match preview.Subject with
             | PreviewSubject.Block (terminalId, blockId) -> paneBlockView model preview terminalId blockId
