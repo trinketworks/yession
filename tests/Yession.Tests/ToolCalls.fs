@@ -74,7 +74,7 @@ type ToolSession =
 /// the production one — the gate the Host builds, the dispatch table and per-turn bindings
 /// `SessionMain` hands it, the registry the SDK adapter assembles — with nothing standing in
 /// but the clock and whatever the caller substituted at the leaves.
-let openToolSession (services: Commands.CommandServices) : ToolSession =
+let openToolSessionTracing (tracer: Telemetry.Tracer) (services: Commands.CommandServices) : ToolSession =
     let doc = Y.Doc.Create ()
     // The session's clock, turned by the test: the gate's deadline is measured on it and
     // observed on a tick that is its own, so crossing the deadline is one call.
@@ -138,7 +138,10 @@ let openToolSession (services: Commands.CommandServices) : ToolSession =
             }
       Advance = clock.Advance
       Armed = clock.Armed
-      Launch = Commands.launchRepo services gate.Run gate.Read }
+      Launch = Commands.launchRepo tracer services gate.Run gate.Read }
+
+let openToolSession (services: Commands.CommandServices) : ToolSession =
+    openToolSessionTracing Telemetry.Tracer.Off services
 
 /// A repo service that answers `add_repo` with whatever the test says, and refuses
 /// everything else — the leaf substituted, and nothing above it.
@@ -862,6 +865,45 @@ let private launchTests =
                 Expect.isTrue
                     (held.Calls |> Seq.exists (fun (call, _) -> call.StartsWith "set_shell_profile"))
                     "and once it lands, the rest follows"
+            }
+
+        // What a person waits through between choosing a repo and seeing it, as ONE trace: a
+        // span per gated call under the launch, and the verb's own span inside the call that
+        // gated it — so the gate's cost is the difference, and the clone's steps (the repo
+        // service's spans, `GitIntegration`) hang off the same tree.
+        testCaseAsync "the launch is one trace, with the repo verb inside the gated call that ran it" <|
+            async {
+                let exporter = Fable.OpenTelemetry.inMemorySpanExporter ()
+                let tracer = Telemetry.tracerTo exporter
+                let held =
+                    let plain = reposHolding [] (cloned "main")
+                    { plain with
+                        Service =
+                            { plain.Service with
+                                AddRepo =
+                                    fun caller repo -> Telemetry.span tracer "repo.add" [] (plain.Service.AddRepo caller repo) } }
+                let session = openToolSessionTracing tracer (servicesRecording held)
+                // A traced verb settles a moment after the gate first looks, and an approved
+                // call appends nothing, so the gate sees it on its next tick: turn the clock.
+                let! running = Async.StartChild (launched session hello None)
+                do! session.Armed ()
+                session.Advance (TimeSpan.FromMilliseconds 100.0)
+                let! outcome = running
+                expect outcome
+                let spans = exporter.getFinishedSpans ()
+                let named name =
+                    match spans |> Array.tryFind (fun s -> s.name = name) with
+                    | Some span -> span
+                    | None -> failwithf "no %s span among %A" name (spans |> Array.map (fun s -> s.name))
+                let idOf (span: Fable.OpenTelemetry.ReadableSpan) = Some ((span.spanContext ()).spanId)
+                let parentOf (span: Fable.OpenTelemetry.ReadableSpan) =
+                    span.parentSpanContext |> Option.map (fun c -> c.spanId)
+                let launch = named "repo.launch"
+                Expect.equal (parentOf launch) None "the launch's work is a root"
+                Expect.equal (parentOf (named "gate add_repo")) (idOf launch) "the gated clone is the launch's child"
+                Expect.equal (parentOf (named "repo.add")) (idOf (named "gate add_repo")) "and the verb runs inside the call that gated it"
+                Expect.equal (parentOf (named "gate set_shell_profile")) (idOf launch) "the profile call is the launch's child too"
+                Expect.isSome (Array.tryFind (fun (s: Fable.OpenTelemetry.ReadableSpan) -> s.name = "repo.launch.admit") spans) "admission is measured"
             }
 
         testCaseAsync "a clone that fails is a failure that names the call and the reason" <|

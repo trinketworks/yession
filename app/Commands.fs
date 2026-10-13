@@ -777,12 +777,14 @@ type LaunchFailure =
 type LaunchRepo = Principal -> RepoRef -> string option -> Async<Result<Async<Result<unit, LaunchFailure>>, string>>
 
 let launchRepo
+    (tracer: Telemetry.Tracer)
     (services: CommandServices)
     (run: RunGatedCommand)
     (resume: QueueId -> Async<Result<CommandOutcome, string>>)
     : LaunchRepo =
     fun actor repo branch ->
         let authority = Authority.ofAuthor actor
+        let named = [ "yession.repo", Telemetry.AttributeValue.String (RepoRef.value repo) ]
         /// One gated call, waited to a verdict. `CommandRunning` is a yield, not an outcome —
         /// the gate hands back a handle and the work runs on — so it is resumed until it is one.
         let rec settle (outcome: Result<CommandOutcome, string>) : Async<Result<string, string>> =
@@ -797,14 +799,24 @@ let launchRepo
                     return! settle next
                 | Ok { Status = CommandRunning; Handle = None } -> return Error "the command yielded with no handle to resume it"
             }
+        let launchFailed (outcome: Result<'a, LaunchFailure>) =
+            match outcome with
+            | Error failure -> Some (sprintf "%s: %s" failure.Tool failure.Reason)
+            | Ok _ -> None
+        // One span per gated call, so the gate's own cost is what is left of it once the
+        // verb's span inside is subtracted.
         let gated (tool: string) (args: string list) (summary: string) : Async<Result<string, LaunchFailure>> =
-            async {
+            Telemetry.spanWith launchFailed tracer (sprintf "gate %s" tool) (("yession.tool", Telemetry.AttributeValue.String tool) :: named)
+            <| async {
                 let! outcome = run { Tool = tool; Args = encodeArgs args; Summary = summary; Authority = authority }
                 match! settle outcome with
                 | Ok text -> return Ok text
                 | Error reason -> return Error { LaunchFailure.Tool = tool; Summary = summary; Reason = reason }
             }
-        async {
+        // Admission and the work are two spans because they are two moments: the peer is
+        // answered after the first, and the second runs on wherever the caller starts it.
+        Telemetry.spanResult tracer "repo.launch.admit" named
+        <| async {
             match services.Repos () with
             | None -> return Error "this session has no repos"
             | Some service ->
@@ -819,7 +831,8 @@ let launchRepo
                 | Ok [] ->
                     return
                         Ok (
-                            async {
+                            Telemetry.spanWith launchFailed tracer "repo.launch" named
+                            <| async {
                                 match! gated addRepoTool [ RepoRef.value repo ] (sprintf "add_repo %s" (RepoRef.value repo)) with
                                 | Error e -> return Error e
                                 | Ok _ ->

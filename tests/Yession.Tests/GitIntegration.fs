@@ -291,7 +291,8 @@ let private makeBareFixtureWithAgentsMd (root: string) (name: string) (agentsMd:
 /// The service, with the git it runs, the credential it spends, and somewhere to record a
 /// network failure. The credential and the recorder are the caller's because whether a verb
 /// spent a credential is exactly what decides whether a failure says anything about one.
-let private serviceAsking
+let private serviceTracing
+    (tracer: Telemetry.Tracer)
     (git: string)
     (token: string option)
     (failures: ResizeArray<CredentialFor * string>)
@@ -321,8 +322,11 @@ let private serviceAsking
           ResolveToken = fun _ -> async { return token }
           Canonical = canonical
           OnNetworkFailure = fun actor said -> async { failures.Add (actor, said) }
+          Tracer = tracer
           Log = log }
     |> expect
+
+let private serviceAsking = serviceTracing Telemetry.Tracer.Off
 
 /// The service over a provider that cannot be asked what it calls a repo — every case that
 /// is not about the name.
@@ -462,6 +466,49 @@ let private srtTests =
                 "the listing is the filesystem's answer, and it says where"
         }
 
+        // Where an add's time goes, as spans: every step between the call and the record is
+        // its own child of the add, and a sandbox's first-use cost sits inside the verb that
+        // paid it — so "the clone is slow" and "the sandbox is slow" read differently.
+        testCaseAsync "an add is one span tree: token, name, clone (with its sandbox), listing, record" <| async {
+            let root = mkdtemp ()
+            makeBareFixture root "hello" |> ignore
+            let exporter = Fable.OpenTelemetry.inMemorySpanExporter ()
+            let service =
+                serviceTracing
+                    (Telemetry.tracerTo exporter)
+                    namedGit
+                    None
+                    (ResizeArray ())
+                    (fun _ _ -> async { return None })
+                    root
+                    (freshLog ())
+            let! added = service.AddRepo caller (RepoRef.create "octo/hello" |> expect)
+            expect added |> ignore
+            let spans = exporter.getFinishedSpans ()
+            let named name =
+                match spans |> Array.filter (fun s -> s.name = name) with
+                | [| span |] -> span
+                | other -> failwithf "expected one %s span, got %d among %A" name other.Length (spans |> Array.map (fun s -> s.name))
+            let idOf (span: Fable.OpenTelemetry.ReadableSpan) = Some ((span.spanContext ()).spanId)
+            let parentOf (span: Fable.OpenTelemetry.ReadableSpan) =
+                span.parentSpanContext |> Option.map (fun c -> c.spanId)
+            let childrenOf (span: Fable.OpenTelemetry.ReadableSpan) =
+                spans |> Array.filter (fun s -> parentOf s = idOf span) |> Array.map (fun s -> s.name) |> Array.sort |> List.ofArray
+            let add = named "repo.add"
+            Expect.equal (parentOf add) None "the add is the root here"
+            Expect.equal
+                (childrenOf add)
+                [ "git clone"; "repo.canonical"; "repo.listing"; "repo.record"; "repo.resolve_token" ]
+                "each step of the add is its own child"
+            Expect.equal (childrenOf (named "git clone")) [ "git.probe"; "git.sandbox.create" ] "the clone's sandbox is brought up inside it"
+            Expect.equal (childrenOf (named "repo.listing")) [ "git rev-parse"; "git status" ] "the listing is two git runs"
+            Expect.equal
+                (childrenOf (named "git rev-parse"))
+                [ "git.probe"; "git.sandbox.create" ]
+                "the confined sandbox's first use lands in the first verb that needs it"
+            Expect.equal (childrenOf (named "git status")) [] "and costs nothing after"
+        }
+
         testCaseAsync "a repo's root AGENTS.md rides on the add" <| async {
             let root = mkdtemp ()
             makeBareFixtureWithAgentsMd root "hello" "Reply to every message in iambic pentameter." |> ignore
@@ -510,6 +557,7 @@ let private srtTests =
                       ResolveToken = fun _ -> async { return None }
                       Canonical = fun _ _ -> async { return None }
                       OnNetworkFailure = fun _ _ -> async { return () }
+                      Tracer = Telemetry.Tracer.Off
                       Log = log }
                 |> expect
             let repo = RepoRef.create "octo/hello" |> expect
