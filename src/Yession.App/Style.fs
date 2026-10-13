@@ -3110,10 +3110,16 @@ module Style =
     let paneStripAct =
         cls [ "shrink-0 w-11 h-11 grid place-items-center bg-transparent border-0 cursor-pointer p-0"
               "text-ink-dim hover:text-ink hover:bg-surface transition-colors motion-reduce:transition-none"; focusRingInset ]
-    /// The same, while what it opens is open: the list button with its sheet down.
-    let paneStripActOn =
-        cls [ "shrink-0 w-11 h-11 grid place-items-center border-0 cursor-pointer p-0"
-              "bg-surface-2 text-ink transition-colors motion-reduce:transition-none"; focusRingInset ]
+    /// The list button: the list's glyph and how many terminals it holds — on a phone only
+    /// one tab fits, and the count is the one clue that there are others. As tall as the
+    /// strip, at least as wide, its figures in the tabs' type so they read as one line.
+    let private paneListButtonBase =
+        cls [ "shrink-0 h-11 min-w-11 px-3 phone:px-2 inline-flex items-center justify-center gap-1.5 border-0 cursor-pointer"
+              "font-ui font-normal text-body tabular-nums transition-colors motion-reduce:transition-none"; focusRingInset ]
+    let paneListButton = cls [ paneListButtonBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
+    /// The same with its sheet down: the sheet's own ground (`allSheet`), flush with it, so
+    /// the button reads as the sheet's tab and is the one lit thing in the strip.
+    let paneListButtonOn = cls [ paneListButtonBase; "bg-surface text-ink" ]
 
     /// Everything under the strip — the toolbar, the body, and the list's sheet when it is down,
     /// which is laid over the first two from the strip's edge.
