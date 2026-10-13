@@ -7142,7 +7142,9 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
 
                 // Every terminal the session has is reachable here, whether or not the strip
-                // would have carried it.
+                // would have carried it — the closed ones one press away, under their fold.
+                do! awaitU (page.ClickAsync "#shell [data-list-closed-fold][aria-expanded='false']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-list-closed-fold][aria-expanded='true']")
                 let! rows = await (page.EvaluateAsync<int> "() => document.querySelectorAll('#shell [data-content-list] [data-terminal-list-row]').length")
                 Expect.equal rows 3 "every terminal the harness has, the closed one included"
 
@@ -7286,6 +7288,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.EvaluateAsync "() => document.querySelector(\"#shell [data-pane-switcher][aria-expanded='false']\")?.click()")
+                do! awaitU (page.ClickAsync "#shell [data-list-closed-fold][aria-expanded='false']")
                 do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-list-row='term-done']")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 // Opened, it is either playing already or one press from it.
@@ -7297,66 +7300,20 @@ let editorTests =
                 return ()
             }
 
-        // F5. The page is narrowed by filters rather than grouped, and a filter is a control
-        // like any other: every one of them is on the keyboard's way, from the rows back up.
-        editorCase "every filter on the all page is reached by Tab" <| fun page ->
+        // The sheet is a layer over the pane, not a place: the pane under it is the way out,
+        // pressed anywhere it shows. Only a browser can say what is on top where it shows —
+        // a scrim under the sheet, or under the pane's own layers, presses nothing.
+        editorCase "pressing the pane under the list's sheet puts the sheet away" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-filter='closed']")
-                let! offered =
-                    await (page.EvaluateAsync<string[]> """() => [...document.querySelectorAll("#shell [data-content-list] [data-terminal-filter]")]
-                        .map(b => b.getAttribute('data-terminal-filter'))""")
-                Expect.isTrue (offered.Length >= 3) (sprintf "all and at least two kinds, or this proves nothing: %A" offered)
-                do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-list-row]")
-                let reached = System.Collections.Generic.HashSet<string> ()
-                let presses = ref 0
-                while reached.Count < offered.Length && presses.Value < 12 do
-                    do! awaitU (page.Keyboard.PressAsync "Shift+Tab")
-                    presses.Value <- presses.Value + 1
-                    let! here =
-                        await (page.EvaluateAsync<string> """() => document.activeElement?.getAttribute('data-terminal-filter') ?? ''""")
-                    if here <> "" then reached.Add here |> ignore
-                for filter in offered do
-                    Expect.isTrue (reached.Contains filter) (sprintf "Tab reaches the %s filter" filter)
-            }
-
-        // F5. Which filter the page is narrowed to is said to assistive technology, not only
-        // drawn: chosen from the keyboard, that one — and only that one — is pressed.
-        editorCase "a filter chosen from the keyboard is the one pressed" <| fun page ->
-            async {
-                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-filter='closed']")
-                do! awaitU (page.Keyboard.PressAsync "Enter")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-filter='closed'][aria-pressed='true']")
-                let! pressed =
-                    await (page.EvaluateAsync<string[]> """() => [...document.querySelectorAll("#shell [data-content-list] [data-terminal-filter]")]
-                        .filter(b => b.getAttribute('aria-pressed') === 'true')
-                        .map(b => b.getAttribute('data-terminal-filter'))""")
-                Expect.equal (List.ofArray pressed) [ "closed" ] "closed, and nothing else"
-            }
-
-        // F5, on a phone: every filter is a thumb's 44px, painted and on top where it is.
-        editorCaseOnTouch 390 844 "on a touch screen every filter on the all page is at the touch floor" <| fun page ->
-            async {
-                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-filter='closed']")
-                let! sizes =
-                    await (page.EvaluateAsync<string> """() => JSON.stringify(
-                        [...document.querySelectorAll("#shell [data-content-list] [data-terminal-filter]")].map(b => {
-                            b.scrollIntoView({ inline: 'nearest', block: 'nearest' });
-                            const r = b.getBoundingClientRect();
-                            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-                            return [b.getAttribute('data-terminal-filter'), Math.round(r.width), Math.round(r.height), hit !== null && b.contains(hit)];
-                        }))""")
-                let sizes = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement[]> sizes
-                Expect.isTrue (sizes.Length >= 3) "filters to measure"
-                for size in sizes do
-                    Expect.isTrue
-                        (size.[1].GetInt32 () >= 44 && size.[2].GetInt32 () >= 44 && size.[3].GetBoolean ())
-                        (sprintf "a filter on top, at the touch floor: %O" size)
+                let! sheet = await (page.WaitForSelectorAsync "#shell #pane-sheet")
+                let! box = await (sheet.BoundingBoxAsync ())
+                let! pane = await (page.Locator("#shell [data-content-panel]").BoundingBoxAsync ())
+                Expect.isTrue (box.Y + box.Height < pane.Y + pane.Height - 20.0f) "pane showing under the sheet, or this proves nothing"
+                do! awaitU (page.Mouse.ClickAsync (pane.X + pane.Width / 2.0f, pane.Y + pane.Height - 10.0f))
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-switcher][aria-expanded='false']")
+                return ()
             }
 
         // F5, on a phone: a thumb has no hover, so the row the pane is about WEARS its verbs —

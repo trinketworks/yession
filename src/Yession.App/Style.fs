@@ -3285,34 +3285,42 @@ module Style =
     /// than the pane, scrolling inside itself.
     let allSheet =
         cls [ "absolute inset-x-0 top-0 max-h-full z-30 overflow-y-auto overscroll-contain"
-              "bg-surface border-b border-edge"
+              "bg-surface border-b border-edge shadow-[0_12px_32px_rgb(0_0_0/0.5)]"
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue focus-visible:-outline-offset-2" ]
 
-    /// The sheet's head, the manager page's section head: the name of what is listed in the
-    /// caps voice, then its filters, then its one act.
-    let allHead = "shrink-0 h-11 flex items-center gap-2 px-3 min-w-0"
-    let allHeadLabel = caps + " text-ink-dim shrink-0 mr-2"
+    /// What the sheet is laid over, dimmed: the pane goes on showing under it, a step back.
+    /// Under the sheet in the stack and over everything else the pane has.
+    let allSheetScrim = cls [ "absolute inset-0 z-20 p-0 border-0 cursor-default bg-black/45"; focusRingInset ]
 
     /// One row: its name (and the marks beside it) over what it last ran, its verbs at the
     /// right. The names line up down the page because every mark sits AFTER its name — a
     /// leading column of marks of four different widths is what made the old list's left
     /// edge ragged.
+    ///
+    /// The row's button holds both its lines (`terminalListName`), so a row needs be no
+    /// taller than they are to be a thumb's: 60px.
     let terminalListRow =
-        cls [ "group/row flex items-center gap-3 px-3 py-2 min-h-14 phone:py-1"
-              "hover:bg-surface has-[[aria-current=true]]:bg-surface-2"; Stroke.dividerBottom ]
+        cls [ "group/row flex items-stretch gap-3 pl-3 pr-1 min-h-15"
+              "hover:bg-surface-2 has-[[aria-current=true]]:bg-surface-2"; Stroke.dividerBottom ]
 
     /// The row's own control: its name, which opens it — the pivot's type, so the page reads
     /// as the pivot's names written out in full. Ink at rest so the page reads as a list of
     /// names, blue under the pointer because that is what interactive means here.
-    let terminalListName =
-        cls [ "min-w-0 truncate bg-transparent border-0 cursor-pointer text-left p-0 phone:min-h-11 phone:min-w-11"
-              "font-ui font-light text-body text-ink transition-colors"; focusRing ]
+    ///
+    /// It is both of the row's lines, the name over what it says, so the row is pressed
+    /// anywhere but its verbs.
+    let private terminalListNameBase =
+        cls [ "min-w-0 flex-1 flex flex-col justify-center gap-0.5 px-0 py-2 bg-transparent border-0 cursor-pointer text-left"
+              "font-ui font-normal text-body transition-colors"; focusRingInset ]
+    let terminalListName = cls [ terminalListNameBase; "text-ink" ]
+    /// The name itself, as much of it as fits.
+    let terminalListNameText = "min-w-0 truncate"
+    /// A row's two lines where they are not a control: a file on its way in.
+    let terminalListWho = "min-w-0 flex-1 flex flex-col justify-center gap-0.5 py-2"
 
     /// A closed row's name: dimmer, which says which half of the list it is in by its tone
     /// rather than by repeating the word — its mark says the rest.
-    let terminalListNameClosed =
-        cls [ "min-w-0 truncate bg-transparent border-0 cursor-pointer text-left p-0 phone:min-h-11 phone:min-w-11"
-              "font-ui font-light text-body text-ink-dim transition-colors"; focusRing ]
+    let terminalListNameClosed = cls [ terminalListNameBase; "text-ink-dim" ]
 
     /// A row's name line: the name, then its marks, on one line that gives way in the name.
     let terminalListNameLine = "min-w-0 flex items-center gap-2"
@@ -3325,10 +3333,13 @@ module Style =
     /// closed, and the missing rewind says there is nothing to play.
     let terminalGone = "shrink-0 whitespace-nowrap font-ui font-light text-small text-ink-faint"
 
-    /// What a terminal row's terminal is doing or last ran, under its name: the command, in
-    /// the terminal's own face, small and faint — it tells nine `term N` rows apart, and it is
-    /// not the thing the row opens. An artifact's size sits in the same slot.
-    let terminalListSubtitle = "block min-w-0 truncate font-terminal text-code-sm text-ink-faint"
+    /// What a terminal row's terminal is doing or last ran, under its name, led by its
+    /// state's mark: small, and `ink-dim` — it tells nine `term N` rows apart, and it is not
+    /// the thing the row opens. In the UI's face: what it says is mostly a sentence an agent
+    /// wrote, and a sentence in the terminal's face read as output.
+    let terminalListSubtitle =
+        "min-w-0 flex items-center gap-1.5 font-ui font-light text-small text-ink-dim [&_[data-pane-mark]]:shrink-0"
+    let terminalListSummary = "min-w-0 truncate"
 
     /// A row's verb, as a WORD: `rewind`, `kill`, `replay`, `put away`. They were glyphs, and
     /// the kill's was a square — which is what stop looks like, beside a command that now has
@@ -3350,7 +3361,7 @@ module Style =
     /// is WCAG 2.5.8's floor for the MARK, never for the target, and a kill 4px from a rewind
     /// is a kill pressed by a thumb aiming at the rewind.
     let terminalListVerbs =
-        "ml-auto flex items-center gap-4 shrink-0 phone:gap-2 phone:[&>*]:min-w-11 phone:[&>*]:min-h-11"
+        "ml-auto self-center flex items-center gap-4 shrink-0 phone:gap-2 phone:[&>*]:min-w-11 phone:[&>*]:min-h-11"
 
     /// Every other row's verbs: there, but not shown, until they are wanted. Under the pointer
     /// or the keyboard anywhere in the row they come up (`group/row`, and `focus-within` so Tab
@@ -3364,29 +3375,17 @@ module Style =
     /// opened from wears them when the reader comes back.
     let terminalListVerbsAtRest = terminalListVerbs
 
-    /// The page's filters (F5), at its head over the rows: `all` and each kind of terminal
-    /// there is, with how many. ONE line, never wrapped: a filter arriving or leaving as
-    /// terminals change must not grow the row and move every row under it, so words that
-    /// outgrow it pan inside it rather than wrap or push the page sideways. The first word
-    /// on the rail, as every name under it is.
-    let allFilters =
-        "min-w-0 flex items-center gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-
-    /// One filter: the pivot's idiom at the section label's size — a word, lowercase and
-    /// light, told apart from the others by INK alone: the one the page is narrowed to in
-    /// full ink, the rest in `ink-faint` and brightening under the hand. A setting, so bare
-    /// (docs/visual-design.md, "Hierarchy of controls"); a lens over the list rather than a
-    /// verb on it, so in the page's lowercase rather than the row verbs' caps. Read from
-    /// `aria-pressed`, so what is drawn and what is announced are one attribute. A thumb's 44
-    /// on a phone, with the word kept on the rail.
-    let allFilter =
-        cls [ "shrink-0 h-7 phone:h-11 px-2.5 inline-flex items-center gap-1.5 bg-transparent cursor-pointer"
-              caps; "whitespace-nowrap text-ink-dim hover:text-ink aria-pressed:text-ink"
-              Stroke.ring; "border-edge hover:border-ink-faint aria-pressed:border-ink-dim"
-              "transition-colors duration-150 ease-out motion-reduce:transition-none"; focusRing ]
-
-    /// A filter's count: figures that do not shift the words beside them as they change.
-    let allFilterCount = "tabular-nums"
+    /// The one row the closed terminals fold under: the section voice, its count, and the
+    /// fold's mark at the far edge, turned while it is open. The row is the press — a
+    /// thumb's 44 across the sheet.
+    let listClosedFold =
+        cls [ "w-full h-11 flex items-center gap-2.5 pl-3 pr-4 bg-transparent border-0 cursor-pointer text-left"
+              caps; "text-ink-dim hover:text-ink hover:bg-surface-2 transition-colors motion-reduce:transition-none"
+              Stroke.dividerBottom; focusRingInset ]
+    let listFoldMark = "ml-auto inline-flex transition-transform motion-reduce:transition-none"
+    let listFoldMarkOpen = cls [ listFoldMark; "rotate-180" ]
+    /// How many a section holds, beside its name: a step quieter, figures that hold still.
+    let listCount = "text-ink-faint tabular-nums"
 
     /// The page's word when there is nothing on it.
     let contentListEmptyWord = "px-3 py-3 font-ui font-light text-body text-ink-faint select-none"
@@ -3396,11 +3395,10 @@ module Style =
     let terminalEmpty = "flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center phone:[&_button]:min-h-11"
 
 
-    /// What a section of the page is called: the pivot's lowercase, small, faint. The rows
-    /// are the content, and a heading that competed with them would make a page of three
-    /// terminals read as two lists. Present only when there is more than one kind to tell
-    /// apart (`listSections`).
-    let listSectionLabel = cls [ "h-11 flex items-end px-3 pb-2 mt-4 select-none text-ink-dim"; caps; Stroke.dividerBottom ]
+    /// What a section of the sheet is called — its files — in the caps voice, `ink-dim`, with
+    /// its count and its one act beside it. The terminals have none: the list button above
+    /// them says what they are.
+    let listSectionLabel = cls [ "h-11 flex items-center gap-2.5 pl-3 pr-1 mt-4 select-none text-ink-dim"; caps; Stroke.dividerBottom ]
 
     /// An artifact's row: the same row as a terminal's, so the two sections read as one list
     /// of things rather than two designs.
@@ -3414,7 +3412,7 @@ module Style =
     /// and not a control — there is nothing to open until the store has it.
     let uploadName = "min-w-0 truncate font-ui font-light text-body text-ink-dim"
 
-    /// The sheet's way to send a file in, at the right end of its head.
+    /// The sheet's way to send a file in, at the right end of its files' heading.
     let uploadCell = "ml-auto shrink-0 flex items-center"
 
     /// The block history's scroll box, and the stream inside it.

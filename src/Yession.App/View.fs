@@ -640,8 +640,7 @@ module View =
                   <span class="truncate min-w-0">{TerminalName.display model.Terminals view}</span>{terminalMark model view}
                 </button>"""
         let terminals =
-            // In the order they were opened, as the strip reads — and every open one, whatever
-            // the `all` page is narrowed to (`terminalRows`).
+            // In the order they were opened, as the strip reads.
             match Projection.openTerminals model.Terminals with
             | [] -> Lit.nothing
             | live ->
@@ -4172,12 +4171,12 @@ module View =
     /// place in the one row the pane is navigated by, and the way to make something is that
     /// row's `+` and nothing here. Choosing from it is choosing a tab.
     ///
-    /// The terminals are in the order they were opened, and can be narrowed by what they need
-    /// of a person (`ClientModel.listFilters`): what finished unseen or failed, what is
-    /// running, what is idle, what has ended. Eight rows with running, failed and closed mixed
-    /// together was a list a reader had to read all of to find the one that wanted them — but
-    /// grouped by state it was a list whose rows moved when their terminals did, under the
-    /// pointer. A filter decides its rows when it is chosen and holds them (`ListFilter`).
+    /// The terminals are in the order they were opened, the open ones first and the closed
+    /// ones folded under one row that unfolds in place (`ClientModel.terminalRows`). A
+    /// session's closed terminals are its record, and forty of them listed among the live
+    /// ones made a list a reader had to read all of to find the one that wanted them. The
+    /// rows above the fold are held while the sheet is down (`ListHeld`), so a row does not
+    /// move under the pointer when its terminal ends.
     ///
     /// The verbs are rendered from `Affordances` and from nothing else — a row wears exactly
     /// the controls its terminal's state allows, and a control that does not apply is ABSENT
@@ -4194,10 +4193,6 @@ module View =
     /// Lists of rows rather than a `listbox`: a row carries its verbs, and a listbox's options
     /// may hold no controls. The name is the row's own button; the arrows walk the names
     /// (`TabStrip.walkRows`), Tab reaches the verbs.
-    ///
-    /// `door` is the phone's way to make a terminal: the pivot's `+` is a desktop control
-    /// (`Style.terminalTabNewCell`), so on a phone this page — the door to everything — carries
-    /// the press instead, at its head.
     let private allPage (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let selected = ClientModel.selectedTerminal model
         let row (view: TerminalView) =
@@ -4255,24 +4250,33 @@ module View =
             let killWord = html $"""{Icon.stop}{Dom.Text.kill}"""
             // What it is doing or last did, and where, under the name: nine rows of `term N`
             // say which is which, and this says which is the one you want.
+            // The row's button holds both lines, so a row is pressed anywhere on them; its
+            // name is the name alone, and the line under it describes it.
+            let nameId = sprintf "list-row-%s" id
+            let subtitleId = sprintf "list-row-%s-says" id
+            //
+            // Its state's mark leads the line — the line is there on every row, so a row is
+            // the same height whatever its terminal has run.
             let subtitle =
-                match TerminalName.summary view with
-                | "" -> Lit.nothing
-                | summary ->
-                    html $"""<span class="{Style.terminalListSubtitle}" title="{TerminalName.hint view}">{summary}</span>"""
+                let summary =
+                    match TerminalName.summary view with
+                    | "" -> Lit.nothing
+                    | summary -> html $"""<span class="{Style.terminalListSummary}">{summary}</span>"""
+                html $"""<span class="{Style.terminalListSubtitle}" id="{subtitleId}" title="{TerminalName.hint view}">{terminalMark model view}{summary}</span>"""
             let mode = ClientModel.chosenRead view.TerminalId model
             html $"""
                 <div class="{Style.terminalListRow}" role="listitem">
-                  <span class="min-w-0 flex-1 flex flex-col">
+                  <button type="button" class="{nameClass}" data-terminal-list-row="{id}"
+                          aria-current="{if selected = Some view.TerminalId then "true" else "false"}"
+                          aria-labelledby="{nameId}" aria-describedby="{subtitleId}"
+                          @click={Ev(fun _ -> dispatch (OpenInPaneMsg mode))}>
                     <span class="{Style.terminalListNameLine}">
-                      <button type="button" class="{nameClass}" data-terminal-list-row="{id}"
-                              aria-current="{if selected = Some view.TerminalId then "true" else "false"}"
-                              @click={Ev(fun _ -> dispatch (OpenInPaneMsg mode))}>{name}</button>
-                      {terminalMark model view}{holder}{gone}
+                      <span class="{Style.terminalListNameText}" id="{nameId}" data-terminal-list-name>{name}</span>
+                      {holder}{gone}
                       <span class="{Style.terminalTabPeers}">{peers}</span>
                     </span>
                     {subtitle}
-                  </span>
+                  </button>
                   <span class="{verbs}">{reattach}{putAway}{killControl dispatch model Style.terminalListKill Style.btnKillArmed killWord view}</span>
                 </div>"""
         // A file's row, in the same shape as a terminal's. Reachability is the whole point of
@@ -4286,18 +4290,21 @@ module View =
         let artifactRow (a: ArtifactShared) =
             let content = ArtifactRef.content a.Ref
             let mark = Icon.ofContent (ContentKind.ofMediaType a.MediaType)
+            let nameId = sprintf "list-file-%s" (ContentRef.value content)
+            let sizeId = nameId + "-size"
             html $"""
                 <div class="{Style.artifactListRow}" role="listitem">
-                  <span class="min-w-0 flex-1 flex flex-col">
+                  <button type="button" class="{Style.terminalListName}"
+                          data-artifact-list-row="{ContentRef.value content}"
+                          aria-labelledby="{nameId}" aria-describedby="{sizeId}"
+                          @click={Ev(fun _ ->
+                                        dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Content content))))}>
                     <span class="{Style.terminalListNameLine}">
-                      <button type="button" class="{Style.terminalListName}"
-                              data-artifact-list-row="{ContentRef.value content}"
-                              @click={Ev(fun _ ->
-                                            dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Content content))))}>{ArtifactRef.name a.Ref}</button>
+                      <span class="{Style.terminalListNameText}" id="{nameId}">{ArtifactRef.name a.Ref}</span>
                       <span class="{Style.pivotMark} text-ink-faint" aria-hidden="true">{mark}</span>
                     </span>
-                    <span class="{Style.artifactListSize}">{ContentSize.render a.Bytes}</span>
-                  </span>
+                    <span class="{Style.artifactListSize}" id="{sizeId}">{ContentSize.render a.Bytes}</span>
+                  </button>
                 </div>"""
         // A file on its way in, in the row a shared one has, so it becomes that row in place
         // when the store records it. What it is doing is worn under the name: a wait in
@@ -4328,7 +4335,7 @@ module View =
                                 @click={Ev(fun _ -> dispatch (DismissUploadMsg upload.Id))}>{Dom.Text.remove}</button>"""
             html $"""
                 <div class="{Style.artifactListRow}" role="listitem" data-upload-row="{upload.Name}" data-upload-state="{token}">
-                  <span class="min-w-0 flex-1 flex flex-col">
+                  <span class="{Style.terminalListWho}">
                     <span class="{Style.terminalListNameLine}">
                       <span class="{Style.uploadName}">{upload.Name}</span>
                     </span>
@@ -4336,13 +4343,8 @@ module View =
                   </span>
                   <span class="{Style.terminalListVerbs}">{verbs |> List.map verb}</span>
                 </div>"""
-        let terminals = ClientModel.terminalRows model
-        // The files are not a kind of terminal: narrowed to one, the page is that kind's rows
-        // and nothing else.
-        let artifacts, uploads =
-            match model.ListFilter with
-            | ListFilter.All -> ClientModel.artifactRows model, model.Uploads
-            | ListFilter.Only _ -> [], []
+        let above, folded = ClientModel.terminalRows model
+        let artifacts, uploads = ClientModel.artifactRows model, model.Uploads
         // Files arrive however a person has them: chosen, pasted while the page has the
         // keyboard, or dropped on it. All three are one action.
         let take (files: Browser.Types.File array) =
@@ -4368,43 +4370,45 @@ module View =
                 <div class="{Style.uploadCell}">
                   <input type="file" class="border-0" multiple hidden data-artifact-upload-input @change={Ev(picked)}>
                   <button type="button" class="{Style.paneToolbarAct}" data-artifact-upload
-                          aria-label="{Dom.Text.uploadNamed}" @click={Ev(choose)}>{Dom.Text.upload}</button>
+                          aria-label="{Dom.Text.uploadNamed}" @click={Ev(choose)}>{Icon.up}{Dom.Text.upload}</button>
                 </div>"""
-        // The terminals are named by the sheet's head, over their filters; the files by a
-        // heading of their own, as the manager's page names each of its sections.
-        let section (label: string) (heading: bool) (rows: TemplateResult list) =
-            if List.isEmpty rows then Lit.nothing
-            else
-                let named =
-                    if heading then html $"""<div class="{Style.listSectionLabel}" data-list-section="{label}">{label}</div>"""
+        // The closed terminals, folded under one row that says how many — and unfolded in
+        // place under it, never somewhere else. No fold over nothing.
+        let closed =
+            match folded with
+            | [] -> Lit.nothing
+            | rows ->
+                let count = List.length rows
+                let shown = model.ClosedShown
+                let unfolded =
+                    if shown then html $"""<div role="list" aria-label="{Dom.Text.closedHeading}">{rows |> List.map row}</div>"""
                     else Lit.nothing
                 html $"""
-                    {named}
-                    <div role="list" aria-label="{label}">{rows}</div>"""
-        // The filters, each a button that says whether the page is narrowed to it — and none
-        // at all where there is nothing to narrow (`listFilters`).
-        let filters =
-            match ClientModel.listFilters model with
-            | [] -> Lit.nothing
-            | offered ->
-                let chosen =
-                    match model.ListFilter with
-                    | ListFilter.All -> None
-                    | ListFilter.Only (kind, _, _) -> Some kind
-                let filter (kind: TerminalKind option, count: int) =
-                    let token, label =
-                        match kind with
-                        | None -> "all", Dom.Text.filterAll
-                        | Some TerminalKind.Attention -> "attention", Dom.Text.filterAttention
-                        | Some TerminalKind.Running -> "running", Dom.Text.filterRunning
-                        | Some TerminalKind.Idle -> "idle", Dom.Text.filterIdle
-                        | Some TerminalKind.Closed -> "closed", Dom.Text.filterClosed
-                    html $"""
-                        <button type="button" class="{Style.allFilter}" data-terminal-filter="{token}"
-                                aria-pressed="{if chosen = kind then "true" else "false"}"
-                                @click={Ev(fun _ -> dispatch (FilterListMsg kind))}>{label}<span class="{Style.allFilterCount}">{string count}</span></button>"""
-                html $"""
-                    <div class="{Style.allFilters}" role="group" aria-label="{Dom.Text.filterTerminals}">{offered |> List.map filter}</div>"""
+                    <button type="button" class="{Style.listClosedFold}" data-list-closed-fold
+                            aria-expanded="{if shown then "true" else "false"}"
+                            aria-label="{Dom.Text.closedTerminals count}"
+                            @click={Ev(fun _ -> dispatch ToggleClosedMsg)}>
+                      <span>{Dom.Text.closedHeading}</span><span class="{Style.listCount}">{string count}</span>
+                      <span class="{if shown then Style.listFoldMarkOpen else Style.listFoldMark}" aria-hidden="true">{Icon.down}</span>
+                    </button>
+                    {unfolded}"""
+        // The files under a heading of their own, which carries the way to add one — there
+        // whether or not any file is, because a session with none is where the first comes
+        // from.
+        let files =
+            let count =
+                match List.length artifacts + List.length uploads with
+                | 0 -> Lit.nothing
+                | n -> html $"""<span class="{Style.listCount}">{string n}</span>"""
+            html $"""
+                <div class="{Style.listSectionLabel}" data-list-section="{Dom.Text.filesHeading}">
+                  <span>{Dom.Text.filesHeading}</span>
+                  {count}
+                  {uploadControl}
+                </div>
+                <div role="list" aria-label="{Dom.Text.filesHeading}">
+                  {(artifacts |> List.map artifactRow) @ (uploads |> List.map uploadRow)}
+                </div>"""
         // The arrow walk down the names — the rows' own buttons — and only for a key the walk
         // claims, so Tab still reaches the verbs.
         let walk (e: Browser.Types.Event) =
@@ -4424,22 +4428,27 @@ module View =
                 pressed.preventDefault ()
             | None -> ()
         let empty =
-            if List.isEmpty terminals && List.isEmpty artifacts && List.isEmpty uploads then
+            if List.isEmpty above && List.isEmpty folded && List.isEmpty artifacts && List.isEmpty uploads then
                 html $"""<span class="{Style.contentListEmptyWord}">{Dom.Text.nothingOpenedYet}</span>"""
             else Lit.nothing
+        let opened =
+            if List.isEmpty above then Lit.nothing
+            else html $"""<div role="list" aria-label="{Dom.Text.terminalsHeading}">{above |> List.map row}</div>"""
+        // Under the sheet, the pane goes on showing, dimmed: the sheet is a layer over it, not
+        // a place. Pressed, the scrim puts the sheet away — a duplicate of the list button and
+        // of Escape, so out of the tree and the Tab order, as the phone's grab edge is.
         html $"""
+            <button type="button" class="{Style.allSheetScrim}" tabindex="-1" aria-hidden="true"
+                    aria-label="{Dom.Text.switchTerminal}" data-pane-sheet-scrim
+                    @click={Ev(fun _ -> dispatch CloseSwitcherMsg)}></button>
             <div class="{Style.allSheet}" role="region" tabindex="-1" aria-label="{Dom.Text.terminalsAndFiles}"
                  id="{Dom.paneSheetId}" data-pane-panel="{allKey}">
               <div class="{Style.allPage}" data-content-list aria-label="{Dom.Text.terminalsAndFiles}"
                    @keydown={Ev(walk)} @paste={Ev(pasted)} @dragover={Ev(dragged)} @drop={Ev(dropped)}>
-                <div class="{Style.allHead}">
-                  <span class="{Style.allHeadLabel}">{Dom.Text.terminalsHeading}</span>
-                  {filters}
-                  {uploadControl}
-                </div>
-                {section "terminals" false (terminals |> List.map row)}
-                {section "files" true ((artifacts |> List.map artifactRow) @ (uploads |> List.map uploadRow))}
+                {opened}
+                {closed}
                 {empty}
+                {files}
               </div>
             </div>"""
 
