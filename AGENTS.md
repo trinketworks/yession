@@ -28,9 +28,8 @@ merge queue, and driving master green. A deviation from what was asked stops the
 to the user.
 
 **Plans are not artifacts.** Say the shape of the work to the user before you start. Write no plan
-document in this repository. `docs/plans/` was removed and stays removed. A plan is right on the day
-it is written and unfalsifiable after, and it drifts silently while it reads as current. Put what
-is worth keeping next to the code it governs, where a test can contradict it.
+document in this repository. Put what is worth keeping next to the code it governs, where a test
+can contradict it.
 
 ## Bootstrap
 
@@ -43,11 +42,11 @@ already assembled the devshell. `check`, `build` and the other tasks are on PATH
 nothing in front of them. Do NOT install devenv, because the devshell exists. Do NOT run
 `.claude/setup.sh`, because it targets Claude Code containers.
 
-**In a fresh Claude Code container**, run `bash .claude/setup.sh` once. It is idempotent, and its
-header lists the steps. The sandbox proxy blocks the `github:cachix/devenv` fetch, so the script
-writes the gitignored `devenv.local.yaml`. That file repoints the input at devenv's own source,
-substituted from `cache.nixos.org`. The SessionStart hook (`.claude/settings.json`) re-runs the
-script with `--hook`. A laptop or CI uses the committed `devenv.yaml`.
+**In a Claude Code container**, the SessionStart hook runs `.claude/setup.sh --hook`. When devenv is
+missing, it starts the full setup in the background and prints where the log is. The sandbox proxy
+blocks the `github:cachix/devenv` fetch, so the script writes the gitignored `devenv.local.yaml`,
+which repoints the input at devenv's own source, substituted from `cache.nixos.org`. A laptop or CI
+uses the committed `devenv.yaml`.
 
 Run the task scripts: `devenv shell -- <task>`, or bare inside the shell. The main ones are
 `check`, `build` and `verify`. They run `restore` for you. Do NOT invoke `dotnet`, `fable` or
@@ -68,10 +67,6 @@ call in a verb's body. The next verb cannot know an order written only there.
 
 `nix/worktree.nix` builds `nix/packages.nix` from the working tree, and its header says why.
 `check Nix NixBuild` drives it.
-
-**No new helper scripts.** New build, dev or repo functionality is a `tasks.fsx` verb. Only glue
-that must run where `dotnet` cannot stays outside. The one such script is `.claude/setup.sh`, which
-runs before Nix/devenv exist.
 
 **No belt-and-braces.** Two mechanisms may meet the same requirement, such as two config locations
 or a fallback beside a primary. Keep ONLY the one verified working here. Remove the other. A spare
@@ -252,27 +247,8 @@ and give the result a type immediately. Never carry `obj` onward. Example: the D
 ## Testing
 
 Capabilities gate suites, not folders (`tests/Yession.Tests/Tags.fs`). Pass the capabilities THIS box
-has. `check` refuses a capability the box cannot host.
-
-```
-check                         # cheap tier: pure, model, protocol on Node. Every PR.
-check Browser                 # + host-free editor E2E in Chromium
-check Ports Native            # + WebRTC and host-spawning suites
-check Keyring                 # + OS credential manager (headless: check arranges D-Bus)
-check Srt                     # + sandbox escape probes. Read tests/AGENTS.md first.
-check Nix                     # + build-source contract against the working tree (seconds)
-check NixBuild --runtime none # build the installable from the working tree and boot it. No suite.
-check Jumpstarter             # + MCP client against the Python example provider
-check Browser Native Caddy    # + fronted deployment behind the proxy example's Caddyfile
-check Docker Dogfood          # + this suite inside the dev container. Up to an hour. Not in verify.
-verify                        # check with every capability but Bench and Dogfood. Release gate.
-lint                          # actionlint, then the F# analyzers. Judges source without running it.
-check --only "<text>"         # narrow both runtimes to cases whose full name contains <text>
-check Browser --runtime clr   # run one runtime (node | clr)
-```
-
-`Docker`, `LiveAgent`, `LiveGitHub`, `Pty` and `Serial` also exist. `Need` in `Tags.fs` lists all.
-`verify` takes `check`'s trailing args, so `verify --only "<text>"` works.
+has. `check` refuses a capability the box cannot host. Run `help` for the verbs and capabilities.
+`check --only "<text>"` narrows a run to the cases whose full name contains `<text>`.
 
 To eyeball a rich-editor change, run `check Browser`. For real screenshots of a server-rendered
 surface, read `.agents/skills/ui-exploration/SKILL.md` first. Naive headless mobile shots lie.

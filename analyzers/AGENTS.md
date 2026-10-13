@@ -33,15 +33,11 @@ widening means. The rule fails by silence, and a closed list fails loudly.
 - Declare a dependency on the project that uses it. A reference costs `lint` seconds. Do not dodge one
   with `[<Emit>]`. If a population walk grows to an hour, fix the analyzer.
 
-## `lint` exit codes
+## `lint` verdicts
 
-- 1: a rule rejected the source. Fix the finding.
-- 2: the source does not compile, so nothing was judged. Run `build`.
-- 3: the analyzer did not finish, so nothing was judged. Run `lint` again.
-
-`lint` takes its verdict from a SARIF report that it names, not from the analyzer's exit code. A killed
-analyzer prints nothing and exits non-zero like a finding. `tasks.fsx` (`lint`, `analyze`) holds the
-reasoning.
+`lint` prints what each outcome means and what to do next. It takes its verdict from a SARIF report
+that it names, not from the analyzer's exit code: a killed analyzer prints nothing and exits non-zero
+like a finding. `tasks.fsx` (`lint`, `analyze`) holds the reasoning.
 
 ## A YES000 that will not reproduce
 
