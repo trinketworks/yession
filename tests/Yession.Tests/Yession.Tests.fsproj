@@ -98,6 +98,7 @@
     <Compile Include="BrowserWait.fs" />
     <Compile Include="BrowserProbe.fs" />
     <Compile Include="BrowserHarness.fs" />
+    <Compile Include="BrowserShims.fs" />
     <Compile Include="Browser.fs" />
     <!-- After Browser.fs: it shares that fixture (serveStatic, chromiumPath, watching). -->
     <Compile Include="Bench.fs" />

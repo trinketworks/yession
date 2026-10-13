@@ -692,6 +692,12 @@ module private Target =
                 [ "app/out/browser/Probes.js"; "--bundle"; "--format=iife"
                   "--outfile=tests/browser/out/probes.js" ]
             |> ignore
+            // The shims a case installs into one page (`Yession.App.Shims`), classic for the
+            // same reason.
+            run esbuild
+                [ "app/out/browser/Shims.js"; "--bundle"; "--format=iife"
+                  "--outfile=tests/browser/out/shims.js" ]
+            |> ignore
             // The harness renders the REAL shell (Plan 14), so it needs the real stylesheet:
             // without it every Tailwind class is inert, and any layout the browser tier measures
             // there — a phone viewport most of all — is a layout nobody will ever get.

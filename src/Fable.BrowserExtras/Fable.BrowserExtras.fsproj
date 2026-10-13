@@ -23,6 +23,7 @@
   <ItemGroup>
     <Compile Include="BrowserExtras.fs" />
     <Compile Include="PageGlobals.fs" />
+    <Compile Include="PagePatches.fs" />
     <Compile Include="EventTargets.fs" />
     <!-- After BrowserExtras.fs, whose `CacheStorage` stores a worker reads and writes. -->
     <Compile Include="ServiceWorkerScope.fs" />
