@@ -2620,16 +2620,16 @@ let editorTests =
                 // block into a heading rendered live as <h1> — the syntax is never left literal.
                 do! awaitU (page.ClickAsync ".ProseMirror")
                 do! awaitU (page.Keyboard.TypeAsync "# Heading one")
-                let! _ = await (page.WaitForFunctionAsync "document.querySelector('.ProseMirror h1')?.textContent === 'Heading one'")
+                do! Wait.until ".ProseMirror h1 to say exactly Heading one" (fun () -> Read.text page ".ProseMirror h1") ((=) (Some "Heading one"))
                 // `**bold**` -> a <strong> mark; `- ` -> a bullet list <ul><li>. The new line is
                 // plain Enter here because the harness mounts the editor as the COMPOSER does,
                 // where Enter is the paragraph key and Ctrl+Enter sends (asserted below).
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 do! awaitU (page.Keyboard.TypeAsync "text with **bold** now")
-                let! _ = await (page.WaitForFunctionAsync "!!document.querySelector('.ProseMirror strong')")
+                do! waitPresent ".ProseMirror strong to be on the page" page ".ProseMirror strong"
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 do! awaitU (page.Keyboard.TypeAsync "- item one")
-                let! _ = await (page.WaitForFunctionAsync "!!document.querySelector('.ProseMirror ul li')")
+                do! waitPresent ".ProseMirror ul li to be on the page" page ".ProseMirror ul li"
 
                 // The document serializes back to Markdown (the durable form the drain snapshots).
                 let! md = Harness.ask page HarnessPage.md
@@ -2701,9 +2701,7 @@ let editorTests =
                 // fire a half-written message on every return keypress.
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 do! awaitU (page.Keyboard.TypeAsync "second block")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        "document.querySelectorAll('#host .ProseMirror > p').length === 2")
+                do! waitCount "exactly 2 of #host .ProseMirror > p" page "#host .ProseMirror > p" 2
                 let! afterEnter = Harness.ask page HarnessPage.md
                 Expect.stringContains afterEnter "first line" "the first block survived"
                 Expect.stringContains afterEnter "second block" "Enter opened a second block"
@@ -2716,10 +2714,8 @@ let editorTests =
                 // serializer writes a trailing backslash and the parser reads it back.
                 do! awaitU (page.Keyboard.PressAsync "Shift+Enter")
                 do! awaitU (page.Keyboard.TypeAsync "same paragraph")
-                let! _ = await (page.WaitForFunctionAsync "!!document.querySelector('.ProseMirror br')")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        "document.querySelectorAll('#host .ProseMirror > p').length === 2")
+                do! waitPresent ".ProseMirror br to be on the page" page ".ProseMirror br"
+                do! waitCount "exactly 2 of #host .ProseMirror > p" page "#host .ProseMirror > p" 2
                 let! broken = Harness.ask page HarnessPage.md
                 Expect.stringContains broken "second block" "the text before the break survived"
                 Expect.stringContains broken "same paragraph" "and the text after it"
@@ -2754,7 +2750,7 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#host .ProseMirror [data-placeholder]")
                 do! awaitU (page.ClickAsync ".ProseMirror")
                 do! awaitU (page.Keyboard.TypeAsync "x")
-                let! _ = await (page.WaitForFunctionAsync "!document.querySelector('#host .ProseMirror [data-placeholder]')")
+                do! waitAbsent "#host .ProseMirror [data-placeholder] to be gone" page "#host .ProseMirror [data-placeholder]"
                 return ()
             }
 
@@ -2777,14 +2773,10 @@ let editorTests =
                 // its relative positions: a caret widget + name label at `head`, and a translucent
                 // highlight across the (non-empty) range.
                 do! Harness.run1 page HarnessPage.pushRemote "remote-peer"
-                let! _ = await (page.WaitForFunctionAsync "!!document.querySelector('.ProseMirror .pm-caret')")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        "[...document.querySelectorAll('.ProseMirror .pm-caret-label')].some(l => l.textContent === 'remote-peer')")
+                do! waitPresent ".ProseMirror .pm-caret to be on the page" page ".ProseMirror .pm-caret"
+                do! Wait.until "some .ProseMirror .pm-caret-label to say remote-peer" (fun () -> Read.texts page ".ProseMirror .pm-caret-label") (List.contains "remote-peer")
                 // The selection highlight is an inline decoration carrying our translucent colour.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        "[...document.querySelectorAll('.ProseMirror [style*=\"background-color\"]')].length > 0")
+                do! waitPresent ".ProseMirror [style*='background-color'] to be on the page" page ".ProseMirror [style*=\"background-color\"]"
                 return ()
             }
 
@@ -2800,7 +2792,8 @@ let editorTests =
         // and the push races the words it is drawing over.
         editorCase "a caret drawn on every frame never costs the mirror its content" <| fun page ->
             async {
-                do! waitFor "both peers to mount" page "!!document.querySelector('#peer-a .ProseMirror') && !!document.querySelector('#peer-b .ProseMirror')"
+                do! waitPresent "both peers to mount" page "#peer-a .ProseMirror"
+                do! waitPresent "both peers to mount" page "#peer-b .ProseMirror"
 
                 // Carets first, and left running for the whole case: the push has to be in
                 // flight WHILE the content arrives, which is the only arrangement in which it
@@ -2844,7 +2837,7 @@ let editorTests =
 
                 // ...and the caret really is drawn there, so this is a test of a caret over
                 // content and not of an editor nobody decorated.
-                do! waitFor "the author's caret to be drawn in the mirror" page "!!document.querySelector('#peer-b .pm-caret')"
+                do! waitPresent "the author's caret to be drawn in the mirror" page "#peer-b .pm-caret"
 
                 // Anti-vacuity, second half, and the reason a green here means anything: a
                 // storm that stopped before the words arrived converges beautifully. Frames
@@ -2873,7 +2866,8 @@ let editorTests =
         // its transaction with. Real doc updates, not a hook we hoped was called.
         editorCase "drawing a remote caret writes nothing to the shared document" <| fun page ->
             async {
-                do! waitFor "both peers to mount" page "!!document.querySelector('#peer-a .ProseMirror') && !!document.querySelector('#peer-b .ProseMirror')"
+                do! waitPresent "both peers to mount" page "#peer-a .ProseMirror"
+                do! waitPresent "both peers to mount" page "#peer-b .ProseMirror"
                 do! Harness.run1 page HarnessPage.caretStorm true
                 // The storm is dispatching before anything is typed, and keeps dispatching
                 // while the words arrive — both waited for rather than counted at the end, for
@@ -2933,17 +2927,13 @@ let editorTests =
                 // and rendered by the player.
                 let! _ = await (page.WaitForSelectorAsync "#replay .ap-overlay-start")
                 do! awaitU (page.ClickAsync "#replay .ap-overlay-start")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        "document.querySelector('#replay').textContent.includes('total 0')")
+                do! Wait.until "#replay to say total 0" (fun () -> Read.text page "#replay") (Option.exists (fun t -> t.Contains "total 0"))
 
                 // …and the chapter marks (Plan 14, stage 4), which are what make a
                 // whole-terminal recording navigable by what ran in it. Asserted after play
                 // rather than before, because the recording's metadata — its duration, and
                 // therefore where a marker sits on the bar — is not known until it loads.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        "document.querySelectorAll('#replay .ap-marker').length === 1")
+                do! waitCount "exactly 1 of #replay .ap-marker" page "#replay .ap-marker" 1
                 return ()
             }
 
@@ -2980,9 +2970,7 @@ let editorTests =
                 //
                 // Asserted after play, like the case above: where a mark sits on the bar is
                 // not known until the recording's duration is.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        "document.querySelectorAll('#replay-gappy .ap-marker').length === 2")
+                do! waitCount "exactly 2 of #replay-gappy .ap-marker" page "#replay-gappy .ap-marker" 2
                 return ()
             }
 
@@ -3013,8 +3001,7 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#replay .ap-overlay-start")
                 // Its output first, so the screen has been drawn when the command is looked for;
                 // the terminal's text rather than the mount's, which also holds the chapter's label.
-                do! waitFor "the recording's output on the screen" page
-                        "document.querySelector('#replay .ap-term-text').textContent.includes('total 0')"
+                do! Wait.until "the recording's output on the screen" (fun () -> Read.text page "#replay .ap-term-text") (Option.exists (fun t -> t.Contains "total 0"))
                 let! screen = await (page.EvaluateAsync<string> "() => document.querySelector('#replay .ap-term-text').textContent")
                 Expect.stringContains screen "ls -la" "the command, on the screen above what it printed"
             }
@@ -3025,8 +3012,7 @@ let editorTests =
         editorCaseOnTouch 390 844 "every chapter's label names its command and stays on a phone's screen" <| fun page ->
             async {
                 do! Harness.run page HarnessPage.chapters
-                do! waitFor "the three chapters on the bar" page
-                        "document.querySelectorAll('#replay-chapters .ap-marker-container').length === 3"
+                do! waitCount "the three chapters on the bar" page "#replay-chapters .ap-marker-container" 3
                 do! awaitU (page.EvaluateAsync "() => document.querySelector('#replay-chapters').scrollIntoView()")
                 let! labels =
                     await (page.EvaluateAsync<string[]> """() =>
@@ -3045,8 +3031,7 @@ let editorTests =
         editorCaseOnTouch 390 844 "pressing a chapter's mark moves the replay to that command" <| fun page ->
             async {
                 do! Harness.run page HarnessPage.chapters
-                do! waitFor "the three chapters on the bar" page
-                        "document.querySelectorAll('#replay-chapters .ap-marker-container').length === 3"
+                do! waitCount "the three chapters on the bar" page "#replay-chapters .ap-marker-container" 3
                 do! awaitU (page.EvaluateAsync "() => document.querySelector('#replay-chapters').scrollIntoView()")
                 // The last mark's own centre, and only if a press there lands on it: a mark another
                 // is drawn over is not one a thumb can press.
@@ -3062,21 +3047,18 @@ let editorTests =
                 do! awaitU (page.Touchscreen.TapAsync (float32 centre.[0], float32 centre.[1]))
                 // Resting at the start, the second command's last line is only on the screen once
                 // the replay has moved past it — which, paused, only a seek can do.
-                do! waitFor "the replay to move to the last command" page
-                        "document.querySelector('#replay-chapters .ap-term-text').textContent.includes('step 3')"
+                do! Wait.until "the replay to move to the last command" (fun () -> Read.text page "#replay-chapters .ap-term-text") (Option.exists (fun t -> t.Contains "step 3"))
             }
 
         editorCase "the keyboard moves a replay from chapter to chapter" <| fun page ->
             async {
                 do! Harness.run page HarnessPage.chapters
-                do! waitFor "the three chapters on the bar" page
-                        "document.querySelectorAll('#replay-chapters .ap-marker-container').length === 3"
+                do! waitCount "the three chapters on the bar" page "#replay-chapters .ap-marker-container" 3
                 // The terminal's text is what Tab reaches in a player; its keys are the player's.
                 do! awaitU (page.FocusAsync "#replay-chapters .ap-term-text")
                 do! awaitU (page.Keyboard.PressAsync "]")
                 do! awaitU (page.Keyboard.PressAsync "]")
-                do! waitFor "the replay to move on two chapters" page
-                        "document.querySelector('#replay-chapters .ap-term-text').textContent.includes('step 3')"
+                do! Wait.until "the replay to move on two chapters" (fun () -> Read.text page "#replay-chapters .ap-term-text") (Option.exists (fun t -> t.Contains "step 3"))
             }
 
         // A reference is part of the sentence it sits in, so its name shares the line's
@@ -3363,8 +3345,7 @@ let editorTests =
                 // Chosen by the DOM's own click rather than Playwright's, which scrolls what it
                 // clicks into view first and would prove nothing about the strip.
                 do! awaitU (page.EvaluateAsync "() => document.querySelector('#shell [data-pane-strip] [role=tab]:last-child').click()")
-                do! waitFor "the last tab to be selected" page
-                        "document.querySelector('#shell [data-pane-strip] [role=tab]:last-child')?.getAttribute('aria-selected') === 'true'"
+                do! Wait.until "the last tab to be selected" (fun () -> Read.attr page "#shell [data-pane-strip] [role=tab]:last-child" "aria-selected") ((=) (Some "true"))
                 // A frame for the reveal, which runs after the render.
                 do! twoFrames page
                 let! inView = selectedTabInsideStrip page
@@ -3423,8 +3404,8 @@ let editorTests =
         editorCase "the selected pivot item is told apart from the others, inside the pivot" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                do! waitFor "an item to be selected beside one that is not" page
-                        "!!document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=true]') && !!document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=false]')"
+                do! waitPresent "an item to be selected beside one that is not" page "#shell [data-pane-strip] [role=tab][aria-selected=true]"
+                do! waitPresent "an item to be selected beside one that is not" page "#shell [data-pane-strip] [role=tab][aria-selected=false]"
                 let! faults =
                     await (page.EvaluateAsync<string>
                         """async () => {
@@ -3461,8 +3442,7 @@ let editorTests =
                             box (commandLine "term-harness")))
                 do! awaitU (page.FocusAsync "#shell [data-pane-strip] [role=tab][aria-selected=true]")
                 do! awaitU (page.Keyboard.PressAsync "ArrowRight")
-                do! waitFor "the walk to land on another tab, keyboard-focused" page
-                        "document.activeElement?.matches('#shell [data-pane-strip] [role=tab][aria-selected=false]:focus-visible') === true"
+                do! Wait.until "the walk to land on another tab, keyboard-focused" (fun () -> Read.focused page "#shell [data-pane-strip] [role=tab][aria-selected=false]:focus-visible") id
                 let! faults =
                     await (page.EvaluateAsync<string>
                         """() => {
@@ -3519,7 +3499,7 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
                 let! listing = doors "the all page"
                 do! awaitU (page.Keyboard.PressAsync "Escape")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector('#shell [data-content-list]')""")
+                do! waitAbsent "#shell [data-content-list] to be gone" page "#shell [data-content-list]"
                 // Chosen, so it is the one the reader is looking at when it ends, and it stays.
                 do! awaitU (page.EvaluateAsync "() => document.querySelector(\"#shell [data-pane-tab='terminal:term-live']\").click()")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab='terminal:term-live'][aria-selected=true]")
@@ -3560,9 +3540,8 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync dismiss)
                 do! awaitU (page.FocusAsync dismiss)
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                do! waitFor "the closed tab to be gone" page "!document.querySelector(\"#shell [data-pane-tab='terminal:term-harness']\")"
-                do! waitFor "focus to be on the tab beside it" page
-                        "document.activeElement?.getAttribute('data-pane-tab') === 'terminal:term-live'"
+                do! waitAbsent "the closed tab to be gone" page "#shell [data-pane-tab='terminal:term-harness']"
+                do! Wait.until "focus to be on the tab beside it" (fun () -> Read.focused page "[data-pane-tab='terminal:term-live']") id
             }
 
         // The keyboard a dying shell dropped is caught a frame later, and only while it is still
@@ -3640,7 +3619,7 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview^='block:']")
 
                 // Focus followed it into the pane.
-                let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-pane-panel') === true""")
+                do! Wait.until "focus on [data-pane-panel]" (fun () -> Read.focused page "[data-pane-panel]") id
 
                 // The block reads as TEXT. (Its recording was one press away here too; a
                 // command's recording is its terminal's to play now, from its toolbar.)
@@ -3726,7 +3705,7 @@ let editorTests =
                 let! _ =
                     await (page.WaitForFunctionAsync
                         "document.querySelector('#shell [data-content-panel]').getBoundingClientRect().left >= window.innerWidth - 1")
-                let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-chat-block') === true""")
+                do! Wait.until "focus on [data-chat-block]" (fun () -> Read.focused page "[data-chat-block]") id
                 return ()
             }
 
@@ -3753,8 +3732,7 @@ let editorTests =
                 do! waitFor "six more tabs in the strip" page
                         (sprintf "document.querySelectorAll('#shell [data-pane-strip] [role=tab]').length === %d" (before + 6))
                 do! awaitU (page.EvaluateAsync "() => document.querySelector('#shell [data-pane-strip] [role=tab]:last-child').click()")
-                do! waitFor "the last tab to be selected" page
-                        "document.querySelector('#shell [data-pane-strip] [role=tab]:last-child')?.getAttribute('aria-selected') === 'true'"
+                do! Wait.until "the last tab to be selected" (fun () -> Read.attr page "#shell [data-pane-strip] [role=tab]:last-child" "aria-selected") ((=) (Some "true"))
                 do! awaitU (
                         page.EvaluateAsync
                             """() => Promise.all(
@@ -4012,9 +3990,7 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='hide']")
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='hide']")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                            """document.activeElement?.getAttribute('data-content-toggle') === 'show'""")
+                do! Wait.until "focus on [data-content-toggle='show']" (fun () -> Read.focused page "[data-content-toggle='show']") id
                 return ()
             }
 
@@ -4027,7 +4003,7 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
                 do! awaitU (page.FocusAsync "#shell [data-chat-block]")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-pane-panel') === true""")
+                do! Wait.until "focus on [data-pane-panel]" (fun () -> Read.focused page "[data-pane-panel]") id
                 let! ring =
                     await (page.EvaluateAsync<string>
                             """() => {
@@ -4470,9 +4446,7 @@ let editorTests =
                 do! awaitU (page.Keyboard.TypeAsync " on a phone")
                 // Ground truth: the field really is where the typing went, and it really is
                 // the focused element for Enter to release.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.hasAttribute('data-session-title') === true""")
+                do! Wait.until "focus on [data-session-title]" (fun () -> Read.focused page "[data-session-title]") id
 
                 do! awaitU (page.Keyboard.PressAsync "Enter")
 
@@ -4649,9 +4623,7 @@ let editorTests =
 
                 // A press on it puts the keyboard there, because its whole purpose is having it.
                 do! awaitU (page.ClickAsync screen)
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.getAttribute('data-terminal-keys') === 'term-live'""")
+                do! Wait.until "focus on [data-terminal-keys='term-live']" (fun () -> Read.focused page "[data-terminal-keys='term-live']") id
 
                 // The screen is composed by a REAL emulator in a real browser: the
                 // Session's snapshot seeds it, and the records the client already
@@ -4697,9 +4669,7 @@ let editorTests =
 
                 // The press that hands this peer the lease — and removes itself doing it.
                 do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.getAttribute('data-terminal-keys') === 'term-harness'""")
+                do! Wait.until "focus on [data-terminal-keys='term-harness']" (fun () -> Read.focused page "[data-terminal-keys='term-harness']") id
 
                 // …and it is really the keyboard, not merely a focus ring: what is typed now
                 // reaches the pty rather than the composer that used to be there.
@@ -4741,9 +4711,7 @@ let editorTests =
                 // Somebody's keyboard is somewhere else in the pane — on the splitter, which
                 // is rendered whatever the terminal is doing and survives this render.
                 do! awaitU (page.FocusAsync "#shell [data-term-resize]")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.hasAttribute('data-term-resize') === true""")
+                do! Wait.until "focus on [data-term-resize]" (fun () -> Read.focused page "[data-term-resize]") id
 
                 // The lease arrives on its own, as the alt-screen flip delivers it.
                 do! Harness.run1 page HarnessPage.take "term-harness"
@@ -4826,9 +4794,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.getAttribute('data-terminal-keys') === 'term-harness'""")
+                do! Wait.until "focus on [data-terminal-keys='term-harness']" (fun () -> Read.focused page "[data-terminal-keys='term-harness']") id
                 let! ring =
                     await (page.EvaluateAsync<string> """() => {
                         const s = getComputedStyle(document.activeElement.closest('[data-terminal-screen]'));
@@ -4880,7 +4846,7 @@ let editorTests =
                 let screen = "#shell [data-terminal-screen='term-live']"
                 let! _ = await (page.WaitForSelectorAsync screen)
                 do! awaitU (page.TapAsync screen)
-                let! _ = await (page.WaitForFunctionAsync "document.activeElement?.getAttribute('data-terminal-keys') === 'term-live'")
+                do! Wait.until "focus on [data-terminal-keys='term-live']" (fun () -> Read.focused page "[data-terminal-keys='term-live']") id
                 do! awaitU (page.Keyboard.InsertTextAsync "bob")
                 do! awaitU (page.Keyboard.InsertTextAsync "\n")
                 let! typed = Harness.read page HarnessPage.typed
@@ -4957,9 +4923,7 @@ let editorTests =
                 let screen = "#shell [data-terminal-screen='term-live']"
                 let! _ = await (page.WaitForSelectorAsync screen)
                 do! awaitU (page.FocusAsync (screen + " [data-terminal-keys]"))
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.getAttribute('data-terminal-keys') === 'term-live'""")
+                do! Wait.until "focus on [data-terminal-keys='term-live']" (fun () -> Read.focused page "[data-terminal-keys='term-live']") id
 
                 do! awaitU (page.Keyboard.PressAsync "Control+ArrowLeft")
                 do! awaitU (page.Keyboard.PressAsync "Alt+b")
@@ -5476,9 +5440,7 @@ let editorTests =
                 // Waited for by EXISTENCE, not visibility: a bare caret is a zero-width
                 // highlight with the caret bar inside it, which every "is it visible" check
                 // in a driver calls hidden.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                            """!!document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='peer:brave-owl']")""")
+                do! waitPresent "#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='peer:brave-owl'] to be on the page" page "#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='peer:brave-owl']"
                 let! inside =
                     await (page.EvaluateAsync<bool>
                             """() => {
@@ -5519,9 +5481,7 @@ let editorTests =
                 // heuristic's guess at a whole line of somebody's message — the longest thing
                 // this slot can be asked to hold.
                 do! Harness.run3 page HarnessPage.chapterCaret "msg-filler-8" 0 0
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                            """!!document.querySelector("#shell [data-peer-presence='peer:brave-owl'] [data-peer-at]")""")
+                do! waitPresent "#shell [data-peer-presence='peer:brave-owl'] [data-peer-at] to be on the page" page "#shell [data-peer-presence='peer:brave-owl'] [data-peer-at]"
                 let! fits =
                     await (page.EvaluateAsync<bool>
                             """() => {
@@ -5680,7 +5640,7 @@ let editorTests =
                     do! toTheEnd page "chat"
                     do! toTheStart page "chat"
                     do! messageLands page 200L "tail-mark-chat, said while nobody was at the end"
-                    let! _ = await (page.WaitForFunctionAsync "document.querySelector(\"#shell [data-tail='chat']\").textContent.includes('tail-mark-chat')")
+                    do! Wait.until "#shell [data-tail='chat'] to say tail-mark-chat" (fun () -> Read.text page "#shell [data-tail='chat']") (Option.exists (fun t -> t.Contains "tail-mark-chat"))
                     do! twoFrames page
                     let! top = await (page.EvaluateAsync<float> "() => document.querySelector(\"#shell [data-tail='chat']\").scrollTop")
                     Expect.equal top 0.0 "the reader is still at the line they scrolled back to"
@@ -5755,15 +5715,11 @@ let editorTests =
                 // putting focus back — which is what the first version of this did. The
                 // hazard is the entry being removed out from under the cursor.
                 do! awaitU (page.Keyboard.PressAsync "Tab")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.hasAttribute('data-item-chapter') === true""")
+                do! Wait.until "focus on [data-item-chapter]" (fun () -> Read.focused page "[data-item-chapter]") id
 
                 do! awaitU (page.Keyboard.PressAsync "Escape")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector('#shell [data-item-menu]')""")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.hasAttribute('data-item-actions') === true""")
+                do! waitAbsent "#shell [data-item-menu] to be gone" page "#shell [data-item-menu]"
+                do! Wait.until "focus on [data-item-actions]" (fun () -> Read.focused page "[data-item-actions]") id
                 return ()
             }
         // The other door out of the menu, and it strands focus the same way: choosing removes
@@ -5776,15 +5732,11 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-item-chapter]")
 
                 do! awaitU (page.Keyboard.PressAsync "Tab")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.hasAttribute('data-item-chapter') === true""")
+                do! Wait.until "focus on [data-item-chapter]" (fun () -> Read.focused page "[data-item-chapter]") id
                 do! awaitU (page.Keyboard.PressAsync "Enter")
 
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector('#shell [data-item-menu]')""")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.hasAttribute('data-item-actions') === true""")
+                do! waitAbsent "#shell [data-item-menu] to be gone" page "#shell [data-item-menu]"
+                do! Wait.until "focus on [data-item-actions]" (fun () -> Read.focused page "[data-item-actions]") id
                 return ()
             }
         // A control lifted by hover is a control a keyboard never sees lifted unless focus
@@ -6253,14 +6205,12 @@ let editorTests =
                 // Watching replaces the live screen with the recording, in a real player.
                 do! awaitU (page.ClickAsync "#shell [data-terminal-watch='watch']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-replay='terminal:term-live'] .ap-player")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-terminal-screen='term-live']")""")
+                do! waitAbsent "#shell [data-terminal-screen='term-live'] to be gone" page "#shell [data-terminal-screen='term-live']"
 
                 // One control in one slot, relabelled — so the press KEEPS its own focus.
                 // There used to be four controls swapping each other out of the document, and
                 // every press had to hand focus on after itself or strand it on `body`.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.getAttribute('data-terminal-watch') === 'live'""")
+                do! Wait.until "focus on [data-terminal-watch='live']" (fun () -> Read.focused page "[data-terminal-watch='live']") id
 
                 // It lands a moment ago: the screen as it stood there, shown before anyone
                 // presses play — not a blank player parked at 0:00, and not the pinned end, which
@@ -6276,17 +6226,15 @@ let editorTests =
                 // still hands focus on — the player being read is unmounted under the reader.
                 do! awaitU (page.ClickAsync "#shell [data-pane-replay='terminal:term-live'] .ap-overlay-start")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-pane-replay='terminal:term-live']")""")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.getAttribute('data-terminal-watch') === 'watch'""")
+                do! waitAbsent "#shell [data-pane-replay='terminal:term-live'] to be gone" page "#shell [data-pane-replay='terminal:term-live']"
+                do! Wait.until "focus on [data-terminal-watch='watch']" (fun () -> Read.focused page "[data-terminal-watch='watch']") id
 
                 // And by hand too: watch again, live again — the same control both times.
                 do! awaitU (page.ClickAsync "#shell [data-terminal-watch='watch']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-replay='terminal:term-live'] .ap-player")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-watch='live']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-pane-replay='terminal:term-live']")""")
+                do! waitAbsent "#shell [data-pane-replay='terminal:term-live'] to be gone" page "#shell [data-pane-replay='terminal:term-live']"
                 return ()
             }
 
@@ -6358,7 +6306,7 @@ let editorTests =
                 // The bar's own press is the way back, and it hands focus on to the toggle
                 // that replaces it rather than stranding it on `body`.
                 do! awaitU (page.ClickAsync "#shell [data-terminal-rewound-live]")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-terminal-rewound]")""")
+                do! waitAbsent "#shell [data-terminal-rewound] to be gone" page "#shell [data-terminal-rewound]"
                 do! waitCommandLine page line "git sta"
                 do! waitFor
                         "focus on the toggle that replaced the bar"
@@ -6505,7 +6453,7 @@ let editorTests =
 
                 // Focus went back to the chip the preview was opened from, as a preview's close
                 // gives it: the pane beside the chat now shows where that chip came from.
-                let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-chat-block') === true""")
+                do! Wait.until "focus on [data-chat-block]" (fun () -> Read.focused page "[data-chat-block]") id
                 return ()
             }
 
@@ -6595,7 +6543,7 @@ let editorTests =
                 // Away to a preview, which takes the history out of the document, and back.
                 do! awaitU (page.ClickAsync "#shell [data-chat-block='block-harness']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview-close]")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-terminal-block-run='block-burst-ok']")""")
+                do! waitAbsent "#shell [data-terminal-block-run='block-burst-ok'] to be gone" page "#shell [data-terminal-block-run='block-burst-ok']"
                 do! awaitU (page.ClickAsync "#shell [data-pane-preview-close]")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-block-run='block-burst-ok'] details")
 
@@ -6706,16 +6654,12 @@ let editorTests =
         editorCase "a queued command says what it will run, and opens the terminal it waits in" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-pending]")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector('#shell [data-chat-pending]').textContent.includes('npm run lint')""")
+                do! Wait.until "#shell [data-chat-pending] to say npm run lint" (fun () -> Read.text page "#shell [data-chat-pending]") (Option.exists (fun t -> t.Contains "npm run lint"))
 
                 do! awaitU (page.ClickAsync "#shell [data-chat-pending]")
 
                 // The pane is on the terminal it is queued in — not some terminal, that one.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector('#shell [data-pane-panel]')?.getAttribute('data-pane-panel') === 'terminal:term-harness'""")
+                do! Wait.until "#shell [data-pane-panel] to have data-pane-panel terminal:term-harness" (fun () -> Read.attr page "#shell [data-pane-panel]" "data-pane-panel") ((=) (Some "terminal:term-harness"))
                 // Focus followed it in, as it does for a block's chip: the reader was moved,
                 // so their keyboard was too — onto the terminal's own command line, which is
                 // where a terminal takes what they type.
@@ -6747,8 +6691,8 @@ let editorTests =
                 Expect.equal during before "the strip holds the same terminals, and no tab for the preview"
                 do! focusReachedPane page
                 do! awaitU (page.Keyboard.PressAsync "Escape")
-                do! waitFor "the preview to be gone" page "!document.querySelector('#shell [data-pane-preview]')"
-                do! waitFor "focus to be back on the chip" page "document.activeElement?.hasAttribute('data-chat-block') === true"
+                do! waitAbsent "the preview to be gone" page "#shell [data-pane-preview]"
+                do! Wait.until "focus to be back on the chip" (fun () -> Read.focused page "[data-chat-block]") id
             }
 
         // The preview's close, in the line under the pivot that names it (F3), is what hands
@@ -6759,8 +6703,8 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview-close]")
                 do! focusReachedPane page
                 do! awaitU (page.Locator("#shell [data-pane-preview-close]").First.PressAsync "Enter")
-                do! waitFor "the preview to be gone" page "!document.querySelector('#shell [data-pane-preview]')"
-                do! waitFor "focus to be back on the chip" page "document.activeElement?.hasAttribute('data-chat-block') === true"
+                do! waitAbsent "the preview to be gone" page "#shell [data-pane-preview]"
+                do! Wait.until "focus to be back on the chip" (fun () -> Read.focused page "[data-chat-block]") id
             }
 
         // A preview is a layer OF its terminal, not a tab beside it (F3). It used to have an
@@ -6868,7 +6812,7 @@ let editorTests =
                 // OVER the pane, not instead of it: the tabs are still there and still a
                 // tablist, which is exactly how this differs from the list.
                 let! _ = await (page.WaitForSelectorAsync "#shell [role='tablist']")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-content-list]")""")
+                do! waitAbsent "#shell [data-content-list] to be gone" page "#shell [data-content-list]"
 
                 // Its entries are real controls a keyboard can reach.
                 do! awaitU (page.Locator("#shell [data-sandbox-new]").First.FocusAsync ())
@@ -6879,10 +6823,8 @@ let editorTests =
                 // Escape from inside the menu shuts it and hands the cursor back, rather than
                 // leaving it on `body` where the entry used to be.
                 do! awaitU (page.Keyboard.PressAsync "Escape")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-pane-new-menu]")""")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.hasAttribute('data-pane-new') === true""")
+                do! waitAbsent "#shell [data-pane-new-menu] to be gone" page "#shell [data-pane-new-menu]"
+                do! Wait.until "focus on [data-pane-new]" (fun () -> Read.focused page "[data-pane-new]") id
                 return ()
             }
 
@@ -6908,10 +6850,8 @@ let editorTests =
                 do! awaitU (page.Locator("#shell [data-sandbox-new]").First.FocusAsync ())
 
                 do! awaitU (page.Keyboard.PressAsync "Escape")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-pane-new-menu]")""")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.hasAttribute('data-terminal-new') === true""")
+                do! waitAbsent "#shell [data-pane-new-menu] to be gone" page "#shell [data-pane-new-menu]"
+                do! Wait.until "focus on [data-terminal-new]" (fun () -> Read.focused page "[data-terminal-new]") id
                 return ()
             }
 
@@ -7023,15 +6963,11 @@ let editorTests =
                 // asks for when the pressed control leaves the document.
                 do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-list-row='term-live']")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector('#shell [data-content-list]')""")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector('#shell [data-pane-panel]')?.getAttribute('data-pane-panel') === 'terminal:term-live'""")
+                do! waitAbsent "#shell [data-content-list] to be gone" page "#shell [data-content-list]"
+                do! Wait.until "#shell [data-pane-panel] to have data-pane-panel terminal:term-live" (fun () -> Read.attr page "#shell [data-pane-panel]" "data-pane-panel") ((=) (Some "terminal:term-live"))
                 // This peer holds that terminal's keyboard, so it has no command line: what
                 // takes the keystrokes is its screen, and that is where focus lands.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.getAttribute('data-terminal-keys') === 'term-live'""")
+                do! Wait.until "focus on [data-terminal-keys='term-live']" (fun () -> Read.focused page "[data-terminal-keys='term-live']") id
                 return ()
             }
 
@@ -7042,9 +6978,7 @@ let editorTests =
         editorCaseIn 1440 900 "a terminal in the environment opens the pane on it" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-environment-terminals] [data-environment-terminal='term-live']")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector('#shell [data-pane-panel]')?.getAttribute('data-pane-panel') === 'terminal:term-live'""")
+                do! Wait.until "#shell [data-pane-panel] to have data-pane-panel terminal:term-live" (fun () -> Read.attr page "#shell [data-pane-panel]" "data-pane-panel") ((=) (Some "terminal:term-live"))
                 return ()
             }
         // On a phone the environment is in the DRAWER, and the pane is the other sheet over the
@@ -7103,10 +7037,8 @@ let editorTests =
                     await (page.WaitForFunctionAsync
                         """!!document.activeElement?.closest('#shell [data-content-list]')""")
                 do! awaitU (page.Keyboard.PressAsync "Escape")
-                let! _ = await (page.WaitForFunctionAsync """!document.querySelector('#shell [data-content-list]')""")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.activeElement?.matches('#shell [data-pane-pivot] [role=tab][aria-selected=true][data-pane-tab]') === true""")
+                do! waitAbsent "#shell [data-content-list] to be gone" page "#shell [data-content-list]"
+                do! Wait.until "focus on #shell [data-pane-pivot] [role=tab][aria-selected=true][data-pane-tab]" (fun () -> Read.focused page "#shell [data-pane-pivot] [role=tab][aria-selected=true][data-pane-tab]") id
                 return ()
             }
 
@@ -7324,7 +7256,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [role='tablist'] [data-pane-tab-dismiss='term-harness']")
-                do! waitFor "the tab to be gone" page "!document.querySelector(\"#shell [data-pane-tab='terminal:term-harness']\")"
+                do! waitAbsent "the tab to be gone" page "#shell [data-pane-tab='terminal:term-harness']"
                 let! sent = Harness.read page HarnessPage.closed
                 Expect.equal sent None "nothing ended"
             }
@@ -7339,7 +7271,7 @@ let editorTests =
                 do! twoFrames page
                 do! awaitU (page.FocusAsync "#shell [data-pane-tab='terminal:term-harness']")
                 do! awaitU (page.Keyboard.PressAsync "Delete")
-                do! waitFor "the tab to be gone" page "!document.querySelector(\"#shell [data-pane-tab='terminal:term-harness']\")"
+                do! waitAbsent "the tab to be gone" page "#shell [data-pane-tab='terminal:term-harness']"
                 let! sent = Harness.read page HarnessPage.closed
                 Expect.equal sent None "nothing ended"
             }
@@ -7418,9 +7350,7 @@ let editorTests =
                 do! fold 91L (closed "term-harness")
                 do! fold 92L (closed "term-bare")
                 // Landed: a closed terminal offers no kill, and one with nothing kept says so.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                            """!document.querySelector("#shell [data-terminal-close='term-harness'], #shell [data-terminal-close='term-bare']")""")
+                do! waitAbsent "#shell [data-terminal-close='term-harness'], #shell [data-terminal-close='term-bare'] to be gone" page "#shell [data-terminal-close='term-harness'], #shell [data-terminal-close='term-bare']"
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-list-gone='term-bare']")
                 let! after = await (page.EvaluateAsync<string> rows)
                 Expect.equal after before "every row where it was, the size it was"
@@ -7450,9 +7380,7 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card]")
                 do! awaitU (page.FocusAsync "#shell [data-chat-task-card] [data-fold]")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector('#shell [data-chat-task-card] [data-fold-body]')?.getAttribute('data-fold-open') === 'yes'""")
+                do! Wait.until "#shell [data-chat-task-card] [data-fold-body] to have data-fold-open yes" (fun () -> Read.attr page "#shell [data-chat-task-card] [data-fold-body]" "data-fold-open") ((=) (Some "yes"))
 
                 // The failed command leads, which is the one thing the ordering promises —
                 // and it is a BUTTON, not a div someone hung a click on.
@@ -7467,9 +7395,7 @@ let editorTests =
                 // And pressing it does what an ungrouped chip does: opens that block.
                 do! awaitU (page.Keyboard.PressAsync "Tab")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector('#shell [data-pane-panel]')?.getAttribute('data-pane-panel') === 'block:term-harness:block-burst-failed'""")
+                do! Wait.until "#shell [data-pane-panel] to have data-pane-panel block:term-harness:block-burst-failed" (fun () -> Read.attr page "#shell [data-pane-panel]" "data-pane-panel") ((=) (Some "block:term-harness:block-burst-failed"))
                 return ()
             }
 
@@ -7596,7 +7522,7 @@ let editorTests =
                     let! pane = onFace "the pane" "#shell [data-content-toggle='show']"
                     let! list = onFace "the switcher" "#shell [data-pane-switcher]"
                     do! awaitU (page.Keyboard.PressAsync "Escape")
-                    do! waitFor "the switcher to shut" page "document.querySelector('#shell [data-content-list]') === null"
+                    do! waitAbsent "the switcher to shut" page "#shell [data-content-list]"
                     let! _ = onFace "" "#shell [data-content-toggle='hide']"
                     let! preview = onFace "a preview" "#shell [data-chat-block]"
                     let! _ = onFace "" "#shell [data-content-toggle='hide']"
