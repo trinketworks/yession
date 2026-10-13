@@ -518,6 +518,23 @@ let connectionsApiFor
             |> List.collect (fun scope -> store.List scope |> List.map (fun m -> m.Id))
             |> broker.StatusOf }
 
+/// The page at the one PUBLIC broker route (Plan 08): where a provider's redirect lands. Not
+/// under /control — a browser arrives here, and the single-use `state` (minted only for a
+/// target the policy permitted at begin) is the whole authorization. A tiny self-contained
+/// page; the session's panel picks the outcome up via its status stream, so this tab only
+/// needs to say "done".
+///
+/// Top level, not beside the route that sends it, so the cheap tier can render it: it is a
+/// document a browser lands on like the others, and the floor (`lang`, a title) is asserted
+/// of every one of them in one place.
+let connectionsCallbackPage (title: string) (detail: string) : string =
+    sprintf
+        """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>%s</title>
+<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem}p{color:#444}</style>
+</head><body><h1>%s</h1><p>%s</p></body></html>"""
+        title title detail
+
 /// Create the Manager. `ui` is the management surface (Step 25): a route handler that
 /// closes over the Manager itself, sharing the control endpoint's server. It receives
 /// the Manager's per-request authenticator (the configured strategy) so
@@ -979,18 +996,7 @@ let createWithUi
               Query = (fun name -> Interop.queryParamOf req.url name)
               Header = fun name -> Interop.headerOf req name }
 
-    // The one PUBLIC broker route (Plan 08): where a provider's redirect lands. Not
-    // under /control — a browser arrives here, and the single-use `state` (minted only
-    // for a target the policy permitted at begin) is the whole authorization. A tiny
-    // self-contained page; the session's panel picks the outcome up via its status
-    // stream, so this tab only needs to say "done".
-    let connectionsCallbackPage (title: string) (detail: string) : string =
-        sprintf
-            """<!doctype html>
-<html><head><meta charset="utf-8"><title>%s</title>
-<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem}p{color:#444}</style>
-</head><body><h1>%s</h1><p>%s</p></body></html>"""
-            title title detail
+    // The one PUBLIC broker route (Plan 08): see `connectionsCallbackPage`.
     let handleConnectionsCallback (req: IncomingMessage) (res: ServerResponse) : bool =
         let path = req.url.Split('?').[0]
         if not (req.``method`` = "GET" && path = "/connections/callback") then false

@@ -3255,12 +3255,82 @@ let private chromeTests =
                     EventConsumer = { representativeModel.EventConsumer with Feed = FeedStalled "ECONNREFUSED" } }
         let noticeShell = stoppedShell + stalledShell
 
+        // The surfaces whose controls none of the renders above reach, each shown in the state
+        // that draws them: a markdown table in a message (the one `th` the shell draws), the
+        // terminal this peer holds (a textarea), a chapter's rule (its name is a field), a
+        // collaborator's half-typed command (a read-only field), and the launch card with a
+        // repository held (two search fields).
+        let tableShell =
+            { representativeModel with
+                Conversation =
+                    ConversationProjection.ofItems
+                        [ { MessageId = MessageId.create "msg-table" |> expect
+                            Author = ActorRef.Agent
+                            Content = ItemContent.Message "| Name | Qty |\n| --- | --- |\n| Widget | 3 |"
+                            Status = Complete
+                            Offset = EventOffset.create 1L |> expect
+                            Woke = None; CausedBy = None } ] }
+            |> Support.render
+        let heldShell = Support.render heldTerminalModel
+        let chapterShell = Support.render (withChapters [ "msg-1" ])
+        let collaboratorShell =
+            { representativeModel with
+                Synced =
+                    { representativeModel.Synced with
+                        TerminalDrafts =
+                            representativeModel.Synced.TerminalDrafts
+                            |> Map.add
+                                (terminalId, bob)
+                                { Terminal = terminalId; Author = bob; QueueId = QueueId.create "queue-ui-term-draft-bob" |> expect } } }
+            |> Support.render
+        let launchShell =
+            let hello = RepoRef.create "octo/hello" |> expect
+            let candidate : RepoCandidate =
+                { Repo = hello; Description = Some "a thing"; DefaultBranch = "main"; Private = false; PushedAt = None }
+            let at (n: int64) (event: SessionEvent) : EventEnvelope<SessionEvent> =
+                { EventId = EventId.fresh ()
+                  SessionId = sessionId
+                  Offset = EventOffset.create n |> expect
+                  Actor = ActorRef.Session
+                  Timestamp = DateTimeOffset (2026, 9, 12, 0, 0, 0, TimeSpan.Zero)
+                  Event = event }
+            // A fresh session, read to its end, with nothing said: the launch card stands where
+            // the timeline's first line will.
+            let events =
+                [ at 0L (SessionStarted { MessageId = MessageId.create "msg-started" |> expect })
+                  at 1L (PeerJoined { PeerId = ada; DisplayName = "swift-heron"; User = None }) ]
+            ClientModel.init { PeerId = ada; DisplayName = "swift-heron" }
+            |> Support.step (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "swift-heron"; LatestOffset = Some (EventOffset.create 1L |> expect) })
+            |> Support.step HistoryReadMsg
+            |> Support.step (EventsPageMsg { Events = events; LastOffset = events |> List.tryLast |> Option.map (fun e -> e.Offset); IsEnd = true })
+            |> Support.step (LaunchMsg (LaunchListingArrived ("", ListingLoaded { Candidates = [ candidate ]; Next = None })))
+            |> Support.step (LaunchMsg (LaunchSelected candidate))
+            |> Support.step (LaunchMsg (LaunchBranchesArrived (hello, BranchesLoaded { Names = [ "main" ]; Next = None })))
+            |> Support.render
+
+        // Every render above, named: what the structure cases at the foot of this list read
+        // one by one, so a failure can say which surface it found the fault on. The cases
+        // that scan for a class read the same renders end to end.
+        let renders =
+            [ "the shell", shell
+              "the settings column, Claude waiting for its code", settingsShell
+              "the settings column, GitHub waiting for approval", deviceShell
+              "the terminal list", listShell
+              "the notices, a session that stopped", stoppedShell
+              "the notices, a feed that stalled", stalledShell
+              "a message holding a table", tableShell
+              "the terminal this peer holds", heldShell
+              "a chapter's rule", chapterShell
+              "a collaborator's half-typed command", collaboratorShell
+              "the launch card, a repository held", launchShell ]
+        let everyRender = renders |> List.map snd |> String.concat ""
+
         // Every input either wears the ONE field face (a ring that goes blue on focus) or
         // wears nothing at all, because the row around it carries the stroke. What is ruled
         // out is the third thing: a control that invents its own border, or one that draws a
         // box with no focus state.
         testCase "every input draws the one field face, or draws nothing" <| fun () ->
-            for classes in classesOf [ "input"; "select"; "textarea" ] (shell + settingsShell + deviceShell + listShell) do
+            for classes in classesOf [ "input"; "select"; "textarea" ] everyRender do
                 let isField = classes.Contains "focus:border-blue"
                 let isBare = classes.Contains "border-0"
                 Expect.isTrue (isField || isBare) (sprintf "an input is neither the field face nor bare: %s" classes)
@@ -3269,7 +3339,7 @@ let private chromeTests =
         // UI baseline). The failure this pins is silent by nature: a control with `outline-2` and no
         // `outline` draws nothing, and you only find out with a keyboard.
         testCase "every button and link declares a visible focus ring" <| fun () ->
-            for classes in classesOf [ "button"; "a "; "summary" ] (shell + settingsShell + deviceShell + listShell + noticeShell) do
+            for classes in classesOf [ "button"; "a "; "summary" ] everyRender do
                 Expect.isTrue
                     (classes.Contains "focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue")
                     (sprintf "a control has no visible focus ring: %s" classes)
@@ -3286,7 +3356,7 @@ let private chromeTests =
         // container's) and is the one legitimate way to write those characters.
         testCase "a declared focus ring is never switched off by outline-none" <| fun () ->
             let tags = [ "button"; "a "; "input"; "select"; "textarea" ]
-            for classes in classesOf tags (shell + settingsShell + deviceShell + listShell) do
+            for classes in classesOf tags everyRender do
                 if classes.Contains "focus-visible:outline" then
                     Expect.isFalse
                         (classes.Split ' ' |> Array.contains "outline-none")
@@ -3410,6 +3480,151 @@ let private chromeTests =
                   "why nothing can be kept here", Dom.Text.historyNotKeptWhy ] do
                 Expect.isTrue (noticeShell.Contains mechanism) (sprintf "%s is still in the document" what)
                 Expect.isFalse (surface.Contains mechanism) (sprintf "%s is not also on the surface" what)
+
+        // --- structure -----------------------------------------------------------------------
+        // WCAG 2.0 AA's structural floor: a control has a name, a header cell says what it
+        // heads, a page says what language it is in and what it is called. Asserted of every
+        // document below and never again beside a surface (tests/AGENTS.md, "UI tests pin an
+        // invariant"): a surface added to this list is held to all of it.
+
+        /// The Manager's page, over a table of sessions (one stopped, one archived), a declared
+        /// MCP server and a hook endpoint: every section it can draw, so every table and form.
+        let managerPage =
+            let record (id: string) (archived: bool) : Yession.Manager.SessionRecord =
+                { SessionId = SessionId.create id |> expect
+                  DisplayName = id
+                  CreatedAt = DateTimeOffset (2026, 7, 15, 12, 0, 0, TimeSpan.Zero)
+                  DataDir = "sessions/" + id
+                  ArchivedAt = if archived then Some (DateTimeOffset (2026, 8, 1, 9, 30, 0, TimeSpan.Zero)) else None }
+            let view (r: Yession.Manager.SessionRecord) : Yession.Host.ProcessManager.SessionView =
+                { Record = r; Status = Yession.Host.ProcessManager.NotRunning; Summary = None }
+            Yession.Host.ManagerUi.page
+                "app.css"
+                "manager-page.js"
+                PublicAccess.Loopback
+                { Yession.Manager.SessionQuery.defaults with Show = Yession.Manager.Shown.Both }
+                [ view (record "alpha" false); view (record "beta" true) ]
+                [ { Server =
+                      { Name = McpServerName.create "serial" |> expect
+                        Transport = McpHttp "http://127.0.0.1:7333"
+                        Description = Some "USB serial ports" }
+                    Audience = AnySession } ]
+                (Yession.Host.WebhookRelay.endpointsFor
+                    "chrome-kek"
+                    [ { Name = "github"; Rotation = 0; Signature = Yession.Host.WebhookRelay.SignatureSpec.webSub } ])
+
+        /// Every document a bin serves, whole. One entry per place the product writes an
+        /// `<html>`: the session's shell, the Manager's page, the two pages `/open` can answer
+        /// with, and the page a provider's redirect lands on.
+        let pages =
+            [ "the session's shell",
+              Yession.Host.Ssr.page sessionId "" None false (AssetBuild "chrome-floor") representativeModel
+              "the Manager's page", managerPage
+              "the page /open answers a refusal with",
+              Yession.Host.ManagerUi.problemPage "Cannot open this session" "It is archived."
+              "the screen /open shows while a session launches",
+              Yession.Host.ManagerUi.openingPage sessionId "/sessions/demo-session/open" "/sessions/demo-session/ready"
+              "the page a provider's redirect lands on",
+              Yession.Host.ProcessManager.connectionsCallbackPage "Connected" "Close this tab and return to your session." ]
+
+        // What a structure case reads: the renders, and the pages (which hold the Manager's
+        // forms and tables, and the shell again with its document around it).
+        let documents = renders @ pages
+
+        /// A document as a tree, with every element in it and the elements around each.
+        let treeOf (html: string) = Markup.elements (Markup.parse html)
+
+        let isControl (e: Markup.Element) = e.Tag = "input" || e.Tag = "select" || e.Tag = "textarea"
+
+        /// The controls of a document that a person can meet. An `<input type="hidden">` is not
+        /// one, and neither is anything under `hidden`, which the browser takes out of the page
+        /// and out of the accessibility tree with it.
+        let controlsOf (all: (Markup.Element * Markup.Element list) list) =
+            all
+            |> List.filter (fun (e, ancestors) ->
+                let inert = e.Attributes.ContainsKey "hidden" || ancestors |> List.exists (fun a -> a.Attributes.ContainsKey "hidden")
+                let hiddenInput = e.Tag = "input" && (Markup.said "type" e |> Option.map (fun t -> t.ToLowerInvariant ())) = Some "hidden"
+                isControl e && not inert && not hiddenInput)
+
+        /// What a screen reader calls a control, by the four ways this product may say it: an
+        /// `aria-labelledby` that points at words, an `aria-label`, a `<label for>` and a
+        /// wrapping `<label>`. A `placeholder` and a `title` are not on the list, because
+        /// neither is an accessible name that survives the field being filled in.
+        let nameOf (all: (Markup.Element * Markup.Element list) list) (control: Markup.Element) (ancestors: Markup.Element list) : string option =
+            let words (e: Markup.Element) =
+                match Markup.text isControl e with
+                | "" -> None
+                | spoken -> Some spoken
+            let labelledBy =
+                Markup.said "aria-labelledby" control
+                |> Option.bind (fun ids ->
+                    let named =
+                        ids.Split ([| ' ' |], StringSplitOptions.RemoveEmptyEntries)
+                        |> Array.choose (fun id ->
+                            all |> List.tryPick (fun (e, _) -> if Markup.attribute "id" e = Some id then words e else None))
+                    if Array.isEmpty named then None else Some (String.concat " " named))
+            let labelFor =
+                Markup.said "id" control
+                |> Option.bind (fun id ->
+                    all |> List.tryPick (fun (e, _) -> if e.Tag = "label" && Markup.attribute "for" e = Some id then words e else None))
+            let wrapping = ancestors |> List.tryPick (fun a -> if a.Tag = "label" then words a else None)
+            [ labelledBy; Markup.said "aria-label" control; labelFor; wrapping ] |> List.tryPick id
+
+        /// Refuses with EVERY offender at once, one per line and each once however many
+        /// documents repeat it, so a change that breaks the floor in three places is fixed in
+        /// one run. An offender is the document it was found on and what was found there.
+        let refuse (what: string) (offenders: (string * string) list) =
+            let distinct = offenders |> List.distinctBy snd
+            Expect.isTrue
+                (List.isEmpty distinct)
+                (distinct
+                 |> List.map (fun (page, fault) -> sprintf "  - on %s: %s" page fault)
+                 |> String.concat "\n"
+                 |> sprintf "%s:\n%s" what)
+
+        testCase "every form control has an accessible name" <| fun () ->
+            let found =
+                [ for page, html in documents do
+                    let all = treeOf html
+                    for control, ancestors in controlsOf all -> page, control, ancestors, nameOf all control ancestors ]
+            refuse
+                "a form control has no accessible name. Give it a <label for=\"its id\"> (class `Style.srOnly` when the design has no room for the words), wrap it in a <label>, or give it an aria-label. A placeholder is not a name"
+                [ for page, control, ancestors, name in found do
+                    if name.IsNone then page, Markup.describe (List.tryHead ancestors) control ]
+            // Every kind is in a document this case reads, or it looked at nothing of that kind.
+            Expect.equal
+                (found |> List.map (fun (_, control, _, _) -> control.Tag) |> Set.ofList)
+                (set [ "input"; "select"; "textarea" ])
+                "this case reads an input, a select and a textarea"
+
+        testCase "every table header cell says whether it heads a column or a row" <| fun () ->
+            let cells =
+                [ for page, html in documents do
+                    for th, ancestors in treeOf html do
+                        if th.Tag = "th" then page, th, ancestors ]
+            refuse
+                "a table header cell has no scope. Add scope=\"col\" when it heads a column, or scope=\"row\" when it heads a row"
+                [ for page, th, ancestors in cells do
+                    if not (Markup.said "scope" th |> Option.exists (fun scope -> List.contains scope [ "col"; "row"; "colgroup"; "rowgroup" ])) then
+                        page, Markup.describe (List.tryHead ancestors) th ]
+            Expect.isNonEmpty cells "this case reads a table"
+
+        testCase "every page a bin serves declares its language" <| fun () ->
+            refuse
+                "a page does not declare its language. Write <html lang=\"en\"> on its root"
+                [ for page, html in pages do
+                    match treeOf html |> List.tryFind (fun (e, _) -> e.Tag = "html") with
+                    | None -> page, "it has no <html> element at all"
+                    | Some (root, _) -> if (Markup.said "lang" root).IsNone then page, "its <html> has no lang" ]
+
+        testCase "every page a bin serves has a title" <| fun () ->
+            refuse
+                "a page has no title. Put a <title> that names the page in its <head>"
+                [ for page, html in pages do
+                    let titles = treeOf html |> List.filter (fun (e, ancestors) -> e.Tag = "title" && ancestors |> List.exists (fun a -> a.Tag = "head"))
+                    match titles with
+                    | [] -> page, "it has no <title> in its <head>"
+                    | (title, _) :: _ -> if Markup.text (fun _ -> false) title = "" then page, "its <title> is empty" ]
     ]
 
 // What the session page must keep saying, whatever it comes to look like: one person wears

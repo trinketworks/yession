@@ -27,6 +27,9 @@
          suite that writes to disk wanted the same half-dozen calls, and each had written its
          own. Here rather than in `Support.fs`, which compiles after `Assets.fs`. -->
     <Compile Include="TestFiles.fs" />
+    <!-- Rendered HTML as a tree, for the floor's scans of names that live in a second element
+         (a label, an `aria-labelledby` target). Early, and with no dependencies of its own. -->
+    <Compile Include="Markup.fs" />
     <Compile Include="Version.fs" />
     <Compile Include="Domain.fs" />
     <Compile Include="Entities.fs" />
