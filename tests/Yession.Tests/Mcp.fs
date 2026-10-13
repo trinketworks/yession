@@ -275,8 +275,11 @@ let private rpcDecoder : Decoder<Rpc> =
           ToolName = get.Optional.At [ "params"; "name" ] Decode.string
           Text = get.Optional.At [ "params"; "arguments"; "text" ] Decode.string })
 
-let private headersOf (entries: (string * string) list) : obj =
-    JsInterop.createObj [ for name, value in entries -> name, box value ]
+/// The headers object `writeHead` takes: a JSON object whose keys are the header names, which
+/// are data (a provider's session id is whatever it chose to call it), so a codec builds it
+/// rather than an object literal spelled by hand.
+let private headersOf (entries: (string * string) list) : JsonValue =
+    Encode.object [ for name, value in entries -> name, Encode.string value ]
 
 /// The request's path alone: a client is entitled to a query string, and every case below
 /// turns on the path.
@@ -857,7 +860,7 @@ let private startProviderServer (engine: Ports.SerialEngine) =
             Interop.createServer (fun req res ->
                 if provider.Value.TryHandle req res then ()
                 else
-                    res.writeHead (404, Fable.Core.JsInterop.createObj [ "content-type", box "text/plain" ])
+                    res.writeHead (404, headersOf [ "content-type", "text/plain" ])
                     |> ignore
                     res.``end`` "not found")
         let mutable bound = 0
