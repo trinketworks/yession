@@ -4833,6 +4833,43 @@ let private watchEngineTests =
             }
     ]
 
+// The page a provider's redirect lands on. What it says includes words the PROVIDER chose
+// (`error_description` is whatever the redirect carried), so two things hold however the page
+// is drawn: those words arrive as text, and the browser is told to run nothing here even if
+// some words ever did not. The route sends this value and no other (`connectionsCallbackPage`
+// is private), so what it is asserted of is what goes out.
+let private callbackPageTests =
+    testList "The connections callback page" [
+        let provider = "<script>alert(1)</script>\"onerror=\"alert(2)"
+
+        testCase "words the provider sent arrive as text, not as markup" <| fun () ->
+            let _, page = ProcessManager.connectionsCallbackResponse "Sign-in failed" provider
+            Expect.isFalse (page.Contains "<script") "no script element is made from them"
+            Expect.stringContains page "&lt;script&gt;" "and they are still there to read"
+
+        testCase "a title arrives as text, not as markup" <| fun () ->
+            let _, page = ProcessManager.connectionsCallbackResponse provider "Close this tab."
+            Expect.isFalse (page.Contains "<script") "no script element is made from it"
+            Expect.stringContains page "&lt;script&gt;" "and it is still there to read"
+
+        testCase "the page is sent with a policy that lets no script run" <| fun () ->
+            let headers, _ = ProcessManager.connectionsCallbackResponse "Sign-in failed" provider
+            let policy =
+                headers
+                |> List.tryPick (fun header ->
+                    if ResponseHeader.name header = "content-security-policy" then Some (ResponseHeader.value header) else None)
+            Expect.isSome policy "the page travels with a content-security-policy"
+            let sources (directive: string) =
+                policy.Value.Split ';'
+                |> Array.map (fun d -> d.Trim().Split ' ')
+                |> Array.tryPick (fun parts -> if parts.[0] = directive then Some (Array.skip 1 parts) else None)
+            // Script falls back to `default-src` where no `script-src` says otherwise.
+            Expect.equal
+                (sources "script-src" |> Option.orElse (sources "default-src"))
+                (Some [| "'none'" |])
+                "script may come from nowhere"
+    ]
+
 let tests =
     testList "Connections" [
         clockTests
@@ -4843,6 +4880,7 @@ let tests =
         githubPollTests
         panelWireTests
         catalogueTests
+        callbackPageTests
         codecTests
         flowTests
         wireTests
