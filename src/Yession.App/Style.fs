@@ -195,9 +195,9 @@ module Style =
     let private caps = "font-semibold text-label tracking-caps uppercase"
 
     /// The same voice one step up, for a verb that has ROOM: 13px rather than 11. Worn by
-    /// the composer's Send and by the tray's verbs above it — the ones that stand on a band of
-    /// their own with nothing competing for the width. At the label size a word button there
-    /// read as a caption of the glyph it replaced rather than as the thing you press.
+    /// the composer's Send, which stands on a band of its own with nothing competing for the
+    /// width. At the label size a word button there read as a caption of the glyph it
+    /// replaced rather than as the thing you press.
     let private capsLg = "font-semibold text-small tracking-caps uppercase"
 
     /// The voice a body is written in: Source Serif 4 for a person, and the system's own Noto
@@ -2556,8 +2556,11 @@ module Style =
     /// like the composer and the queue's bands: inset, it would read as an object floating
     /// over the conversation again. No rule of its own — the step from `bg` is its top edge.
     ///
-    /// `px-4` is the composer's gutter, so interrupt's glyph starts on the model picker's
-    /// edge and the jump's ends on Send's. 44px on a phone, a thumb's target; 40 elsewhere.
+    /// The leading edge is the timeline's (`px-8`, `px-4` on a phone), so interrupt's word
+    /// stands on the reading rail every message body starts on and its glyph hangs on the
+    /// avatars' column (`trayMark`) — the line a reader draws down the conversation runs on
+    /// through it. The trailing edge is the composer's gutter (`px-4`), so the jump's arrow
+    /// ends on Send's. 44px on a phone, a thumb's target; one control high elsewhere.
     ///
     /// It ARRIVES rather than appears: drawn first (`starting:`) a touch low and clear, it
     /// rises onto the composer's rule and fades in, on the pace every arrival here takes
@@ -2571,12 +2574,14 @@ module Style =
     /// times the paints of a strip that simply arrived. Opacity and translation move nothing
     /// else on the page.
     let composerTray =
-        cls [ "shrink-0 flex items-center h-10 max-md:h-11 px-4 bg-panel"
+        cls [ "shrink-0 flex items-center h-8 max-md:h-11 pl-8 pr-4 max-md:pl-4 bg-panel"
               "transition-[translate,opacity] starting:translate-y-1 starting:opacity-0"; Motion.pace ]
 
+    /// The label voice (`caps`), not Send's step up: these are controls for the timeline
+    /// above, and at Send's size they stood level with the verb the composer is for.
     let private trayVerb =
-        cls [ "h-full min-w-11 shrink-0 inline-flex items-center gap-1.5 p-0 bg-transparent border-0 cursor-pointer font-ui"
-              capsLg; "text-ink-dim"
+        cls [ "h-full min-w-11 shrink-0 inline-flex items-center p-0 bg-transparent border-0 cursor-pointer font-ui"
+              caps; "text-ink-dim"
               // A control arriving in a strip already open fades in on the same pace
               // (`starting:`, the style it is first drawn from), so the second of the two
               // turning up does not pop where the first arrived.
@@ -2587,14 +2592,21 @@ module Style =
     /// case. `disabled:*` is the turn between a press and the stop landing
     /// (`AgentViewState.Interrupting`); `pointer-events-none` so the err face never paints
     /// while there is nothing left to press.
+    ///
+    /// No gap of its own: the glyph's cell (`trayMark`) plus `gap-3` is the 20px avatar and
+    /// the 12px gutter `messageGroupHead` spends, so the word lands on the reading rail.
     let trayInterrupt =
-        cls [ trayVerb; "hover:text-err"
+        cls [ trayVerb; "gap-3 hover:text-err"
               "disabled:text-ink-faint disabled:cursor-default disabled:pointer-events-none" ]
 
     /// The way back to the latest message, at the strip's trailing edge whatever stands at
     /// its leading one. Its word ends in the glyph, so no caps tracking trails past the ink.
     let trayJumpSlot = "ml-auto h-full flex"
-    let trayJump = cls [ trayVerb; "justify-end hover:text-ink" ]
+    let trayJump = cls [ trayVerb; "gap-1.5 justify-end hover:text-ink" ]
+
+    /// Interrupt's glyph, a mark hanging in the gutter left of the rail: the avatar's width,
+    /// centred, so it stands on the column the speakers' avatars and the fold arrows do.
+    let trayMark = "w-5 shrink-0 inline-flex justify-center"
 
     // --- Queue: editable until drained; the head's green count says so ------------------------
     // The queue is the composer's dock, not a list floating over the ground: its rows are
