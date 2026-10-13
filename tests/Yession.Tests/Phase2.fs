@@ -2051,6 +2051,36 @@ let private runEndTests =
             }
     ]
 
+// What a skip line tells its reader to do. Each case asks one pass of one run about one suite.
+// The line is read as a verdict on what CAN run, so the cases pin the action it names, not its
+// wording around that action.
+let private skipLineTests =
+    testList "The test harness's skip lines (what to run instead)" [
+        testCaseAsync "a browser suite skipped on a run without Browser names `check Browser`" <|
+            async {
+                let line = Tag.skipReason false Set.empty [ Tag.Browser ]
+                Expect.stringContains line "`check Browser`" "the command that runs it"
+            }
+
+        testCaseAsync "a suite with several needs names all of them in one command" <|
+            async {
+                let line = Tag.skipReason false (Set.ofList [ Tag.Ports ]) [ Tag.Browser; Tag.Native ]
+                Expect.stringContains line "`check Browser Native`" "every need, so the command runs it"
+            }
+
+        testCaseAsync "a browser suite on the Node pass of a Browser run is not called missing" <|
+            async {
+                let line = Tag.skipReason false (Set.ofList [ Tag.Browser ]) [ Tag.Browser ]
+                Expect.isFalse (line.Contains "needs") "the .NET CLR pass of the same run runs it"
+            }
+
+        testCaseAsync "a Node suite on the .NET CLR pass is not called missing" <|
+            async {
+                let line = Tag.skipReason true (Set.ofList [ Tag.Browser ]) []
+                Expect.isFalse (line.Contains "needs") "the Node pass runs it"
+            }
+    ]
+
 let private commandFoldTests =
     testList "Command execution (local)" [
         testCaseAsync "a host-sandbox command never inherits the session's credentials (leak regression)" <|
@@ -2596,6 +2626,7 @@ let tests =
         testEnvTests
         testWaitTests
         runEndTests
+        skipLineTests
         commandFoldTests
         acceptanceTests
         agentSpawnerTests

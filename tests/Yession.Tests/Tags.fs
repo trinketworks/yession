@@ -121,22 +121,30 @@ let private canRun (need: Need list) : bool =
     onDotnet = runsOnDotnet need
     && need |> List.forall (fun n -> Set.contains n caps)
 
-/// What this run declared, for the skip line — which now means exactly "this tier did not ask
-/// for it", since a cap that was asked for and is unavailable fails the run instead.
-let private declared : string =
-    if Set.isEmpty caps then "none"
-    else caps |> Set.toList |> List.map (sprintf "%A") |> String.concat ", "
+/// Why a suite skips, as an instruction to the reader. A skip line is read as a verdict on
+/// what CAN run, so it says what to do. It does not describe the runtime: "runs on the .NET
+/// CLR, not Node" once led an agent to conclude that the browser suites cannot run at all, and
+/// it never ran `check Browser`.
+///
+/// A capability the run did not declare is missing, and the line names the `check` that runs
+/// the suite: every need it lists, in its order. `Browser` is one of them, so this covers a
+/// browser suite on a Node pass that did not ask for it. When nothing is missing, the suite
+/// skips only because it lives on the other runtime, and `check` runs that runtime as a
+/// separate pass of the same run. The line says so, so that nobody reads it as missing.
+///
+/// Pure, and given the runtime and the declared set, so a cheap test can ask it about both
+/// passes (`Phase2`).
+let skipReason (onDotnet: bool) (caps: Set<Need>) (need: Need list) : string =
+    let names (needs: Need list) = needs |> List.map (sprintf "%A")
+    match need |> List.filter (fun n -> not (Set.contains n caps)) with
+    | [] when onDotnet -> "runs on Node. The Node pass of `check` runs it, not this .NET CLR pass"
+    | [] -> "runs on the .NET CLR. The .NET CLR pass of this run runs it, not this Node pass"
+    | missing ->
+        let declared = if Set.isEmpty caps then "none" else caps |> Set.toList |> names |> String.concat ", "
+        sprintf "needs %s (this run has: %s). Run `check %s`"
+            (missing |> names |> String.concat ", ") declared (need |> names |> String.concat " ")
 
-let private reason (need: Need list) : string =
-    if onDotnet <> runsOnDotnet need then
-        if onDotnet then "runs on Node (Fable/JS), not the .NET CLR"
-        else "runs on the .NET CLR (browser), not Node"
-    else
-        need
-        |> List.filter (fun n -> not (Set.contains n caps))
-        |> List.map (sprintf "%A")
-        |> String.concat ", "
-        |> fun missing -> sprintf "needs %s (this run has: %s)" missing declared
+let private reason (need: Need list) : string = skipReason onDotnet caps need
 
 /// Include a suite only when the current run can satisfy its needs; otherwise stand in one
 /// visible skip labelled with why. The suite thunk is forced only when it will run.
