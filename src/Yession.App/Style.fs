@@ -3084,6 +3084,9 @@ module Style =
               "motion-reduce:transition-none"; focusRingInset ]
     let pivotItem = cls [ pivotItemBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
     let pivotItemOn = cls [ pivotItemBase; "bg-panel text-ink" ]
+    /// The selected tab under a command's preview: the preview's lifted ground, so the tab and
+    /// the command lifted out of its terminal read as one piece (`paneToolbarLifted`).
+    let pivotItemLifted = cls [ pivotItemBase; "bg-surface-2 text-ink" ]
     /// A pivot item's name: as much of it as fits, and an ellipsis for the rest — capped so
     /// that at the narrowest pane the splitter allows, the selected item and its × still fit
     /// beside `all` whole. The `all` page writes the name out in full.
@@ -3129,6 +3132,14 @@ module Style =
     /// way from the name of what they act on. Its hairline is the band's.
     let paneToolbar =
         cls [ "shrink-0 h-11 flex items-center gap-4 min-w-0 pl-3 pr-1.5 font-ui"; Stroke.dividerBottom ]
+    /// The toolbar under a command's preview: the command LIFTED out of its terminal — the
+    /// highlight a command lands with when it settles back (`animate-reveal-line`), a ground
+    /// two steps up and a leading edge in ink, held for as long as it is lifted.
+    let paneToolbarLifted = cls [ paneToolbar; "bg-surface-2 shadow-[inset_2px_0_0_var(--color-ink)]" ]
+    /// The name a lifted command and the place it settles back into share, so the browser
+    /// morphs one into the other (`ViewActions.Morph`, app/tailwind.css). Inline style: a
+    /// property with a value no utility composes.
+    let liftedName = "view-transition-name: pane-lifted"
     /// The toolbar's words about the thing on screen: where it runs, what it is doing.
     let paneToolbarSays = "min-w-0 flex-1 flex items-center gap-2 truncate text-small font-light text-ink-faint"
     /// A command inside them, in the terminal's own face, cut short rather than wrapped.
@@ -3204,6 +3215,8 @@ module Style =
     let panePanel =
         paneBody
         + " focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue focus-visible:-outline-offset-2"
+    /// The panel under a command's preview, on its lifted ground (`paneToolbarLifted`).
+    let panePanelLifted = cls [ panePanel; "bg-surface-2 shadow-[inset_2px_0_0_var(--color-ink)]" ]
     /// A read-only region: a player's own mount, or text shown rather than typed into. The
     /// same scrolling box the block history uses, so a block read from the chat looks exactly
     /// like the block read in its terminal — without the bottom anchoring, because a player
@@ -3431,7 +3444,7 @@ module Style =
     /// the one thing a terminal does not look like. What separates two blocks is what
     /// separates them in a terminal: a green prompt glyph, the command in ink, its output
     /// dim beneath, and a line of air.
-    let terminalBlock = "flex flex-col"
+    let terminalBlock = "flex flex-col -mx-3 px-3"
     /// The command line as it was run, and how it went. It WRAPS: the command (`terminalBlockLine`)
     /// asks for its whole length, so when it and its status do not fit one line the status goes
     /// UNDER it, at the end of its own line, and the command gets the full width. Side by side,

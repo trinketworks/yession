@@ -1551,7 +1551,7 @@ do
     // (a rewound cast that plays off its end jumps back to live) and dispatch's render needs
     // the render.
     let mutable dispatchRef : ClientMsg -> unit = ignore
-    let actions = { ViewActions.ssr with TypeIntoTerminal = recordTyped }
+    let actions = { ViewActions.ssr with TypeIntoTerminal = recordTyped; Morph = PaneShell.morph }
     let shellDoc = Y.Doc.Create ()
     let shellTexts = TextRegistry shellDoc
     // Bound once rather than built inline at the render, because the draft-slot rule below
