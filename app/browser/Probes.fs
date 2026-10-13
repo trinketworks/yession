@@ -13,7 +13,11 @@ open Fable.Core
 open Browser.Types
 open Fable.BrowserExtras
 open Yession.App
+#if FABLE_COMPILER
 open Thoth.Json
+#else
+open Thoth.Json.Net
+#endif
 
 let private boxOf (element: Element) : Probes.Box =
     let rect = element.getBoundingClientRect ()
@@ -40,9 +44,8 @@ let private seen (selector: string) : Probes.Seen list =
     all selector
     |> List.map (fun element ->
         let box = boxOf element
-        // An element's `textContent` is never null — only a document's or a doctype's is —
-        // so the default is unreachable rather than a guess.
-        Probes.Seen.create box (paintedAtCentre element box) (element.textContent |> Option.ofObj |> Option.defaultValue ""))
+        // An element's `textContent` is never null — only a document's or a doctype's is.
+        Probes.Seen.create box (paintedAtCentre element box) element.textContent)
 
 let private boxes (selectors: string list) : Probes.Box option list =
     selectors |> List.map (fun selector -> first selector |> Option.map boxOf)
