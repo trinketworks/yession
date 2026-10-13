@@ -24,12 +24,16 @@
 
   <ItemGroup>
     <Compile Include="NodeExtras.fs" />
+    <!-- After NodeExtras.fs, whose `WebSockets` a CDP session speaks over. -->
+    <Compile Include="Cdp.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Fable.Core" />
     <PackageReference Include="Fable.Node" />
-    <!-- `Response` — the type `responseBody` below reads a stream off. -->
+    <!-- `Response` — the type `responseBody` below reads a stream off. It also brings
+         Fable.Promise, whose `Promise.create` and `Promise.map` a CDP session answers its
+         commands with (`Cdp.fs`). -->
     <PackageReference Include="Fable.Fetch" />
   </ItemGroup>
 

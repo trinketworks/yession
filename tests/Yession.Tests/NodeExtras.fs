@@ -40,6 +40,12 @@ open Node.Buffer
 // handler they install is not attached yet either.
 open Yession.Host
 
+#if FABLE_COMPILER
+open Thoth.Json
+#else
+open Thoth.Json.Net
+#endif
+
 let private utf8 = BufferEncoding.Utf8
 
 /// Poll for a condition rather than sleeping a fixed amount: what is being waited on is a
@@ -428,6 +434,271 @@ let socketTests =
             Expect.stringContains seen "from-a-later-version" "the control frame arrived as text"
             do! provider.stop () |> Interop.awaitPromise
         }
+    ]
+
+// --- The Chrome DevTools Protocol ---------------------------------------------------------------
+//
+// `Cdp.Session` takes its carrier as two functions, so these cases speak the protocol without a
+// browser: what the session TRANSMITS is kept, and what a browser would have SENT is fed to
+// `Receive` by hand. That is the half of the binding the compiler cannot check — the method
+// names and parameter keys a command writes, and the keys an answer and an event are read by —
+// and it is checked here against the protocol's own spelling, written out beside each case.
+// The socket under `Cdp.connect` is the WebSocket binding, which `socketTests` drives.
+
+/// A session over nothing, and every frame it has transmitted.
+let private cdpSession () : Cdp.Session * ResizeArray<string> =
+    let sent = ResizeArray<string> ()
+    Cdp.Session (sent.Add, ignore), sent
+
+/// A command as it went out: the method it named, and each parameter's value as its JSON text.
+/// The keys and values are what the browser reads; the order they were written in is not.
+let private wireForm (frame: string) : string * Map<string, string> =
+    let parameters =
+        Decode.keyValuePairs Decode.value
+        |> Decode.map (List.map (fun (key, value) -> key, Encode.toString 0 value) >> Map.ofList)
+
+    let command =
+        Decode.map2 (fun name parameters -> name, parameters) (Decode.field "method" Decode.string) (Decode.field "params" parameters)
+
+    match Decode.fromString command frame with
+    | Ok form -> form
+    | Error why -> failwithf "not a command: %s (%s)" frame why
+
+/// The answer a browser gives the command it numbered `id`.
+let private answerTo (id: int) (result: string) : string = sprintf """{"id":%d,"result":%s}""" id result
+
+let private wireCases : (string * (Cdp.Session -> JS.Promise<unit>) * string * (string * string) list) list =
+    [ "Page.enable", Cdp.Page.enable, "Page.enable", []
+      "Runtime.enable", Cdp.Runtime.enable, "Runtime.enable", []
+      "Network.enable", Cdp.Network.enable, "Network.enable", []
+      "Page.stopScreencast", Cdp.Page.stopScreencast, "Page.stopScreencast", []
+      "Emulation.clearDeviceMetricsOverride", Cdp.Emulation.clearDeviceMetricsOverride, "Emulation.clearDeviceMetricsOverride", []
+      "Page.navigate", (fun cdp -> Cdp.Page.navigate cdp "http://x/"), "Page.navigate", [ "url", "\"http://x/\"" ]
+      "Page.startScreencast",
+      (fun cdp -> Cdp.Page.startScreencast cdp 1 780 1688),
+      "Page.startScreencast",
+      [ "format", "\"png\""; "everyNthFrame", "1"; "maxWidth", "780"; "maxHeight", "1688" ]
+      "Emulation.setDeviceMetricsOverride",
+      (fun cdp -> Cdp.Emulation.setDeviceMetricsOverride cdp 390 844 2.0 true),
+      "Emulation.setDeviceMetricsOverride",
+      [ "width", "390"; "height", "844"; "deviceScaleFactor", "2"; "mobile", "true" ]
+      "Emulation.setFocusEmulationEnabled",
+      (fun cdp -> Cdp.Emulation.setFocusEmulationEnabled cdp true),
+      "Emulation.setFocusEmulationEnabled",
+      [ "enabled", "true" ]
+      "Emulation.setTouchEmulationEnabled",
+      (fun cdp -> Cdp.Emulation.setTouchEmulationEnabled cdp true 5),
+      "Emulation.setTouchEmulationEnabled",
+      [ "enabled", "true"; "maxTouchPoints", "5" ]
+      "Page.addScriptToEvaluateOnNewDocument",
+      (fun cdp -> Cdp.Page.addScriptToEvaluateOnNewDocument cdp "1" |> Promise.map ignore),
+      "Page.addScriptToEvaluateOnNewDocument",
+      [ "source", "\"1\"" ] ]
+
+/// What `Runtime.evaluate` is sent for an expression: the expression, awaited, by value.
+let private evaluateParameters = [ "expression", "\"1\""; "awaitPromise", "true"; "returnByValue", "true" ]
+
+let cdpTests =
+    testList "Node platform bindings, the Chrome DevTools Protocol (Fable.NodeExtras)" [
+
+        // One case per command: the method's name and the parameters' keys are the browser's
+        // spelling, which nothing else in the build knows.
+        yield!
+            [ for (label, send, methodName, parameters) in wireCases ->
+                  testCase (sprintf "%s goes out under its protocol name with the parameters the browser reads" label) <| fun () ->
+                      let session, sent = cdpSession ()
+                      send session |> ignore
+                      Expect.equal (List.ofSeq sent |> List.map wireForm) [ methodName, Map.ofList parameters ] "what went out"
+              ]
+
+        testCase "Runtime.evaluate goes out awaiting the expression and asking for its value" <| fun () ->
+            let session, sent = cdpSession ()
+            Cdp.Runtime.evaluateText session "1" |> ignore
+            Expect.equal (List.ofSeq sent |> List.map wireForm) [ "Runtime.evaluate", Map.ofList evaluateParameters ] "what went out"
+
+        testCase "Page.captureScreenshot goes out asking for a PNG" <| fun () ->
+            let session, sent = cdpSession ()
+            Cdp.Page.captureScreenshot session |> ignore
+            Expect.equal (List.ofSeq sent |> List.map wireForm) [ "Page.captureScreenshot", Map.ofList [ "format", "\"png\"" ] ] "what went out"
+
+        testCaseAsync "a screenshot's answer is the picture's base64" <| async {
+            let session, _ = cdpSession ()
+            let picture = Cdp.Page.captureScreenshot session |> Interop.awaitPromise
+            session.Receive (answerTo 1 """{"data":"QUJD"}""")
+            let! data = picture
+            Expect.equal data "QUJD" "the data member of the answer"
+        }
+
+        testCaseAsync "an answer settles the command it numbers, whatever order the answers arrive in" <| async {
+            let session, _ = cdpSession ()
+            let picture = Cdp.Page.captureScreenshot session |> Interop.awaitPromise
+            let script = Cdp.Page.addScriptToEvaluateOnNewDocument session "1" |> Interop.awaitPromise
+            session.Receive (answerTo 2 """{"identifier":"script-9"}""")
+            session.Receive (answerTo 1 """{"data":"QUJD"}""")
+            let! data = picture
+            let! _ = script
+            Expect.equal data "QUJD" "the screenshot, though it was answered second"
+        }
+
+        testCaseAsync "the identifier a script was added under is the one it is removed by" <| async {
+            let session, sent = cdpSession ()
+            let added = Cdp.Page.addScriptToEvaluateOnNewDocument session "1" |> Interop.awaitPromise
+            session.Receive (answerTo 1 """{"identifier":"script-9"}""")
+            let! script = added
+            Cdp.Page.removeScriptToEvaluateOnNewDocument session script |> ignore
+
+            Expect.equal
+                (List.ofSeq sent |> List.map wireForm |> List.last)
+                ("Page.removeScriptToEvaluateOnNewDocument", Map.ofList [ "identifier", "\"script-9\"" ])
+                "the last command out"
+        }
+
+        testCaseAsync "a command the browser refuses is rejected with its name and the browser's reason" <| async {
+            let session, _ = cdpSession ()
+            let refused = Cdp.Page.navigate session "http://x/" |> Interop.awaitPromise |> Async.Catch
+            session.Receive """{"id":1,"error":{"code":-32602,"message":"Invalid parameters"}}"""
+            let! outcome = refused
+
+            let said =
+                match outcome with
+                | Choice1Of2 () -> "answered"
+                | Choice2Of2 error -> error.Message
+
+            Expect.stringContains said "Page.navigate" "the command"
+            Expect.stringContains said "Invalid parameters" "the reason"
+        }
+
+        // --- What an expression evaluated to --------------------------------------------------
+
+        testCaseAsync "a string evaluated, asked for as text, comes back as the text" <| async {
+            let session, _ = cdpSession ()
+            let evaluated = Cdp.Runtime.evaluateText session "1" |> Interop.awaitPromise
+            session.Receive (answerTo 1 """{"result":{"type":"string","value":"hello"}}""")
+            let! answer = evaluated
+            Expect.equal answer (Cdp.Evaluated.Returned "hello") "returned"
+        }
+
+        testCaseAsync "a number evaluated, asked for as text, comes back as what it was" <| async {
+            let session, _ = cdpSession ()
+            let evaluated = Cdp.Runtime.evaluateText session "1" |> Interop.awaitPromise
+            session.Receive (answerTo 1 """{"result":{"type":"number","value":5}}""")
+            let! answer = evaluated
+            Expect.equal answer (Cdp.Evaluated.Unexpected "5") "unexpected, with its JSON"
+        }
+
+        testCaseAsync "a number evaluated, asked for as a number, comes back as the number" <| async {
+            let session, _ = cdpSession ()
+            let evaluated = Cdp.Runtime.evaluateNumber session "1" |> Interop.awaitPromise
+            session.Receive (answerTo 1 """{"result":{"type":"number","value":1234.5}}""")
+            let! answer = evaluated
+            Expect.equal answer (Cdp.Evaluated.Returned 1234.5) "returned"
+        }
+
+        testCaseAsync "an expression that evaluated to nothing is not a string, and says so" <| async {
+            let session, _ = cdpSession ()
+            let evaluated = Cdp.Runtime.evaluateText session "undefined" |> Interop.awaitPromise
+            session.Receive (answerTo 1 """{"result":{"type":"undefined"}}""")
+            let! answer = evaluated
+            Expect.equal answer (Cdp.Evaluated.Unexpected "undefined") "unexpected, as the word"
+        }
+
+        testCaseAsync "any value, asked for as JSON, comes back as its JSON" <| async {
+            let session, _ = cdpSession ()
+            let evaluated = Cdp.Runtime.evaluateJson session "({a: 1})" |> Interop.awaitPromise
+            session.Receive (answerTo 1 """{"result":{"type":"object","value":{"a":1}}}""")
+            let! answer = evaluated
+            Expect.equal answer (Cdp.Evaluated.Returned """{"a":1}""") "returned"
+        }
+
+        testCaseAsync "an expression that threw comes back as a throw, with the browser's account" <| async {
+            let session, _ = cdpSession ()
+            let evaluated = Cdp.Runtime.evaluateText session "boom()" |> Interop.awaitPromise
+
+            session.Receive (
+                answerTo 1 """{"result":{"type":"object","subtype":"error"},"exceptionDetails":{"text":"Uncaught","lineNumber":0}}"""
+            )
+
+            let! answer = evaluated
+
+            let threw =
+                match answer with
+                | Cdp.Evaluated.Threw details -> details
+                | Cdp.Evaluated.Returned _ -> "returned"
+                | Cdp.Evaluated.Unexpected _ -> "unexpected"
+
+            Expect.stringContains threw "Uncaught" "the exception's own text"
+        }
+
+        // --- What the browser says unprompted -------------------------------------------------
+
+        let screencastFrame = """{"method":"Page.screencastFrame","params":{"data":"AA==","metadata":{"timestamp":1.5},"sessionId":7}}"""
+
+        testCase "a screencast frame is kept with its picture and when it was painted" <| fun () ->
+            let session, _ = cdpSession ()
+            session.Receive screencastFrame
+            Expect.equal (List.ofSeq session.Events) [ Cdp.Event.ScreencastFrame ("AA==", Some 1.5) ] "the one event"
+
+        testCase "a screencast frame with no timestamp is kept without one" <| fun () ->
+            let session, _ = cdpSession ()
+            session.Receive """{"method":"Page.screencastFrame","params":{"data":"AA==","metadata":{},"sessionId":7}}"""
+            Expect.equal (List.ofSeq session.Events) [ Cdp.Event.ScreencastFrame ("AA==", None) ] "no time to put it on"
+
+        testCase "a screencast frame is acknowledged by the session id it came with" <| fun () ->
+            let session, sent = cdpSession ()
+            session.Receive screencastFrame
+
+            Expect.equal
+                (List.ofSeq sent |> List.map wireForm)
+                [ "Page.screencastFrameAck", Map.ofList [ "sessionId", "7" ] ]
+                "the browser stops sending frames that are not acknowledged"
+
+        testCase "a request is kept with its kind and its address" <| fun () ->
+            let session, _ = cdpSession ()
+
+            session.Receive
+                """{"method":"Network.requestWillBeSent","params":{"type":"Document","request":{"url":"http://x/a"}}}"""
+
+            Expect.equal
+                (List.ofSeq session.Events)
+                [ Cdp.Event.RequestSent (Some "Document", "http://x/a", None) ]
+                "a request that follows no redirect"
+
+        testCase "a request that follows a redirect carries the status of the redirect" <| fun () ->
+            let session, _ = cdpSession ()
+
+            session.Receive
+                """{"method":"Network.requestWillBeSent","params":{"type":"Document","request":{"url":"http://x/b"},"redirectResponse":{"status":303}}}"""
+
+            Expect.equal
+                (List.ofSeq session.Events)
+                [ Cdp.Event.RequestSent (Some "Document", "http://x/b", Some 303) ]
+                "after a 303"
+
+        testCase "a response is kept with its address and its status" <| fun () ->
+            let session, _ = cdpSession ()
+
+            session.Receive
+                """{"method":"Network.responseReceived","params":{"type":"Fetch","response":{"url":"http://x/me","status":401}}}"""
+
+            Expect.equal
+                (List.ofSeq session.Events)
+                [ Cdp.Event.ResponseReceived (Some "Fetch", "http://x/me", 401) ]
+                "a 401"
+
+        testCase "a navigation of a frame with no parent is the main frame's" <| fun () ->
+            let session, _ = cdpSession ()
+            session.Receive """{"method":"Page.frameNavigated","params":{"frame":{"id":"a","url":"http://x/"}}}"""
+            Expect.equal (List.ofSeq session.Events) [ Cdp.Event.FrameNavigated ("http://x/", true) ] "main"
+
+        testCase "a navigation of a frame with a parent is a child's" <| fun () ->
+            let session, _ = cdpSession ()
+            session.Receive """{"method":"Page.frameNavigated","params":{"frame":{"id":"b","parentId":"a","url":"http://x/f"}}}"""
+            Expect.equal (List.ofSeq session.Events) [ Cdp.Event.FrameNavigated ("http://x/f", false) ] "not main"
+
+        testCase "an event nothing here reads is dropped" <| fun () ->
+            let session, _ = cdpSession ()
+            session.Receive """{"method":"Page.loadEventFired","params":{"timestamp":1}}"""
+            Expect.isEmpty session.Events "nothing kept"
     ]
 
 // --- Aborting, relaying, and what was thrown ----------------------------------------------------
