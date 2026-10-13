@@ -152,7 +152,7 @@ let private toolOf (registry: ToolRegistry) (descriptor: ToolDescriptor) : ToolD
                 | Error reason -> return ToolResult.ofText true (sprintf "unreadable arguments: %s" reason)
                 | Ok arguments ->
                     let call : ToolCall =
-                        { Namespace = descriptor.Namespace; Name = descriptor.Name; Arguments = arguments }
+                        { Namespace = descriptor.Namespace; Name = descriptor.Name; Arguments = arguments; ToolUseId = None }
                     match! registry.Invoke call with
                     | Ok answer ->
                         match answer.Image with

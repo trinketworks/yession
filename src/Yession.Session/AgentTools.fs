@@ -34,13 +34,13 @@ module AgentTools =
     /// because it is simultaneously the SDK server name, the wire-name segment and what the
     /// tool-use record shows.
     [<Literal>]
-    let Namespace = "yession"
+    let Namespace = SessionTool.Namespace
 
     /// The names of the tools the system prompt steers by. One spelling for the descriptor
     /// and the prompt, so renaming a tool cannot leave the prompt naming one that is gone.
     module ToolName =
         [<Literal>]
-        let ExecuteCommand = "execute_command"
+        let ExecuteCommand = SessionTool.ExecuteCommand
         [<Literal>]
         let ReadFile = "read_file"
         [<Literal>]
@@ -276,8 +276,14 @@ module AgentTools =
 
     // The two verbs that produce a BLOCK say so, because the tool-use record needs to know
     // — a call that became a block draws no chip of its own, and only the call can tell.
+    //
+    // It also says what it did with the command (`ToolQueueing`), on every answer: queued, or
+    // not run at all. "No block" alone cannot tell a command still waiting its turn from one
+    // that never will, and the chat draws the two in opposite colours.
     let private executeCommand
         (capabilities: AgentCapabilities)
+        // The call this is, so the command's block can name it from the moment it starts.
+        (call: ToolUseId option)
         (command: string)
         (terminal: string option)
         (sandbox: string option)
@@ -298,18 +304,26 @@ module AgentTools =
                 | Some t, None -> TerminalId.create t |> Result.mapError (sprintf "not a terminal id: %s") |> Result.map (InTerminal >> Some)
                 | None, Some s -> SandboxRef.parse s |> Result.mapError (sprintf "not a sandbox: %s") |> Result.map (InSandbox >> Some)
                 | None, None -> Ok None
+            let notRun (text: string) = { ToolAnswer.text text with Queueing = Some NothingQueued }
             match target with
-            | Error e -> return ToolAnswer.text e
+            | Error e -> return notRun e
             | Ok target ->
                 let request =
                     { Command = command
                       Target = target
                       Background = background
                       Stdin = stdin
-                      Description = description |> Option.bind BlockDescription.ofProse }
+                      Description = description |> Option.bind BlockDescription.ofProse
+                      ToolUseId = call }
                 match! capabilities.Terminals.Execute request with
-                | Ok outcome -> return { Text = renderOutcome outcome; Block = outcome.Block; Stream = None; Image = None }
-                | Error reason -> return ToolAnswer.text (sprintf "could not run the command: %s" reason)
+                | Ok outcome ->
+                    return
+                        { Text = renderOutcome outcome
+                          Block = outcome.Block
+                          Stream = None
+                          Image = None
+                          Queueing = Some (CommandQueued outcome.Handle) }
+                | Error reason -> return notRun (sprintf "could not run the command: %s" reason)
         }
 
     /// The one renderer for every gated command (Plan 15, stage 3b). A gate has few
@@ -358,7 +372,7 @@ module AgentTools =
                         | Some wait, TerminalCommandRunning ->
                             sprintf "\n(%s did not appear within %gs)" (TerminalMatch.describe wait.Until) wait.TimeoutSeconds
                         | _ -> ""
-                    return { Text = renderOutcome outcome + missed; Block = outcome.Block; Stream = None; Image = None }
+                    return { Text = renderOutcome outcome + missed; Block = outcome.Block; Stream = None; Image = None; Queueing = None }
                 | Ok (PendingCommand outcome) -> return ToolAnswer.text (renderCommandOutcome outcome)
                 | Error reason -> return ToolAnswer.text (sprintf "could not read that command: %s" reason)
         }
@@ -750,15 +764,32 @@ module AgentTools =
                 | Ok read -> return! body read
             }
 
+    /// The same, for a body that has to know WHICH call it is answering: the one whose work
+    /// the chat draws in its own right, and has to tie back to the call that started it.
+    let private toolOfCall
+        (name: string)
+        (description: string)
+        (args: ToolArgs<'a>)
+        (body: ToolUseId option -> 'a -> Async<Result<ToolAnswer, string>>)
+        : ToolDescriptor * (ToolCall -> Async<Result<ToolAnswer, string>>) =
+        ToolDescriptor.create Namespace name description (ToolArgs.schema args),
+        fun call ->
+            async {
+                match ToolArgs.read args call.Arguments with
+                | Error e -> return Error e
+                | Ok read -> return! body call.ToolUseId read
+            }
+
     /// For the arguments that can be refused once read: a body only runs on what passed.
     let whenValid (body: 'a -> Async<Result<ToolAnswer, string>>) (read: Result<'a, string>) : Async<Result<ToolAnswer, string>> =
         match read with
         | Error e -> async { return Error e }
         | Ok read -> body read
 
-    /// The verbs: everything that is written out rather than generated.
-    let private verbs (capabilities: AgentCapabilities) : (ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>)) list =
-        [ tool
+    /// The one verb whose body is handed the call it answers: a command it queues is drawn
+    /// by the chat as its own chip, and has to say which call it stands in for.
+    let private executeCommandTool (capabilities: AgentCapabilities) : ToolDescriptor * (ToolCall -> Async<Result<ToolAnswer, string>>) =
+        toolOfCall
             ToolName.ExecuteCommand
             "Run a shell command in a session terminal — the only way to run anything, seen by everyone and on the record. Always pass `description`: several words or fewer, in the past tense, saying what the command did — the transcript shows it after \"ran\". Not for reading or editing files: use read_file and edit_file, which record WHICH file, unless a dedicated tool genuinely cannot do it — avoid cat, sed, awk, head, tail, grep -n and heredocs here. `sandbox`: a named work sandbox (start_work_sandbox); omit for the default one. `terminal`: a terminal from open_terminal, to run beside something long (each terminal runs one command at a time). For anything long-running pass background: true — it returns a handle at once, you end your turn, and you're woken when it finishes; otherwise it waits and hands back a check_pending handle if the command outlasts the wait. No stdin unless stdin: true (readers get EOF), so pass flags, not prompts. Scratch under $TMPDIR; /tmp is denied. Rewriting a file, write the new content before deleting the old — a delete-then-write can be refused halfway. Read the answer: it says which happened."
             (toolArgs {
@@ -781,10 +812,12 @@ module AgentTools =
                         "several words or fewer, in the past tense, saying what the command did — \"fetched master\", \"built the app\". People read it after \"ran\". Pass one on every call."
                 return command, terminal, sandbox, background, stdin, description
              })
-            (fun (command, terminal, sandbox, background, stdin, description) ->
-                answered (executeCommand capabilities command terminal sandbox background stdin description))
+            (fun call (command, terminal, sandbox, background, stdin, description) ->
+                answered (executeCommand capabilities call command terminal sandbox background stdin description))
 
-          // The terminal verbs a person already has (Plan 20, stage 3). Deliberately the same
+    /// The verbs: everything else that is written out rather than generated.
+    let private verbs (capabilities: AgentCapabilities) : (ToolDescriptor * (string -> Async<Result<ToolAnswer, string>>)) list =
+        [ // The terminal verbs a person already has (Plan 20, stage 3). Deliberately the same
           // three a human uses from the list — open, close, see what there is — because the
           // agent and the people in the session are working on ONE set of terminals, and a
           // second vocabulary for the agent's would make its terminals a different kind of
@@ -1138,8 +1171,11 @@ module AgentTools =
     /// be callable without being declared. `Repos.ProviderTools` is where a provider (today
     /// only `GitHubPrs.fs`) contributes its own -- `create_pr`, `watch_pr`, `unwatch_pr`
     /// today -- without this module knowing what provider, or how many, filled it in.
-    let private declared (capabilities: AgentCapabilities) =
-        verbs capabilities @ queryTools capabilities @ capabilities.Repos.ProviderTools
+    let private declared (capabilities: AgentCapabilities) : (ToolDescriptor * (ToolCall -> Async<Result<ToolAnswer, string>>)) list =
+        let ofArguments (descriptor, body: string -> Async<Result<ToolAnswer, string>>) =
+            descriptor, (fun (call: ToolCall) -> body call.Arguments)
+        executeCommandTool capabilities
+        :: (verbs capabilities @ queryTools capabilities @ capabilities.Repos.ProviderTools |> List.map ofArguments)
 
     /// The `yession` registry for one turn's capabilities.
     let registry (capabilities: AgentCapabilities) : ToolRegistry =
@@ -1149,5 +1185,5 @@ module AgentTools =
             (declared |> List.map fst)
             (fun call ->
                 match declared |> List.tryFind (fun (descriptor, _) -> descriptor.Name = call.Name) with
-                | Some (_, body) -> body call.Arguments
+                | Some (_, body) -> body call
                 | None -> async { return Error (sprintf "no tool '%s/%s'" call.Namespace call.Name) })

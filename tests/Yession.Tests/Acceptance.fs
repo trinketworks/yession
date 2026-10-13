@@ -118,7 +118,8 @@ let private representativeModel : ClientModel =
                     Background = false
                     Stdin = false
                     // An agent command, so no viewport and no claim about width.
-                    Size = None } ]
+                    Size = None
+                    ToolUseId = None } ]
           Model = Some pickedModel
           Chapters = Map.empty
           LaunchDismissed = false

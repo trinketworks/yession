@@ -2106,12 +2106,16 @@ module Style =
     /// of chips between two messages lines up with the prose rather than drifting under the
     /// avatars. The palette stays `text-ink-dim`/`text-ink-faint` — chips are the busiest
     /// thing the chat will carry, and they must read as texture next to what people said.
+    ///
+    /// Disabled is a command the agent asked for whose terminal is not known yet: the chip
+    /// stands where its block will be, with nothing yet to open, so it neither points nor
+    /// brightens under the pointer.
     let private chatChipEnding (rightEdge: string) =
-        cls [ "w-full bg-transparent cursor-pointer text-left"
+        cls [ "w-full bg-transparent cursor-pointer disabled:cursor-default text-left"
               readingColumn
               "flex items-baseline gap-2 pl-[32px] py-0.5 phone:py-2.5"
               rightEdge
-              "text-ink-dim hover:text-ink transition-colors duration-150 ease-out"
+              "text-ink-dim enabled:hover:text-ink transition-colors duration-150 ease-out"
               focusRing ]
     /// The same right edge a tool run's line ends on (`itemGround`: `pr-8` less the phone's
     /// 16px bleed), so a chip's status and a call's stand in one column.

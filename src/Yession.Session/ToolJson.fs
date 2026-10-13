@@ -224,7 +224,9 @@ module ToolUseLog =
                     let! answer =
                         async {
                             try
-                                return! registry.Invoke call
+                                // Handed the minted id, so a body whose work the chat draws
+                                // in its own right can say which call started it.
+                                return! registry.Invoke { call with ToolUseId = handle }
                             with e ->
                                 return Error e.Message
                         }
@@ -243,8 +245,8 @@ module ToolUseLog =
                                     | Some _ -> None
                                     | None when not ours -> None
                                     | None -> Some (cappedResult answer.Text)
-                                { Outcome = ToolCallOk; Block = answer.Block; Result = result }
-                            | Error reason -> { Outcome = ToolCallFailed reason; Block = None; Result = None }
+                                { Outcome = ToolCallOk; Block = answer.Block; Result = result; Queueing = answer.Queueing }
+                            | Error reason -> { Outcome = ToolCallFailed reason; Block = None; Result = None; Queueing = None }
                         do! log.Finished id ending
                         // Only onto an answer that HAPPENED. A refusal is about the call, and
                         // appending the session's unrelated news to it would make a reader

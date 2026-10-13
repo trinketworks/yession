@@ -5099,6 +5099,8 @@ module ClientModel =
                       Stdin = false
                       // Nor says what it is for: a person's command is named by itself.
                       Description = None
+                      // Nor comes from a tool call: only the agent makes those.
+                      ToolUseId = None
                       // The width of the box this author is looking at, so the output is laid
                       // out for the screen it will be read on. Absent when nothing has been
                       // measured — a terminals column that has never been opened — which is a

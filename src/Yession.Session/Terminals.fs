@@ -2075,7 +2075,8 @@ module SessionTerminals =
                       RejectedBy = by
                       Command = command
                       Description = entry.Description
-                      Reason = Some reason })
+                      Reason = Some reason
+                      ToolUseId = entry.ToolUseId })
 
         let runBlock (terminalId: TerminalId) (entry: PendingAct) (command: string) (onStarted: unit -> unit) : Async<unit> =
             async {
@@ -2156,7 +2157,8 @@ module SessionTerminals =
                                       Command = command
                                       FromSeq = fromSeq
                                       Background = entry.Background
-                                      Description = entry.Description })
+                                      Description = entry.Description
+                                      ToolUseId = entry.ToolUseId })
                         // Consumed: the durable fact exists, so the doc key can go. Between
                         // the append and this call the entry is in both places, which the
                         // drain answers by planning against the log-anchored `consumed` set
@@ -3452,6 +3454,7 @@ module TerminalCommands =
                             request.Background
                             request.Stdin
                             request.Description
+                            request.ToolUseId
                         // A terminal that cannot run commands refuses at once, and the refusal
                         // is the answer — background or not, because "started" about a
                         // command that never will is the wrong thing to walk away with.

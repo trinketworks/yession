@@ -2230,7 +2230,8 @@ let private acceptanceTests =
                           Command = "true"
                           FromSeq = 0
                           Description = None
-                          Background = false }
+                          Background = false
+                          ToolUseId = None }
                       SessionEvent.TerminalBlockCompleted
                         { TerminalId = TerminalId.create "t1" |> expect
                           BlockId = BlockId.create "b1" |> expect

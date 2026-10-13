@@ -168,7 +168,7 @@ type private Panel () =
           IsOpen = fun id -> not (closed.Contains (TerminalId.value id)) }
 
 let private invoke (registry: ToolRegistry) =
-    registry.Invoke { Namespace = "serial"; Name = "acquire"; Arguments = "{}" }
+    registry.Invoke { Namespace = "serial"; Name = "acquire"; Arguments = "{}"; ToolUseId = None }
 
 let private decoratorTests =
     testList "an offer becomes a terminal" [

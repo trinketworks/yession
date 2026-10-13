@@ -116,7 +116,28 @@ module ToolDescriptor =
 type ToolCall =
     { Namespace : string
       Name : string
-      Arguments : string }
+      Arguments : string
+      /// The record this call is logged under, once the audit seam has minted one
+      /// (`ToolUseLog.wrap`). `None` on the way in, and for a call nobody is recording.
+      ///
+      /// On the call because a body that starts something the chat draws in its own right
+      /// (`execute_command`, whose command becomes a block) has to say WHICH call started it,
+      /// at the moment it starts. The finish names the block too, but the finish arrives when
+      /// the command ends, and the call's chip stood beside the block's for that whole time.
+      ToolUseId : ToolUseId option }
+
+/// The session's own tool namespace, and the names in it that a fold below the session reads.
+///
+/// Here rather than only beside the tool bodies (`AgentTools`) because the chat folds a call
+/// differently by what it is: a call that runs a command is drawn as the command it becomes.
+/// One spelling, so renaming the tool cannot leave the chat drawing it as something else.
+module SessionTool =
+
+    [<Literal>]
+    let Namespace = "yession"
+
+    [<Literal>]
+    let ExecuteCommand = "execute_command"
 
 /// A picture a tool hands the model to LOOK at — an image block beside the answer's text,
 /// which is the only way a model sees one. Without it an agent that took a screenshot could
@@ -190,11 +211,14 @@ type ToolAnswer =
       /// A picture shown to the model beside the text (`ToolImage`). The text stays what the
       /// record keeps — the tool-use log says which file was looked at and how big it was,
       /// never the bytes.
-      Image : ToolImage option }
+      Image : ToolImage option
+      /// What the call did with a command (`ToolQueueing`), said by the one verb that runs
+      /// one. `None` for every other tool.
+      Queueing : ToolQueueing option }
 
 module ToolAnswer =
 
-    let text (value: string) : ToolAnswer = { Text = value; Block = None; Stream = None; Image = None }
+    let text (value: string) : ToolAnswer = { Text = value; Block = None; Stream = None; Image = None; Queueing = None }
 
 /// Invoke a tool. ONE function, so an in-process tool and a proxied one are
 /// indistinguishable to the caller — which is what makes a single audit seam possible
@@ -293,7 +317,9 @@ type ToolUseEnd =
       /// The answer text a chip may disclose, already capped — set only for a call that
       /// succeeded, drew its own chip (no `Block`), and is one of OUR tools. See
       /// `ToolUseFinished.Result` for why those are the conditions.
-      Result : string option }
+      Result : string option
+      /// What the call did with a command (`ToolUseFinished.Queueing`).
+      Queueing : ToolQueueing option }
 
 /// The audit seam: ONE service, injected into every path a tool call can take, so the
 /// session's own tools and a proxied external server are recorded the same way. Different
