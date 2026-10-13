@@ -3525,7 +3525,7 @@ let private chromeTests =
               "the screen /open shows while a session launches",
               Yession.Host.ManagerUi.openingPage sessionId "/sessions/demo-session/open" "/sessions/demo-session/ready"
               "the page a provider's redirect lands on",
-              Yession.Host.ProcessManager.connectionsCallbackPage "Connected" "Close this tab and return to your session." ]
+              snd (Yession.Host.ProcessManager.connectionsCallbackResponse "Connected" "Close this tab and return to your session.") ]
 
         // What a structure case reads: the renders, and the pages (which hold the Manager's
         // forms and tables, and the shell again with its document around it).

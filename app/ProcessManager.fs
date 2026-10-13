@@ -524,16 +524,32 @@ let connectionsApiFor
 /// page; the session's panel picks the outcome up via its status stream, so this tab only
 /// needs to say "done".
 ///
-/// Top level, not beside the route that sends it, so the cheap tier can render it: it is a
-/// document a browser lands on like the others, and the floor (`lang`, a title) is asserted
-/// of every one of them in one place.
-let connectionsCallbackPage (title: string) (detail: string) : string =
+/// `title` and `detail` are TEXT: `detail` is whatever the provider's redirect carried
+/// (`error_description`), which is the provider's to say and not this page's to trust.
+let private connectionsCallbackPage (title: string) (detail: string) : string =
     sprintf
         """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>%s</title>
 <style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem}p{color:#444}</style>
 </head><body><h1>%s</h1><p>%s</p></body></html>"""
-        title title detail
+        (Ssr.escapeText title)
+        (Ssr.escapeText title)
+        (Ssr.escapeText detail)
+
+/// What the callback route sends for one outcome: the page and the headers it travels with, as
+/// ONE value, so no caller can send the page without them. The policy is the second guard
+/// beside the escaping in the page: the page needs its own inline `<style>` and nothing else,
+/// so a value that ever reached it as markup would still be unable to run script, load a
+/// resource or open a connection.
+///
+/// Top level, and the page itself private, so the cheap tier renders exactly what the route
+/// sends: it is a document a browser lands on like the others, and the floor (`lang`, a
+/// title) is asserted of every one of them in one place.
+let connectionsCallbackResponse (title: string) (detail: string) : ResponseHeader list * string =
+    [ ResponseHeader.ContentType "text/html; charset=utf-8"
+      ResponseHeader.CacheControl "no-store"
+      ResponseHeader.ContentSecurityPolicy "default-src 'none'; style-src 'unsafe-inline'" ],
+    connectionsCallbackPage title detail
 
 /// Create the Manager. `ui` is the management surface (Step 25): a route handler that
 /// closes over the Manager itself, sharing the control endpoint's server. It receives
@@ -996,24 +1012,22 @@ let createWithUi
               Query = (fun name -> Interop.queryParamOf req.url name)
               Header = fun name -> Interop.headerOf req name }
 
-    // The one PUBLIC broker route (Plan 08): see `connectionsCallbackPage`.
+    // The one PUBLIC broker route (Plan 08): see `connectionsCallbackResponse`.
     let handleConnectionsCallback (req: IncomingMessage) (res: ServerResponse) : bool =
         let path = req.url.Split('?').[0]
         if not (req.``method`` = "GET" && path = "/connections/callback") then false
         else
-            let respondHtml (status: int) (html: string) =
-                res.writeHead (
-                    status,
-                    [ ResponseHeader.ContentType "text/html; charset=utf-8"
-                      ResponseHeader.CacheControl "no-store" ])
-                res.``end`` html
+            let respondHtml (status: int) (title: string) (detail: string) =
+                let headers, page = connectionsCallbackResponse title detail
+                res.writeHead (status, headers)
+                res.``end`` page
             match broker with
-            | None -> respondHtml 404 (connectionsCallbackPage "Not available" "This Manager has no secrets store, so connections are disabled.")
+            | None -> respondHtml 404 "Not available" "This Manager has no secrets store, so connections are disabled."
             | Some b ->
                 match Interop.queryParamOf req.url "error" with
                 | Some providerError ->
                     let detail = Interop.queryParamOf req.url "error_description" |> Option.defaultValue providerError
-                    respondHtml 400 (connectionsCallbackPage "Sign-in failed" detail)
+                    respondHtml 400 "Sign-in failed" detail
                 | None ->
                     match Interop.queryParamOf req.url "code", Interop.queryParamOf req.url "state" with
                     | Some code, Some state ->
@@ -1021,11 +1035,11 @@ let createWithUi
                             async {
                                 match! b.CompleteCallback state code with
                                 | Ok _ ->
-                                    respondHtml 200 (connectionsCallbackPage "Connected" "Close this tab and return to your session.")
+                                    respondHtml 200 "Connected" "Close this tab and return to your session."
                                 | Error e ->
-                                    respondHtml 400 (connectionsCallbackPage "Sign-in failed" e)
+                                    respondHtml 400 "Sign-in failed" e
                             })
-                    | _ -> respondHtml 400 (connectionsCallbackPage "Sign-in failed" "The provider's redirect is missing its code or state.")
+                    | _ -> respondHtml 400 "Sign-in failed" "The provider's redirect is missing its code or state."
             true
 
     let! controlServer =
