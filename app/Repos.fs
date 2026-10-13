@@ -209,6 +209,14 @@ let unusableGit (git: string) (reason: string) : string =
         git
         reason
 
+/// The subcommand an argument list runs — what a span is named for. `-C <path>` is how every
+/// verb here addresses its checkout, so it is skipped rather than reported as the verb.
+let gitVerb (args: string list) : string =
+    match args with
+    | "-C" :: _ :: verb :: _ -> verb
+    | verb :: _ -> verb
+    | [] -> "?"
+
 /// Cap rendered git output. The head is kept — a status/log/diff front-loads its
 /// signal — and the elision is stated, never silent.
 let capText (limit: int) (text: string) : string =
@@ -273,6 +281,9 @@ type ReposConfig =
       /// "that repo does not exist" (`Repository not found` is what github.com says for
       /// both), so the composition asks the provider, which is the only place that knows.
       OnNetworkFailure : CredentialFor -> string -> Async<unit>
+      /// Where the add path's spans go. Each step of a clone is its own span, because
+      /// "adding a repo is slow" has six candidates and only a measurement picks one.
+      Tracer : Telemetry.Tracer
       Log : EventLog<SessionEvent> }
 
 /// Who is calling a mutating/network verb. The two halves genuinely differ for the
@@ -407,8 +418,9 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         // argv-rewriting wrapper, not a container, so per-verb spawns stay cheap. The
         // answer is remembered either way: a sandbox that failed its probe fails every
         // verb with the same sentence rather than re-probing per call.
-        let lazySandbox (policy: SandboxPolicy) : unit -> Async<Result<Sandbox, string>> =
+        let lazySandbox (kind: string) (policy: SandboxPolicy) : unit -> Async<Result<Sandbox, string>> =
             let mutable ready : Result<Sandbox, string> option = None
+            let named = [ "yession.git.sandbox", Telemetry.AttributeValue.String kind ]
             fun () ->
                 async {
                     match ready with
@@ -416,15 +428,17 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                     | None ->
                         let! answer =
                             async {
-                                match! createSandbox policy with
+                                match!
+                                    Telemetry.spanResult config.Tracer "git.sandbox.create" named (createSandbox policy)
+                                with
                                 | Error e -> return Error (sprintf "git sandbox: %s" e)
-                                | Ok created -> return! usable created
+                                | Ok created -> return! Telemetry.spanResult config.Tracer "git.probe" named (usable created)
                             }
                         ready <- Some answer
                         return answer
                 }
 
-        let confined = lazySandbox policy
+        let confined = lazySandbox "confined" policy
 
         /// The clone's sandbox, and nothing else's: a checkout can contain a `.vscode`,
         /// a `.mcp.json`, a `.gitmodules` — names srt refuses to write anywhere, over any
@@ -433,7 +447,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         /// the hardened one, and every other verb keeps the policy above: none of them
         /// writes a path srt objects to. Undo the moment srt can exempt a subtree instead
         /// of a whole spawn — `clone` goes back to `confined` and this sandbox goes away.
-        let unconfined = lazySandbox { policy with Filesystem = Unconfined }
+        let unconfined = lazySandbox "unconfined" { policy with Filesystem = Unconfined }
 
         let runGit
             (sandboxFor: unit -> Async<Result<Sandbox, string>>)
@@ -458,20 +472,28 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                         | SandboxExited code -> return Ok { Code = code; Stdout = stdout; Stderr = stderr }
             }
 
-        /// Run and demand exit 0; a failure surfaces git's own words, capped.
+        /// Run and demand exit 0; a failure surfaces git's own words, capped. One span per
+        /// run, named for the subcommand (`git clone`, `git status`) — the sandbox's own
+        /// first-use cost lands inside it as a child, so a slow first verb says why.
         let runOk
             (sandboxFor: unit -> Async<Result<Sandbox, string>>)
             (token: string option)
             (args: string list)
             : Async<Result<GitRun, string>> =
-            async {
-                match! runGit sandboxFor token args with
-                | Error e -> return Error e
-                | Ok run when run.Code <> 0 ->
-                    let said = if run.Stderr.Trim () <> "" then run.Stderr else run.Stdout
-                    return Error (sprintf "git %s failed (exit %d): %s" (List.tryHead args |> Option.defaultValue "?") run.Code (capText 2000 (said.Trim ())))
-                | Ok run -> return Ok run
-            }
+            let verb = gitVerb args
+            Telemetry.spanResult
+                config.Tracer
+                (sprintf "git %s" verb)
+                [ "yession.git.verb", Telemetry.AttributeValue.String verb
+                  "yession.git.authenticated", Telemetry.AttributeValue.Bool token.IsSome ]
+                (async {
+                    match! runGit sandboxFor token args with
+                    | Error e -> return Error e
+                    | Ok run when run.Code <> 0 ->
+                        let said = if run.Stderr.Trim () <> "" then run.Stderr else run.Stdout
+                        return Error (sprintf "git %s failed (exit %d): %s" (List.tryHead args |> Option.defaultValue "?") run.Code (capText 2000 (said.Trim ())))
+                    | Ok run -> return Ok run
+                })
 
         let pathOf (repo: RepoRef) = sprintf "%s/%s" reposDir (RepoRef.relativePath repo)
         /// The same checkout as a TERMINAL in this session reaches it. What the listing
@@ -538,8 +560,8 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         /// one is coming, and a clone that dies leaves the wreckage somewhere nobody reads.
         let cloneIntoPlace (caller: RepoCaller) (repo: RepoRef) : Async<Result<Recorded<RepoListing>, string>> =
             async {
-                let! token = config.ResolveToken caller.Credential
-                match! config.Canonical token repo with
+                let! token = Telemetry.span config.Tracer "repo.resolve_token" [] (config.ResolveToken caller.Credential)
+                match! Telemetry.span config.Tracer "repo.canonical" [] (config.Canonical token repo) with
                 | Some current when current <> repo ->
                     return
                         Error (
@@ -573,11 +595,16 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                     // it inside the staging area rather than here.
                     Fs.ensureDir (sprintf "%s/%s" reposDir (RepoRef.owner repo))
                     Fs.rename staging (pathOf repo)
-                    match! listingOf repo with
+                    match! Telemetry.spanResult config.Tracer "repo.listing" [] (listingOf repo) with
                     | Error e -> return Error e
                     | Ok listing ->
                         let messageId = mintMessageId ()
-                        do! append caller.Actor (SessionEvent.RepoAdded { MessageId = messageId; Repo = repo; Branch = listing.Branch; Actor = caller.Actor; AgentsMd = agentsMdOf repo })
+                        do!
+                            Telemetry.span
+                                config.Tracer
+                                "repo.record"
+                                []
+                                (append caller.Actor (SessionEvent.RepoAdded { MessageId = messageId; Repo = repo; Branch = listing.Branch; Actor = caller.Actor; AgentsMd = agentsMdOf repo }))
                         return Ok { Recorded.Answer = listing; Recorded.RecordedAs = Some messageId }
             }
 
@@ -588,7 +615,12 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         let cloning = Dictionary<string, JS.Promise<Result<Recorded<RepoListing>, string>>> ()
 
         let addRepo (caller: RepoCaller) (repo: RepoRef) : Async<Result<Recorded<RepoListing>, string>> =
-            async {
+            Telemetry.spanResult
+                config.Tracer
+                "repo.add"
+                [ "yession.repo", Telemetry.AttributeValue.String (RepoRef.value repo)
+                  "yession.repo.present", Telemetry.AttributeValue.Bool (present repo) ]
+            <| async {
                 if present repo then
                     // Already here: answer with the current state and record nothing —
                     // a repeated add is a question, not an act. `present` can be trusted to

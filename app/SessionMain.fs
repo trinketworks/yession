@@ -963,6 +963,7 @@ Async.StartImmediate (
                                 | Error _ -> return None
                             }
                       OnNetworkFailure = reportGitHubNetworkFailure
+                      Tracer = telemetry.Tracer
                       Log = log } with
             | Ok service -> reposService <- Some service
             | Error e -> failwithf "repos: %s" e
@@ -1460,7 +1461,7 @@ Async.StartImmediate (
         // Consent reaches the fold that knows what each repo asks for.
         host.SetApproveCapabilities (fun actor repo granted -> repoSandboxes.Approve actor repo granted)
         // A person's first repo goes through the same gate the agent's `add_repo` does.
-        host.SetLaunchRepo (Commands.launchRepo commandServices host.RunGated host.ResumeGated)
+        host.SetLaunchRepo (Commands.launchRepo telemetry.Tracer commandServices host.RunGated host.ResumeGated)
         // The reverse leg starts LAST, after the query registry exists and the Host is up:
         // a set frame rebuilds a registry and invalidates a query, and both of those have
         // to be there before the first frame can arrive.
