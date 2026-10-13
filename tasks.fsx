@@ -2162,6 +2162,12 @@ let private unjudged = "YES000"
 [<Literal>]
 let private unjudgedExit = 2
 
+/// A rule rejected the source: the one answer that IS a verdict, and the one a reader fixes right
+/// here. It exits on 1, the code any failed task has, and every other `lint` exit is a code of its
+/// own so that this one cannot be mistaken for a run that judged nothing.
+[<Literal>]
+let private rejectedExit = 1
+
 /// A run that did not FINISH judged nothing either, and it exits on a code of its own for the
 /// same reason `unjudgedExit` does: the next step is a different verb again. Source that does
 /// not compile is answered by `build`; an analyzer that died is answered by running it again,
@@ -2386,7 +2392,12 @@ let private analyzers () =
         exit unjudgedExit
     | Judged findings when not (List.isEmpty findings) ->
         printfn "%s" output
-        failwith "lint: an analyzer rejected something in the product — see above for which rule and where"
+
+        // Not a `failwith`: its stack trace would be the last thing printed, and the line that
+        // names the next step has to be.
+        eprintfn "lint: a rule rejected the source. Fix the findings above, then run `lint` again."
+
+        exit rejectedExit
     | Judged _ -> ()
 
     for code, name, files in fixtures do
