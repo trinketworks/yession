@@ -33,6 +33,7 @@ open Microsoft.Playwright
 open Yession.App.Codecs
 open Yession.App.Collab
 open Yession.Tests.BrowserWait
+open Yession.Tests.BrowserProbe
 
 /// The URL out of a "launched at http://127.0.0.1:PORT/ …" line. Same shape the packaged
 /// composition test uses to learn both endpoints from stdout.
@@ -190,6 +191,7 @@ type internal Contexts (browser: IBrowser) =
                 | None -> await (browser.NewContextAsync ())
                 | Some o -> await (browser.NewContextAsync o)
             lock opened (fun () -> opened.Add context)
+            do! Probe.install context
             return context
         }
 
@@ -803,13 +805,14 @@ let private sessionPair (name: string) (body: IPage -> IPage -> Async<unit>) =
 /// The refusal notices a person can SEE: drawn, with something at their centre that belongs
 /// to them. A notice under a shut column or behind the pane is in the document and not on the
 /// screen, and "said once" is a claim about the screen.
-let private refusalsOnScreen =
-    """[...document.querySelectorAll('[data-command-refused]')].filter(el => {
-         const box = el.getBoundingClientRect()
-         if (box.width === 0 || box.height === 0) return false
-         const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
-         return !!hit && el.contains(hit)
-       })"""
+let private refusal = "[data-command-refused]"
+
+/// The refusals a reader can see: painted, not merely present.
+let private refusalsOnScreen (page: IPage) () : Async<Yession.App.Probes.Seen list> =
+    async {
+        let! all = Probe.seen page refusal
+        return all |> List.filter (fun r -> r.Painted)
+    }
 
 /// A session with no resources profile has no `default` sandbox, so New terminal is refused —
 /// the press this suite can make the session refuse without running anything. The profile
@@ -821,7 +824,7 @@ let private refusedInPane (page: IPage) : Async<unit> =
     async {
         do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
         do! openNewTerminal page
-        do! waitFor "a refusal on screen" page (sprintf "%s.length > 0" refusalsOnScreen)
+        do! Wait.until "a refusal on screen" (refusalsOnScreen page) (not << List.isEmpty)
     }
 
 let tests =
@@ -833,17 +836,19 @@ let tests =
             fun page ->
             async {
                 do! refusedInPane page
-                do! waitFor
+                let inPane = Sel.hook Yession.App.Dom.Hooks.contentPanel + " " + refusal
+                do! Wait.until
                         "exactly one visible refusal, inside the pane, in the session's words"
-                        page
-                        (sprintf
-                            """(() => {
-                                 const shown = %s
-                                 return shown.length === 1
-                                   && !!shown[0].closest('[data-content-panel]')
-                                   && shown[0].textContent.includes("'default'")
-                               })()"""
-                            refusalsOnScreen)
+                        (fun () ->
+                            async {
+                                let! shown = refusalsOnScreen page ()
+                                let! shownInPane = Probe.seen page inPane
+                                return shown, shownInPane |> List.filter (fun r -> r.Painted)
+                            })
+                        (fun (shown, shownInPane) ->
+                            match shown, shownInPane with
+                            | [ one ], [ _ ] -> one.Text.Contains "'default'"
+                            | _ -> false)
             }
 
         // The dismiss takes the notice out of the document with the keyboard inside it, and
@@ -2150,19 +2155,34 @@ let private signInButtonHoldsStill (width: int) (height: int) =
             Expect.equal opened closed "the button's offset and size in the prompt (left,top,width,height)"
         }
 
-/// Where a mounted player's terminal is against the box it was mounted into and against its
-/// own control bar, as `[top, bottom, left, right]` for each — read when a fit check fails, so
-/// a red case says by how much and on which side rather than only that a wait ran out.
-let private replayBoxes (mount: string) =
-    sprintf
-        """() => {
-             const host = document.querySelector(%s)
-             const box = el => { const r = el.getBoundingClientRect(); return [r.top, r.bottom, r.left, r.right].map(Math.round) }
-             const term = host && host.querySelector('.ap-term')
-             const bar = host && host.querySelector('.ap-control-bar')
-             return JSON.stringify({ host: host && box(host), term: term && box(term), bar: bar && box(bar) })
-           }"""
-        (System.Text.Json.JsonSerializer.Serialize mount)
+/// Where a mounted player's terminal is against the box it was mounted into and against its own
+/// control bar — the host, `.ap-term` (the terminal as the player drew it) and `.ap-control-bar`,
+/// measured in one frame — and the terminal's bottom border, which is its own ground.
+type private ReplayBoxes =
+    { Host: Yession.App.Probes.Box option
+      Term: Yession.App.Probes.Box option
+      Bar: Yession.App.Probes.Box option
+      /// `None` where there is no terminal, or its border is not a length in pixels — which no
+      /// fit can be judged against.
+      TermBorderBottom: float option }
+
+let private replayBoxes (page: IPage) (mount: string) () : Async<ReplayBoxes> =
+    async {
+        let term = mount + " .ap-term"
+        let! measured = Probe.boxes page [ mount; term; mount + " .ap-control-bar" ]
+        let! border = Probe.computed page term "border-bottom-width"
+        let border =
+            border
+            |> Option.filter (fun b -> b.EndsWith "px")
+            |> Option.bind (fun b ->
+                match Double.TryParse (b.Substring (0, b.Length - 2), Globalization.NumberStyles.Float, Globalization.CultureInfo.InvariantCulture) with
+                | true, px -> Some px
+                | false, _ -> None)
+        return
+            match measured with
+            | [ host; term; bar ] -> { Host = host; Term = term; Bar = bar; TermBorderBottom = border }
+            | other -> failwithf "asked for three boxes and was given %d" (List.length other)
+    }
 
 /// Whether every line and every column of a mounted player's terminal is where a reader can
 /// see it: inside the box it was mounted into, and its LINES clear of the player's own control
@@ -2171,30 +2191,21 @@ let private replayBoxes (mount: string) =
 /// character cell wrong, which shows as columns running off the side and the last line sliding
 /// under the bar. Its lines, not its box: the box ends in a margin of the terminal's own ground
 /// (its bottom border), which the bar's top rule overlaps by design.
-let private replayFits (mount: string) =
-    sprintf
-        """() => {
-             const host = document.querySelector(%s)
-             const term = host && host.querySelector('.ap-term')
-             if (!term) return false
-             const bar = host.querySelector('.ap-control-bar')
-             const h = host.getBoundingClientRect(), t = term.getBoundingClientRect()
-             return t.width > 0 && t.height > 0
-               && t.top >= h.top - 0.5 && t.bottom <= h.bottom + 0.5
-               && t.left >= h.left - 0.5 && t.right <= h.right + 0.5
-               && (!bar || t.bottom - parseFloat(getComputedStyle(term).borderBottomWidth) <= bar.getBoundingClientRect().top + 0.5)
-           }"""
-        (System.Text.Json.JsonSerializer.Serialize mount)
+let private replayFits (boxes: ReplayBoxes) : bool =
+    match boxes.Host, boxes.Term with
+    | Some h, Some t ->
+        not (Yession.App.Probes.Box.isEmpty t)
+        && t.Top >= h.Top - 0.5 && t.Bottom <= h.Bottom + 0.5
+        && t.Left >= h.Left - 0.5 && t.Right <= h.Right + 0.5
+        && (match boxes.Bar with
+            | Some bar ->
+                boxes.TermBorderBottom |> Option.exists (fun border -> t.Bottom - border <= bar.Top + 0.5)
+            | None -> true)
+    | _ -> false
 
-/// Wait for a mounted player to fit its box, and fail saying where it is when it never does.
+/// Wait for a mounted player to fit its box. A red one says where each of them was.
 let private replayFitsWithin (what: string) (page: IPage) (mount: string) : Async<unit> =
-    async {
-        match! waitFor what page (replayFits mount) |> Async.Catch with
-        | Choice1Of2 () -> ()
-        | Choice2Of2 e ->
-            let! boxes = await (page.EvaluateAsync<string> (replayBoxes mount))
-            failwithf "%s\n  where they are [top, bottom, left, right]: %s" e.Message boxes
-    }
+    Wait.until what (replayBoxes page mount) replayFits
 
 /// The harness's live terminal, rewound. Its recording is TALL and narrow (40x60, the shape a
 /// terminal opened on a phone has), which is the one a panel runs out of HEIGHT for before
@@ -8933,54 +8944,59 @@ let frontedTests =
                         // through the Manager as issuer, at the proxy's origin, and came back),
                         // and the name on the roster is the one the ingress asserted — through
                         // caddy's translation, the Manager's ID token and the session's cookie.
-                        let landedAsYourself =
-                            sprintf
-                                """() => {
-                                     const at = /^\/s\/([^/]+)\//.exec(location.pathname)
-                                     const shell = document.querySelector('meta[name="%s"]')?.getAttribute('content')
-                                     const connection = document.querySelector('[%s]')?.getAttribute('%s')
-                                     const name = document.querySelector('[%s]')?.textContent?.trim()
-                                     return !!at && shell === at[1] && connection === 'Connected' && name === '%s'
-                                   }"""
-                                Yession.App.Dom.sessionMetaName
-                                Yession.App.Dom.Hooks.connection
-                                Yession.App.Dom.Hooks.connection
-                                Yession.App.Dom.Hooks.displayName
-                                FRONTED_NAME
+                        let landing () =
+                            async {
+                                let! at = Read.url page
+                                let! shell = Read.attr page ("meta" + Sel.hookIs "name" Yession.App.Dom.sessionMetaName) "content"
+                                let! connection = connectionState page ()
+                                let! name = Read.text page (Sel.hook Yession.App.Dom.Hooks.displayName)
+                                return at, shell, connection, name |> Option.map (fun n -> n.Trim ())
+                            }
+                        let landedAsYourself (at: Uri, shell: string option, connection: string option, name: string option) =
+                            // `/s/<id>/…`: the session the address asked for.
+                            match List.ofArray (at.AbsolutePath.Split '/') with
+                            | "" :: "s" :: asked :: _ :: _ when asked <> "" ->
+                                shell = Some asked
+                                && connection = Some Yession.App.Dom.Text.connected
+                                && name = Some FRONTED_NAME
+                            | _ -> false
                         // A real child launches, the map catches up, caddy re-adapts within a
                         // second, and the sign-in round-trips — slow on a cold runner, and the
                         // faults this guards are all instant, so a long wait only costs green time.
-                        try
-                            do!
-                                await (page.WaitForFunctionAsync (landedAsYourself, null, PageWaitForFunctionOptions (Timeout = 90000.0f)))
-                                |> Async.Ignore
-                        with _ ->
-                            let! showing =
-                                await (page.EvaluateAsync<string>
-                                        (sprintf
-                                            """async () => JSON.stringify({
-                                                 url: location.href,
-                                                 title: document.title,
-                                                 // Whether the page is being RENDERED at all, which
-                                                 // "Connected with the right name" does not say: a
-                                                 // document whose script runs while its rendering is
-                                                 // suppressed reads as a wait that simply never fires.
-                                                 // Cost one whole CI round to tell apart once.
-                                                 rafAlive: await Promise.race([new Promise(r => requestAnimationFrame(() => r(true))), new Promise(r => setTimeout(() => r(false), 2000))]),
-                                                 connection: document.querySelector('[%s]')?.getAttribute('%s') ?? null,
-                                                 name: document.querySelector('[%s]')?.textContent ?? null,
-                                                 text: document.body?.innerText?.slice(0, 200) ?? null
-                                               })"""
-                                            Yession.App.Dom.Hooks.connection
-                                            Yession.App.Dom.Hooks.connection
-                                            Yession.App.Dom.Hooks.displayName))
+                        match! Wait.within 90000.0 "pressing Create to land in that session as the asserted user" landing landedAsYourself |> Async.Catch with
+                        | Choice1Of2 () -> ()
+                        | Choice2Of2 e ->
+                            // Whether the page is being RENDERED at all, which "connected with the
+                            // right name" does not say: a document whose script runs while its
+                            // rendering is suppressed reads as a wait that simply never fires.
+                            // Cost one whole CI round to tell apart once.
+                            // Each read is one more look at a page that may be mid-navigation, so
+                            // none of them may cost the message the wait already wrote.
+                            let orUnreadable (read: Async<string>) =
+                                async {
+                                    match! Async.Catch read with
+                                    | Choice1Of2 value -> return value
+                                    | Choice2Of2 failed -> return sprintf "(unreadable: %s)" failed.Message
+                                }
+                            let! rendering =
+                                orUnreadable (async {
+                                    let! painting = Probe.framing page 2000
+                                    return string painting })
+                            let! title = orUnreadable (await (page.TitleAsync ()))
+                            let! text =
+                                orUnreadable (async {
+                                    let! t = await (page.Locator("body").InnerTextAsync ())
+                                    return t.Substring (0, min 200 t.Length) })
                             let said =
                                 deployed.Pieces
                                 |> List.map (fun d -> sprintf "--- %s said ---\n%s" d.Label (lock d.Said (fun () -> string d.Said)))
                                 |> String.concat "\n"
                             failwithf
-                                "pressing Create must land in that session as the asserted user; the browser is showing %s\n%s"
-                                showing
+                                "%s\n  rendering: %s, title: %s, text: %s\n%s"
+                                e.Message
+                                rendering
+                                title
+                                text
                                 said
                         }
                     })
@@ -9316,10 +9332,13 @@ let private readyAnswers (status: int) (page: IPage) : Async<unit> =
     awaitU (page.RouteAsync ("**/ready", fun route ->
         route.FulfillAsync (RouteFulfillOptions (Status = status, ContentType = "text/plain", Body = "http://127.0.0.1:1/login")) |> ignore))
 
-let private marksShown =
-    """() => JSON.stringify({
-        intro: getComputedStyle(document.querySelector('[data-mark-intro]')).display,
-        still: getComputedStyle(document.querySelector('[data-mark-static]')).display })"""
+/// How the intro mark and the still mark are displayed, in that order.
+let private marksShown (page: IPage) : Async<string option * string option> =
+    async {
+        let! intro = Probe.computed page "[data-mark-intro]" "display"
+        let! still = Probe.computed page "[data-mark-static]" "display"
+        return intro, still
+    }
 
 let openingTests =
     testList "The opening page (browser)" [
@@ -9373,15 +9392,15 @@ let openingTests =
                 do! readyAnswers 503 page
             }) (fun _ page opening -> async {
                 let! _ = await (page.GotoAsync opening)
-                let! shown = await (page.EvaluateAsync<string> marksShown)
-                Expect.equal shown """{"intro":"none","still":"block"}""" "the intro is off and the still mark is on"
+                let! shown = marksShown page
+                Expect.equal shown (Some "none", Some "block") "the intro is off and the still mark is on"
             })
 
         testCaseAsync "otherwise the intro is shown, and the still mark is not" <|
             withOpening "motion" (readyAnswers 503) (fun _ page opening -> async {
                 let! _ = await (page.GotoAsync opening)
-                let! shown = await (page.EvaluateAsync<string> marksShown)
-                Expect.equal shown """{"intro":"block","still":"none"}""" "the intro is on and the still mark is off"
+                let! shown = marksShown page
+                Expect.equal shown (Some "block", Some "none") "the intro is on and the still mark is off"
             })
     ]
 
