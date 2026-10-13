@@ -83,6 +83,92 @@ let private ownTexts (selector: string) : string list =
 let private databases (_: int) : JS.Promise<string list> =
     IndexedDb.names () |> Promise.map List.ofArray
 
+let private scrollOf (element: Element) : Probes.Scroll =
+    Probes.Scroll.create
+        element.scrollTop element.scrollLeft element.scrollHeight element.scrollWidth
+        element.clientHeight element.clientWidth
+
+let private scroll (selector: string) : Probes.Scroll option = first selector |> Option.map scrollOf
+
+let private scrollTo (selector: string, top: float) : Probes.Scroll option =
+    first selector
+    |> Option.map (fun element ->
+        element.scrollTop <- top
+        scrollOf element)
+
+let private reveal (selector: string, block: string) : bool =
+    match first selector with
+    | Some element ->
+        Scrolling.intoView element block
+        true
+    | None -> false
+
+/// Every text node under `node`, in document order.
+let rec private textsUnder (node: Node) : Node list =
+    if node.nodeType = 3.0 then [ node ]
+    else
+        let children = node.childNodes
+        [ for i in 0 .. children.length - 1 do yield! textsUnder children.[i] ]
+
+let private newest (selector: string, mark: string) : Probes.Newest option =
+    first selector
+    |> Option.bind (fun surface ->
+        textsUnder surface
+        |> List.choose (fun text ->
+            let at = text.textContent.LastIndexOf mark
+            if at >= 0 then Some (text, at) else None)
+        |> List.tryLast
+        |> Option.map (fun (text, at) ->
+            let line = TextRange.boxOf text at (at + mark.Length)
+            let box = surface.getBoundingClientRect ()
+            let painted =
+                Browser.Dom.document.elementFromPoint (line.left + line.width / 2.0, line.top + line.height / 2.0)
+                |> Option.ofObj
+                |> Option.exists surface.contains
+            Probes.Newest.create
+                (line.top >= box.top - 0.5 && line.bottom <= box.bottom + 0.5)
+                painted
+                (round (surface.scrollHeight - surface.clientHeight - surface.scrollTop))))
+
+let private openAll (selector: string) : int =
+    let found = all selector
+    found |> List.iter (fun element -> element.setAttribute ("open", ""))
+    found.Length
+
+let private animating (selector: string) : int option =
+    first selector |> Option.map (fun element -> (Animations.on element).Length)
+
+let private park (selector: string, atEnd: bool) : Probes.Scroll option =
+    first selector
+    |> Option.map (fun surface ->
+        surface.parentElement |> Option.ofObj |> Option.iter (fun parent -> Scrolling.intoView parent "end")
+        surface.scrollTop <- (if atEnd then surface.scrollHeight else 0.0)
+        scrollOf surface)
+
+let private settled (_: int) : JS.Promise<int> =
+    let finite = Animations.finite ()
+    finite |> Array.map Animations.whenFinished |> Promise.all |> Promise.map (fun _ -> finite.Length)
+
+let private computedAll (selector: string, property: string) : string list =
+    all selector |> List.map (fun element -> Css.computedProperty (element :?> HTMLElement) property)
+
+let private transitionsOnToggle (rootClass: string) : string list =
+    let started () =
+        Transitions.unfinished ()
+        |> Array.map (fun transition ->
+            let target = transition.target
+            let named =
+                match target.getAttribute "class" |> Option.ofObj with
+                | Some cls when cls <> "" -> cls
+                | _ -> target.tagName
+            sprintf "%s (%s)" (named.Substring (0, min 60 named.Length)) transition.transitionProperty)
+        |> List.ofArray
+    let root = Browser.Dom.document.documentElement.classList
+    root.toggle rootClass |> ignore
+    let there = started ()
+    root.toggle rootClass |> ignore
+    there @ started ()
+
 /// Publish a probe that answers at once.
 let private answering (probe: Probes.Probe<'Ask, 'Answer>) (answer: 'Ask -> 'Answer) : unit =
     PageGlobal.set
@@ -108,3 +194,13 @@ awaiting Probes.framing framing
 awaiting Probes.frames frames
 answering Probes.ownTexts ownTexts
 awaiting Probes.databases databases
+answering Probes.scroll scroll
+answering Probes.scrollTo scrollTo
+answering Probes.reveal reveal
+awaiting Probes.settled settled
+answering Probes.computedAll computedAll
+answering Probes.transitionsOnToggle transitionsOnToggle
+answering Probes.newest newest
+answering Probes.openAll openAll
+answering Probes.animating animating
+answering Probes.park park

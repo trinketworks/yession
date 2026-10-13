@@ -1964,8 +1964,7 @@ let private editorCase = editorCaseOn None
 /// somewhere itself, before that frame, has its focus taken back from under it by the move
 /// it did not wait for. Which of the two lands last is timing, and a slower runner lost it.
 let private focusReachedPane (page: IPage) : Async<unit> =
-    waitFor "focus to follow the chip into the pane" page
-        "document.activeElement?.hasAttribute('data-pane-panel') === true"
+    Wait.until "focus to follow the chip into the pane" (fun () -> Read.focused page "[data-pane-panel]") id
 
 /// A page of events as the session sends them — one envelope a line — at the offsets given.
 let private foldBody (events: (int64 * Yession.Domain.SessionEvent) list) : string =
@@ -1997,9 +1996,8 @@ let private stolenFromHarness (page: IPage) : Async<unit> =
             Yession.Domain.ActorRef.PeerRef (Yession.Domain.PeerId.create name |> Result.defaultWith failwith)
         do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
         do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
-        let! _ =
-            await (page.WaitForFunctionAsync
-                """document.activeElement?.getAttribute('data-terminal-keys') === 'term-harness'""")
+        do! Wait.until "the keyboard to be in the harness terminal"
+                (fun () -> Read.focused page (Sel.hookIs Yession.App.Dom.Hooks.terminalKeys "term-harness")) id
         do!
             foldHarness page [
                 90L,
@@ -2034,25 +2032,23 @@ let private openManyTerminals (page: IPage) : Async<unit> =
         // Showing the pane puts focus on the command line a frame later; the cases after this
         // put focus somewhere themselves, and must not have it taken back by a move they did
         // not wait for.
-        do! waitFor "focus to land on the command line" page
-                (sprintf "document.activeElement?.matches(%s) === true" (System.Text.Json.JsonSerializer.Serialize (commandLine "term-harness")))
+        do! Wait.until "focus to land on the command line" (fun () -> Read.focused page (commandLine "term-harness")) id
         do! foldHarness page [ for i in 0 .. 3 -> 80L + int64 i, opened (sprintf "term-more-%d" i) ]
-        do! waitFor "six tabs in the strip" page "document.querySelectorAll('#shell [data-pane-strip] [role=tab]').length === 6"
+        do! waitCount "six tabs in the strip" page "#shell [data-pane-strip] [role=tab]" 6
         // The column OPENS by animating its width, and a case that measures what is on screen
         // in it measures a narrower pane until that has finished — its right-hand controls
         // clipped away by the column's own edge for the length of the transition.
-        do! awaitU (
-                page.EvaluateAsync
-                    """() => Promise.all(
-                         document.getAnimations()
-                           .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
-                           .map(a => a.finished.catch(() => null)))""")
+        do! Probe.settled page
     }
 
 /// Whether the strip holds more tabs than it shows — the precondition every scrolling case
 /// asserts first, because on a strip that fits, "in view" is true of everything.
-let private stripOverflows =
-    """() => { const s = document.querySelector('#shell [data-pane-strip]'); return s.scrollWidth > s.clientWidth + 1 }"""
+let private stripOverflows (page: IPage) : Async<bool> =
+    async {
+        match! Probe.scroll page "#shell [data-pane-strip]" with
+        | Some strip -> return Yession.App.Probes.Scroll.overflowsSideways strip
+        | None -> return failwith "there is no strip to overflow"
+    }
 
 /// A chip in the chat pressed, and the preview it opens settled on screen — the column's
 /// opening animation finished, so what is measured is where things land, not where they pass.
@@ -2060,23 +2056,17 @@ let private previewSettled (page: IPage) : Async<unit> =
     async {
         do! awaitU (page.ClickAsync "#shell [data-chat-block]")
         let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview]")
-        do! awaitU (
-                page.EvaluateAsync
-                    """() => Promise.all(
-                         document.getAnimations()
-                           .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
-                           .map(a => a.finished.catch(() => null)))""")
+        do! Probe.settled page
     }
 
-/// Whether the element an expression names lies wholly inside the strip's box, sideways.
-let private insideStrip (element: string) =
-    sprintf
-        """() => {
-             const s = document.querySelector('#shell [data-pane-strip]').getBoundingClientRect()
-             const t = (%s).getBoundingClientRect()
-             return t.left >= s.left - 0.5 && t.right <= s.right + 0.5
-           }"""
-        element
+/// Whether the selected tab lies wholly inside the strip's box, sideways — both measured in one
+/// frame.
+let private selectedTabInsideStrip (page: IPage) : Async<bool> =
+    async {
+        match! Probe.boxes page [ "#shell [data-pane-strip]"; "#shell [data-pane-strip] [role=tab][aria-selected=true]" ] with
+        | [ Some s; Some t ] -> return t.Left >= s.Left - 0.5 && t.Right <= s.Right + 0.5
+        | measured -> return failwithf "the strip and its selected tab were not both there: %A" measured
+    }
 
 
 /// A case at a stated viewport. `ViewportSize` alone, never `IsMobile`: that additionally asks
@@ -2108,27 +2098,25 @@ let private signInButtonHoldsStill (width: int) (height: int) =
             let! _ = await (page.WaitForSelectorAsync "#shell [data-signin-required] [data-signin-again]")
             // Settled first: the side panes slide into place as the shell lays out, and the
             // column between them — the prompt's width — is still changing until they land.
-            let settled () =
-                awaitU (
-                    page.EvaluateAsync
-                        """() => Promise.all(
-                             document.getAnimations()
-                               .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
-                               .map(a => a.finished.catch(() => null)))""")
-            do! settled ()
-            let at =
-                """() => {
-                     const prompt = document.querySelector('#shell [data-signin-required]')
-                     prompt.scrollIntoView({ block: 'start' })
-                     const p = prompt.getBoundingClientRect()
-                     const b = prompt.querySelector('[data-signin-again]').getBoundingClientRect()
-                     return [b.left - p.left, b.top - p.top, b.width, b.height].map(Math.round).join(',')
-                   }"""
-            let! closed = await (page.EvaluateAsync<string> at)
+            do! Probe.settled page
+            let prompt = "#shell [data-signin-required]"
+            // The button's offset and size in the prompt, scrolled to the prompt's top so the
+            // page moving under it is not a move.
+            let at () =
+                async {
+                    do! Probe.reveal page prompt
+                    match! Probe.boxes page [ prompt; prompt + " [data-signin-again]" ] with
+                    | [ Some p; Some b ] ->
+                        return
+                            [ b.Left - p.Left; b.Top - p.Top; Yession.App.Probes.Box.width b; Yession.App.Probes.Box.height b ]
+                            |> List.map (fun v -> int (Math.Round v))
+                    | measured -> return failwithf "the prompt and its button were not both there: %A" measured
+                }
+            let! closed = at ()
             do! awaitU (page.ClickAsync "#shell [data-signin-required] [data-detail] summary")
             let! _ = await (page.WaitForSelectorAsync "#shell [data-signin-required] [data-detail][open]")
-            do! settled ()
-            let! opened = await (page.EvaluateAsync<string> at)
+            do! Probe.settled page
+            let! opened = at ()
             Expect.equal opened closed "the button's offset and size in the prompt (left,top,width,height)"
         }
 
@@ -2195,14 +2183,10 @@ let private rewoundTall (page: IPage) : Async<unit> =
         let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
         do! awaitU (page.ClickAsync "#shell [data-terminal-watch='watch']")
         // Landed: the still at the pin is up, so the player has its recording's size.
-        do! waitFor "the rewound terminal to show the screen at its pin" page
-                """document.querySelector("#shell [data-pane-replay='terminal:term-live']")?.textContent.includes('earlier output') === true"""
+        do! waitTextIn "the rewound terminal to show the screen at its pin" page "#shell [data-pane-replay='terminal:term-live']" "earlier output"
     }
 
 let [<Literal>] private rewoundMount = "#shell [data-pane-replay='terminal:term-live']"
-
-/// What a rewound terminal's player has drawn, as the page's text.
-let private rewoundText = sprintf "() => document.querySelector(%s)?.textContent ?? ''" (System.Text.Json.JsonSerializer.Serialize rewoundMount)
 
 /// A rewound terminal's player draws all of its terminal inside the region it is mounted in:
 /// scaled to that region's width AND its height, so no column runs off the side of the pane and
@@ -2223,51 +2207,45 @@ let private rewoundSaysWhere (width: int) (height: int) =
     editorCaseIn width height (sprintf "a rewound player says how far in it is, against its length, at %dx%d" width height) <| fun page ->
         async {
             do! rewoundTall page
-            let read =
-                sprintf
-                    """() => {
-                         const host = document.querySelector(%s)
-                         const elapsed = host?.querySelector('.ap-time-elapsed')
-                         const filled = host?.querySelector('.ap-gutter-full')
-                         if (!elapsed || !filled) return null
-                         const box = elapsed.getBoundingClientRect()
-                         const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
-                         const fraction = Number((filled.style.transform.match(/scaleX\(([0-9.]+)\)/) ?? [])[1])
-                         const [m, s] = elapsed.textContent.split(':').map(Number)
-                         return { shown: !!hit && elapsed.contains(hit), seconds: m * 60 + s, fraction }
-                       }"""
-                    (System.Text.Json.JsonSerializer.Serialize rewoundMount)
-            let held = sprintf "() => { const r = (%s)(); return !!r && r.shown && r.seconds > 0 && r.fraction > 0 && r.fraction < 1 }" read
-            match! waitFor "the rewound player's timer to be on screen, past the start and short of the end" page held |> Async.Catch with
-            | Choice1Of2 () -> ()
-            | Choice2Of2 e ->
-                let! got = await (page.EvaluateAsync<string> (sprintf "() => JSON.stringify((%s)())" read))
-                failwithf "%s\n  what the timer and bar read: %s" e.Message got
+            // The time elapsed, as said and as painted, and how much of the bar is filled —
+            // read off the transform the player scales it by.
+            let read () =
+                async {
+                    let! elapsed = Probe.seen page (rewoundMount + " .ap-time-elapsed")
+                    let! style = Read.attr page (rewoundMount + " .ap-gutter-full") "style"
+                    let fraction =
+                        style
+                        |> Option.bind (fun style ->
+                            let scaled = Text.RegularExpressions.Regex.Match (style, @"scaleX\(([0-9.]+)\)")
+                            if scaled.Success then Some (float scaled.Groups.[1].Value) else None)
+                    let seconds =
+                        elapsed
+                        |> List.tryHead
+                        |> Option.bind (fun e ->
+                            match e.Text.Split ':' |> Array.map Int32.TryParse with
+                            | [| true, m; true, s |] -> Some (m * 60 + s)
+                            | _ -> None)
+                    return {| Shown = elapsed |> List.exists (fun e -> e.Painted); Seconds = seconds; Fraction = fraction |}
+                }
+            do! Wait.until "the rewound player's timer to be on screen, past the start and short of the end"
+                    read
+                    (fun r ->
+                        r.Shown
+                        && r.Seconds |> Option.exists (fun s -> s > 0)
+                        && r.Fraction |> Option.exists (fun f -> f > 0.0 && f < 1.0))
         }
 
 /// What is painted at the centre of a player's control bar and of each of its buttons, and
-/// whether it is that control — `[]` when there is no bar. The predicate below is this report
-/// asking "all of them?", and a failing case prints it, so a red run says WHICH control was
-/// covered and by what rather than only that a wait ran out.
-let private replayControlsReport (mount: string) =
-    sprintf
-        """() => {
-             const host = document.querySelector(%s)
-             const bar = host && host.querySelector('.ap-control-bar')
-             if (!bar) return []
-             return [bar, ...bar.querySelectorAll('button')].map(el => {
-               const r = el.getBoundingClientRect()
-               const hit = r.width > 0 && r.height > 0
-                 ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-                 : null
-               return { control: el.getAttribute('class') ?? el.tagName,
-                        opacity: getComputedStyle(el).opacity,
-                        box: [r.top, r.bottom, r.left, r.right].map(Math.round),
-                        reached: !!hit && el.contains(hit),
-                        painted: hit ? hit.outerHTML.slice(0, 80) : null }
-             })
-           }"""
-        (System.Text.Json.JsonSerializer.Serialize mount)
+/// how opaque each is — `[]` when there is no bar. A failing case prints it, so a red run says
+/// WHICH control was covered rather than only that a wait ran out.
+let private replayControls (page: IPage) (mount: string) () : Async<(Yession.App.Probes.Seen * string) list> =
+    async {
+        let controls = sprintf "%s .ap-control-bar, %s .ap-control-bar button" mount mount
+        let! seen = Probe.seen page controls
+        let! opacity = Probe.computedAll page controls "opacity"
+        // Two looks; a control that came or went between them is read as not there yet.
+        return if List.length seen = List.length opacity then List.zip seen opacity else []
+    }
 
 /// A rewound terminal's transport — play and pause, the timeline, the player's own buttons —
 /// is on show, and what is painted at the centre of the bar and of each of its buttons is that
@@ -2277,19 +2255,11 @@ let private rewoundReplayControlsInReach (width: int) (height: int) =
     editorCaseIn width height (sprintf "a rewound terminal's player controls are on show and in reach at %dx%d" width height) <| fun page ->
         async {
             do! rewoundTall page
-            let report = replayControlsReport rewoundMount
-            let all =
-                sprintf
-                    """async () => {
-                         const controls = await (%s)()
-                         return controls.length > 1 && controls.every(c => c.reached && c.opacity === '1')
-                       }"""
-                    report
-            match! waitFor "the rewound player's controls to be on show, each painted where it stands" page all |> Async.Catch with
-            | Choice1Of2 () -> ()
-            | Choice2Of2 e ->
-                let! controls = await (page.EvaluateAsync<string> (sprintf "async () => JSON.stringify(await (%s)())" report))
-                failwithf "%s\n  the controls: %s" e.Message controls
+            do! Wait.until "the rewound player's controls to be on show, each painted where it stands"
+                    (replayControls page rewoundMount)
+                    (fun controls ->
+                        List.length controls > 1
+                        && controls |> List.forall (fun (seen, opacity) -> seen.Painted && opacity = "1"))
         }
 
 /// A side column shutting and opening again, with reduced motion asked for, starts no
@@ -2306,25 +2276,8 @@ let private columnHoldsStill (width: int) (height: int) (column: string) (rootCl
             let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
             // Settled first, so what is counted is what the toggle started. A pulse or a blink
             // never finishes and is not waited for.
-            do! awaitU (
-                    page.EvaluateAsync
-                        """() => Promise.all(
-                             document.getAnimations()
-                               .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
-                               .map(a => a.finished.catch(() => null)))""")
-            let! moved =
-                await (page.EvaluateAsync<string[]>(
-                        """(cls) => {
-                             const started = () => document.getAnimations()
-                               .filter(a => a instanceof CSSTransition && a.playState !== 'finished')
-                               .map(a => (a.effect.target.getAttribute('class') || a.effect.target.tagName).slice(0, 60)
-                                         + ' (' + a.transitionProperty + ')')
-                             const root = document.documentElement.classList
-                             root.toggle(cls)
-                             const there = started()
-                             root.toggle(cls)
-                             return there.concat(started())
-                           }""", rootClass))
+            do! Probe.settled page
+            let! moved = Probe.transitionsOnToggle page rootClass
             Expect.isEmpty
                 moved
                 (sprintf "toggling %s with reduced motion starts no transition; these started: %s"
@@ -2337,30 +2290,23 @@ let private columnHoldsStill (width: int) (height: int) (column: string) (rootCl
 ///
 /// Measured against the scrollport's CLIENT width rather than its border box, so a classic
 /// scrollbar does not read as a message that stopped short of the screen.
-let [<Literal>] private groundSpare =
-    """() => {
-         const item = document.querySelector("#shell [data-conversation] [data-message-id='msg-filler-8']")
-         const port = document.querySelector('#shell [data-conversation]')
-         return port.clientWidth - item.getBoundingClientRect().width
-       }"""
+let private groundSpare (page: IPage) : Async<float> =
+    async {
+        let port = "#shell [data-conversation]"
+        let! scroll = Probe.scroll page port
+        let! item = Probe.boxes page [ port + " [data-message-id='msg-filler-8']" ]
+        match scroll, item with
+        | Some port, [ Some item ] -> return port.ClientWidth - Yession.App.Probes.Box.width item
+        | _ -> return failwith "the conversation or its eighth message is not there to measure"
+    }
 
 /// Wait for the "jump to latest" control to be on the screen — hit-tested at its own centre,
 /// so a control that is present, shown and buried under something else does not count. The
 /// chat's is not in the document at all until it is offered.
 let private jumpShown (page: IPage) =
-    async {
-        let! _ =
-            await (page.WaitForFunctionAsync
-                    """(() => {
-                         const control = document.querySelector('#shell [data-jump-to-latest="chat"] button')
-                         if (!control) return false
-                         const box = control.getBoundingClientRect()
-                         if (box.width === 0) return false
-                         const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
-                         return !!hit && control.contains(hit)
-                       })()""")
-        return ()
-    }
+    Wait.until "the way back to the latest message to be on screen"
+        (fun () -> Probe.seen page "#shell [data-jump-to-latest=\"chat\"] button")
+        (List.tryHead >> Option.exists (fun control -> control.Painted))
 
 /// Scroll the conversation back to its start, which is far enough from the latest message
 /// for the control to be offered, and wait for it.
@@ -2370,20 +2316,9 @@ let private scrolledAwayFromLatest (page: IPage) =
         // The harness page is taller than the viewport, so the composer — and the tray on its
         // top edge, where the control is offered — is brought into view first; then the
         // conversation's scroll goes back to the start.
-        do! awaitU (
-                page.EvaluateAsync
-                    """() => {
-                         const conversation = document.querySelector('#shell [data-conversation]')
-                         conversation.scrollTop = 0
-                       }""")
-        do! awaitU (
-                page.WaitForFunctionAsync
-                    """(() => {
-                         const control = document.querySelector('#shell [data-jump-to-latest="chat"] button')
-                         if (!control) return false
-                         document.querySelector('#shell [data-draft-editor]').scrollIntoView({ block: 'end' })
-                         return true
-                       })()""")
+        let! _ = Probe.scrollTo page "#shell [data-conversation]" 0.0
+        do! waitPresent "the way back to the latest message to be offered" page "#shell [data-jump-to-latest=\"chat\"] button"
+        let! _ = Probe.revealEnd page "#shell [data-draft-editor]"
         do! jumpShown page
     }
 
@@ -2392,18 +2327,22 @@ let private scrolledAwayFromLatest (page: IPage) =
 /// where the words are and a control drawn over it hides whatever line scrolls under it.
 /// Found by their own hooks, wherever a redesign puts them; a missing one is reported, so
 /// the case cannot pass by measuring nothing.
-let [<Literal>] private controlsOverConversation =
-    """() => {
-         const c = document.querySelector('#shell [data-conversation]').getBoundingClientRect()
-         const controls = { interrupt: '#shell [data-interrupt-turn]', jump: '#shell [data-jump-to-latest="chat"] button' }
-         return Object.entries(controls).flatMap(([name, sel]) => {
-           const el = document.querySelector(sel)
-           if (!el) return [name + ' missing']
-           const r = el.getBoundingClientRect()
-           const over = r.top < c.bottom - 0.5 && r.bottom > c.top + 0.5 && r.left < c.right && r.right > c.left
-           return over ? [name + ' spans ' + r.top + '..' + r.bottom + ' over the conversation ending at ' + c.bottom] : []
-         }).join('; ')
-       }"""
+let private controlsOverConversation (page: IPage) : Async<string> =
+    async {
+        let controls = [ "interrupt", "#shell [data-interrupt-turn]"; "jump", "#shell [data-jump-to-latest=\"chat\"] button" ]
+        match! Probe.boxes page ("#shell [data-conversation]" :: List.map snd controls) with
+        | Some c :: placed ->
+            return
+                List.zip (List.map fst controls) placed
+                |> List.collect (fun (name, box) ->
+                    match box with
+                    | None -> [ name + " missing" ]
+                    | Some r when r.Top < c.Bottom - 0.5 && r.Bottom > c.Top + 0.5 && r.Left < c.Right && r.Right > c.Left ->
+                        [ sprintf "%s spans %g..%g over the conversation ending at %g" name r.Top r.Bottom c.Bottom ]
+                    | Some _ -> [])
+                |> String.concat "; "
+        | _ -> return "the conversation missing"
+    }
 
 // --- Surfaces read from their end (`Tail`) ---------------------------------------------------
 //
@@ -2418,23 +2357,15 @@ let private tailSurface (key: string) = sprintf "#shell [data-tail='%s']" key
 /// A frame and another, so a scroll this case made has been reported to the page (a scroll
 /// event lands a frame after the scroll) and whatever a render left behind has settled.
 let private twoFrames (page: IPage) : Async<unit> =
-    awaitU (page.EvaluateAsync "() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))")
+    Probe.frames page 2
 
 /// Bring a surface's box on screen and put its reader at its end, the way a reader does it,
 /// and say whether there was anywhere else to be — a surface that fits its box is at its end
 /// whatever happens, and a case over one could not fail.
 let private toTheEnd (page: IPage) (key: string) : Async<unit> =
     async {
-        let! scrolls =
-            await (
-                page.EvaluateAsync<bool> (
-                    """selector => {
-                         const el = document.querySelector(selector)
-                         el.parentElement.scrollIntoView({ block: 'end' })
-                         el.scrollTop = el.scrollHeight
-                         return el.scrollHeight > el.clientHeight + 100
-                       }""",
-                    box (tailSurface key)))
+        let! parked = Probe.park page (tailSurface key) true
+        let scrolls = parked |> Option.exists (fun s -> s.Height > s.ClientHeight + 100.0)
         Expect.isTrue scrolls (sprintf "the %s surface is taller than its box, so it has an end to keep" key)
         do! twoFrames page
     }
@@ -2442,14 +2373,7 @@ let private toTheEnd (page: IPage) (key: string) : Async<unit> =
 /// Put a surface's reader at its START, as a reader who scrolled back to read does.
 let private toTheStart (page: IPage) (key: string) : Async<unit> =
     async {
-        do! awaitU (
-                page.EvaluateAsync (
-                    """selector => {
-                         const el = document.querySelector(selector)
-                         el.parentElement.scrollIntoView({ block: 'end' })
-                         el.scrollTop = 0
-                       }""",
-                    box (tailSurface key)))
+        let! _ = Probe.park page (tailSurface key) false
         do! twoFrames page
     }
 
@@ -2457,41 +2381,17 @@ let private toTheStart (page: IPage) (key: string) : Async<unit> =
 /// that line lies wholly inside the surface's box, and whether what is painted at its centre
 /// belongs to the surface — so a line under the composer, a sticky header or a float reads as
 /// not shown. With how far short of its end the surface stands, for a red to say by how much.
-let private newestShown (page: IPage) (key: string) (mark: string) : Async<string> =
+let private newestShown (page: IPage) (key: string) (mark: string) : Async<Yession.App.Probes.Newest> =
     async {
-        let! _ =
-            await (
-                page.WaitForFunctionAsync (
-                    "([selector, mark]) => document.querySelector(selector)?.textContent.includes(mark)",
-                    box [| tailSurface key; mark |]))
+        do! waitTextIn (sprintf "%s in the %s surface" mark key) page (tailSurface key) mark
         do! twoFrames page
-        return!
-            await (
-                page.EvaluateAsync<string> (
-                    """([selector, mark]) => {
-                         const surface = document.querySelector(selector)
-                         const walker = document.createTreeWalker(surface, NodeFilter.SHOW_TEXT)
-                         let node = null, at = -1
-                         while (walker.nextNode()) {
-                           const i = walker.currentNode.textContent.lastIndexOf(mark)
-                           if (i >= 0) { node = walker.currentNode; at = i }
-                         }
-                         const range = document.createRange()
-                         range.setStart(node, at)
-                         range.setEnd(node, at + mark.length)
-                         const line = range.getBoundingClientRect(), box = surface.getBoundingClientRect()
-                         const hit = document.elementFromPoint(line.left + line.width / 2, line.top + line.height / 2)
-                         return JSON.stringify({
-                           inside: line.top >= box.top - 0.5 && line.bottom <= box.bottom + 0.5,
-                           painted: !!hit && surface.contains(hit),
-                           short: Math.round(surface.scrollHeight - surface.clientHeight - surface.scrollTop)
-                         })
-                       }""",
-                    box [| tailSurface key; mark |]))
+        match! Probe.newest page (tailSurface key) mark with
+        | Some newest -> return newest
+        | None -> return failwithf "%s went from the %s surface as it was read" mark key
     }
 
-/// The verdict `newestShown` has to give for the newest words to be on screen.
-let [<Literal>] private shownFully = "\"inside\":true,\"painted\":true"
+/// Whether the newest words are wholly on screen, as `newestShown` read them.
+let private shownFully (newest: Yession.App.Probes.Newest) = newest.Inside && newest.Painted
 
 /// A message from a collaborator, folded into the harness's conversation at `offset`.
 let private messageLands (page: IPage) (offset: int64) (body: string) : Async<unit> =
@@ -2510,8 +2410,8 @@ let private paneOnBlocks (page: IPage) : Async<unit> =
     async {
         do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
         let! _ = await (page.WaitForSelectorAsync (tailSurface "blocks:term-harness"))
-        do! waitFor "the column to finish opening" page
-                """(() => document.querySelector('#shell [data-content-panel]').getAnimations().length === 0)()"""
+        do! Wait.until "the column to finish opening"
+                (fun () -> Probe.animating page "#shell [data-content-panel]") ((=) (Some 0))
     }
 
 /// `<prefix> 1` to `<prefix> n`, one to a line.
@@ -2523,9 +2423,7 @@ let private numberedLines (prefix: string) (count: int) : string =
 let private blocksFilled (page: IPage) : Async<unit> =
     async {
         do! Harness.run4 page HarnessPage.record "term-harness" 2 "o" (numberedLines "line" 300 + "\r\n")
-        do! awaitU (
-                page.EvaluateAsync
-                    """() => document.querySelectorAll("#shell [data-tail='blocks:term-harness'] details").forEach(d => { d.open = true })""")
+        let! _ = Probe.openAll page "#shell [data-tail='blocks:term-harness'] details"
         do! twoFrames page
     }
 
@@ -2549,38 +2447,35 @@ let private afterBurst (page: IPage) (andThen: string) : Async<string> =
 
 /// Whether the "jump to latest" over a surface is on screen and is what is painted at its own
 /// centre, so a control that is present, shown and buried does not count.
-let private jumpOffered (key: string) =
-    sprintf
-        """(() => {
-             const control = document.querySelector("#shell [data-jump-to-latest='%s'] button")
-             if (!control) return false
-             const box = control.getBoundingClientRect()
-             if (box.width === 0 || box.height === 0) return false
-             const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
-             return !!hit && control.contains(hit)
-           })()"""
-        key
+let private jumpOffered (page: IPage) (key: string) : Async<bool> =
+    async {
+        let! control = Probe.seen page (sprintf "#shell [data-jump-to-latest='%s'] button" key)
+        return control |> List.tryHead |> Option.exists (fun c -> c.Painted)
+    }
 
 /// Whether a surface's reader is at its end.
-let private atItsEnd (key: string) =
-    sprintf
-        """(() => {
-             const el = document.querySelector("%s")
-             return el.scrollTop + el.clientHeight >= el.scrollHeight - 4
-           })()"""
-        (tailSurface key)
+let private atItsEnd (page: IPage) (key: string) : Async<bool> =
+    async {
+        let! scroll = Probe.scroll page (tailSurface key)
+        return scroll |> Option.exists (fun s -> s.Top + s.ClientHeight >= s.Height - 4.0)
+    }
 
 /// Show the pane and wait until it stands at the width the separator says — the column animates
 /// open, and a measurement taken while it travels is of a width it was for one frame.
 let private paneOpenAndSettled (page: IPage) : Async<unit> =
     async {
         do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-        do! waitFor "the pane to stand at the width its separator says" page
-                """(() => {
-                     const pane = document.querySelector('#shell [data-content-panel]')
-                     const said = Number(document.querySelector('#shell [data-term-resize]').getAttribute('aria-valuenow'))
-                     return Math.abs(pane.getBoundingClientRect().width - said) <= 1
-                   })()"""
+        do! Wait.until "the pane to stand at the width its separator says"
+                (fun () ->
+                    async {
+                        let! pane = Probe.boxes page [ "#shell [data-content-panel]" ]
+                        let! said = Read.attr page "#shell [data-term-resize]" "aria-valuenow"
+                        return pane, said
+                    })
+                (fun (pane, said) ->
+                    match pane, said |> Option.map Double.TryParse with
+                    | [ Some pane ], Some (true, said) -> abs (Yession.App.Probes.Box.width pane - said) <= 1.0
+                    | _ -> false)
     }
 
 /// On a desktop with room to spare, a pane nobody sized takes what the chat's reading column
@@ -2590,27 +2485,26 @@ let private paneOpenAndSettled (page: IPage) : Async<unit> =
 let private paneTakesTheRoom (page: IPage) : Async<unit> =
     async {
         do! paneOpenAndSettled page
-        let! layout =
-            await (page.EvaluateAsync<string>
-                    """() => {
-                         const chat = document.querySelector('#shell [data-conversation]')
-                         const pane = document.querySelector('#shell [data-content-panel]').getBoundingClientRect()
-                         const groups = [...chat.querySelectorAll('[data-message-author]')]
-                         const right = Math.max(...groups.map(g => g.getBoundingClientRect().right))
-                         const column = Math.max(...groups.map(g => g.getBoundingClientRect().width))
-                         const measure = parseFloat(getComputedStyle(groups[0]).maxWidth)
-                         const gutter = parseFloat(getComputedStyle(chat).paddingRight)
-                         const gap = pane.left - right
-                         return JSON.stringify({
-                           chatAtMeasure: column >= measure - 1,
-                           gapIsTheGutter: gap <= gutter + 1,
-                           paneAtItsFloor: pane.width >= 420,
-                           column, measure, gap, gutter, pane: pane.width })
-                       }""")
-        Expect.stringContains
-            layout
-            "\"chatAtMeasure\":true,\"gapIsTheGutter\":true,\"paneAtItsFloor\":true"
-            "the chat keeps its measure, the pane takes the rest and is never under its floor"
+        let chat = "#shell [data-conversation]"
+        let groups = chat + " [data-message-author]"
+        let! pane = Probe.boxes page [ "#shell [data-content-panel]" ]
+        let! grouped = Probe.seen page groups
+        let! measure = Probe.computed page groups "max-width"
+        let! gutter = Probe.computed page chat "padding-right"
+        let px (value: string option) =
+            value
+            |> Option.filter (fun v -> v.EndsWith "px")
+            |> Option.map (fun v -> float (v.Substring (0, v.Length - 2)))
+        match pane, grouped, px measure, px gutter with
+        | [ Some pane ], (_ :: _), Some measure, Some gutter ->
+            let right = grouped |> List.map (fun g -> g.Box.Right) |> List.max
+            let column = grouped |> List.map (fun g -> Yession.App.Probes.Box.width g.Box) |> List.max
+            let gap = pane.Left - right
+            let layout = {| Column = column; Measure = measure; Gap = gap; Gutter = gutter; Pane = Yession.App.Probes.Box.width pane |}
+            Expect.isTrue
+                (column >= measure - 1.0 && gap <= gutter + 1.0 && layout.Pane >= 420.0)
+                (sprintf "the chat keeps its measure, the pane takes the rest and is never under its floor: %A" layout)
+        | _ -> failwithf "the pane, the messages, their measure and the gutter were not all there: %A" (pane, grouped, measure, gutter)
     }
 
 // --- A fold of earlier commands opens UPWARD (`Tail`'s `Press`) ------------------------------
@@ -2623,13 +2517,10 @@ let private paneTakesTheRoom (page: IPage) : Async<unit> =
 /// The harness terminal's newest fold — nearest the end, so the one a reader there can see — by
 /// the block id it is keyed by.
 let private newestRun (page: IPage) : Async<string> =
-    await (
-        page.EvaluateAsync<string> (
-            """selector => {
-                 const runs = document.querySelector(selector).querySelectorAll('[data-terminal-block-run]')
-                 return runs.length ? runs[runs.length - 1].getAttribute('data-terminal-block-run') : ''
-               }""",
-            box (tailSurface "blocks:term-harness")))
+    async {
+        let! runs = Read.attrs page (tailSurface "blocks:term-harness" + " [data-terminal-block-run]") "data-terminal-block-run"
+        return runs |> List.choose id |> List.tryLast |> Option.defaultWith (fun () -> failwith "the history holds no fold")
+    }
 
 /// A fold's line, by the id the run is keyed by.
 let private runLine (run: string) =
@@ -2638,39 +2529,36 @@ let private runLine (run: string) =
 /// Where the latest command's line stands on screen — the last one drawn, since everything a
 /// fold holds came before it.
 let private latestCommandTop (page: IPage) : Async<float> =
-    await (
-        page.EvaluateAsync<float> (
-            """selector => {
-                 const lines = document.querySelector(selector).querySelectorAll('[data-terminal-block-command]')
-                 return lines[lines.length - 1].getBoundingClientRect().top
-               }""",
-            box (tailSurface "blocks:term-harness")))
+    async {
+        let! lines = Probe.seen page (tailSurface "blocks:term-harness" + " [data-terminal-block-command]")
+        match List.tryLast lines with
+        | Some line -> return line.Box.Top
+        | None -> return failwith "the history draws no command"
+    }
 
 /// Whether a fold's line lies wholly inside the history's box: the precondition for a case
 /// about a reader who presses it from where they are, since one off screen is a press nobody
 /// at the end makes (and the browser's own anchoring keeps the place for it anyway).
 let private runLineOnScreen (page: IPage) (run: string) : Async<bool> =
-    await (
-        page.EvaluateAsync<bool> (
-            """([surface, line]) => {
-                 const box = document.querySelector(surface).getBoundingClientRect()
-                 const at = document.querySelector(line).getBoundingClientRect()
-                 return at.top >= box.top && at.bottom <= box.bottom
-               }""",
-            box [| tailSurface "blocks:term-harness"; runLine run |]))
+    async {
+        match! Probe.boxes page [ tailSurface "blocks:term-harness"; runLine run ] with
+        | [ Some box; Some at ] -> return at.Top >= box.Top && at.Bottom <= box.Bottom
+        | measured -> return failwithf "the history and the fold's line were not both there: %A" measured
+    }
 
 /// Press a fold one way or another, and wait for the press to have been drawn — open if it was
 /// shut, shut if it was open — and the frame after.
 let private pressRunBy (press: IPage -> string -> Async<unit>) (page: IPage) (run: string) : Async<unit> =
     async {
         let details = sprintf "%s [data-terminal-block-run='%s'] details" (tailSurface "blocks:term-harness") run
-        let! was = await (page.EvaluateAsync<bool> ("selector => document.querySelector(selector).open", box details))
+        let isOpen () =
+            async {
+                let! opened = Read.attr page details "open"
+                return Option.isSome opened
+            }
+        let! was = isOpen ()
         do! press page (runLine run)
-        let! _ =
-            await (
-                page.WaitForFunctionAsync (
-                    "([selector, was]) => document.querySelector(selector).open !== was",
-                    box [| box details; box was |]))
+        do! Wait.until "the fold to have turned" isOpen ((<>) was)
         do! twoFrames page
     }
 
@@ -2679,12 +2567,10 @@ let private pressRunBy (press: IPage -> string -> Async<unit>) (page: IPage) (ru
 /// line, and so moves the very place a case is measuring.
 let private clickWhereItIs (page: IPage) (selector: string) : Async<unit> =
     async {
-        let! at =
-            await (
-                page.EvaluateAsync<float[]> (
-                    "selector => { const r = document.querySelector(selector).getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2] }",
-                    box selector))
-        do! awaitU (page.Mouse.ClickAsync (float32 at.[0], float32 at.[1]))
+        match! Probe.boxes page [ selector ] with
+        | [ Some r ] ->
+            do! awaitU (page.Mouse.ClickAsync (float32 (r.Left + Yession.App.Probes.Box.width r / 2.0), float32 (r.Top + Yession.App.Probes.Box.height r / 2.0)))
+        | _ -> return failwithf "nothing at %s to press" selector
     }
 
 /// A fold pressed with a pointer, where it is on screen.
@@ -2703,19 +2589,26 @@ let private enterRun =
 /// reader one who is not following it.
 let private scrollToTop (page: IPage) (selector: string) : Async<unit> =
     async {
-        do! awaitU (
-                page.EvaluateAsync (
-                    """([surface, target]) => {
-                         const el = document.querySelector(surface)
-                         el.scrollTop += document.querySelector(target).getBoundingClientRect().top - el.getBoundingClientRect().top - 120
-                       }""",
-                    box [| tailSurface "blocks:term-harness"; selector |]))
+        let surface = tailSurface "blocks:term-harness"
+        let! scroll = Probe.scroll page surface
+        match scroll with
+        | None -> return failwith "the history is not there to scroll"
+        | Some scroll ->
+            match! Probe.boxes page [ surface; selector ] with
+            | [ Some el; Some target ] ->
+                let! _ = Probe.scrollTo page surface (scroll.Top + target.Top - el.Top - 120.0)
+                ()
+            | measured -> return failwithf "the history and %s were not both there: %A" selector measured
         do! twoFrames page
     }
 
 /// Where something stands on screen: the top of its box.
 let private topOf (page: IPage) (selector: string) : Async<float> =
-    await (page.EvaluateAsync<float> ("selector => document.querySelector(selector).getBoundingClientRect().top", box selector))
+    async {
+        match! Probe.boxes page [ selector ] with
+        | [ Some r ] -> return r.Top
+        | _ -> return failwithf "nothing at %s to measure" selector
+    }
 
 let editorTests =
     testList "Editor rendering (browser)" [
@@ -3465,7 +3358,7 @@ let editorTests =
         editorCase "a newly selected tab is scrolled into view" <| fun page ->
             async {
                 do! openManyTerminals page
-                let! overflows = await (page.EvaluateAsync<bool> stripOverflows)
+                let! overflows = stripOverflows page
                 Expect.isTrue overflows "the strip holds more tabs than it shows, or this proves nothing"
                 // Chosen by the DOM's own click rather than Playwright's, which scrolls what it
                 // clicks into view first and would prove nothing about the strip.
@@ -3474,9 +3367,7 @@ let editorTests =
                         "document.querySelector('#shell [data-pane-strip] [role=tab]:last-child')?.getAttribute('aria-selected') === 'true'"
                 // A frame for the reveal, which runs after the render.
                 do! twoFrames page
-                let! inView =
-                    await (page.EvaluateAsync<bool>
-                        (insideStrip "document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=true]')"))
+                let! inView = selectedTabInsideStrip page
                 Expect.isTrue inView "the selected tab lies inside the strip's box"
             }
 
@@ -3489,7 +3380,7 @@ let editorTests =
         editorCase "keyboard focus never rests past the strip's edge or under its fade" <| fun page ->
             async {
                 do! openManyTerminals page
-                let! overflows = await (page.EvaluateAsync<bool> stripOverflows)
+                let! overflows = stripOverflows page
                 Expect.isTrue overflows "the strip holds more tabs than it shows, or this proves nothing"
                 let! count = await (page.EvaluateAsync<int> "() => document.querySelectorAll('#shell [data-pane-strip] [role=tab]').length")
                 do! awaitU (page.FocusAsync "#shell [data-pane-strip] [role=tab][aria-selected=true]")
@@ -3727,9 +3618,7 @@ let editorTests =
                             (sprintf "document.querySelector('#shell [data-pane-strip] [role=tab]:%s')?.getAttribute('aria-selected') === 'true'" which)
                     // A frame for the reveal, which runs after the render.
                     do! awaitU (page.EvaluateAsync "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
-                    let! inView =
-                        await (page.EvaluateAsync<bool>
-                            (insideStrip "document.querySelector('#shell [data-pane-strip] [role=tab][aria-selected=true]')"))
+                    let! inView = selectedTabInsideStrip page
                     if not inView then faults.Add which
                 Expect.isEmpty faults (sprintf "chosen and not shown whole: %s" (String.Join (", ", faults)))
             }
@@ -3872,7 +3761,7 @@ let editorTests =
                                  document.getAnimations()
                                    .filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
                                    .map(a => a.finished.catch(() => null)))""")
-                let! overflows = await (page.EvaluateAsync<bool> stripOverflows)
+                let! overflows = stripOverflows page
                 Expect.isTrue overflows "the strip holds more tabs than it shows, or this proves nothing"
                 let! whole =
                     await (page.EvaluateAsync<string>
@@ -5672,7 +5561,7 @@ let editorTests =
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-id]")
                 let! spare =
-                    await (page.EvaluateAsync<float> groundSpare)
+                    groundSpare page
                 Expect.isTrue
                     (abs spare < 1.0)
                     (sprintf "the ground stops %fpx short of the screen" spare)
@@ -5684,7 +5573,7 @@ let editorTests =
         editorCaseIn 1440 900 "a message's ground stops at the reading column, not the window" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-id]")
-                let! spare = await (page.EvaluateAsync<float> groundSpare)
+                let! spare = groundSpare page
                 Expect.isTrue
                     (spare > 100.0)
                     (sprintf "the ground runs to within %fpx of a 1440px window" spare)
@@ -5700,7 +5589,7 @@ let editorTests =
                 do! Harness.run page HarnessPage.agentTurn
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-interrupt-turn]")
                 do! scrolledAwayFromLatest page
-                let! over = await (page.EvaluateAsync<string> controlsOverConversation)
+                let! over = controlsOverConversation page
                 Expect.equal over "" "both controls are on screen and neither lies over the conversation"
             }
         // The tray takes its own height when a turn starts, and the conversation's box gives
@@ -5714,7 +5603,7 @@ let editorTests =
                 do! Harness.run page HarnessPage.agentTurn
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-interrupt-turn]")
                 do! twoFrames page
-                let! there = await (page.EvaluateAsync<bool> (atItsEnd "chat"))
+                let! there = atItsEnd page "chat"
                 Expect.isTrue there "the reader is still at the end of the conversation"
             }
         // The surfaces read from their end, one list so `--only "read from their end"` runs them.
@@ -5731,7 +5620,7 @@ let editorTests =
                     do! Harness.run5 page HarnessPage.snapshot "term-harness" 50 (numberedLines "old" 300 + "\r\nprompt-mark$ ") None None
                     do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
                     let! shown = newestShown page "screen:term-harness" "prompt-mark"
-                    Expect.stringContains shown shownFully "the prompt is on screen as the keyboard arrives"
+                    Expect.isTrue (shownFully shown) (sprintf "the prompt is on screen as the keyboard arrives: %A" shown)
                 }
             // A reader at the end of the conversation sees what is said next. The rule used to move
             // them only once the end was more than 200px away, so a message shorter than that
@@ -5743,7 +5632,7 @@ let editorTests =
                     do! toTheEnd page "chat"
                     do! messageLands page 200L "tail-mark-chat, which has just been said"
                     let! shown = newestShown page "chat" "tail-mark-chat"
-                    Expect.stringContains shown shownFully "the newest message is wholly on screen"
+                    Expect.isTrue (shownFully shown) (sprintf "the newest message is wholly on screen: %A" shown)
                 }
             // The same promise over a terminal's blocks, where what arrives is output.
             editorCaseIn 1440 900 "a reader at the end of a terminal's blocks sees the output that arrives next" <| fun page ->
@@ -5767,7 +5656,7 @@ let editorTests =
                                   Yession.Domain.Terminals.TerminalBlockStarted.Description = None } ]
                     do! Harness.run4 page HarnessPage.record "term-harness" 3 "o" "tail-mark-blocks\r\n"
                     let! shown = newestShown page "blocks:term-harness" "tail-mark-blocks"
-                    Expect.stringContains shown shownFully "the newest line of output is wholly on screen"
+                    Expect.isTrue (shownFully shown) (sprintf "the newest line of output is wholly on screen: %A" shown)
                 }
             // And over the live screen: a program printing below the cursor scrolls the screen, and
             // a reader at its end goes with it.
@@ -5780,7 +5669,7 @@ let editorTests =
                     do! toTheEnd page "screen:term-harness"
                     do! Harness.run4 page HarnessPage.record "term-harness" 51 "o" "one\r\ntwo\r\ntail-mark-screen\r\n"
                     let! shown = newestShown page "screen:term-harness" "tail-mark-screen"
-                    Expect.stringContains shown shownFully "the newest line on the screen is wholly on screen"
+                    Expect.isTrue (shownFully shown) (sprintf "the newest line on the screen is wholly on screen: %A" shown)
                 }
             // The other half: a reader who scrolled back to read is LEFT there. What arrives while
             // they read is what the way back is for, not a reason to take them away from the line
@@ -5806,7 +5695,7 @@ let editorTests =
                     do! awaitU (page.EvaluateAsync "() => { document.querySelector(\"#shell [data-tail='chat']\").scrollTop -= 120 }")
                     do! twoFrames page
                     do! twoFrames page
-                    let! offered = await (page.EvaluateAsync<bool> (jumpOffered "chat"))
+                    let! offered = jumpOffered page "chat"
                     Expect.isFalse offered "no way back while the end is a few lines away"
                 }
             // …and is told there is more below, over a terminal as over the chat. Output a reader
@@ -5817,7 +5706,7 @@ let editorTests =
                     do! blocksFilled page
                     do! toTheEnd page "blocks:term-harness"
                     do! toTheStart page "blocks:term-harness"
-                    do! waitFor "the way to the latest output to be on screen" page (jumpOffered "blocks:term-harness")
+                    do! Wait.until "the way to the latest output to be on screen" (fun () -> jumpOffered page "blocks:term-harness") id
                 }
             // Pressing the way back lands at the end, and the keyboard lands with it. The press takes
             // its own control away — a reader at the end has nowhere to jump to — and it used to
@@ -5827,10 +5716,10 @@ let editorTests =
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
                     do! toTheEnd page "chat"
                     do! toTheStart page "chat"
-                    do! waitFor "the way to the latest message to be on screen" page (jumpOffered "chat")
+                    do! Wait.until "the way to the latest message to be on screen" (fun () -> jumpOffered page "chat") id
                     do! awaitU (page.FocusAsync "#shell [data-jump-to-latest='chat'] button")
                     do! awaitU (page.Keyboard.PressAsync "Enter")
-                    do! waitFor "the conversation to reach its end" page (atItsEnd "chat")
+                    do! Wait.until "the conversation to reach its end" (fun () -> atItsEnd page "chat") id
                     let! focused = await (page.EvaluateAsync<string> "() => document.activeElement?.getAttribute('data-tail') ?? document.activeElement?.tagName ?? 'nothing'")
                     Expect.equal focused "chat" "the keyboard is on the conversation it was taken to"
                 }
@@ -5842,10 +5731,10 @@ let editorTests =
                     do! blocksFilled page
                     do! toTheEnd page "blocks:term-harness"
                     do! toTheStart page "blocks:term-harness"
-                    do! waitFor "the way to the latest output to be on screen" page (jumpOffered "blocks:term-harness")
+                    do! Wait.until "the way to the latest output to be on screen" (fun () -> jumpOffered page "blocks:term-harness") id
                     do! awaitU (page.FocusAsync "#shell [data-jump-to-latest='blocks:term-harness'] button")
                     do! awaitU (page.Keyboard.PressAsync "Enter")
-                    do! waitFor "the blocks to reach their end" page (atItsEnd "blocks:term-harness")
+                    do! Wait.until "the blocks to reach their end" (fun () -> atItsEnd page "blocks:term-harness") id
                     let! inPane =
                         await (page.EvaluateAsync<bool> "() => !!document.activeElement?.closest('#shell [data-content-panel]') && !document.activeElement.closest('[data-jump-to-latest]')")
                     Expect.isTrue inPane "the keyboard is in the pane, on what holds the blocks it was taken to"
@@ -6376,10 +6265,9 @@ let editorTests =
                 // It lands a moment ago: the screen as it stood there, shown before anyone
                 // presses play — not a blank player parked at 0:00, and not the pinned end, which
                 // has nothing after it to play.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector("#shell [data-pane-replay='terminal:term-live']")?.textContent.includes('earlier output') === true""")
-                let! landed = await (page.EvaluateAsync<string> rewoundText)
+                do! waitTextIn "the rewound screen to land" page rewoundMount "earlier output"
+                let! drawn = Read.text page rewoundMount
+                let landed = drawn |> Option.defaultWith (fun () -> failwith "the rewound player went as it was read")
                 Expect.stringContains landed "line 3" "the screen as it stood at the landing"
                 Expect.isFalse (landed.Contains "line 7") "which is short of the pin: there is something left to play"
 
@@ -7362,7 +7250,7 @@ let editorTests =
         editorCase "with more tabs than the pivot shows, all stays on screen and lists the hidden ones" <| fun page ->
             async {
                 do! openManyTerminals page
-                let! overflows = await (page.EvaluateAsync<bool> stripOverflows)
+                let! overflows = stripOverflows page
                 Expect.isTrue overflows "the pivot holds more tabs than it shows, or this proves nothing"
                 let! hidden =
                     await (page.EvaluateAsync<string> """() => {
