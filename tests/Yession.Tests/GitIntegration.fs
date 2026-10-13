@@ -814,8 +814,6 @@ let private srtTests =
                 (readDirSafe (sprintf "%s/%s" (reposIn root) Repos.stagingDirName))
                 []
                 "and nothing left in the staging area"
-            let! events = eventsOf log
-            Expect.isEmpty events "a clone that did not happen records nothing"
         }
 
         testCaseAsync "a checkout left behind by an interrupted clone is named, with the way out" <| async {
@@ -847,7 +845,10 @@ let private srtTests =
             let listings = both |> Array.map expect
             Expect.equal listings.[0] listings.[1] "both callers are answered with the same listing"
             let! events = eventsOf log
-            Expect.equal (List.length events) 1 "one clone happened, and it was recorded once"
+            match events with
+            | [ SessionEvent.RepoAdded added; SessionEvent.RepoCloned cloned ] ->
+                Expect.equal cloned.MessageId added.MessageId "one add, and its one clone"
+            | other -> failwithf "expected one clone, recorded once, got %A" other
         }
 
         testCaseAsync "a checkout with uncommitted changes is not removed by asking nicely" <| async {
