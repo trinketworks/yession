@@ -30,6 +30,11 @@ module PageGlobal =
     /// that many parameters and a curried F# function of that type is not.
     let named<'T> (name: string) : PageGlobal<'T> = PageGlobal name
 
+    /// The name it is published under — for a reader outside the page (a Playwright
+    /// `evaluate`) that has to say which property it means, and is told by the same key the
+    /// page published with rather than by a second spelling of it.
+    let name (PageGlobal name: PageGlobal<'T>) : string = name
+
     [<Emit("globalThis[$0]")>]
     let private lookup<'T> (name: string) : 'T option = jsNative
 

@@ -34,6 +34,9 @@ open Yession.App.Codecs
 open Yession.App.Collab
 open Yession.Tests.BrowserWait
 open Yession.Tests.BrowserProbe
+open Yession.Tests.BrowserHarness
+
+module HarnessPage = Yession.App.HarnessPage
 
 /// The URL out of a "launched at http://127.0.0.1:PORT/ …" line. Same shape the packaged
 /// composition test uses to learn both endpoints from stdout.
@@ -2007,7 +2010,7 @@ let private foldBody (events: (int64 * Yession.Domain.SessionEvent) list) : stri
 /// Events folded into the harness as one page, as the session would send them
 /// (`window.__fold`), at the offsets given.
 let private foldHarness (page: IPage) (events: (int64 * Yession.Domain.SessionEvent) list) : Async<unit> =
-    async { do! awaitU (page.EvaluateAsync ("body => window.__fold(body)", box (foldBody events))) }
+    Harness.run1 page HarnessPage.fold (foldBody events)
 
 let private harnessTerminal (id: string) : Yession.Domain.TerminalId =
     Yession.Domain.TerminalId.create id |> Result.defaultWith failwith
@@ -2127,7 +2130,7 @@ let private editorCaseOnTouch (width: int) (height: int) =
 let private signInButtonHoldsStill (width: int) (height: int) =
     editorCaseIn width height (sprintf "opening a sign-in prompt's reason does not move its button at %dpx" width) <| fun page ->
         async {
-            do! awaitU (page.EvaluateAsync "() => window.__signInLost()")
+            do! Harness.run page HarnessPage.signInLost
             let! _ = await (page.WaitForSelectorAsync "#shell [data-signin-required] [data-signin-again]")
             // Settled first: the side panes slide into place as the shell lays out, and the
             // column between them — the prompt's width — is still changing until they land.
@@ -2537,14 +2540,15 @@ let private paneOnBlocks (page: IPage) : Async<unit> =
                 """(() => document.querySelector('#shell [data-content-panel]').getAnimations().length === 0)()"""
     }
 
+/// `<prefix> 1` to `<prefix> n`, one to a line.
+let private numberedLines (prefix: string) (count: int) : string =
+    [ for i in 1 .. count -> sprintf "%s %d" prefix i ] |> String.concat "\r\n"
+
 /// The harness terminal's blocks made taller than their box: a running command's three hundred
 /// lines, and every fold in the history open, so the lines are on the page to be scrolled past.
 let private blocksFilled (page: IPage) : Async<unit> =
     async {
-        do! awaitU (
-                page.EvaluateAsync
-                    """() => window.__record('term-harness', 2, 'o',
-                               Array.from({ length: 300 }, (_, i) => 'line ' + (i + 1)).join('\r\n') + '\r\n')""")
+        do! Harness.run4 page HarnessPage.record "term-harness" 2 "o" (numberedLines "line" 300 + "\r\n")
         do! awaitU (
                 page.EvaluateAsync
                     """() => document.querySelectorAll("#shell [data-tail='blocks:term-harness'] details").forEach(d => { d.open = true })""")
@@ -2761,7 +2765,7 @@ let editorTests =
                 let! _ = await (page.WaitForFunctionAsync "!!document.querySelector('.ProseMirror ul li')")
 
                 // The document serializes back to Markdown (the durable form the drain snapshots).
-                let! md = await (page.EvaluateAsync<string> "() => window.__md()")
+                let! md = Harness.ask page HarnessPage.md
                 Expect.stringContains md "# Heading one" "heading serialized to markdown"
                 Expect.stringContains md "**bold**" "bold serialized to markdown"
                 Expect.stringContains md "* item one" "bullet serialized to markdown"
@@ -2776,7 +2780,7 @@ let editorTests =
                 do! awaitU (page.Keyboard.TypeAsync "thanks @sw")
                 let! _ = await (page.WaitForSelectorAsync "[data-address-hint]")
                 do! awaitU (page.Keyboard.PressAsync "Tab")
-                let! md = await (page.EvaluateAsync<string> "() => window.__md()")
+                let! md = Harness.ask page HarnessPage.md
                 Expect.equal (md.TrimEnd ()) "thanks @swift-heron" "the hinted name was taken"
             }
 
@@ -2788,7 +2792,7 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "[data-address-hint]")
                 do! awaitU (page.Keyboard.PressAsync "Tab")
                 do! awaitU (page.Keyboard.PressAsync "Tab")
-                let! md = await (page.EvaluateAsync<string> "() => window.__md()")
+                let! md = Harness.ask page HarnessPage.md
                 Expect.equal (md.TrimEnd ()) "@swift-heron" "the second press moved past the agent"
             }
 
@@ -2800,7 +2804,7 @@ let editorTests =
                 do! awaitU (page.Keyboard.TypeAsync "@ag")
                 let! _ = await (page.WaitForSelectorAsync "[data-address-hint]")
                 do! awaitU (page.Keyboard.PressAsync "ArrowRight")
-                let! md = await (page.EvaluateAsync<string> "() => window.__md()")
+                let! md = Harness.ask page HarnessPage.md
                 Expect.equal (md.TrimEnd ()) "@agent" "the arrow took the hint"
             }
 
@@ -2833,10 +2837,10 @@ let editorTests =
                 let! _ =
                     await (page.WaitForFunctionAsync
                         "document.querySelectorAll('#host .ProseMirror > p').length === 2")
-                let! afterEnter = await (page.EvaluateAsync<string> "() => window.__md()")
+                let! afterEnter = Harness.ask page HarnessPage.md
                 Expect.stringContains afterEnter "first line" "the first block survived"
                 Expect.stringContains afterEnter "second block" "Enter opened a second block"
-                let! sendsAfterEnter = await (page.EvaluateAsync<int> "() => window.__sends")
+                let! sendsAfterEnter = Harness.held page HarnessPage.sends
                 Expect.equal sendsAfterEnter 0 "plain Enter did not send"
 
                 // Shift+Enter breaks the LINE: a <br> inside the block it was already in, so
@@ -2849,7 +2853,7 @@ let editorTests =
                 let! _ =
                     await (page.WaitForFunctionAsync
                         "document.querySelectorAll('#host .ProseMirror > p').length === 2")
-                let! broken = await (page.EvaluateAsync<string> "() => window.__md()")
+                let! broken = Harness.ask page HarnessPage.md
                 Expect.stringContains broken "second block" "the text before the break survived"
                 Expect.stringContains broken "same paragraph" "and the text after it"
 
@@ -2858,8 +2862,8 @@ let editorTests =
                 // also touched the text would look right in a screenshot and corrupt the
                 // draft every time it fired.
                 do! awaitU (page.Keyboard.PressAsync "ControlOrMeta+Enter")
-                let! _ = await (page.WaitForFunctionAsync "window.__sends === 1")
-                let! afterSend = await (page.EvaluateAsync<string> "() => window.__md()")
+                do! Wait.until "the send to have fired once" (fun () -> Harness.read page HarnessPage.sends) ((=) (Some 1))
+                let! afterSend = Harness.ask page HarnessPage.md
                 Expect.equal afterSend broken "Ctrl+Enter sent without touching the document"
             }
 
@@ -2905,7 +2909,7 @@ let editorTests =
                 // Replay that selection as a REMOTE peer's cursor. The decorations are built from
                 // its relative positions: a caret widget + name label at `head`, and a translucent
                 // highlight across the (non-empty) range.
-                do! awaitU (page.EvaluateAsync "() => window.__pushRemote('remote-peer')")
+                do! Harness.run1 page HarnessPage.pushRemote "remote-peer"
                 let! _ = await (page.WaitForFunctionAsync "!!document.querySelector('.ProseMirror .pm-caret')")
                 let! _ =
                     await (page.WaitForFunctionAsync
@@ -2935,7 +2939,7 @@ let editorTests =
                 // flight WHILE the content arrives, which is the only arrangement in which it
                 // can race anything. Started before a single keystroke so no frame of the
                 // convergence happens un-stormed.
-                do! awaitU (page.EvaluateAsync "() => window.__caretStorm(true)")
+                do! Harness.run1 page HarnessPage.caretStorm true
 
                 // Anti-vacuity, first half: the storm is really running before a key is
                 // pressed, so the convergence below happens under one rather than beside it.
@@ -2948,8 +2952,8 @@ let editorTests =
                 // A wait makes the same claim about the code and none about the box: a page
                 // the browser never paints times out here saying which, and a storm that
                 // never dispatches never arrives.
-                do! waitFor "the caret storm to push frames at all" page "window.__caretPushes >= 5"
-                let! stormedBefore = await (page.EvaluateAsync<int> "() => window.__caretPushes")
+                do! Wait.until "the caret storm to push frames at all" (fun () -> Harness.read page HarnessPage.caretPushes) (Option.exists (fun n -> n >= 5))
+                let! stormedBefore = Harness.held page HarnessPage.caretPushes
 
                 // A types into its own composer. Real key events, so every keystroke is its own
                 // doc update and its own relay — the drip a collaborator actually produces,
@@ -2968,7 +2972,7 @@ let editorTests =
                             page
                             (sprintf "%s === 'Heading one'" (ownText "#peer-b .ProseMirror h1"))
                 with e ->
-                    let! state = await (page.EvaluateAsync<string> "() => window.__convState()")
+                    let! state = Harness.ask page HarnessPage.convState
                     return failwithf "%s\n  state: %s" e.Message state
 
                 // ...and the caret really is drawn there, so this is a test of a caret over
@@ -2980,12 +2984,12 @@ let editorTests =
                 // landing DURING the convergence are what raced it — waited for with the storm
                 // still on, so the first one settles it, rather than counted against a window
                 // that was only ever a guess at how fast this machine is.
-                do! waitFor
+                do! Wait.until
                         "the caret storm to push a frame while the content was arriving"
-                        page
-                        (sprintf "window.__caretPushes > %d" stormedBefore)
+                        (fun () -> Harness.read page HarnessPage.caretPushes)
+                        (Option.exists (fun n -> n > stormedBefore))
 
-                do! awaitU (page.EvaluateAsync "() => window.__caretStorm(false)")
+                do! Harness.run1 page HarnessPage.caretStorm false
             }
 
         // The other half of the same story, and the one the whole `pushPresences` debate turned
@@ -3003,13 +3007,13 @@ let editorTests =
         editorCase "drawing a remote caret writes nothing to the shared document" <| fun page ->
             async {
                 do! waitFor "both peers to mount" page "!!document.querySelector('#peer-a .ProseMirror') && !!document.querySelector('#peer-b .ProseMirror')"
-                do! awaitU (page.EvaluateAsync "() => window.__caretStorm(true)")
+                do! Harness.run1 page HarnessPage.caretStorm true
                 // The storm is dispatching before anything is typed, and keeps dispatching
                 // while the words arrive — both waited for rather than counted at the end, for
                 // the reason the case above gives: a push is one animation frame, so a count
                 // inside a fixed window is a measurement of the machine.
-                do! waitFor "the caret storm to push frames at all" page "window.__caretPushes >= 5"
-                let! stormedBefore = await (page.EvaluateAsync<int> "() => window.__caretPushes")
+                do! Wait.until "the caret storm to push frames at all" (fun () -> Harness.read page HarnessPage.caretPushes) (Option.exists (fun n -> n >= 5))
+                let! stormedBefore = Harness.held page HarnessPage.caretPushes
                 do! awaitU (page.ClickAsync "#peer-a .ProseMirror")
                 do! awaitU (page.Keyboard.TypeAsync "# Heading one")
                 // Over CONTENT: an empty document is the case y-prosemirror short-circuits
@@ -3018,19 +3022,19 @@ let editorTests =
                         "the co-editor to render the author's remote content"
                         page
                         (sprintf "%s === 'Heading one'" (ownText "#peer-b .ProseMirror h1"))
-                do! waitFor
+                do! Wait.until
                         "the caret storm to push a frame while the content was arriving"
-                        page
-                        (sprintf "window.__caretPushes > %d" stormedBefore)
-                do! awaitU (page.EvaluateAsync "() => window.__caretStorm(false)")
+                        (fun () -> Harness.read page HarnessPage.caretPushes)
+                        (Option.exists (fun n -> n > stormedBefore))
+                do! Harness.run1 page HarnessPage.caretStorm false
 
-                let! pushes = await (page.EvaluateAsync<int> "() => window.__caretPushes")
+                let! pushes = Harness.held page HarnessPage.caretPushes
                 // The doc really moved under the storm — otherwise a write-back count of zero
                 // says the observer was never wired, not that nothing was written.
-                let! updates = await (page.EvaluateAsync<int> "() => window.__docUpdates")
+                let! updates = Harness.held page HarnessPage.docUpdates
                 if updates < 1 then
                     failwith "the co-editor's doc took no updates at all, so a zero write-back count means the counter is broken, not that a caret is harmless"
-                let! writebacks = await (page.EvaluateAsync<int> "() => window.__writebacks")
+                let! writebacks = Harness.held page HarnessPage.writebacks
                 Expect.equal
                     writebacks
                     0
@@ -3153,7 +3157,7 @@ let editorTests =
         // ran off both sides of a phone and named nothing that was left on it.
         editorCaseOnTouch 390 844 "every chapter's label names its command and stays on a phone's screen" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__chapters()")
+                do! Harness.run page HarnessPage.chapters
                 do! waitFor "the three chapters on the bar" page
                         "document.querySelectorAll('#replay-chapters .ap-marker-container').length === 3"
                 do! awaitU (page.EvaluateAsync "() => document.querySelector('#replay-chapters').scrollIntoView()")
@@ -3173,7 +3177,7 @@ let editorTests =
 
         editorCaseOnTouch 390 844 "pressing a chapter's mark moves the replay to that command" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__chapters()")
+                do! Harness.run page HarnessPage.chapters
                 do! waitFor "the three chapters on the bar" page
                         "document.querySelectorAll('#replay-chapters .ap-marker-container').length === 3"
                 do! awaitU (page.EvaluateAsync "() => document.querySelector('#replay-chapters').scrollIntoView()")
@@ -3197,7 +3201,7 @@ let editorTests =
 
         editorCase "the keyboard moves a replay from chapter to chapter" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__chapters()")
+                do! Harness.run page HarnessPage.chapters
                 do! waitFor "the three chapters on the bar" page
                         "document.querySelectorAll('#replay-chapters .ap-marker-container').length === 3"
                 // The terminal's text is what Tab reaches in a player; its keys are the player's.
@@ -3216,7 +3220,7 @@ let editorTests =
         // image, so a font or a mark redrawn does not move it.
         editorCase "a reference's name sits on the line's baseline" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-entity]")
                 let! drift =
                     await (page.EvaluateAsync<float> """() => {
@@ -3250,7 +3254,7 @@ let editorTests =
         editorCase "a running act's mark spans its title's letters, in the gutter" <| fun page ->
             async {
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
-                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-status=\"running\"] [data-act-running]")
                 let! misplaced =
                     await (page.EvaluateAsync<string> """() => {
@@ -3292,7 +3296,7 @@ let editorTests =
         // mark; the head stood half a pixel left of its stem before.
         editorCase "every cause's head paints centred on its line" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-cause-ref] svg")
                 let! off =
                     await (page.EvaluateAsync<string> """() => {
@@ -3332,7 +3336,7 @@ let editorTests =
         editorCase "a running act's mark paints centred on its cause's line" <| fun page ->
             async {
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
-                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-status=\"running\"] [data-cause-ref]")
                 let! off =
                     await (page.EvaluateAsync<string> """() => {
@@ -3366,7 +3370,7 @@ let editorTests =
         // centre, never as coordinates, so a wider gutter or a taller line does not move it.
         editorCase "every fold's arrow is on its own title's line, and all of them on one rail" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
                 let! off =
                     await (page.EvaluateAsync<float[]> """() => {
@@ -3397,7 +3401,7 @@ let editorTests =
         // of a nested row's — on phones only. A rail is a rail at every width.
         editorCaseIn 390 844 "and on a phone, where a bled row could spend its bleed on the gutter" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
                 let! off =
                     await (page.EvaluateAsync<float[]> """() => {
@@ -3429,7 +3433,7 @@ let editorTests =
         // each fold sits under, by centre, so a larger avatar or a wider gutter keeps it true.
         editorCase "every fold's arrow stands on its author's avatar column" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
                 let! off =
                     await (page.EvaluateAsync<float[]> """() => {
@@ -3451,7 +3455,7 @@ let editorTests =
         // fold MOVES: the settled state is the promise, the motion is the design.
         editorCase "unfolding an act shows its particulars, and folding hides them" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
                 let visibility = "getComputedStyle(document.querySelector('#shell [data-act-note] [data-fold-body]')).visibility"
                 do! waitFor "the particulars to start hidden" page (visibility + " === 'hidden'")
@@ -3470,7 +3474,7 @@ let editorTests =
         // `[data-fold]`, to prove the row itself is the control rather than the arrow alone.
         editorCase "tapping the row, not only the arrow, unfolds it and folds it back" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__acts()")
+                do! Harness.run page HarnessPage.acts
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
                 let visibility = "getComputedStyle(document.querySelector('#shell [data-act-note] [data-fold-body]')).visibility"
                 do! waitFor "the particulars to start hidden" page (visibility + " === 'hidden'")
@@ -3946,7 +3950,7 @@ let editorTests =
         // clipped off the screen, is not one.
         editorCaseOnTouch 390 844 "on a phone the pane brought up by a fresh viewer lands on the session's open terminals" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__freshViewer()")
+                do! Harness.run page HarnessPage.freshViewer
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! waitFor "the pane to cover the phone's screen" page
                         """(() => {
@@ -4301,7 +4305,7 @@ let editorTests =
 
                     // The same session before it began, with a row held — so the branch line
                     // inside a row is on screen as well as the lines outside them.
-                    do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
+                    do! Harness.run1 page HarnessPage.launch true
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate]")
                     do! awaitU (page.ClickAsync "#shell [data-repo-picker] [data-repo-candidate]")
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate-branch]")
@@ -4356,7 +4360,7 @@ let editorTests =
             editorCaseIn width height
                 (sprintf "at %dpx every item in the conversation can be scrolled clear of the launch card" width) <| fun page ->
                 async {
-                    do! awaitU (page.EvaluateAsync "() => window.__launchOver()")
+                    do! Harness.run page HarnessPage.launchOver
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
                     // The card RISES in (`animate-ask-rise`), growing its height over ~240ms, and
                     // while it does the chat's room is still changing underfoot — an item
@@ -4433,7 +4437,7 @@ let editorTests =
                              return [Math.round(card.height), Math.round(start.top)]
                            }"""
                     // The instant before the repositories land: the card is up, still looking.
-                    do! awaitU (page.EvaluateAsync "() => window.__launchLooking()")
+                    do! Harness.run page HarnessPage.launchLooking
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
                     let! looking = await (page.EvaluateAsync<int[]> shape)
                     // Ground truth that this IS the looking state and not the loaded one already:
@@ -4441,7 +4445,7 @@ let editorTests =
                     let! rows = await (page.EvaluateAsync<int> "() => document.querySelectorAll('#shell [data-repo-picker] [data-repo-candidate]').length")
                     Expect.equal rows 0 "the looking state has no repositories in it yet"
                     // The repositories arrive.
-                    do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
+                    do! Harness.run1 page HarnessPage.launch true
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate]")
                     let! loaded = await (page.EvaluateAsync<int[]> shape)
                     Expect.equal loaded looking
@@ -4454,7 +4458,7 @@ let editorTests =
         // and a pointer alike. Measured as the BOX a press lands on, not the glyph in it.
         editorCaseIn 390 844 "on a phone the launch card's way out is a 44px target with a name" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
+                do! Harness.run1 page HarnessPage.launch true
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker-dismiss]")
                 let! size =
                     await (page.EvaluateAsync<int[]>
@@ -4480,7 +4484,7 @@ let editorTests =
         // whatever it chooses is owed to both sides.
         editorCaseIn 390 844 "the start button is centred in the card, not shoved along the reading rail" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
+                do! Harness.run1 page HarnessPage.launch true
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
                 let! margins =
                     await (page.EvaluateAsync<int[]>
@@ -4510,7 +4514,7 @@ let editorTests =
         // are the design.
         editorCaseIn 390 844 "the branch pane is off to the right until it is asked for, and out of reach until then" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
+                do! Harness.run1 page HarnessPage.launch true
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate]")
                 // Holding a row is what puts a branch on it to go and change.
                 do! awaitU (page.ClickAsync "#shell [data-repo-picker] [data-repo-candidate]")
@@ -4554,7 +4558,7 @@ let editorTests =
         // Lit drew, which is three things a rendered string does not have.
         editorCaseIn 390 844 "the listing pages as the reader reaches its foot, without a press" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__launch(true)")
+                do! Harness.run1 page HarnessPage.launch true
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate]")
 
                 // Ground truth, both halves: the foot is below the card, and the page it
@@ -4796,7 +4800,7 @@ let editorTests =
                 // being proven is the FOLD — "earlier output" exists only in the transcript
                 // records, never in the screen the model was built with — so a client that
                 // rendered the snapshot and folded nothing would fail here.
-                do! awaitU (page.EvaluateAsync ("() => window.__snapshot('term-live', 0, 'session start\\r\\n')"))
+                do! Harness.run5 page HarnessPage.snapshot "term-live" 0 "session start\r\n" None None
                 let! _ =
                     await (page.WaitForFunctionAsync
                         (sprintf "document.querySelector(%s).textContent.includes('earlier output')" "\"#shell [data-terminal-screen='term-live']\""))
@@ -4806,8 +4810,8 @@ let editorTests =
                 do! awaitU (page.Keyboard.PressAsync "Control+c")
                 do! awaitU (page.Keyboard.PressAsync "Backspace")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                let! typed = await (page.EvaluateAsync<string> "() => window.__typed || ''")
-                Expect.equal typed "ls\u001b[A\u0003\u007f\r" "printable, escape, control code, delete, carriage return"
+                let! typed = Harness.read page HarnessPage.typed
+                Expect.equal typed (Some "ls\u001b[A\u0003\u007f\r") "printable, escape, control code, delete, carriage return"
 
                 // Tab is SENT rather than moving focus out of the terminal mid-session, and
                 // the shift is that `preventDefault` fires for everything the terminal takes.
@@ -4837,8 +4841,8 @@ let editorTests =
                 // …and it is really the keyboard, not merely a focus ring: what is typed now
                 // reaches the pty rather than the composer that used to be there.
                 do! awaitU (page.Keyboard.PressAsync "ArrowUp")
-                let! typed = await (page.EvaluateAsync<string> "() => window.__typed || ''")
-                Expect.equal typed "\u001b[A" "a key pressed after the take reaches the terminal"
+                let! typed = Harness.read page HarnessPage.typed
+                Expect.equal typed (Some "\u001b[A") "a key pressed after the take reaches the terminal"
             }
         // The alt-screen flip, from where it is usually set off: `vim` typed into the command
         // line and run from it, the block takes the screen, and its author gets the keyboard.
@@ -4855,7 +4859,7 @@ let editorTests =
                     await (page.WaitForFunctionAsync
                         """document.activeElement?.getAttribute('data-terminal-input')?.startsWith('term-draft:term-harness:') === true""")
 
-                do! awaitU (page.EvaluateAsync "() => window.__take('term-harness')")
+                do! Harness.run1 page HarnessPage.take "term-harness"
                 do! waitFor
                         "the keyboard on the screen the lease landed on, not on the command line under it"
                         page
@@ -4879,7 +4883,7 @@ let editorTests =
                         """document.activeElement?.hasAttribute('data-term-resize') === true""")
 
                 // The lease arrives on its own, as the alt-screen flip delivers it.
-                do! awaitU (page.EvaluateAsync "() => window.__take('term-harness')")
+                do! Harness.run1 page HarnessPage.take "term-harness"
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-harness']")
                 let! kept =
                     await (page.EvaluateAsync<string> "() => document.activeElement?.outerHTML?.slice(0, 60) ?? 'NOTHING'")
@@ -4950,8 +4954,8 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-stolen='term-harness']")
                 do! awaitU (page.Keyboard.TypeAsync "pwd")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                let! typed = await (page.EvaluateAsync<string> "() => window.__typed || ''")
-                Expect.equal typed "" "nothing typed after the steal reached the pty"
+                let! typed = Harness.read page HarnessPage.typed
+                Expect.equal typed None "nothing typed after the steal reached the pty"
             }
         // The live screen's ring, on the focus every way into it gives: a script's, which is
         // not `:focus-visible`, so the ring the rest of the page wears painted nothing here.
@@ -4976,7 +4980,7 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-harness'] [data-terminal-keys]")
                 // A line typed, then the cursor moved four cells back along it.
-                do! awaitU (page.EvaluateAsync ("() => window.__snapshot('term-harness', 50, '$ echo hi\\u001b[4D', 80, 24)"))
+                do! Harness.run5 page HarnessPage.snapshot "term-harness" 50 "$ echo hi\u001b[4D" (Some 80) (Some 24)
                 do!
                     waitFor
                         "the caret on the o of echo"
@@ -5016,8 +5020,8 @@ let editorTests =
                 let! _ = await (page.WaitForFunctionAsync "document.activeElement?.getAttribute('data-terminal-keys') === 'term-live'")
                 do! awaitU (page.Keyboard.InsertTextAsync "bob")
                 do! awaitU (page.Keyboard.InsertTextAsync "\n")
-                let! typed = await (page.EvaluateAsync<string> "() => window.__typed || ''")
-                Expect.equal typed "bob\r" "the word once, and Return as a carriage return"
+                let! typed = Harness.read page HarnessPage.typed
+                Expect.equal typed (Some "bob\r") "the word once, and Return as a carriage return"
             }
         // The other half of putting the keyboard in a field on a press: a press that ENDS a
         // selection is somebody copying output, and focusing a text field would take the
@@ -5099,10 +5103,10 @@ let editorTests =
                 do! awaitU (page.Keyboard.PressAsync "Alt+Backspace")
                 do! awaitU (page.Keyboard.PressAsync "Control+Backspace")
                 do! awaitU (page.Keyboard.PressAsync "Shift+ArrowRight")
-                let! typed = await (page.EvaluateAsync<string> "() => window.__typed || ''")
+                let! typed = Harness.read page HarnessPage.typed
                 Expect.equal
                     typed
-                    "\u001b[1;5D\u001bb\u001b\u007f\b\u001b[1;2C"
+                    (Some "\u001b[1;5D\u001bb\u001b\u007f\b\u001b[1;2C")
                     "a word left, a word back, rub a word out twice, and a selection right"
             }
         // A screen is a paint at a GEOMETRY, and the client's emulator has to be the geometry
@@ -5175,8 +5179,8 @@ let editorTests =
 
                 // Seeded at a seq past everything the fixture's feed holds, so what ends up on
                 // this screen is only what this case put there.
-                do! awaitU (page.EvaluateAsync "() => window.__snapshot('term-live', 10, '', 40, 24)")
-                do! awaitU (page.EvaluateAsync "() => window.__record('term-live', 10, 'o', '\\u001b[500GX')")
+                do! Harness.run5 page HarnessPage.snapshot "term-live" 10 "" (Some 40) (Some 24)
+                do! Harness.run4 page HarnessPage.record "term-live" 10 "o" "\u001b[500GX"
                 // Waited for, then MEASURED. A wait that was also the assertion would fail as
                 // a timeout naming neither number, and this tier can only fail by a wait
                 // never settling.
@@ -5198,8 +5202,8 @@ let editorTests =
 
                 // A resize is a record like any other, and the emulator follows it — the pty
                 // was told the same thing at the same point in the same stream.
-                do! awaitU (page.EvaluateAsync "() => window.__record('term-live', 11, 'r', '100x24')")
-                do! awaitU (page.EvaluateAsync "() => window.__record('term-live', 12, 'o', '\\r\\n\\u001b[500GY')")
+                do! Harness.run4 page HarnessPage.record "term-live" 11 "r" "100x24"
+                do! Harness.run4 page HarnessPage.record "term-live" 12 "o" "\r\n\u001b[500GY"
                 let! atHundred = widthOfLineEndingIn "Y"
                 Expect.equal atHundred 100 "and of a 100-column one, after the resize"
             }
@@ -5215,18 +5219,17 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
 
                 // The size this client reported for the pane as it stands.
-                let reported () = page.EvaluateAsync<string> "() => window.__resized || ''"
-                let! _ = await (page.WaitForFunctionAsync "window.__resized")
-                let! before = await (reported ())
+                let reported () = Harness.read page HarnessPage.resized
+                do! Wait.until "the client to report a size" reported Option.isSome
+                let! before = reported ()
 
                 // Widen the column from the keyboard, which dispatches nothing at all: the
                 // splitter writes a CSS custom property on the shell root.
                 do! awaitU (page.FocusAsync "#shell [data-term-resize]")
                 for _ in 1 .. 12 do
                     do! awaitU (page.Keyboard.PressAsync "ArrowLeft")
-                let! _ =
-                    await (page.WaitForFunctionAsync (sprintf "window.__resized !== '%s'" before))
-                let! after = await (reported ())
+                do! Wait.until "the reported size to change" reported ((<>) before)
+                let! after = reported ()
                 Expect.notEqual after before "the pty is told the width the reader chose"
             }
         // The same measurement, in the mode that CANNOT report it over the wire. A terminal
@@ -5245,16 +5248,16 @@ let editorTests =
 
                 // Nobody holds this terminal, so the holder's report never fires: this is the
                 // measurement the model kept, which is the one a command reads.
-                let viewport () = page.EvaluateAsync<string> "() => window.__viewport || ''"
-                let! _ = await (page.WaitForFunctionAsync "window.__viewport")
-                let! before = await (viewport ())
+                let viewport () = Harness.read page HarnessPage.viewport
+                do! Wait.until "the pane's size to be measured" viewport Option.isSome
+                let! before = viewport ()
 
                 // Widen the column from the keyboard, which dispatches nothing at all.
                 do! awaitU (page.FocusAsync "#shell [data-term-resize]")
                 for _ in 1 .. 12 do
                     do! awaitU (page.Keyboard.PressAsync "ArrowLeft")
-                let! _ = await (page.WaitForFunctionAsync (sprintf "window.__viewport !== '%s'" before))
-                let! after = await (viewport ())
+                do! Wait.until "the measured size to change" viewport ((<>) before)
+                let! after = viewport ()
                 Expect.notEqual after before "the width the next command would claim follows the pane"
             }
         // A chapter's rule is in the FLOW, which is the whole of what replaced the rail: no
@@ -5438,7 +5441,7 @@ let editorTests =
                 // 60 items of streamed replies is ~1,500 events: fifteen pages of a hundred,
                 // twenty-five milliseconds apart — three hundred and seventy-five of the five
                 // hundred a render is held for.
-                let! report = await (page.EvaluateAsync<string> "() => window.__benchOpenCold(60, 100, 25)")
+                let! report = Harness.await3 page HarnessPage.benchOpenCold 60 100 25
                 use doc = System.Text.Json.JsonDocument.Parse report
                 let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
                 let items = doc.RootElement.GetProperty("items").GetInt32 ()
@@ -5463,7 +5466,7 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation]")
                 // Two hundred items, a record a frame for four hundred frames — the scroll has
                 // to reach the top well inside that, so every frame of it has a render in it.
-                do! awaitU (page.EvaluateAsync "() => window.__benchScrollBegin(200, 400, 16, true)")
+                do! Harness.run4 page HarnessPage.benchScrollBegin 200 400 16 true
                 let! reached =
                     await (page.EvaluateAsync<float>
                             """() => new Promise((done) => {
@@ -5480,7 +5483,7 @@ let editorTests =
                                    requestAnimationFrame(tick)
                                  })
                                })""")
-                let! report = await (page.EvaluateAsync<string> "() => window.__benchScrollEnd()")
+                let! report = Harness.ask page HarnessPage.benchScrollEnd
                 use doc = System.Text.Json.JsonDocument.Parse report
                 let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
                 let startedAt = doc.RootElement.GetProperty("scrolledFrom").GetDouble ()
@@ -5606,7 +5609,7 @@ let editorTests =
                     await (page.WaitForFunctionAsync
                         """document.querySelector("#shell [data-chapter-name='msg-filler-8']")
                              ?.value === 'Where it was settled'""")
-                do! awaitU (page.EvaluateAsync "() => window.__chapterCaret('msg-filler-8', 3, 3)")
+                do! Harness.run3 page HarnessPage.chapterCaret "msg-filler-8" 3 3
                 // Waited for by EXISTENCE, not visibility: a bare caret is a zero-width
                 // highlight with the caret bar inside it, which every "is it visible" check
                 // in a driver calls hidden.
@@ -5631,7 +5634,7 @@ let editorTests =
                 let! at3 =
                     await (page.EvaluateAsync<float>
                             """() => document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='peer:brave-owl']").getBoundingClientRect().left""")
-                do! awaitU (page.EvaluateAsync "() => window.__chapterCaret('msg-filler-8', 9, 9)")
+                do! Harness.run3 page HarnessPage.chapterCaret "msg-filler-8" 9 9
                 let! moved =
                     await (page.WaitForFunctionAsync
                             (sprintf
@@ -5652,7 +5655,7 @@ let editorTests =
                 // The chapter whose name nobody has written, so what the roster says is the
                 // heuristic's guess at a whole line of somebody's message — the longest thing
                 // this slot can be asked to hold.
-                do! awaitU (page.EvaluateAsync "() => window.__chapterCaret('msg-filler-8', 0, 0)")
+                do! Harness.run3 page HarnessPage.chapterCaret "msg-filler-8" 0 0
                 let! _ =
                     await (page.WaitForFunctionAsync
                             """!!document.querySelector("#shell [data-peer-presence='peer:brave-owl'] [data-peer-at]")""")
@@ -5720,7 +5723,7 @@ let editorTests =
         // it — measured with both shown at once, a turn running and the reader scrolled back.
         editorCaseIn 390 844 "on a phone the ways to stop a turn and to jump to the latest lie over none of the conversation" <| fun page ->
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__agentTurn()")
+                do! Harness.run page HarnessPage.agentTurn
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-interrupt-turn]")
                 do! scrolledAwayFromLatest page
                 let! over = await (page.EvaluateAsync<string> controlsOverConversation)
@@ -5734,7 +5737,7 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
                 do! toTheEnd page "chat"
                 do! twoFrames page
-                do! awaitU (page.EvaluateAsync "() => window.__agentTurn()")
+                do! Harness.run page HarnessPage.agentTurn
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-interrupt-turn]")
                 do! twoFrames page
                 let! there = await (page.EvaluateAsync<bool> (atItsEnd "chat"))
@@ -5751,10 +5754,7 @@ let editorTests =
                     do! paneOnBlocks page
                     // A screen whose scrollback runs far past its box, seeded past everything the
                     // fixture's feed holds so the prompt is the last thing on it.
-                    do! awaitU (
-                            page.EvaluateAsync
-                                """() => window.__snapshot('term-harness', 50,
-                                           Array.from({ length: 300 }, (_, i) => 'old ' + (i + 1)).join('\r\n') + '\r\nprompt-mark$ ')""")
+                    do! Harness.run5 page HarnessPage.snapshot "term-harness" 50 (numberedLines "old" 300 + "\r\nprompt-mark$ ") None None
                     do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
                     let! shown = newestShown page "screen:term-harness" "prompt-mark"
                     Expect.stringContains shown shownFully "the prompt is on screen as the keyboard arrives"
@@ -5791,7 +5791,7 @@ let editorTests =
                                   Yession.Domain.Terminals.TerminalBlockStarted.FromSeq = 3
                                   Yession.Domain.Terminals.TerminalBlockStarted.Background = false
                                   Yession.Domain.Terminals.TerminalBlockStarted.Description = None } ]
-                    do! awaitU (page.EvaluateAsync "() => window.__record('term-harness', 3, 'o', 'tail-mark-blocks\\r\\n')")
+                    do! Harness.run4 page HarnessPage.record "term-harness" 3 "o" "tail-mark-blocks\r\n"
                     let! shown = newestShown page "blocks:term-harness" "tail-mark-blocks"
                     Expect.stringContains shown shownFully "the newest line of output is wholly on screen"
                 }
@@ -5800,14 +5800,11 @@ let editorTests =
             editorCaseIn 1440 900 "a reader at the end of a live screen sees the output that arrives next" <| fun page ->
                 async {
                     do! paneOnBlocks page
-                    do! awaitU (
-                            page.EvaluateAsync
-                                """() => window.__snapshot('term-harness', 50,
-                                           Array.from({ length: 300 }, (_, i) => 'old ' + (i + 1)).join('\r\n') + '\r\n')""")
+                    do! Harness.run5 page HarnessPage.snapshot "term-harness" 50 (numberedLines "old" 300 + "\r\n") None None
                     do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
                     let! _ = await (page.WaitForSelectorAsync (tailSurface "screen:term-harness"))
                     do! toTheEnd page "screen:term-harness"
-                    do! awaitU (page.EvaluateAsync "() => window.__record('term-harness', 51, 'o', 'one\\r\\ntwo\\r\\ntail-mark-screen\\r\\n')")
+                    do! Harness.run4 page HarnessPage.record "term-harness" 51 "o" "one\r\ntwo\r\ntail-mark-screen\r\n"
                     let! shown = newestShown page "screen:term-harness" "tail-mark-screen"
                     Expect.stringContains shown shownFully "the newest line on the screen is wholly on screen"
                 }
@@ -6035,7 +6032,7 @@ let editorTests =
                 // is what every mark here already carries.
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
-                do! awaitU (page.EvaluateAsync "() => window.__agentTurn()")
+                do! Harness.run page HarnessPage.agentTurn
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
                 // The shell into the viewport, then the timeline to its end — where a turn that
                 // has just started is. Both, because this harness page stacks its mounts and
@@ -6086,7 +6083,7 @@ let editorTests =
                 // Held still, so the mark is measured at rest rather than mid-turn.
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
-                do! awaitU (page.EvaluateAsync "() => window.__agentTurn()")
+                do! Harness.run page HarnessPage.agentTurn
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
                 let! misplaced =
                     await (page.EvaluateAsync<string>
@@ -6136,7 +6133,7 @@ let editorTests =
         editorCaseIn 390 844 "the agent's thinking mark never paints outside its box through any move" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
-                do! awaitU (page.EvaluateAsync "() => window.__agentThinks()")
+                do! Harness.run page HarnessPage.agentThinks
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
                 let! outside =
                     await (page.EvaluateAsync<string>
@@ -6173,7 +6170,7 @@ let editorTests =
         editorCaseIn 390 844 "the first word takes the agent's mark from where the turn began" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
-                do! awaitU (page.EvaluateAsync "() => window.__agentThinks()")
+                do! Harness.run page HarnessPage.agentThinks
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
                 let! _ =
                     await (page.EvaluateAsync<bool>
@@ -6218,7 +6215,7 @@ let editorTests =
         editorCaseIn 390 844 "a turn starting never costs the composer its line or its send" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
-                do! awaitU (page.EvaluateAsync "() => window.__agentTurn()")
+                do! Harness.run page HarnessPage.agentTurn
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-interrupt-turn]")
                 let! whole =
                     await (page.EvaluateAsync<bool>
@@ -6538,10 +6535,7 @@ let editorTests =
                                    && !!document.activeElement?.closest('#shell [data-content-panel]')
                                })()""")
                 // Three hundred lines into the running command — one record, so one render.
-                do! awaitU (
-                        page.EvaluateAsync
-                            """() => window.__record('term-harness', 2, 'o',
-                                       Array.from({ length: 300 }, (_, i) => 'line ' + (i + 1)).join('\r\n'))""")
+                do! Harness.run4 page HarnessPage.record "term-harness" 2 "o" (numberedLines "line" 300)
                 // The history draws a block's last lines until it is opened, so a block tall
                 // enough to scroll through is an OPENED one: ask for all of it.
                 do! awaitU (page.ClickAsync "#shell [data-terminal-block=block-burst-running] [data-terminal-output-expand]")
@@ -6595,10 +6589,7 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 let! _ =
                     await (page.WaitForSelectorAsync "#shell [data-terminal-scrollback][data-terminal-id='term-harness']")
-                do! awaitU (
-                        page.EvaluateAsync
-                            """() => window.__record('term-harness', 2, 'o',
-                                       Array.from({ length: 1500 }, (_, i) => 'line ' + (i + 1)).join('\r\n'))""")
+                do! Harness.run4 page HarnessPage.record "term-harness" 2 "o" (numberedLines "line" 1500)
                 // Drawn by the frame's end, not necessarily before the call returns: the page
                 // draws at most once a frame (`Render.setState`).
                 do! twoFrames page
@@ -6787,10 +6778,7 @@ let editorTests =
         editorCaseIn 1440 900 "clicking to show all of a command's lines leaves the commands under it where a reader saw them" <| fun page ->
             async {
                 do! paneOnBlocks page
-                do! awaitU (
-                        page.EvaluateAsync
-                            """() => window.__record('term-harness', 2, 'o',
-                                       Array.from({ length: 300 }, (_, i) => 'line ' + (i + 1)).join('\r\n'))""")
+                do! Harness.run4 page HarnessPage.record "term-harness" 2 "o" (numberedLines "line" 300)
                 let block = sprintf "%s [data-terminal-block='block-burst-running']" (tailSurface "blocks:term-harness")
                 let expand = block + " [data-terminal-output-expand]"
                 let! _ = await (page.WaitForSelectorAsync expand)
@@ -7495,8 +7483,8 @@ let editorTests =
                                 "() => document.elementFromPoint(%.1f, %.1f)?.closest('[data-terminal-close]')?.getAttribute('data-terminal-close-armed') ?? 'nothing'"
                                 (float x) (float y)))
                 Expect.equal under "true" "the spot that was pressed is the armed kill"
-                let! sent = await (page.EvaluateAsync<int> "() => (window.__closed || []).length")
-                Expect.equal sent 0 "the first press asked; it sent no kill"
+                let! sent = Harness.read page HarnessPage.closed
+                Expect.equal sent None "the first press asked; it sent no kill"
             }
 
         // The fault this replaced: a double-click on a kill ended two terminals, the second
@@ -7507,8 +7495,8 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
                 do! awaitU (page.Locator("#shell [data-content-list] [data-terminal-close='term-harness']").DblClickAsync ())
-                let! sent = await (page.EvaluateAsync<string> "() => JSON.stringify(window.__closed || [])")
-                Expect.equal sent "[\"term-harness\"]" "one kill, of the terminal the double-click was on"
+                let! sent = Harness.read page HarnessPage.closed
+                Expect.equal sent (Some [| "term-harness" |]) "one kill, of the terminal the double-click was on"
             }
 
         // A tab's × closes the tab and ends nothing: the terminal under it goes on running,
@@ -7518,8 +7506,8 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [role='tablist'] [data-pane-tab-dismiss='term-harness']")
                 do! waitFor "the tab to be gone" page "!document.querySelector(\"#shell [data-pane-tab='terminal:term-harness']\")"
-                let! sent = await (page.EvaluateAsync<int> "() => (window.__closed || []).length")
-                Expect.equal sent 0 "nothing ended"
+                let! sent = Harness.read page HarnessPage.closed
+                Expect.equal sent None "nothing ended"
             }
 
         // Delete on a focused tab is the ×'s press from the keyboard.
@@ -7533,8 +7521,8 @@ let editorTests =
                 do! awaitU (page.FocusAsync "#shell [data-pane-tab='terminal:term-harness']")
                 do! awaitU (page.Keyboard.PressAsync "Delete")
                 do! waitFor "the tab to be gone" page "!document.querySelector(\"#shell [data-pane-tab='terminal:term-harness']\")"
-                let! sent = await (page.EvaluateAsync<int> "() => (window.__closed || []).length")
-                Expect.equal sent 0 "nothing ended"
+                let! sent = Harness.read page HarnessPage.closed
+                Expect.equal sent None "nothing ended"
             }
 
         // The keyboard half of the same control (UI baseline: a swap must never strand
@@ -7554,8 +7542,8 @@ let editorTests =
                 let! focused =
                     await (page.EvaluateAsync<string> "() => document.activeElement?.getAttribute('data-terminal-close') ?? 'nothing'")
                 Expect.equal focused "term-harness" "focus stays on the kill"
-                let! sent = await (page.EvaluateAsync<int> "() => (window.__closed || []).length")
-                Expect.equal sent 0 "and nothing was killed"
+                let! sent = Harness.read page HarnessPage.closed
+                Expect.equal sent None "and nothing was killed"
             }
 
         // A list somebody is pressing in holds still. It used to put the open terminals first,
@@ -7578,7 +7566,7 @@ let editorTests =
                           Timestamp = DateTimeOffset.UtcNow
                           Event = event }
                     let line = Yession.Codecs.Codec.toString Events.sessionEventEnvelope envelope
-                    awaitU (page.EvaluateAsync ("line => window.__fold(line)", box line))
+                    Harness.run1 page HarnessPage.fold line
                 let terminal (id: string) = Yession.Domain.TerminalId.create id |> expect
                 let closed (id: string) =
                     Yession.Domain.SessionEvent.TerminalClosed
@@ -7806,7 +7794,7 @@ let editorTests =
         // settings, and on a phone it is a thumb's height.
         let noAgentRow (page: IPage) =
             async {
-                do! awaitU (page.EvaluateAsync "() => window.__noAgent()")
+                do! Harness.run page HarnessPage.noAgent
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-presence='absent'] [data-no-agent-connect]")
                 return ()
             }
