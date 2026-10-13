@@ -396,4 +396,74 @@ let private auditTests =
                 "stable WARN rendering"
     ]
 
-let tests = testList "Telemetry" [ bindingTests; emitterTests; forwardingTests; auditTests ]
+/// What a test reads off a finished span: its name, its parent's name, and whether it failed.
+let private shapeOf (spans: ReadableSpan array) : (string * string option * bool) list =
+    let nameOf (id: string) =
+        spans |> Array.tryFind (fun s -> (s.spanContext ()).spanId = id) |> Option.map (fun s -> s.name)
+    spans
+    |> Array.map (fun s ->
+        s.name, (s.parentSpanContext |> Option.bind (fun c -> nameOf c.spanId)), s.status.code = spanStatusError)
+    |> List.ofArray
+
+let private spanTests =
+    testList "spans (app/Telemetry.fs)" [
+        testCaseAsync "a span started inside another's work is its child, across awaits" <|
+            async {
+                let exporter = inMemorySpanExporter ()
+                let tracer = Telemetry.tracerTo exporter
+                let! answer =
+                    Telemetry.span tracer "outer" [] (async {
+                        do! Async.Sleep 1
+                        let! inner =
+                            Telemetry.span tracer "inner" [] (async {
+                                do! Async.Sleep 1
+                                return 41 })
+                        return inner + 1 })
+                Expect.equal answer 42 "the work's answer comes through unchanged"
+                Expect.equal
+                    (shapeOf (exporter.getFinishedSpans ()))
+                    [ "inner", Some "outer", false; "outer", None, false ]
+                    "the inner span hangs off the outer one"
+            }
+
+        testCaseAsync "an Error outcome marks its span failed, and the answer is untouched" <|
+            async {
+                let exporter = inMemorySpanExporter ()
+                let tracer = Telemetry.tracerTo exporter
+                let! answer = Telemetry.spanResult tracer "clone" [] (async { return Error "not found" })
+                Expect.equal answer (Error "not found" : Result<unit, string>) "the failure is still the caller's to read"
+                let span = (exporter.getFinishedSpans ()).[0]
+                Expect.equal span.status.code spanStatusError "the span says it failed"
+                Expect.equal span.status.message (Some "not found") "and why"
+            }
+
+        testCaseAsync "a throw marks its span failed and still propagates" <|
+            async {
+                let exporter = inMemorySpanExporter ()
+                let tracer = Telemetry.tracerTo exporter
+                let! caught =
+                    Telemetry.span tracer "boom" [] (async { return failwith "kaboom" })
+                    |> Async.Catch
+                match caught with
+                | Choice1Of2 () -> failwith "the throw was swallowed"
+                | Choice2Of2 e -> Expect.stringContains e.Message "kaboom" "the caller sees the throw"
+                Expect.equal (shapeOf (exporter.getFinishedSpans ())) [ "boom", None, true ] "and the span ended, failed"
+            }
+
+        testCaseAsync "with the tracer off the work runs as written" <|
+            async {
+                let! answer = Telemetry.span Telemetry.Tracer.Off "nothing" [] (async { return "same" })
+                Expect.equal answer "same" "no span, same answer"
+            }
+
+        testCaseAsync "OTEL_TRACES_EXPORTER unset leaves tracing off" <|
+            async {
+                do! Support.withEnv [ "OTEL_TRACES_EXPORTER", None ] (fun () -> async {
+                    let emitter = Telemetry.fromEnv (SessionId.create "sess-no-traces" |> expect)
+                    Expect.equal emitter.Tracer Telemetry.Tracer.Off "a span listing is opt-in"
+                    do! emitter.Shutdown () |> Interop.awaitPromise
+                })
+            }
+    ]
+
+let tests = testList "Telemetry" [ bindingTests; emitterTests; forwardingTests; auditTests; spanTests ]
