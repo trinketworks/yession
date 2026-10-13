@@ -367,6 +367,145 @@ let private loneRecordInQuietFrame () : JS.Promise<string list> =
                 | None -> attempt (tries + 1))
     attempt 0
 
+let private smoothScrollToTop () : JS.Promise<float list> =
+    match first Root.Document "#shell [data-conversation]" with
+    | None -> Promise.lift []
+    | Some el ->
+        Scrolling.intoView el "start"
+        el.scrollTop <- el.scrollHeight
+        nextFrame ()
+        |> Promise.bind (fun () ->
+            Scrolling.smoothlyTo el 0.0
+            // Until it stops moving for three frames, wherever that is.
+            let rec settle (last: float) (still: int) : JS.Promise<float list> =
+                nextFrame ()
+                |> Promise.bind (fun () ->
+                    let now = el.scrollTop
+                    let still = if now = last then still + 1 else 0
+                    if still >= 3 then Promise.lift [ now ] else settle now still)
+            settle el.scrollTop 0)
+
+let private chapterPlaceholder () : float list =
+    match first Root.Document "#shell [data-chapter-name='msg-filler-8']" with
+    | None -> []
+    | Some field ->
+        let input = field :?> HTMLInputElement
+        let ink = Css.placeholderColor field
+        let flag (holds: bool) = if holds then 1.0 else 0.0
+        [ flag (input.value = "")
+          flag (input.placeholder.Length > 0)
+          flag (ink <> "rgba(0, 0, 0, 0)" && ink <> "transparent") ]
+
+let private itemActionsUnderThumb () : string list =
+    all Root.Document "#shell [data-conversation] [data-item-actions]"
+    |> List.choose (fun control ->
+        Scrolling.intoView control "center"
+        let box = control.getBoundingClientRect ()
+        let opacity = float (Css.computedProperty (control :?> HTMLElement) "opacity")
+        if opacity = 0.0 || not (paintedAt control (box.left + box.width / 2.0) (box.top + box.height / 2.0)) then
+            Some (sprintf "%s (opacity %g)" (control.getAttribute "data-item-actions") opacity)
+        else None)
+
+let private fontSize (element: Element) : float =
+    let size = Css.computedProperty (element :?> HTMLElement) "font-size"
+    float (size.Replace ("px", ""))
+
+let private agentCaretOnLetters () : string list =
+    match first Root.Document "#shell [data-agent-writing]" with
+    | None -> [ "there is no caret" ]
+    | Some caret ->
+        let last =
+            closest caret "[data-message-body]"
+            |> Option.bind (fun body -> textsUnder body |> List.filter (fun t -> t.textContent.Trim () <> "") |> List.tryLast)
+        match last with
+        | None -> [ "the body has no words to stand after" ]
+        | Some last ->
+            let ending = last.textContent.TrimEnd().Length
+            let glyph = TextRange.boxOf last (ending - 1) ending
+            // A zero-wide box one x-height tall, just after the last word: its bottom is the
+            // baseline and its top where an `x` ends.
+            let marker = document.createElement "span"
+            marker.setAttribute ("style", "display:inline-block;width:0;height:1ex")
+            last.parentNode.insertBefore (marker, last.nextSibling) |> ignore
+            let letters = marker.getBoundingClientRect ()
+            marker.remove ()
+            let at = caret.getBoundingClientRect ()
+            let em = fontSize last.parentElement
+            [ if at.top < glyph.top || at.bottom > glyph.bottom then
+                  sprintf "it is not on the last line (%g-%g against %g-%g)" at.top at.bottom glyph.top glyph.bottom
+              // Within an overshoot: a point is carried a hair past its line, as the round
+              // letters beside it are.
+              if abs (at.bottom - letters.bottom) > 0.05 * em then
+                  sprintf "its lower point is %gpx off the baseline" (at.bottom - letters.bottom)
+              if abs (at.top - letters.top) > 0.05 * em then
+                  sprintf "its upper point is %gpx off the x-height" (at.top - letters.top)
+              if at.left < glyph.right then "it starts before the last word ends"
+              if at.left - glyph.right > em then sprintf "it stands %gpx after the last word" (at.left - glyph.right) ]
+
+let private thinkingMarkInsideBox () : string list =
+    match first Root.Document "#shell [data-agent-writing]" with
+    | None -> [ "there is no thinking mark" ]
+    | Some mark ->
+        let box = mark.getBoundingClientRect ()
+        let em = fontSize mark
+        let leaves = all (Root.Under mark) "*" |> List.filter (fun e -> e.children.length = 0)
+        let moves = Animations.under mark
+        if moves.Length = 0 then [ "the thinking mark does not move" ]
+        else
+            let cycle = moves |> Array.map Animations.duration |> Array.max
+            let painted = if leaves.IsEmpty then [ mark ] else leaves
+            let worst =
+                [ for t in 0.0 .. 20.0 .. cycle - 1.0 do
+                      for move in moves do Animations.pauseAt move t
+                      let boxes = painted |> List.map (fun e -> e.getBoundingClientRect ())
+                      let over =
+                          List.max
+                              [ box.top - (boxes |> List.map (fun b -> b.top) |> List.min)
+                                (boxes |> List.map (fun b -> b.bottom) |> List.max) - box.bottom
+                                box.left - (boxes |> List.map (fun b -> b.left) |> List.min)
+                                (boxes |> List.map (fun b -> b.right) |> List.max) - box.right ]
+                          - 0.05 * em
+                      if over > 0.0 then yield over, t ]
+                |> List.sortByDescending fst
+                |> List.tryHead
+            match worst with
+            | Some (over, t) -> [ sprintf "it paints %.2fpx outside its box at %gms" over t ]
+            | None -> []
+
+let private firstWordFromOpening () : JS.Promise<string list> =
+    let conversation () = first Root.Document "#shell [data-conversation]"
+    let place (mark: Element) =
+        let r = mark.getBoundingClientRect ()
+        let scrolled = conversation () |> Option.map (fun c -> c.scrollTop) |> Option.defaultValue 0.0
+        r.left + r.width / 2.0, r.top + r.height / 2.0 + scrolled, r.height
+    match first Root.Document "#shell [data-agent-writing]", PageGlobal.tryGet HarnessPage.agentSays with
+    | None, _ -> Promise.lift [ "there is no opening mark" ]
+    | _, None -> Promise.lift [ "this page publishes no first word to say" ]
+    | Some opening, Some says ->
+        let wasX, wasY, wasH = place opening
+        says ()
+        let rec caret (tries: int) : JS.Promise<Element option> =
+            match first Root.Document "#shell [data-agent-writing]" with
+            | Some m when m.children.length = 0 -> Promise.lift (Some m)
+            | _ when tries >= 60 -> Promise.lift None
+            | _ -> nextFrame () |> Promise.bind (fun () -> caret (tries + 1))
+        caret 0
+        |> Promise.bind (function
+            | None -> Promise.lift [ "the first word put down no caret" ]
+            | Some caret ->
+                nextFrame ()
+                |> Promise.map (fun () ->
+                    let arriving = Animations.on caret
+                    if arriving.Length = 0 then [ "the caret appears where it lands, from nowhere" ]
+                    else
+                        for animation in arriving do Animations.pauseAt animation 0.0
+                        // In the CONVERSATION's coordinates, not the window's: a reader at the
+                        // end is kept there as the first word lands, and the column scrolling
+                        // under both marks is not the caret leaving.
+                        let x, y, h = place caret
+                        let off = List.max [ abs (x - wasX); abs (y - wasY); abs (h - wasH) ]
+                        if off > 1.0 then [ sprintf "it leaves %.2fpx from where the turn's mark stood" off ] else []))
+
 /// The verdict measures that answer at once.
 let private verdictNow (measure: Probes.Measure) : (int -> string list) option =
     match measure with
@@ -380,13 +519,19 @@ let private verdictNow (measure: Probes.Measure) : (int -> string list) option =
     | Probes.Measure.ItemsClearOfCard -> Some (fun _ -> itemsClearOfCard ())
     | Probes.Measure.HideFixturesAboveShell -> Some (fun _ -> hideFixturesAboveShell ())
     | Probes.Measure.FocusBeforePane -> Some (fun _ -> focusBeforePane ())
+    | Probes.Measure.ItemActionsUnderThumb -> Some (fun _ -> itemActionsUnderThumb ())
+    | Probes.Measure.AgentCaretOnLetters -> Some (fun _ -> agentCaretOnLetters ())
+    | Probes.Measure.ThinkingMarkInsideBox -> Some (fun _ -> thinkingMarkInsideBox ())
+    | Probes.Measure.FirstWordFromOpening
     | Probes.Measure.PastShell
     | Probes.Measure.FoldArrowsOnRail
     | Probes.Measure.FoldArrowsOnAvatars
     | Probes.Measure.ReferenceBaseline
     | Probes.Measure.GrabEdgeShape
+    | Probes.Measure.ChapterPlaceholder
     | Probes.Measure.Burst
-    | Probes.Measure.LoneRecordInQuietFrame -> None
+    | Probes.Measure.LoneRecordInQuietFrame
+    | Probes.Measure.SmoothScrollToTop -> None
 
 /// The reading measures that answer at once.
 let private readingNow (measure: Probes.Measure) : (int -> float list) option =
@@ -396,24 +541,31 @@ let private readingNow (measure: Probes.Measure) : (int -> float list) option =
     | Probes.Measure.ReferenceBaseline -> Some (fun _ -> referenceBaseline ())
     | Probes.Measure.GrabEdgeShape -> Some (fun _ -> grabEdgeShape ())
     | Probes.Measure.PastShell -> Some (fun _ -> pastShell ())
+    | Probes.Measure.ChapterPlaceholder -> Some (fun _ -> chapterPlaceholder ())
     | Probes.Measure.RoomBelowShell
     | Probes.Measure.AskCardColumn
     | Probes.Measure.ItemsClearOfCard
     | Probes.Measure.HideFixturesAboveShell
     | Probes.Measure.FocusBeforePane
+    | Probes.Measure.ItemActionsUnderThumb
+    | Probes.Measure.AgentCaretOnLetters
+    | Probes.Measure.ThinkingMarkInsideBox
+    | Probes.Measure.FirstWordFromOpening
     | Probes.Measure.RunningMarkOnTitle
     | Probes.Measure.CauseHeadsOnLines
     | Probes.Measure.RunningMarkOnCauseLine
     | Probes.Measure.GrabEdgeClear
     | Probes.Measure.EdgeTabOnBand
     | Probes.Measure.Burst
-    | Probes.Measure.LoneRecordInQuietFrame -> None
+    | Probes.Measure.LoneRecordInQuietFrame
+    | Probes.Measure.SmoothScrollToTop -> None
 
 /// What is wrong, by a verdict measure's account, asked with its parameter.
 let verdict (measure: Probes.Measure) : (int -> JS.Promise<string list>) option =
     let now (read: int -> string list) = Some (fun parameter -> Promise.lift (read parameter))
     match measure with
     | Probes.Measure.LoneRecordInQuietFrame -> Some (fun _ -> loneRecordInQuietFrame ())
+    | Probes.Measure.FirstWordFromOpening -> Some (fun _ -> firstWordFromOpening ())
     | measure -> verdictNow measure |> Option.bind now
 
 /// The numbers a reading measure takes.
@@ -421,4 +573,5 @@ let reading (measure: Probes.Measure) : (int -> JS.Promise<float list>) option =
     let now (read: int -> float list) = Some (fun parameter -> Promise.lift (read parameter))
     match measure with
     | Probes.Measure.Burst -> Some (fun _ -> burst ())
+    | Probes.Measure.SmoothScrollToTop -> Some (fun _ -> smoothScrollToTop ())
     | measure -> readingNow measure |> Option.bind now

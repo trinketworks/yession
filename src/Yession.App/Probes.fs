@@ -377,6 +377,25 @@ module Probes =
         /// A lone record dispatched from inside a frame nothing has been drawn in yet, and the
         /// page read back in the same breath: empty when it is already on the page.
         | LoneRecordInQuietFrame
+        /// The conversation put at its end, then sent smoothly to its top, and read once it has
+        /// stood still three frames: where it stopped.
+        | SmoothScrollToTop
+        /// The chapter name field for `msg-filler-8`: 1 or 0 for whether it is empty, whether
+        /// it has a placeholder to offer, and whether that placeholder is painted in any ink.
+        | ChapterPlaceholder
+        /// Every conversation item's actions control, brought to the middle of the scrollport:
+        /// each that is transparent, or is not what a press at its own centre lands on.
+        | ItemActionsUnderThumb
+        /// The agent's caret against its message's last line: on it, its points on the
+        /// baseline and the x-height, just after the last word.
+        | AgentCaretOnLetters
+        /// The agent's thinking mark, its animations paused and stepped every 20ms through one
+        /// cycle: the furthest it paints outside its own box, if it does.
+        | ThinkingMarkInsideBox
+        /// Where the turn's opening mark stands is remembered; the first word is said
+        /// (`HarnessPage.agentSays`); and at the first frame of the caret's arrival, how far it
+        /// stands from that place and size, if more than a pixel.
+        | FirstWordFromOpening
 
     [<RequireQualifiedAccess>]
     module Measure =
@@ -399,6 +418,12 @@ module Probes =
             | Measure.FocusBeforePane -> "focus-before-pane"
             | Measure.Burst -> "burst"
             | Measure.LoneRecordInQuietFrame -> "lone-record-in-quiet-frame"
+            | Measure.SmoothScrollToTop -> "smooth-scroll-to-top"
+            | Measure.ChapterPlaceholder -> "chapter-placeholder"
+            | Measure.ItemActionsUnderThumb -> "item-actions-under-thumb"
+            | Measure.AgentCaretOnLetters -> "agent-caret-on-letters"
+            | Measure.ThinkingMarkInsideBox -> "thinking-mark-inside-box"
+            | Measure.FirstWordFromOpening -> "first-word-from-opening"
 
         let all =
             [ Measure.RunningMarkOnTitle
@@ -417,7 +442,13 @@ module Probes =
               Measure.HideFixturesAboveShell
               Measure.FocusBeforePane
               Measure.Burst
-              Measure.LoneRecordInQuietFrame ]
+              Measure.LoneRecordInQuietFrame
+              Measure.SmoothScrollToTop
+              Measure.ChapterPlaceholder
+              Measure.ItemActionsUnderThumb
+              Measure.AgentCaretOnLetters
+              Measure.ThinkingMarkInsideBox
+              Measure.FirstWordFromOpening ]
 
     /// How many times this document has rendered — published by `app/browser/Render.fs`,
     /// absent until the first render.
@@ -505,3 +536,20 @@ module Probes =
           DecodeAsk = Decode.int
           EncodeAnswer = Encode.string
           DecodeAnswer = Decode.string }
+
+    /// Whether the first match is what is painted at its horizontal centre, this many pixels
+    /// below its top — for an element a sticky line or a drawer may stand over at its head.
+    let hitAt : Probe<string * float, bool> =
+        { Name = "__probeHitAt"
+          EncodeAsk = fun (selector, below) -> Encode.list [ Encode.string selector; Encode.float below ]
+          DecodeAsk = Decode.tuple2 Decode.string Decode.float
+          EncodeAnswer = Encode.bool
+          DecodeAnswer = Decode.bool }
+
+    /// Whether the page's media query matches, as `matchMedia` answers it.
+    let media : Probe<string, bool> =
+        { Name = "__probeMedia"
+          EncodeAsk = Encode.string
+          DecodeAsk = Decode.string
+          EncodeAnswer = Encode.bool
+          DecodeAnswer = Decode.bool }
