@@ -128,6 +128,13 @@ module Elapsed =
         let n, unit = largest span
         sprintf "%d %s%s" n unit (if n = 1 then "" else "s")
 
+    /// How long ago, for a line that says when something happened: "4m ago", "7h ago",
+    /// "3d ago" — and "just now" under a minute, where a count of minutes would round a
+    /// moment up to one. A moment the reader's clock has not reached yet is "just now"
+    /// too: two clocks a few seconds apart are not news.
+    let ago (span: System.TimeSpan) : string =
+        if span.TotalMinutes < 1.0 then "just now" else describe span + " ago"
+
 /// One moment, spelled for a reader rather than for a machine. UTC and to the minute, written
 /// out of the parts rather than through a format string, so every runtime this compiles to
 /// produces the same characters — and so the time a person reads off the screen is the same

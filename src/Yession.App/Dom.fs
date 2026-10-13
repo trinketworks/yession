@@ -365,6 +365,9 @@ module Dom =
         /// The facts beneath a block's command, as a line — present when there is a fact the
         /// command line does not already say.
         let terminalBlockFacts = "data-terminal-block-facts"
+        /// How long ago a block ran, on its byline — present once the page's clock has said
+        /// what time it is (`ClientModel.Now`).
+        let terminalBlockAgo = "data-terminal-block-ago"
         /// A terminal's Stop, on top of its command line while a command runs — ^C to it, the
         /// terminal left standing. Valued with the terminal id.
         let terminalStop = "data-terminal-stop"

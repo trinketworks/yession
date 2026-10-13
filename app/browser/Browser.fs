@@ -1249,6 +1249,7 @@ let private start () =
             doc
             initial
         |> Client.withTimers Timer.system
+        |> Client.withClock (fun () -> System.DateTimeOffset.UtcNow) Timer.system
         |> Program.withSetState setState
         |> Program.run
 

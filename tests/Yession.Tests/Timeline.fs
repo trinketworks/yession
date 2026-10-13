@@ -184,7 +184,7 @@ let private chipTests =
             let itemsOf events = (TimelineProjection.applyEvents None events TimelineProjection.empty |> fst).TerminalItems
             Expect.equal (itemsOf running) (itemsOf finished) "the timeline entry does not move or change"
             let statusOf events =
-                let proj = events |> List.fold (fun p (e: EventEnvelope<SessionEvent>) -> Projection.applyEvent p e.Event) Projection.empty
+                let proj = events |> List.fold (fun p (e: EventEnvelope<SessionEvent>) -> Projection.applyEvent p e.Timestamp e.Event) Projection.empty
                 Projection.tryFind terminalA proj
                 |> Option.bind (fun t -> t.Blocks |> List.tryFind (fun b -> b.BlockId = block "1"))
                 |> Option.map (fun b -> b.Status)
@@ -1466,7 +1466,8 @@ let private blockOf (authority: Authority) (n: string) (status: BlockStatus) : B
       FromSeq = 0
       ToSeq = Some 1
       Status = status
-      StoppedBy = None }
+      StoppedBy = None
+      StartedAt = epoch }
 
 let private doneBy (authority: Authority) (n: string) = blockOf authority n (BlockFinished (CommandSucceeded 0))
 
@@ -2891,6 +2892,21 @@ let private listTests =
                 |> thenFolded [ at 3L 2.0 (closedNow terminalA) ]
                 |> Support.step ToggleSwitcherMsg
             Expect.equal (foldedRows model) [] "term-a closed, and still above the fold"
+
+        // When a command ran is said on its line, against the page's clock — and not at all
+        // until that clock has said, rather than against a guess.
+        testCase "a command's line says how long ago it ran" <| fun () ->
+            let ran =
+                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 60.0 (started terminalA "1" byAda "make" 0) ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+            let said model = textAt Dom.Hooks.terminalBlockAgo (Support.render model)
+            Expect.equal (said (ran |> Support.step (ClockMsg (epoch.AddMinutes 5.0)))) "4m ago" "four minutes after it started"
+
+        testCase "a command's line says nothing of when before the page knows the time" <| fun () ->
+            let ran =
+                clientOf [ at 1L 0.0 (opened terminalA "build"); at 2L 60.0 (started terminalA "1" byAda "make" 0) ]
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+            Expect.isFalse ((Support.render ran).Contains Dom.Hooks.terminalBlockAgo) "no clock, no count"
 
         // Stop is offered where it does something: while a command runs in the terminal on
         // screen, and not once it has finished — a Stop over nothing would send ^C to a prompt.
@@ -4770,7 +4786,7 @@ let private sandboxTaskTests =
 
         testCase "a running block is a running task; a finished one has left the queue" <| fun () ->
             let stateOf events =
-                let blocks = events |> List.fold (fun p (e: EventEnvelope<SessionEvent>) -> Projection.applyEvent p e.Event) Projection.empty
+                let blocks = events |> List.fold (fun p (e: EventEnvelope<SessionEvent>) -> Projection.applyEvent p e.Timestamp e.Event) Projection.empty
                 let blockStatus id =
                     Projection.tryFind terminalA blocks
                     |> Option.bind (fun t -> t.Blocks |> List.tryFind (fun b -> b.BlockId = id))

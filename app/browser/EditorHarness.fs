@@ -728,6 +728,9 @@ let private replyBody (i: int) : string =
 /// jump target, and the middle of a column those cases scroll to); the scroll scenario sweeps
 /// the length over replies, because what a render costs while a person scrolls grows with
 /// what is on the page, and one length of one-liners cannot show that growing.
+/// When the harness terminal's commands ran: one moment for all, since no case here asks when.
+let private harnessRanAt = System.DateTimeOffset (2026, 8, 2, 0, 0, 0, System.TimeSpan.Zero)
+
 let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
     let terminalId = harnessTerminal
     /// A second terminal, in LIVE mode and held by this peer — the screen that takes
@@ -962,7 +965,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                           FromSeq = 0
                           ToSeq = Some 2
                           Status = BlockFinished (CommandSucceeded 0)
-                          StoppedBy = None }
+                          StoppedBy = None
+                          StartedAt = harnessRanAt }
                         { BlockId = burstOk
                           QueueId = None
                           Authority = Authority.agentFor (Principal.Peer peerId)
@@ -972,7 +976,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                           FromSeq = 2
                           ToSeq = Some 2
                           Status = BlockFinished (CommandSucceeded 0)
-                          StoppedBy = None }
+                          StoppedBy = None
+                          StartedAt = harnessRanAt }
                         { BlockId = burstFailed
                           QueueId = None
                           Authority = Authority.agentFor (Principal.Peer peerId)
@@ -982,7 +987,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                           FromSeq = 2
                           ToSeq = Some 2
                           Status = BlockFinished (CommandFailed 1)
-                          StoppedBy = None }
+                          StoppedBy = None
+                          StartedAt = harnessRanAt }
                         { BlockId = burstRunning
                           QueueId = None
                           Authority = Authority.agentFor (Principal.Peer peerId)
@@ -992,7 +998,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                           FromSeq = 2
                           ToSeq = None
                           Status = BlockRunning
-                          StoppedBy = None }
+                          StoppedBy = None
+                          StartedAt = harnessRanAt }
                         { BlockId = refusedLong
                           QueueId = None
                           Authority = Authority.agentFor (Principal.Peer peerId)
@@ -1002,7 +1009,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                           FromSeq = 2
                           ToSeq = Some 2
                           Status = BlockRejected (ActorRef.System, None)
-                          StoppedBy = None }
+                          StoppedBy = None
+                          StartedAt = harnessRanAt }
                         // Enough history that the scrollback actually OVERFLOWS its box.
                         // "Show in terminal" (Plan 25, stage 3) scrolls to a command, and a
                         // history that fits on screen is one where every scroll is a no-op —
@@ -1018,7 +1026,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                                 FromSeq = 2
                                 ToSeq = Some 2
                                 Status = BlockFinished (CommandSucceeded 0)
-                                StoppedBy = None } ] ]
+                                StoppedBy = None
+                                StartedAt = harnessRanAt } ] ]
                     DroppedBytes = 0 }
                   { TerminalId = liveId
                     Title = TerminalTitle.fromProse "shell"
@@ -1513,7 +1522,7 @@ do
                 SessionEvent.TerminalLeaseTaken
                     { TerminalId = id; By = ActorRef.PeerRef model.Peer.PeerId; FromSeq = 0 }
             let before = model
-            model <- { model with Terminals = Projection.applyEvent model.Terminals taken }
+            model <- { model with Terminals = Projection.applyEvent model.Terminals System.DateTimeOffset.UtcNow taken }
             render ()
             // The real client folds this as an event arriving, and the reducer turns its edge
             // into the move that puts the keyboard on the screen and the resize that fits the

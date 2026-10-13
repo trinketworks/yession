@@ -210,8 +210,8 @@ module Scheduler =
                                 // window "since the previous turn" without a cursor.
                                 let events = page.Events |> List.map (fun envelope -> envelope.Event)
                                 let terminals =
-                                    events
-                                    |> List.fold Projection.applyEvent Projection.empty
+                                    page.Events
+                                    |> List.fold (fun proj e -> Projection.applyEvent proj e.Timestamp e.Event) Projection.empty
                                     |> Digest.build
                                         (fun id fromSeq toSeq -> readTranscript id fromSeq toSeq |> Transcript.printed)
                                         (Digest.window events)
@@ -271,8 +271,8 @@ module Scheduler =
                             let projection, _ =
                                 ConversationProjection.applyEvents None page.Events ConversationProjection.empty
                             let terminals =
-                                events
-                                |> List.fold Projection.applyEvent Projection.empty
+                                page.Events
+                                |> List.fold (fun proj e -> Projection.applyEvent proj e.Timestamp e.Event) Projection.empty
                                 |> Digest.build
                                     (fun id fromSeq toSeq -> readTranscript id fromSeq toSeq |> Transcript.printed)
                                     (Digest.window events)

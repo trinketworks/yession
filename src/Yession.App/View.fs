@@ -3374,6 +3374,10 @@ module View =
         // As a REFERENCE (`Entity.render`), which is the same mark and name the person wears
         // on every other surface — the roster, the timeline, the chip in the chat — rather
         // than a second way of saying who somebody is.
+        //
+        // On its own line OVER the command (`Style.terminalBlockByline`), with when it ran
+        // and how it went at the far end: beside the command, the name pushed a long command
+        // into a column a third of a phone's width.
         let author =
             let who = Authority.author block.Authority
             if not showAuthor || ClientModel.isMine who model then Lit.nothing
@@ -3411,6 +3415,14 @@ module View =
             | BlockEnded _, _
             | _, Some _ -> html $"""<div class="{Style.terminalBlockFacts}" data-terminal-block-facts>{reason}{stoppedBy}</div>"""
             | _ -> Lit.nothing
+        // When it ran, against the page's clock — "4m ago", the moment itself under the
+        // pointer. Nothing until the clock has said (`ClientModel.Now`), rather than a count
+        // against a guess.
+        let ago =
+            match model.Now with
+            | None -> Lit.nothing
+            | Some now ->
+                html $"""<span title="{Moment.stamp block.StartedAt}" data-terminal-block-ago>{Elapsed.ago (now - block.StartedAt)}</span>"""
         // The command a preview settled back into carries the preview's name, so the browser
         // moves the one into the other (`ViewActions.Morph`). Only while nothing is previewed:
         // two elements of one name on one page and there is no morph at all.
@@ -3422,15 +3434,19 @@ module View =
             <article class="{Style.terminalBlock}" data-terminal-block="{BlockId.value block.BlockId}" style="{landed}"
                      data-terminal-block-status="{terminalBlockStatusLabel block.Status}">
               <div class="{Style.terminalBlockSummary}" data-terminal-block-command>
-                <span class="{Style.terminalBlockLine}">
+                <div class="{Style.terminalBlockByline}" data-terminal-block-byline>
                   {author}
+                  <span class="{Style.terminalBlockWhen}">{ago}{terminalBlockStatusIn (newestWrong = Some block.BlockId) model block.Status}</span>
+                </div>
+                <span class="{Style.terminalBlockLine}">
                   <span class="{Style.terminalPrompt}">$</span>
                   <code class="{Style.terminalCommandText}">{block.Command}</code>
                 </span>
-                <span class="ml-auto shrink-0">{terminalBlockStatusIn (newestWrong = Some block.BlockId) model block.Status}</span>
               </div>
-              {facts}
-              {body}
+              <div class="{Style.terminalBlockBody}">
+                {facts}
+                {body}
+              </div>
             </article>"""
 
     /// One fold over a run of commands one actor ran back to back in this terminal — "ran N
