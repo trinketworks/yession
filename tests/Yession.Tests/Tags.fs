@@ -43,7 +43,10 @@ type Need =
     | Nix         // the nix CLI, to evaluate this repo's derivations against the working tree
     | NixBuild    // consent to BUILD the installable from the working tree and boot it: minutes of
                   // sandboxed compile. No suite needs it; `check` runs the build (tasks.fsx).
-    | Srt         // OS-level confinement: bubblewrap + socat on Linux, Seatbelt on macOS
+    | Sandbox     // a work sandbox to RUN a command in: srt under either nesting profile (strict, or
+                  // weak where the box cannot nest). The suite does not assert the boundary holds
+    | Srt         // CONFINEMENT under test (the escape probes): srt's STRICT profile only, bubblewrap +
+                  // socat on Linux, Seatbelt on macOS. A granted `Srt` also grants `Sandbox`
     | Pty         // the native `node-pty` addon — a real pseudo-terminal, not a pipe
     | Serial      // a real serial engine: the `serialport` addon, `udevadm`, and socat for a PTY pair
     | Jumpstarter // uv, and a resolvable Python environment for the jumpstarter example
@@ -70,7 +73,7 @@ let private getEnv (name: string) : string =
 // first substitutes, which is tens of minutes buying a proof the gate already has piecewise —
 // it is asked for by name (`check Docker Dogfood`, or a `verify.yml` dispatch naming both) when
 // the container environment story changes.
-let allNeeds = [ Browser; Ports; Native; Docker; LiveAgent; LiveGitHub; Keyring; Nix; NixBuild; Srt; Pty; Serial; Jumpstarter; Caddy ]
+let allNeeds = [ Browser; Ports; Native; Docker; LiveAgent; LiveGitHub; Keyring; Nix; NixBuild; Sandbox; Srt; Pty; Serial; Jumpstarter; Caddy ]
 
 let parseNeed (s: string) : Need option =
     match s.Trim().ToLowerInvariant () with
@@ -83,6 +86,7 @@ let parseNeed (s: string) : Need option =
     | "keyring"   -> Some Keyring
     | "nix"       -> Some Nix
     | "nixbuild"  -> Some NixBuild
+    | "sandbox"   -> Some Sandbox
     | "srt"       -> Some Srt
     | "pty"       -> Some Pty
     | "serial"    -> Some Serial
@@ -91,6 +95,22 @@ let parseNeed (s: string) : Need option =
     | "bench"     -> Some Bench
     | "dogfood"   -> Some Dogfood
     | _           -> None
+
+/// What asking for a capability also asks for, itself included. `Srt` is a sandbox too — the
+/// strict one — so a run that has it hosts every suite that only needs to RUN a command in one,
+/// and a tier that names `Srt` need not name `Sandbox` beside it.
+///
+/// Written once, here, because two readers need the same answer: `caps` below (what a run has)
+/// and `VerifyTiers` (what a tier covers). Each reading it for itself is how the release gate
+/// comes to run a suite its tiers say it does not, or the reverse.
+let withImplied (asked: Need list) : Need list =
+    asked
+    |> List.collect (fun need ->
+        match need with
+        | Srt -> [ Srt; Sandbox ]
+        | Browser | Ports | Native | Docker | LiveAgent | LiveGitHub | Keyring | Nix | NixBuild
+        | Sandbox | Pty | Serial | Jumpstarter | Caddy | Bench | Dogfood -> [ need ])
+    |> List.distinct
 
 /// The capabilities THIS run declares it has. `YESSION_TEST_CAPS` is the primary API (a
 /// space/comma list, e.g. from `check Browser Native`); `YESSION_TEST_TIER=verify|all`
@@ -103,13 +123,14 @@ let private requestedCaps : Set<Need> =
         |> Array.choose parseNeed
         |> Set.ofArray
 
-/// What the run declared, verbatim. A capability is never dropped here: `check` refuses to
-/// start when the box cannot host one it was asked for (tasks.fsx `requireCapabilities`), so
-/// by the time this runs the declared set is the available set. `LiveAgent` used to be
+/// What the run declared, and what each of those implies (`withImplied`). A capability is never
+/// dropped here: `check` refuses to start when the box cannot host one it was asked for
+/// (tasks.fsx `requireCapabilities`), so by the time this runs the declared set is the
+/// available set. `LiveAgent` used to be
 /// silently removed when no credential was present, which is how a release workflow naming a
 /// secret this repository does not have shipped every version up to v5.0.0-beta.0 with the
 /// live agent suite reporting a skip.
-let private caps : Set<Need> = requestedCaps
+let private caps : Set<Need> = requestedCaps |> Set.toList |> withImplied |> Set.ofList
 
 let private onDotnet = Compiler.isDotnet
 

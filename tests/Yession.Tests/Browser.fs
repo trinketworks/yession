@@ -859,13 +859,13 @@ let tests =
         // in the cheap tier; what is under test here is the binding itself, and that the
         // command really runs in the session's sandbox.
         //
-        // `Srt` because of that last clause, and it is not a formality: the product's default
+        // `Sandbox` because of that last clause, and it is not a formality: the product's default
         // work sandbox IS srt (`SessionMain.fs`, `YESSION_SESSION_WORK_BACKEND`), so on a box that
         // cannot host one the command never runs, the block never reaches `ok`, and this waits
         // out its timeout — thirty seconds to report, in effect, "this machine is not a
         // machine this test can run on", which is precisely what a capability is for. It cost
         // an agent a stash-and-re-run to discover that once.
-        Tag.needs "a command that really runs" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        Tag.needs "a command that really runs" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         sessionPair "a command typed in the terminal composer converges, runs in the sandbox, and both peers see the block" <|
             fun pageA pageB ->
             async {
@@ -920,7 +920,7 @@ let tests =
         // than refusing it, so a watcher can still say the next command and it runs the moment
         // the terminal is handed back. That only works if the watcher has somewhere to write
         // it: the lease bar used to stand in place of the command line.
-        Tag.needs "a command that really runs" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        Tag.needs "a command that really runs" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         sessionPair "a watcher queues a command during a lease and it runs on hand-back" <|
             fun pageA pageB ->
             async {
@@ -961,7 +961,7 @@ let tests =
         // and the strip went from `[TERMINAL]` to `[ECHO ONE]`, the live terminal gone from it
         // and reachable again only through the list. A chip opens a PREVIEW over the terminal
         // its command ran in (P2-1): the strip is terminals, and it does not change.
-        Tag.needs "a command that really runs" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        Tag.needs "a command that really runs" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         sessionCase "the first chip tapped opens a preview, and the live terminal stays the strip" <|
             fun page ->
             async {
@@ -990,7 +990,7 @@ let tests =
         // A reload brings a person back to what they had (P0-4): the same terminals in the
         // strip, the one on top, and a column with width. A preview is NOT brought back: it
         // was a glance, and the terminal it was laid over is what comes back on top.
-        Tag.needs "a command that really runs" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        Tag.needs "a command that really runs" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         sessionCase "a reload brings back the strip, the selection and the open pane" <|
             fun page ->
             async {
@@ -1076,9 +1076,9 @@ let tests =
         // a guard against getting worse rather than a description of good — the storm above is
         // still there. Tightening this constant is how the fix that removes it gets proved.
         //
-        // `Srt` because the seed is a command that really runs: on a box that cannot host a
+        // `Sandbox` because the seed is a command that really runs: on a box that cannot host a
         // sandbox it never would, and this would wait out its timeout rather than skip.
-        Tag.needs "what reopening a session costs" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        Tag.needs "what reopening a session costs" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         hostSessionCase "reopening a session renders a bounded number of times per transcript record" <|
             fun host page ->
             async {
@@ -1255,10 +1255,10 @@ let tests =
         // Both counts are per DOCUMENT, so the reload is what makes them comparable: a fresh
         // document starts them at zero and a reopen is a burst of renders worth measuring.
         //
-        // `Srt` because opening a terminal starts a shell in the session's work sandbox: on a
+        // `Sandbox` because opening a terminal starts a shell in the session's work sandbox: on a
         // box that cannot host one no terminal ever appears, and this would wait out its
         // timeout rather than skip.
-        Tag.needs "measuring several terminals" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        Tag.needs "measuring several terminals" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         sessionCase "measuring the terminals costs one look at the document, however many are open" <|
             fun page ->
             async {
@@ -1325,10 +1325,10 @@ let tests =
         // typed into, and switching away and back left only the last character — a line
         // writing into its neighbour, wiped by every render that pushed its own text back in.
         //
-        // `Srt` because opening a terminal starts a shell in the session's work sandbox: on a
+        // `Sandbox` because opening a terminal starts a shell in the session's work sandbox: on a
         // box that cannot host one, no terminal ever appears and this waits out its timeout
         // instead of failing.
-        Tag.needs "two terminals at once" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        Tag.needs "two terminals at once" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         sessionCase "each terminal's composer types into that terminal's command line" <|
             fun page ->
             async {
@@ -1376,9 +1376,9 @@ let tests =
 
         // A press for a terminal is answered a round trip later, by an event that takes the
         // pressed control's place (the empty pane's press) or leaves it standing (`+`). Either
-        // way the keyboard goes where the new terminal takes typing. `Srt` for the reason the
+        // way the keyboard goes where the new terminal takes typing. `Sandbox` for the reason the
         // case above gives: no sandbox, no terminal.
-        Tag.needs "a terminal to arrive" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        Tag.needs "a terminal to arrive" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         sessionCase "a new terminal takes the keyboard" <|
             fun page ->
             async {
@@ -1393,13 +1393,13 @@ let tests =
         // Stopping one command is not ending the terminal. Before there was a Stop, the only
         // way out of a `sleep 600` was killing the terminal, its shell and its working
         // directory with it.
-        Tag.needs "a command to stop" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        Tag.needs "a command to stop" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         sessionCase "Stop on a running command ends it, and the terminal runs the next one" <|
             stoppedAndStillThere (fun page ->
                 awaitU (page.Locator("[data-terminal-stop]").First.ClickAsync ())))
 
         // With nothing typed, Ctrl-C at the command line has the meaning it has in a terminal.
-        Tag.needs "a command to stop" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        Tag.needs "a command to stop" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         sessionCase "Ctrl-C in an empty command line ends the running command, and the terminal runs the next one" <|
             stoppedAndStillThere (fun page ->
                 async {
@@ -1410,7 +1410,7 @@ let tests =
         // The kill is pressed on a row of the switcher, and the close that answers it takes
         // that row's kill away — so focus lands on the row that takes its place, rather than
         // on `body` with the switcher still under the reader's hand.
-        Tag.needs "two terminals to kill one of" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        Tag.needs "two terminals to kill one of" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         sessionCase "killing a terminal from the switcher lands on the next one" <|
             fun page ->
             async {
@@ -7251,10 +7251,10 @@ let mountedTests =
             }
 
         // Plan 22, and the other half of the bug report: the conversation came back offline
-        // and the terminal under it did not. `Srt` because this really runs a command — on a
+        // and the terminal under it did not. `Sandbox` because this really runs a command — on a
         // box that cannot host a sandbox the block never reaches `ok` and this would HANG
         // rather than fail.
-        Tag.needs "a terminal that really ran something" [ Tag.Browser; Tag.Native; Tag.Srt ] (fun () ->
+        Tag.needs "a terminal that really ran something" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         offlineReopen
             "the session is gone, the page is still there, and so is what its terminal printed"
             (fun page ->

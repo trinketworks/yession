@@ -1197,7 +1197,16 @@ let private agentCredentials () =
 // installed is not the same as WORKING. Run the profile the suites will run under, rather than
 // look for binaries: a kernel that forbids the nested namespace fails here, where the reason
 // is one line, instead of inside a suite.
-let private srtAvailable () =
+
+/// Whether the run configures srt's WEAKER nesting profile (`enableWeakerNestedSandbox`): the
+/// host's `/proc` stays visible and capabilities are not dropped. Read as `SrtSandbox.toolsFrom`
+/// reads it, so the probe below runs the profile a session on this box would.
+let private weakNesting () =
+    (match Environment.GetEnvironmentVariable "YESSION_NESTED_SANDBOX" with null -> "" | v -> v.Trim().ToLowerInvariant ()) = "weak"
+
+/// A sandbox this box can run a command in, under the profile the run configures. That is all
+/// `Sandbox` asks; `Srt` asks for more (see `srtRefusal`).
+let private sandboxAvailable () =
     if OperatingSystem.IsMacOS () then true
     else
         let named name = Environment.GetEnvironmentVariable name
@@ -1205,9 +1214,8 @@ let private srtAvailable () =
         let socat = match named "YESSION_BIN_SOCAT" with null | "" -> "socat" | path -> path
         let ripgrep = match named "YESSION_BIN_RIPGREP" with null | "" -> "rg" | path -> path
         let setsid = match named "YESSION_BIN_SETSID" with null | "" -> "setsid" | path -> path
-        let weak = (match named "YESSION_NESTED_SANDBOX" with null -> "" | v -> v.Trim().ToLowerInvariant ()) = "weak"
         let confines =
-            if weak then
+            if weakNesting () then
                 probeSucceeds bwrap [ "--ro-bind"; "/"; "/"; "--dev"; "/dev"; "--unshare-net"; "--unshare-pid"
                                       "--unshare-user"; "--bind"; "/proc"; "/proc"; "true" ]
             else
@@ -1267,6 +1275,25 @@ let private unless (hosted: unit -> bool) (reason: string) () : string option =
 /// A capability nothing probes: its suites find out for themselves, and skip or fail by name.
 let private unprobed () : string option = None
 
+/// Why `Srt` is refused, or `None`. `Srt` is CONFINEMENT under test: a green escape probe has
+/// to describe the profile production runs, which is the strict one. So it is refused under
+/// weak nesting on every platform — this answers the request to weaken confinement under test,
+/// not what the box could host — before it asks whether the box can host the profile at all.
+let private srtRefusal () : string option =
+    if weakNesting () then
+        Some (
+            "Srt: confinement under test needs the strict profile, and YESSION_NESTED_SANDBOX=weak is set. "
+            + "Weak nesting only gives a suite somewhere to RUN: run the suites that run a command with "
+            + "`Sandbox`. The strict probes run in CI (pr.yaml), or with `vm-check Srt` on a Mac"
+        )
+    else
+        unless
+            sandboxAvailable
+            ("Srt: no working strict confinement (bubblewrap, socat, ripgrep, setsid and a nested user "
+             + "namespace; an unprivileged container cannot host it — run `Sandbox` there under "
+             + "YESSION_NESTED_SANDBOX=weak, and leave the strict probes to CI (pr.yaml) or `vm-check Srt` on a Mac)")
+            ()
+
 let private capabilities : Capability list =
     [ { Name = "Browser"
         Needs = "Chromium, on the .NET CLR. Probe: none."
@@ -1308,15 +1335,19 @@ let private capabilities : Capability list =
         Needs = "builds and boots the installable (minutes); pair with --runtime none. Probe: as Nix."
         Gated = true
         Refusal = unless nixAvailable "NixBuild: no `nix` on PATH" }
-      { Name = "Srt"
-        Needs = "bubblewrap, socat, ripgrep, setsid. Probe: runs the confinement profile."
+      { Name = "Sandbox"
+        Needs = "a work sandbox to run a command in: bubblewrap, socat, ripgrep, setsid. Probe: runs the confinement profile the run configures (weak under YESSION_NESTED_SANDBOX=weak)."
         Gated = true
         Refusal =
             unless
-                srtAvailable
-                ("Srt: no working confinement (bubblewrap, socat, ripgrep, setsid, and — under the strict "
-                 + "profile — a nested user namespace; an unprivileged container needs "
+                sandboxAvailable
+                ("Sandbox: no working work sandbox (bubblewrap, socat, ripgrep, setsid, and — under the "
+                 + "strict profile — a nested user namespace; an unprivileged container needs "
                  + "YESSION_NESTED_SANDBOX=weak)") }
+      { Name = "Srt"
+        Needs = "confinement under test, so the STRICT profile only; also grants Sandbox. Probe: as Sandbox, and refused under YESSION_NESTED_SANDBOX=weak."
+        Gated = true
+        Refusal = srtRefusal }
       { Name = "Pty"
         Needs = "the node-pty addon. Probe: opens a pseudo-terminal."
         Gated = true
@@ -1415,7 +1446,9 @@ let private nodeBudgetMs (caps: Set<string>) =
     + allowing "Nix" 90_000
     + allowing "Ports" 90_000
     + allowing "Native" 30_000
-    + allowing "Srt" 45_000
+    // `Srt` hosts the `Sandbox` suites as well (`Tag.withImplied`), so its allowance carries both.
+    + allowing "Sandbox" 45_000
+    + allowing "Srt" 90_000
     + allowing "LiveAgent" 150_000
     + allowing "LiveGitHub" 30_000
     + allowing "Docker" 150_000

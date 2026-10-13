@@ -1417,7 +1417,7 @@ let private harnessTests =
             | Some refusal ->
                 Expect.stringContains
                     refusal
-                    "the suite needs `Srt` in its `needs`"
+                    "the suite needs `Sandbox` in its `needs`"
                     "the refusal names the capability a command-running suite declares"
 
         testCaseAsync "a condition that arrives resolves, and the deadline never fires after it" <|

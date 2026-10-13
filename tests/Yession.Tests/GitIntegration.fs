@@ -3,7 +3,7 @@ module Yession.Tests.GitIntegration
 // Plan 14: the repo manager, driven for real against LOCAL bare fixtures — deterministic,
 // no network — under the srt confinement the production git sandbox uses. The pure pieces
 // (the hardened invocation env, branch-name validation, output capping) run in the cheap
-// tier; the [Srt] suite proves the interesting property, which is not "clone works" but
+// tier; the [Sandbox] suite proves the interesting property, which is not "clone works" but
 // that repo-controlled execution stays OFF: a hook and an fsmonitor planted in the
 // checkout (exactly what the WorkSandbox could write) must not fire through the verbs.
 //
@@ -189,7 +189,7 @@ let private pureTests =
             Expect.isTrue (capped.Contains "5 more characters omitted") "the elision is stated"
     ]
 
-// --- [Srt]: the verbs against local bare fixtures, confined for real ------------------------
+// --- [Sandbox]: the verbs against local bare fixtures, confined for real ------------------------
 
 
 /// A fixture directory named the way the KERNEL will check it.
@@ -918,7 +918,7 @@ let private srtTests =
 
 let private nodeExecutable : string = Node.Api.``process``.execPath
 
-// --- [Ports; Native; Srt]: the session's own composition, without a model -------------------
+// --- [Ports; Native; Sandbox]: the session's own composition, without a model -------------------
 //
 // The verbs above are driven against a config this file writes. What that cannot reach is the
 // one the SESSION writes — and that is where the fault lived: a relative data directory
@@ -1209,13 +1209,13 @@ let tests =
         pureTests
         Tag.needs "A sandbox's git and credential helpers" [ Tag.Ports ] (fun () -> credentialHelperTests)
         layoutTests
-        Tag.needs "Repo verbs (srt)" [ Tag.Srt ] (fun () -> srtTests)
+        Tag.needs "Repo verbs (srt)" [ Tag.Sandbox ] (fun () -> srtTests)
         Tag.needs
             "Repos the session reports"
-            [ Tag.Ports; Tag.Native; Tag.Srt ]
+            [ Tag.Ports; Tag.Native; Tag.Sandbox ]
             (fun () -> compositionTests)
         Tag.needs
             "add_repo (live model, real GitHub)"
-            [ Tag.LiveAgent; Tag.Ports; Tag.Native; Tag.Srt ]
+            [ Tag.LiveAgent; Tag.Ports; Tag.Native; Tag.Sandbox ]
             (fun () -> liveClone)
     ]

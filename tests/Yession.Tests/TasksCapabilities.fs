@@ -82,4 +82,15 @@ let tests =
                 asked
                 gate
                 "the `Gated = true` rows of `capabilities` in tasks.fsx (actual) and `Tag.allNeeds` in tests/Yession.Tests/Tags.fs (expected) must be the same set. A capability the release gate means is in both; one left out on purpose (Bench, Dogfood) is in neither"
+
+        // `Srt` is a sandbox too: the strict one. A run that has it hosts the suites that only
+        // need somewhere to RUN a command, so a tier naming `Srt` need not name `Sandbox`.
+        testCase "a run that has Srt also has Sandbox" <| fun () ->
+            Expect.isTrue (List.contains Tag.Sandbox (Tag.withImplied [ Tag.Srt ])) "Srt grants Sandbox"
+
+        // The direction that must never hold. `Sandbox` is satisfied by the weak profile, and a
+        // weak sandbox is no evidence that the boundary holds: if it granted `Srt`, an escape
+        // probe would run (and pass) under a profile production never uses.
+        testCase "a run that has only Sandbox does not have Srt" <| fun () ->
+            Expect.isFalse (List.contains Tag.Srt (Tag.withImplied [ Tag.Sandbox ])) "Sandbox does not grant Srt"
     ]
