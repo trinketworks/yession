@@ -223,6 +223,13 @@ let capText (limit: int) (text: string) : string =
     if text.Length <= limit then text
     else sprintf "%s\n[%d more characters omitted]" (text.Substring (0, limit)) (text.Length - limit)
 
+/// The most characters of a repo's root `AGENTS.md` a session reads: `agentsMdOf` truncates
+/// past it, so what a maintainer writes beyond it never reaches the agent working in that
+/// repo. A value of its own, rather than a local of `create`, so that the suite can hold THIS
+/// repository's `AGENTS.md` to the cap its sessions will apply to it (`RepoLayout`) without
+/// restating the number.
+let agentsMdCharCap = 20_000
+
 // --- the service -------------------------------------------------------------------------
 
 type private GitRun =
@@ -508,7 +515,6 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         /// an error. Capped in characters, the same shape as Claude Code's own CLAUDE.md
         /// size ceiling, so one repo cannot dominate every turn's context; a file over the
         /// cap is truncated, not dropped, so a maintainer's opening lines still land.
-        let agentsMdCharCap = 20_000
         let agentsMdOf (repo: RepoRef) : string option =
             let path = sprintf "%s/AGENTS.md" (pathOf repo)
             if not (Fs.exists path) then None
