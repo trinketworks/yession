@@ -41,6 +41,10 @@
          (`AssetFile.manager-page`), so the page does not load the session client. Nothing
          here imports it. (The opening screen's program is inline: `ManagerUi.openingProgram`
          says why.) -->
+    <!-- What the browser cases ask a page that a locator cannot answer (`Yession.App.Probes`):
+         bundled only by the test build and installed into the suite's contexts, never
+         imported by an app entry, so it does not ship. -->
+    <Compile Include="Probes.fs" />
     <Compile Include="ManagerPage.fs" />
     <!-- The session shell's service worker: an entry of its own, bundled as a classic script
          (`AssetFile.service-worker`), and the one program here that runs in no page at all.

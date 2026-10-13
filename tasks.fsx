@@ -635,7 +635,7 @@ type Target =
     /// again beside the suites, since Fable compiles a project's references into its own output.
     | Suite
     /// The page the browser suites drive, `tests/browser/out`: the editor harness bundled, with an
-    /// unminified asset set beside it.
+    /// unminified asset set beside it, and the probes the suites install into every page.
     | Harness
     /// The suite compiled for the .NET CLR, `tests/Yession.Tests/bin/Debug`: where the browser
     /// suites run, since Playwright is a .NET driver and Fable never sees them.
@@ -684,6 +684,12 @@ module private Target =
             run esbuild
                 [ "app/out/browser/EditorHarness.js"; "--bundle"; "--format=esm"
                   "--outfile=tests/browser/out/harness.js" ]
+            |> ignore
+            // The probes every context the suite opens is given before any page script runs
+            // (`Yession.App.Probes`). A classic script, because an init script is not a module.
+            run esbuild
+                [ "app/out/browser/Probes.js"; "--bundle"; "--format=iife"
+                  "--outfile=tests/browser/out/probes.js" ]
             |> ignore
             // The harness renders the REAL shell (Plan 14), so it needs the real stylesheet:
             // without it every Tailwind class is inert, and any layout the browser tier measures
