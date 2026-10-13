@@ -1210,10 +1210,21 @@ type UploadState =
     /// offers is to put it away.
     | Refused of reason: string
 
-/// One file on its way into the session's artifacts, as this browser holds it. Local, like the
-/// clipboard's confirmation: the bytes are on this machine, and nobody else has anything to
-/// see until the store records the version — which every peer then learns as `ArtifactShared`,
-/// so a finished upload needs no row of its own.
+/// Where a file this browser is sending goes.
+[<RequireQualifiedAccess>]
+type UploadInto =
+    /// Straight into the artifacts, as the next version under its name: the "All" page.
+    | Artifacts
+    /// Into the session's staging area, attached to the message with this queue key, to
+    /// become an artifact when that message is sent: the composer. The upload's id is the
+    /// attachment's `UploadId`.
+    | Message of QueueId
+
+/// One file on its way into the session, as this browser holds it. Local, like the
+/// clipboard's confirmation: the bytes are on this machine. Nobody else has anything to see of
+/// one going into the artifacts until the store records the version — which every peer then
+/// learns as `ArtifactShared`, so a finished upload needs no row of its own — and one attached
+/// to a message is the doc's attachment entry, which everybody sees already.
 type Upload =
     { /// Minted by whoever kept the bytes (`Client.Ports.Uploads`), which is what an effect
       /// names them by.
@@ -1221,6 +1232,7 @@ type Upload =
       /// The name it will be shared under (`ArtifactRef.nameFor`).
       Name : string
       Bytes : int64
+      Into : UploadInto
       State : UploadState }
 
 /// How one try at an upload ended, as the session answered it.
@@ -2125,7 +2137,13 @@ type ClientMsg =
     /// A person picked, pasted or dropped a file to share, and whoever keeps its bytes named
     /// them `id` (`Client.Ports.Uploads`). Whether it is sent at all is decided here: one past
     /// the cap is refused before a byte leaves.
-    | UploadPickedMsg of id: string * fileName: string * bytes: int64
+    | UploadPickedMsg of id: string * fileName: string * bytes: int64 * into: UploadInto
+    /// A person attached a file to the draft the composer shows — `author`'s — and whoever
+    /// keeps its bytes named them `id`, an `UploadId`. `fresh` is the queue key the draft is
+    /// published under if it has not been yet: attaching to an empty composer starts a message.
+    | AttachPickedMsg of id: UploadId * fileName: string * bytes: int64 * author: PeerId * fresh: QueueId
+    /// Take a file off the message it is attached to, and stop sending it if it is on its way.
+    | RemoveAttachmentMsg of UploadId
     /// How much of an upload has gone so far.
     | UploadProgressMsg of id: string * sent: int64
     /// How a try at an upload ended.
@@ -2244,9 +2262,9 @@ type ClientEffect =
     | Remember of Preference
     | Copy of box: string * text: string
     | RetryNow
-    /// Send the bytes kept under `id` as the next version of `name`, answered as
+    /// Send the bytes kept under `id`, as `name`, to where `into` says, answered as
     /// `UploadProgressMsg`s and one `UploadAnsweredMsg`.
-    | Upload of id: string * name: string
+    | Upload of id: string * name: string * into: UploadInto
     /// Let go of the bytes kept under `id`: they are recorded, or nobody wants them sent.
     | ForgetUpload of id: string
 
@@ -2267,7 +2285,7 @@ module Uploads =
     /// for one put away while it was out.
     let update (msg: ClientMsg) (uploads: Upload list) : Upload list * ClientEffect list =
         match msg with
-        | UploadPickedMsg (id, fileName, bytes) ->
+        | UploadPickedMsg (id, fileName, bytes, into) ->
             let name = ArtifactRef.nameFor fileName
             if bytes > ArtifactRef.cap then
                 let reason =
@@ -2276,11 +2294,11 @@ module Uploads =
                         name
                         (ContentSize.render bytes)
                         (ContentSize.render ArtifactRef.cap)
-                uploads @ [ { Id = id; Name = name; Bytes = bytes; State = UploadState.Refused reason } ],
+                uploads @ [ { Id = id; Name = name; Bytes = bytes; Into = into; State = UploadState.Refused reason } ],
                 [ ClientEffect.ForgetUpload id ]
             else
-                uploads @ [ { Id = id; Name = name; Bytes = bytes; State = UploadState.Sending 0L } ],
-                [ ClientEffect.Upload (id, name) ]
+                uploads @ [ { Id = id; Name = name; Bytes = bytes; Into = into; State = UploadState.Sending 0L } ],
+                [ ClientEffect.Upload (id, name, into) ]
         | UploadProgressMsg (id, sent) ->
             match find id uploads with
             | Some { State = UploadState.Sending _ } -> set id (UploadState.Sending sent) uploads, []
@@ -2294,7 +2312,7 @@ module Uploads =
         | RetryUploadMsg id ->
             match find id uploads with
             | Some ({ State = UploadState.Failed _ } as upload) ->
-                set id (UploadState.Sending 0L) uploads, [ ClientEffect.Upload (id, upload.Name) ]
+                set id (UploadState.Sending 0L) uploads, [ ClientEffect.Upload (id, upload.Name, upload.Into) ]
             | Some _ | None -> uploads, []
         | DismissUploadMsg id ->
             match find id uploads with
@@ -2576,6 +2594,33 @@ module ClientModel =
     /// about whether there is anything to send.
     let draftHasContent (peer: PeerId) (model: ClientModel) : bool =
         Map.containsKey peer model.Synced.Drafts
+
+    /// The files on a draft, as its composer shows them: each attachment in the doc, with this
+    /// browser's upload of it while that is still going or has stopped — and, after them, every
+    /// file this browser would not attach (past the cap), which is nobody else's to see and was
+    /// never on any draft, so it is shown wherever this person is writing until they put it
+    /// away. A file with no upload beside it is one whose bytes left this browser, or another
+    /// person's.
+    let draftFiles (peer: PeerId) (model: ClientModel) : (string * string * int64 * Upload option) list =
+        let attached =
+            match Map.tryFind peer model.Synced.Drafts with
+            | None -> []
+            | Some draft ->
+                Attachments.ofMessage draft.QueueId model.Synced.Attachments
+                |> List.map (fun a ->
+                    let id = UploadId.value a.Upload
+                    id, a.Name, a.Bytes, model.Uploads |> List.tryFind (fun u -> u.Id = id))
+        let refused =
+            model.Uploads
+            |> List.filter (fun u ->
+                match u.Into, u.State with
+                | UploadInto.Message _, UploadState.Refused _ ->
+                    match UploadId.create u.Id with
+                    | Ok id -> not (Map.containsKey id model.Synced.Attachments)
+                    | Error _ -> true
+                | _ -> false)
+            |> List.map (fun u -> u.Id, u.Name, u.Bytes, Some u)
+        attached @ refused
 
     /// Who is editing this draft right now, by their live caret (never the local peer — you are
     /// not your own collaborator). Names come from presence, which is where a live caret's name
@@ -5132,9 +5177,11 @@ module ClientModel =
         | ReattachTerminalMsg _
         | InterruptTerminalMsg _
         | ApproveRepoCapabilitiesMsg _ -> model
-        // `update` hands these to `Uploads`, which says both halves — the list and the effects
-        // — at once; they reach here from nowhere else.
+        // `update` hands these to `Uploads` and the attachment rules beside it, which say both
+        // halves — the state and the effects — at once; they reach here from nowhere else.
         | UploadPickedMsg _
+        | AttachPickedMsg _
+        | RemoveAttachmentMsg _
         | UploadProgressMsg _
         | UploadAnsweredMsg _
         | RetryUploadMsg _
@@ -5498,6 +5545,58 @@ module ClientModel =
             | Some _ | None -> next, []
         next, effects @ answered @ unnoticed @ swapped @ landing @ leased @ revealed @ resized @ present @ kept @ fetching @ offering @ reading
 
+    /// A file attached to `author`'s draft: the doc's attachment entry and this browser's upload,
+    /// in one update, so nothing can see the one without the other. The entry names the draft's
+    /// queue key — publishing the draft under `fresh` when it is the local peer's own and has not
+    /// been published yet — and is written only for a file the session would take: one past the
+    /// cap stays this browser's refused row, attached to nothing anybody else can see. Someone
+    /// else's draft that has gone takes nothing.
+    let private attach
+        (id: UploadId)
+        (fileName: string)
+        (bytes: int64)
+        (author: PeerId)
+        (fresh: QueueId)
+        (model: ClientModel)
+        : ClientModel * ClientEffect list =
+        let me = model.Peer.PeerId
+        let draft =
+            match Map.tryFind author model.Synced.Drafts with
+            | Some draft -> Some draft
+            | None when author = me -> Some { Author = me; QueueId = fresh }
+            | None -> None
+        match draft with
+        | None -> model, []
+        | Some draft ->
+            let uploads, effects =
+                Uploads.update
+                    (UploadPickedMsg (UploadId.value id, fileName, bytes, UploadInto.Message draft.QueueId))
+                    model.Uploads
+            let model = { model with Uploads = uploads }
+            if bytes > ArtifactRef.cap then model, effects
+            else
+                let entry =
+                    { Upload = id
+                      QueueId = draft.QueueId
+                      Name = ArtifactRef.nameFor fileName
+                      Bytes = bytes
+                      Uploader = me }
+                model
+                |> withSynced
+                    { model.Synced with
+                        Drafts = Map.add author draft model.Synced.Drafts
+                        Attachments = Map.add id entry model.Synced.Attachments },
+                effects
+
+    /// A file taken off its message: gone from the doc for everybody, and this browser's upload
+    /// of it, if there is one, put away — the session deletes whatever of it had already arrived
+    /// once nothing names it (`Attachments.orphans`).
+    let private removeAttachment (id: UploadId) (model: ClientModel) : ClientModel * ClientEffect list =
+        let uploads, effects = Uploads.update (DismissUploadMsg (UploadId.value id)) model.Uploads
+        { model with Uploads = uploads }
+        |> withSynced { model.Synced with Attachments = Map.remove id model.Synced.Attachments },
+        effects
+
     /// A message and the effects it asks for. A kill's press is resolved here, against the
     /// model as it stands, into the press it is (`killPress`) — then applied like any other.
     let update (msg: ClientMsg) (model: ClientModel) : ClientModel * ClientEffect list =
@@ -5506,6 +5605,8 @@ module ClientModel =
             match killPress terminal model with
             | Some press -> apply press model
             | None -> model, []
+        | AttachPickedMsg (id, fileName, bytes, author, fresh) -> attach id fileName bytes author fresh model
+        | RemoveAttachmentMsg id -> removeAttachment id model
         | UploadPickedMsg _
         | UploadProgressMsg _
         | UploadAnsweredMsg _

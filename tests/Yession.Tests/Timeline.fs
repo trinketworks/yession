@@ -5529,12 +5529,12 @@ let private readLoopTests =
 // --- A file, sent in from the all page ----------------------------------------------------
 
 let private uploadTests =
-    let pick (id: string) (name: string) (bytes: int64) model = ClientModel.update (UploadPickedMsg (id, name, bytes)) model
+    let pick (id: string) (name: string) (bytes: int64) model = ClientModel.update (UploadPickedMsg (id, name, bytes, UploadInto.Artifacts)) model
     testList "A file, sent in" [
 
         testCase "a picked file is sent at once, under the name an artifact can have" <| fun () ->
             let model, effects = pick "u1" "Screen Shot.png" 2_048L (clientOf [])
-            Expect.equal effects [ ClientEffect.Upload ("u1", "Screen-Shot.png") ] "sent, by the name it will be shared as"
+            Expect.equal effects [ ClientEffect.Upload ("u1", "Screen-Shot.png", UploadInto.Artifacts) ] "sent, by the name it will be shared as"
             Expect.equal
                 (model.Uploads |> List.map (fun u -> u.Name, u.State))
                 [ "Screen-Shot.png", UploadState.Sending 0L ]
@@ -5558,7 +5558,7 @@ let private uploadTests =
             let failed, effects = ClientModel.update (UploadAnsweredMsg ("u1", UploadAnswer.Failed "unreachable")) sending
             Expect.isEmpty effects "kept for the retry"
             let again, effects = ClientModel.update (RetryUploadMsg "u1") failed
-            Expect.equal effects [ ClientEffect.Upload ("u1", "notes.md") ] "sent again"
+            Expect.equal effects [ ClientEffect.Upload ("u1", "notes.md", UploadInto.Artifacts) ] "sent again"
             Expect.equal (again.Uploads |> List.map (fun u -> u.State)) [ UploadState.Sending 0L ] "and on its way again"
 
         testCase "a refusal is not retried, and putting one away lets it go" <| fun () ->
@@ -5581,9 +5581,9 @@ let private uploadTests =
             let model =
                 clientOf []
                 |> Support.step ToggleSwitcherMsg
-                |> Support.step (UploadPickedMsg ("u1", "sending.md", 4_000L))
+                |> Support.step (UploadPickedMsg ("u1", "sending.md", 4_000L, UploadInto.Artifacts))
                 |> Support.step (UploadProgressMsg ("u1", 1_000L))
-                |> Support.step (UploadPickedMsg ("u2", "failed.md", 10L))
+                |> Support.step (UploadPickedMsg ("u2", "failed.md", 10L, UploadInto.Artifacts))
                 |> Support.step (UploadAnsweredMsg ("u2", UploadAnswer.Failed "the session could not be reached"))
             let html = Support.render model
             Expect.stringContains html Dom.Hooks.artifactUpload "a way to send a file in"
@@ -5595,9 +5595,83 @@ let private uploadTests =
             Expect.isFalse (html.Contains (Dom.attr Dom.Hooks.uploadRetry "u1")) "which one still sending does not offer"
     ]
 
+// --- A file, attached to a message ------------------------------------------------------------
+
+let private attachmentTests =
+    let uploadId (raw: string) = match UploadId.create raw with Ok id -> id | Error e -> failwith e
+    let queueId (raw: string) = match QueueId.create raw with Ok id -> id | Error e -> failwith e
+    let attach (id: string) (name: string) (bytes: int64) (fresh: string) (model: ClientModel) =
+        ClientModel.update (AttachPickedMsg (uploadId id, name, bytes, model.Peer.PeerId, queueId fresh)) model
+    testList "A file, attached to a message" [
+
+        testCase "attaching to an empty composer starts the message, and stages the file under it" <| fun () ->
+            let model, effects = attach "a1" "Screen Shot.png" 2_048L "q-new" (clientOf [])
+            let me = model.Peer.PeerId
+            Expect.equal
+                (Map.tryFind me model.Synced.Drafts |> Option.map (fun d -> d.QueueId))
+                (Some (queueId "q-new"))
+                "the draft is published under the fresh key"
+            Expect.equal
+                (model.Synced.Attachments |> Map.toList |> List.map (fun (_, a) -> a.QueueId, a.Name, a.Uploader))
+                [ queueId "q-new", "Screen-Shot.png", me ]
+                "the doc says what is attached, to which message, and who has its bytes"
+            Expect.equal
+                effects
+                [ ClientEffect.Upload ("a1", "Screen-Shot.png", UploadInto.Message (queueId "q-new")) ]
+                "and the bytes go to staging, not the artifacts"
+
+        testCase "a second file joins the draft already published, under its key" <| fun () ->
+            let once, _ = attach "a1" "one.md" 10L "q-first" (clientOf [])
+            let twice, _ = attach "a2" "two.md" 10L "q-second" once
+            Expect.equal
+                (twice.Synced.Attachments |> Map.toList |> List.map (fun (_, a) -> a.QueueId) |> List.distinct)
+                [ queueId "q-first" ]
+                "both files are on the one message"
+
+        testCase "a file past the cap is attached for nobody, and its refusal is shown where it was picked" <| fun () ->
+            let model, effects = attach "a1" "huge.iso" (ArtifactRef.cap + 1L) "q-new" (clientOf [])
+            Expect.isEmpty model.Synced.Attachments "nothing anybody else can see"
+            Expect.isEmpty model.Synced.Drafts "and no message started for it"
+            Expect.equal effects [ ClientEffect.ForgetUpload "a1" ] "nothing sent, nothing kept"
+            match ClientModel.draftFiles model.Peer.PeerId model with
+            | [ (_, "huge.iso", _, Some { State = UploadState.Refused said }) ] ->
+                Expect.stringContains said "100 MB" "the refusal quotes the cap"
+            | other -> failwithf "expected the refused file in the composer, got %A" other
+
+        testCase "taking a file off the message removes it for everyone and stops sending it" <| fun () ->
+            let attached, _ = attach "a1" "notes.md" 10L "q-new" (clientOf [])
+            let model, effects = ClientModel.update (RemoveAttachmentMsg (uploadId "a1")) attached
+            Expect.isEmpty model.Synced.Attachments "off the doc"
+            Expect.isEmpty model.Uploads "no longer this browser's to send"
+            Expect.equal effects [ ClientEffect.ForgetUpload "a1" ] "and the bytes are let go"
+
+        testCase "a staged file's failed try is offered again, to staging" <| fun () ->
+            let attached, _ = attach "a1" "notes.md" 10L "q-new" (clientOf [])
+            let failed = attached |> Support.step (UploadAnsweredMsg ("a1", UploadAnswer.Failed "unreachable"))
+            let _, effects = ClientModel.update (RetryUploadMsg "a1") failed
+            Expect.equal effects [ ClientEffect.Upload ("a1", "notes.md", UploadInto.Message (queueId "q-new")) ] "sent again where it was going"
+
+        testCase "the composer offers attaching and wears each file's state; the all page does not list them" <| fun () ->
+            let model =
+                clientOf []
+                |> fun m -> attach "a1" "sending.md" 4_000L "q-new" m |> fst
+                |> Support.step (UploadProgressMsg ("a1", 1_000L))
+                |> fun m -> attach "a2" "failed.md" 10L "q-other" m |> fst
+                |> Support.step (UploadAnsweredMsg ("a2", UploadAnswer.Failed "the session could not be reached"))
+            let html = Support.render model
+            Expect.stringContains html Dom.Hooks.draftAttach "a way to attach a file"
+            Expect.stringContains html (Dom.attr Dom.Hooks.draftFile "sending.md") "the file on its way is on the draft"
+            Expect.stringContains html (Dom.Text.uploadSending "1.00 kB" "4.00 kB") "saying how much has gone"
+            Expect.stringContains html (Dom.attr Dom.Hooks.draftFileRetry "a2") "the failed one offers another try"
+            Expect.stringContains html (Dom.attr Dom.Hooks.draftFileRemove "a1") "and every file can be taken off"
+            let all = Support.render (model |> Support.step ToggleSwitcherMsg)
+            Expect.isFalse (all.Contains (Dom.attr Dom.Hooks.uploadRow "sending.md")) "a message's file is not the all page's"
+    ]
+
 let tests =
     testList "Timeline and the pane (Plan 14)" [
         uploadTests
+        attachmentTests
         contentChipTests
         richTableTests
         listTests

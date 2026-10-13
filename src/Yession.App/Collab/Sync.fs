@@ -772,6 +772,14 @@ module SyncedStateSync =
     let draftQueueId (doc: Yjs.Y.Doc) (author: PeerId) : QueueId option =
         (ofDoc doc).Drafts |> Map.tryFind author |> Option.map (fun draft -> draft.QueueId)
 
+    /// Whether an author's draft has files attached — which makes it a draft somebody is
+    /// writing, words or not: the files are what they have put in it so far.
+    let draftAttached (doc: Yjs.Y.Doc) (author: PeerId) : bool =
+        let synced = ofDoc doc
+        match Map.tryFind author synced.Drafts with
+        | Some draft -> not (List.isEmpty (Attachments.ofMessage draft.QueueId synced.Attachments))
+        | None -> false
+
     // --- Terminals (Plan 13) -----------------------------------------------------------
     //
     // The same three moves the message queue needs, over the terminal roots: read a
@@ -907,18 +915,11 @@ module SyncedStateSync =
         if not (doc.share.has "drafts") then []
         else
             let drafts : Yjs.Y.Map<obj> = doc.getMap "drafts"
-            // A slot with files attached and no words is a draft somebody is writing — the
-            // files are what they have put in it so far.
-            let synced = ofDoc doc
-            let attached (author: PeerId) =
-                match Map.tryFind author synced.Drafts with
-                | Some draft -> not (List.isEmpty (Attachments.ofMessage draft.QueueId synced.Attachments))
-                | None -> false
             let empty =
                 mapKeys drafts
                 |> Array.choose (fun key ->
                     match PeerId.create key with
-                    | Ok author when (draftBodyMarkdown doc author).Trim () = "" && not (attached author) -> Some author
+                    | Ok author when (draftBodyMarkdown doc author).Trim () = "" && not (draftAttached doc author) -> Some author
                     | _ -> None)
                 |> List.ofArray
             if not (List.isEmpty empty) then

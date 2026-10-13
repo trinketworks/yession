@@ -961,13 +961,20 @@ let private fetchPullHead (repo: RepoRef) (number: int) : Async<Result<PullHead,
 
 let private keptUploads = Collections.Generic.Dictionary<string, Browser.Types.File * (unit -> unit) option> ()
 
-/// Send the bytes kept under `id` as the next version of `name`. The session's 4xx is a
-/// refusal a second try would meet again; no answer, or a 5xx, is a try that may yet go.
-let private sendUpload (peer: PeerId) (id: string) (name: string) (onProgress: int64 -> unit) : Async<UploadAnswer> =
-    match keptUploads.TryGetValue id, Content.ArtifactRef.directoryOf name with
+/// Send the bytes kept under `id`: as the next version of `name`, or into the staging area under
+/// `id` for the message they are attached to. The session's 4xx is a refusal a second try would
+/// meet again; no answer, or a 5xx, is a try that may yet go.
+let private sendUpload (peer: PeerId) (id: string) (name: string) (into: UploadInto) (onProgress: int64 -> unit) : Async<UploadAnswer> =
+    let route =
+        match into with
+        | UploadInto.Artifacts ->
+            Content.ArtifactRef.directoryOf name
+            |> Result.map (fun content -> ContentUpload content, [ SessionRoute.uploaderHeader, PeerId.value peer ])
+        | UploadInto.Message _ -> UploadId.create id |> Result.map (fun upload -> StagedUpload upload, [])
+    match keptUploads.TryGetValue id, route with
     | (false, _), _ -> async.Return (UploadAnswer.Refused "this page no longer has the file — choose it again")
     | _, Error reason -> async.Return (UploadAnswer.Refused reason)
-    | (true, (file, _)), Ok content ->
+    | (true, (file, _)), Ok (route, headers) ->
         Async.FromContinuations (fun (resolve, _, _) ->
             let answered (status: int) (said: string) =
                 let said = if String.IsNullOrWhiteSpace said then sprintf "the session answered %d" status else said
@@ -976,8 +983,8 @@ let private sendUpload (peer: PeerId) (id: string) (name: string) (onProgress: i
                 else resolve (UploadAnswer.Failed said)
             let abort =
                 Fable.BrowserExtras.Requests.put
-                    (Page.href (ContentUpload content))
-                    [ SessionRoute.uploaderHeader, PeerId.value peer ]
+                    (Page.href route)
+                    headers
                     file
                     (fun loaded -> onProgress (int64 loaded))
                     answered
@@ -1152,7 +1159,18 @@ let private start () =
                     for file in files do
                         let id = mintId "upload"
                         keptUploads.[id] <- (file, None)
-                        dispatchRef (UploadPickedMsg (id, file.name, int64 file.size))
+                        dispatchRef (UploadPickedMsg (id, file.name, int64 file.size, UploadInto.Artifacts))
+              Attach =
+                fun author files ->
+                    // A GUID, not `mintId`: this id is a key in the shared doc, where every
+                    // peer's attachments meet, and a staging file name on the session.
+                    let mint () = string (Guid.NewGuid ())
+                    for file in files do
+                        match UploadId.create (mint ()), QueueId.create (mint ()) with
+                        | Ok id, Ok fresh ->
+                            keptUploads.[UploadId.value id] <- (file, None)
+                            dispatchRef (AttachPickedMsg (id, file.name, int64 file.size, author, fresh))
+                        | Error e, _ | _, Error e -> failwithf "upload id invariant violated: %s" e
               Morph = PaneShell.morph }
 
         let el = appRoot ()

@@ -723,6 +723,27 @@ let private draftSlotTests =
                 Expect.isFalse (SyncedStateSync.hasDraft doc ada) "emptying the composer retracts the slot from the doc"
             }
 
+        testCaseAsync "a file is content: a draft of only files stays, and goes with its last file" <|
+            async {
+                let doc = Y.Doc.Create ()
+                let registry = BodyRegistry doc
+                let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+                DraftSlot.follow doc registry ada (user >> p.Dispatch) |> ignore
+                let upload = UploadId.create "a1" |> expect
+
+                p.Dispatch (user (AttachPickedMsg (upload, "notes.md", 10L, ada, QueueId.create "q-files" |> expect)))
+                do! p.WaitFor (fun m -> Map.containsKey ada m.Synced.Drafts)
+                Body.write registry ada "words, then none"
+                Body.write registry ada ""
+                // Long enough for a retraction, which is a dispatch, to have landed if one went.
+                do! Async.Sleep 50
+                Expect.isTrue (SyncedStateSync.hasDraft doc ada) "the file keeps the draft published with no words"
+
+                p.Dispatch (user (RemoveAttachmentMsg upload))
+                do! p.WaitFor (fun m -> not (Map.containsKey ada m.Synced.Drafts))
+                Expect.isFalse (SyncedStateSync.hasDraft doc ada) "taking off the last file retracts it"
+            }
+
         testCase "an empty-bodied slot is dropped from a doc at boot; a typed draft survives" <| fun () ->
             let doc = Y.Doc.Create ()
             let registry = BodyRegistry doc

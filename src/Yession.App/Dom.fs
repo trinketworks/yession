@@ -607,6 +607,17 @@ module Dom =
         /// Send a failed upload again, and put one away.
         let uploadRetry = "data-upload-retry"
         let uploadDismiss = "data-upload-dismiss"
+        /// The composer's way to attach a file to the open draft, standing in for the file
+        /// input beside it (`draftAttachInput`) as `artifactUpload` does on the `all` page.
+        let draftAttach = "data-draft-attach"
+        let draftAttachInput = "data-draft-attach-input"
+        /// A file on the open draft, carrying its name, with `data-upload-state` saying where
+        /// this browser's upload of it has got to — `sending`, `failed`, `refused`, or
+        /// `attached` once nothing here is still sending it.
+        let draftFile = "data-draft-file"
+        /// Send a failed attachment again, and take one off the draft.
+        let draftFileRetry = "data-draft-file-retry"
+        let draftFileRemove = "data-draft-file-remove"
 
     /// Observable text/value tokens the session view emits (labels and status words that
     /// tests assert exactly — never free-text message bodies, which are model data).
@@ -999,6 +1010,12 @@ module Dom =
         let dismissUpload (name: string) = sprintf "Put away %s" name
         let retry = "retry"
         let remove = "remove"
+        /// The composer's verb for attaching a file, and what it says to a screen reader.
+        let attach = "attach"
+        let attachNamed = "Attach a file to this message"
+        let removeAttachment (name: string) = sprintf "Take %s off this message" name
+        /// A file on the draft, read out with what it is doing.
+        let draftFilesNamed = "attached files"
         /// What a terminal's mark says to a screen reader (`View.terminalMark`): it has
         /// closed, or the last thing it ran did not succeed. Running says `blockRunning`, as
         /// every running mark does.

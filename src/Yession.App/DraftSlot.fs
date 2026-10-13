@@ -50,8 +50,12 @@ module DraftSlot =
     /// send snapshots and the drain durably records — so "publishes a slot" and "sends something"
     /// can never disagree. (Fragment length would be cheaper and wrong: mounting an editor writes
     /// an empty paragraph, and an empty paragraph is not a draft.)
-    let contentOf (registry: BodyRegistry) (peer: PeerId) : BodyContent =
-        if (Markdown.ofFragment (registry.Fragment (BodyKey.draft peer))).Trim () = "" then Empty
+    ///
+    /// Files attached to the draft are content too: a person who attaches a file before typing a
+    /// word has started a message, and retracting its slot would orphan the file.
+    let contentOf (doc: Y.Doc) (registry: BodyRegistry) (peer: PeerId) : BodyContent =
+        if (Markdown.ofFragment (registry.Fragment (BodyKey.draft peer))).Trim () = ""
+           && not (SyncedStateSync.draftAttached doc peer) then Empty
         else HasContent
 
     /// Whether the doc currently announces this peer's draft.
@@ -68,7 +72,7 @@ module DraftSlot =
     /// Bring the local peer's slot into agreement with its body, now. Both facts are read from
     /// the doc, so the rule never acts on a stale model snapshot.
     let settle (doc: Y.Doc) (registry: BodyRegistry) (peer: PeerId) (dispatch: Sink<ClientMsg>) : unit =
-        match reconcile (contentOf registry peer) (slotOf doc peer) with
+        match reconcile (contentOf doc registry peer) (slotOf doc peer) with
         | Publish -> dispatch (EnsureDraftMsg (peer, mintQueueId ()))
         | Retract -> dispatch (DiscardDraftMsg peer)
         | Agreed -> ()
@@ -82,19 +86,24 @@ module DraftSlot =
     /// that body. Only the local peer's slot — publication is the author's, exactly as sending is.
     /// The returned `Subscription` stops observing.
     ///
-    /// Body changes are the only thing that can move the slot under this rule, so nothing else is
-    /// watched. State that arrives another way — a persisted doc replaying at load, say — is
-    /// answered by calling `settle` at that point, which is what the browser does once its
-    /// IndexedDB store has synced.
+    /// The body and the attachments are the only things that can move the slot under this rule,
+    /// so nothing else is watched. State that arrives another way — a persisted doc replaying at
+    /// load, say — is answered by calling `settle` at that point, which is what the browser does
+    /// once its IndexedDB store has synced.
     let follow (doc: Y.Doc) (registry: BodyRegistry) (peer: PeerId) (dispatch: Sink<ClientMsg>) : Subscription =
         let fragment = registry.Fragment (BodyKey.draft peer)
-        // One observer value for both calls: `unobserveDeep` removes a listener only when
-        // handed the very reference `observeDeep` was given. The events and the transaction
-        // it carries are not read — the rule re-reads the doc.
+        let attachments : Y.Map<obj> = doc.getMap "attachments"
+        // One observer value for each pair of calls: `unobserve` removes a listener only when
+        // handed the very reference `observe` was given. The events and the transaction they
+        // carry are not read — the rule re-reads the doc.
         let observer _ _ = settle doc registry peer dispatch
+        let attachmentsObserver _ _ = settle doc registry peer dispatch
         settle doc registry peer dispatch
         fragment.observeDeep observer
-        Subscription.ofStop (fun () -> fragment.unobserveDeep observer)
+        attachments.observe attachmentsObserver
+        Subscription.ofStop (fun () ->
+            fragment.unobserveDeep observer
+            attachments.unobserve attachmentsObserver)
 
 /// The same publication rule for a terminal composer (Plan 13). Identical in shape and in
 /// reasoning — a slot exists exactly while its command line has content — over a plain

@@ -134,9 +134,9 @@ module Client =
     /// (`ClientModel.Uploads` decides when). Keyed by the id the keeper minted as it took them.
     [<RequireQualifiedAccess>]
     type UploadPort =
-        { /// Send the bytes kept under the id as the next version of the name, reporting the
+        { /// Send the bytes kept under the id, as the name, to where they go, reporting the
           /// bytes sent so far as they go. Total: a failure is an answer.
-          Send : string -> string -> (int64 -> unit) -> Async<UploadAnswer>
+          Send : string -> string -> UploadInto -> (int64 -> unit) -> Async<UploadAnswer>
           /// Let go of them, cutting short a send still out.
           Forget : string -> unit }
 
@@ -281,12 +281,12 @@ module Client =
                         if written then dispatch (CopiedMsg (Some box))
                     })
             | ClientEffect.RetryNow -> ports.Retry ()
-            | ClientEffect.Upload (id, name) ->
+            | ClientEffect.Upload (id, name, into) ->
                 ports.Uploads
                 |> Option.iter (fun uploads ->
                     Async.StartImmediate (
                         async {
-                            let! answer = uploads.Send id name (fun sent -> dispatch (UploadProgressMsg (id, sent)))
+                            let! answer = uploads.Send id name into (fun sent -> dispatch (UploadProgressMsg (id, sent)))
                             dispatch (UploadAnsweredMsg (id, answer))
                         }))
             | ClientEffect.ForgetUpload id -> ports.Uploads |> Option.iter (fun uploads -> uploads.Forget id)

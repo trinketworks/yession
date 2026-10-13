@@ -2864,7 +2864,21 @@ module Style =
     /// whose gutter comes free from its buttons' own `px-3`, this row is the model control
     /// alone, so the row itself has to carry it. Without it the picker sits flush against the
     /// viewport edge, outside the gutter every other line in the composer keeps.
-    let draftLead = "shrink-0 flex items-center pl-4 md:order-first"
+    let draftLead = "shrink-0 flex items-center gap-4 pl-4 md:order-first"
+    /// The composer's way to attach a file, beside the model picker on `draftLead`: the
+    /// picker's own voice (`modelSelectFace`) and height (`modelSelectWrap`), so the row reads
+    /// as one set of controls rather than a label beside a word of the message.
+    let draftAttach =
+        cls [ "shrink-0 h-10 inline-flex items-center bg-transparent border-0 cursor-pointer p-0"
+              caps; "text-ink-dim hover:text-ink transition-colors"; focusRing ]
+
+    /// The files on the open draft, under its words: one line of them that wraps, in the
+    /// input's own gutter.
+    let draftFiles = "flex flex-wrap gap-x-4 gap-y-1 px-4 pb-2"
+    /// One file: its name, then what it weighs or where it has got to, then its verbs.
+    let draftFile = "min-w-0 inline-flex items-center gap-2"
+    let draftFileName = "min-w-0 max-w-[16rem] truncate font-ui font-light text-small text-ink"
+    let draftFileSize = "shrink-0 font-ui font-light text-small text-ink-faint tabular-nums"
 
     /// The picker (`draftLead`) and Send's row (`draftCommit`/`draftCommitReady`) ride
     /// together as ONE line on a phone, not two: `draftBox`'s `max-md:flex-col` makes every

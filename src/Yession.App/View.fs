@@ -61,6 +61,9 @@ type ViewActions =
       /// because a file's bytes are not model data: the browser keeps them and tells the model
       /// what it is keeping (`UploadPickedMsg`).
       Upload : Browser.Types.File list -> unit
+      /// Take files a person picked, pasted or dropped in the composer, to attach to that
+      /// author's draft (`AttachPickedMsg`). Imperative for the same reason as `Upload`.
+      Attach : PeerId -> Browser.Types.File list -> unit
       /// Run a change to the model as a MORPH: what is named alike on the page before and
       /// after it (`view-transition-name`) moves from one place to the other rather than
       /// vanishing in one and appearing in the other. Imperative because only the browser can
@@ -76,6 +79,7 @@ module ViewActions =
           SendTerminalDraft = fun _ _ -> ()
           TypeIntoTerminal = fun _ _ -> ()
           Upload = ignore
+          Attach = fun _ _ -> ()
           Morph = fun change -> change () }
 
 module View =
@@ -1588,15 +1592,82 @@ module View =
             let author =
                 if target = myPeer then Lit.nothing
                 else html $"""<span class="{Style.draftAuthor}">{ClientModel.nameOf target model}'s message</span>"""
+            // Files arrive however a person has them: chosen, pasted into the draft, or dropped
+            // on it. All three are one action, as on the `all` page.
+            let take (files: Browser.Types.File array) =
+                if Array.isEmpty files then false
+                else
+                    actions.Attach target (List.ofArray files)
+                    true
+            let picked (e: Browser.Types.Event) =
+                let input = e.target :?> Browser.Types.HTMLInputElement
+                take (CarriedFiles.ofInput input) |> ignore
+                // Emptied, so the same file chosen again is a change the input reports.
+                input.value <- ""
+            let pasted (e: Browser.Types.Event) = if take (CarriedFiles.ofPaste e) then e.preventDefault ()
+            let dragged (e: Browser.Types.Event) = if CarriedFiles.inDrag e then e.preventDefault ()
+            let dropped (e: Browser.Types.Event) = if take (CarriedFiles.ofDrop e) then e.preventDefault ()
+            let choose (e: Browser.Types.Event) =
+                let button = e.currentTarget :?> Browser.Types.Element
+                match button.parentElement.querySelector (sprintf "[%s]" Dom.Hooks.draftAttachInput) with
+                | null -> ()
+                | input -> (input :?> Browser.Types.HTMLElement).click ()
+            // Each file on the draft: its name, then what it weighs — or, while this browser is
+            // sending it, how far it has got, beating in `ink-dim`; or the one red word, with
+            // what can be done about it. Remove is always there: a file on a message is
+            // anybody's to take off, as the message's words are anybody's to edit.
+            let file (id: string, name: string, bytes: int64, upload: Upload option) =
+                let token, status =
+                    match upload |> Option.map (fun u -> u.State) with
+                    | Some (UploadState.Sending sent) ->
+                        "sending",
+                        html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotPulse}" aria-hidden="true"></span>{Dom.Text.uploadSending (ContentSize.render sent) (ContentSize.render bytes)}</span>"""
+                    | Some (UploadState.Failed reason) -> "failed", html $"""<span class="{Style.statusErr}">{reason}</span>"""
+                    | Some (UploadState.Refused reason) -> "refused", html $"""<span class="{Style.statusErr}">{reason}</span>"""
+                    | None -> "attached", html $"""<span class="{Style.draftFileSize}">{ContentSize.render bytes}</span>"""
+                let retry =
+                    match upload with
+                    | Some { State = UploadState.Failed _ } ->
+                        html $"""
+                            <button type="button" class="{Style.terminalListAct}" data-draft-file-retry="{id}"
+                                    aria-label="{Dom.Text.retryUpload name}"
+                                    @click={Ev(fun _ -> dispatch (RetryUploadMsg id))}>{Dom.Text.retry}</button>"""
+                    | _ -> Lit.nothing
+                let remove =
+                    match UploadId.create id with
+                    | Ok upload -> RemoveAttachmentMsg upload
+                    | Error _ -> DismissUploadMsg id
+                html $"""
+                    <span class="{Style.draftFile}" role="listitem" data-draft-file="{name}" data-upload-state="{token}">
+                      <span class="{Style.entityMark}" aria-hidden="true">{Icon.fileSm}</span>
+                      <span class="{Style.draftFileName}">{name}</span>
+                      <span role="status">{status}</span>
+                      {retry}
+                      <button type="button" class="{Style.terminalListAct}" data-draft-file-remove="{id}"
+                              aria-label="{Dom.Text.removeAttachment name}"
+                              @click={Ev(fun _ -> dispatch remove)}>{Dom.Text.remove}</button>
+                    </span>"""
+            let files =
+                match ClientModel.draftFiles target model with
+                | [] -> Lit.nothing
+                | files ->
+                    html $"""<div class="{Style.draftFiles}" role="list" aria-label="{Dom.Text.draftFilesNamed}">{files |> List.map file}</div>"""
             html $"""
-                <article class="{Style.draftBox}" data-draft-id="{PeerId.value target}" data-draft-author="{PeerId.value target}">
+                <article class="{Style.draftBox}" data-draft-id="{PeerId.value target}" data-draft-author="{PeerId.value target}"
+                         @paste={Ev(pasted)} @dragover={Ev(dragged)} @drop={Ev(dropped)}>
                   <div class="{Style.draftBody}">
                     {author}
                     <div class="{Style.draftInput}" data-rich-body="{BodyKey.draft target}" data-rich-readonly="false" data-draft-input="{PeerId.value target}"></div>
+                    {files}
                   </div>
                   <div class="{Style.draftActionsRow}">
                     <div class="{Style.draftLead}">
                       {modelControl dispatch model}
+                      <span class="contents">
+                        <input type="file" class="border-0" multiple hidden data-draft-attach-input @change={Ev(picked)}>
+                        <button type="button" class="{Style.draftAttach}" data-draft-attach
+                                aria-label="{Dom.Text.attachNamed}" @click={Ev(choose)}>{Dom.Text.attach}</button>
+                      </span>
                     </div>
                     <div class="{commitClass}">
                       <span class="{Style.draftEditors}">{editors target}</span>
@@ -4344,7 +4415,8 @@ module View =
                   <span class="{Style.terminalListVerbs}">{verbs |> List.map verb}</span>
                 </div>"""
         let above, folded = ClientModel.terminalRows model
-        let artifacts, uploads = ClientModel.artifactRows model, model.Uploads
+        let artifacts, uploads =
+            ClientModel.artifactRows model, model.Uploads |> List.filter (fun u -> u.Into = UploadInto.Artifacts)
         // Files arrive however a person has them: chosen, pasted while the page has the
         // keyboard, or dropped on it. All three are one action.
         let take (files: Browser.Types.File array) =
