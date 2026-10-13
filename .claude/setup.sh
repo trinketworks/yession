@@ -5,8 +5,10 @@
 # use the committed devenv.yaml (see AGENTS.md Bootstrap).
 #
 # Also the SessionStart hook (.claude/settings.json): with --hook it refreshes
-# devenv.local.yaml and settles devenv.lock — never installs, never builds — and exits
-# quietly if Nix is absent.
+# devenv.local.yaml and settles devenv.lock, and never installs or builds itself. When Nix or
+# the devenv CLI is missing it starts this script's FULL run detached in the background and
+# returns at once, so a fresh container installs itself without anybody asking: see the
+# hand-off below.
 set -euo pipefail
 
 hook_only=false
@@ -26,7 +28,39 @@ export https_proxy="${https_proxy:-${HTTPS_PROXY:-}}"
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 nix_sh="$HOME/.nix-profile/etc/profile.d/nix.sh"
+devenv_bin="$HOME/.nix-profile/bin/devenv"
 nixpkgs="https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz"
+
+# The hook used to stop here with "nix not installed yet; run .claude/setup.sh first", so a fresh
+# container had no devenv until an agent read the docs and ran this by hand, and the session's
+# first build failed. Now the hook starts the install itself. It cannot WAIT for it: the hook has
+# a timeout and the install takes minutes, so the full run goes into the background and the hook
+# says where its log is.
+#
+# One installer at a time, however many sessions or hook runs arrive. The lock is taken BEFORE
+# the spawn and handed to the job as the inherited fd 9, so it is held for as long as the job or
+# anything it started is alive, and a job that crashes releases it. A pid file would go stale;
+# this cannot.
+#
+# `setsid` puts the job in a session of its own, so it outlives the hook's process group. The
+# redirections matter as much: a job holding the hook's stdout keeps the hook "running" until the
+# job exits, which is the timeout again. The job is `bash "$0"` with no flag, the full path. A
+# conflict is flock's own exit 75, so a missing flock is not read as "somebody else is
+# installing".
+if $hook_only && ! { [ -e "$nix_sh" ] && [ -x "$devenv_bin" ]; }; then
+  lock=/tmp/yession-setup.lock
+  log=/tmp/yession-setup.log
+  exec 9>"$lock"
+  held=0
+  flock -n -E 75 9 || held=$?
+  case "$held" in
+    0)  setsid --fork bash "$0" >"$log" 2>&1 </dev/null; state=started ;;
+    75) state="already running" ;;
+    *)  exit "$held" ;;
+  esac
+  echo "setup: nix or devenv missing; full setup $state in the background, log $log. devenv works once the log ends with \"setup: done\" (minutes); do not start a second run. If the log stops on an error, run: bash .claude/setup.sh"
+  exit 0
+fi
 
 if ! $hook_only; then
   # The container runs as root with no nixbld group — the installer aborts at its final
@@ -95,10 +129,6 @@ WRAP
   done
 fi
 
-if ! [ -e "$nix_sh" ]; then
-  echo "setup: nix not installed yet; run .claude/setup.sh (without --hook) first"
-  exit 0
-fi
 . "$nix_sh"
 
 # The yession cachix cache, so a store path this container lost is SUBSTITUTED instead of
@@ -212,7 +242,7 @@ $hook_only && exit 0
 # The devenv CLI itself, on PATH permanently — same nixpkgs the input resolution above uses.
 # Test the profile binary, not PATH: the wrapper written above shadows it, so `command -v`
 # would always succeed and this install would never run.
-[ -x "$HOME/.nix-profile/bin/devenv" ] \
+[ -x "$devenv_bin" ] \
   || nix profile add "${nixpkgs}#devenv" 2>/dev/null \
   || nix profile install "${nixpkgs}#devenv"
 
