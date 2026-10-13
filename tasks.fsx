@@ -2271,13 +2271,17 @@ let private rejectedExit = 1
 [<Literal>]
 let private unfinishedExit = 3
 
-/// One finding, as the report gives it: which rule, in which file, on which line. The message
-/// is deliberately not carried — pinning its text would make every reword of a rule a failure
-/// of that rule, and stdout already shows a reader the words.
+/// One finding, as the report gives it: which rule, in which file, on which line and column. The
+/// message is deliberately not carried — pinning its text would make every reword of a rule a
+/// failure of that rule, and stdout already shows a reader the words. The column is, because
+/// where on its line a `YES000` starts is what tells the phantom from a real error
+/// (`isPhantomMismatch`).
 type private Finding =
     { Rule : string
       File : string
-      Line : int }
+      Line : int
+      /// 1-based, as SARIF numbers columns.
+      Column : int }
 
 /// What one run of the CLI amounted to, which is NOT what its exit code says.
 type private Verdict =
@@ -2357,10 +2361,65 @@ let private findingsIn (report: string) : Finding list option =
                           yield
                               { Rule = result.GetProperty("ruleId").GetString ()
                                 File = at.GetProperty("artifactLocation").GetProperty("uri").GetString ()
-                                Line = at.GetProperty("region").GetProperty("startLine").GetInt32 () } ]
+                                Line = at.GetProperty("region").GetProperty("startLine").GetInt32 ()
+                                Column = at.GetProperty("region").GetProperty("startColumn").GetInt32 () } ]
     with _ ->
         // A report that will not parse is a report that was not finished being written.
         None
+
+/// The phantom `YES000`: a type mismatch that appears in CI alone, anchored at a column that
+/// addresses no character of its own line (`analyzers/AGENTS.md`, "A YES000 that will not
+/// reproduce"). An error the compiler really made starts ON the code it is about, so a start
+/// column past the last character of the line it names is the one tell the report carries.
+/// `column` is 1-based, as SARIF numbers it, so a line of `n` characters has columns 1 to `n`.
+let private isPhantomMismatch (column: int) (lineText: string) : bool = column > lineText.Length
+
+/// Where a finding's file is on disk. The CLI spells a report path relative to the PARENT of
+/// `--code-root`, so it begins with the repository directory's own name (`yession/analyzers/...`).
+/// The fixture check in `analyzers` fails if that stops being true, because `sourceLine` would
+/// otherwise go quiet without saying so.
+let private findingPath (finding: Finding) : string =
+    Path.Combine (Path.GetDirectoryName repoRoot, finding.File)
+
+/// The text of the line a finding is anchored on, or nothing when it cannot be read: a report
+/// path that is not in this tree, or a line number the file does not reach. Either way the
+/// finding is not shown to be the phantom, which is what `None` answers.
+let private sourceLine (finding: Finding) : string option =
+    try
+        let lines = File.ReadAllLines (findingPath finding)
+
+        if finding.Line >= 1 && finding.Line <= lines.Length then
+            Some lines.[finding.Line - 1]
+        else
+            None
+    with
+    | :? IOException
+    | :? UnauthorizedAccessException -> None
+
+/// What `lint` says right after a `YES000` it can recognise as the phantom, so that the reader
+/// meets the known remedy at the moment they need it. Nothing for any other `YES000`: those
+/// are real compile errors, and `build` shows them.
+let private phantomHint (findings: Finding list) : string option =
+    let phantoms =
+        findings
+        |> List.filter (fun f ->
+            f.Rule = unjudged && (sourceLine f |> Option.exists (isPhantomMismatch f.Column)))
+
+    if List.isEmpty phantoms then
+        None
+    else
+        let where =
+            phantoms
+            |> List.map (fun f -> $"%s{Path.GetRelativePath (repoRoot, findingPath f)}:%d{f.Line}")
+            |> String.concat ", "
+
+        Some(
+            $"lint: %s{where}: this YES000 starts past the end of its line. If `build` compiles the "
+            + "file cleanly, it is the phantom type mismatch that appears in CI alone.\n"
+            + "lint: every known case was a name rebound across an option boundary (`x : T option`, "
+            + "then `x : T`). Rename the inner binding.\n"
+            + "lint: the cause is not known, so a case that does not fit is worth reporting."
+        )
 
 let private analyze (projects: string list) : Verdict * string =
     // A path of this run's own. Two `lint`s can be in flight on one box — several agents
@@ -2480,6 +2539,7 @@ let private analyzers () =
         exit unfinishedExit
     | Judged findings when findings |> List.exists (fun f -> f.Rule = unjudged) ->
         printfn "%s" output
+        phantomHint findings |> Option.iter (eprintfn "%s")
 
         eprintfn
             "lint: %s"
@@ -2526,6 +2586,23 @@ let private analyzers () =
                     file
                     expected
                     actual
+
+        // `phantomHint` says nothing when it cannot find the line a finding names, so a report
+        // path convention that moved would switch it off in silence. The `YES000` this fixture
+        // marks is a real error inside its line: `sourceLine` must read that line, and
+        // `isPhantomMismatch` must not take it for the phantom.
+        if code = unjudged then
+            for f in fixtureFindings |> List.filter (fun f -> f.Rule = unjudged) do
+                if Option.isNone (sourceLine f) then
+                    failwithf
+                        "lint: the YES000 hint cannot read %s:%d, so it could never fire. The CLI spells report paths relative to the parent of --code-root; if that changed, change `sourceLine` in tasks.fsx"
+                        f.File
+                        f.Line
+
+            if Option.isSome (phantomHint fixtureFindings) then
+                failwithf
+                    "lint: the YES000 hint fired on %s, whose error lies inside its line. SARIF columns are 1-based; if that changed, change `isPhantomMismatch` in tasks.fsx"
+                    name
 
 // A workflow file is only validated by GitHub when it RUNS. release.yml runs on master — after a
 // PR has merged — so a syntax error in it is invisible to PR CI and lands already broken: a
