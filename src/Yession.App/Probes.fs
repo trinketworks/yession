@@ -710,6 +710,82 @@ module Probes =
           EncodeAnswer = List.map Encode.string >> Encode.list
           DecodeAnswer = Decode.list Decode.string }
 
+    /// Whether this client KEPT some words: a store whose name holds the first part, with an
+    /// entry whose body holds the second — or, asked with `true`, a LINE of a body holding them
+    /// beside an asciicast `"o"`, which is what a terminal printed rather than the `"i"` input
+    /// line of the command that caused it. A store that cannot be read has kept nothing.
+    let kept : Probe<(string * string) * bool, bool> =
+        { Name = "__probeKept"
+          EncodeAsk =
+            fun ((store, words), printed) ->
+                Encode.list [ Encode.string store; Encode.string words; Encode.bool printed ]
+          DecodeAsk =
+            Decode.tuple3 Decode.string Decode.string Decode.bool
+            |> Decode.map (fun (store, words, printed) -> (store, words), printed)
+          EncodeAnswer = Encode.bool
+          DecodeAnswer = Decode.bool }
+
+    /// Whether the page has a service worker registration with an ACTIVE worker. Asked of
+    /// `getRegistration`, which answers at once, rather than `ready`, which never settles where
+    /// no worker will activate.
+    let workerActive : Probe<int, bool> =
+        { Name = "__probeWorkerActive"
+          EncodeAsk = Encode.int
+          DecodeAsk = Decode.int
+          EncodeAnswer = Encode.bool
+          DecodeAnswer = Decode.bool }
+
+    /// The installed app as the browser resolves it from the page's manifest link: the path its
+    /// start URL resolves to, and its first icon fetched — the path it was served from, the
+    /// status and the content type.
+    [<RequireQualifiedAccess>]
+    type Installed = { Start: string; Icon: string; Status: int; ContentType: string option }
+
+    [<RequireQualifiedAccess>]
+    module Installed =
+        let encode (installed: Installed) =
+            Encode.object
+                [ "start", Encode.string installed.Start
+                  "icon", Encode.string installed.Icon
+                  "status", Encode.int installed.Status
+                  "contentType", Encode.option Encode.string installed.ContentType ]
+
+        let decode : Decoder<Installed> =
+            Decode.object (fun get ->
+                { Installed.Start = get.Required.Field "start" Decode.string
+                  Installed.Icon = get.Required.Field "icon" Decode.string
+                  Installed.Status = get.Required.Field "status" Decode.int
+                  Installed.ContentType = get.Optional.Field "contentType" Decode.string })
+
+    /// `None` where the page links no manifest, or the manifest names no start or icon.
+    let installed : Probe<int, Installed option> =
+        { Name = "__probeInstalled"
+          EncodeAsk = Encode.int
+          DecodeAsk = Decode.int
+          EncodeAnswer = Encode.option Installed.encode
+          DecodeAnswer = Decode.option Installed.decode }
+
+    /// How many matches a person can SEE: each hit-tested at its centre, clamped inside the
+    /// window, and seen when what is painted there is it, inside it, or holds it. Neither
+    /// `offsetParent` (null for anything fixed) nor a box (non-zero for contents clipped to
+    /// nothing by an `overflow: hidden` ancestor) can say so.
+    let visible : Probe<string, int> =
+        { Name = "__probeVisible"
+          EncodeAsk = Encode.string
+          DecodeAsk = Decode.string
+          EncodeAnswer = Encode.int
+          DecodeAnswer = Decode.int }
+
+    /// The first match's scroll box once it has stood still — its top unmoved for three frames
+    /// running, wherever that is. For a scroll still going after the gesture that started it:
+    /// a thumb lifted is a scroll still going. `None` where nothing matches.
+    let stood : Probe<string, Scroll option> =
+        { Name = "__probeStood"
+          EncodeAsk = Encode.string
+          DecodeAsk = Decode.string
+          EncodeAnswer = Encode.option Scroll.encode
+          DecodeAnswer = Decode.option Scroll.decode }
+
     /// Whether the page's media query matches, as `matchMedia` answers it.
     let media : Probe<string, bool> =
         { Name = "__probeMedia"

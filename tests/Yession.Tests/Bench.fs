@@ -32,6 +32,7 @@ open Microsoft.Playwright
 
 open Yession.Domain
 open Yession.Tests.Browser
+open Yession.Tests.BrowserProbe
 open Yession.Tests.BrowserHarness
 
 module HarnessPage = Yession.App.HarnessPage
@@ -206,39 +207,43 @@ let private thumbFling (cdp: ICDPSession) (x: float) (fromY: float) (toY: float)
 /// recorded were not a fling's, whatever else they were.
 let private flingWhileStreaming (page: IPage) (cdp: ICDPSession) (records: int) : Async<float> =
     async {
-        let scrollTop = "() => document.querySelector('#shell [data-conversation]').scrollTop"
+        let conversation = "#shell [data-conversation]"
+        let scrollTop () =
+            async {
+                match! Probe.scroll page conversation with
+                | Some scroll -> return scroll.Top
+                | None -> return failwith "no conversation to fling"
+            }
         // Where the thumb goes, found again before every gesture: a fling that reaches the
         // conversation's top chains to the page, which scrolls the shell out from under a
         // box measured once.
-        let box' =
-            """() => {
-              const el = document.querySelector('#shell [data-conversation]')
-              el.scrollIntoView()
-              const r = el.getBoundingClientRect()
-              return [r.x + r.width / 2, r.top + r.height * 0.2, r.top + r.height * 0.9]
-            }"""
+        let thumb () =
+            async {
+                do! Probe.reveal page conversation
+                match! Probe.boxes page [ conversation ] with
+                | [ Some r ] ->
+                    let height = Yession.App.Probes.Box.height r
+                    return r.Left + Yession.App.Probes.Box.width r / 2.0, r.Top + height * 0.2, r.Top + height * 0.9
+                | _ -> return failwith "no conversation to fling"
+            }
         let mutable carried = 0.0
         let mutable sent = 0
         let mutable gestures = 0
         // Bounded, so a stream that stopped early cannot fling forever: at most one gesture
         // per record is far more than any conversation needs.
         while sent < records && gestures < records do
-            let! b = await (page.EvaluateAsync<float[]> box')
-            let! before = await (page.EvaluateAsync<float> scrollTop)
-            do! thumbFling cdp b.[0] b.[1] b.[2]
+            let! x, top, bottom = thumb ()
+            let! before = scrollTop ()
+            do! thumbFling cdp x top bottom
             // Let the fling run out before measuring what it carried: a thumb lifted is a
             // scroll still going.
-            do! awaitU (page.WaitForFunctionAsync """() => new Promise(done => {
-                  const el = document.querySelector('#shell [data-conversation]')
-                  let last = el.scrollTop, still = 0
-                  const tick = () => { if (el.scrollTop === last) still++; else { still = 0; last = el.scrollTop }
-                    if (still >= 3) done(true); else requestAnimationFrame(tick) }
-                  requestAnimationFrame(tick) })""")
+            let! stood = Probe.stood page conversation
             gestures <- gestures + 1
-            let! after = await (page.EvaluateAsync<float> scrollTop)
+            let after = stood |> Option.map (fun s -> s.Top) |> Option.defaultWith (fun () -> failwith "the conversation went")
             carried <- carried + max 0.0 (before - after)
             if after <= 0.0 then
-                do! awaitU (page.EvaluateAsync "() => { const el = document.querySelector('#shell [data-conversation]'); el.scrollTop = el.scrollHeight }")
+                let! _ = Probe.park page conversation true
+                ()
             let! n = Harness.ask page HarnessPage.benchScrollSent
             sent <- n
         return carried
@@ -253,7 +258,10 @@ let tests =
                 let! br =
                     await (pw.Chromium.LaunchAsync (
                         BrowserTypeLaunchOptions (ExecutablePath = chromiumPath ())))
-                let! page = await (br.NewPageAsync ())
+                // Through `Contexts`, as every browser case's are, so each page carries the probes
+                // the fling asks where it is.
+                let contexts = Contexts br
+                let! page = contexts.Page None
                 let evidence = watching page
                 page.SetDefaultTimeout 30000.0f
 
@@ -321,10 +329,11 @@ let tests =
                         // 648px rather than 390 (`Browser.fs` tells the same story). Touch is
                         // what makes the fling a touch gesture rather than a wheel.
                         let! phoneContext =
-                            await (br.NewContextAsync (
-                                BrowserNewContextOptions (
-                                    ViewportSize = ViewportSize (Width = fst phone, Height = snd phone),
-                                    HasTouch = true)))
+                            contexts.Open (
+                                Some (
+                                    BrowserNewContextOptions (
+                                        ViewportSize = ViewportSize (Width = fst phone, Height = snd phone),
+                                        HasTouch = true)))
                         let! phonePage = await (phoneContext.NewPageAsync ())
                         let! _ = await (phonePage.GotoAsync (server.At "/"))
                         let! _ = await (phonePage.WaitForSelectorAsync "#shell [data-conversation]")

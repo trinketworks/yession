@@ -111,6 +111,19 @@ module Probe =
     let attrAt (page: IPage) (x: float) (y: float) (selector: string) (attribute: string) : Async<string option> =
         ask page Probes.attrAt ((x, y), (selector, attribute))
 
+    /// Whether this client kept some words in a store whose name holds `store`.
+    let kept (page: IPage) (store: string) (words: string) : Async<bool> = ask page Probes.kept ((store, words), false)
+
+    /// Whether this client kept some words as a terminal PRINTED them, in a store whose name
+    /// holds `store`.
+    let keptPrinted (page: IPage) (store: string) (words: string) : Async<bool> = ask page Probes.kept ((store, words), true)
+
+    /// The first match's scroll box once it has stood still for three frames.
+    let stood (page: IPage) (selector: string) : Async<Probes.Scroll option> = ask page Probes.stood selector
+
+    /// How many matches a person can see.
+    let visible (page: IPage) (selector: string) : Async<int> = ask page Probes.visible selector
+
     /// Whether a media query matches on the page.
     let media (page: IPage) (query: string) : Async<bool> = ask page Probes.media query
 
