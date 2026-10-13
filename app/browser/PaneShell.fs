@@ -358,6 +358,21 @@ let revealMessage (messageId: string) : unit =
             // all — focusable on purpose, never a Tab stop.
             item.focus ()))
 
+/// Scroll the conversation to one command's chip and flash it: `revealMessage`'s two moves
+/// and its focus, on the chip a command leaves in the timeline. The chip is a `<button>`, so
+/// focus lands on something a reader can press next — the preview of the command.
+let revealCommand (terminalId: string) (blockId: string) : unit =
+    nextFrame (fun () ->
+        find (sprintf "[data-conversation] [data-chat-block=\"%s\"][data-terminal-id=\"%s\"]" blockId terminalId)
+        |> Option.iter (fun chip ->
+            scrollIntoMiddle chip
+            // A chip is a bare row like a block, so it takes the line's flash, not the
+            // message's rimmed ground (`revealBlock` says why).
+            chip.classList.remove [| "animate-reveal-line" |]
+            reflow chip
+            chip.classList.add [| "animate-reveal-line" |]
+            chip.focus ()))
+
 /// The "jump to latest" press: the surface followed from its end (`Tail.follow`), and the
 /// keyboard put where the reader now is. The press takes its own control away — a surface at
 /// its end has no way back to offer — so focus has to land somewhere or it lands on `body`:
@@ -470,6 +485,8 @@ let rec move (asked: Yession.App.DomMove) : unit =
     | Yession.App.DomMove.RevealBlock (terminalId, blockId) ->
         revealBlock (Yession.Domain.TerminalId.value terminalId) (Yession.Domain.BlockId.value blockId)
     | Yession.App.DomMove.RevealMessage messageId -> revealMessage (Yession.Domain.MessageId.value messageId)
+    | Yession.App.DomMove.RevealCommand (terminalId, blockId) ->
+        revealCommand (Yession.Domain.TerminalId.value terminalId) (Yession.Domain.BlockId.value blockId)
     | Yession.App.DomMove.ScrollToLatest surface -> Tail.follow surface |> ignore
     | Yession.App.DomMove.JumpToLatest surface -> jumpToLatest surface
     // A frame on, for the render that drew the selection; not a placement, so not guarded.
@@ -506,6 +523,7 @@ and private place (asked: Yession.App.DomMove) : unit =
     // Not placements, and nothing guards one: made as `move` makes them.
     | Yession.App.DomMove.RevealBlock _
     | Yession.App.DomMove.RevealMessage _
+    | Yession.App.DomMove.RevealCommand _
     | Yession.App.DomMove.ScrollToLatest _
     | Yession.App.DomMove.JumpToLatest _ -> move asked
     | Yession.App.DomMove.RevealPivot -> Strip.revealSelected ()

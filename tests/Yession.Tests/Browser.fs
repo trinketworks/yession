@@ -5100,8 +5100,16 @@ let editorTests =
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
                     do! toTheEnd page "chat"
                     do! toTheStart page "chat"
+                    // The harness keeps other fixtures above the shell, so where the page
+                    // itself is scrolled to is incidental: a tray already up at rest (a
+                    // command running) put the way back under the harness's fold. The
+                    // app's shell IS the page, so the control is brought into the window
+                    // first and then asked whether it is painted.
+                    let jump = "#shell [data-jump-to-latest='chat'] button"
+                    let! _ = await (page.WaitForSelectorAsync jump)
+                    do! awaitU (page.Locator(jump).ScrollIntoViewIfNeededAsync ())
                     do! Wait.until "the way to the latest message to be on screen" (fun () -> jumpOffered page "chat") id
-                    do! awaitU (page.FocusAsync "#shell [data-jump-to-latest='chat'] button")
+                    do! awaitU (page.FocusAsync jump)
                     do! awaitU (page.Keyboard.PressAsync "Enter")
                     do! Wait.until "the conversation to reach its end" (fun () -> atItsEnd page "chat") id
                     let! focused = focusedAttr page "data-tail"

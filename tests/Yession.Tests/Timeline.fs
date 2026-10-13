@@ -1038,6 +1038,48 @@ let private upBeforeTheLog : ClientModel =
 /// The page that carries `upBeforeTheLog` past the read-through line.
 let private lastOfTheLog = [ at 2L 1.0 (sent "1" "hello") ]
 
+/// The composer's tray says a command is running in the spot interrupt takes during a turn,
+/// and goes to that command's chip when pressed.
+let private trayRunningTests =
+    let runningHook = Dom.attr Dom.Hooks.revealRunning (BlockId.value (block "1"))
+    let turnId = AgentTurnId.create "turn-1" |> expect
+    testList "The tray says a command is running" [
+        testCase "a command running with no turn: the tray offers the way to it" <| fun () ->
+            let running = clientOf (twoOpenOneEnded @ [ at 5L 4.0 (started terminalA "1" byAda "make" 1) ])
+            let html = Support.render running
+            Expect.stringContains html runningHook "the tray names the running command's block"
+            Expect.isFalse (html.Contains Dom.Hooks.interruptTurn) "and offers no interrupt, with no turn to stop"
+
+        testCase "a turn running: interrupt takes the spot, running does not" <| fun () ->
+            let duringTurn =
+                clientOf
+                    (twoOpenOneEnded
+                     @ [ at 5L 4.0 (AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy (message "1") })
+                         at 6L 5.0 (started terminalA "1" agentForAda "make" 1) ])
+            let html = Support.render duringTurn
+            Expect.equal (html.Split Dom.Hooks.interruptTurn |> Array.length) 2 "one interrupt"
+            Expect.isFalse (html.Contains Dom.Hooks.revealRunning) "and no running beside it"
+
+        testCase "nothing running, no turn: no tray" <| fun () ->
+            let finished =
+                clientOf
+                    (twoOpenOneEnded
+                     @ [ at 5L 4.0 (started terminalA "1" byAda "make" 1)
+                         at 6L 5.0 (completed terminalA "1" (CommandSucceeded 0) 9) ])
+            let html = Support.render finished
+            Expect.isFalse (html.Contains Dom.Hooks.revealRunning) "a finished command is not running"
+            Expect.isFalse (html.Contains "data-composer-tray") "and the strip has nothing to hold"
+
+        testCase "going to an agent's command opens the task card it sits in" <| fun () ->
+            let model =
+                clientOf
+                    (twoOpenOneEnded
+                     @ [ at 5L 4.0 (AgentTurnStarted { AgentTurnId = turnId; Cause = TurnCause.TriggeredBy (message "1") })
+                         at 6L 5.0 (started terminalA "1" agentForAda "make" 1) ])
+            let revealed = model |> Support.step (MoveMsg (DomMove.RevealCommand (terminalA, block "1")))
+            Expect.isTrue (Set.contains (FoldKey.Task turnId) revealed.OpenFolds) "the chip is on the page to scroll to"
+    ]
+
 let private edgeTabTests =
     testList "The hidden pane is an edge tab (P1-4)" [
         testCase "the hidden pane's edge tab counts the open terminals" <| fun () ->
@@ -5691,6 +5733,7 @@ let tests =
         namingTests
         reloadTests
         edgeTabTests
+        trayRunningTests
         statusTests
         unseenTests
         latestTests
