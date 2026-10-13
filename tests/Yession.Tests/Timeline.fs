@@ -2087,22 +2087,20 @@ let private videoTests =
             Expect.isFalse (refuser.Contains ">ada<") "never the id"
             Expect.isFalse (html.Contains (Dom.attr Dom.Hooks.paneReplay "block:term-a:b-no")) "and mounts no player"
 
-        testCase "a block offers the way to its command in the terminal's own history" <| fun () ->
-            // The reader's other question — what was going on around this — is about POSITION,
-            // and its answer is more of the same text. Offered wherever there is a history to
-            // be positioned in, open or closed: the question is as real on a running terminal.
-            let closed =
-                withRecords (clientOf recordedTerminal)
-                |> Support.step (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Block (terminalA, block "1"))))
-            Expect.isTrue
-                ((Support.render closed).Contains (Dom.attr Dom.Hooks.paneShowInTerminal "b-1"))
-                "a closed terminal's block can be shown where it ran"
+        // The reader's other question — what was going on around this — is about POSITION, and
+        // its answer is more of the same text. A command's preview is that command lifted out of
+        // its terminal, and its one control puts it back there, open terminal or closed.
+        testCase "closing a closed terminal's command preview lands on that command in its history" <| fun () ->
+            let preview = Preview.ofSubject (PreviewSubject.Block (terminalA, block "1"))
+            let closed = withRecords (clientOf recordedTerminal) |> Support.step (OpenPreviewMsg preview)
+            Expect.equal (ClientModel.closingPreview preview closed) (ShowInTerminalMsg (terminalA, block "1")) "back where it ran"
+
+        testCase "closing a running terminal's command preview lands on that command in its history" <| fun () ->
+            let preview = Preview.ofSubject (PreviewSubject.Block (terminalA, block "1"))
             let stillOpen =
                 withRecords (clientOf (recordedTerminal |> List.filter (fun e -> match e.Event with SessionEvent.TerminalClosed _ -> false | _ -> true)))
-                |> Support.step (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Block (terminalA, block "1"))))
-            Expect.isTrue
-                ((Support.render stillOpen).Contains (Dom.attr Dom.Hooks.paneShowInTerminal "b-1"))
-                "and so can a running one's"
+                |> Support.step (OpenPreviewMsg preview)
+            Expect.equal (ClientModel.closingPreview preview stillOpen) (ShowInTerminalMsg (terminalA, block "1")) "back where it ran"
 
         testCase "the keyframe a preview needs is the one at its range's first line" <| fun () ->
             let model = withRecords (clientOf recordedTerminal) |> Support.step (chip terminalA "2")

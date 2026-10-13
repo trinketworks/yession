@@ -250,6 +250,22 @@ module Media =
     [<Emit("window.matchMedia($0)")>]
     let mediaQuery (query: string) : MediaQueryList = jsNative
 
+/// The View Transitions API: the browser snapshots the page, runs an update, snapshots it
+/// again, and animates between the two — an element named the same in both (`view-transition-
+/// name`) moves from where it was to where it is. Declared as the one call this repository
+/// makes, and whether the browser has it, which a caller asks first: where it is missing the
+/// update simply runs.
+module ViewTransition =
+
+    /// Whether this browser can run a view transition.
+    [<Emit("typeof document !== 'undefined' && typeof document.startViewTransition === 'function'")>]
+    let supported () : bool = jsNative
+
+    /// Run `update` inside a view transition. The promise it returns says when the new state
+    /// is on the page, which is when the browser takes its second snapshot.
+    [<Emit("document.startViewTransition($0)")>]
+    let start (update: unit -> JS.Promise<unit>) : unit = jsNative
+
 /// The one write this repository makes to the system clipboard.
 ///
 /// `Fable.Browser.Dom`'s `Navigator` stops at the navigator's older surface, and the async

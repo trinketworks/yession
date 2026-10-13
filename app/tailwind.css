@@ -180,9 +180,23 @@
 @keyframes ask-rise {
   from { height: 0; opacity: 0; }
 }
+/* A command landing in its terminal: lifted (`Style.paneToolbarLifted`) — the ground two steps
+   up and a leading edge in ink — and settling back into the history. */
 @keyframes reveal-line {
-  0%, 55% { background-color: var(--color-surface-2); }
-  100% { background-color: transparent; }
+  0%, 55% { background-color: var(--color-surface-2); box-shadow: inset 2px 0 0 var(--color-ink); }
+  100% { background-color: transparent; box-shadow: inset 2px 0 0 transparent; }
+}
+
+/* The morph a preview's close runs (`ViewActions.Morph`): the lifted command moves into its
+   place in the terminal at the motion pace, eased out, while the pane cross-fades around it.
+   A reader who asked for no motion never gets here — the change just happens. */
+::view-transition-group(pane-lifted) {
+  animation-duration: 200ms;
+  animation-timing-function: ease-out;
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 200ms;
 }
 @keyframes reveal {
   /* A rim as well as a fill, because the fill alone is ambiguous: surface-2 is one step off

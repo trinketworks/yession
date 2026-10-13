@@ -3743,7 +3743,7 @@ let editorTests =
         // nicety: a chip that opens a pane and leaves focus behind is exactly the failure the
         // floor names. (The strip's arrow walk, which this case used to finish with, is the
         // keyboard-focus case's: a chip no longer adds a tab to walk to.)
-        editorCase "a chat chip opens a preview that plays" <| fun page ->
+        editorCase "a chat chip opens a preview, and focus follows it" <| fun page ->
             async {
                 // The chip the harness model's one block puts in the chat.
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
@@ -3752,38 +3752,17 @@ let editorTests =
                 // A preview opened, showing that block.
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview^='block:']")
 
-                // Focus followed it into the pane. Asserted BEFORE anything is played,
-                // because pressing play is itself a focus move.
+                // Focus followed it into the pane.
                 let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-pane-panel') === true""")
 
-                // The block reads as TEXT, and its recording is one press away — the two reads
-                // of one history, with the cheap one first. Pressing play mounts the real
-                // player over the ranged cast the model built, inside the preview the chip
-                // opened: a stream renderer would show a cursor-moving program as garbage,
-                // which is the whole reason the transcript was written as asciicast.
+                // The block reads as TEXT. (Its recording was one press away here too; a
+                // command's recording is its terminal's to play now, from its toolbar.)
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-block] [data-terminal-output]")
-                do! awaitU (page.ClickAsync "#shell [data-pane-watch]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-replay] .ap-overlay-start")
-                do! awaitU (page.ClickAsync "#shell [data-pane-replay] .ap-overlay-start")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector('#shell [data-pane-block]')?.textContent.includes('total 0') === true""")
                 return ()
             }
 
-        // A block's recording shows the screen the command began on before anybody presses
-        // play. Without a poster the player draws nothing until it is asked to play, so the
-        // preview a reader opened to watch a command was a black box with a button on it.
-        editorCase "a block's replay shows its first frame before play" <| fun page ->
-            async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
-                do! awaitU (page.ClickAsync "#shell [data-chat-block]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-block] [data-terminal-output]")
-                do! awaitU (page.ClickAsync "#shell [data-pane-watch]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-replay] .ap-overlay-start")
-                do! waitFor "the block's replay to show the screen its command began on" page
-                        """document.querySelector('#shell [data-pane-replay]')?.textContent.includes('before the command') === true"""
-            }
+        // (A block's replay used to show its first frame before play, here. A command's
+        // preview no longer plays it: the recording is the terminal's, from its toolbar.)
 
         // The session id is a thing people copy, so on a phone a press on it has to reach
         // IT — not fall through to the title field whose box reaches down behind it, where a
@@ -6630,8 +6609,8 @@ let editorTests =
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-show-in-terminal]")
-                do! awaitU (page.ClickAsync "#shell [data-pane-show-in-terminal]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview-close]")
+                do! awaitU (page.ClickAsync "#shell [data-pane-preview-close]")
 
                 // The pane moved to the terminal's own text.
                 let! _ =
@@ -6651,9 +6630,9 @@ let editorTests =
                              return b.top >= a.top - 1 && b.top < a.bottom
                            })()""")
 
-                // Focus followed into the pane, as it does for a chip: the control that was
-                // pressed left the document with the tab it was in.
-                let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-pane-panel') === true""")
+                // Focus went back to the chip the preview was opened from, as a preview's close
+                // gives it: the pane beside the chat now shows where that chip came from.
+                let! _ = await (page.WaitForFunctionAsync """document.activeElement?.hasAttribute('data-chat-block') === true""")
                 return ()
             }
 
@@ -6667,8 +6646,8 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-chat-task-card] [data-fold]")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card] [data-chat-block='block-burst-failed']")
                 do! awaitU (page.ClickAsync "#shell [data-chat-task-card] [data-chat-block='block-burst-failed']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-show-in-terminal]")
-                do! awaitU (page.ClickAsync "#shell [data-pane-show-in-terminal]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview-close]")
+                do! awaitU (page.ClickAsync "#shell [data-pane-preview-close]")
 
                 // One reading, so a red names every part that did not hold rather than the
                 // first wait that timed out.
@@ -6687,10 +6666,10 @@ let editorTests =
                            runOpen: !!run && run.open,
                            inView: r.top >= a.top - 1 && r.bottom <= a.bottom + 1 && !!hit && block.contains(hit),
                            marked: block.getAnimations().some(x => x.animationName === 'reveal-line'),
-                           focusInPane: document.activeElement?.hasAttribute('data-pane-panel') === true
+                           focusOnChip: document.activeElement?.hasAttribute('data-chat-block') === true
                          })
                        })()"""
-                let expected = "{\"runOpen\":true,\"inView\":true,\"marked\":true,\"focusInPane\":true}"
+                let expected = "{\"runOpen\":true,\"inView\":true,\"marked\":true,\"focusOnChip\":true}"
                 // The mark is an animation that ENDS, so it is read while it plays: the wait
                 // settles on all four at once, and only a wait that never settled reads again
                 // to say which part was missing.
@@ -6698,7 +6677,7 @@ let editorTests =
                 | Choice1Of2 _ -> ()
                 | Choice2Of2 _ ->
                     let! said = await (page.EvaluateAsync<string> ("() => " + landed))
-                    Expect.equal said expected "the run is open, the command in view, marked, and focus in the pane"
+                    Expect.equal said expected "the run is open, the command in view, marked, and focus back on the chip"
             }
 
         // A command and its status share a line only while the command keeps the line. With
@@ -6742,9 +6721,9 @@ let editorTests =
 
                 // Away to a preview, which takes the history out of the document, and back.
                 do! awaitU (page.ClickAsync "#shell [data-chat-block='block-harness']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-show-in-terminal]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview-close]")
                 let! _ = await (page.WaitForFunctionAsync """!document.querySelector("#shell [data-terminal-block-run='block-burst-ok']")""")
-                do! awaitU (page.ClickAsync "#shell [data-pane-show-in-terminal]")
+                do! awaitU (page.ClickAsync "#shell [data-pane-preview-close]")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-block-run='block-burst-ok'] details")
 
                 let! opened =
@@ -6935,16 +6914,14 @@ let editorTests =
 
         // Measured where a thumb lands: each one's centre hit-tested, so a name clipped to
         // nothing or a control under something else is not "reachable" — and the two presses
-        // a thumb's 44 each, the floor the strip's own items hold. The two presses are the
-        // preview's two exits: its close, back to the terminal it is laid over, and the way to
-        // this command in that terminal's history. (A third, `‹ <terminal>`, went where the
-        // close goes, and is gone.)
-        editorCaseIn 390 844 "on a phone, a preview's name, its close and its way into the terminal are on the screen" <| fun page ->
+        // a thumb's 44, the floor the strip's own items hold. The close is a command preview's
+        // one exit, and it is also the way to the command in its terminal's history.
+        editorCaseIn 390 844 "on a phone, a preview's name and its close are on the screen" <| fun page ->
             async {
                 do! previewSettled page
                 let! faults =
                     await (page.EvaluateAsync<string[]>
-                            """() => [['name', '[data-pane-preview-name]', 0], ['close', '[data-pane-preview-close]', 44], ['show in terminal', '[data-pane-show-in-terminal]', 44]]
+                            """() => [['name', '[data-pane-preview-name]', 0], ['close', '[data-pane-preview-close]', 44]]
                                  .flatMap(([what, sel, floor]) => {
                                    const e = document.querySelector('#shell ' + sel)
                                    if (!e) return [what + ': not rendered']
@@ -6956,7 +6933,7 @@ let editorTests =
                                    if (r.width < floor - 0.5 || r.height < floor - 0.5) faults.push(`${what}: ${Math.round(r.width)}x${Math.round(r.height)}`)
                                    return faults
                                  })""")
-                Expect.isEmpty faults (sprintf "the name is visible and both presses are 44px targets: %s" (String.Join (", ", faults)))
+                Expect.isEmpty faults (sprintf "the name is visible and the close is a 44px target: %s" (String.Join (", ", faults)))
             }
 
         // Nothing in a block preview pushes the column wider than the phone. The harness's

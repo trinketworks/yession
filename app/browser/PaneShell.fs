@@ -149,6 +149,10 @@ let private covered (element: HTMLElement) : bool =
     else
         match document.elementFromPoint (x, y) with
         | null -> false
+        // The document element itself is what answers while a view transition plays
+        // (`morph`): its overlay is painted over the whole page, which covers nothing a
+        // reader will see once it has run. No answer either way, so not covered.
+        | hit when System.Object.ReferenceEquals (hit, document.documentElement) -> false
         | hit -> not (element.contains hit)
 
 /// Return focus to the chat item that opened a preview, once the preview is going — the
@@ -231,6 +235,20 @@ let private toTerminalScreen (terminal: Yession.Domain.TerminalId) : unit =
 /// The mark is an animation that ends. A block scrolled to in a wall of identical mono is
 /// still a block nobody can pick out; a permanent highlight would still be pointing at it
 /// long after the reader had moved on.
+/// Run a model change as a morph (`ViewActions.Morph`): inside a view transition, which
+/// snapshots the page, runs the change, and snapshots it again once the update's promise
+/// settles. Settled at once, because a dispatch draws before it returns (`Render.setState`)
+/// and the browser holds every animation frame until it settles — a promise that waited on a
+/// frame waited on itself, and the transition timed out. Not where the browser has none, and
+/// not for a reader who asked for no motion: there the change simply happens, which is the end
+/// state the morph would have arrived at.
+let morph (change: unit -> unit) : unit =
+    if Fable.BrowserExtras.ViewTransition.supported () && not (mediaMatches "(prefers-reduced-motion: reduce)") then
+        Fable.BrowserExtras.ViewTransition.start (fun () ->
+            change ()
+            Promise.create (fun resolve _ -> resolve ()))
+    else change ()
+
 let revealBlock (terminalId: string) (blockId: string) : unit =
     nextFrame (fun () ->
         let scrollback =

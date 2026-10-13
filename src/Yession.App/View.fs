@@ -60,7 +60,12 @@ type ViewActions =
       /// Take files a person picked, pasted or dropped, to send into the artifacts. Imperative
       /// because a file's bytes are not model data: the browser keeps them and tells the model
       /// what it is keeping (`UploadPickedMsg`).
-      Upload : Browser.Types.File list -> unit }
+      Upload : Browser.Types.File list -> unit
+      /// Run a change to the model as a MORPH: what is named alike on the page before and
+      /// after it (`view-transition-name`) moves from one place to the other rather than
+      /// vanishing in one and appearing in the other. Imperative because only the browser can
+      /// snapshot the page around a render; where it cannot, the change simply happens.
+      Morph : (unit -> unit) -> unit }
 
 module ViewActions =
     /// A no-op action set for rendering the view to a string (SSR + tests). The handlers
@@ -70,7 +75,8 @@ module ViewActions =
           ReportFieldSelection = fun _ _ -> ()
           SendTerminalDraft = fun _ _ -> ()
           TypeIntoTerminal = fun _ _ -> ()
-          Upload = ignore }
+          Upload = ignore
+          Morph = fun change -> change () }
 
 module View =
 
@@ -3341,8 +3347,15 @@ module View =
             | BlockFinished _
             | BlockRejected _
             | BlockEnded _ -> Lit.nothing
+        // The command a preview settled back into carries the preview's name, so the browser
+        // moves the one into the other (`ViewActions.Morph`). Only while nothing is previewed:
+        // two elements of one name on one page and there is no morph at all.
+        let landed =
+            match model.Pane with
+            | Some (OnTerminal (ReadingAt (t, b))) when t = terminal && b = block.BlockId -> Style.liftedName
+            | _ -> ""
         html $"""
-            <article class="{Style.terminalBlock}" data-terminal-block="{BlockId.value block.BlockId}"
+            <article class="{Style.terminalBlock}" data-terminal-block="{BlockId.value block.BlockId}" style="{landed}"
                      data-terminal-block-status="{terminalBlockStatusLabel block.Status}">
               <div class="{Style.terminalBlockSummary}" data-terminal-block-command>
                 <span class="{Style.terminalBlockLine}">
@@ -4074,48 +4087,12 @@ module View =
     /// What a preview on screen affords, for the action row: a command's recording and its
     /// place in its terminal's history, a file's download. A stretch is always its recording
     /// and plays without being asked, so it has nothing to offer and nothing to step out to.
-    let private previewVerbs (dispatch: ClientMsg -> unit) (model: ClientModel) (preview: Preview) : TemplateResult list =
+    let private previewVerbs (preview: Preview) : TemplateResult list =
         match preview.Subject with
-        | PreviewSubject.Block (terminalId, blockId) ->
-            let blocks =
-                Projection.tryFind terminalId model.Terminals
-                |> Option.map (fun v -> v.Blocks)
-                |> Option.defaultValue []
-            let playing = ClientModel.previewPlays preview model
-            // ONE control rather than a pair, so the press that swaps the body leaves focus
-            // where it was: the same button in the same slot, saying the other thing.
-            // Offered only where there is something to play — a refusal never ran, and a
-            // recording still being written has no end to replay to.
-            let watch =
-                if not (ClientModel.previewPlayable preview.Subject model) then []
-                else
-                    let face = if playing then "output" else "watch"
-                    let label =
-                        if playing then html $"""{Icon.rights}{Dom.Text.output}"""
-                        else html $"""{Icon.play}{Dom.Text.replay}"""
-                    [ html $"""
-                        <button type="button" class="{Style.paneToolbarAct}" data-pane-watch="{face}"
-                                @click={Ev(fun _ ->
-                                              dispatch (ShowPreviewMsg { preview with Preview.Plays = not playing }))}>{label}</button>""" ]
-            // The reader's OTHER question about this command: not what it printed, which
-            // the body already answers, but what was going on around it. Text answers it —
-            // the terminal's own history, scrolled here — so there has to be a history. It
-            // takes the preview down: the reader has asked for the terminal instead.
-            //
-            // A fixed word, with the terminal's name in its accessible name only. It used to
-            // say `show in <name>`, and a terminal an agent opened is named for why it was
-            // opened — sixty characters of it, in the row's largest type, run off the side of
-            // a phone. Which terminal is the one the strip has selected, or the head says.
-            let showInTerminal =
-                if List.isEmpty blocks then []
-                else
-                    let where = Entity.terminalName model terminalId |> Option.defaultValue (TerminalId.value terminalId)
-                    [ html $"""
-                        <button type="button" class="{Style.paneToolbarAct}" data-pane-show-in-terminal="{BlockId.value blockId}"
-                                aria-label="{Dom.Text.showInTerminalNamed where}" title="{Dom.Text.showInTerminalNamed where}"
-                                @click={Ev(fun _ ->
-                                              dispatch (ShowInTerminalMsg (terminalId, blockId)))}>{Dom.Text.showInTerminal}</button>""" ]
-            watch @ showInTerminal
+        // A command's preview has one control, its close, which settles it back into its
+        // terminal (`View.contentPane`): it is the command lifted out of its history, and its
+        // recording and its place in that history are the terminal's to give.
+        | PreviewSubject.Block _ -> []
         | PreviewSubject.Stretch _ -> []
         | PreviewSubject.Content ref -> [ contentDownloadLink ref ]
 
@@ -4482,6 +4459,12 @@ module View =
         let tabs = model.Tabs |> List.choose (fun terminal -> Projection.tryFind terminal model.Terminals)
         let selected = ClientModel.selectedTerminal model
         let previewing = ClientModel.preview model
+        // A command's preview is the command LIFTED out of its terminal: it wears a ground of
+        // its own, and its close settles it back. A file's or a stretch's is a view over the pane.
+        let lifted (preview: Preview) =
+            match preview.Subject with
+            | PreviewSubject.Block _ -> true
+            | PreviewSubject.Stretch _ | PreviewSubject.Content _ -> false
         let onAll = model.Switcher
         // Which pivot item is selected — exactly one, or none in a pane with nothing in it:
         // `all` while it is up, else the terminal the pane is about, preview or not. A preview
@@ -4540,7 +4523,12 @@ module View =
             let showing = on && Option.isNone previewing
             let key = ClientModel.tabKey view.TerminalId
             let id = TerminalId.value view.TerminalId
-            let klass = if on then Style.pivotItemOn else Style.pivotItem
+            // Under a command's preview, the tab wears the preview's own lifted ground, so the
+            // two read as one piece: the command, lifted out of this terminal.
+            let klass =
+                if not on then Style.pivotItem
+                elif previewing |> Option.exists lifted then Style.pivotItemLifted
+                else Style.pivotItemOn
             let name = TerminalName.display model.Terminals view
             // The item says WHICH terminal; what it is running, and the sandbox it runs in, ride
             // the tooltip, because a row of names is what a person scans and a row of commands
@@ -4853,8 +4841,8 @@ module View =
                         Dom.paneTabId (ClientModel.tabKey terminal) + " " + Dom.panePreviewNameId
                     | Some _ | None -> Dom.panePreviewNameId
                 html $"""
-                    <div class="{Style.panePanel}" role="tabpanel" tabindex="-1"
-                         id="{Dom.panePanelId}" aria-labelledby="{labelledBy}"
+                    <div class="{if lifted preview then Style.panePanelLifted else Style.panePanel}" role="tabpanel" tabindex="-1"
+                         id="{Dom.panePanelId}" aria-labelledby="{labelledBy}" style="{if lifted preview then Style.liftedName else ""}"
                          data-pane-panel="{key}" data-pane-preview="{key}">
                       {previewBody preview}
                     </div>"""
@@ -4909,6 +4897,14 @@ module View =
         //
         // Under a preview the row is the PREVIEW's (F3): its name, where it lives when the
         // strip does not say so, its acts, and its close.
+        // A preview's close. A command's settles it back into its place in its terminal — the
+        // tab switched first when it lives in another — and highlighted there, as a MORPH: the
+        // preview and the command are named alike (`Style.liftedName`), so the browser moves
+        // the one into the other rather than swapping them. Anything else just closes.
+        let closePreview (preview: Preview) =
+            match ClientModel.closingPreview preview model with
+            | ShowInTerminalMsg _ as settle -> actions.Morph (fun () -> dispatch settle)
+            | other -> dispatch other
         let toolbar =
             match previewing, selected with
             | Some preview, _ ->
@@ -4926,16 +4922,16 @@ module View =
                                        title="{Dom.Text.inTerminal name}">{Dom.Text.inTerminal name}</span>"""
                     | PreviewSubject.Block _ | PreviewSubject.Stretch _ | PreviewSubject.Content _ -> Lit.nothing
                 html $"""
-                    <div class="{Style.paneToolbar}">
+                    <div class="{if lifted preview then Style.paneToolbarLifted else Style.paneToolbar}">
                       <div class="{Style.panePreviewHead}" data-pane-subtitle="preview">
                         <span class="{Style.panePreviewName}" id="{Dom.panePreviewNameId}" data-pane-preview-name="{key}"
                               title="{hint}">{label}</span>
                         {whereabouts}
                       </div>
-                      {paneActionsView key (previewVerbs dispatch model preview)}
+                      {paneActionsView key (previewVerbs preview)}
                       <button type="button" class="{Style.paneStripAct}" data-pane-preview-close
                               aria-label="{Dom.Text.closePreview label}" title="{Dom.Text.closePreview label}"
-                              @click={Ev(fun _ -> dispatch ClosePreviewMsg)}>{Icon.close}</button>
+                              @click={Ev(fun _ -> closePreview preview)}>{Icon.close}</button>
                     </div>"""
             | None, Some terminal ->
                 // Where it runs, then what it is doing. A terminal whose BLOCKS are the read has
@@ -5038,7 +5034,7 @@ module View =
                                     let key = (e :?> Browser.Types.KeyboardEvent).key
                                     if key = "Escape" && not model.PaneMenu then
                                         if onAll then dispatch CloseSwitcherMsg
-                                        elif Option.isSome previewing then dispatch ClosePreviewMsg)}>
+                                        else previewing |> Option.iter closePreview)}>
                 {pivot}
                 <div class="{Style.paneUnderStrip}">
                   {toolbar}

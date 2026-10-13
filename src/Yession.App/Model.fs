@@ -2713,6 +2713,20 @@ module ClientModel =
         |> List.tryLast
         |> Option.map (fun block -> block.BlockId)
 
+    /// What closing a preview asks for. A command's settles it back into its place in its
+    /// terminal's history (`ShowInTerminalMsg`), the tab switched first when it lives in
+    /// another — the preview was that command lifted out, and its one control puts it back.
+    /// A command this device has not seen, a file, or a stretch just closes.
+    let closingPreview (preview: Preview) (model: ClientModel) : ClientMsg =
+        match preview.Subject with
+        | PreviewSubject.Block (terminal, block)
+            when Projection.tryFind terminal model.Terminals
+                 |> Option.exists (fun view -> view.Blocks |> List.exists (fun b -> b.BlockId = block)) ->
+            ShowInTerminalMsg (terminal, block)
+        | PreviewSubject.Block _
+        | PreviewSubject.Stretch _
+        | PreviewSubject.Content _ -> ClosePreviewMsg
+
     let shownTerminal (model: ClientModel) : TerminalId option =
         if model.TerminalsOpen && not model.Switcher && Option.isNone (preview model) then
             selectedTerminal model
@@ -5478,8 +5492,15 @@ module ClientModel =
             // itself, it stays on the tab.
             | ShowInPaneMsg _ when Option.isSome (preview model) && not model.Switcher ->
                 [ ClientEffect.Move (DomMove.IfDropped (paneLanding next)) ]
+            // Settling a preview back into its terminal moves the PANE to the command, and hands
+            // focus back to where the preview was opened from, as any preview's close does: the
+            // reader was reading the chat, and the pane beside it now shows where that came from.
             | ShowInTerminalMsg (terminal, block) ->
-                [ ClientEffect.Move (DomMove.RevealBlock (terminal, block)); ClientEffect.Move DomMove.FocusPane ]
+                let focus =
+                    match preview model with
+                    | Some preview -> DomMove.FocusChat preview.Subject
+                    | None -> DomMove.FocusPane
+                [ ClientEffect.Move (DomMove.RevealBlock (terminal, block)); ClientEffect.Move focus ]
             // Into the list as the page opens, and back onto the item it was laid over as it
             // goes: either way the control under the hand is about to leave the document, and
             // the keyboard has to go with the reader rather than be left on `body`.

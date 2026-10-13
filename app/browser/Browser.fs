@@ -1152,7 +1152,8 @@ let private start () =
                     for file in files do
                         let id = mintId "upload"
                         keptUploads.[id] <- (file, None)
-                        dispatchRef (UploadPickedMsg (id, file.name, int64 file.size)) }
+                        dispatchRef (UploadPickedMsg (id, file.name, int64 file.size))
+              Morph = PaneShell.morph }
 
         let el = appRoot ()
         // Take over the server-rendered shell: from here Lit owns it. lit-html's `render`

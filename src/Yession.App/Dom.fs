@@ -508,11 +508,6 @@ module Dom =
         let paneReplay = "data-pane-replay"
         /// A stretch's facts, above its recording.
         let paneStretch = "data-pane-stretch"
-        /// From a block, to that command in its terminal's own history (Plan 25, stage 3):
-        /// the same text, scrolled to it and marking it. The reader's other question — not
-        /// "what did this print", which the block already answers, but "what was going on
-        /// around it" — and text answers it, where a player used to.
-        let paneShowInTerminal = "data-pane-show-in-terminal"
         /// A block's way between its two reads: the output it printed, and the recording of
         /// it printing. One control saying whichever the reader is not looking at, so the
         /// press that swaps the body keeps the focus it was pressed with. Its VALUE is the
@@ -940,11 +935,6 @@ module Dom =
         /// A preview's close, naming what it closes. It says PREVIEW, because "close" on its
         /// own is the word this product uses for ending a terminal.
         let closePreview (what: string) = sprintf "Close preview %s" what
-        /// From a command's preview to that command in its terminal's history. A fixed word:
-        /// the terminal is named in the accessible name, never on the control.
-        let showInTerminal = "Show in terminal"
-        /// The same act's accessible name, which says which terminal.
-        let showInTerminalNamed (terminal: string) = sprintf "Show in terminal %s" terminal
         /// A command chip's accessible name: what ran, how it went, and WHERE — the part the
         /// chip's look leaves to its terminal name, and the part a screen reader walking a
         /// chat of forty commands across three terminals has no other way to hear. Status
