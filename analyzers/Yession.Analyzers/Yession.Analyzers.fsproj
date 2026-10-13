@@ -39,6 +39,7 @@
     <Compile Include="EmptyDefault.fs" />
     <Compile Include="AwaitSeam.fs" />
     <Compile Include="EmitHome.fs" />
+    <Compile Include="PageScripts.fs" />
   </ItemGroup>
 
   <ItemGroup>

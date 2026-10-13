@@ -11,6 +11,7 @@ open System.IO
 open Microsoft.Playwright
 open Thoth.Json.Net
 open Yession.App
+open Yession.Tests.PageScript
 
 [<RequireQualifiedAccess>]
 module Probe =
@@ -19,19 +20,14 @@ module Probe =
 
     /// Give every page this context opens the probes, before any script of its own runs.
     let install (context: IBrowserContext) : Async<unit> =
-        // The disposable it answers takes the script away again; it stays for the context's life.
-        Async.AwaitTask (context.AddInitScriptAsync (scriptPath = bundle)) |> Async.Ignore
-
-    /// The one piece of JavaScript the probes need from this side, and it is fixed: call the
-    /// function published under a name with the JSON it was asked. Nothing is spliced into it;
-    /// the name and the question cross as arguments.
-    let private invoke = "([name, asked]) => globalThis[name](asked)"
+        PageScript.everyPage context bundle
 
     /// Ask the page one question of its contract.
     let ask (page: IPage) (probe: Probes.Probe<'Ask, 'Answer>) (asked: 'Ask) : Async<'Answer> =
         async {
             let question = Encode.toString 0 (probe.EncodeAsk asked)
-            let! answer = Async.AwaitTask (page.EvaluateAsync<string> (invoke, [| probe.Name; question |]))
+            // The question crosses as JSON the shared codec wrote, and so does the answer.
+            let! answer = PageScript.call<string> page probe.Name [| box question |]
             return
                 match Decode.fromString probe.DecodeAnswer answer with
                 | Ok value -> value

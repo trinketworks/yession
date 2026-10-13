@@ -12,14 +12,10 @@ open Microsoft.Playwright
 open Microsoft.FSharp.Reflection
 open Fable.Core
 open Fable.BrowserExtras
+open Yession.Tests.PageScript
 
 [<RequireQualifiedAccess>]
 module Harness =
-    /// The two pieces of JavaScript this side needs, both fixed: call what is published under a
-    /// name with the arguments given, or read it. The name and the arguments cross as arguments.
-    let private invoke = "([name, args]) => globalThis[name](...args)"
-    let private lookup = "name => globalThis[name] ?? null"
-
     /// An argument as the page should see it. Playwright serializes an F# option as the object
     /// it is in .NET; the page's F# reads `None` as null and `Some x` as `x`, so it crosses as
     /// those.
@@ -32,12 +28,10 @@ module Harness =
         | v -> v
 
     let private call (page: IPage) (name: string) (args: obj list) : Async<unit> =
-        page.EvaluateAsync (invoke, [| box name; box (args |> List.map arg |> Array.ofList) |])
-        |> Async.AwaitTask
-        |> Async.Ignore
+        PageScript.run page name (args |> List.map arg |> Array.ofList)
 
     let private answer<'T> (page: IPage) (name: string) (args: obj list) : Async<'T> =
-        Async.AwaitTask (page.EvaluateAsync<'T> (invoke, [| box name; box (args |> List.map arg |> Array.ofList) |]))
+        PageScript.call<'T> page name (args |> List.map arg |> Array.ofList)
 
     // --- Calls whose answer is nothing ----------------------------------------------------
 
@@ -89,7 +83,7 @@ module Harness =
     /// What the page holds under this key; `None` where nothing has been published yet.
     let read (page: IPage) (key: PageGlobal<'T>) : Async<'T option> =
         async {
-            let! held = Async.AwaitTask (page.EvaluateAsync<JsonElement> (lookup, PageGlobal.name key))
+            let! held = PageScript.held<JsonElement> page (PageGlobal.name key)
             return
                 match held.ValueKind with
                 | JsonValueKind.Null

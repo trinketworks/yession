@@ -12,6 +12,7 @@ open System.Text.Json
 open Microsoft.Playwright
 open Thoth.Json.Net
 open Yession.App
+open Yession.Tests.PageScript
 
 [<RequireQualifiedAccess>]
 module Shim =
@@ -29,7 +30,7 @@ module Shim =
                     (JsonSerializer.Serialize (Fable.BrowserExtras.PageGlobal.name Shims.asked))
                     (JsonSerializer.Serialize asked)
             let! script = File.ReadAllTextAsync bundle |> Async.AwaitTask
-            do! Async.AwaitTask (page.AddInitScriptAsync (published + script)) |> Async.Ignore
+            do! PageScript.fromNextLoad page (published + script)
         }
 
 #endif

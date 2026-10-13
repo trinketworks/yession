@@ -2314,7 +2314,8 @@ let private fixtures =
       // same emits the first is reported for.
       "YES011", "EmitInProductFixture", [ "Product.fs" ]
       "YES011", "Yession.EmitInDomainFixture", [ "Domain.fs" ]
-      "YES011", "EmitInBindingFixture", [ "Binding.fs" ] ]
+      "YES011", "EmitInBindingFixture", [ "Binding.fs" ]
+      "YES012", "PageScriptFixture", [ "Typed.fs"; "Seam.fs"; "Elsewhere.fs" ] ]
 
 let private fixtureProject name =
     Path.Combine ("analyzers", "fixtures", name, name + ".fsproj")

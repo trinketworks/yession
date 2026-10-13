@@ -222,8 +222,10 @@ hole Fable closed. Only two have an analyzer rule, and it covers part of each, s
 author. Do not introduce any of these, and remove them from code you are already changing:
 
 - **A JavaScript program in a string.** An `[<Emit>]` outside `src/Fable.*` (rule YES011 reports
-  it), an inline `<script>` body, a CDP `Runtime.evaluate` source. Nothing type-checks the string.
-  Write F# through Fable, behind a binding project if it reaches an API we do not own.
+  it), an inline `<script>` body, a CDP `Runtime.evaluate` source, a Playwright `EvaluateAsync`
+  program (rule YES012 holds the suite's few fixed ones to `PageScript`). Nothing type-checks the
+  string. Write F# through Fable, behind a binding project if it reaches an API we do not own; in
+  the browser suite, a probe in `Yession.App.Probes`.
 - **Dynamic access: `?` and `?<-`.** `fs?readdirSync path` is one typo away from a silent
   `undefined`. Bind the module. Key the map with a type.
 - **`unbox`, `!!`, `:?>` on a value you did not just construct.** They assert and do not check. A
