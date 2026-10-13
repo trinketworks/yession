@@ -164,6 +164,9 @@ let all =
         // What may publish a release. `release.yml` runs on master alone, so this is the only
         // reader of its gate that runs before a release has already gone out through a hole.
         Tag.needs "Release gate" [] (fun () -> ReleaseGate.tests)
+        // That the capabilities `check` probes, `verify` asks for and `help` prints (tasks.fsx)
+        // are the cases of `Need` this very list is written in.
+        Tag.needs "Tasks capabilities" [] (fun () -> TasksCapabilities.tests)
         // That the gate, spread over one runner per capability tier, still runs everything
         // declared in this very list. A suite whose needs no tier satisfies runs nowhere and
         // says nothing about it, which is the one failure a green gate cannot distinguish

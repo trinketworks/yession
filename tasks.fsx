@@ -4,8 +4,9 @@
 // `dotnet fsi tasks.fsx <verb>`. Only tool-specific glue (nix/devenv bootstrap, actions/*
 // steps, artifact upload) stays in the callers; no Yession logic does.
 //
-// The verbs are the dispatch at the bottom of this file; each has its own section below. A
-// bare version (`dotnet fsi tasks.fsx 1.2.3`) is shorthand for `package`.
+// The verbs are the table at the bottom of this file, which the dispatch runs and `help` prints;
+// each has its own section below. A bare version (`dotnet fsi tasks.fsx 1.2.3`) is shorthand
+// for `package`.
 //
 // Yession ships as ONE npm package with two bins: `yession` (the Manager) and
 // `yession-session` (a Session). Each is esbuild-bundled to a single ESM file
@@ -1232,6 +1233,125 @@ let private jumpstarterAvailable () =
 // cheapest thing that only a runnable caddy answers; the dev shell provides one.
 let private caddyAvailable () = probeSucceeds "caddy" [ "version" ]
 
+/// A capability a run can ask `check` for: something a box may or may not be able to host.
+///
+/// THE ONE TABLE of them. `requireCapabilities` probes it, `verify` asks for the `Gated` rows,
+/// `help` prints it, and the `Tasks capabilities` suite holds its names equal to `Need` in
+/// `tests/Yession.Tests/Tags.fs`. A capability is a row here and a case there, never one alone.
+type private Capability =
+    { /// Spelled as `Need` spells it, and as `check` is given it.
+      Name: string
+      /// What it needs and how it is probed: the one line `help` prints.
+      Needs: string
+      /// Whether `verify`, the release gate, asks for it. `Bench` and `Dogfood` are asked for by name.
+      Gated: bool
+      /// Why this box cannot host it, or `None`. Run only for a capability the run asked for.
+      Refusal: unit -> string option }
+
+/// Refused with `reason` unless `hosted` answers true.
+let private unless (hosted: unit -> bool) (reason: string) () : string option =
+    if hosted () then None else Some reason
+
+/// A capability nothing probes: its suites find out for themselves, and skip or fail by name.
+let private unprobed () : string option = None
+
+let private capabilities : Capability list =
+    [ { Name = "Browser"
+        Needs = "Chromium, on the .NET CLR. Probe: none."
+        Gated = true
+        Refusal = unprobed }
+      { Name = "Ports"
+        Needs = "TCP ports and child processes. Probe: none."
+        Gated = true
+        Refusal = unprobed }
+      { Name = "Native"
+        Needs = "the node-datachannel addon (WebRTC). Probe: none."
+        Gated = true
+        Refusal = unprobed }
+      { Name = "Docker"
+        Needs = "a Docker daemon. Probe: `docker info`."
+        Gated = true
+        Refusal = unless dockerReachable "Docker: no daemon answers `docker info` (is it running, is DOCKER_HOST right?)" }
+      { Name = "LiveAgent"
+        Needs = "ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN. Probe: one is set."
+        Gated = true
+        Refusal = unless agentCredentials "LiveAgent: no ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in the environment" }
+      { Name = "LiveGitHub"
+        Needs = "a GITHUB_TOKEN that GitHub accepts. Probe: an authenticated API call."
+        Gated = true
+        Refusal =
+            unless
+                githubAccepts
+                ("LiveGitHub: no GITHUB_TOKEN, or GitHub refused it (a workflow passes "
+                 + "secrets.GITHUB_TOKEN; a sandbox whose proxy holds the credential needs HTTPS_PROXY)") }
+      { Name = "Keyring"
+        Needs = "an OS credential manager. Probe: none; headless Linux gets a private D-Bus."
+        Gated = true
+        Refusal = unprobed }
+      { Name = "Nix"
+        Needs = "the nix CLI, to evaluate the build source. Probe: `nix --version`."
+        Gated = true
+        Refusal = unless nixAvailable "Nix: no `nix` on PATH" }
+      { Name = "NixBuild"
+        Needs = "builds and boots the installable (minutes); pair with --runtime none. Probe: as Nix."
+        Gated = true
+        Refusal = unless nixAvailable "NixBuild: no `nix` on PATH" }
+      { Name = "Srt"
+        Needs = "bubblewrap, socat, ripgrep, setsid. Probe: runs the confinement profile."
+        Gated = true
+        Refusal =
+            unless
+                srtAvailable
+                ("Srt: no working confinement (bubblewrap, socat, ripgrep, setsid, and — under the strict "
+                 + "profile — a nested user namespace; an unprivileged container needs "
+                 + "YESSION_NESTED_SANDBOX=weak)") }
+      { Name = "Pty"
+        Needs = "the node-pty addon. Probe: opens a pseudo-terminal."
+        Gated = true
+        Refusal =
+            unless
+                ptyAvailable
+                ("Pty: node-pty could not open a pseudo-terminal (is the native addon built, and "
+                 + "does this box allow /dev/pts?)") }
+      { Name = "Serial"
+        Needs = "serialport, udevadm, socat. Probe: lists ports through the engine."
+        Gated = true
+        Refusal =
+            unless
+                serialAvailable
+                ("Serial: no working serial engine (needs the `serialport` addon, `udevadm` for "
+                 + "enumeration, and socat for a PTY pair — `devenv shell` provides all three on Linux)") }
+      { Name = "Jumpstarter"
+        Needs = "uv and Python 3.11+. Probe: `uv sync` on examples/jumpstarter (slow when cold)."
+        Gated = true
+        Refusal =
+            unless
+                jumpstarterAvailable
+                ("Jumpstarter: the example's Python environment would not resolve (needs `uv` and a "
+                 + "CPython >= 3.11 it can find, plus a network on the first run — try "
+                 + "`uv sync --project examples/jumpstarter --all-groups`)") }
+      { Name = "Caddy"
+        Needs = "the caddy binary. Probe: `caddy version`."
+        Gated = true
+        Refusal = unless caddyAvailable "Caddy: no `caddy` on PATH (`devenv shell` provides one)" }
+      { Name = "Bench"
+        Needs = "a timing run, not an assertion. Probe: none. `bench` asks for it."
+        Gated = false
+        Refusal = unprobed }
+      { Name = "Dogfood"
+        Needs = "this suite in the dev container: Docker, up to an hour. Probe: cache.nixos.org answers."
+        Gated = false
+        // Egress, because the self-hosting run's container substitutes a whole devshell
+        // closure before a single test runs — a box that cannot reach the cache would sit
+        // silent for the length of a source build and then fail on something unrelated.
+        // The daemon half is `Docker`'s own probe; asking for Dogfood without Docker gets
+        // Docker's refusal when the suite's tag goes unmet — no second copy here.
+        Refusal =
+            unless
+                (fun () -> probeSucceeds "curl" [ "-fsSI"; "https://cache.nixos.org/nix-cache-info" ])
+                ("Dogfood: cache.nixos.org is unreachable — the in-container devshell substitutes "
+                 + "from it, so this run would be a source build measured in hours") } ]
+
 // ASKING FOR A CAPABILITY IS REQUIRING IT. A run names the capabilities it wants; anything it
 // named and cannot host is an ERROR, with the reason, before a single test runs.
 //
@@ -1246,42 +1366,9 @@ let private caddyAvailable () = probeSucceeds "caddy" [ "version" ]
 // browser suite on Node are not availability questions, they are the other runtime's tests.
 let private requireCapabilities (caps: string list) =
     let missing =
-        [ if List.contains "Docker" caps && not (dockerReachable ()) then
-            "Docker: no daemon answers `docker info` (is it running, is DOCKER_HOST right?)"
-          if List.contains "Nix" caps && not (nixAvailable ()) then
-            "Nix: no `nix` on PATH"
-          if List.contains "NixBuild" caps && not (nixAvailable ()) then
-            "NixBuild: no `nix` on PATH"
-          if List.contains "LiveAgent" caps && not (agentCredentials ()) then
-            "LiveAgent: no ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in the environment"
-          if List.contains "LiveGitHub" caps && not (githubAccepts ()) then
-            "LiveGitHub: no GITHUB_TOKEN, or GitHub refused it (a workflow passes "
-            + "secrets.GITHUB_TOKEN; a sandbox whose proxy holds the credential needs HTTPS_PROXY)"
-          if List.contains "Pty" caps && not (ptyAvailable ()) then
-            "Pty: node-pty could not open a pseudo-terminal (is the native addon built, and "
-            + "does this box allow /dev/pts?)"
-          if List.contains "Serial" caps && not (serialAvailable ()) then
-            "Serial: no working serial engine (needs the `serialport` addon, `udevadm` for "
-            + "enumeration, and socat for a PTY pair — `devenv shell` provides all three on Linux)"
-          if List.contains "Jumpstarter" caps && not (jumpstarterAvailable ()) then
-            "Jumpstarter: the example's Python environment would not resolve (needs `uv` and a "
-            + "CPython >= 3.11 it can find, plus a network on the first run — try "
-            + "`uv sync --project examples/jumpstarter --all-groups`)"
-          if List.contains "Caddy" caps && not (caddyAvailable ()) then
-            "Caddy: no `caddy` on PATH (`devenv shell` provides one)"
-          if List.contains "Srt" caps && not (srtAvailable ()) then
-            "Srt: no working confinement (bubblewrap, socat, ripgrep, setsid, and — under the strict "
-            + "profile — a nested user namespace; an unprivileged container needs "
-            + "YESSION_NESTED_SANDBOX=weak)"
-          // Egress, because the self-hosting run's container substitutes a whole devshell
-          // closure before a single test runs — a box that cannot reach the cache would sit
-          // silent for the length of a source build and then fail on something unrelated.
-          // The daemon half is `Docker`'s own probe; asking for Dogfood without Docker gets
-          // Docker's refusal when the suite's tag goes unmet — no second copy here.
-          if List.contains "Dogfood" caps
-             && not (probeSucceeds "curl" [ "-fsSI"; "https://cache.nixos.org/nix-cache-info" ]) then
-            "Dogfood: cache.nixos.org is unreachable — the in-container devshell substitutes "
-            + "from it, so this run would be a source build measured in hours" ]
+        capabilities
+        |> List.filter (fun capability -> List.contains capability.Name caps)
+        |> List.choose (fun capability -> capability.Refusal ())
     if not (List.isEmpty missing) then
         failwithf
             "check: this box cannot host every capability it was asked for:\n  - %s\nRun a tier it can host, or install what is missing."
@@ -1592,10 +1679,7 @@ let check (args: string list) =
 /// does — which in practice means `--only`, so a gate run by hand can be narrowed to the case
 /// being worked on without the caller having to restate the tier list and get it subtly wrong.
 let verify (args: string list) =
-    check
-        ([ "Browser"; "Ports"; "Native"; "Docker"; "LiveAgent"; "LiveGitHub"; "Keyring"; "Nix"; "NixBuild"; "Srt"; "Pty"
-           "Serial"; "Jumpstarter"; "Caddy" ]
-         @ args)
+    check ((capabilities |> List.filter (fun capability -> capability.Gated) |> List.map (fun capability -> capability.Name)) @ args)
 
 // --- vm-check: run a Node test tier on a Linux target -----------------------------------------
 //
@@ -2617,6 +2701,7 @@ let frames (args: string list) =
 //
 //   crash-repro regex [rounds] [workers] [seconds] [heapMb] [NAME=value …]   defaults 20, cores, 60, 2000
 //   crash-repro fable [rounds] [workers] [NAME=value …]                      defaults 10, 2
+//   crash-repro child <seconds> <heapMb>        the worker each regex child runs; not for hands
 //
 // Exit 0: no child died in the budget. Exit 1: one did, and its report is printed. The nix
 // sandbox, where every crash so far has happened, is reached through `nix build --file
@@ -2735,7 +2820,10 @@ let crashRepro (args: string list) =
         // collector, so that is what a child gets unless the arguments say otherwise.
         let env = if env |> List.exists (fst >> (=) "DOTNET_gcServer") then env else ("DOTNET_gcServer", "0") :: env
         rounds "regex" (number 1 20) (number 2 Environment.ProcessorCount) env (fun _ ->
-            "dotnet", [ "fsi"; Path.Combine (repoRoot, "tasks.fsx"); "crash-repro-child"; string seconds; string heapMb ])
+            "dotnet", [ "fsi"; Path.Combine (repoRoot, "tasks.fsx"); "crash-repro"; "child"; string seconds; string heapMb ])
+    // The worker that `rounds "regex"` starts for each of its children. A subcommand rather than
+    // a verb of its own, because nobody runs it by hand and `help` would list it as though they did.
+    | "child" :: _ -> regexChurn (float (number 1 60)) (number 2 0)
     | "fable" :: _ ->
         make [ Target.Tools; Target.Packages ]
         let project = Path.Combine (repoRoot, "app", "browser", "Yession.Browser.fsproj")
@@ -2751,48 +2839,106 @@ let crashRepro (args: string list) =
         failwith
             "crash-repro regex [rounds] [workers] [seconds] [heapMb] [NAME=value …] | crash-repro fable [rounds] [workers] [NAME=value …]"
 
+// --- verbs: the table the dispatch and `help` both read --------------------------------------
+
+/// One verb of this script. THE ONE TABLE of them: the dispatch below runs it, and `help` prints
+/// it, so a verb that can be run is a verb that is described, and the reverse.
+type private Verb =
+    { Name: string
+      /// What it does, in one imperative line, with its arguments when it takes any.
+      Summary: string
+      /// Runs it, given the arguments after its name.
+      Run: string list -> unit }
+
+/// The text of `help`: every verb, then every capability, each on a line of its own.
+let private listing (verbs: Verb list) =
+    let column (names: string list) = names |> List.map String.length |> List.max
+    let verbWidth = verbs |> List.map (fun verb -> verb.Name) |> column
+    let capabilityWidth = capabilities |> List.map (fun capability -> capability.Name) |> column
+    let outside =
+        capabilities
+        |> List.filter (fun capability -> not capability.Gated)
+        |> List.map (fun capability -> capability.Name)
+        |> String.concat ", "
+    printfn "Run a verb bare in `devenv shell`, or as `dotnet fsi tasks.fsx <verb> [args]`."
+    printfn "verbs"
+    for verb in verbs do
+        printfn "  %-*s  %s" verbWidth verb.Name verb.Summary
+    printfn "capabilities (check <name…> adds its suites; verify asks for all but %s)" outside
+    for capability in capabilities do
+        printfn "  %-*s  %s" capabilityWidth capability.Name capability.Needs
+
+let rec private verbs () : Verb list =
+    // The first argument, or the version computed from the commit history when there is none.
+    let orVersion (args: string list) = args |> List.tryHead |> Option.defaultWith defaultVersion
+    [ { Name = "restore"; Summary = "install the tools and node_modules"; Run = fun _ -> restore () }
+      { Name = "compile"; Summary = "compile the server, client and assets"; Run = fun _ -> compile () }
+      { Name = "build"; Summary = "build the solution, then compile"; Run = fun _ -> build () }
+      { Name = "stage"
+        Summary = "assemble the npm package in dist/npm. [version]"
+        Run = fun args -> stage (orVersion args) }
+      { Name = "package"
+        Summary = "stage, smoke-test and npm pack. [version]"
+        Run = fun args -> package (orVersion args) }
+      { Name = "clean"; Summary = "delete the build outputs"; Run = fun _ -> clean () }
+      { Name = "lock"; Summary = "re-lock the NuGet packages after adding or bumping one"; Run = fun _ -> lock () }
+      { Name = "start"
+        Summary = "build, then run the Manager. [--scratch]: throwaway data dir, free port"
+        Run = start }
+      { Name = "dev"; Summary = "run the Manager under fable watch"; Run = fun _ -> dev () }
+      { Name = "check"
+        Summary = "run the suite: cheap tier + caps. [caps…] [--only <text>] [--runtime node|clr|none]"
+        Run = check }
+      { Name = "verify"; Summary = "run the release gate: check with every capability it means. Takes check's args"; Run = verify }
+      { Name = "vm-check"
+        Summary = "run a Node tier in the Colima VM, under strict Srt. Takes check's args"
+        Run = vmCheck Colima }
+      { Name = "lint"; Summary = "actionlint, then the F# analyzers"; Run = fun _ -> lint () }
+      { Name = "bench"; Summary = "measure client performance against the recorded baseline"; Run = bench }
+      { Name = "bench-guard"; Summary = "fail on a large regression against the recorded history"; Run = fun _ -> benchGuard () }
+      { Name = "bench-publish"
+        Summary = "record this measurement on the bench branch and redraw its chart. [label]"
+        Run = fun args -> benchPublish (orVersion args) }
+      { Name = "version"; Summary = "print the version computed from the commit history"; Run = fun _ -> printfn "%s" (defaultVersion ()) }
+      { Name = "install-smoke"
+        Summary = "install a tarball into a clean prefix and boot it. <tgz>"
+        Run =
+            function
+            | tgz :: _ -> installSmoke tgz
+            | [] -> failwith "install-smoke <tgz>" }
+      { Name = "boot-smoke"
+        Summary = "run a bin and wait for its ready line. <ready-line> <command…>"
+        Run =
+            function
+            | ready :: command :: arguments -> bootSmoke ready command (fun _ -> arguments)
+            | _ -> failwith "boot-smoke <ready-line> <command…>" }
+      { Name = "clean-docker"; Summary = "remove session containers and volumes (CI runners)"; Run = fun _ -> cleanDocker () }
+      { Name = "example"
+        Summary = "build and boot an example integration. <name> (see examples/)"
+        Run =
+            function
+            | name :: _ -> example name
+            | [] -> failwith "example <name>   (see examples/)" }
+      { Name = "probe"; Summary = "run the headless probe peer (tools/Yession.Probe). Args pass through"; Run = probe }
+      { Name = "frames"
+        Summary = "photograph a page's frames (tools/Yession.Frames). [--boot] starts a scratch Manager"
+        Run = frames }
+      { Name = "brand"; Summary = "regenerate src/Yession.App/Brand.fs from assets/logo"; Run = fun _ -> brand () }
+      { Name = "crash-repro"
+        Summary = "run the Fable SIGSEGV until it happens. regex|fable [args]"
+        Run = crashRepro }
+      { Name = "help"; Summary = "list the verbs and capabilities"; Run = fun _ -> listing (verbs ()) } ]
+
 // --- dispatch --------------------------------------------------------------------------------
 
-let argv = fsi.CommandLineArgs
-let arg i = argv |> Array.tryItem i
-let rest i = if argv.Length > i then argv.[i..] |> Array.toList else []
-
-match arg 1 with
-| Some "compile" -> compile ()
-| Some "restore" -> restore ()
-| Some "lock" -> lock ()
-| Some "build" -> build ()
-| Some "start" -> start (rest 2)
-| Some "dev" -> dev ()
-| Some "version" -> printfn "%s" (defaultVersion ())
-| Some "stage" -> stage (arg 2 |> Option.defaultWith defaultVersion)
-| Some "check" -> check (rest 2)
-| Some "vm-check" -> vmCheck Colima (rest 2)
-| Some "verify" -> verify (rest 2)
-| Some "lint" -> lint ()
-| Some "probe" -> probe (rest 2)
-| Some "frames" -> frames (rest 2)
-| Some "crash-repro" -> crashRepro (rest 2)
-| Some "crash-repro-child" ->
-    regexChurn (arg 2 |> Option.map float |> Option.defaultValue 60.0) (arg 3 |> Option.map int |> Option.defaultValue 0)
-| Some "bench" -> bench (rest 2)
-| Some "bench-guard" -> benchGuard ()
-| Some "bench-publish" -> benchPublish (arg 2 |> Option.defaultWith defaultVersion)
-| Some "package" -> package (arg 2 |> Option.defaultWith defaultVersion)
-| Some "install-smoke" ->
-    match arg 2 with
-    | Some tgz -> installSmoke tgz
-    | None -> failwith "install-smoke <tgz>"
-| Some "boot-smoke" ->
-    match rest 2 with
-    | ready :: cmd :: cmdArgs -> bootSmoke ready cmd (fun _ -> cmdArgs)
-    | _ -> failwith "boot-smoke <ready-line> <command…>"
-| Some "example" ->
-    match arg 2 with
-    | Some name -> example name
-    | None -> failwith "example <name>   (see examples/)"
-| Some "brand" -> brand ()
-| Some "clean" -> clean ()
-| Some "clean-docker" -> cleanDocker ()
-| Some version -> package version // backwards compat: `tasks.fsx <version>` == `package <version>`
-| None -> package (defaultVersion ())
+match fsi.CommandLineArgs |> Array.toList |> List.tail with
+| [] -> package (defaultVersion ())
+| name :: args ->
+    match verbs () |> List.tryFind (fun verb -> verb.Name = name) with
+    | Some verb -> verb.Run args
+    // A bare version is `package`'s shorthand, spelled as a version so that a mistyped verb is
+    // refused rather than packaged.
+    | None when Regex.IsMatch (name, @"^\d+\.\d+\.\d+") -> package name
+    | None ->
+        eprintfn "tasks: `%s` is not a verb. Run `help` for the verbs and capabilities." name
+        exit 2
