@@ -195,6 +195,10 @@ module Scrolling =
     [<Emit("$0.scrollIntoView({ block: 'center' })")>]
     let scrollIntoMiddle (element: Browser.Types.HTMLElement) : unit = jsNative
 
+    /// `scrollIntoView({ block })`: `start`, `center`, `end` or `nearest`.
+    [<Emit("$0.scrollIntoView({ block: $1 })")>]
+    let intoView (element: Browser.Types.Element) (block: string) : unit = jsNative
+
     /// Scroll an element to its own bottom, animated. The caller decides WHETHER to animate
     /// (`mediaMatches "(prefers-reduced-motion: reduce)"`, in `Media` above) — this only
     /// knows how to ask for the moving form, same as `scrollIntoMiddle` only knows the
@@ -629,3 +633,41 @@ module IndexedDb =
     /// The names of the databases this origin holds.
     [<Emit("indexedDB.databases().then(held => held.map(database => database.name))")>]
     let names () : JS.Promise<string array> = jsNative
+
+/// One of the page's running animations; nothing here reads it but to wait on it.
+type RunningAnimation =
+    interface end
+
+/// The page's running animations, as far as a test waits on them.
+[<RequireQualifiedAccess>]
+module Animations =
+    /// Every animation on the document that will finish — one with a finite iteration count.
+    [<Emit("document.getAnimations().filter(running => running.effect && running.effect.getComputedTiming().iterations !== Infinity)")>]
+    let finite () : RunningAnimation array = jsNative
+
+    /// The animations one element is running itself.
+    [<Emit("$0.getAnimations()")>]
+    let on (element: Browser.Types.Element) : RunningAnimation array = jsNative
+
+    /// Settles when the animation finishes, or is cancelled.
+    [<Emit("$0.finished.then(() => undefined, () => undefined)")>]
+    let whenFinished (animation: RunningAnimation) : JS.Promise<unit> = jsNative
+
+/// A CSS transition still running, as much of it as says what moved.
+type RunningTransition =
+    /// What is transitioning.
+    abstract target : Browser.Types.Element
+    /// The property it transitions, as the stylesheet named it.
+    abstract transitionProperty : string
+
+[<RequireQualifiedAccess>]
+module Transitions =
+    /// Every CSS transition on the document that has not finished.
+    [<Emit("document.getAnimations().filter(running => running instanceof CSSTransition && running.playState !== 'finished').map(running => ({ target: running.effect.target, transitionProperty: running.transitionProperty }))")>]
+    let unfinished () : RunningTransition array = jsNative
+
+/// The box a run of characters inside one text node is drawn in.
+[<RequireQualifiedAccess>]
+module TextRange =
+    [<Emit("(function (text, start, finish) { const range = document.createRange(); range.setStart(text, start); range.setEnd(text, finish); return range.getBoundingClientRect() })($0, $1, $2)")>]
+    let boxOf (text: Browser.Types.Node) (start: int) (finish: int) : Browser.Types.ClientRect = jsNative

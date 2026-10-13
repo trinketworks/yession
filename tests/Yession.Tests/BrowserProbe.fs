@@ -65,6 +65,49 @@ module Probe =
     /// Every match's own text, the remote carets' widgets left out.
     let ownTexts (page: IPage) (selector: string) : Async<string list> = ask page Probes.ownTexts selector
 
+    /// The first match's scroll box.
+    let scroll (page: IPage) (selector: string) : Async<Probes.Scroll option> = ask page Probes.scroll selector
+
+    /// Scroll the first match to this many pixels from its top.
+    let scrollTo (page: IPage) (selector: string) (top: float) : Async<Probes.Scroll option> =
+        ask page Probes.scrollTo (selector, top)
+
+    /// Bring the first match into view, its top at the top of what scrolls it.
+    let reveal (page: IPage) (selector: string) : Async<unit> =
+        async {
+            match! ask page Probes.reveal (selector, "start") with
+            | true -> ()
+            | false -> return failwithf "nothing matches %s to bring into view" selector
+        }
+
+    /// One computed style property of every match.
+    let computedAll (page: IPage) (selector: string) (property: string) : Async<string list> =
+        ask page Probes.computedAll (selector, property)
+
+    /// The transitions toggling this class on `<html>` and back starts.
+    let transitionsOnToggle (page: IPage) (rootClass: string) : Async<string list> =
+        ask page Probes.transitionsOnToggle rootClass
+
+    /// Bring the first match into view, its bottom at the bottom of what scrolls it.
+    let revealEnd (page: IPage) (selector: string) : Async<bool> = ask page Probes.reveal (selector, "end")
+
+    /// Where the newest occurrence of `mark` in a surface is drawn.
+    let newest (page: IPage) (selector: string) (mark: string) : Async<Probes.Newest option> =
+        ask page Probes.newest (selector, mark)
+
+    /// Open every `<details>` a selector names.
+    let openAll (page: IPage) (selector: string) : Async<int> = ask page Probes.openAll selector
+
+    /// How many animations the first match is running itself.
+    let animating (page: IPage) (selector: string) : Async<int option> = ask page Probes.animating selector
+
+    /// Put a surface's reader at its end or its start.
+    let park (page: IPage) (selector: string) (atEnd: bool) : Async<Probes.Scroll option> =
+        ask page Probes.park (selector, atEnd)
+
+    /// Wait for every animation on the page that will end to have ended.
+    let settled (page: IPage) : Async<unit> = ask page Probes.settled 0 |> Async.Ignore
+
     /// The IndexedDB databases this page's origin holds, by name.
     let databases (page: IPage) : Async<string list> = ask page Probes.databases 0
 

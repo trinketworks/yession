@@ -156,3 +156,161 @@ module Probes =
           DecodeAsk = Decode.int
           EncodeAnswer = List.map Encode.string >> Encode.list
           DecodeAnswer = Decode.list Decode.string }
+
+    /// Where an element is scrolled to and how far it could be — its own scroll box, as
+    /// `scrollTop`/`scrollLeft` and the scroll and client extents report them.
+    [<RequireQualifiedAccess>]
+    type Scroll =
+        { Top: float
+          Left: float
+          Height: float
+          Width: float
+          ClientHeight: float
+          ClientWidth: float }
+
+    [<RequireQualifiedAccess>]
+    module Scroll =
+        let create top left height width clientHeight clientWidth : Scroll =
+            { Scroll.Top = top
+              Scroll.Left = left
+              Scroll.Height = height
+              Scroll.Width = width
+              Scroll.ClientHeight = clientHeight
+              Scroll.ClientWidth = clientWidth }
+
+        /// More content than box, sideways.
+        let overflowsSideways (scroll: Scroll) = scroll.Width > scroll.ClientWidth + 1.0
+
+        /// Scrolled to its end, within a pixel.
+        let atEnd (scroll: Scroll) = scroll.Top + scroll.ClientHeight >= scroll.Height - 1.0
+
+        let encode (scroll: Scroll) =
+            Encode.object
+                [ "top", Encode.float scroll.Top
+                  "left", Encode.float scroll.Left
+                  "height", Encode.float scroll.Height
+                  "width", Encode.float scroll.Width
+                  "clientHeight", Encode.float scroll.ClientHeight
+                  "clientWidth", Encode.float scroll.ClientWidth ]
+
+        let decode : Decoder<Scroll> =
+            Decode.object (fun get ->
+                create
+                    (get.Required.Field "top" Decode.float)
+                    (get.Required.Field "left" Decode.float)
+                    (get.Required.Field "height" Decode.float)
+                    (get.Required.Field "width" Decode.float)
+                    (get.Required.Field "clientHeight" Decode.float)
+                    (get.Required.Field "clientWidth" Decode.float))
+
+    /// The first match's scroll box; `None` where nothing matches.
+    let scroll : Probe<string, Scroll option> =
+        { Name = "__probeScroll"
+          EncodeAsk = Encode.string
+          DecodeAsk = Decode.string
+          EncodeAnswer = Encode.option Scroll.encode
+          DecodeAnswer = Decode.option Scroll.decode }
+
+    /// Scroll the first match to this many pixels from its top, answering where it landed.
+    let scrollTo : Probe<string * float, Scroll option> =
+        { Name = "__probeScrollTo"
+          EncodeAsk = fun (selector, top) -> Encode.list [ Encode.string selector; Encode.float top ]
+          DecodeAsk = Decode.tuple2 Decode.string Decode.float
+          EncodeAnswer = Encode.option Scroll.encode
+          DecodeAnswer = Decode.option Scroll.decode }
+
+    /// Bring the first match into view, aligned as `block` says (`start` or `end`, as
+    /// `scrollIntoView` takes it), answering whether there was one.
+    let reveal : Probe<string * string, bool> =
+        { Name = "__probeReveal"
+          EncodeAsk = fun (selector, block) -> Encode.list [ Encode.string selector; Encode.string block ]
+          DecodeAsk = Decode.tuple2 Decode.string Decode.string
+          EncodeAnswer = Encode.bool
+          DecodeAnswer = Decode.bool }
+
+    /// Wait for every animation on the page that will END to have ended, answering how many
+    /// there were. One that repeats forever — a pulse — is not waited for: it never finishes.
+    let settled : Probe<int, int> =
+        { Name = "__probeSettled"
+          EncodeAsk = Encode.int
+          DecodeAsk = Decode.int
+          EncodeAnswer = Encode.int
+          DecodeAnswer = Decode.int }
+
+    /// One computed style property of every match, in document order.
+    let computedAll : Probe<string * string, string list> =
+        { Name = "__probeComputedAll"
+          EncodeAsk = fun (selector, property) -> Encode.list [ Encode.string selector; Encode.string property ]
+          DecodeAsk = Decode.tuple2 Decode.string Decode.string
+          EncodeAnswer = List.map Encode.string >> Encode.list
+          DecodeAnswer = Decode.list Decode.string }
+
+    /// Toggle this class on `<html>` and back, answering every CSS transition the two toggles
+    /// started — as `<class or tag> (<property>)` — on a page that should start none. Asked
+    /// straight after each toggle, because reading the animations flushes style: a transition a
+    /// toggle starts is in the answer at once, with no clock to wait on.
+    let transitionsOnToggle : Probe<string, string list> =
+        { Name = "__probeTransitionsOnToggle"
+          EncodeAsk = Encode.string
+          DecodeAsk = Decode.string
+          EncodeAnswer = List.map Encode.string >> Encode.list
+          DecodeAnswer = Decode.list Decode.string }
+
+    /// Where the newest occurrence of some words in a surface is drawn: the LAST occurrence of
+    /// the text in the surface, whether that line lies wholly inside the surface's box, whether
+    /// what is painted at its centre belongs to the surface — so a line under the composer, a
+    /// sticky header or a float reads as not shown — and how far short of its end the surface
+    /// stands.
+    [<RequireQualifiedAccess>]
+    type Newest = { Inside: bool; Painted: bool; Short: float }
+
+    [<RequireQualifiedAccess>]
+    module Newest =
+        let create (inside: bool) (painted: bool) (short: float) : Newest =
+            { Newest.Inside = inside; Newest.Painted = painted; Newest.Short = short }
+
+        let encode (newest: Newest) =
+            Encode.object
+                [ "inside", Encode.bool newest.Inside
+                  "painted", Encode.bool newest.Painted
+                  "short", Encode.float newest.Short ]
+
+        let decode : Decoder<Newest> =
+            Decode.object (fun get ->
+                create
+                    (get.Required.Field "inside" Decode.bool)
+                    (get.Required.Field "painted" Decode.bool)
+                    (get.Required.Field "short" Decode.float))
+
+    /// `None` where the surface is not there or does not hold the words.
+    let newest : Probe<string * string, Newest option> =
+        { Name = "__probeNewest"
+          EncodeAsk = fun (selector, mark) -> Encode.list [ Encode.string selector; Encode.string mark ]
+          DecodeAsk = Decode.tuple2 Decode.string Decode.string
+          EncodeAnswer = Encode.option Newest.encode
+          DecodeAnswer = Decode.option Newest.decode }
+
+    /// Open every `<details>` matching a selector, answering how many.
+    let openAll : Probe<string, int> =
+        { Name = "__probeOpenAll"
+          EncodeAsk = Encode.string
+          DecodeAsk = Decode.string
+          EncodeAnswer = Encode.int
+          DecodeAnswer = Decode.int }
+
+    /// How many animations the first match itself is running; `None` where nothing matches.
+    let animating : Probe<string, int option> =
+        { Name = "__probeAnimating"
+          EncodeAsk = Encode.string
+          DecodeAsk = Decode.string
+          EncodeAnswer = Encode.option Encode.int
+          DecodeAnswer = Decode.option Decode.int }
+
+    /// Put a surface's reader at its end (`true`) or its start, the way a reader does it: its
+    /// box brought on screen, then scrolled. Answers where it then stands.
+    let park : Probe<string * bool, Scroll option> =
+        { Name = "__probePark"
+          EncodeAsk = fun (selector, atEnd) -> Encode.list [ Encode.string selector; Encode.bool atEnd ]
+          DecodeAsk = Decode.tuple2 Decode.string Decode.bool
+          EncodeAnswer = Encode.option Scroll.encode
+          DecodeAnswer = Decode.option Scroll.decode }
