@@ -476,8 +476,9 @@ let startFull
         // Likewise nothing can be launched into until SessionMain says how.
         let launchRepoRef : Commands.LaunchRepo ref =
             ref (fun _ _ _ -> async { return Error "this session cannot add a repo yet" })
-        /// Admission answers the peer; the work runs on, and only its failure needs saying
-        /// here — success is the `RepoAdded` the repo service records.
+        /// Admission answers the peer; the work runs on, and only a failure the log does not
+        /// already hold needs saying here — the repo service records the add and its clone's
+        /// outcome itself.
         let launchRepo (actor: Principal) (repo: RepoRef) (branch: string option) : Async<Result<unit, string>> =
             async {
                 match! launchRepoRef.Value actor repo branch with
@@ -487,6 +488,7 @@ let startFull
                         async {
                             match! work with
                             | Ok () -> ()
+                            | Error (failure: Commands.LaunchFailure) when failure.Recorded -> ()
                             | Error (failure: Commands.LaunchFailure) ->
                                 let! _ =
                                     log.Append

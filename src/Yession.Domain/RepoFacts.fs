@@ -6,16 +6,35 @@ open Yession.Domain
 /// and the projections that fold that union sit above it — so a feature spans the event
 /// spine rather than living on one side of it. What this buys is that `Repo` and `Branch`
 /// stop being field labels in the namespace every file opens.
-type RepoAdded =
+///
+/// A repo was CHOSEN for this session, and its clone has begun. Recorded before the name
+/// check and the clone, so the timeline shows the act the moment it is asked for rather
+/// than after the seconds a clone takes — the dead air `WorkSandboxStarting` fills for a
+/// sandbox. Its item runs until a `RepoCloned` or `RepoCloneFailed` with the same
+/// `MessageId` resolves it. Nothing reads a repo as present off this: the checkout does
+/// not exist yet, which is why the repo's facts are on `RepoCloned`.
+type [<RequireQualifiedAccess>] RepoAdded =
     { /// The timeline note's identity, minted by the Process at append time — which is
-      /// what lets the conversation projection fold this without inventing ids.
+      /// what lets the conversation projection fold this without inventing ids. The
+      /// clone's outcome carries the same one.
+      MessageId : MessageId
+      Repo : RepoRef
+      /// Who brought it in — the panel's human or the agent. Carried on the payload
+      /// because the projection reads events, not envelopes, and "who added this repo"
+      /// is the fact the shared-trust disclosure hangs off.
+      Actor : ActorRef }
+
+/// The checkout a `RepoAdded` began is in place — the moment the repo exists here.
+///
+/// A log written before `RepoAdded` was recorded up front has one `repoAdded` record per
+/// add, written at this moment and carrying these facts; the codec reads it as this event,
+/// with no `RepoAdded` before it.
+and RepoCloned =
+    { /// The `RepoAdded`'s, so the item it opened is resolved in place.
       MessageId : MessageId
       Repo : RepoRef
       /// The branch the clone landed on (the remote's default).
       Branch : string
-      /// Who brought it in — the panel's human or the agent. Carried on the payload
-      /// because the projection reads events, not envelopes, and "who added this repo"
-      /// is the fact the shared-trust disclosure hangs off.
       Actor : ActorRef
       /// The checkout's own root `AGENTS.md`, read once at the moment the clone landed
       /// (the one moment its content is trustworthy -- `app/Repos.fs`, right after the
@@ -27,7 +46,16 @@ type RepoAdded =
       /// per-turn re-read.
       AgentsMd : string option }
 
-and RepoRemoved =
+/// The clone a `RepoAdded` began did not land, and why — in the words the failure used.
+/// Nothing was put in place: the clone runs in a staging area that is cleared on failure.
+and RepoCloneFailed =
+    { /// The `RepoAdded`'s, so the item it opened is resolved in place.
+      MessageId : MessageId
+      Repo : RepoRef
+      Reason : string
+      Actor : ActorRef }
+
+and [<RequireQualifiedAccess>] RepoRemoved =
     { MessageId : MessageId
       Repo : RepoRef
       Actor : ActorRef }
@@ -143,7 +171,22 @@ module RepoAdded =
 
     let phrase (r: RepoAdded) : Phrase = [ Segment.Text "added repo "; Segment.Ref (EntityRef.Repo r.Repo) ]
 
-    let particulars (r: RepoAdded) : Phrase list = [ Phrase.text (sprintf "on branch %s" r.Branch) ]
+    /// Said to a reader that is not a screen, which sees no running mark: the add is not a
+    /// checkout yet.
+    let particulars (_: RepoAdded) : Phrase list = [ Phrase.text "cloning" ]
+
+/// The same headline as the add it resolves, because to a reader it is the same act, finished.
+module RepoCloned =
+
+    let phrase (r: RepoCloned) : Phrase = [ Segment.Text "added repo "; Segment.Ref (EntityRef.Repo r.Repo) ]
+
+    let particulars (r: RepoCloned) : Phrase list = [ Phrase.text (sprintf "on branch %s" r.Branch) ]
+
+module RepoCloneFailed =
+
+    let phrase (r: RepoCloneFailed) : Phrase = [ Segment.Text "could not clone repo "; Segment.Ref (EntityRef.Repo r.Repo) ]
+
+    let particulars (r: RepoCloneFailed) : Phrase list = [ Phrase.text r.Reason ]
 
 module RepoRemoved =
 

@@ -34,6 +34,8 @@ open Yession.Domain.Watching
 [<RequireQualifiedAccess>]
 type Act =
     | RepoAdded of RepoAdded
+    | RepoCloned of RepoCloned
+    | RepoCloneFailed of RepoCloneFailed
     | RepoRemoved of RepoRemoved
     | RepoBranchSwitched of RepoBranchSwitched
     | RepoCapabilitiesChanged of RepoCapabilitiesChanged
@@ -78,6 +80,8 @@ module Act =
         match act with
         | Act.Noticed (_, inner) -> deed inner
         | Act.RepoAdded r -> RepoAdded.phrase r
+        | Act.RepoCloned r -> RepoCloned.phrase r
+        | Act.RepoCloneFailed r -> RepoCloneFailed.phrase r
         | Act.RepoRemoved r -> RepoRemoved.phrase r
         | Act.RepoBranchSwitched r -> RepoBranchSwitched.phrase r
         | Act.RepoCapabilitiesChanged c -> RepoCapabilitiesChanged.phrase c
@@ -121,6 +125,8 @@ module Act =
         | Act.ShellProfileSet p -> person p.OnBehalfOf
         | Act.CredentialSpent g -> GitCredentialSpent.forWhom g
         | Act.RepoAdded _
+        | Act.RepoCloned _
+        | Act.RepoCloneFailed _
         | Act.RepoRemoved _
         | Act.RepoBranchSwitched _
         | Act.RepoCapabilitiesChanged _
@@ -170,6 +176,8 @@ module Act =
         match act with
         | Act.Noticed (_, inner) -> particulars inner
         | Act.RepoAdded r -> RepoAdded.particulars r
+        | Act.RepoCloned r -> RepoCloned.particulars r
+        | Act.RepoCloneFailed r -> RepoCloneFailed.particulars r
         | Act.RepoCapabilitiesChanged c -> RepoCapabilitiesChanged.particulars c
         | Act.RepoConfigRefused r -> RepoConfigRefused.particulars r
         | Act.RepoConfigWarned w -> RepoConfigWarned.particulars w
@@ -221,7 +229,9 @@ module Act =
     let rec counted (act: Act) : string * string * string =
         match act with
         | Act.Noticed (_, inner) -> counted inner
-        | Act.RepoAdded _ -> "added", "repo", "repos"
+        | Act.RepoAdded _
+        | Act.RepoCloned _ -> "added", "repo", "repos"
+        | Act.RepoCloneFailed _ -> "failed to clone", "repo", "repos"
         | Act.RepoRemoved _ -> "removed", "repo", "repos"
         | Act.RepoBranchSwitched _ -> "switched", "branch", "branches"
         | Act.RepoCapabilitiesChanged _ -> "changed", "repo's capabilities", "repos' capabilities"

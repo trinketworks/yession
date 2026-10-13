@@ -48,6 +48,8 @@ module Bootstrap =
         | SessionEvent.TerminalMarkedLate _ -> "terminal-marked-late"
         | SessionEvent.TerminalTranscriptTruncated _ -> "terminal-transcript-truncated"
         | SessionEvent.RepoAdded _ -> "repo-added"
+        | SessionEvent.RepoCloned _ -> "repo-cloned"
+        | SessionEvent.RepoCloneFailed _ -> "repo-clone-failed"
         | SessionEvent.RepoRemoved _ -> "repo-removed"
         | SessionEvent.RepoBranchSwitched _ -> "repo-branch-switched"
         | SessionEvent.WorkSandboxStarting _ -> "work-sandbox-starting"

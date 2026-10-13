@@ -558,7 +558,7 @@ let create (config: ReposConfig) : Result<ReposService, string> =
         /// Clone into the staging area and MOVE the finished thing into place. The rename
         /// is the moment the repo exists; before it, nothing at the visible path suggests
         /// one is coming, and a clone that dies leaves the wreckage somewhere nobody reads.
-        let cloneIntoPlace (caller: RepoCaller) (repo: RepoRef) : Async<Result<Recorded<RepoListing>, string>> =
+        let cloneInPlace (caller: RepoCaller) (repo: RepoRef) : Async<Result<RepoListing, string>> =
             async {
                 let! token = Telemetry.span config.Tracer "repo.resolve_token" [] (config.ResolveToken caller.Credential)
                 match! Telemetry.span config.Tracer "repo.canonical" [] (config.Canonical token repo) with
@@ -595,17 +595,51 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                     // it inside the staging area rather than here.
                     Fs.ensureDir (sprintf "%s/%s" reposDir (RepoRef.owner repo))
                     Fs.rename staging (pathOf repo)
-                    match! Telemetry.spanResult config.Tracer "repo.listing" [] (listingOf repo) with
-                    | Error e -> return Error e
-                    | Ok listing ->
-                        let messageId = mintMessageId ()
-                        do!
-                            Telemetry.span
-                                config.Tracer
-                                "repo.record"
-                                []
-                                (append caller.Actor (SessionEvent.RepoAdded { MessageId = messageId; Repo = repo; Branch = listing.Branch; Actor = caller.Actor; AgentsMd = agentsMdOf repo }))
-                        return Ok { Recorded.Answer = listing; Recorded.RecordedAs = Some messageId }
+                    return! Telemetry.spanResult config.Tracer "repo.listing" [] (listingOf repo)
+            }
+
+        /// The add as the log tells it: `RepoAdded` the moment it is asked for, so the
+        /// timeline shows it before the seconds the clone takes, and then the clone's outcome
+        /// under the same id — `RepoCloned`, or `RepoCloneFailed` with the reason. Every
+        /// failure after the add is recorded, so no add is left reading as still cloning.
+        let cloneIntoPlace (caller: RepoCaller) (repo: RepoRef) : Async<Result<Recorded<RepoListing>, string>> =
+            async {
+                let messageId = mintMessageId ()
+                do!
+                    Telemetry.span
+                        config.Tracer
+                        "repo.record_added"
+                        []
+                        (append caller.Actor (SessionEvent.RepoAdded { MessageId = messageId; Repo = repo; Actor = caller.Actor }))
+                // A throw (the rename, say) is a failure like any other: an add that nothing
+                // resolves reads as cloning forever.
+                let! outcome = Async.Catch (cloneInPlace caller repo)
+                let cloned =
+                    match outcome with
+                    | Choice1Of2 result -> result
+                    | Choice2Of2 ex -> Error ex.Message
+                match cloned with
+                | Error e ->
+                    do!
+                        append
+                            caller.Actor
+                            (SessionEvent.RepoCloneFailed { MessageId = messageId; Repo = repo; Reason = e; Actor = caller.Actor })
+                    return Error e
+                | Ok listing ->
+                    do!
+                        Telemetry.span
+                            config.Tracer
+                            "repo.record"
+                            []
+                            (append
+                                caller.Actor
+                                (SessionEvent.RepoCloned
+                                    { MessageId = messageId
+                                      Repo = repo
+                                      Branch = listing.Branch
+                                      Actor = caller.Actor
+                                      AgentsMd = agentsMdOf repo }))
+                    return Ok { Recorded.Answer = listing; Recorded.RecordedAs = Some messageId }
             }
 
         /// Clones in flight, keyed by repo. A clone is not instant, and the same repo asked

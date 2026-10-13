@@ -101,8 +101,13 @@ let private offeredTests =
 
         testCase "a repo, or anything said, takes it away" <| fun () ->
             let begun =
-                clientAt 2L (fresh @ [ at 2L (RepoAdded { MessageId = MessageId.create "r1" |> expect; Repo = hello; Branch = "main"; Actor = PeerRef ada; AgentsMd = None }) ])
-            Expect.isFalse (ClientModel.launchOffered begun) "a repo note is the session having begun"
+                clientAt 2L (fresh @ [ at 2L (RepoCloned { MessageId = MessageId.create "r1" |> expect; Repo = hello; Branch = "main"; Actor = PeerRef ada; AgentsMd = None }) ])
+            Expect.isFalse (ClientModel.launchOffered begun) "a repo is the session having begun"
+            // An add whose clone is running is not yet a repo. The card has stepped aside for
+            // the person who sent it (`committed`); it is a failed clone that brings it back.
+            let adding =
+                clientAt 2L (fresh @ [ at 2L (RepoAdded { MessageId = MessageId.create "r1" |> expect; Repo = hello; Actor = PeerRef ada }) ])
+            Expect.isTrue (ClientModel.launchOffered adding) "an add still cloning has not begun the session"
             let spoken =
                 clientAt 2L (fresh @ [ at 2L (MessageSent { MessageId = MessageId.create "m1" |> expect; QueueId = None; Author = Principal.Peer ada; Body = "hi" }) ])
             Expect.isFalse (ClientModel.launchOffered spoken) "so is a message"
@@ -378,20 +383,19 @@ let private answerTests =
 
         testCase "a clone that failed reaches the screen that asked, while it is waiting" <| fun () ->
             let admitted = Support.step (CommandAnsweredMsg (request, CommandAccepted)) waiting
-            let failed =
+            let added = MessageId.create "r1" |> expect
+            let failedFor (repo: RepoRef) =
                 Support.step
                     (EventsPageMsg
                         { Events =
-                            [ at 2L
-                                  (GatedCommandFailed
-                                      { MessageId = MessageId.create "f1" |> expect
-                                        Tool = "add_repo"
-                                        Summary = "add_repo octo/hello"
-                                        Author = PeerRef ada
-                                        Reason = "github says not found" }) ]
-                          LastOffset = Some (offset 2L)
+                            [ at 2L (RepoAdded { MessageId = added; Repo = repo; Actor = PeerRef ada })
+                              at 3L (RepoCloneFailed { MessageId = added; Repo = repo; Reason = "github says not found"; Actor = PeerRef ada }) ]
+                          LastOffset = Some (offset 3L)
                           IsEnd = true })
                     admitted
+            let other = failedFor (RepoRef.create "octo/other" |> expect)
+            Expect.equal other.Launch.Stage (Cloning target) "another repo's clone failing is not this one's"
+            let failed = failedFor hello
             Expect.equal failed.Launch.Problem (Some "github says not found") "the reason, off the log"
             Expect.equal failed.Launch.Stage Choosing "and choosing is open again"
             // The failure is also the timeline's first line, and the surface stays above it:
@@ -400,7 +404,7 @@ let private answerTests =
             Expect.isTrue (ClientModel.launchOffered failed) "still offered over its own failure"
             let html = render failed
             Expect.stringContains html "data-repo-picker=\"choosing\"" "drawn"
-            Expect.stringContains html "failed add_repo octo/hello" "beside the timeline's own account of it"
+            Expect.stringContains html "could not clone repo" "beside the timeline's own account of it"
     ]
 
 /// What one message asks of the session, on a client in the given state.

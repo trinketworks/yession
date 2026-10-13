@@ -2250,19 +2250,30 @@ let private codecTests =
                 """{"type":"repoAdded","payload":{"messageId":"msg-1","repo":"octo/hello","""
                 + """"branch":"main","actor":{"kind":"agent"},"approvedBy":{"kind":"peer","peerId":"bob"}}}"""
             match Codec.fromString Events.sessionEvent approved with
-            | Ok (SessionEvent.RepoAdded decoded) ->
+            // A `repoAdded` with a branch was written when the clone landed: it is the clone.
+            | Ok (SessionEvent.RepoCloned decoded) ->
                 Expect.equal decoded.Actor ActorRef.Agent "the actor survives the retired key beside it"
+                Expect.equal decoded.Branch "main" "and the branch the clone landed on"
                 // No "agentsMd" key at all -- a log from before repo AGENTS.md existed --
                 // decodes to `None`, never a decode failure: an optional field this build
                 // added must not turn every session's own event history unreadable.
                 Expect.equal decoded.AgentsMd None "a log with no notion of AGENTS.md carries none"
             | other -> failwithf "an approved pre-Plan-23 repo event must still read back, got %A" other
 
-        testCase "a RepoAdded carrying an AGENTS.md round-trips with it" <| fun () ->
+        testCase "an add, and both of its clone's outcomes, round-trip as themselves" <| fun () ->
+            let repo = RepoRef.create "octo/hello" |> expect
+            let messageId = MessageId.create "msg-1" |> expect
+            for event in
+                [ SessionEvent.RepoAdded { MessageId = messageId; Repo = repo; Actor = ActorRef.Agent }
+                  SessionEvent.RepoCloneFailed { MessageId = messageId; Repo = repo; Reason = "not found"; Actor = ActorRef.Agent } ] do
+                let encoded = Codec.toString Events.sessionEvent event
+                Expect.equal (Codec.fromString Events.sessionEvent encoded) (Ok event) (sprintf "read back whole: %s" encoded)
+
+        testCase "a RepoCloned carrying an AGENTS.md round-trips with it" <| fun () ->
             let repo = RepoRef.create "octo/hello" |> expect
             let messageId = MessageId.create "msg-1" |> expect
             let added =
-                SessionEvent.RepoAdded
+                SessionEvent.RepoCloned
                     { MessageId = messageId
                       Repo = repo
                       Branch = "main"
