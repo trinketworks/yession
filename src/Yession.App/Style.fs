@@ -2591,6 +2591,12 @@ module Style =
         cls [ trayVerb; "hover:text-err"
               "disabled:text-ink-faint disabled:cursor-default disabled:pointer-events-none" ]
 
+    /// While no turn runs and a command does, the leading edge says so: `running` behind
+    /// the live dot every running command wears, pressed to go to that command's chip.
+    /// Ink at rest, ink under the hand — it moves the reader, it stops nothing.
+    let trayRunning = cls [ trayVerb; "hover:text-ink" ]
+    let trayRunningDot = statusDotLive
+
     /// The way back to the latest message, at the strip's trailing edge whatever stands at
     /// its leading one. Its word ends in the glyph, so no caps tracking trails past the ink.
     let trayJumpSlot = "ml-auto h-full flex"
@@ -3694,12 +3700,6 @@ module Style =
     /// variant: whether the control exists is a fact about the model, and a button that is
     /// merely invisible is still in the tab order.
     let terminalReopen = navChevronBack + " shrink-0"
-    /// Its mark, AFTER the count ("2 terminals ●"), because the count is what the tab is
-    /// named by and the mark only qualifies it. Idle: a dot in the control's own faint ink,
-    /// saying terminals are there and nothing is happening in them. Running: the live
-    /// dot itself (`statusDotLive`), the same mark a running block wears everywhere else.
-    let terminalReopenIdle = "inline-block w-1.5 h-1.5 rounded-full bg-current"
-    let terminalReopenRunning = statusDotLive
 
     // --- ANSI styling ---------------------------------------------------------------------------
     // Turning a parsed `AnsiStyle` into what a span wears. Split in two on purpose:

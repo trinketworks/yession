@@ -174,6 +174,9 @@ module Dom =
         let agentWriting = "data-agent-writing"
         let agentStream = "data-agent-stream"
         let interruptTurn = "data-interrupt-turn"
+        /// The tray's `running`, while no turn is and a command is: valued with the block it
+        /// takes the reader to.
+        let revealRunning = "data-reveal-running"
         // Message queue.
         let messageQueue = "data-message-queue"
         let queueId = "data-queue-id"
@@ -1107,6 +1110,9 @@ module Dom =
         /// DOES, and this one stops the turn that is running — which is also the only reason
         /// the control is on the band at all.
         let interruptLabel = "Interrupt the agent"
+        /// The accessible name of the tray's `running`: what it does, and which command —
+        /// the face says only that one is.
+        let revealRunningLabel (command: string) = sprintf "Go to the running command: %s" command
         /// A running block's Stop, named for the command it stops: a pane with three commands
         /// running is three Stop controls, and a name that did not say which is a list of
         /// identical words.

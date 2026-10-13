@@ -1291,10 +1291,11 @@ module View =
     /// The way back into the content column once it is shut. Present only while it IS
     /// shut, so there are never two controls for the one column on screen at once.
     ///
-    /// An edge tab that says what the column holds (P1-4): how many terminals are open, and a
-    /// mark while one of them is running a command. It used to say "content", in the faint
-    /// small voice of a chevron, so a session with a build running showed nothing about it
-    /// on the first screen — the word "terminal" was nowhere until somebody went looking.
+    /// An edge tab that says what the column holds (P1-4): how many terminals are open. It
+    /// used to say "content", in the faint small voice of a chevron, so a session's terminals
+    /// were nowhere on the first screen until somebody went looking. A running command is
+    /// said to the eye by the composer's tray (`composerTray`), which can take the reader to
+    /// it; here only in the tab's accessible name.
     /// Still the pivot's vocabulary — words and a chevron, no box — because it is still the
     /// way to the column beside this one, and only what it SAYS has changed.
     let private contentReopen (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
@@ -1307,17 +1308,12 @@ module View =
                 // By the name the strip and the list give it (P1-1), so the edge tab's spoken
                 // "build running" is the word a reader will find once the pane is open.
                 |> List.map (TerminalName.display model.Terminals)
-            // Nothing open, no mark: a dot beside "terminals" would be a state of nothing.
-            let mark =
-                if not (List.isEmpty running) then html $"""<span class="{Style.terminalReopenRunning}" aria-hidden="true"></span>"""
-                elif List.isEmpty live then Lit.nothing
-                else html $"""<span class="{Style.terminalReopenIdle}" aria-hidden="true"></span>"""
             html $"""
                 <button type="button" class="{Style.terminalReopen}"
                         title="{Dom.Text.showTerminals}" aria-label="{Dom.Text.showTerminalsNamed (List.length live) running}"
                         data-content-toggle="show" data-terminals-open="{string (List.length live)}"
                         ?data-terminals-running={not (List.isEmpty running)}
-                        @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.left}<span data-terminals-count>{Dom.Text.terminalsCount (List.length live)}</span>{mark}</button>"""
+                        @click={Ev(fun _ -> dispatch ToggleContentMsg)}>{Icon.left}<span data-terminals-count>{Dom.Text.terminalsCount (List.length live)}</span></button>"""
 
     let private header (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let titleStr = Ylmish.Text.toString model.Synced.Title
@@ -1485,12 +1481,27 @@ module View =
     ///
     /// The jump's hook keeps naming the conversation (`TailSurface.key`), the surface it
     /// brings back; `Tail` decides when it shows by moving `ClientModel.Away`.
+    ///
+    /// With no turn to stop, the leading edge says a command is running, if one is, and goes
+    /// to its chip when pressed (`DomMove.RevealCommand`) — the way a chapter goes to its
+    /// message. One spot, one thing at a time: during a turn the agent's own commands are
+    /// that turn's work, and interrupt is the verb that matters.
     let private composerTray (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         let away = Set.contains TailSurface.Conversation model.Away
-        let interrupt =
-            match model.Agent.ActiveTurn with
-            | None -> Lit.nothing
-            | Some turn ->
+        // The first open terminal running a command, in the order they were opened — the
+        // order the strip and the list show them in.
+        let running =
+            Projection.openTerminals model.Terminals
+            |> List.tryPick (fun view -> Projection.runningBlock view |> Option.map (fun block -> view.TerminalId, block))
+        let leading =
+            match model.Agent.ActiveTurn, running with
+            | None, None -> Lit.nothing
+            | None, Some (terminal, block) ->
+                html $"""
+                    <button type="button" class="{Style.trayRunning}" aria-label="{Dom.Text.revealRunningLabel (BlockLabel.ofBlock block)}"
+                            data-reveal-running="{BlockId.value block.BlockId}"
+                            @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealCommand (terminal, block.BlockId))))}><span class="{Style.trayRunningDot}" aria-hidden="true"></span>running</button>"""
+            | Some turn, _ ->
                 // `Interrupting` only ever names THIS turn or none (the event fold clears it the
                 // moment the turn it named ends), so a plain equality is the whole check.
                 let stopping = model.Agent.Interrupting = Some turn
@@ -1509,8 +1520,8 @@ module View =
                       <button type="button" class="{Style.trayJump}" aria-label="{Dom.Text.jumpToLatest}"
                               @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.JumpToLatest TailSurface.Conversation)))}>latest{Icon.down}</button>
                     </div>"""
-        if model.Agent.ActiveTurn.IsNone && not away then Lit.nothing
-        else html $"""<div class="{Style.composerTray}" data-composer-tray>{interrupt}{jump}</div>"""
+        if model.Agent.ActiveTurn.IsNone && running.IsNone && not away then Lit.nothing
+        else html $"""<div class="{Style.composerTray}" data-composer-tray>{leading}{jump}</div>"""
 
     /// The composer: ONE draft open, everyone else's as a line you can open.
     ///

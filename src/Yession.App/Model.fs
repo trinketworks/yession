@@ -1721,6 +1721,9 @@ type DomMove =
     | RevealBlock of TerminalId * BlockId
     /// Scroll the conversation to one message and mark it.
     | RevealMessage of MessageId
+    /// Scroll the conversation to one command's chip and mark it — the tray's `running`
+    /// press, which takes a reader to the command the way a chapter takes them to a message.
+    | RevealCommand of TerminalId * BlockId
     /// Scroll the pane's strip the least distance that shows its selected tab whole
     /// (`ClientModel.pivotReveal`).
     | RevealPivot
@@ -4866,6 +4869,13 @@ module ClientModel =
         // where none is open, and nothing for the next surface that jumps to remember.
         | MoveMsg (DomMove.RevealMessage _) when not model.Column.Wide ->
             { model with Column = { model.Column with Drawer = false } }
+        // The chip has to be ON the page before anything can scroll to it: one inside a
+        // turn's task card is in that card's fold, so the fold opens on the way — the
+        // conversation's half of what `ShowInTerminalMsg` does for a shut run.
+        | MoveMsg (DomMove.RevealCommand (_, block)) ->
+            match TimelineProjection.blockTurn block model.Timeline with
+            | Some turn -> { model with OpenFolds = Set.add (FoldKey.Task turn) model.OpenFolds }
+            | None -> model
         | MoveMsg _
         | CopyMsg _
         | RetryNowMsg -> model
