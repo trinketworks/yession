@@ -95,6 +95,7 @@
     <Compile Include="ZodBindings.fs" />
     <Compile Include="Telemetry.fs" />
     <Compile Include="TelemetryE2E.fs" />
+    <Compile Include="BrowserWait.fs" />
     <Compile Include="Browser.fs" />
     <!-- After Browser.fs: it shares that fixture (serveStatic, chromiumPath, watching). -->
     <Compile Include="Bench.fs" />
