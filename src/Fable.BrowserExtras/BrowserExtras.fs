@@ -671,6 +671,11 @@ module Animations =
     [<Emit("(function (animation, at) { animation.pause(); animation.currentTime = at })($0, $1)")>]
     let pauseAt (animation: RunningAnimation) (at: float) : unit = jsNative
 
+    /// The CSS animation's name, as its `@keyframes` were named; empty for one that is not a
+    /// CSS animation.
+    [<Emit("($0.animationName ?? '')")>]
+    let name (animation: RunningAnimation) : string = jsNative
+
     /// Settles when the animation finishes, or is cancelled.
     [<Emit("$0.finished.then(() => undefined, () => undefined)")>]
     let whenFinished (animation: RunningAnimation) : JS.Promise<unit> = jsNative

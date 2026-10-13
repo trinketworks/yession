@@ -136,6 +136,17 @@ let private hitAt (selector: string, below: float) : bool =
         |> Option.ofObj
         |> Option.exists element.contains
 
+let private shows (selector: string, words: string) : bool =
+    match first selector with
+    | None -> false
+    | Some root ->
+        let found = root.querySelectorAll "*"
+        [ for i in 0 .. found.length - 1 -> found.[i] ]
+        |> List.exists (fun e ->
+            e.children.length = 0
+            && e.textContent.Contains words
+            && paintedAtCentre e (boxOf e))
+
 let private newest (selector: string, mark: string) : Probes.Newest option =
     first selector
     |> Option.bind (fun surface ->
@@ -259,6 +270,7 @@ answering Probes.textAt textAt
 answering Probes.selection selection
 answering Probes.media media
 answering Probes.hitAt hitAt
+answering Probes.shows shows
 
 for measure in Probes.Measure.all do
     Measures.verdict measure |> Option.iter (awaiting (Probes.verdict measure))

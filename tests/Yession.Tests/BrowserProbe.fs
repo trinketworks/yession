@@ -97,6 +97,9 @@ module Probe =
     /// down from its top.
     let hitAt (page: IPage) (selector: string) (below: float) : Async<bool> = ask page Probes.hitAt (selector, below)
 
+    /// Whether some words are shown under the first match: in a leaf, painted where it stands.
+    let shows (page: IPage) (selector: string) (words: string) : Async<bool> = ask page Probes.shows (selector, words)
+
     /// Whether a media query matches on the page.
     let media (page: IPage) (query: string) : Async<bool> = ask page Probes.media query
 

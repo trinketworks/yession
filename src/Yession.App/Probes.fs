@@ -396,6 +396,30 @@ module Probes =
         /// (`HarnessPage.agentSays`); and at the first frame of the caret's arrival, how far it
         /// stands from that place and size, if more than a pixel.
         | FirstWordFromOpening
+        /// The composer's draft line, its model picker and its own top edge, in the document's
+        /// coordinates (reaching the line can scroll the page).
+        | ComposerTops
+        /// Empty when a press at Send's centre reaches Send; otherwise what it reaches, and
+        /// where both stand.
+        | SendAnswers
+        /// The rewound replay's screen sampled every 25ms for 100ms, play pressed, and sampled
+        /// for 700ms more: each sample that does not hold the landing (`line 3`).
+        | PlayCarriesOn
+        /// What has not yet settled of the content column opening: its animation, the
+        /// scrollback inside it, and focus handed into it.
+        | ColumnOpened
+        /// An arrangement: once the opened `block-burst-running` is over 1000px tall, its middle
+        /// scrolled to the top of the scrollback. Empty once it has been.
+        | BurstMiddleToTop
+        /// After a frame, what of `block-burst-running`'s command row is not held at the top of
+        /// the scrollback, painted, while the block itself is far above.
+        | CommandRowHeld
+        /// `block-burst-running`'s output: how many nodes it is drawn in, and 1 if `line 1500`
+        /// is among them, else 0. Nothing drawn reads as no numbers.
+        | OutputNodes
+        /// What of a folded command shown in its terminal has not landed: its run open, the
+        /// command in view and painted, its mark playing, and focus back on the chip.
+        | FoldedCommandLanded
 
     [<RequireQualifiedAccess>]
     module Measure =
@@ -424,6 +448,14 @@ module Probes =
             | Measure.AgentCaretOnLetters -> "agent-caret-on-letters"
             | Measure.ThinkingMarkInsideBox -> "thinking-mark-inside-box"
             | Measure.FirstWordFromOpening -> "first-word-from-opening"
+            | Measure.ComposerTops -> "composer-tops"
+            | Measure.SendAnswers -> "send-answers"
+            | Measure.PlayCarriesOn -> "play-carries-on"
+            | Measure.ColumnOpened -> "column-opened"
+            | Measure.BurstMiddleToTop -> "burst-middle-to-top"
+            | Measure.CommandRowHeld -> "command-row-held"
+            | Measure.OutputNodes -> "output-nodes"
+            | Measure.FoldedCommandLanded -> "folded-command-landed"
 
         let all =
             [ Measure.RunningMarkOnTitle
@@ -448,7 +480,15 @@ module Probes =
               Measure.ItemActionsUnderThumb
               Measure.AgentCaretOnLetters
               Measure.ThinkingMarkInsideBox
-              Measure.FirstWordFromOpening ]
+              Measure.FirstWordFromOpening
+              Measure.ComposerTops
+              Measure.SendAnswers
+              Measure.PlayCarriesOn
+              Measure.ColumnOpened
+              Measure.BurstMiddleToTop
+              Measure.CommandRowHeld
+              Measure.OutputNodes
+              Measure.FoldedCommandLanded ]
 
     /// How many times this document has rendered — published by `app/browser/Render.fs`,
     /// absent until the first render.
@@ -543,6 +583,16 @@ module Probes =
         { Name = "__probeHitAt"
           EncodeAsk = fun (selector, below) -> Encode.list [ Encode.string selector; Encode.float below ]
           DecodeAsk = Decode.tuple2 Decode.string Decode.float
+          EncodeAnswer = Encode.bool
+          DecodeAnswer = Decode.bool }
+
+    /// Whether some words are SHOWN under the first match: an element with no element children
+    /// whose text holds them, with an area, and painted at its own centre — so words laid out
+    /// under something that covers them are not shown.
+    let shows : Probe<string * string, bool> =
+        { Name = "__probeShows"
+          EncodeAsk = fun (selector, words) -> Encode.list [ Encode.string selector; Encode.string words ]
+          DecodeAsk = Decode.tuple2 Decode.string Decode.string
           EncodeAnswer = Encode.bool
           DecodeAnswer = Decode.bool }
 

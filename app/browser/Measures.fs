@@ -506,72 +506,192 @@ let private firstWordFromOpening () : JS.Promise<string list> =
                         let off = List.max [ abs (x - wasX); abs (y - wasY); abs (h - wasH) ]
                         if off > 1.0 then [ sprintf "it leaves %.2fpx from where the turn's mark stood" off ] else []))
 
-/// The verdict measures that answer at once.
-let private verdictNow (measure: Probes.Measure) : (int -> string list) option =
-    match measure with
-    | Probes.Measure.RunningMarkOnTitle -> Some (fun _ -> runningMarkOnTitle ())
-    | Probes.Measure.CauseHeadsOnLines -> Some (fun _ -> causeHeadsOnLines ())
-    | Probes.Measure.RunningMarkOnCauseLine -> Some (fun _ -> runningMarkOnCauseLine ())
-    | Probes.Measure.GrabEdgeClear -> Some (fun _ -> grabEdgeClear ())
-    | Probes.Measure.EdgeTabOnBand -> Some (fun desktop -> edgeTabOnBand (desktop = 1))
-    | Probes.Measure.RoomBelowShell -> Some roomBelowShell
-    | Probes.Measure.AskCardColumn -> Some askCardColumn
-    | Probes.Measure.ItemsClearOfCard -> Some (fun _ -> itemsClearOfCard ())
-    | Probes.Measure.HideFixturesAboveShell -> Some (fun _ -> hideFixturesAboveShell ())
-    | Probes.Measure.FocusBeforePane -> Some (fun _ -> focusBeforePane ())
-    | Probes.Measure.ItemActionsUnderThumb -> Some (fun _ -> itemActionsUnderThumb ())
-    | Probes.Measure.AgentCaretOnLetters -> Some (fun _ -> agentCaretOnLetters ())
-    | Probes.Measure.ThinkingMarkInsideBox -> Some (fun _ -> thinkingMarkInsideBox ())
-    | Probes.Measure.FirstWordFromOpening
-    | Probes.Measure.PastShell
-    | Probes.Measure.FoldArrowsOnRail
-    | Probes.Measure.FoldArrowsOnAvatars
-    | Probes.Measure.ReferenceBaseline
-    | Probes.Measure.GrabEdgeShape
-    | Probes.Measure.ChapterPlaceholder
-    | Probes.Measure.Burst
-    | Probes.Measure.LoneRecordInQuietFrame
-    | Probes.Measure.SmoothScrollToTop -> None
+/// A box's edges, rounded, for a verdict to say where something stood.
+let private described (box: ClientRect) : string =
+    sprintf "%.0f,%.0f %.0fx%.0f" box.left box.top box.width box.height
 
-/// The reading measures that answer at once.
-let private readingNow (measure: Probes.Measure) : (int -> float list) option =
+/// An element as a verdict names it: its tag and its `data-*` attributes.
+let private named (element: Element) : string =
+    let attributes = element.attributes
+    let hooks =
+        [ for i in 0 .. int attributes.length - 1 do
+              let attribute = attributes.[i]
+              if attribute.name.StartsWith "data-" then yield sprintf "[%s=%s]" attribute.name attribute.value ]
+    element.tagName.ToLowerInvariant () + String.concat "" hooks
+
+let private composerTops () : float list =
+    let top selector =
+        match first Root.Document selector with
+        | Some element -> (element.getBoundingClientRect ()).top + Browser.Dom.window.scrollY
+        | None -> nan
+    [ top "#shell [data-draft-input] .ProseMirror"
+      top "#shell [data-model-panel]"
+      top "#shell [data-draft-input]" ]
+
+let private sendAnswers () : string list =
+    match first Root.Document "#shell [data-send-draft]" with
+    | None -> [ "there is no Send" ]
+    | Some send ->
+        let b = send.getBoundingClientRect ()
+        match document.elementFromPoint (b.left + b.width / 2.0, b.top + b.height / 2.0) |> Option.ofObj with
+        | Some at when send.contains at -> []
+        | Some at -> [ sprintf "%s at %s (send at %s)" (named at) (described (at.getBoundingClientRect ())) (described b) ]
+        | None -> [ sprintf "nothing (send at %s)" (described b) ]
+
+let private wait (ms: int) : JS.Promise<unit> =
+    Promise.create (fun resolve _ -> Browser.Dom.window.setTimeout ((fun () -> resolve ()), ms) |> ignore)
+
+let private playCarriesOn () : JS.Promise<string list> =
+    let mount = "#shell [data-pane-replay='terminal:term-live']"
+    let seen = ResizeArray<string> ()
+    let read () =
+        seen.Add (first Root.Document mount |> Option.map (fun m -> m.textContent) |> Option.defaultValue "(no replay)")
+    let timer = Browser.Dom.window.setInterval (read, 25)
+    wait 100
+    |> Promise.bind (fun () ->
+        match first Root.Document (mount + " .ap-overlay-start") with
+        | Some start -> (start :?> HTMLElement).click ()
+        | None -> seen.Add "(no play to press)"
+        wait 700)
+    |> Promise.map (fun () ->
+        Browser.Dom.window.clearInterval timer
+        seen |> Seq.filter (fun frame -> not (frame.Contains "line 3")) |> List.ofSeq)
+
+let private columnOpened () : string list =
+    match first Root.Document "#shell [data-content-panel]" with
+    | None -> [ "no content column" ]
+    | Some panel ->
+        let p = panel.getBoundingClientRect ()
+        [ if (Animations.on panel).Length > 0 then "the column is still animating"
+          match first (Root.Under panel) "[data-terminal-scrollback]" with
+          | None -> "no scrollback in the column"
+          | Some scroller ->
+              let q = scroller.getBoundingClientRect ()
+              if q.left < p.left - 0.5 || q.right > p.right + 0.5 then "the scrollback is wider than the column"
+          let inside =
+              document.activeElement |> Option.ofObj |> Option.bind (fun e -> closest e "#shell [data-content-panel]")
+          if inside.IsNone then "focus is not in the column" ]
+
+let private burstMiddleToTop () : string list =
+    match first Root.Document "#shell [data-terminal-scrollback]" with
+    | None -> [ "no scrollback" ]
+    | Some scroller ->
+        match first (Root.Under scroller) "[data-terminal-block=block-burst-running]" with
+        | None -> [ "no burst block" ]
+        | Some block ->
+            let a = scroller.getBoundingClientRect ()
+            let b = block.getBoundingClientRect ()
+            if b.height < 1000.0 then [ sprintf "the burst block is %.0fpx tall" b.height ]
+            else
+                scroller.scrollTop <- scroller.scrollTop + (b.top - a.top) + b.height / 2.0
+                []
+
+let private commandRowHeld () : JS.Promise<string list> =
+    nextFrame ()
+    |> Promise.map (fun () ->
+        let scroller = first Root.Document "#shell [data-terminal-scrollback]"
+        let block = scroller |> Option.bind (fun s -> first (Root.Under s) "[data-terminal-block=block-burst-running]")
+        let row = block |> Option.bind (fun b -> first (Root.Under b) "[data-terminal-block-command]")
+        match scroller, block, row with
+        | Some scroller, Some block, Some row ->
+            let a = scroller.getBoundingClientRect ()
+            let b = block.getBoundingClientRect ()
+            let r = row.getBoundingClientRect ()
+            let hit = document.elementFromPoint (r.left + r.width / 2.0, r.top + r.height / 2.0) |> Option.ofObj
+            let where =
+                sprintf "scroller %.1f, block %.1f, row %.1f (%.1f to %.1f), window %.0f"
+                    a.top b.top r.top r.left r.right Browser.Dom.window.innerWidth
+            [ if b.top >= a.top - 500.0 then "the block has not scrolled away: " + where
+              if abs (r.top - a.top) > 1.0 then "the row is not at the top: " + where
+              match hit with
+              | Some hit when row.contains hit -> ()
+              | Some hit -> "the row is under " + named hit
+              | None -> "nothing is painted at the row" ]
+        | _ -> [ "the burst block's command row is not there" ])
+
+let rec private nodesUnder (node: Node) : int =
+    let children = node.childNodes
+    children.length + List.sum [ for i in 0 .. children.length - 1 -> nodesUnder children.[i] ]
+
+let private outputNodes () : float list =
+    match first Root.Document "#shell [data-terminal-block='block-burst-running'] [data-terminal-output]" with
+    | None -> []
+    | Some output -> [ float (nodesUnder output); (if output.textContent.Contains "line 1500" then 1.0 else 0.0) ]
+
+let private foldedCommandLanded () : string list =
+    let scroller = first Root.Document "#shell [data-terminal-scrollback]"
+    let run = scroller |> Option.bind (fun s -> first (Root.Under s) "[data-terminal-block-run='block-burst-ok'] details")
+    let block = scroller |> Option.bind (fun s -> first (Root.Under s) "[data-terminal-block=block-burst-failed]")
+    match scroller, block with
+    | Some scroller, Some block ->
+        // In view AND painted: a box inside a shut `<details>` can still measure as if it were
+        // on screen, so ask what is drawn at its line.
+        let inView =
+            match first (Root.Under block) "[data-terminal-block-command]" with
+            | None -> false
+            | Some row ->
+                let a = scroller.getBoundingClientRect ()
+                let r = row.getBoundingClientRect ()
+                r.top >= a.top - 1.0 && r.bottom <= a.bottom + 1.0 && paintedAt block (r.left + r.width / 2.0) (r.top + r.height / 2.0)
+        let focusOnChip =
+            document.activeElement |> Option.ofObj |> Option.exists (fun e -> e.hasAttribute "data-chat-block")
+        [ if not (run |> Option.exists (fun r -> r.hasAttribute "open")) then "the run is shut"
+          if not inView then "the command is not in view"
+          if not (Animations.on block |> Array.exists (fun a -> Animations.name a = "reveal-line")) then "the command is not marked"
+          if not focusOnChip then "focus is not back on the chip" ]
+    | _ -> [ "the folded command is not in the scrollback" ]
+
+/// How a measure answers: a verdict (what is wrong) or a reading (numbers), each asked with
+/// its parameter. One match, so a new measure does not compile until it says which it is.
+[<RequireQualifiedAccess>]
+type private Implementation =
+    | Verdict of (int -> JS.Promise<string list>)
+    | Reading of (int -> JS.Promise<float list>)
+
+let private implement (measure: Probes.Measure) : Implementation =
+    let verdictNow (read: int -> string list) = Implementation.Verdict (fun parameter -> Promise.lift (read parameter))
+    let readingNow (read: int -> float list) = Implementation.Reading (fun parameter -> Promise.lift (read parameter))
     match measure with
-    | Probes.Measure.FoldArrowsOnRail -> Some (fun _ -> foldArrowsOnRail ())
-    | Probes.Measure.FoldArrowsOnAvatars -> Some (fun _ -> foldArrowsOnAvatars ())
-    | Probes.Measure.ReferenceBaseline -> Some (fun _ -> referenceBaseline ())
-    | Probes.Measure.GrabEdgeShape -> Some (fun _ -> grabEdgeShape ())
-    | Probes.Measure.PastShell -> Some (fun _ -> pastShell ())
-    | Probes.Measure.ChapterPlaceholder -> Some (fun _ -> chapterPlaceholder ())
-    | Probes.Measure.RoomBelowShell
-    | Probes.Measure.AskCardColumn
-    | Probes.Measure.ItemsClearOfCard
-    | Probes.Measure.HideFixturesAboveShell
-    | Probes.Measure.FocusBeforePane
-    | Probes.Measure.ItemActionsUnderThumb
-    | Probes.Measure.AgentCaretOnLetters
-    | Probes.Measure.ThinkingMarkInsideBox
-    | Probes.Measure.FirstWordFromOpening
-    | Probes.Measure.RunningMarkOnTitle
-    | Probes.Measure.CauseHeadsOnLines
-    | Probes.Measure.RunningMarkOnCauseLine
-    | Probes.Measure.GrabEdgeClear
-    | Probes.Measure.EdgeTabOnBand
-    | Probes.Measure.Burst
-    | Probes.Measure.LoneRecordInQuietFrame
-    | Probes.Measure.SmoothScrollToTop -> None
+    | Probes.Measure.RunningMarkOnTitle -> verdictNow (fun _ -> runningMarkOnTitle ())
+    | Probes.Measure.CauseHeadsOnLines -> verdictNow (fun _ -> causeHeadsOnLines ())
+    | Probes.Measure.RunningMarkOnCauseLine -> verdictNow (fun _ -> runningMarkOnCauseLine ())
+    | Probes.Measure.FoldArrowsOnRail -> readingNow (fun _ -> foldArrowsOnRail ())
+    | Probes.Measure.FoldArrowsOnAvatars -> readingNow (fun _ -> foldArrowsOnAvatars ())
+    | Probes.Measure.ReferenceBaseline -> readingNow (fun _ -> referenceBaseline ())
+    | Probes.Measure.GrabEdgeShape -> readingNow (fun _ -> grabEdgeShape ())
+    | Probes.Measure.GrabEdgeClear -> verdictNow (fun _ -> grabEdgeClear ())
+    | Probes.Measure.EdgeTabOnBand -> verdictNow (fun desktop -> edgeTabOnBand (desktop = 1))
+    | Probes.Measure.RoomBelowShell -> verdictNow roomBelowShell
+    | Probes.Measure.PastShell -> readingNow (fun _ -> pastShell ())
+    | Probes.Measure.AskCardColumn -> verdictNow askCardColumn
+    | Probes.Measure.ItemsClearOfCard -> verdictNow (fun _ -> itemsClearOfCard ())
+    | Probes.Measure.HideFixturesAboveShell -> verdictNow (fun _ -> hideFixturesAboveShell ())
+    | Probes.Measure.FocusBeforePane -> verdictNow (fun _ -> focusBeforePane ())
+    | Probes.Measure.Burst -> Implementation.Reading (fun _ -> burst ())
+    | Probes.Measure.LoneRecordInQuietFrame -> Implementation.Verdict (fun _ -> loneRecordInQuietFrame ())
+    | Probes.Measure.SmoothScrollToTop -> Implementation.Reading (fun _ -> smoothScrollToTop ())
+    | Probes.Measure.ChapterPlaceholder -> readingNow (fun _ -> chapterPlaceholder ())
+    | Probes.Measure.ItemActionsUnderThumb -> verdictNow (fun _ -> itemActionsUnderThumb ())
+    | Probes.Measure.AgentCaretOnLetters -> verdictNow (fun _ -> agentCaretOnLetters ())
+    | Probes.Measure.ThinkingMarkInsideBox -> verdictNow (fun _ -> thinkingMarkInsideBox ())
+    | Probes.Measure.FirstWordFromOpening -> Implementation.Verdict (fun _ -> firstWordFromOpening ())
+    | Probes.Measure.ComposerTops -> readingNow (fun _ -> composerTops ())
+    | Probes.Measure.SendAnswers -> verdictNow (fun _ -> sendAnswers ())
+    | Probes.Measure.PlayCarriesOn -> Implementation.Verdict (fun _ -> playCarriesOn ())
+    | Probes.Measure.ColumnOpened -> verdictNow (fun _ -> columnOpened ())
+    | Probes.Measure.BurstMiddleToTop -> verdictNow (fun _ -> burstMiddleToTop ())
+    | Probes.Measure.CommandRowHeld -> Implementation.Verdict (fun _ -> commandRowHeld ())
+    | Probes.Measure.OutputNodes -> readingNow (fun _ -> outputNodes ())
+    | Probes.Measure.FoldedCommandLanded -> verdictNow (fun _ -> foldedCommandLanded ())
 
 /// What is wrong, by a verdict measure's account, asked with its parameter.
 let verdict (measure: Probes.Measure) : (int -> JS.Promise<string list>) option =
-    let now (read: int -> string list) = Some (fun parameter -> Promise.lift (read parameter))
-    match measure with
-    | Probes.Measure.LoneRecordInQuietFrame -> Some (fun _ -> loneRecordInQuietFrame ())
-    | Probes.Measure.FirstWordFromOpening -> Some (fun _ -> firstWordFromOpening ())
-    | measure -> verdictNow measure |> Option.bind now
+    match implement measure with
+    | Implementation.Verdict answer -> Some answer
+    | Implementation.Reading _ -> None
 
 /// The numbers a reading measure takes.
 let reading (measure: Probes.Measure) : (int -> JS.Promise<float list>) option =
-    let now (read: int -> float list) = Some (fun parameter -> Promise.lift (read parameter))
-    match measure with
-    | Probes.Measure.Burst -> Some (fun _ -> burst ())
-    | Probes.Measure.SmoothScrollToTop -> Some (fun _ -> smoothScrollToTop ())
-    | measure -> readingNow measure |> Option.bind now
+    match implement measure with
+    | Implementation.Reading answer -> Some answer
+    | Implementation.Verdict _ -> None
