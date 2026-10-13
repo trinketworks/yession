@@ -128,3 +128,31 @@ module Probes =
           DecodeAsk = Decode.int
           EncodeAnswer = Encode.bool
           DecodeAnswer = Decode.bool }
+
+    /// Wait this many animation frames, answering how many ran. For a case that has to let the
+    /// page draw what it was just handed — a frame for a move to be asked, a frame for it to be
+    /// made — before it acts again.
+    let frames : Probe<int, int> =
+        { Name = "__probeFrames"
+          EncodeAsk = Encode.int
+          DecodeAsk = Decode.int
+          EncodeAnswer = Encode.int
+          DecodeAnswer = Decode.int }
+
+    /// The text of every match of a selector with the remote carets' widgets left out — a
+    /// collaborator's caret is drawn INSIDE the text it sits in, label and all, so the words a
+    /// reader is shown are the element's own text without them.
+    let ownTexts : Probe<string, string list> =
+        { Name = "__probeOwnTexts"
+          EncodeAsk = Encode.string
+          DecodeAsk = Decode.string
+          EncodeAnswer = List.map Encode.string >> Encode.list
+          DecodeAnswer = Decode.list Decode.string }
+
+    /// The names of the IndexedDB databases this origin holds.
+    let databases : Probe<int, string list> =
+        { Name = "__probeDatabases"
+          EncodeAsk = Encode.int
+          DecodeAsk = Decode.int
+          EncodeAnswer = List.map Encode.string >> Encode.list
+          DecodeAnswer = Decode.list Decode.string }

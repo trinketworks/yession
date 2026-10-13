@@ -62,6 +62,27 @@ let private framing (withinMs: int) : JS.Promise<bool> =
         Browser.Dom.window.requestAnimationFrame (fun _ -> resolve true) |> ignore
         Browser.Dom.window.setTimeout ((fun () -> resolve false), withinMs) |> ignore)
 
+let private frames (count: int) : JS.Promise<int> =
+    let rec after (ran: int) : JS.Promise<int> =
+        if ran >= count then Promise.lift ran
+        else
+            Promise.create (fun resolve _ -> Browser.Dom.window.requestAnimationFrame (fun _ -> resolve ()) |> ignore)
+            |> Promise.bind (fun () -> after (ran + 1))
+    after 0
+
+let private ownTexts (selector: string) : string list =
+    all selector
+    |> List.map (fun element ->
+        let children = element.childNodes
+        [ for i in 0 .. children.length - 1 -> children.[i] ]
+        |> List.filter (fun child ->
+            not (child.nodeType = 1.0 && (child :?> Element).classList.contains "pm-caret"))
+        |> List.map (fun child -> child.textContent)
+        |> String.concat "")
+
+let private databases (_: int) : JS.Promise<string list> =
+    IndexedDb.names () |> Promise.map List.ofArray
+
 /// Publish a probe that answers at once.
 let private answering (probe: Probes.Probe<'Ask, 'Answer>) (answer: 'Ask -> 'Answer) : unit =
     PageGlobal.set
@@ -84,3 +105,6 @@ answering Probes.seen seen
 answering Probes.boxes boxes
 answering Probes.computed computed
 awaiting Probes.framing framing
+awaiting Probes.frames frames
+answering Probes.ownTexts ownTexts
+awaiting Probes.databases databases

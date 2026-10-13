@@ -59,4 +59,13 @@ module Probe =
     /// Whether the page runs an animation frame within the given milliseconds.
     let framing (page: IPage) (withinMs: int) : Async<bool> = ask page Probes.framing withinMs
 
+    /// Let the page run this many animation frames.
+    let frames (page: IPage) (count: int) : Async<unit> = ask page Probes.frames count |> Async.Ignore
+
+    /// Every match's own text, the remote carets' widgets left out.
+    let ownTexts (page: IPage) (selector: string) : Async<string list> = ask page Probes.ownTexts selector
+
+    /// The IndexedDB databases this page's origin holds, by name.
+    let databases (page: IPage) : Async<string list> = ask page Probes.databases 0
+
 #endif
