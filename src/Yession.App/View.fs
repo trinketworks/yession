@@ -4389,7 +4389,7 @@ module View =
                             aria-label="{Dom.Text.closedTerminals count}"
                             @click={Ev(fun _ -> dispatch ToggleClosedMsg)}>
                       <span>{Dom.Text.closedHeading}</span><span class="{Style.listCount}">{string count}</span>
-                      <span class="{if shown then Style.listFoldMarkOpen else Style.listFoldMark}" aria-hidden="true">{Icon.down}</span>
+                      <span class="{if shown then Style.listFoldMarkOpen else Style.listFoldMark}" aria-hidden="true">{Icon.caret}</span>
                     </button>
                     {unfolded}"""
         // The files under a heading of their own, which carries the way to add one — there

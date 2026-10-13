@@ -3300,7 +3300,7 @@ module Style =
     /// The row's button holds both its lines (`terminalListName`), so a row needs be no
     /// taller than they are to be a thumb's: 60px.
     let terminalListRow =
-        cls [ "group/row flex items-stretch gap-3 pl-3 pr-1 min-h-15"
+        cls [ "group/row flex items-stretch gap-3 pr-1 min-h-15"
               "hover:bg-surface-2 has-[[aria-current=true]]:bg-surface-2"; Stroke.dividerBottom ]
 
     /// The row's own control: its name, which opens it — the pivot's type, so the page reads
@@ -3310,13 +3310,13 @@ module Style =
     /// It is both of the row's lines, the name over what it says, so the row is pressed
     /// anywhere but its verbs.
     let private terminalListNameBase =
-        cls [ "min-w-0 flex-1 flex flex-col justify-center gap-0.5 px-0 py-2 bg-transparent border-0 cursor-pointer text-left"
+        cls [ "min-w-0 flex-1 flex flex-col justify-center gap-0.5 pl-3 pr-0 py-2 bg-transparent border-0 cursor-pointer text-left"
               "font-ui font-normal text-body transition-colors"; focusRingInset ]
     let terminalListName = cls [ terminalListNameBase; "text-ink" ]
     /// The name itself, as much of it as fits.
     let terminalListNameText = "min-w-0 truncate"
     /// A row's two lines where they are not a control: a file on its way in.
-    let terminalListWho = "min-w-0 flex-1 flex flex-col justify-center gap-0.5 py-2"
+    let terminalListWho = "min-w-0 flex-1 flex flex-col justify-center gap-0.5 pl-3 py-2"
 
     /// A closed row's name: dimmer, which says which half of the list it is in by its tone
     /// rather than by repeating the word — its mark says the rest.
