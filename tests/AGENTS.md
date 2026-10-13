@@ -9,8 +9,7 @@ in `tasks.fsx` probes each one and holds the refusal text. Read those, not a cop
   quietly. A quiet drop once shipped releases with the live agent suite skipped.
 - Two things still skip: a capability the tier did not ask for, and the runtime partition (a Node suite
   on the CLR, or the reverse).
-- `verify` runs every capability except `Bench` and `Dogfood` (`allNeeds`). Tiers live in
-  `.github/verify-tiers.json`.
+- `verify`'s tiers live in `.github/verify-tiers.json`.
 - `LiveGitHub`: in a Claude Code container `GITHUB_TOKEN` is a placeholder. The agent proxy swaps in the
   real credential, and only through `HTTPS_PROXY`. It authenticates EVERY request to GitHub, so no
   anonymous case can run there.
