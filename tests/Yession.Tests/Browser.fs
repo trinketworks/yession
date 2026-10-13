@@ -32,6 +32,7 @@ open System.Threading.Tasks
 open Microsoft.Playwright
 open Yession.App.Codecs
 open Yession.App.Collab
+open Yession.Tests.BrowserWait
 
 /// The URL out of a "launched at http://127.0.0.1:PORT/ …" line. Same shape the packaged
 /// composition test uses to learn both endpoints from stdout.
@@ -467,7 +468,15 @@ let private waitFor (what: string) (page: IPage) (predicate: string) : Async<uni
 // Read off the ATTRIBUTE, never off the words. A healthy client says nothing about being
 // healthy any more — "Connected" was on three surfaces at once and is now on none — so the
 // state token is the only place this can come from, which is where a markup contract belongs.
-let private connected = """document.querySelector('[data-connection]')?.getAttribute('data-connection') === 'Connected'"""
+/// The connection state token, if the page carries one yet.
+let private connectionState (page: IPage) () : Async<string option> =
+    Read.attr page (Sel.hook Yession.App.Dom.Hooks.connection) Yession.App.Dom.Hooks.connection
+
+/// Wait for the client to say it is connected.
+let private waitConnectedAs (what: string) (page: IPage) : Async<unit> =
+    Wait.until what (connectionState page) ((=) (Some Yession.App.Dom.Text.connected))
+
+let private waitConnected (page: IPage) : Async<unit> = waitConnectedAs "the client to be connected" page
 
 /// An init script that takes away the END of ICE gathering — the `complete` state and the null
 /// candidate — from every peer connection the page makes, and counts the candidates instead.
@@ -717,7 +726,7 @@ let private peersCase (env: (string * string) list) (name: string) (peers: int) 
                                 let! _ = await (page.GotoAsync host.Base)
                                 ()
                             for i, page in List.indexed pages do
-                                do! waitFor (sprintf "peer %d to connect" (i + 1)) page connected
+                                do! waitConnectedAs (sprintf "peer %d to connect" (i + 1)) page
                             do! body host pages
                         }
                     do! reportingAll name opened arranged
@@ -1139,7 +1148,7 @@ let tests =
                                  watching.disconnect()
                                }).observe(document, { subtree: true, childList: true, attributes: true })""")
                 let! _ = await (page.ReloadAsync ())
-                do! waitFor "the reloaded page to connect" page connected
+                do! waitConnectedAs "the reloaded page to connect" page
                 do! waitFor "all three terminals to be back in the strip" page "document.querySelectorAll('[data-pane-tab]').length === 3"
                 do! waitFor "the chosen terminal to be on top again" page chosenOnTop
                 let! firstOnTop = await (page.EvaluateAsync<string> "() => window.__firstOnTop ?? 'never recorded'")
@@ -1254,7 +1263,7 @@ let tests =
                 let reopen (upTo: int) =
                     async {
                         let! _ = await (page.ReloadAsync ())
-                        do! waitFor "the reopened session to connect" page connected
+                        do! waitConnectedAs "the reopened session to connect" page
                         do! waitFor "the reopened session to have replayed its terminal" page (printed upTo)
                         let! settled =
                             await (page.EvaluateAsync<string> """() => new Promise(resolve => {
@@ -1390,7 +1399,7 @@ let tests =
                 do! await (page.WaitForFunctionAsync enough) |> Async.Ignore
 
                 let! _ = await (page.ReloadAsync ())
-                do! waitFor "the reopened session to connect" page connected
+                do! waitConnectedAs "the reopened session to connect" page
                 do! waitFor (sprintf "the reopened session to offer its %d terminals" opened) page enough
 
                 // Settled when the render count has stopped moving, which is also when the
@@ -1763,7 +1772,7 @@ let tests =
                 let! before = ownName ()
                 Expect.isFalse (String.IsNullOrWhiteSpace before) "a connected peer shows its own name"
                 let! _ = await (page.ReloadAsync ())
-                do! waitFor "the reloaded page to connect" page connected
+                do! waitConnectedAs "the reloaded page to connect" page
                 let! after = ownName ()
                 Expect.equal after before "the reloaded page wears the name it had before"
             }
@@ -8032,10 +8041,12 @@ let private startMounted (stalls: string -> bool) : Mounted =
 
 let private saidInTimeline = "still here when the session is not"
 
-let private inTimeline =
-    sprintf
-        """document.querySelector('[data-conversation]')?.textContent?.includes('%s') === true"""
-        saidInTimeline
+/// The conversation's text, if the page has drawn one yet.
+let private timelineText (page: IPage) () : Async<string option> =
+    Read.text page (Sel.hook Yession.App.Dom.Hooks.conversation)
+
+let private inTimeline (page: IPage) : Async<unit> =
+    Wait.until "the message in the timeline" (timelineText page) (Option.exists (fun t -> t.Contains saidInTimeline))
 
 let private printedInTerminal = "printed-before-the-session-died"
 
@@ -8115,10 +8126,10 @@ let private transcriptKept =
             printedInTerminal)
 let private conversationKept = keptIn "/events" saidInTimeline
 
-let private terminalPrinted =
-    sprintf
-        """[...document.querySelectorAll('[data-terminal-output]')].some(o => o.textContent.includes('%s'))"""
-        printedInTerminal
+let private terminalPrinted (what: string) (page: IPage) : Async<unit> =
+    Wait.until what
+        (fun () -> Read.texts page (Sel.hook Yession.App.Dom.Hooks.terminalOutput))
+        (List.exists (fun o -> o.Contains printedInTerminal))
 
 /// `make` runs against a live session and leaves history behind; `check` runs against the
 /// page that came back with the session dead.
@@ -8134,7 +8145,7 @@ let private offlineReopen (name: string) (make: IPage -> Async<unit>) (check: IP
                     let evidence = watching page
                     do! reporting name page evidence <| async {
                     let! _ = await (page.GotoAsync publicUrl)
-                    let! _ = await (page.WaitForFunctionAsync connected)
+                    do! waitConnected page
 
                     do! make page
 
@@ -8196,10 +8207,10 @@ let mountedTests =
                         // exactly how this test passed locally and broke master. `connected` is only
                         // true on the shell after the bounce, and `WaitForFunctionAsync` re-arms
                         // across navigations, so it is the one safe thing to await first.
-                        let! _ = await (page.WaitForFunctionAsync connected)
+                        do! waitConnected page
 
-                        let! baseHref = await (page.EvaluateAsync<string> "() => document.querySelector('base')?.getAttribute('href')")
-                        Expect.equal baseHref (sprintf "/s/%s/" MOUNT_SESSION) "the shell declares its mount"
+                        let! baseHref = Read.attr page "base" "href"
+                        Expect.equal baseHref (Some (sprintf "/s/%s/" MOUNT_SESSION)) "the shell declares its mount"
 
                         // Installable, and installable AS ITSELF. The manifest is addressed
                         // relatively like every other route here, and the URLs INSIDE it resolve
@@ -8251,9 +8262,9 @@ let mountedTests =
                         let! _ = await (page.WaitForSelectorAsync composerSel)
                         do! awaitU (page.ClickAsync composerSel)
                         do! awaitU (page.Keyboard.TypeAsync "persisted across the wipe")
-                        let hasDraft =
-                            """[...document.querySelectorAll('.ProseMirror')].some(p => p.textContent === 'persisted across the wipe')"""
-                        let! _ = await (page.WaitForFunctionAsync hasDraft)
+                        let hasDraft (what: string) =
+                            Wait.until what (fun () -> Read.texts page ".ProseMirror") (List.contains "persisted across the wipe")
+                        do! hasDraft "the draft in an editor"
 
                         mountedHost.Kill true
                         mountedHost.WaitForExit ()
@@ -8265,8 +8276,8 @@ let mountedTests =
                         // unchanged, its IndexedDB is still this session's, and the draft can
                         // only have come from there: the server's copy was deleted.
                         let! _ = await (page.ReloadAsync ())
-                        let! _ = await (page.WaitForFunctionAsync connected)
-                        do! await (page.WaitForFunctionAsync hasDraft) |> Async.Ignore
+                        do! waitConnected page
+                        do! hasDraft "the draft back from the browser's own store"
                     })
                 finally
                     mounted.Stop ()
@@ -8292,7 +8303,7 @@ let mountedTests =
                     do! awaitU (page.ClickAsync composerSel)
                     do! awaitU (page.Keyboard.TypeAsync saidInTimeline)
                     do! awaitU (page.Locator("[data-send-draft]").First.ClickAsync ())
-                    do! waitFor "the message in the timeline" page inTimeline
+                    do! inTimeline page
                     do! waitFor "the conversation to be kept" page conversationKept
                 })
             (fun page ->
@@ -8300,7 +8311,7 @@ let mountedTests =
                     // It has what this client had been reading. Scoped to the conversation
                     // element: a page-level match is satisfied by the roster and by the
                     // composer this text was typed into.
-                    do! waitFor "the conversation to come back offline" page inTimeline
+                    do! Wait.until "the conversation to come back offline" (timelineText page) (Option.exists (fun t -> t.Contains saidInTimeline))
                 })
 
         // The connection state is its own promise, and its own way to break: a client that
@@ -8312,10 +8323,10 @@ let mountedTests =
             (fun page ->
                 async {
                     do!
-                        waitFor
+                        Wait.until
                             "the client to stop claiming it is connected"
-                            page
-                            """document.querySelector('[data-connection]')?.getAttribute('data-connection') !== 'Connected'"""
+                            (connectionState page)
+                            ((<>) (Some Yession.App.Dom.Text.connected))
                 })
 
         // The report has two mounts — the nav column's, and the bar for where the column
@@ -8357,8 +8368,8 @@ let mountedTests =
                     // screen says the session is gone. Without this the case above passes on a
                     // client that reports nothing at all.
                     let saidSomewhere = sprintf "(%s.reports + %s.offer) >= 1" counted counted
-                    do! waitFor "the client to notice the session is gone" page
-                            """document.querySelector('[data-degraded]') !== null"""
+                    do! Wait.until "the client to notice the session is gone"
+                            (fun () -> Read.count page (Sel.hook Yession.App.Dom.Hooks.degraded)) (fun n -> n > 0)
                     for width, height, what in [ 1440, 900, "a desktop"; 390, 844, "a phone" ] do
                         do! awaitU (page.SetViewportSizeAsync (width, height))
                         do! waitFor (sprintf "one report at most on %s" what) page atMostOne
@@ -8382,7 +8393,7 @@ let mountedTests =
             (fun _ -> async { return () })
             (fun page ->
                 async {
-                    do! waitFor "the offer to reopen" page """document.querySelector('[data-session-reopen]') !== null"""
+                    do! Wait.until "the offer to reopen" (fun () -> Read.count page (Sel.hook Yession.App.Dom.Hooks.sessionReopen)) (fun n -> n > 0)
                     let asked = ResizeArray<string> ()
                     page.Request.Add (fun r -> if r.Url.EndsWith "/open" then asked.Add r.Url)
                     do! awaitU (page.RouteAsync ("**/sessions/*/open", fun route ->
@@ -8418,7 +8429,7 @@ let mountedTests =
                         // with no cookie, so the sign-in bounce runs. `connected` is only true on
                         // the shell after it, and re-arms across the navigations in between.
                         let! _ = await (page.GotoAsync publicUrl)
-                        let! _ = await (page.WaitForFunctionAsync connected)
+                        do! waitConnected page
                         let! _ = await (page.GoBackAsync ())
                         do! waitFor "the Manager, one step back" page
                                 (sprintf "location.href === %s" (System.Text.Json.JsonSerializer.Serialize managerUrl))
@@ -8453,7 +8464,7 @@ let mountedTests =
                         // Signed in and connected first, so the reload below is a client that has
                         // everything but an answer — not one that is off to log in.
                         let! _ = await (page.GotoAsync publicUrl)
-                        let! _ = await (page.WaitForFunctionAsync connected)
+                        do! waitConnected page
                         stalling <- true
                         // The page's time from here is the case's to turn, so the probe's deadline
                         // passes when the case says rather than ten real seconds later. Flowing,
@@ -8464,8 +8475,8 @@ let mountedTests =
                         let! asked = Async.AwaitTask (Task.WhenAny (stalled.Task, Task.Delay 20000))
                         Expect.isTrue (obj.ReferenceEquals (asked, stalled.Task)) "the reloaded page asked who it is, and the question was held"
                         do! awaitU (page.Clock.FastForwardAsync (int64 Yession.App.Client.Probe.deadline.TotalMilliseconds))
-                        do! waitFor "the offer to reopen, once the probe has been given up on" page
-                                """document.querySelector('[data-session-reopen]') !== null"""
+                        do! Wait.until "the offer to reopen, once the probe has been given up on"
+                                (fun () -> Read.count page (Sel.hook Yession.App.Dom.Hooks.sessionReopen)) (fun n -> n > 0)
                         }
                     })
                 finally
@@ -8488,7 +8499,7 @@ let mountedTests =
                     do! awaitU (page.ClickAsync composerInput)
                     do! awaitU (page.Keyboard.TypeAsync (sprintf "echo %s" printedInTerminal))
                     do! awaitU (page.ClickAsync "[data-terminal-send]")
-                    do! waitFor "the printed line on screen" page terminalPrinted
+                    do! terminalPrinted "the printed line on screen" page
                     do! waitFor "the transcript to be kept" page transcriptKept
                 })
             (fun page ->
@@ -8496,7 +8507,7 @@ let mountedTests =
                     // The column comes back as this browser left it — open (P0-4) — so nothing
                     // is pressed here: the replayed records are on screen with no network
                     // behind them, which is what a store read before the network buys.
-                    do! waitFor "the terminal output to come back offline" page terminalPrinted
+                    do! terminalPrinted "the terminal output to come back offline" page
                 }))
     ]
 
@@ -8777,35 +8788,22 @@ let frontDoorTests =
                         // fact, read off the page rather than off its words — the shell says which
                         // session it is, and the address says which session was asked for, and
                         // they have to be the same one.
-                        let landed =
-                            sprintf
-                                """() => {
-                                     const at = /^\/s\/([^/]+)\//.exec(location.pathname)
-                                     const shell = document.querySelector('meta[name="%s"]')?.getAttribute('content')
-                                     return !!at && !!shell && shell === at[1]
-                                   }"""
-                                Yession.App.Dom.sessionMetaName
+                        let landed () =
+                            async {
+                                let! at = Read.url page
+                                let! shell = Read.attr page ("meta" + Sel.hookIs "name" Yession.App.Dom.sessionMetaName) "content"
+                                return at, shell
+                            }
+                        let inSession (at: Uri, shell: string option) =
+                            // `/s/<id>/…`: the session the address asked for.
+                            match List.ofArray (at.AbsolutePath.Split '/') with
+                            | "" :: "s" :: asked :: _ :: _ when asked <> "" -> shell = Some asked
+                            | _ -> false
                         // Launching a real child and waiting out the door's lag is the slow part;
                         // the failure this guards is instant, so a long wait only ever costs a
-                        // green run time.
-                        try
-                            do!
-                                await (page.WaitForFunctionAsync (landed, null, PageWaitForFunctionOptions (Timeout = 90000.0f)))
-                                |> Async.Ignore
-                        with _ ->
-                            // A browser case can only fail by a wait not settling, and that failure
-                            // names the wait rather than the fault. The page has been holding the
-                            // answer the whole time: say what it is showing.
-                            let! showing =
-                                await (page.EvaluateAsync<string>
-                                        """() => JSON.stringify({
-                                             url: location.href,
-                                             title: document.title,
-                                             text: document.body?.innerText?.slice(0, 200) ?? null
-                                           })""")
-                            failwithf
-                                "creating a session must land in that session; the browser is showing %s"
-                                showing
+                        // green run time. A red one says where the browser is and what the shell
+                        // there says it is, which is the whole of the answer.
+                        do! Wait.within 90000.0 "creating a session to land in that session" landed inSession
                         }
                     })
                 finally
@@ -9031,23 +9029,24 @@ let filterTests =
                         // Both halves of one click, read off the page: the address carries the
                         // filter, and the rows stream has answered for it — which shows as the chip
                         // re-rendered for the NEW query, linking back to the one without it.
-                        let lit =
-                            sprintf
-                                """() => location.search.includes('show=archived')
-                                      && !document.querySelector('[%s="show-archived"]')?.getAttribute('href')?.includes('show=archived')"""
-                                Yession.App.Dom.Manager.filter
-                        let! _ = await (page.WaitForFunctionAsync lit)
+                        let chip = Sel.hookIs Yession.App.Dom.Manager.filter "show-archived"
+                        let addressAndChip () =
+                            async {
+                                let! at = Read.url page
+                                let! href = Read.attr page chip "href"
+                                return at, href
+                            }
+                        let offers (href: string option) = href |> Option.exists (fun h -> h.Contains "show=archived")
+                        do! Wait.until "the filter in the address, and the chip offering its removal"
+                                addressAndChip
+                                (fun (at, href) -> at.Query.Contains "show=archived" && not (offers href))
 
                         // Back is the promise. It must stay on this page, take the filter out of
                         // the address, and move the rows with it — the chip links to adding it again.
                         let! _ = await (page.GoBackAsync ())
-                        let unlit =
-                            sprintf
-                                """() => location.pathname === '/'
-                                      && !location.search.includes('show=archived')
-                                      && !!document.querySelector('[%s="show-archived"]')?.getAttribute('href')?.includes('show=archived')"""
-                                Yession.App.Dom.Manager.filter
-                        let! _ = await (page.WaitForFunctionAsync unlit)
+                        do! Wait.until "the filter gone from the address, and the chip offering it again"
+                                addressAndChip
+                                (fun (at, href) -> at.AbsolutePath = "/" && not (at.Query.Contains "show=archived") && offers href)
                         ()
                         }
                     })
@@ -9262,7 +9261,7 @@ let pressTests =
                 let! _ = await (other.GotoAsync (manager.At "/"))
                 do! awaitU (other.ClickAsync (sprintf "[%s]" Yession.App.Dom.Manager.archive))
                 hold.LetGo ()
-                do! waitFor "the frame to have landed here" page (sprintf "document.querySelector('[%s]') === null" Yession.App.Dom.Manager.archive)
+                do! Wait.until "the frame to have landed here" (fun () -> Read.count page (Sel.hook Yession.App.Dom.Manager.archive)) ((=) 0)
                 let! seen =
                     await (page.EvaluateAsync<string>
                             (sprintf "() => { const b = document.querySelector('%s'); return JSON.stringify({ there: !!b, held: b?.getAttribute('aria-busy') === 'true', underTheFinger: document.activeElement === b }) }" createButton))
@@ -9340,23 +9339,17 @@ let openingTests =
                 do! awaitU (page.RouteAsync ("**/login*", fun route ->
                         route.FulfillAsync (RouteFulfillOptions (Status = 200, ContentType = "text/html", Body = "<title>session</title>")) |> ignore))
                 let! _ = await (page.GotoAsync opening)
-                let stillHere = sprintf "location.port === '%d'" manager.Port
                 // The readiness has answered, so the hand-over is scheduled — and not yet due.
-                do! waitFor "the page to have heard the session answer" page
-                        (sprintf "document.querySelector('[%s]')?.textContent === 'ready'" Yession.App.Dom.Manager.openingWord)
+                do! Wait.until "the page to have heard the session answer"
+                        (fun () -> Read.text page (Sel.hook Yession.App.Dom.Manager.openingWord)) ((=) (Some "ready"))
                 // The intro is 2.4s and the dwell 2.8s from the page's first script: a beat
                 // short of it, the page is still showing.
                 do! awaitU (page.Clock.RunForAsync 2700L)
-                // A context torn down under the question is the page having navigated away,
-                // which is the answer rather than an error.
-                let! held =
-                    async {
-                        try return! await (page.EvaluateAsync<bool> (sprintf "() => %s" stillHere))
-                        with _ -> return false
-                    }
+                let! at = Read.url page
+                let held = at.Port = manager.Port
                 Expect.isTrue held "the page held until the intro had landed"
                 do! awaitU (page.Clock.RunForAsync 200L)
-                do! waitFor "the browser to have left for the session" page (sprintf "location.port !== '%d'" manager.Port)
+                do! Wait.until "the browser to have left for the session" (fun () -> Read.url page) (fun at -> at.Port <> manager.Port)
             })
 
         // The screen is sent before the launch it covers, so a launch that fails can only reach
@@ -9370,8 +9363,8 @@ let openingTests =
                         RouteFulfillOptions (Status = 500, ContentType = "text/plain", Body = "session process exited before ready (code 3)"))
                     |> ignore))) (fun _ page opening -> async {
                 let! _ = await (page.GotoAsync opening)
-                do! waitFor "the reason on the screen" page
-                        "document.getElementById('status')?.textContent.includes('exited before ready (code 3)')"
+                do! Wait.until "the reason on the screen"
+                        (fun () -> Read.text page "#status") (Option.exists (fun t -> t.Contains "exited before ready (code 3)"))
             })
 
         testCaseAsync "a reader who declined motion is shown the still mark, and only it" <|
