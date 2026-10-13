@@ -100,6 +100,17 @@ module Probe =
     /// Whether some words are shown under the first match: in a leaf, painted where it stands.
     let shows (page: IPage) (selector: string) (words: string) : Async<bool> = ask page Probes.shows (selector, words)
 
+    /// Every match as a control, measured where it stands.
+    let controls (page: IPage) (selector: string) : Async<Probes.Control list> = ask page Probes.controls (selector, false)
+
+    /// Every match as a control, each brought to the middle of the screen before it is measured.
+    let controlsReached (page: IPage) (selector: string) : Async<Probes.Control list> =
+        ask page Probes.controls (selector, true)
+
+    /// An attribute of the closest match of a selector to what is painted at a point.
+    let attrAt (page: IPage) (x: float) (y: float) (selector: string) (attribute: string) : Async<string option> =
+        ask page Probes.attrAt ((x, y), (selector, attribute))
+
     /// Whether a media query matches on the page.
     let media (page: IPage) (query: string) : Async<bool> = ask page Probes.media query
 
