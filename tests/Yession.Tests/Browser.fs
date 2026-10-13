@@ -35,6 +35,7 @@ open Yession.App.Collab
 open Yession.Tests.BrowserWait
 open Yession.Tests.BrowserProbe
 open Yession.Tests.BrowserHarness
+open Yession.Tests.BrowserShims
 
 module HarnessPage = Yession.App.HarnessPage
 
@@ -523,39 +524,6 @@ let private waitConnectedAs (what: string) (page: IPage) : Async<unit> =
     Wait.until what (connectionState page) ((=) (Some Yession.App.Dom.Text.connected))
 
 let private waitConnected (page: IPage) : Async<unit> = waitConnectedAs "the client to be connected" page
-
-/// An init script that takes away the END of ICE gathering — the `complete` state and the null
-/// candidate — from every peer connection the page makes, and counts the candidates instead.
-/// Its listeners are registered in the constructor, before the page can set a handler of its
-/// own, so they are heard first and can stop the event there.
-let private gatheringNeverEnds =
-    """(() => {
-         const Native = globalThis.RTCPeerConnection
-         globalThis.__yessionCandidates = 0
-         globalThis.RTCPeerConnection = class extends Native {
-           constructor (...args) {
-             super(...args)
-             this.addEventListener('icecandidate', e => {
-               if (e.candidate) globalThis.__yessionCandidates++
-               else e.stopImmediatePropagation()
-             })
-             this.addEventListener('icegatheringstatechange', e => e.stopImmediatePropagation())
-           }
-         }
-       })()"""
-
-// Says when a connection has taken its remote description, which is the moment a handshake's
-// deadline stops meaning "the session did not answer".
-let private answerApplied =
-    """(() => {
-         const Native = globalThis.RTCPeerConnection
-         globalThis.RTCPeerConnection = class extends Native {
-           async setRemoteDescription (...args) {
-             await super.setRemoteDescription(...args)
-             globalThis.__yessionAnswered = true
-           }
-         }
-       })()"""
 
 // The open draft is a ProseMirror editable (`.ProseMirror`) inside the editable
 // (`data-rich-readonly="false"`) body-mount host — and it is whichever draft this peer has open,
@@ -1182,22 +1150,13 @@ let tests =
                 // the choice only once catch-up had finished, so a reload showed the first tab
                 // on top for as long as catch-up took. Waiting for the end of it, as this case
                 // used to, waited the fault out.
-                do!
-                    awaitU (
-                        page.AddInitScriptAsync
-                            """new MutationObserver((_, watching) => {
-                                 const tabs = document.querySelectorAll('[data-pane-tab]')
-                                 if (tabs.length !== 3) return
-                                 const top = [...tabs].find(t => t.getAttribute('aria-selected') === 'true')
-                                 window.__firstOnTop = top ? top.getAttribute('data-pane-tab') : 'nothing'
-                                 watching.disconnect()
-                               }).observe(document, { subtree: true, childList: true, attributes: true })""")
+                do! Shim.install page [ Yession.App.Shims.Shim.FirstOnTop 3 ]
                 let! _ = await (page.ReloadAsync ())
                 do! waitConnectedAs "the reloaded page to connect" page
                 do! waitFor "all three terminals to be back in the strip" page "document.querySelectorAll('[data-pane-tab]').length === 3"
                 do! waitFor "the chosen terminal to be on top again" page chosenOnTop
-                let! firstOnTop = await (page.EvaluateAsync<string> "() => window.__firstOnTop ?? 'never recorded'")
-                Expect.equal firstOnTop chosen "on top from the first moment the strip was back, not once catch-up ended"
+                let! firstOnTop = Harness.read page Yession.App.Shims.firstOnTop
+                Expect.equal firstOnTop (Some chosen) "on top from the first moment the strip was back, not once catch-up ended"
                 do! waitFor "no preview, which was a glance" page "!document.querySelector('[data-pane-preview]')"
                 do! waitFor
                         "the pane to be open"
@@ -1843,7 +1802,7 @@ let tests =
         sessionCase "the offer goes once the candidates fall quiet, without waiting for gathering to end" <|
             fun page ->
             async {
-                do! awaitU (page.AddInitScriptAsync gatheringNeverEnds)
+                do! Shim.install page [ Yession.App.Shims.Shim.GatheringNeverEnds ]
                 let offered = TaskCompletionSource<unit> (TaskCreationOptions.RunContinuationsAsynchronously)
                 let signal = "**" + Yession.App.RelativeUrl.under "" (Yession.App.SessionRoute.relative Yession.App.SessionRoute.Signal)
                 do! awaitU (page.RouteAsync (signal, fun route ->
@@ -1855,7 +1814,8 @@ let tests =
                 let! _ = await (page.ReloadAsync ())
                 // Candidates arrive on the browser's network thread, which no page clock owns;
                 // until one has, there is no window for page time to close.
-                do! waitFor "the reloaded page to gather a candidate" page "(globalThis.__yessionCandidates ?? 0) > 0"
+                do! Wait.until "the reloaded page to gather a candidate"
+                        (fun () -> Harness.read page Yession.App.Shims.candidates) (Option.exists (fun n -> n > 0))
                 let window = int64 Yession.App.Client.Gathering.quiet.TotalMilliseconds + 1L
                 let cap = int64 Yession.App.Client.Gathering.cap.TotalMilliseconds
                 // A window at a time, because a later candidate restarts it: a box with several
@@ -1906,10 +1866,11 @@ let tests =
                             else
                                 do! route.ContinueAsync ()
                         } :> Task))
-                do! awaitU (page.AddInitScriptAsync answerApplied)
+                do! Shim.install page [ Yession.App.Shims.Shim.AnswerApplied ]
                 do! awaitU (page.Clock.InstallAsync ())
                 let! _ = await (page.ReloadAsync ())
-                do! waitFor "the session's answer to be applied" page "globalThis.__yessionAnswered === true"
+                do! Wait.until "the session's answer to be applied"
+                        (fun () -> Harness.read page Yession.App.Shims.answered) ((=) (Some true))
                 do! awaitU (page.Clock.FastForwardAsync 10000L)
                 do! Async.AwaitTask (Task.WhenAny (settled.Task, Task.Delay 10000)) |> Async.Ignore
                 Expect.isTrue settled.Task.IsCompleted "the handshake settled"
@@ -9060,19 +9021,7 @@ let installedAppTests =
                         page.SetDefaultTimeout 30000.0f
                         let evidence = watching page
                         do! reporting "installed app row" page evidence <| async {
-                        do! awaitU (page.AddInitScriptAsync (
-                                sprintf
-                                    """(() => {
-                                         const installed = %s
-                                         const asked = window.matchMedia.bind(window)
-                                         const answer = query => ({
-                                           matches: true, media: query, onchange: null,
-                                           addListener () {}, removeListener () {},
-                                           addEventListener () {}, removeEventListener () {},
-                                           dispatchEvent () { return false } })
-                                         window.matchMedia = query => query === installed ? answer(query) : asked(query)
-                                       })()"""
-                                    (System.Text.Json.JsonSerializer.Serialize Yession.App.Dom.Manager.installedApp)))
+                        do! Shim.install page [ Yession.App.Shims.Shim.Matching Yession.App.Dom.Manager.installedApp ]
                         do! awaitU (page.RouteAsync ("**/sessions/*/open", fun route ->
                                 route.FulfillAsync (RouteFulfillOptions (Status = 200, ContentType = "text/html", Body = "<title>opening</title>"))
                                 |> ignore))

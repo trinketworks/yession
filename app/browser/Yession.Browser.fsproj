@@ -45,6 +45,10 @@
          bundled only by the test build and installed into the suite's contexts, never
          imported by an app entry, so it does not ship. -->
     <Compile Include="Probes.fs" />
+    <!-- The instruments a browser case installs into a page before its scripts run
+         (`Yession.App.Shims`): bundled only by the test build, never imported by an app
+         entry. -->
+    <Compile Include="Shims.fs" />
     <Compile Include="ManagerPage.fs" />
     <!-- The session shell's service worker: an entry of its own, bundled as a classic script
          (`AssetFile.service-worker`), and the one program here that runs in no page at all.

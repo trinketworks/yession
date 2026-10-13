@@ -9,6 +9,7 @@
     <Compile Include="Dom.fs" />
     <Compile Include="Probes.fs" />
     <Compile Include="HarnessPage.fs" />
+    <Compile Include="Shims.fs" />
     <Compile Include="Codecs/Sdp.fs" />
     <Compile Include="Codecs/Transcripts.fs" />
     <Compile Include="Codecs/Events.fs" />
