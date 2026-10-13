@@ -168,7 +168,11 @@ ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
     # for a task.
     case "''${DEVENV_CMDLINE:-}" in
       *" -- "*) ;;
-      *) echo "yession — tasks: restore build start dev check verify lint package clean  (check <caps>: see AGENTS.md § Testing)" ;;
+      *)
+        # A builtin outranks a script of the same name on PATH, and bash has a `help` of its own.
+        enable -n help
+        echo "yession — run help for the tasks and capabilities"
+        ;;
     esac
   '';
 
@@ -184,6 +188,8 @@ ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
   # interface). No Yession build logic lives here — delete devenv and call the fsx directly and
   # nothing is lost. `"$@"` forwards args (e.g. `check Browser Ports Native --retry 1`).
 
+  # Lists every verb and every capability, read off the tables the dispatch and `check` run from.
+  scripts.help.exec = ''exec dotnet fsi tasks.fsx help'';
   scripts.restore.exec = ''exec dotnet fsi tasks.fsx restore'';
   # Rewrites every packages.lock.json after a NuGet package changes; every other restore is
   # in locked mode and refuses to.

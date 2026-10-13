@@ -147,6 +147,8 @@
          only thing that can see a hole in release.yml's gate before a release goes out
          through it. -->
     <Compile Include="ReleaseGate.fs" />
+    <!-- That the capabilities tasks.fsx probes, prints and gates on are the cases of `Need`. -->
+    <Compile Include="TasksCapabilities.fs" />
     <!-- That the release gate, spread over one runner per capability tier, still runs every
          suite this assembly declares. Reads the tiers verify.yml reads and the declarations
          `Tag.needs` recorded, so neither side of it is a copy. -->
