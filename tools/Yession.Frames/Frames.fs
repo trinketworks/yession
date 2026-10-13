@@ -244,18 +244,23 @@ let private launch
         Fable.NodeExtras.Readables.text (Fable.NodeExtras.ChildProcessStreams.stderr child) (fun chunk ->
             let kept = said.Value + chunk
             said.Value <- if kept.Length > stderrKept then kept.Substring (kept.Length - stderrKept) else kept)
+        // How it ended, kept apart: an exit's code (`None` when a signal took it), and the
+        // spawn's own error, which is the only place a missing or non-executable binary says
+        // so — Chromium never ran, so its stderr is empty and the errno is the whole answer.
         let exited : int option option ref = ref None
+        let unspawned : string option ref = ref None
         Fable.NodeExtras.ChildProcessStreams.onExit child (fun code -> exited.Value <- Some code)
-        Fable.NodeExtras.ChildProcessStreams.onError child (fun _ -> exited.Value <- Some None)
+        Fable.NodeExtras.ChildProcessStreams.onError child (fun error ->
+            unspawned.Value <- Some (Fable.NodeExtras.StreamError.describe error))
         /// Say why, with what Chromium said, and stop — the browser with it, if it is still up.
         let failed (why: string) : unit =
             let stderr = said.Value.Trim ()
-            if exited.Value.IsNone then child.kill () |> ignore
+            if exited.Value.IsNone && unspawned.Value.IsNone then child.kill () |> ignore
             abort (sprintf "%s\n%s" why (if stderr = "" then "(Chromium wrote nothing to stderr)" else stderr))
         let portFile = joinTwo profile "DevToolsActivePort"
         let mutable port = ""
         let mutable waited = 0
-        while port = "" && exited.Value.IsNone && waited < 100 do
+        while port = "" && exited.Value.IsNone && unspawned.Value.IsNone && waited < 100 do
             if exists portFile then
                 let lines : string = fs?readFileSync (portFile, "utf8") |> unbox
                 port <- lines.Split('\n').[0].Trim ()
@@ -263,10 +268,11 @@ let private launch
                 do! delay 100
                 waited <- waited + 1
         if port = "" then
-            match exited.Value with
-            | Some (Some code) -> failed (sprintf "Chromium (%s) exited with code %d before writing DevToolsActivePort. Its stderr:" executable code)
-            | Some None -> failed (sprintf "Chromium (%s) could not be started, or a signal ended it, before writing DevToolsActivePort. Its stderr:" executable)
-            | None -> failed (sprintf "Chromium (%s) never wrote DevToolsActivePort in 10s. Its stderr:" executable)
+            match unspawned.Value, exited.Value with
+            | Some why, _ -> failed (sprintf "Chromium (%s) could not be started: %s. Its stderr:" executable why)
+            | None, Some (Some code) -> failed (sprintf "Chromium (%s) exited with code %d before writing DevToolsActivePort. Its stderr:" executable code)
+            | None, Some None -> failed (sprintf "Chromium (%s) was ended by a signal before writing DevToolsActivePort. Its stderr:" executable)
+            | None, None -> failed (sprintf "Chromium (%s) never wrote DevToolsActivePort in 10s. Its stderr:" executable)
         let mutable target = ""
         waited <- 0
         while target = "" && waited < 50 do
