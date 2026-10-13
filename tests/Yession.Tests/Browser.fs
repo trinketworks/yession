@@ -15,7 +15,8 @@ module Yession.Tests.Browser
 // body is Markdown — rendering as that same formatted rich text in both timelines; then proves
 // client-side IndexedDB persistence by wiping the server and reloading
 // (the draft can only return from the browser), and that the doc store is session-keyed.
-// Event-driven throughout (WaitForFunctionAsync); Playwright's own per-action timeouts watch.
+// Waits are typed reads polled until they hold (`BrowserWait`); Playwright's own per-action
+// timeouts watch.
 
 open Fable.Pyxpecto
 
@@ -335,25 +336,6 @@ let internal reporting (label: string) (page: IPage) (ev: Evidence) (body: Async
 
 
 
-/// A page-function wait that says WHICH wait it was. Playwright reports only "Timeout 30000ms
-/// exceeded", and a case with a dozen waits is a case whose red names none of them — telling
-/// them apart then costs a full run of the gate per hypothesis, which is how guessing comes to
-/// cost the same as looking and wins every time. The label is the whole instrument.
-///
-/// Poll until the predicate holds, awaiting it whether it is a plain boolean expression or an
-/// async one.
-///
-/// It does NOT use `page.WaitForFunctionAsync`, which is unusable for a predicate that resolves a
-/// Promise: that call checks the truthiness of the expression's VALUE and never awaits it, so an
-/// `(async () => …)()` (or any `.then`-chained expression) is truthy the instant it is evaluated —
-/// the Promise object itself — and the wait settles while the condition it names has never held. A
-/// store-kept gate written that way is a silent no-op: `transcriptKept`/`conversationKept` returned
-/// at once, `make` killed the session before the record was ever written, and the reload replayed
-/// nothing — green on an idle box, red on a loaded runner, which is the whole of this bug. This was
-/// verified in place: `WaitForFunctionAsync "(async () => false)()"` settles in ~30ms, and even the
-/// function form `() => (async () => false)()` settles at once, while `() => false` correctly times
-/// out. `EvaluateAsync` awaits a returned Promise (confirmed: `(async () => false)()` -> false), so
-/// polling it is correct for both predicate shapes.
 /// Open a terminal the way a person does (Plan 20, stage 1): press the strip's `+` — or, in an
 /// empty pane, its own button, which is the one door there (P1-4) — and take the choice if one
 /// is offered.
@@ -427,33 +409,6 @@ let private sessionMeta (page: IPage) : Async<string> =
         | None -> return failwith "the shell carries no session id"
     }
 
-let private waitTimeoutMs = 30000.0
-let private waitFor (what: string) (page: IPage) (predicate: string) : Async<unit> =
-    async {
-        let sw = Stopwatch.StartNew ()
-        let mutable held = false
-        let mutable lastError = ""
-        while not held && sw.Elapsed.TotalMilliseconds < waitTimeoutMs do
-            // `EvaluateAsync` awaits a Promise the expression returns, so an async predicate yields
-            // its real boolean here. A transient throw (an execution context torn down by a reload
-            // mid-poll) is just "not yet" — kept, so the final timeout can name it.
-            try
-                let! v = await (page.EvaluateAsync<bool> predicate)
-                held <- v
-            with e -> lastError <- e.Message
-            if not held then do! Async.Sleep 100
-        if not held then
-            let tail = if lastError = "" then "" else sprintf " (last error: %s)" lastError
-            failwithf "waiting for %s — timed out after %gms%s\n  predicate: %s"
-                what waitTimeoutMs tail predicate
-        // A wait that settles is otherwise silent about how long it took, and a case's time
-        // is the sum of its waits: said here, a slow case's log names which wait it spent it
-        // on, where its duration alone names nothing.
-        elif sw.Elapsed.TotalSeconds >= 1.0 then
-            printfn "browser: waited %.1fs for %s" sw.Elapsed.TotalSeconds what
-    }
-
-// Browser-evaluated predicate strings: JS by necessity — they run inside Chromium via CDP.
 
 // Read off the ATTRIBUTE, never off the words. A healthy client says nothing about being
 // healthy any more — "Connected" was on three surfaces at once and is now on none — so the
@@ -6896,70 +6851,28 @@ let private printedInTerminal = "printed-before-the-session-died"
 /// killing the session inside it left the reload nothing to replay and the case timed out
 /// naming no cause. Waiting on the store is the difference between testing this and testing
 /// that race, exactly as waiting on the worker's registration is below.
-/// The store search `keptIn` is, with the body test spelled out — for a case where "the text
-/// is in there somewhere" is not the question being asked.
-let private keptWhere (cachePart: string) (bodyTest: string) =
-    sprintf
-        """(async () => {
-             try {
-               const names = (await caches.keys()).filter(n => n.includes('%s'))
-               for (const n of names) {
-                 const c = await caches.open(n)
-                 for (const req of await c.keys()) {
-                   const r = await c.match(req)
-                   if (r) {
-                     const body = await r.text()
-                     if (%s) return true
-                   }
-                 }
-               }
-             } catch (e) { return false }
-             return false
-           })()"""
-        cachePart
-        bodyTest
-
-let private keptIn (cachePart: string) (text: string) =
-    sprintf
-        """(async () => {
-             try {
-               const names = (await caches.keys()).filter(n => n.includes('%s'))
-               for (const n of names) {
-                 const c = await caches.open(n)
-                 for (const req of await c.keys()) {
-                   const r = await c.match(req)
-                   if (r && (await r.text()).includes('%s')) return true
-                 }
-               }
-             } catch (e) { return false }
-             return false
-           })()"""
-        cachePart
-        text
+///
+/// What the conversation's store must hold.
+let private conversationKept (page: IPage) : Async<unit> =
+    Wait.until "the conversation to be kept" (fun () -> Probe.kept page "/events" saidInTimeline) id
 
 /// The transcript store holding what the terminal PRINTED — an asciicast `"o"` output record
 /// carrying the shell's answer, not the `"i"` input record of the command that caused it.
 ///
 /// The distinction is the precondition. `echo printed-before-the-session-died` is kept as an
 /// `"i"` record the instant it is sent — the command line CONTAINS the marker — so a plain search
-/// (`keptIn`) is satisfied before the shell has answered, let alone before the answer has been
-/// fetched and written. Narrowing to `"o"` excludes that input record and leaves only the shell's
-/// real output (verified: the recording holds an `"i"` line for the command and one
+/// is satisfied before the shell has answered, let alone before the answer has been fetched and
+/// written. Narrowing to `"o"` excludes that input record and leaves only the shell's real output
+/// (verified: the recording holds an `"i"` line for the command and one
 /// `[t,"o","printed-before-the-session-died\r\n"]` for its result — no separate echo record).
 ///
-/// This narrowing was necessary but not sufficient: the wait that consumed it never actually ran
-/// (see `waitFor` — `WaitForFunctionAsync` does not await an async predicate), so `make` proceeded
-/// on the first poll regardless of what the store held, killed the session before the output
-/// record was written, and the reload replayed a recording with no output — `[data-terminal-output]`
-/// never carried the text and the case timed out naming a wait rather than a cause. Green on an
-/// idle box, red on a loaded runner, twice on the release gate.
-let private transcriptKept =
-    keptWhere
-        "/terminals/"
-        (sprintf
-            """body.split('\n').some(l => l.includes('"o"') && l.includes('%s'))"""
-            printedInTerminal)
-let private conversationKept = keptIn "/events" saidInTimeline
+/// The wait that consumed it once never actually ran — Playwright's `WaitForFunctionAsync`
+/// does not await a predicate that returns a Promise — so `make` proceeded on the first poll
+/// regardless of what the store held, killed the session before the output record was written,
+/// and the reload replayed a recording with no output. Green on an idle box, red on a loaded
+/// runner, twice on the release gate. Asked of the page as a typed probe, the answer is awaited.
+let private transcriptKept (page: IPage) : Async<unit> =
+    Wait.until "the transcript to be kept" (fun () -> Probe.keptPrinted page "/terminals/" printedInTerminal) id
 
 let private terminalPrinted (what: string) (page: IPage) : Async<unit> =
     Wait.until what
@@ -6986,13 +6899,8 @@ let private offlineReopen (name: string) (make: IPage -> Async<unit>) (check: IP
 
                     // The worker has to be RUNNING before the session goes, or the reload has
                     // nothing serving it. Waiting on the registration is the difference between
-                    // testing this and testing a race — but only through `waitFor`, which awaits: a
-                    // bare `WaitForFunctionAsync` of this `.then`-chained Promise settles at once (see
-                    // `waitFor`), so it was not waiting on the worker at all. `getRegistration`
-                    // resolves promptly each poll (unlike `.ready`, which never settles with no active
-                    // worker and would hang a single evaluation), and the loop supplies the timeout.
-                    do! waitFor "the service worker to be active" page
-                            "navigator.serviceWorker.getRegistration().then(r => !!(r && r.active))"
+                    // testing this and testing a race.
+                    do! Wait.until "the service worker to be active" (fun () -> Probe.ask page Yession.App.Probes.workerActive 0) id
 
                     // Gone, and staying gone. The proxy stays up, which is the honest shape of a
                     // reaped session behind an operator's front door — and it means the shell
@@ -7037,11 +6945,11 @@ let mountedTests =
 
                         // NOTHING may be evaluated until the page has settled. On a 401 from `me`
                         // the client RENAVIGATES through the login bounce (session -> manager ->
-                        // `<mount>/callback` -> `./` -> the shell), and an `EvaluateAsync` racing
+                        // `<mount>/callback` -> `./` -> the shell), and a page evaluation racing
                         // that navigation dies with "Execution context was destroyed" — which is
                         // exactly how this test passed locally and broke master. `connected` is only
-                        // true on the shell after the bounce, and `WaitForFunctionAsync` re-arms
-                        // across navigations, so it is the one safe thing to await first.
+                        // true on the shell after the bounce, and a typed wait reads again across
+                        // navigations, so it is the one safe thing to await first.
                         do! waitConnected page
 
                         let! baseHref = Read.attr page "base" "href"
@@ -7054,20 +6962,14 @@ let mountedTests =
                         // root. Resolved by the browser rather than compared as text, because the
                         // resolution is the property; the icon is fetched for the same reason a
                         // manifest naming an icon nobody serves would still parse.
-                        let! installed =
-                            await (page.EvaluateAsync<string>
-                                    """async () => {
-                                         const href = document.querySelector('link[rel=manifest]').href
-                                         const manifest = await (await fetch(href)).json()
-                                         const icon = await fetch(new URL(manifest.icons[0].src, href))
-                                         return [new URL(manifest.start_url, href).pathname,
-                                                 new URL(icon.url).pathname,
-                                                 icon.status,
-                                                 icon.headers.get('content-type')].join(' ')
-                                       }""")
+                        let! installed = Probe.ask page Yession.App.Probes.installed 0
                         Expect.equal
                             installed
-                            (sprintf "/s/%s/ /s/%s/icon.png 200 image/png" MOUNT_SESSION MOUNT_SESSION)
+                            (Some
+                                { Yession.App.Probes.Installed.Start = sprintf "/s/%s/" MOUNT_SESSION
+                                  Yession.App.Probes.Installed.Icon = sprintf "/s/%s/icon.png" MOUNT_SESSION
+                                  Yession.App.Probes.Installed.Status = 200
+                                  Yession.App.Probes.Installed.ContentType = Some "image/png" })
                             "the installed app starts at this session, and its mark is served under the same mount"
 
                         // No assertion here that the bundle was fetched under the mount: reaching
@@ -7139,7 +7041,7 @@ let mountedTests =
                     do! awaitU (page.Keyboard.TypeAsync saidInTimeline)
                     do! awaitU (page.Locator("[data-send-draft]").First.ClickAsync ())
                     do! inTimeline page
-                    do! waitFor "the conversation to be kept" page conversationKept
+                    do! conversationKept page
                 })
             (fun page ->
                 async {
@@ -7183,36 +7085,27 @@ let mountedTests =
                     // anything fixed — the bar is) nor a bounding rect (non-zero for the
                     // collapsed nav's contents, clipped to nothing by `overflow-hidden`) can
                     // tell you. Hit-test the centre and ask what is painted there.
-                    let counted =
-                        """(() => {
-                             const seen = el => {
-                               const r = el.getBoundingClientRect()
-                               if (r.width < 1 || r.height < 1) return false
-                               const x = Math.min(Math.max(r.left + r.width / 2, 1), innerWidth - 1)
-                               const y = Math.min(Math.max(r.top + r.height / 2, 1), innerHeight - 1)
-                               const hit = document.elementFromPoint(x, y)
-                               return !!hit && (el.contains(hit) || hit.contains(el))
-                             }
-                             const reports = [...document.querySelectorAll('[data-degraded]')].filter(seen)
-                             const offer = [...document.querySelectorAll('[data-session-gone]')].filter(seen)
-                             return { reports: reports.length, offer: offer.length }
-                           })()"""
-                    let atMostOne = sprintf "%s.reports <= 1" counted
+                    let atMostOne (what: string) =
+                        Wait.until what (fun () -> Probe.visible page (Sel.hook Yession.App.Dom.Hooks.degraded)) (fun n -> n <= 1)
                     // And not zero everywhere: the column may be showing the reconnect card
                     // INSTEAD of the status, so what must always hold is that something on
                     // screen says the session is gone. Without this the case above passes on a
                     // client that reports nothing at all.
-                    let saidSomewhere = sprintf "(%s.reports + %s.offer) >= 1" counted counted
+                    let saidSomewhere (what: string) =
+                        Wait.until
+                            what
+                            (fun () -> Probe.visible page (Sel.hook Yession.App.Dom.Hooks.degraded + ", [data-session-gone]"))
+                            (fun n -> n >= 1)
                     do! Wait.until "the client to notice the session is gone"
                             (fun () -> Read.count page (Sel.hook Yession.App.Dom.Hooks.degraded)) (fun n -> n > 0)
                     for width, height, what in [ 1440, 900, "a desktop"; 390, 844, "a phone" ] do
                         do! awaitU (page.SetViewportSizeAsync (width, height))
-                        do! waitFor (sprintf "one report at most on %s" what) page atMostOne
-                        do! waitFor (sprintf "and something saying it on %s" what) page saidSomewhere
+                        do! atMostOne (sprintf "one report at most on %s" what)
+                        do! saidSomewhere (sprintf "and something saying it on %s" what)
                     // The pane a phone reader can be on when it happens. The bar is fixed above
                     // all three, so bringing the nav out over it must not reveal a second copy.
                     do! awaitU (page.Locator("[data-nav-toggle='show']").First.ClickAsync ())
-                    do! waitFor "still one report with the nav open over it" page atMostOne
+                    do! atMostOne "still one report with the nav open over it"
                 })
 
         // The way back is a link to the Manager, and a link is followed ONCE. It used to carry
@@ -7236,7 +7129,7 @@ let mountedTests =
                             |> ignore))
                     // Whichever mount is on screen; a hidden one cannot be pressed.
                     do! awaitU (page.Locator("[data-session-reopen]:visible").First.ClickAsync ())
-                    do! waitFor "the browser to have left for the Manager" page """location.pathname.endsWith('/open')"""
+                    do! Wait.until "the browser to have left for the Manager" (fun () -> Read.url page) (fun url -> url.AbsolutePath.EndsWith "/open")
                     Expect.equal asked.Count 1 (sprintf "one press, one request: %A" (List.ofSeq asked))
                 })
 
@@ -7266,8 +7159,7 @@ let mountedTests =
                         let! _ = await (page.GotoAsync publicUrl)
                         do! waitConnected page
                         let! _ = await (page.GoBackAsync ())
-                        do! waitFor "the Manager, one step back" page
-                                (sprintf "location.href === %s" (System.Text.Json.JsonSerializer.Serialize managerUrl))
+                        do! Wait.until "the Manager, one step back" (fun () -> Read.url page) (fun url -> url = Uri managerUrl)
                         }
                     })
                 finally
@@ -7335,7 +7227,7 @@ let mountedTests =
                     do! awaitU (page.Keyboard.TypeAsync (sprintf "echo %s" printedInTerminal))
                     do! awaitU (page.ClickAsync "[data-terminal-send]")
                     do! terminalPrinted "the printed line on screen" page
-                    do! waitFor "the transcript to be kept" page transcriptKept
+                    do! transcriptKept page
                 })
             (fun page ->
                 async {
@@ -7934,7 +7826,7 @@ let installedAppTests =
                         let row = sprintf "[%s]" Yession.App.Dom.Manager.openLink
                         let! _ = await (page.WaitForSelectorAsync row)
                         do! awaitU (page.Locator(row).First.ClickAsync ())
-                        do! waitFor "this window to have gone to the session" page """location.pathname.endsWith('/open')"""
+                        do! Wait.until "this window to have gone to the session" (fun () -> Read.url page) (fun url -> url.AbsolutePath.EndsWith "/open")
                         Expect.equal page.Context.Pages.Count 1 "and no second window was opened"
                         }
                     })
@@ -8070,7 +7962,7 @@ let pressTests =
                 do! hold.Held
                 do! push page at
                 hold.LetGo ()
-                do! waitFor "the browser to have left for the new session" page (sprintf "location.port !== '%d'" manager.Port)
+                do! Wait.until "the browser to have left for the new session" (fun () -> Read.url page) (fun url -> url.Port <> manager.Port)
                 Expect.equal posted.Count 1 (sprintf "two pushes, one session: %A" (List.ofSeq posted))
             })
 
@@ -8090,10 +7982,9 @@ let pressTests =
                 do! awaitU (other.ClickAsync (sprintf "[%s]" Yession.App.Dom.Manager.archive))
                 hold.LetGo ()
                 do! Wait.until "the frame to have landed here" (fun () -> Read.count page (Sel.hook Yession.App.Dom.Manager.archive)) ((=) 0)
-                let! seen =
-                    await (page.EvaluateAsync<string>
-                            (sprintf "() => { const b = document.querySelector('%s'); return JSON.stringify({ there: !!b, held: b?.getAttribute('aria-busy') === 'true', underTheFinger: document.activeElement === b }) }" createButton))
-                Expect.equal seen """{"there":true,"held":true,"underTheFinger":true}""" "the Create that was pushed is still down, and still the one under the finger"
+                let! busy = Read.attr page createButton "aria-busy"
+                let! underTheFinger = Read.focused page createButton
+                Expect.equal (busy, underTheFinger) (Some "true", true) "the Create that was pushed is still there, still down, and still the one under the finger"
             })
     ]
 

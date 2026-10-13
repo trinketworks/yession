@@ -263,6 +263,95 @@ let private pageState (_: int) : JS.Promise<string list> =
           + (Browser.Dom.document.activeElement |> Option.ofObj |> Option.map opening |> Option.defaultValue "(none)") ]
     kept () |> Promise.map (fun kept -> facts @ kept)
 
+let private keptWords ((store: string, words: string), printed: bool) : JS.Promise<bool> =
+    let holds (body: string) =
+        if printed then body.Split '\n' |> Array.exists (fun line -> line.Contains "\"o\"" && line.Contains words)
+        else body.Contains words
+    match caches () with
+    | None -> Promise.lift false
+    | Some stores ->
+        stores.names ()
+        |> Promise.bind (fun names ->
+            names
+            |> Array.filter (fun name -> name.Contains store)
+            |> Array.map (fun name ->
+                stores.openStore name
+                |> Promise.bind (fun cache ->
+                    cache.keys ()
+                    |> Promise.bind (fun requests ->
+                        requests
+                        |> Array.map (fun request ->
+                            cacheMatch cache request.url
+                            |> Promise.bind (fun response ->
+                                match Option.ofObj response with
+                                | None -> Promise.lift false
+                                | Some response -> response.text () |> Promise.map holds))
+                        |> Promise.all
+                        |> Promise.map (Array.exists id))))
+            |> Promise.all
+            |> Promise.map (Array.exists id))
+        |> Promise.catch (fun _ -> false)
+
+let private workerActive (_: int) : JS.Promise<bool> =
+    match Browser.Navigator.navigator.serviceWorker with
+    | None -> Promise.lift false
+    | Some workers ->
+        workers.getRegistration ()
+        |> Promise.map (fun registration ->
+            registration |> Option.ofObj |> Option.exists (fun r -> r.active.IsSome))
+
+/// The two fields of a manifest this reads: where the app starts, and its first icon.
+let private manifestDecoder : Decoder<string * string> =
+    Decode.object (fun get ->
+        get.Required.Field "start_url" Decode.string,
+        get.Required.Field "icons" (Decode.index 0 (Decode.field "src" Decode.string)))
+
+let private installed (_: int) : JS.Promise<Probes.Installed option> =
+    match first "link[rel=manifest]" |> Option.bind (fun link -> link.getAttribute "href" |> Option.ofObj) with
+    | None -> Promise.lift None
+    | Some linked ->
+        let href = Urls.resolve linked Browser.Dom.document.baseURI
+        Fetch.fetchUnsafe href []
+        |> Promise.bind (fun response -> response.text ())
+        |> Promise.bind (fun body ->
+            match Decode.fromString manifestDecoder body with
+            | Error _ -> Promise.lift None
+            | Ok (start, icon) ->
+                Fetch.fetchUnsafe (Urls.resolve icon href) []
+                |> Promise.map (fun response ->
+                    Some
+                        { Probes.Installed.Start = Urls.pathname (Urls.resolve start href)
+                          Probes.Installed.Icon = Urls.pathname response.Url
+                          Probes.Installed.Status = response.Status
+                          Probes.Installed.ContentType = response.Headers.get "content-type" |> Option.ofObj }))
+
+let private stood (selector: string) : JS.Promise<Probes.Scroll option> =
+    match first selector with
+    | None -> Promise.lift None
+    | Some element ->
+        let frame () = Promise.create (fun resolve _ -> Browser.Dom.window.requestAnimationFrame (fun _ -> resolve ()) |> ignore)
+        let rec settle (last: float) (still: int) : JS.Promise<Probes.Scroll option> =
+            frame ()
+            |> Promise.bind (fun () ->
+                let now = element.scrollTop
+                let still = if now = last then still + 1 else 0
+                if still >= 3 then Promise.lift (Some (scrollOf element)) else settle now still)
+        settle element.scrollTop 0
+
+let private visible (selector: string) : int =
+    let window = Browser.Dom.window
+    all selector
+    |> List.filter (fun element ->
+        let box = element.getBoundingClientRect ()
+        if box.width < 1.0 || box.height < 1.0 then false
+        else
+            let x = min (max (box.left + box.width / 2.0) 1.0) (window.innerWidth - 1.0)
+            let y = min (max (box.top + box.height / 2.0) 1.0) (window.innerHeight - 1.0)
+            match Browser.Dom.document.elementFromPoint (x, y) |> Option.ofObj with
+            | Some hit -> element.contains hit || hit.contains element
+            | None -> false)
+    |> List.length
+
 let private newest (selector: string, mark: string) : Probes.Newest option =
     first selector
     |> Option.bind (fun surface ->
@@ -388,6 +477,11 @@ answering Probes.media media
 answering Probes.hitAt hitAt
 answering Probes.shows shows
 awaiting Probes.quiet quiet
+awaiting Probes.kept keptWords
+awaiting Probes.workerActive workerActive
+awaiting Probes.installed installed
+answering Probes.visible visible
+awaiting Probes.stood stood
 awaiting Probes.pageState pageState
 answering Probes.controls controls
 answering Probes.attrAt attrAt
