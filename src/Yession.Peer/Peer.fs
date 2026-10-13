@@ -15,6 +15,7 @@ open Fable.Core
 open Yjs
 open Ylmish
 open Yession.Domain
+open Yession.Domain.Sandboxes
 open Yession.Domain.Collab
 open Yession.App.Collab
 open Yession.Domain.Link
@@ -53,26 +54,52 @@ module Harness =
         { Model : unit -> 'model
           Dispatch : 'msg -> unit
           /// Resolve the first time the model satisfies the predicate, or FAIL after
-          /// `waitForTimeoutMs`. Never waits for ever.
+          /// `waitForTimeoutMs`, or FAIL at once when the runner's `refusal` says the model
+          /// has reached a state no wait will survive. Never waits for ever.
           WaitFor : ('model -> bool) -> Async<unit> }
+
+    /// A `refusal` for a model with no state that ends a wait early: every wait runs to its
+    /// predicate or its deadline.
+    let neverRefuses (_model: 'model) : string option = None
 
     /// The runner, with the wait deadline as a parameter — so the deadline itself can be
     /// tested (a 30s one cannot be, in a cheap tier measured in milliseconds) without any
     /// suite having to reach for a different mechanism. `run` is this at the real deadline.
-    let runWith (timeoutMs: int) (program: Program<unit, 'model, 'msg, unit>) : Runner<'model, 'msg> =
+    ///
+    /// `refusal` answers, for a model, why a wait that is not yet met will not be: the
+    /// reason, or `None` while waiting is still sensible. It is asked of every model the
+    /// program reaches and of the model a wait begins on, and the predicate is asked FIRST —
+    /// so a wait FOR the bad state is answered, and only the waits for anything else are
+    /// refused. A deadline is a hang detector and says only that nothing came; the model
+    /// often knows better, and a wait that sits out thirty seconds beside a model that
+    /// already holds the reason is a red that hid its own cause.
+    let runWith
+        (refusal: 'model -> string option)
+        (timeoutMs: int)
+        (program: Program<unit, 'model, 'msg, unit>)
+        : Runner<'model, 'msg> =
         let mutable model = Unchecked.defaultof<'model>
         let mutable dispatch : 'msg -> unit = ignore
-        let mutable waiters : (('model -> bool) * (unit -> unit)) list = []
+        // A waiter is settled exactly once, by the model, the clock or the refusal — whichever
+        // comes first — so each carries how to be resumed and how to be failed.
+        let mutable waiters : (('model -> bool) * (unit -> unit) * (string -> unit)) list = []
         let setState m d =
             model <- m
             dispatch <- d
-            let fire, keep = waiters |> List.partition (fun (predicate, _) -> predicate m)
+            let fire, rest = waiters |> List.partition (fun (predicate, _, _) -> predicate m)
+            // What is left, once the model has had its say, is a set of waits for something
+            // the model has said will not come.
+            let refused, keep =
+                match refusal m with
+                | Some reason -> rest |> List.map (fun (_, _, fail) -> fun () -> fail reason), []
+                | None -> [], rest
             waiters <- keep
             // Resume on a microtask: setState runs INSIDE the Elmish dispatch loop, and
             // a continuation that dispatches synchronously from here would only enqueue
             // (ring buffer) — its Model() reads would then see stale state. Deferring
             // lets the loop drain first, so awaited WaitFor + Dispatch compose safely.
-            fire |> List.iter (fun (_, resume) -> Fable.NodeExtras.Microtasks.queue resume)
+            fire |> List.iter (fun (_, resume, _) -> Fable.NodeExtras.Microtasks.queue resume)
+            refused |> List.iter Fable.NodeExtras.Microtasks.queue
         Program.withSetState setState program |> Program.run
         { Model = fun () -> model
           Dispatch = fun msg -> dispatch msg
@@ -81,39 +108,47 @@ module Harness =
                 Async.FromContinuations (fun (cont, econt, _) ->
                     if predicate model then cont ()
                     else
-                        // Settled exactly once, by whichever comes first — the model or the
-                        // clock. `settled` is what makes that true: the timer cannot resume a
-                        // continuation the model already resumed, and a model update cannot
-                        // resume one the timer already failed.
-                        let settled = ref false
-                        let timer = ref 0
-                        let resume () =
-                            if not settled.Value then
-                                settled.Value <- true
-                                JS.clearTimeout timer.Value
-                                cont ()
-                        waiters <- (predicate, resume) :: waiters
-                        timer.Value <-
-                            JS.setTimeout
-                                (fun () ->
-                                    if not settled.Value then
-                                        settled.Value <- true
-                                        // Drop the waiter before failing: a predicate left in
-                                        // the list would be re-evaluated on every later
-                                        // setState, for a test that is already over.
-                                        waiters <-
-                                            waiters
-                                            |> List.filter (fun (_, r) ->
-                                                not (System.Object.ReferenceEquals (r, resume)))
-                                        econt (
-                                            exn (
-                                                sprintf
-                                                    "WaitFor timed out after %dms: the model never satisfied the predicate"
-                                                    timeoutMs)))
-                                timeoutMs) }
+                        match refusal model with
+                        | Some reason -> econt (exn (sprintf "WaitFor stopped waiting: %s" reason))
+                        | None ->
+                            // Settled exactly once, by whichever comes first — the model, the
+                            // refusal or the clock. `settled` is what makes that true: the timer
+                            // cannot resume a continuation the model already resumed, and a model
+                            // update cannot resume one the timer already failed.
+                            let settled = ref false
+                            let timer = ref 0
+                            let resume () =
+                                if not settled.Value then
+                                    settled.Value <- true
+                                    JS.clearTimeout timer.Value
+                                    cont ()
+                            let fail (reason: string) =
+                                if not settled.Value then
+                                    settled.Value <- true
+                                    JS.clearTimeout timer.Value
+                                    econt (exn (sprintf "WaitFor stopped waiting: %s" reason))
+                            waiters <- (predicate, resume, fail) :: waiters
+                            timer.Value <-
+                                JS.setTimeout
+                                    (fun () ->
+                                        if not settled.Value then
+                                            settled.Value <- true
+                                            // Drop the waiter before failing: a predicate left in
+                                            // the list would be re-evaluated on every later
+                                            // setState, for a test that is already over.
+                                            waiters <-
+                                                waiters
+                                                |> List.filter (fun (_, r, _) ->
+                                                    not (System.Object.ReferenceEquals (r, resume)))
+                                            econt (
+                                                exn (
+                                                    sprintf
+                                                        "WaitFor timed out after %dms: the model never satisfied the predicate"
+                                                        timeoutMs)))
+                                    timeoutMs) }
 
     let run (program: Program<unit, 'model, 'msg, unit>) : Runner<'model, 'msg> =
-        runWith waitForTimeoutMs program
+        runWith neverRefuses waitForTimeoutMs program
 
     /// Wait for every named condition at once, and on the deadline say WHICH did not hold.
     ///
@@ -173,6 +208,33 @@ type Client =
       /// says so here, or its reads go on being asked of a channel that has gone.
       Wire : Client.Connection -> unit }
 
+/// Why a client's waits should stop: the session's environment, where every command of a work
+/// sandbox starts, failed to START. Its reason is the product's own sentence (`srt sandbox
+/// failed: ...`), which the model has held since the event arrived.
+///
+/// Without this, a suite that runs a command on a box with no sandbox waits for a block that
+/// can never finish and reports a thirty-second timeout naming the wait and nothing about the
+/// box. With it the first wait the client is in fails at once, quoting the reason and saying
+/// what to do about it.
+///
+/// "Failed" ends a wait because nothing in a client's lifetime here retries: the environment is
+/// started on a command's need, and a suite that expects one failure and then a recovery waits
+/// FOR the failure first, which the predicate-first order of `Harness.runWith` answers.
+///
+/// Cases listed one by one, so a new state of the environment is a compile error here and not
+/// a silent "keep waiting".
+let environmentRefusal (model: ClientModel) : string option =
+    match model.Environment with
+    | EnvironmentFailed reason ->
+        Some (
+            sprintf
+                "the work sandbox did not start: %s. If this box has no sandbox, the suite needs `Srt` in its `needs`"
+                reason)
+    | EnvironmentNotStarted
+    | EnvironmentStarting
+    | EnvironmentRunning _
+    | EnvironmentDown -> None
+
 /// Connect one full client with explicit options: WebRTC channel, its own Yjs doc, the
 /// withYlmish program, and the connection driver. Resolves once the model reaches
 /// `Connected`.
@@ -186,7 +248,7 @@ let connectClientWith (options: Client.ConnectOptions) (signalUrl: string) (toke
         // Made after the program, as the browser makes it, so the program reads it through a
         // getter: what a message asks of the session goes to whichever connection there is.
         let wired : Client.Connection option ref = ref None
-        let runner = Harness.run (Client.makeProgram { Client.Ports.Connection = (fun () -> wired.Value); Client.Ports.Launch = None; Client.Ports.Panels = None; Client.Ports.Moves = ignore; Client.Ports.Clipboard = (fun _ -> async.Return false); Client.Ports.Retry = ignore; Client.Ports.Keyframe = (fun _ _ -> async.Return None); Client.Ports.Remember = ignore; Client.Ports.Uploads = None } doc (ClientModel.init local))
+        let runner = Harness.runWith environmentRefusal Harness.waitForTimeoutMs (Client.makeProgram { Client.Ports.Connection = (fun () -> wired.Value); Client.Ports.Launch = None; Client.Ports.Panels = None; Client.Ports.Moves = ignore; Client.Ports.Clipboard = (fun _ -> async.Return false); Client.Ports.Retry = ignore; Client.Ports.Keyframe = (fun _ _ -> async.Return None); Client.Ports.Remember = ignore; Client.Ports.Uploads = None } doc (ClientModel.init local))
         // The composer's publication rule, wired exactly as the browser wires it: the client's
         // draft slot appears when its body has content and goes when the body empties.
         DraftSlot.follow doc registry local.PeerId (user >> runner.Dispatch) |> ignore

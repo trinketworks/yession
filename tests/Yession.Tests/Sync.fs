@@ -18,6 +18,7 @@ open Fable.Pyxpecto
 open Yjs
 open Ylmish
 open Yession.Domain
+open Yession.Domain.Sandboxes
 open Yession.Domain.Agent
 open Yession.Domain.Content
 open Yession.Domain.Link
@@ -44,6 +45,18 @@ let private said (messageId: MessageId) (body: string) : EventPage<SessionEvent>
           Actor = PeerRef ada
           Timestamp = DateTimeOffset.UtcNow
           Event = MessageSent { MessageId = messageId; QueueId = None; Author = Principal.Peer ada; Body = body } }
+    { Events = [ envelope ]; LastOffset = Some envelope.Offset; IsEnd = true }
+
+/// One page holding the news that the session's environment could not start: the event a
+/// session appends when the sandbox its commands run in refuses to come up.
+let private environmentFailed (reason: string) : EventPage<SessionEvent> =
+    let envelope : EventEnvelope<SessionEvent> =
+        { EventId = EventId.fresh ()
+          SessionId = SessionId.create "sync-session" |> expect
+          Offset = EventOffset.zero
+          Actor = PeerRef ada
+          Timestamp = DateTimeOffset.UtcNow
+          Event = EnvironmentStartFailed { EnvironmentId = "env-1"; Reason = reason } }
     { Events = [ envelope ]; LastOffset = Some envelope.Offset; IsEnd = true }
 
 let private syncBoth (a: Y.Doc) (b: Y.Doc) =
@@ -1302,7 +1315,7 @@ let private harnessTests =
         testCaseAsync "a condition that never arrives fails the ONE test, with why" <|
             async {
                 let doc = Y.Doc.Create ()
-                let p = Harness.runWith 50 (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+                let p = Harness.runWith Harness.neverRefuses 50 (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
                 let! outcome = Async.Catch (p.WaitFor (fun _ -> false))
                 match outcome with
                 | Choice1Of2 () -> failwith "a never-satisfied predicate must not resolve"
@@ -1316,7 +1329,7 @@ let private harnessTests =
         testCaseAsync "a wait on several conditions says which never held" <|
             async {
                 let doc = Y.Doc.Create ()
-                let p = Harness.runWith 50 (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+                let p = Harness.runWith Harness.neverRefuses 50 (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
                 let! outcome =
                     Harness.waitForAll
                         p
@@ -1336,14 +1349,81 @@ let private harnessTests =
         testCaseAsync "a condition that is already true resolves without waiting" <|
             async {
                 let doc = Y.Doc.Create ()
-                let p = Harness.runWith 50 (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+                let p = Harness.runWith Harness.neverRefuses 50 (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
                 do! p.WaitFor (fun m -> m.Peer.DisplayName = "Ada")
             }
+
+        // The deadline says only that nothing came. A model that already holds the reason —
+        // the environment failed to start — is the better witness, and a wait that sat out its
+        // deadline beside it reported a timeout naming the wait and nothing about the box. The
+        // deadline here is 2s, not 50ms: a refusal that never fires must still end in a red that
+        // says "timed out", quickly, and not in a pass.
+        testCaseAsync "a wait pending when the work sandbox fails to start ends with the product's reason" <|
+            async {
+                let doc = Y.Doc.Create ()
+                let p = Harness.runWith environmentRefusal 2000 (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+                let waited = p.WaitFor (fun _ -> false)
+                p.Dispatch (user (EventsPageMsg (environmentFailed "srt sandbox failed: no user namespace")))
+                let! outcome = Async.Catch waited
+                match outcome with
+                | Choice1Of2 () -> failwith "a wait the model refused must not resolve"
+                | Choice2Of2 error ->
+                    Expect.stringContains
+                        error.Message
+                        "the work sandbox did not start: srt sandbox failed: no user namespace"
+                        "the failure quotes the reason the session recorded"
+            }
+
+        testCaseAsync "a wait begun after the work sandbox failed to start ends with the product's reason" <|
+            async {
+                let doc = Y.Doc.Create ()
+                let p = Harness.runWith environmentRefusal 2000 (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+                p.Dispatch (user (EventsPageMsg (environmentFailed "srt sandbox failed: no user namespace")))
+                let! outcome = Async.Catch (p.WaitFor (fun _ -> false))
+                match outcome with
+                | Choice1Of2 () -> failwith "a wait the model refused must not resolve"
+                | Choice2Of2 error ->
+                    Expect.stringContains
+                        error.Message
+                        "the work sandbox did not start: srt sandbox failed: no user namespace"
+                        "the failure quotes the reason the session recorded"
+            }
+
+        // The order that lets a suite expect a failure: the predicate is asked before the
+        // refusal, so a wait FOR the failed environment is answered and not refused by it.
+        testCaseAsync "a wait for the failed environment itself is answered, not refused" <|
+            async {
+                let doc = Y.Doc.Create ()
+                let p = Harness.runWith environmentRefusal 2000 (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+                let waited = p.WaitFor (fun m -> m.Environment = EnvironmentFailed "srt sandbox failed: no user namespace")
+                p.Dispatch (user (EventsPageMsg (environmentFailed "srt sandbox failed: no user namespace")))
+                do! waited
+            }
+
+        // Only a failed start is a reason to stop waiting. An environment that is starting,
+        // running, down or never asked for is one a wait may still outlast.
+        testCase "every state of the environment but a failed start leaves a wait to wait" <| fun () ->
+            let model = ClientModel.init (peer "ada" "Ada")
+            let refused =
+                [ EnvironmentNotStarted; EnvironmentStarting; EnvironmentRunning "srt"; EnvironmentDown ]
+                |> List.filter (fun status -> (environmentRefusal { model with Environment = status }).IsSome)
+            Expect.isEmpty refused "no state but EnvironmentFailed refuses a wait"
+
+        // The message is read by whoever's suite just went red, on a box they may not have.
+        testCase "the refusal says what a suite does about a box with no sandbox" <| fun () ->
+            let model = { ClientModel.init (peer "ada" "Ada") with Environment = EnvironmentFailed "boom" }
+            match environmentRefusal model with
+            | None -> failwith "a failed environment must refuse a wait"
+            | Some refusal ->
+                Expect.stringContains
+                    refusal
+                    "the suite needs `Srt` in its `needs`"
+                    "the refusal names the capability a command-running suite declares"
 
         testCaseAsync "a condition that arrives resolves, and the deadline never fires after it" <|
             async {
                 let doc = Y.Doc.Create ()
-                let p = Harness.runWith 50 (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
+                let p = Harness.runWith Harness.neverRefuses 50 (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
                 let waited = p.WaitFor (fun m -> m.Composer = Own)
                 p.Dispatch (user StartDraftMsg)
                 do! waited
