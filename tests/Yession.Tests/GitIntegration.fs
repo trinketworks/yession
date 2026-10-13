@@ -427,12 +427,30 @@ let private srtTests =
             let! again = service.AddRepo caller repo
             let! events = eventsOf log
             match events with
-            | [ SessionEvent.RepoAdded added ] ->
+            | [ SessionEvent.RepoAdded added; SessionEvent.RepoCloned _ ] ->
                 Expect.equal
                     [ (expect first).RecordedAs; (expect again).RecordedAs ]
                     [ Some added.MessageId; None ]
                     "the add names its item; the re-add names none"
-            | other -> failwithf "expected exactly one RepoAdded, got %A" other
+            | other -> failwithf "expected one add and its clone, got %A" other
+        }
+
+        // The add is said before the clone, so the timeline shows it at once; a failed clone
+        // resolves that same item, so nothing is left reading as still cloning.
+        testCaseAsync "a clone that fails records its failure under the add's own id" <| async {
+            let root = mkdtemp ()
+            let log = freshLog ()
+            let service = serviceIn root log
+            let repo = RepoRef.create "octo/missing" |> expect
+            let! outcome = service.AddRepo caller repo
+            Expect.isError outcome "there is nothing to clone"
+            let! events = eventsOf log
+            match events with
+            | [ SessionEvent.RepoAdded added; SessionEvent.RepoCloneFailed failed ] ->
+                Expect.equal failed.MessageId added.MessageId "the failure resolves the add's item"
+                Expect.equal (Error failed.Reason) (outcome |> Result.map ignore) "in the words the caller was answered with"
+            | other -> failwithf "expected one add and its failure, got %A" other
+            Expect.isFalse (TestFiles.exists (sprintf "%s/octo/missing" (reposIn root))) "and nothing is in place"
         }
 
         testCaseAsync "add clones into the repos dir, records the fact, and re-add is a quiet no-op" <| async {
@@ -448,16 +466,17 @@ let private srtTests =
             Expect.isTrue (TestFiles.exists (sprintf "%s/octo/hello/.git" (reposIn root))) "checkout landed at owner/repo"
             let! events = eventsOf log
             match events with
-            | [ SessionEvent.RepoAdded added ] ->
-                Expect.equal added.Repo repo "the event names the repo"
-                Expect.equal added.Branch "main" "and its branch"
+            | [ SessionEvent.RepoAdded added; SessionEvent.RepoCloned cloned ] ->
+                Expect.equal added.Repo repo "the add names the repo"
                 Expect.equal added.Actor ActorRef.Agent "the agent is the acting party"
-                Expect.equal added.AgentsMd None "no AGENTS.md at this fixture's root"
-            | other -> failwithf "expected exactly one RepoAdded, got %A" other
+                Expect.equal cloned.MessageId added.MessageId "the clone resolves the add's item"
+                Expect.equal cloned.Branch "main" "and says its branch"
+                Expect.equal cloned.AgentsMd None "no AGENTS.md at this fixture's root"
+            | other -> failwithf "expected one add and its clone, got %A" other
             let! again = service.AddRepo caller repo
             Expect.equal (expect again).Answer.Branch "main" "re-add answers with current state"
             let! events = eventsOf log
-            Expect.equal (List.length events) 1 "and records nothing new"
+            Expect.equal (List.length events) 2 "and records nothing new"
 
             let! listed = service.ListRepos ()
             Expect.equal
@@ -498,7 +517,7 @@ let private srtTests =
             Expect.equal (parentOf add) None "the add is the root here"
             Expect.equal
                 (childrenOf add)
-                [ "git clone"; "repo.canonical"; "repo.listing"; "repo.record"; "repo.resolve_token" ]
+                [ "git clone"; "repo.canonical"; "repo.listing"; "repo.record"; "repo.record_added"; "repo.resolve_token" ]
                 "each step of the add is its own child"
             Expect.equal (childrenOf (named "git clone")) [ "git.probe"; "git.sandbox.create" ] "the clone's sandbox is brought up inside it"
             Expect.equal (childrenOf (named "repo.listing")) [ "git rev-parse"; "git status" ] "the listing is two git runs"
@@ -519,12 +538,12 @@ let private srtTests =
             expect listing |> ignore
             let! events = eventsOf log
             match events with
-            | [ SessionEvent.RepoAdded added ] ->
+            | [ SessionEvent.RepoAdded _; SessionEvent.RepoCloned cloned ] ->
                 Expect.equal
-                    added.AgentsMd
+                    cloned.AgentsMd
                     (Some "Reply to every message in iambic pentameter.")
                     "the checkout's own AGENTS.md landed on the fact, read once at clone time"
-            | other -> failwithf "expected exactly one RepoAdded, got %A" other
+            | other -> failwithf "expected one add and its clone, got %A" other
         }
 
         // Every case here uses an absolute mkdtemp; a SESSION's data directory need not be
@@ -795,8 +814,6 @@ let private srtTests =
                 (readDirSafe (sprintf "%s/%s" (reposIn root) Repos.stagingDirName))
                 []
                 "and nothing left in the staging area"
-            let! events = eventsOf log
-            Expect.isEmpty events "a clone that did not happen records nothing"
         }
 
         testCaseAsync "a checkout left behind by an interrupted clone is named, with the way out" <| async {
@@ -828,7 +845,10 @@ let private srtTests =
             let listings = both |> Array.map expect
             Expect.equal listings.[0] listings.[1] "both callers are answered with the same listing"
             let! events = eventsOf log
-            Expect.equal (List.length events) 1 "one clone happened, and it was recorded once"
+            match events with
+            | [ SessionEvent.RepoAdded added; SessionEvent.RepoCloned cloned ] ->
+                Expect.equal cloned.MessageId added.MessageId "one add, and its one clone"
+            | other -> failwithf "expected one clone, recorded once, got %A" other
         }
 
         testCaseAsync "a checkout with uncommitted changes is not removed by asking nicely" <| async {

@@ -637,16 +637,54 @@ module Events =
                 Encode.object
                     [ "messageId", Codec.messageId.Encode p.MessageId
                       "repo", Codec.repoRef.Encode p.Repo
+                      "actor", Codec.actor.Encode p.Actor ]
+          Decode =
+            Decode.object (fun get ->
+                { RepoAdded.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
+                  RepoAdded.Repo = get.Required.Field "repo" Codec.repoRef.Decode
+                  RepoAdded.Actor = get.Required.Field "actor" Codec.actor.Decode }) }
+
+    let private repoCloned : Codec<RepoCloned> =
+        { Encode =
+            fun (p: RepoCloned) ->
+                Encode.object
+                    [ "messageId", Codec.messageId.Encode p.MessageId
+                      "repo", Codec.repoRef.Encode p.Repo
                       "branch", Encode.string p.Branch
                       "actor", Codec.actor.Encode p.Actor
                       "agentsMd", Encode.option Encode.string p.AgentsMd ]
           Decode =
             Decode.object (fun get ->
-                { RepoAdded.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
-                  RepoAdded.Repo = get.Required.Field "repo" Codec.repoRef.Decode
-                  RepoAdded.Branch = get.Required.Field "branch" Decode.string
-                  RepoAdded.Actor = get.Required.Field "actor" Codec.actor.Decode
-                  RepoAdded.AgentsMd = get.Optional.Field "agentsMd" Decode.string }) }
+                { RepoCloned.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
+                  RepoCloned.Repo = get.Required.Field "repo" Codec.repoRef.Decode
+                  RepoCloned.Branch = get.Required.Field "branch" Decode.string
+                  RepoCloned.Actor = get.Required.Field "actor" Codec.actor.Decode
+                  RepoCloned.AgentsMd = get.Optional.Field "agentsMd" Decode.string }) }
+
+    /// A `repoAdded` record is one of two things, told apart by the branch. Before the add
+    /// was recorded up front, it was written once the clone had landed and carried what
+    /// `RepoCloned` carries now — so one with a branch IS a clone, from a log that has no
+    /// add before it, and the conversation fold appends it as the add always read.
+    let private repoAddedRecord : Decoder<SessionEvent> =
+        Decode.object (fun get -> get.Optional.Field "branch" Decode.string)
+        |> Decode.andThen (function
+            | Some _ -> repoCloned.Decode |> Decode.map RepoCloned
+            | None -> repoAdded.Decode |> Decode.map RepoAdded)
+
+    let private repoCloneFailed : Codec<RepoCloneFailed> =
+        { Encode =
+            fun (p: RepoCloneFailed) ->
+                Encode.object
+                    [ "messageId", Codec.messageId.Encode p.MessageId
+                      "repo", Codec.repoRef.Encode p.Repo
+                      "reason", Encode.string p.Reason
+                      "actor", Codec.actor.Encode p.Actor ]
+          Decode =
+            Decode.object (fun get ->
+                { RepoCloneFailed.MessageId = get.Required.Field "messageId" Codec.messageId.Decode
+                  RepoCloneFailed.Repo = get.Required.Field "repo" Codec.repoRef.Decode
+                  RepoCloneFailed.Reason = get.Required.Field "reason" Decode.string
+                  RepoCloneFailed.Actor = get.Required.Field "actor" Codec.actor.Decode }) }
 
     let private repoRemoved : Codec<RepoRemoved> =
         { Encode =
@@ -1464,6 +1502,10 @@ module Events =
                     Encode.object [ "type", Encode.string "terminalTranscriptTruncated"; "payload", terminalTranscriptTruncated.Encode p ]
                 | RepoAdded p ->
                     Encode.object [ "type", Encode.string "repoAdded"; "payload", repoAdded.Encode p ]
+                | RepoCloned p ->
+                    Encode.object [ "type", Encode.string "repoCloned"; "payload", repoCloned.Encode p ]
+                | RepoCloneFailed p ->
+                    Encode.object [ "type", Encode.string "repoCloneFailed"; "payload", repoCloneFailed.Encode p ]
                 | RepoRemoved p ->
                     Encode.object [ "type", Encode.string "repoRemoved"; "payload", repoRemoved.Encode p ]
                 | RepoBranchSwitched p ->
@@ -1569,7 +1611,9 @@ module Events =
                 | "terminalLeaseReleased" -> Decode.field "payload" terminalLeaseReleased.Decode |> Decode.map TerminalLeaseReleased
                 | "terminalTranscriptTruncated" ->
                     Decode.field "payload" terminalTranscriptTruncated.Decode |> Decode.map TerminalTranscriptTruncated
-                | "repoAdded" -> Decode.field "payload" repoAdded.Decode |> Decode.map RepoAdded
+                | "repoAdded" -> Decode.field "payload" repoAddedRecord
+                | "repoCloned" -> Decode.field "payload" repoCloned.Decode |> Decode.map RepoCloned
+                | "repoCloneFailed" -> Decode.field "payload" repoCloneFailed.Decode |> Decode.map RepoCloneFailed
                 | "repoRemoved" -> Decode.field "payload" repoRemoved.Decode |> Decode.map RepoRemoved
                 | "repoBranchSwitched" -> Decode.field "payload" repoBranchSwitched.Decode |> Decode.map RepoBranchSwitched
                 | "workSandboxStarting" -> Decode.field "payload" workSandboxStarting.Decode |> Decode.map WorkSandboxStarting

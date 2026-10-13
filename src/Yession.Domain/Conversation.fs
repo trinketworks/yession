@@ -547,7 +547,22 @@ module ConversationProjection =
         // the agent's next turn needs to know. Each note rides the Process-minted
         // MessageId its event carries, and carries the event's FACTS: what it says is
         // `Act.phrase`'s, beside the event, and how a screen lays it out is the screen's.
-        | SessionEvent.RepoAdded r -> proj |> noted r.MessageId r.Actor (Act.RepoAdded r) envelope
+        // An add opens a running act, as a sandbox coming up does (below): the clone takes
+        // seconds, and the item holds its place while it runs. Its outcome, under the same
+        // MessageId, resolves it in place; an outcome from a log that predates the running
+        // half has no item to resolve, and is appended as the add always was.
+        | SessionEvent.RepoAdded r ->
+            { proj with
+                Recent =
+                    { MessageId = r.MessageId
+                      Author = r.Actor
+                      Content = ItemContent.Act (Act.RepoAdded r)
+                      Status = Running
+                      Offset = envelope.Offset
+                      Woke = None; CausedBy = None }
+                    :: proj.Recent }
+        | SessionEvent.RepoCloned r -> proj |> resolved r.MessageId None r.Actor (Act.RepoCloned r) Complete envelope
+        | SessionEvent.RepoCloneFailed r -> proj |> resolved r.MessageId None r.Actor (Act.RepoCloneFailed r) Failed envelope
         | SessionEvent.RepoRemoved r -> proj |> noted r.MessageId r.Actor (Act.RepoRemoved r) envelope
         | SessionEvent.RepoBranchSwitched r -> proj |> noted r.MessageId r.Actor (Act.RepoBranchSwitched r) envelope
         // Named WorkSandboxes (Plan 15, stage 2) fold in for the repo notes' reason and

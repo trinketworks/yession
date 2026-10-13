@@ -15,7 +15,7 @@ open Yession.Domain.Repos
 ///
 /// View state, local to this client and never synced — choosing is one person's act on one
 /// screen, and what it produces is the `AddRepo` command, whose outcome everybody reads off
-/// the log (`RepoAdded`, or `GatedCommandFailed`). The one thing folded back in from the
+/// the log (`RepoAdded` at once, then `RepoCloned` or `RepoCloneFailed`). The one thing folded back in from the
 /// log is that failure, so the screen that asked can say why rather than sit there. The one
 /// answer that is not local is "none": a dismissal is the session's, held in its synced state
 /// (`SyncedSessionState.LaunchDismissed`), because the other answers retire the card for
@@ -164,7 +164,7 @@ type LaunchMsg =
     /// The session answered a command; only the one `Sent` names is this surface's.
     | LaunchAnswered of RequestId * SessionCommandResult
     /// An attempt failed — a link the provider could not resolve, or the log saying the
-    /// clone did (`GatedCommandFailed` for `add_repo`). Choosing is open again.
+    /// clone did (`RepoCloneFailed`). Choosing is open again.
     | LaunchFailed of reason: string
 
 /// What the launch surface asks of the session, as values the reducer returns beside the

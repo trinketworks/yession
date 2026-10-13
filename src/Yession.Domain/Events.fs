@@ -97,6 +97,8 @@ type SessionEvent =
     // timeline (each carries the Process-minted MessageId its timeline note folds
     // under), so humans and the agent's context both see the history.
     | RepoAdded of RepoAdded
+    | RepoCloned of RepoCloned
+    | RepoCloneFailed of RepoCloneFailed
     | RepoRemoved of RepoRemoved
     | RepoBranchSwitched of RepoBranchSwitched
     // Named WorkSandboxes (Plan 15, stage 2). A session used to have exactly one

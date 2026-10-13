@@ -48,7 +48,7 @@ let private repoRemoved (repo: string) : Act =
           Actor = PeerRef ada }
 
 let private repoAdded (repo: string) (branch: string) : Act =
-    Act.RepoAdded
+    Act.RepoCloned
         { MessageId = MessageId.create "act-added" |> expect
           Repo = RepoRef.create repo |> expect
           Branch = branch

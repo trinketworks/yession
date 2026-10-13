@@ -4759,7 +4759,7 @@ let private sandboxTaskTests =
 let private hello = RepoRef.create "octo/hello" |> expect
 
 let private repoAdded (n: string) (repo: string) =
-    SessionEvent.RepoAdded
+    SessionEvent.RepoCloned
         { MessageId = message n; Repo = RepoRef.create repo |> expect; Branch = "main"; Actor = PeerRef ada; AgentsMd = None }
 
 let private startingBecause (n: string) (cause: Cause) =

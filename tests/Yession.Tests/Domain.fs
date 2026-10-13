@@ -405,7 +405,9 @@ let private frameSerializationTests =
                   CommandCompleted { CommandId = CommandId.create "cmd-1" |> expect; Result = CommandFailed 3 }
                   CommandCompleted { CommandId = CommandId.create "cmd-1" |> expect; Result = CommandTimedOut }
                   CommandCompleted { CommandId = CommandId.create "cmd-1" |> expect; Result = CommandExecutionFailed "denied" }
-                  RepoAdded { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Branch = "main"; Actor = PeerRef peerId; AgentsMd = None }
+                  RepoAdded { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Actor = PeerRef peerId }
+                  RepoCloned { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Branch = "main"; Actor = PeerRef peerId; AgentsMd = None }
+                  RepoCloneFailed { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Reason = "not found"; Actor = PeerRef peerId }
                   RepoRemoved { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Actor = ActorRef.Agent }
                   RepoBranchSwitched { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Branch = "feature/x"; Created = true; Actor = UserRef (UserId.create "alice" |> expect) }
                   WorkSandboxStarted
@@ -922,7 +924,7 @@ let private repoTests =
             let repo = RepoRef.create "octo/hello" |> expect
             let ada = PeerId.create "ada" |> expect
             let folded =
-                [ RepoAdded { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = PeerRef ada; AgentsMd = Some "say hi to every reviewer" }
+                [ RepoCloned { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = PeerRef ada; AgentsMd = Some "say hi to every reviewer" }
                   RepoBranchSwitched { MessageId = msg "r2"; Repo = repo; Branch = "feature/x"; Created = true; Actor = ActorRef.Agent }
                   MessageSent { MessageId = msg "m"; QueueId = None; Author = Principal.Peer ada; Body = "hi" } ]
                 |> List.fold ReposProjection.applyEvent ReposProjection.empty
@@ -932,7 +934,7 @@ let private repoTests =
                 "one repo, on the switched branch, carrying what its AGENTS.md said at add time"
             // Re-add with no file this time: the newest add wins, notes  a repoincluded 
             // that removed its AGENTS.md between adds is not still quoted from the last one.
-            let readded = ReposProjection.applyEvent folded (RepoAdded { MessageId = msg "r3"; Repo = repo; Branch = "main"; Actor = ActorRef.Agent; AgentsMd = None })
+            let readded = ReposProjection.applyEvent folded (RepoCloned { MessageId = msg "r3"; Repo = repo; Branch = "main"; Actor = ActorRef.Agent; AgentsMd = None })
             Expect.equal
                 readded.Repos
                 [ { Repo = repo; Branch = "main"; AddedBy = ActorRef.Agent; AgentsMd = None } ]
@@ -940,13 +942,84 @@ let private repoTests =
             let removed = ReposProjection.applyEvent readded (RepoRemoved { MessageId = msg "r4"; Repo = repo; Actor = PeerRef ada })
             Expect.equal removed.Repos [] "removed"
 
+        // The add is recorded before the clone, and a repo is here only once its checkout is:
+        // anything that acted on the add alone would act on a directory that is not there yet.
+        testCase "a repo is in the projection once cloned, not once added, and never when the clone failed" <| fun () ->
+            let msg n = MessageId.create n |> expect
+            let repo = RepoRef.create "octo/hello" |> expect
+            let added = RepoAdded { MessageId = msg "r1"; Repo = repo; Actor = ActorRef.Agent }
+            let adding = ReposProjection.applyEvent ReposProjection.empty added
+            Expect.equal adding.Repos [] "an add whose clone is running is not a repo"
+            let failed =
+                ReposProjection.applyEvent adding (RepoCloneFailed { MessageId = msg "r1"; Repo = repo; Reason = "not found"; Actor = ActorRef.Agent })
+            Expect.equal failed.Repos [] "nor is one whose clone failed"
+            let cloned =
+                ReposProjection.applyEvent adding (RepoCloned { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = ActorRef.Agent; AgentsMd = None })
+            Expect.equal (cloned.Repos |> List.map (fun r -> r.Repo)) [ repo ] "the clone landing is what puts it here"
+
+        testCase "an add is ONE item: running at once, then resolved in place by its clone's outcome" <| fun () ->
+            let msg n = MessageId.create n |> expect
+            let repo = RepoRef.create "octo/hello" |> expect
+            let sessionId = SessionId.create "repo-session" |> expect
+            let ada = PeerId.create "ada" |> expect
+            let envelopesOf events =
+                events
+                |> List.mapi (fun i event ->
+                    { EventId = EventId.fresh ()
+                      SessionId = sessionId
+                      Offset = EventOffset.create (int64 (i + 1)) |> expect
+                      Actor = ActorRef.Session
+                      Timestamp = DateTimeOffset(2026, 8, 8, 10, 0, 0, TimeSpan.Zero)
+                      Event = event })
+            let foldOf events = ConversationProjection.applyEvents None (envelopesOf events) ConversationProjection.empty |> fst
+            let added = RepoAdded { MessageId = msg "r1"; Repo = repo; Actor = PeerRef ada }
+            match (foldOf [ added ]).Items with
+            | [ item ] ->
+                Expect.equal item.Status ConversationItemStatus.Running "the add is drawn at once, running"
+                Expect.equal (ConversationItem.headline item) "added repo github:octo/hello" "saying what was asked for"
+                Expect.equal (noteDetail item) (Some "cloning") "and telling a reader with no running mark that it is not a checkout yet"
+            | other -> failwithf "one item expected, got %A" other
+            let cloned =
+                foldOf [ added; RepoCloned { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = PeerRef ada; AgentsMd = None } ]
+            match cloned.Items with
+            | [ item ] ->
+                Expect.equal item.Status Complete "the clone landing completes the same item"
+                Expect.equal item.Offset (EventOffset.create 1L |> expect) "which keeps the place the add took"
+                Expect.equal (noteDetail item) (Some "on branch main") "and now says the branch"
+            | other -> failwithf "the clone must resolve the add in place, got %A" other
+            let failed =
+                foldOf [ added; RepoCloneFailed { MessageId = msg "r1"; Repo = repo; Reason = "github says not found"; Actor = PeerRef ada } ]
+            match failed.Items with
+            | [ item ] ->
+                Expect.equal item.Status ConversationItemStatus.Failed "a failed clone fails the same item"
+                Expect.equal (ConversationItem.headline item) "could not clone repo github:octo/hello" "saying it did not clone"
+                Expect.equal (noteDetail item) (Some "github says not found") "and why, in the failure's words"
+            | other -> failwithf "the failure must resolve the add in place, got %A" other
+
+        // A log from before the add was recorded up front holds the clone alone. It has no
+        // running item to resolve, so it is appended, complete — as it always read.
+        testCase "a clone with no add before it reads as the add always did" <| fun () ->
+            let repo = RepoRef.create "octo/hello" |> expect
+            let envelope =
+                { EventId = EventId.fresh ()
+                  SessionId = SessionId.create "repo-session" |> expect
+                  Offset = EventOffset.create 1L |> expect
+                  Actor = ActorRef.Session
+                  Timestamp = DateTimeOffset(2026, 8, 8, 10, 0, 0, TimeSpan.Zero)
+                  Event = RepoCloned { MessageId = MessageId.create "r1" |> expect; Repo = repo; Branch = "main"; Actor = ActorRef.Agent; AgentsMd = None } }
+            match (ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty |> fst).Items with
+            | [ item ] ->
+                Expect.equal item.Status Complete "complete"
+                Expect.equal (ConversationItem.said item) "added repo github:octo/hello — on branch main" "and said as before"
+            | other -> failwithf "one item expected, got %A" other
+
         testCase "repo events fold into the timeline as attributed notes" <| fun () ->
             let msg n = MessageId.create n |> expect
             let repo = RepoRef.create "octo/hello" |> expect
             let sessionId = SessionId.create "repo-session" |> expect
             let ada = PeerId.create "ada" |> expect
             let envelopes =
-                [ RepoAdded { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = PeerRef ada; AgentsMd = None }
+                [ RepoCloned { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = PeerRef ada; AgentsMd = None }
                   RepoBranchSwitched { MessageId = msg "r2"; Repo = repo; Branch = "fix/y"; Created = false; Actor = ActorRef.Agent }
                   RepoRemoved { MessageId = msg "r3"; Repo = repo; Actor = PeerRef ada } ]
                 |> List.mapi (fun i event ->
@@ -1013,7 +1086,7 @@ let private repoTests =
                   Author = ActorRef.Agent
                   Content =
                     ItemContent.Act (
-                        Act.RepoAdded
+                        Act.RepoCloned
                             { MessageId = MessageId.create "n1" |> expect
                               Repo = RepoRef.create "octo/hello" |> expect
                               Branch = "main"

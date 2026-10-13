@@ -27,11 +27,12 @@ module ReposProjection =
 
     let empty : ReposProjection = { Repos = [] }
 
-    /// Fold one event. Re-adding an existing repo replaces its entry (the clone was
-    /// re-verified; the newest add wins), keeping list order stable otherwise.
+    /// Fold one event. A repo is here once its clone is (`RepoCloned`), not when it was
+    /// asked for. Re-adding an existing repo replaces its entry (the clone was re-verified;
+    /// the newest add wins), keeping list order stable otherwise.
     let applyEvent (proj: ReposProjection) (event: SessionEvent) : ReposProjection =
         match event with
-        | RepoAdded r ->
+        | RepoCloned r ->
             let entry = { Repo = r.Repo; Branch = r.Branch; AddedBy = r.Actor; AgentsMd = r.AgentsMd }
             if proj.Repos |> List.exists (fun s -> s.Repo = r.Repo) then
                 { Repos = proj.Repos |> List.map (fun s -> if s.Repo = r.Repo then entry else s) }

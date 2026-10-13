@@ -84,7 +84,7 @@ type SessionCommand =
     /// attribution, a second caller — admitted only while the session has no repo, so a
     /// second one is still the agent's to add. Rejected with the reason when it is not
     /// admitted; ACCEPTED means the clone has begun, and its outcome reaches everyone as
-    /// `RepoAdded` or `GatedCommandFailed`, never in this response — a clone is not something to
+    /// `RepoCloned` or `RepoCloneFailed`, never in this response — a clone is not something to
     /// hold a peer's command pump for.
     | AddRepo of repo: RepoRef * branch: string option
 

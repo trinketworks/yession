@@ -4273,6 +4273,10 @@ module ClientModel =
                 |> List.fold
                     (fun (launch: LaunchViewState) e ->
                         match e.Event, launch.Stage with
+                        | SessionEvent.RepoCloneFailed failed, (Sent (_, target) | Cloning target) when failed.Repo = target.Repo ->
+                            Launch.update (LaunchFailed failed.Reason) launch |> fst
+                        // What the clone's own record does not cover: the launch's later
+                        // reading of the listing it landed on.
                         | SessionEvent.GatedCommandFailed failed, (Sent _ | Cloning _) when failed.Tool = "add_repo" ->
                             Launch.update (LaunchFailed failed.Reason) launch |> fst
                         | _ -> launch)

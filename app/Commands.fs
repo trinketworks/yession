@@ -772,7 +772,10 @@ type LaunchFailure =
       Tool : string
       /// Its summary — the sentence the record carries for it.
       Summary : string
-      Reason : string }
+      Reason : string
+      /// Whether the log already says it: a clone that fails records `RepoCloneFailed`
+      /// on the add's own item, and a second note under it would be one failure twice.
+      Recorded : bool }
 
 type LaunchRepo = Principal -> RepoRef -> string option -> Async<Result<Async<Result<unit, LaunchFailure>>, string>>
 
@@ -811,7 +814,10 @@ let launchRepo
                 let! outcome = run { Tool = tool; Args = encodeArgs args; Summary = summary; Authority = authority }
                 match! settle outcome with
                 | Ok text -> return Ok text
-                | Error reason -> return Error { LaunchFailure.Tool = tool; Summary = summary; Reason = reason }
+                // Admission found no repo here, so an `add_repo` that fails failed in its
+                // clone, after its add was recorded — and the repo service recorded that.
+                | Error reason ->
+                    return Error { LaunchFailure.Tool = tool; Summary = summary; Reason = reason; Recorded = (tool = addRepoTool) }
             }
         // Admission and the work are two spans because they are two moments: the peer is
         // answered after the first, and the second runs on wherever the caller starts it.
@@ -841,7 +847,7 @@ let launchRepo
                                     // that names it is not a switch.
                                     let added = sprintf "add_repo %s" (RepoRef.value repo)
                                     let listingFailure (reason: string) : LaunchFailure =
-                                        { LaunchFailure.Tool = addRepoTool; Summary = added; Reason = reason }
+                                        { LaunchFailure.Tool = addRepoTool; Summary = added; Reason = reason; Recorded = false }
                                     match! service.ListRepos () with
                                     | Error e -> return Error (listingFailure e)
                                     | Ok listings ->
