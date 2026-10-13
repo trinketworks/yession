@@ -111,7 +111,6 @@ open Yession.App
 let private fs : obj = importAll "node:fs"
 let private os : obj = importAll "node:os"
 let private nodePath : obj = importAll "node:path"
-let private childProcess : obj = importAll "node:child_process"
 let private crypto : obj = importAll "node:crypto"
 
 /// A screencast frame's bytes. CDP hands them over base64 in the JSON, and what `writeFileSync`
@@ -147,7 +146,7 @@ let private abort (message: string) : 'a =
 /// This process's arguments, its executable and script dropped — what `Cli` parses.
 let private argv () : string array = Node.Api.``process``.argv |> Seq.skip 2 |> Seq.toArray
 
-let private pretty (value: obj) : string = JS.JSON.stringify (value, space = 1)
+let private pretty (value: 'a) : string = JS.JSON.stringify (value, space = 1)
 
 let private say (line: string) : unit = JS.console.log line
 
@@ -193,50 +192,18 @@ let private chromiumPath () : string =
 
 // --- CDP ---------------------------------------------------------------------------------------
 
-type private Cdp =
-    { Send: string -> obj -> JS.Promise<obj>
-      /// Every event the browser sends, as it arrives: method and params.
-      Events: ResizeArray<string * obj>
-      /// Screencast frames are ACKED here as they arrive, or the browser stops sending them.
-      Close: unit -> unit }
-
-let private connect (url: string) : JS.Promise<Cdp> =
-    Promise.create (fun resolve _ ->
-        let ws = Fable.NodeExtras.WebSockets.connect url
-        let pending = System.Collections.Generic.Dictionary<int, obj -> unit> ()
-        let events = ResizeArray<string * obj> ()
-        let mutable nextId = 1
-        let send (methodName: string) (parameters: obj) : JS.Promise<obj> =
-            Promise.create (fun ok _ ->
-                let id = nextId
-                nextId <- nextId + 1
-                pending.[id] <- ok
-                ws.sendText (JS.JSON.stringify (createObj [ "id" ==> id; "method" ==> methodName; "params" ==> parameters ])))
-        // CDP is a TEXT protocol, and the frame type says so rather than a cast: a binary
-        // frame on this wire is not a message that failed to parse, it is a wire that is not
-        // CDP, and `JSON.parse` over `$0.data` could not have told the difference.
-        ws.onMessage (fun frame ->
-            match Fable.NodeExtras.WebSockets.payload frame with
-            | Fable.NodeExtras.Frame.Binary _ -> ()
-            | Fable.NodeExtras.Frame.Text data ->
-                let msg = JS.JSON.parse data
-                match msg?id |> unbox<int option> with
-                | Some id when pending.ContainsKey id ->
-                    let ok = pending.[id]
-                    pending.Remove id |> ignore
-                    ok (msg?result)
-                | _ ->
-                    match msg?``method`` |> unbox<string option> with
-                    | Some name ->
-                        if name = "Page.screencastFrame" then
-                            send "Page.screencastFrameAck" (createObj [ "sessionId" ==> msg?``params``?sessionId ]) |> ignore
-                        events.Add (name, msg?``params``)
-                    | None -> ())
-        ws.onOpen (fun () -> resolve { Send = send; Events = events; Close = ws.close }))
+// The protocol is `Fable.NodeExtras.Cdp`'s: every command this camera sends is declared there with
+// the arguments it means, and every answer and event comes back typed.
+module Cdp = Fable.NodeExtras.Cdp
 
 /// A headless Chromium on a debugging port of the OS's choosing, read back from the file it
 /// writes into its profile directory — no port to collide on.
-let private launch (executable: string) (width: int) (height: int) (extra: string list) : JS.Promise<obj * string> =
+let private launch
+    (executable: string)
+    (width: int)
+    (height: int)
+    (extra: string list)
+    : JS.Promise<Node.ChildProcess.ChildProcess * string> =
     promise {
         let profile : string = fs?mkdtempSync (joinTwo (os?tmpdir () |> unbox) "yession-frames-") |> unbox
         let args =
@@ -247,7 +214,18 @@ let private launch (executable: string) (width: int) (height: int) (extra: strin
                "--use-mock-keychain"; "--password-store=basic"; "--ignore-certificate-errors"
                sprintf "--window-size=%d,%d" width height |]
             |> fun fixedArgs -> Array.append fixedArgs (Array.ofList (extra @ [ "about:blank" ]))
-        let child = childProcess?spawn (executable, args, createObj [ "stdio" ==> "ignore" ])
+        let ignored : Fable.NodeExtras.StreamWiring =
+            { Stdin = Fable.NodeExtras.Stdio.Ignore
+              Stdout = Fable.NodeExtras.Stdio.Ignore
+              Stderr = Fable.NodeExtras.Stdio.Ignore }
+        let child =
+            Fable.NodeExtras.ChildProcesses.spawn
+                executable
+                (List.ofArray args)
+                { Cwd = None
+                  Env = Fable.NodeExtras.ChildEnv.Adding Map.empty
+                  Streams = ignored
+                  Detached = false }
         let portFile = joinTwo profile "DevToolsActivePort"
         let mutable port = ""
         let mutable waited = 0
@@ -276,16 +254,40 @@ let private launch (executable: string) (width: int) (height: int) (extra: strin
         return child, target
     }
 
-/// `Runtime.evaluate`, awaited, by value. An exception in the expression is printed rather
-/// than swallowed, because a probe that silently evaluates to `undefined` is a probe that
-/// reports a clean page.
-let private evaluate (cdp: Cdp) (expression: string) : JS.Promise<obj> =
+/// What an evaluated expression gave, as the kind it was asked for. A throw in the expression
+/// is printed rather than swallowed, because a probe that silently evaluates to nothing is a
+/// probe that reports a clean page; an answer of another kind is no answer.
+let private settled (answer: Cdp.Evaluated<'T>) : 'T option =
+    match answer with
+    | Cdp.Evaluated.Returned value -> Some value
+    | Cdp.Evaluated.Unexpected _ -> None
+    | Cdp.Evaluated.Threw details ->
+        say (sprintf "evaluate: %s" (if details.Length > 300 then details.Substring (0, 300) else details))
+        None
+
+let private evaluateText (cdp: Cdp.Session) (expression: string) : JS.Promise<string option> =
+    Cdp.Runtime.evaluateText cdp expression |> Promise.map settled
+
+let private evaluateNumber (cdp: Cdp.Session) (expression: string) : JS.Promise<float option> =
+    Cdp.Runtime.evaluateNumber cdp expression |> Promise.map settled
+
+let private evaluateJson (cdp: Cdp.Session) (expression: string) : JS.Promise<string option> =
+    Cdp.Runtime.evaluateJson cdp expression |> Promise.map settled
+
+/// What the page must have answered for the run to mean anything.
+let private answered (what: string) (answer: 'T option) : 'T =
+    match answer with
+    | Some value -> value
+    | None -> failwithf "the page did not answer %s" what
+
+/// The address the page is at once `probe` says it has landed, and nothing while it has not.
+/// An expression that answers with no string is a page that has not landed.
+let private landedAt (cdp: Cdp.Session) (probe: string) : JS.Promise<string> =
     promise {
-        let! r = cdp.Send "Runtime.evaluate" (createObj [ "expression" ==> expression; "awaitPromise" ==> true; "returnByValue" ==> true ])
-        match r?exceptionDetails |> unbox<obj option> with
-        | Some details -> say (sprintf "evaluate: %s" ((JS.JSON.stringify details).Substring (0, 300)))
-        | None -> ()
-        return r?result?value
+        let! href = evaluateText cdp probe
+        match href with
+        | Some href -> return href
+        | None -> return ""
     }
 
 // --- the instrument in the page ----------------------------------------------------------------
@@ -477,8 +479,8 @@ let private run () =
                 | _ -> abort (sprintf "--size %s: want WIDTHxHEIGHT, e.g. 390x844" size)
             | None -> if Cli.isSet desktopOption args then 1280, 800 else 390, 844
         let desktop = not (width < 768 || height <= 500)
-        fs?rmSync (out, createObj [ "recursive" ==> true; "force" ==> true ]) |> ignore
-        fs?mkdirSync ((if still then out else joinTwo out "frames"), createObj [ "recursive" ==> true ]) |> ignore
+        Fable.NodeExtras.Files.removeTree out
+        Fable.NodeExtras.Files.mkdirp (if still then out else joinTwo out "frames")
 
         // The page: one named outright, an existing session, or a session made the way the
         // form makes one — a POST, answered with the `/open` page that launches it and hands
@@ -546,50 +548,49 @@ let private run () =
                 [ "--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4" ]
             else []
         let! child, target = launch (chromiumPath ()) width height pointer
-        let! cdp = connect target
-        let! _ = cdp.Send "Page.enable" (createObj [])
-        let! _ = cdp.Send "Runtime.enable" (createObj [])
-        let! _ = cdp.Send "Network.enable" (createObj [])
+        let! cdp = Cdp.connect target
+        do! Cdp.Page.enable cdp
+        do! Cdp.Runtime.enable cdp
+        do! Cdp.Network.enable cdp
 
         if still then
             // A TRUE device viewport. Headless Chromium clamps its window to ~500px wide, so a
             // `--window-size` phone is a 500px layout cropped to 390 — overflow hides and wrapping
             // never happens. The metrics override is what a phone-width picture means.
-            let! _ = cdp.Send "Emulation.setDeviceMetricsOverride" (createObj [ "width" ==> width; "height" ==> height; "deviceScaleFactor" ==> 2; "mobile" ==> not desktop ])
+            do! Cdp.Emulation.setDeviceMetricsOverride cdp width height 2.0 (not desktop)
             // A headless page is never the focused window, so `:focus` matches nothing and a
             // "focused" picture is the rest state. This makes the page believe it is frontmost.
-            let! _ = cdp.Send "Emulation.setFocusEmulationEnabled" (createObj [ "enabled" ==> true ])
+            do! Cdp.Emulation.setFocusEmulationEnabled cdp true
             // And a phone is a finger: no hover, a coarse pointer. Without this a phone-width
             // picture on a desktop host keeps the host's mouse (`hover: true` on a Mac), and a
             // hover-only affordance photographs as present where a phone never shows it.
             if not desktop then
-                let! _ = cdp.Send "Emulation.setTouchEmulationEnabled" (createObj [ "enabled" ==> true; "maxTouchPoints" ==> 5 ])
-                ()
-            let! _ = cdp.Send "Page.navigate" (createObj [ "url" ==> openUrl ])
+                do! Cdp.Emulation.setTouchEmulationEnabled cdp true 5
+            do! Cdp.Page.navigate cdp openUrl
             let mutable landed = ""
             let startedAt = clock.Now ()
             while landed = "" && (clock.Now () - startedAt).TotalSeconds < 60.0 do
                 do! delay 250
-                let! href = evaluate cdp landedProbe
-                landed <- match unbox href with | null -> "" | s -> s
+                let! href = landedAt cdp landedProbe
+                landed <- href
             // Settled, not merely landed: a client connects and renders after its document
             // loads, and the first frame of a transition is not where it arrives.
             do! delay 1500
             // The ground truth beside the picture: trust it only when `vw` is the width asked
             // for, and `overflowX` is a page a phone cannot scroll back from.
-            let! truth = evaluate cdp "JSON.stringify({ vw: innerWidth, docW: document.documentElement.scrollWidth, overflowX: document.documentElement.scrollWidth > innerWidth, hover: matchMedia('(hover: hover)').matches })"
-            say (unbox truth)
+            let! truth = evaluateText cdp "JSON.stringify({ vw: innerWidth, docW: document.documentElement.scrollWidth, overflowX: document.documentElement.scrollWidth > innerWidth, hover: matchMedia('(hover: hover)').matches })"
+            say (answered "the viewport's measurements" truth)
             match Cli.valueOf measureOption args with
             | Some expression ->
-                let! measured = evaluate cdp expression
-                say (JS.JSON.stringify measured)
+                let! measured = evaluateJson cdp expression
+                say (answered "--measure" measured)
             | None -> ()
-            let! shot = cdp.Send "Page.captureScreenshot" (createObj [ "format" ==> "png" ])
+            let! shot = Cdp.Page.captureScreenshot cdp
             let picture = joinTwo out "still.png"
-            writeFile picture (bytesOfBase64 (unbox shot?data))
+            writeFile picture (bytesOfBase64 shot)
             say (sprintf "wrote %s (%dx%d)" picture width height)
             cdp.Close ()
-            child?kill () |> ignore
+            child.kill ()
             do! stopCreated ()
             // A page that never landed is a failed picture of SOMETHING, kept because what the
             // tab showed is usually why — and said with a code, so a caller cannot read it as a
@@ -600,12 +601,11 @@ let private run () =
             exitWith 0
 
         if not desktop then
-            let! _ = cdp.Send "Emulation.setDeviceMetricsOverride" (createObj [ "width" ==> width; "height" ==> height; "deviceScaleFactor" ==> 2; "mobile" ==> true ])
-            ()
-        let! installed = cdp.Send "Page.addScriptToEvaluateOnNewDocument" (createObj [ "source" ==> instrument ])
-        let! _ = cdp.Send "Page.startScreencast" (createObj [ "format" ==> "png"; "everyNthFrame" ==> 1; "maxWidth" ==> width * 2; "maxHeight" ==> height * 2 ])
+            do! Cdp.Emulation.setDeviceMetricsOverride cdp width height 2.0 true
+        let! installed = Cdp.Page.addScriptToEvaluateOnNewDocument cdp instrument
+        do! Cdp.Page.startScreencast cdp 1 (width * 2) (height * 2)
         let navigatedAt = clock.Now ()
-        let! _ = cdp.Send "Page.navigate" (createObj [ "url" ==> openUrl ])
+        do! Cdp.Page.navigate cdp openUrl
         let mutable landed = false
         let mutable since = clock.Now ()
         while (clock.Now () - since).TotalMilliseconds < float (if landed then seconds else 60) * 1000.0 do
@@ -613,29 +613,32 @@ let private run () =
             // Landed = the document is the session shell, wherever the deployment mounts it
             // (a path under the Manager, a port of its own): the shell is the one document
             // with the client's mount in it, and the Manager's opening page has none.
-            let! href = evaluate cdp (sprintf "document.getElementById('%s') ? location.href : ''" Yession.App.Dom.appId)
-            let href : string = match unbox href with | null -> "" | s -> s
+            let! href = landedAt cdp (sprintf "document.getElementById('%s') ? location.href : ''" Yession.App.Dom.appId)
             if not landed && href <> "" then
                 landed <- true
                 since <- clock.Now ()
                 say (sprintf "landed %s after %.0f ms" href (clock.Now () - navigatedAt).TotalMilliseconds)
         if not landed then say "the shell never landed; the frames are of whatever the tab showed"
-        let! _ = cdp.Send "Page.stopScreencast" (createObj [])
-        let! origin = evaluate cdp "__origin"
-        let origin : float = unbox origin
-        let! logJson = evaluate cdp "JSON.stringify(__log)"
-        let log : obj array = JS.JSON.parse (unbox logJson) |> unbox
-        let! rafsJson = evaluate cdp "JSON.stringify(__frames)"
-        let! sessionUrl = evaluate cdp "location.href"
-        let sessionUrl : string = unbox sessionUrl
+        do! Cdp.Page.stopScreencast cdp
+        let! originAnswer = evaluateNumber cdp "__origin"
+        let origin = answered "__origin, the instrument's clock" originAnswer
+        let! logAnswer = evaluateText cdp "JSON.stringify(__log)"
+        let log : obj array = JS.JSON.parse (answered "__log, the instrument's renders" logAnswer) |> unbox
+        let! rafsAnswer = evaluateText cdp "JSON.stringify(__frames)"
+        let rafsJson = answered "__frames, the instrument's frames" rafsAnswer
+        let! sessionUrlAnswer = evaluateText cdp "location.href"
+        let sessionUrl = answered "location.href" sessionUrlAnswer
 
         // The browser's side: frames, on the final document's clock, deduplicated by picture.
         let frames =
             cdp.Events
-            |> Seq.filter (fun (name, _) -> name = "Page.screencastFrame")
-            |> Seq.mapi (fun i (_, p) ->
-                let data : string = p?data |> unbox
-                let epoch : float = p?metadata?timestamp |> unbox
+            |> Seq.choose (function
+                | Cdp.Event.ScreencastFrame (data, Some epoch) -> Some (data, epoch)
+                // A frame that says nothing of when it was painted cannot go on the page's clock,
+                // and every number the report derives from it would be a plausible wrong one.
+                | Cdp.Event.ScreencastFrame (_, None) -> failwith "a screencast frame came without a timestamp"
+                | _ -> None)
+            |> Seq.mapi (fun i (data, epoch) ->
                 { Index = i; EpochMs = epoch * 1000.0
                   Hash = (crypto?createHash "sha1")?update(data)?digest("hex") |> unbox
                   Data = data; T = int (System.Math.Round (epoch * 1000.0 - origin)); Renders = []; Changed = -1; Box = None })
@@ -643,16 +646,16 @@ let private run () =
         let distinct = frames |> List.fold (fun acc f -> match acc with | prev :: _ when prev.Hash = f.Hash -> acc | _ -> f :: acc) [] |> List.rev
         let requests =
             cdp.Events
-            |> Seq.choose (fun (name, p) ->
-                let document (t: obj) = (unbox<string> t) = "Document"
+            |> Seq.choose (fun event ->
+                let document (resourceType: string option) = (resourceType = Some "Document")
                 let named (url: string) = url.Contains "/me" || url.Contains "/login"
-                match name with
-                | "Network.requestWillBeSent" when document p?``type`` || named (unbox p?request?url) ->
-                    let via = match p?redirectResponse |> unbox<obj option> with | Some r -> sprintf " (after %d)" (unbox<int> r?status) | None -> ""
-                    Some (sprintf "request  %s%s" (unbox<string> p?request?url) via)
-                | "Network.responseReceived" when document p?``type`` || named (unbox p?response?url) ->
-                    Some (sprintf "response %s %d" (unbox<string> p?response?url) (unbox<int> p?response?status))
-                | "Page.frameNavigated" when isNull (p?frame?parentId) -> Some (sprintf "navigated %s" (unbox<string> p?frame?url))
+                match event with
+                | Cdp.Event.RequestSent (resourceType, url, redirectedWith) when document resourceType || named url ->
+                    let via = match redirectedWith with | Some status -> sprintf " (after %d)" status | None -> ""
+                    Some (sprintf "request  %s%s" url via)
+                | Cdp.Event.ResponseReceived (resourceType, url, status) when document resourceType || named url ->
+                    Some (sprintf "response %s %d" url status)
+                | Cdp.Event.FrameNavigated (url, true) -> Some (sprintf "navigated %s" url)
                 | _ -> None)
             |> Seq.toList
 
@@ -681,9 +684,9 @@ let private run () =
         // The pixel diff, and the cut: shown when the picture changed by more than the stamp
         // does, or when a render landed in it. The instrument comes out first, or the analyzer
         // and the sheets would wear a stamp of their own.
-        let! _ = cdp.Send "Page.removeScriptToEvaluateOnNewDocument" (createObj [ "identifier" ==> installed?identifier ])
+        do! Cdp.Page.removeScriptToEvaluateOnNewDocument cdp installed
         writeFile (joinTwo out "analyze.html") (box analyzer)
-        let! _ = cdp.Send "Page.navigate" (createObj [ "url" ==> sprintf "file://%s" (joinTwo out "analyze.html") ])
+        do! Cdp.Page.navigate cdp (sprintf "file://%s" (joinTwo out "analyze.html"))
         do! delay 500
         // In batches: one `Runtime.evaluate` carrying every frame of a long run as data URLs
         // is tens of megabytes of expression, and the browser never answers it.
@@ -691,8 +694,8 @@ let private run () =
         let diffs = ResizeArray<obj> ()
         for batch in batches do
             let urls = batch |> List.map (fun f -> "data:image/png;base64," + f.Data) |> List.toArray
-            let! diffsJson = evaluate cdp (sprintf "__analyze(%s)" (JS.JSON.stringify urls))
-            let these : obj array = JS.JSON.parse (unbox diffsJson) |> unbox
+            let! diffsAnswer = evaluateText cdp (sprintf "__analyze(%s)" (JS.JSON.stringify urls))
+            let these : obj array = JS.JSON.parse (answered "__analyze, the pixel diff" diffsAnswer) |> unbox
             diffs.AddRange these
         let analyzed =
             attributed
@@ -734,21 +737,31 @@ let private run () =
                   (if List.isEmpty trailing then "" else sprintf "<h2>Renders after the last frame</h2>%s" (trailing |> List.map renderLines |> String.concat ""))
                   sprintf "<h2>All renders</h2>%s" allRenders ]
         writeFile (joinTwo out "report.html") (box report)
+        // Anonymous records, which Fable writes as object literals: the file's keys are these
+        // names, spelled where the compiler can see them. A key left out of `after` or `box` is
+        // an `undefined`, which `JSON.stringify` omits.
         let logOut =
-            createObj
-                [ "sessionUrl" ==> sessionUrl; "origin" ==> origin; "requests" ==> List.toArray requests
-                  "renders" ==> (rendersWithChanges |> List.map (fun (r, lines) -> createObj [ "n" ==> renderNo r; "t" ==> renderTime r; "after" ==> r?after; "changes" ==> List.toArray lines ]) |> List.toArray)
-                  "html" ==> (log |> Array.filter (fun e -> not (isNull e?attr)))
-                  "panes" ==> (log |> Array.filter (fun e -> not (isNull e?pane)))
-                  "rafs" ==> JS.JSON.parse (unbox rafsJson)
-                  "frames" ==> (analyzed |> List.map (fun f -> createObj [ "i" ==> f.Index; "t" ==> f.T; "changed" ==> f.Changed; "box" ==> f.Box; "renders" ==> (f.Renders |> List.map (fun (r, _) -> renderNo r) |> List.toArray) ]) |> List.toArray) ]
+            {| sessionUrl = sessionUrl
+               origin = origin
+               requests = List.toArray requests
+               renders =
+                   rendersWithChanges
+                   |> List.map (fun (r, lines) -> {| n = renderNo r; t = renderTime r; after = r?after; changes = List.toArray lines |})
+                   |> List.toArray
+               html = log |> Array.filter (fun e -> not (isNull e?attr))
+               panes = log |> Array.filter (fun e -> not (isNull e?pane))
+               rafs = JS.JSON.parse rafsJson
+               frames =
+                   analyzed
+                   |> List.map (fun f -> {| i = f.Index; t = f.T; changed = f.Changed; box = f.Box; renders = f.Renders |> List.map (fun (r, _) -> renderNo r) |> List.toArray |})
+                   |> List.toArray |}
         writeFile (joinTwo out "log.json") (box (pretty logOut))
 
         // Contact sheets, by the same Chrome: eight frames a page, at a size the Read tool reads.
         let cols, rows = 4, 2
         let cw, ch = width / 2 + 16, height / 2 + 170
-        let! _ = cdp.Send "Emulation.clearDeviceMetricsOverride" (createObj [])
-        let! _ = cdp.Send "Emulation.setDeviceMetricsOverride" (createObj [ "width" ==> cols * cw + 24; "height" ==> rows * ch + 24; "deviceScaleFactor" ==> 1; "mobile" ==> false ])
+        do! Cdp.Emulation.clearDeviceMetricsOverride cdp
+        do! Cdp.Emulation.setDeviceMetricsOverride cdp (cols * cw + 24) (rows * ch + 24) 1.0 false
         let pages = shown |> List.chunkBySize (cols * rows)
         for (p, page) in List.indexed pages do
             let html =
@@ -756,10 +769,10 @@ let private run () =
                     style cols cw ch (page |> List.map card |> String.concat "\n")
             let sheet = joinTwo out (sprintf "sheet-%d.html" p)
             writeFile sheet (box html)
-            let! _ = cdp.Send "Page.navigate" (createObj [ "url" ==> sprintf "file://%s" sheet ])
+            do! Cdp.Page.navigate cdp (sprintf "file://%s" sheet)
             do! delay 800
-            let! shot = cdp.Send "Page.captureScreenshot" (createObj [ "format" ==> "png" ])
-            writeFile (joinTwo out (sprintf "sheet-%d.png" p)) (bytesOfBase64 (unbox shot?data))
+            let! shot = Cdp.Page.captureScreenshot cdp
+            writeFile (joinTwo out (sprintf "sheet-%d.png" p)) (bytesOfBase64 shot)
 
         say (sprintf "frames %d distinct %d shown %d renders %d; %s" (List.length frames) (List.length distinct) (List.length shown) (List.length renders) (joinTwo out "report.html"))
         for r in requests do say r
@@ -767,7 +780,7 @@ let private run () =
             if not (List.isEmpty lines) then say (sprintf "#%d t=%d %s" (renderNo r) (renderTime r) (String.concat " ; " lines))
 
         cdp.Close ()
-        child?kill () |> ignore
+        child.kill ()
         do! stopCreated ()
         exitWith 0
     }

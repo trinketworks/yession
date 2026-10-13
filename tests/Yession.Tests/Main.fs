@@ -102,6 +102,8 @@ let all =
         Tag.needs "Node platform bindings" [] (fun () -> NodeExtras.tests)
         Tag.needs "Node platform bindings, spawning" [ Tag.Ports ] (fun () -> NodeExtras.portsTests)
         Tag.needs "Node platform bindings, WebSocket" [ Tag.Ports ] (fun () -> NodeExtras.socketTests)
+        // A session's protocol needs no browser: the frames a browser would send are fed to it.
+        Tag.needs "Node platform bindings, the Chrome DevTools Protocol" [] (fun () -> NodeExtras.cdpTests)
         Tag.needs "Node platform bindings, aborting and relaying" [] (fun () -> NodeExtras.eventTests)
         Tag.needs "Node platform bindings, a given environment" [ Tag.Ports ] (fun () -> NodeExtras.seamTests)
         Tag.needs "Editor" [] (fun () -> Editor.tests)

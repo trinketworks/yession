@@ -18,7 +18,7 @@
        whatever the deployment serves.
 
        The rest is the platform it drives Chromium over: `Fable.Fetch` for the Manager's
-       routes, `Fable.NodeExtras` for the CDP socket and the process environment, and
+       routes, `Fable.NodeExtras` for the CDP session and the process environment, and
        `Fable.BrowserExtras` for reading the path back off the address the Manager answered
        with — `URL` being a global on Node as much as in a browser. -->
   <PropertyGroup>
