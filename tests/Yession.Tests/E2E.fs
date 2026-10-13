@@ -14,6 +14,8 @@ open Yession.Domain
 open Yession.Domain.Link
 open Yession.Session
 open Yession.Host
+open Yession.Codecs
+open Yession.App.Codecs
 open Yession.Tests.Support
 
 let private expect =
@@ -46,6 +48,64 @@ let private signalUrl () =
     match host with
     | Some h -> sprintf "http://127.0.0.1:%d/signal" h.Port
     | None -> failwith "host not started"
+
+/// A client's half of a handshake, by hand: a peer connection with a data channel, and its
+/// complete offer SDP. What the client does with the answer is the case's to decide, which is the
+/// point — `WebRtc.connect` always applies it.
+let private offering (name: string) : Async<Fable.NodeDataChannel.PeerConnection * Fable.NodeDataChannel.DataChannel * string> =
+    async {
+        let pc = Interop.createPeerConnection name
+        let mutable gathered = false
+        let mutable waiter : (unit -> unit) option = None
+        pc.onGatheringStateChange (fun state ->
+            if state = "complete" then
+                gathered <- true
+                waiter |> Option.iter (fun w -> w ()))
+        let dc = pc.createDataChannel "session"
+        do! Async.FromContinuations (fun (cont, _, _) -> if gathered then cont () else waiter <- Some cont)
+        // The SDP itself, as `/signal` hands it on once it has read the posted message.
+        return pc, dc, (pc.localDescription ()).sdp
+    }
+
+let private answeringTests =
+    testList "The session's answered connections" [
+        // A browser that gives up on a handshake closes its end and tries again with a new
+        // connection. The session's end of the old one used to be held until the session
+        // stopped, one per abandoned attempt.
+        testCaseAsync "an answered connection that never opens a channel is closed" <|
+            async {
+                let peers = WebRtc.Answering.create ()
+                let bounds = { WebRtc.Answering.shipped with Open = TimeSpan.FromMilliseconds 100.0 }
+                let! client, _, offer = offering "e2e-abandoning-client"
+                let! answer = WebRtc.Answering.answer bounds peers (fun _ -> failwith "no channel was meant to open") offer
+                Expect.isOk answer "the session answered"
+                // The answer is never applied: this is the browser that gave up.
+                do! waitUntil "the abandoned connection to be closed" (fun () -> WebRtc.Answering.count peers = 0)
+                do! WebRtc.closePeerConnection client
+            }
+
+        testCaseAsync "an answered connection is closed when its channel ends" <|
+            async {
+                let peers = WebRtc.Answering.create ()
+                let opened, isOpen = latch ()
+                let channels = ResizeArray<FrameChannel<string>> ()
+                let! client, dc, offer = offering "e2e-leaving-client"
+                dc.onOpen (fun () -> opened ())
+                match! WebRtc.Answering.answer WebRtc.Answering.shipped peers channels.Add offer with
+                | Ok answer ->
+                    match Sdp.parse answer with
+                    | Some { Kind = SdpKind.Answer; Sdp = sdp } -> client.setRemoteDescription (sdp, SdpKind.wire SdpKind.Answer)
+                    | other -> failwithf "the session answered with %A" other
+                | Error why -> failwithf "the session did not answer: %s" why
+                do! isOpen
+                do! waitUntil "the session to have the channel" (fun () -> channels.Count = 1)
+                // The client leaves; whoever pumps the session's end learns it as the end.
+                do! WebRtc.closePeerConnection client
+                let! last = channels.[0].Receive ()
+                Expect.isNone last "the channel ended"
+                do! waitUntil "the session's end of it to be closed" (fun () -> WebRtc.Answering.count peers = 0)
+            }
+    ]
 
 let tests =
     testList "WebRTC E2E" [
@@ -110,4 +170,6 @@ let tests =
                 | Some h -> do! h.Stop ()
                 | None -> ()
             }
+
+        answeringTests
     ]

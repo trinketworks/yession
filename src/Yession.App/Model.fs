@@ -26,7 +26,13 @@ type ConnectionState =
     /// be: a true statement that helps nobody. A session that could not be reached is never
     /// this: it is `Retrying`, because it is being tried again.
     | Disconnected of reason: string option
-    | Connecting
+    /// About to have, or opening, a transport. `slow` is whether the attempt has run long
+    /// enough to be worth SAYING (`ClientModel.connectingQuietMs`): every client starts here,
+    /// and a connect that lands inside the window says nothing, so a healthy load never
+    /// flashes a status. One that does not land is reported, on every width, rather than
+    /// leaving a person looking at a page that might be working or might be stuck. Only the
+    /// timer `ClientModel.timers` declares sets it, and only while connecting.
+    | Connecting of slow: bool
     | Connected
     | Reconnecting
     /// Not connected, and still trying: the last attempt to reach the session (`/me`, or
@@ -1799,6 +1805,10 @@ type ClientMsg =
     /// it is the ONLY thing that lights the "catching up" status — see
     /// `EventConsumerState.CatchUpIsSlow` for why the truth alone is too noisy to show.
     | CatchUpSlowMsg of bool
+    /// The attempt to connect has run for `ClientModel.connectingQuietMs` — fired by the timer
+    /// `ClientModel.timers` declares while the model is `Connecting false`, never by anything
+    /// else. It is what makes the connecting status visible (`ConnectionState.Connecting`).
+    | ConnectingSlowMsg
     /// The agent's writing sat still at this stamp for `ClientModel.writingQuietMs` — fired
     /// by the timer `ClientModel.timers` declares for it, never by anything else.
     | AgentQuietMsg of WritingStamp
@@ -2399,13 +2409,13 @@ module ClientModel =
     /// The model for a freshly loaded client: connecting, nothing consumed, idle. The
     /// optimistic start is deliberate and is what `connectionReport` already assumes ("Connecting
     /// is the state every client starts in"): a client that has just loaded IS about to connect,
-    /// so the first paint says `Connecting` — which the report keeps silent — rather than wearing
-    /// the "not connected" strip for the ~75ms until the transport is asked and then reflowing the
-    /// panes under it up by the strip's height. A genuine failure replaces this with
-    /// `Disconnected reason` and earns the strip.
+    /// so the first paint says `Connecting` — which the report keeps silent until it has lasted
+    /// `connectingQuietMs` — rather than wearing the "not connected" strip for the ~75ms until
+    /// the transport is asked and then reflowing the panes under it up by the strip's height. A
+    /// genuine failure replaces this with `Disconnected reason` and earns the strip.
     let init (peer: PeerState) : ClientModel =
         { Peer = peer
-          Connection = Connecting
+          Connection = Connecting false
           Session = None
           Manager = None
           EphemeralStorage = false
@@ -4064,6 +4074,13 @@ module ClientModel =
     /// through in silence.
     let catchUpQuietMs = 500
 
+    /// How long an attempt to connect must run before it is worth SAYING
+    /// (`ConnectionState.Connecting`). Long enough that a session on the same machine or the
+    /// same network, which connects in a few hundred milliseconds, never lights it; short
+    /// enough that a cold session, or one whose answer is slow, is reported well before a
+    /// person decides the page is dead.
+    let connectingQuietMs = 1500
+
     /// How long a copy says so for. Long enough to be read as an answer to the press, short
     /// enough that the code it stands in front of comes back before anybody needs it again.
     let copiedShownMs = 1500
@@ -4120,6 +4137,14 @@ module ClientModel =
     /// growing for `writingQuietMs` ever fires. None once it has fired for this stamp — the
     /// fact is recorded, and a wait for it again would be asking a settled question.
     let timers (model: ClientModel) : Timer<ClientMsg> list =
+        // One key for the whole episode. A `ConnectingMsg` said again inside it (the channel
+        // coming up after the probe) leaves the state, and so the wait, alone; a failure ends
+        // the episode (`Retrying`), and the next attempt starts a fresh one.
+        let connecting =
+            match model.Connection with
+            | Connecting false ->
+                [ { Key = [ "connecting-slow" ]; After = connectingQuietMs; Fire = ConnectingSlowMsg } ]
+            | Connecting true | Disconnected _ | Connected | Reconnecting | Retrying _ -> []
         let catchUp =
             if model.EventConsumer.IsCatchingUp && not model.EventConsumer.CatchUpIsSlow then
                 [ { Key = [ "catch-up-slow" ]; After = catchUpQuietMs; Fire = CatchUpSlowMsg true } ]
@@ -4161,7 +4186,7 @@ module ClientModel =
                           After = int Pending.deadlineMillis
                           Fire = PendingWaitedMsg (since + Pending.deadlineMillis) }
                 | Pending.Ready | Pending.Sending | Pending.Refused _ -> None)
-        catchUp @ copied @ queueDeleteArmed @ killArmed @ pending @ quiet @ GitHubPoll.timer model.GitHub
+        connecting @ catchUp @ copied @ queueDeleteArmed @ killArmed @ pending @ quiet @ GitHubPoll.timer model.GitHub
 
     /// Fold a message into the model — the state half of `update`, its only caller.
     /// Piped through `reconcileLaunch` (see its doc) so the launch surface anchors here,
@@ -4214,7 +4239,17 @@ module ClientModel =
         heard (holdList (notice (reconcileLaunch (landsWhenHeard (openOfItself model (settle (recall (
         match msg with
         | ConnectingMsg ->
-            { model with Connection = Connecting }
+            (match model.Connection with
+             // Already connecting: said again as the channel comes up, and the same attempt.
+             // Restarting it would take a status that is showing off the screen and put it
+             // back a moment later.
+             | Connecting _ -> model
+             | Disconnected _ | Connected | Reconnecting | Retrying _ -> { model with Connection = Connecting false })
+        | ConnectingSlowMsg ->
+            (match model.Connection with
+             | Connecting false -> { model with Connection = Connecting true }
+             // Late: the attempt it timed has already ended, and slow describes only a running one.
+             | Connecting true | Disconnected _ | Connected | Reconnecting | Retrying _ -> model)
         | ConnectedMsg accepted ->
             { model with
                 Connection = Connected

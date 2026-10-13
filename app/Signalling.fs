@@ -152,10 +152,11 @@ let start
                 |> List.map (fun (path, _) -> inWorker (Asset (AssetBuild.digest assets.Build, path))) }
         Map.tryFind (AssetFile.path AssetFile.``service-worker``) assets.Files
         |> Option.map (fun program -> WorkerConfig.script config (program.toString BufferEncoding.Utf8))
-    // Every accepted peer connection, so a stopping Host can drain them. Never pruned
-    // mid-life (closePeerConnection resolves immediately for already-closed ones, and a
-    // session hosts a bounded handful of peers).
-    let connections = ResizeArray<PeerConnection> ()
+    // Every answered peer connection, so a stopping Host can drain them. Each one is also
+    // closed by itself: when its channel ends, or when none has opened in time
+    // (`Answering.shipped`), so an attempt a browser gave up on is not held for the life of
+    // the session.
+    let connections = Answering.create ()
     let routeOf (req: IncomingMessage) = SessionRoute.parseUnder mount req.``method`` (pathnameOf req.url)
     let authorized (req: IncomingMessage) (url: string) (validateToken: string -> bool) =
         (match auth with
@@ -355,14 +356,17 @@ let start
                 | None -> badRequest "no session description" res
                 | Some { Kind = SdpKind.Answer } -> badRequest "an answer is not an offer" res
                 | Some offer ->
-                    let pc = createPeerConnection "yession-process"
-                    connections.Add pc
-                    pc.onDataChannel (fun dc -> onConnection (frameChannel dc))
                     Async.StartImmediate(
                         async {
-                            let! answer = answerOffer pc offer.Sdp
-                            res.writeHead (200, [ ResponseHeader.ContentType "application/json" ])
-                            res.``end`` answer
+                            match! Answering.answer Answering.shipped connections onConnection offer.Sdp with
+                            | Ok answer ->
+                                res.writeHead (200, [ ResponseHeader.ContentType "application/json" ])
+                                res.``end`` answer
+                            // Said, not hung: the browser counts a refusal as an attempt that
+                            // failed, and tries again on its schedule.
+                            | Error why ->
+                                res.writeHead (503, [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ])
+                                res.``end`` why
                         }))
         | Some Shell ->
             // The document that NAMES the fingerprinted assets, so it is the one thing that
@@ -544,11 +548,6 @@ let start
         | None -> handleWithExtraRoutes ()
 
     let server = createServer handler
-    let closeConnections () : Async<unit> =
-        async {
-            for pc in List.ofSeq connections do
-                do! WebRtc.closePeerConnection pc
-            connections.Clear ()
-        }
+    let closeConnections () : Async<unit> = Answering.closeAll connections
     Async.FromContinuations(fun (cont, _, _) ->
         server.listen (port, "127.0.0.1", fun () -> cont (server, closeConnections)) |> ignore)

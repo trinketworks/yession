@@ -85,7 +85,7 @@ module View =
     let private connectionLabel =
         function
         | Disconnected _ -> Dom.Text.disconnected
-        | Connecting -> Dom.Text.connecting
+        | Connecting _ -> Dom.Text.connecting
         | Connected -> Dom.Text.connected
         | Reconnecting -> Dom.Text.reconnecting
         | Retrying _ -> Dom.Text.retrying
@@ -274,6 +274,11 @@ module View =
         | Disconnected reason, _ ->
             Some (Dom.Text.degradedOffline, stopped "not connected", promise :: (Option.toList reason @ why))
         | Reconnecting, _ -> Some (Dom.Text.degradedReconnecting, running "reconnecting", promise :: why)
+        // A connect that has run past `ClientModel.connectingQuietMs`. Every client starts
+        // connecting, and one that lands inside the window says nothing, so this is never a
+        // flash on a healthy load — but one that does not land is news, and a page that said
+        // nothing through it looked exactly like a page that had loaded and had nothing in it.
+        | Connecting true, _ -> Some (Dom.Text.degradedConnecting, running Dom.Text.connectingStatus, promise :: why)
         | Retrying (reason, failures), _ ->
             Some (
                 Dom.Text.degradedRetrying,
@@ -282,9 +287,10 @@ module View =
         | _, FeedRetrying (attempt, reason) ->
             Some (Dom.Text.feedRetrying, running "history retrying", promise :: sprintf "%s · attempt %d" reason attempt :: why)
         | _, FeedStalled reason -> Some (Dom.Text.feedPaused, stopped "history paused", promise :: reason :: why)
-        // Connecting is the state every client starts in, so it is not a degradation and says
-        // nothing — a strip that flashed on every load would be chrome, not news.
-        | Connecting, FeedLive
+        // Connecting is the state every client starts in, so until it has lasted it is not a
+        // degradation and says nothing — a strip that flashed on every load would be chrome,
+        // not news.
+        | Connecting false, FeedLive
         | Connected, FeedLive -> None
 
     /// Whether a catch-up is worth showing: PROGRESS, not health, so it is the one thing that

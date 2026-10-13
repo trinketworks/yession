@@ -724,11 +724,17 @@ module Dom =
         let degradedOffline = "offline"
         let degradedReconnecting = "reconnecting"
         let degradedRetrying = "session-retrying"
+        let degradedConnecting = "session-connecting"
+        /// What a client says while its first attempt to reach the session is still running,
+        /// once that has lasted long enough to say (`ClientModel.connectingQuietMs`).
+        let connectingStatus = "connecting"
         /// What a client that cannot reach its session says while it keeps trying: the work
         /// going on, and how far it has got, rather than the fault. The count is the attempt
         /// under way or next, so it moves every time one fails — which is what tells a person
-        /// it is being worked on and not stuck.
-        let retryingStatus (failures: int) = sprintf "reconnecting · attempt %d" (failures + 1)
+        /// it is being worked on and not stuck. "Retrying", not "reconnecting": a page that has
+        /// never connected has nothing to reconnect to, and a session that dropped is
+        /// `Reconnecting` before it is this.
+        let retryingStatus (failures: int) = sprintf "retrying · attempt %d" (failures + 1)
         /// Why it is still trying, behind the disclosure: the last attempt's fault and how many
         /// have failed, in the shape the history feed's retries already use.
         let retryingWhy (reason: string) (failures: int) = sprintf "%s · attempt %d" reason failures
