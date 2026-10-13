@@ -41,11 +41,10 @@ like a finding. `tasks.fsx` (`lint`, `analyze`) holds the reasoning.
 
 ## A YES000 that will not reproduce
 
-`YES000` reports the first compile error in a file. It can appear in CI alone. It is a phantom type
-mismatch, anchored at a column past the end of its line. The file compiles cleanly under `build`,
-`fsharp-analyzers`, Fable and a from-scratch `lint` on this box.
+`YES000` reports the first compile error in a file. A phantom one appears in CI alone, anchored
+past the end of its line, in a file that compiles cleanly everywhere else. `lint` recognises it and
+prints the known fix (`phantomHint` in `tasks.fsx`).
 
-Every case so far was a name shadowed across an option boundary. Example: `secret : string option`
-rebound as `secret : string` in the branch that resolved it. Renaming the inner binding to
-`launchSecret` cleared CI. The cause is not yet known. Until it is, do not give a binding two types
-under one name. Rename the inner binding.
+Every case so far was a name shadowed across an option boundary: `secret : string option` rebound
+as `secret : string`. Renaming the inner binding to `launchSecret` cleared CI. The cause is not
+known, so do not give a binding two types under one name.
