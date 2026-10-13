@@ -112,6 +112,19 @@ let rec private textsUnder (node: Node) : Node list =
         let children = node.childNodes
         [ for i in 0 .. children.length - 1 do yield! textsUnder children.[i] ]
 
+let private textAt (selector: string, words: string) : Probes.Box option =
+    first selector
+    |> Option.bind (fun element ->
+        textsUnder element
+        |> List.tryPick (fun text ->
+            let at = text.textContent.IndexOf words
+            if at >= 0 then Some (text, at) else None))
+    |> Option.map (fun (text, at) ->
+        let r = TextRange.boxOf text at (at + words.Length)
+        Probes.Box.create r.top r.bottom r.left r.right)
+
+let private selection (_: int) : string = Selection.text ()
+
 let private newest (selector: string, mark: string) : Probes.Newest option =
     first selector
     |> Option.bind (fun surface ->
@@ -231,7 +244,9 @@ answering Probes.park park
 answering Probes.scrolls scrolls
 awaiting Probes.heldAfterFold heldAfterFold
 answering Probes.window window
+answering Probes.textAt textAt
+answering Probes.selection selection
 
 for measure in Probes.Measure.all do
-    Measures.verdict measure |> Option.iter (answering (Probes.verdict measure))
-    Measures.reading measure |> Option.iter (answering (Probes.reading measure))
+    Measures.verdict measure |> Option.iter (awaiting (Probes.verdict measure))
+    Measures.reading measure |> Option.iter (awaiting (Probes.reading measure))

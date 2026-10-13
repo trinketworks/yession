@@ -56,7 +56,7 @@ open Yession.App.Codecs
 // render-budget case in `Browser.fs`, and the frames tool's recorder — read it by that
 // name in the page. The harness reads it through `renders` below. Absent until the first
 // render of this document.
-let private rendersPublished : PageGlobal<int> = PageGlobal.named "__yessionRenders"
+let private rendersPublished : PageGlobal<int> = Probes.renders
 
 let private countRender () : unit =
     PageGlobal.set

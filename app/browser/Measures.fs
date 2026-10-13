@@ -5,6 +5,7 @@ module Yession.Browser.Measures
 // the compiler reads, published by `Probes.fs` under the name its case asks for. Bundled by the
 // test build alone, with the probes; nothing in the product imports it.
 
+open Fable.Core
 open Browser.Types
 open Fable.BrowserExtras
 open Yession.App
@@ -296,8 +297,78 @@ let private itemsClearOfCard () : string list =
         if paintedAt item (box.left + box.width / 2.0) (box.top + box.height / 2.0) then None
         else Some (sprintf "%s is not what a press in its middle lands on" (item.getAttribute "data-message-id")))
 
-/// What is wrong, by a verdict measure's account, asked with its parameter.
-let verdict (measure: Probes.Measure) : (int -> string list) option =
+let private hideFixturesAboveShell () : string list =
+    for id in [ "host"; "replay" ] do
+        document.getElementById id |> Option.ofObj |> Option.iter (fun fixture -> fixture.setAttribute ("style", "display:none"))
+    []
+
+let private focusBeforePane () : string list =
+    match first Root.Document "#shell [data-content-panel]" with
+    | None -> [ "there is no pane" ]
+    | Some pane ->
+        let before =
+            all Root.Document "#shell button"
+            |> List.filter (fun b ->
+                let button = b :?> HTMLButtonElement
+                button.tabIndex >= 0.0 && not button.disabled
+                // DOCUMENT_POSITION_PRECEDING: the button comes before the pane.
+                && (int (pane.compareDocumentPosition b) &&& 2) <> 0)
+        PageGlobal.set Probes.focusStops [||]
+        document.addEventListener ("focusin", fun e ->
+            let target = e.target :?> Element
+            let stop = if (closest target "[data-content-panel]").IsSome then "pane" else "elsewhere"
+            let stops = PageGlobal.tryGet Probes.focusStops |> Option.defaultValue [||]
+            PageGlobal.set Probes.focusStops (Array.append stops [| stop |]))
+        let landed =
+            before
+            |> List.rev
+            |> List.exists (fun b ->
+                (b :?> HTMLElement).focus ()
+                obj.ReferenceEquals (document.activeElement, b))
+        if landed then [] else [ "no control before the pane would take focus" ]
+
+let private nextFrame () : JS.Promise<unit> =
+    Promise.create (fun resolve _ -> Browser.Dom.window.requestAnimationFrame (fun _ -> resolve ()) |> ignore)
+
+let private rendered () = PageGlobal.tryGet Probes.renders |> Option.defaultValue 0
+
+let private record (seq: int) (data: string) : unit =
+    match PageGlobal.tryGet HarnessPage.record with
+    | Some record -> record.Invoke ("term-harness", seq, "o", data)
+    | None -> failwith "this page publishes no record to hand output to"
+
+let private blocksSay (words: string) : bool =
+    first Root.Document "#shell [data-tail='blocks:term-harness']"
+    |> Option.exists (fun surface -> surface.textContent.Contains words)
+
+let private burst () : JS.Promise<float list> =
+    let before = rendered ()
+    for seq in 2 .. 51 do
+        record seq (sprintf "burst-mark %d\r\n" seq)
+    nextFrame ()
+    |> Promise.map (fun () -> [ float (rendered () - before); (if blocksSay "burst-mark 51" then 1.0 else 0.0) ])
+
+let private loneRecordInQuietFrame () : JS.Promise<string list> =
+    let rec attempt (tries: int) : JS.Promise<string list> =
+        if tries >= 60 then Promise.lift [ "the page drew on every one of sixty frames, so none was quiet to ask in" ]
+        else
+            let seen = rendered ()
+            Promise.create (fun resolve _ ->
+                Browser.Dom.window.requestAnimationFrame (fun _ ->
+                    // A render since the last look may still have its frame open; look again a
+                    // frame on.
+                    if rendered () <> seen then resolve None
+                    else
+                        record 2 "lone-mark\r\n"
+                        resolve (Some (if blocksSay "lone-mark" then [] else [ "not yet" ])))
+                |> ignore)
+            |> Promise.bind (function
+                | Some answer -> Promise.lift answer
+                | None -> attempt (tries + 1))
+    attempt 0
+
+/// The verdict measures that answer at once.
+let private verdictNow (measure: Probes.Measure) : (int -> string list) option =
     match measure with
     | Probes.Measure.RunningMarkOnTitle -> Some (fun _ -> runningMarkOnTitle ())
     | Probes.Measure.CauseHeadsOnLines -> Some (fun _ -> causeHeadsOnLines ())
@@ -307,14 +378,18 @@ let verdict (measure: Probes.Measure) : (int -> string list) option =
     | Probes.Measure.RoomBelowShell -> Some roomBelowShell
     | Probes.Measure.AskCardColumn -> Some askCardColumn
     | Probes.Measure.ItemsClearOfCard -> Some (fun _ -> itemsClearOfCard ())
+    | Probes.Measure.HideFixturesAboveShell -> Some (fun _ -> hideFixturesAboveShell ())
+    | Probes.Measure.FocusBeforePane -> Some (fun _ -> focusBeforePane ())
     | Probes.Measure.PastShell
     | Probes.Measure.FoldArrowsOnRail
     | Probes.Measure.FoldArrowsOnAvatars
     | Probes.Measure.ReferenceBaseline
-    | Probes.Measure.GrabEdgeShape -> None
+    | Probes.Measure.GrabEdgeShape
+    | Probes.Measure.Burst
+    | Probes.Measure.LoneRecordInQuietFrame -> None
 
-/// The numbers a reading measure takes.
-let reading (measure: Probes.Measure) : (int -> float list) option =
+/// The reading measures that answer at once.
+let private readingNow (measure: Probes.Measure) : (int -> float list) option =
     match measure with
     | Probes.Measure.FoldArrowsOnRail -> Some (fun _ -> foldArrowsOnRail ())
     | Probes.Measure.FoldArrowsOnAvatars -> Some (fun _ -> foldArrowsOnAvatars ())
@@ -324,8 +399,26 @@ let reading (measure: Probes.Measure) : (int -> float list) option =
     | Probes.Measure.RoomBelowShell
     | Probes.Measure.AskCardColumn
     | Probes.Measure.ItemsClearOfCard
+    | Probes.Measure.HideFixturesAboveShell
+    | Probes.Measure.FocusBeforePane
     | Probes.Measure.RunningMarkOnTitle
     | Probes.Measure.CauseHeadsOnLines
     | Probes.Measure.RunningMarkOnCauseLine
     | Probes.Measure.GrabEdgeClear
-    | Probes.Measure.EdgeTabOnBand -> None
+    | Probes.Measure.EdgeTabOnBand
+    | Probes.Measure.Burst
+    | Probes.Measure.LoneRecordInQuietFrame -> None
+
+/// What is wrong, by a verdict measure's account, asked with its parameter.
+let verdict (measure: Probes.Measure) : (int -> JS.Promise<string list>) option =
+    let now (read: int -> string list) = Some (fun parameter -> Promise.lift (read parameter))
+    match measure with
+    | Probes.Measure.LoneRecordInQuietFrame -> Some (fun _ -> loneRecordInQuietFrame ())
+    | measure -> verdictNow measure |> Option.bind now
+
+/// The numbers a reading measure takes.
+let reading (measure: Probes.Measure) : (int -> JS.Promise<float list>) option =
+    let now (read: int -> float list) = Some (fun parameter -> Promise.lift (read parameter))
+    match measure with
+    | Probes.Measure.Burst -> Some (fun _ -> burst ())
+    | measure -> readingNow measure |> Option.bind now

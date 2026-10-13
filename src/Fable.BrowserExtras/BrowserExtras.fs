@@ -701,3 +701,10 @@ module Viewport =
     /// visual viewport to ask.
     [<Emit("(globalThis.visualViewport ? globalThis.visualViewport.offsetTop : 0)")>]
     let visualOffsetTop () : float = jsNative
+
+/// The document's selection, as far as a measurement reads it.
+[<RequireQualifiedAccess>]
+module Selection =
+    /// What the selection holds, as text; empty when nothing is selected.
+    [<Emit("String(globalThis.getSelection ? globalThis.getSelection() : '')")>]
+    let text () : string = jsNative
