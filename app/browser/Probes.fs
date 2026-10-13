@@ -125,6 +125,17 @@ let private textAt (selector: string, words: string) : Probes.Box option =
 
 let private selection (_: int) : string = Selection.text ()
 
+let private media (query: string) : bool = Media.mediaMatches query
+
+let private hitAt (selector: string, below: float) : bool =
+    match first selector with
+    | None -> false
+    | Some element ->
+        let box = element.getBoundingClientRect ()
+        Browser.Dom.document.elementFromPoint (box.left + box.width / 2.0, box.top + below)
+        |> Option.ofObj
+        |> Option.exists element.contains
+
 let private newest (selector: string, mark: string) : Probes.Newest option =
     first selector
     |> Option.bind (fun surface ->
@@ -246,6 +257,8 @@ awaiting Probes.heldAfterFold heldAfterFold
 answering Probes.window window
 answering Probes.textAt textAt
 answering Probes.selection selection
+answering Probes.media media
+answering Probes.hitAt hitAt
 
 for measure in Probes.Measure.all do
     Measures.verdict measure |> Option.iter (awaiting (Probes.verdict measure))

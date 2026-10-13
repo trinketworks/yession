@@ -4734,41 +4734,34 @@ let editorTests =
         editorCaseIn 1440 900 "a chapter's rule stands above the message it opens, across the column" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-rule='msg-filler-8']")
-                let! above =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const rule = document.querySelector("#shell [data-chapter-rule='msg-filler-8']")
-                                 const item = document.querySelector("#shell [data-conversation] [data-message-id='msg-filler-8']")
-                                 const r = rule.getBoundingClientRect()
-                                 const i = item.getBoundingClientRect()
-                                 return r.height > 0 && r.width > 0 && r.bottom <= i.top
-                               }""")
+                let rule = "#shell [data-chapter-rule='msg-filler-8']"
+                let item = "#shell [data-conversation] [data-message-id='msg-filler-8']"
+                let! ruleAndItem = boxesOf page [ rule; item ]
+                let above =
+                    match ruleAndItem with
+                    | [ r; i ] -> Yession.App.Probes.Box.height r > 0.0 && Yession.App.Probes.Box.width r > 0.0 && r.Bottom <= i.Top
+                    | _ -> false
                 Expect.isTrue above "the rule stands above its message, with a box of its own"
 
                 // And it is a line somebody can SEE. A border that resolved to nothing, or
                 // painted the ground onto the ground, measures exactly as one that works.
-                let! painted =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const rule = document.querySelector("#shell [data-chapter-rule='msg-filler-8']")
-                                 const style = getComputedStyle(rule)
-                                 const ground = getComputedStyle(document.querySelector('#shell [data-conversation]')).backgroundColor
-                                 return parseFloat(style.borderTopWidth) > 0 && style.borderTopColor !== ground
-                               }""")
+                let! borderWidth = Probe.computed page rule "border-top-width"
+                let! borderColour = Probe.computed page rule "border-top-color"
+                let! ground = Probe.computed page "#shell [data-conversation]" "background-color"
+                let painted =
+                    (borderWidth |> Option.exists (fun w -> w.EndsWith "px" && float (w.Substring (0, w.Length - 2)) > 0.0))
+                    && borderColour <> ground
                 Expect.isTrue painted "the rule is a line on the screen, not a border the ground swallowed"
 
                 // It divides the COLUMN, so it is exactly as wide as the column. Narrower and
                 // it reads as a mark on one message; wider — which is what a rule with no
                 // measure of its own does on a desktop — and it reads as a line drawn on the
                 // page, with the conversation happening to sit inside it.
-                let! spans =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const rule = document.querySelector("#shell [data-chapter-rule='msg-filler-8']")
-                                 const item = document.querySelector("#shell [data-conversation] [data-message-id='msg-filler-8']")
-                                 return Math.abs(rule.getBoundingClientRect().width
-                                                 - item.getBoundingClientRect().width) <= 1
-                               }""")
+                let! widths = boxesOf page [ rule; item ]
+                let spans =
+                    match widths with
+                    | [ r; i ] -> abs (Yession.App.Probes.Box.width r - Yession.App.Probes.Box.width i) <= 1.0
+                    | _ -> false
                 Expect.isTrue spans "the rule runs the width of the column it divides"
                 return ()
             }
@@ -4782,24 +4775,18 @@ let editorTests =
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-reply-jump][data-reply-ref='msg-harness']")
                 // To the bottom, where the reply sits, so its source is off the top and the jump is real.
-                let! _ =
-                    await (page.EvaluateAsync<bool>
-                            """() => { const t = document.querySelector('#shell [data-conversation]')
-                                       t.scrollTop = t.scrollHeight
-                                       return t.scrollTop > 0 }""")
+                match! Probe.scroll page "#shell [data-conversation]" with
+                | Some conversation ->
+                    let! _ = Probe.scrollTo page "#shell [data-conversation]" conversation.Height
+                    ()
+                | None -> failwith "there is no conversation to scroll"
                 do! awaitU (page.ClickAsync "#shell [data-reply-jump][data-reply-ref='msg-harness']")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']")
-                             ?.classList.contains('animate-reveal') === true""")
-                let! landed =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const item = document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']")
-                                 const box = item.getBoundingClientRect()
-                                 const at = document.elementFromPoint(box.left + box.width / 2, box.top + 4)
-                                 return item.contains(at) && item === document.activeElement
-                               }""")
+                do! Wait.until "the message to flash as it is revealed"
+                        (fun () -> Read.attr page "#shell [data-conversation] [data-message-id='msg-harness']" "class")
+                        (Option.exists (fun classes -> classes.Split ' ' |> Array.contains "animate-reveal"))
+                let! onScreen = Probe.hitAt page "#shell [data-conversation] [data-message-id='msg-harness']" 4.0
+                let! holds = Read.focused page "#shell [data-conversation] [data-message-id='msg-harness']"
+                let landed = onScreen && holds
                 Expect.isTrue landed "the message the ref answers is on the screen and holds the cursor"
                 return ()
             }
@@ -4812,19 +4799,16 @@ let editorTests =
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapters] [data-chapter-entry]")
                 // Away from it first, so the jump has a real scroll to make.
-                let! _ =
-                    await (page.EvaluateAsync<bool>
-                            """() => { const t = document.querySelector('#shell [data-conversation]')
-                                       t.scrollTop = t.scrollHeight
-                                       return t.scrollTop > 0 }""")
+                match! Probe.scroll page "#shell [data-conversation]" with
+                | Some conversation ->
+                    let! _ = Probe.scrollTo page "#shell [data-conversation]" conversation.Height
+                    ()
+                | None -> failwith "there is no conversation to scroll"
                 do! awaitU (page.ClickAsync "#shell [data-chapter-entry='msg-harness']")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']")
-                             ?.classList.contains('animate-reveal') === true""")
-                let! focused =
-                    await (page.EvaluateAsync<bool>
-                            """() => document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']") === document.activeElement""")
+                do! Wait.until "the message to flash as it is revealed"
+                        (fun () -> Read.attr page "#shell [data-conversation] [data-message-id='msg-harness']" "class")
+                        (Option.exists (fun classes -> classes.Split ' ' |> Array.contains "animate-reveal"))
+                let! focused = Read.focused page "#shell [data-conversation] [data-message-id='msg-harness']"
                 Expect.isTrue focused "the contents moves the cursor to the chapter, through the same reveal the ref uses"
                 return ()
             }
@@ -4843,33 +4827,19 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapters] [data-chapter-entry]")
-                let! covered =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const item = document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']")
-                                 const box = item.getBoundingClientRect()
-                                 const at = document.elementFromPoint(box.left + box.width / 2, box.top + 4)
-                                 return !item.contains(at)
-                               }""")
+                let! reachable = Probe.hitAt page "#shell [data-conversation] [data-message-id='msg-harness']" 4.0
+                let covered = not reachable
                 Expect.isTrue covered "the drawer is over the conversation, which is what the phone's contents sit in"
 
                 do! awaitU (page.ClickAsync "#shell [data-chapter-entry='msg-harness']")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']")
-                             ?.classList.contains('animate-reveal') === true""")
+                do! Wait.until "the message to flash as it is revealed"
+                        (fun () -> Read.attr page "#shell [data-conversation] [data-message-id='msg-harness']" "class")
+                        (Option.exists (fun classes -> classes.Split ' ' |> Array.contains "animate-reveal"))
                 // Hit-tested at its own centre, which is the only way to ask whether something
                 // is over it: a drawer left open leaves the message's box exactly where it was,
                 // and every cheap visibility check answers yes.
-                let! uncovered =
-                    await (page.WaitForFunctionAsync
-                            """(() => {
-                                 const item = document.querySelector("#shell [data-conversation] [data-message-id='msg-harness']")
-                                 const box = item.getBoundingClientRect()
-                                 const at = document.elementFromPoint(box.left + box.width / 2, box.top + 4)
-                                 return item.contains(at)
-                               })()""")
-                Expect.isNotNull uncovered "the drawer stood aside, so the chapter is on the screen"
+                do! Wait.until "the drawer to stand aside, so the chapter is on the screen"
+                        (fun () -> Probe.hitAt page "#shell [data-conversation] [data-message-id='msg-harness']" 4.0) id
                 return ()
             }
         // The contents' entries on a phone are touch targets, so each is one row at the 44px
@@ -4880,14 +4850,15 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapters] [data-chapter-entry]")
-                let! shape =
-                    await (page.EvaluateAsync<float[]> """() => {
-                        const boxes = [...document.querySelectorAll('#shell [data-chapters] [data-chapter-entry]')]
-                            .map(el => el.getBoundingClientRect())
-                        const heights = boxes.map(b => b.height)
-                        const gaps = boxes.slice(1).map((b, at) => b.top - boxes[at].bottom)
-                        return [boxes.length, Math.min(...heights), Math.max(...heights), Math.max(...gaps)]
-                    }""")
+                let! entries = Probe.seen page "#shell [data-chapters] [data-chapter-entry]"
+                let boxes = entries |> List.map (fun e -> e.Box)
+                let heights = boxes |> List.map Yession.App.Probes.Box.height
+                let gaps = List.pairwise boxes |> List.map (fun (a, b) -> b.Top - a.Bottom)
+                let shape =
+                    [| float boxes.Length
+                       (if heights.IsEmpty then 0.0 else List.min heights)
+                       (if heights.IsEmpty then 0.0 else List.max heights)
+                       (if gaps.IsEmpty then 0.0 else List.max gaps) |]
                 Expect.isTrue (shape.[0] >= 2) "the harness has more than one chapter, so there is a gap to measure"
                 Expect.isTrue (shape.[1] >= 44.0) (sprintf "every entry is a thumb's 44px, the shortest is %.1f" shape.[1])
                 Expect.isTrue (shape.[2] < 50.0) (sprintf "and none is taller than one row, the tallest is %.1f" shape.[2])
@@ -4933,22 +4904,8 @@ let editorTests =
                 // Two hundred items, a record a frame for four hundred frames — the scroll has
                 // to reach the top well inside that, so every frame of it has a render in it.
                 do! Harness.run4 page HarnessPage.benchScrollBegin 200 400 16 true
-                let! reached =
-                    await (page.EvaluateAsync<float>
-                            """() => new Promise((done) => {
-                                 const el = document.querySelector('#shell [data-conversation]')
-                                 el.scrollIntoView()
-                                 el.scrollTop = el.scrollHeight
-                                 requestAnimationFrame(() => {
-                                   el.scrollTo({ top: 0, behavior: 'smooth' })
-                                   // Until it stops moving for three frames, wherever that is.
-                                   let last = el.scrollTop, still = 0
-                                   const tick = () => {
-                                     if (el.scrollTop === last) still++; else { still = 0; last = el.scrollTop }
-                                     if (still >= 3) done(el.scrollTop); else requestAnimationFrame(tick) }
-                                   requestAnimationFrame(tick)
-                                 })
-                               })""")
+                let! stopped = Probe.reading page Yession.App.Probes.Measure.SmoothScrollToTop
+                let reached = match stopped with [ at ] -> at | _ -> failwith "there is no conversation to scroll"
                 let! report = Harness.ask page HarnessPage.benchScrollEnd
                 use doc = System.Text.Json.JsonDocument.Parse report
                 let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
@@ -4972,21 +4929,17 @@ let editorTests =
         editorCaseIn 1440 1200 "a short conversation ends by the composer, not at the top of the column" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-id]")
-                do! awaitU (page.EvaluateAsync "() => { window.__benchScrollBegin(0, 0, 16, true); window.__benchScrollEnd() }")
-                let! report =
-                    await (page.EvaluateAsync<string>
-                            """() => {
-                                 const conversation = document.querySelector('#shell [data-conversation]')
-                                 const last = conversation.lastElementChild.getBoundingClientRect()
-                                 const foot = conversation.getBoundingClientRect().bottom
-                                   - parseFloat(getComputedStyle(conversation).paddingBottom)
-                                 return JSON.stringify({
-                                   fits: conversation.scrollHeight <= conversation.clientHeight,
-                                   gap: foot - last.bottom })
-                               }""")
-                use doc = System.Text.Json.JsonDocument.Parse report
-                let fits = doc.RootElement.GetProperty("fits").GetBoolean ()
-                let gap = doc.RootElement.GetProperty("gap").GetDouble ()
+                do! Harness.run4 page HarnessPage.benchScrollBegin 0 0 16 true
+                let! _ = Harness.ask page HarnessPage.benchScrollEnd
+                let conversation = "#shell [data-conversation]"
+                let! measured = boxesOf page [ conversation; conversation + " > :last-child" ]
+                let! padding = Probe.computed page conversation "padding-bottom"
+                let! scroll = Probe.scroll page conversation
+                let fits = scroll |> Option.exists (fun s -> s.Height <= s.ClientHeight)
+                let gap =
+                    match measured, padding |> Option.filter (fun p -> p.EndsWith "px") with
+                    | [ c; last ], Some padding -> c.Bottom - float (padding.Substring (0, padding.Length - 2)) - last.Bottom
+                    | _ -> failwith "the conversation, its last item or its padding could not be read"
                 Expect.isTrue fits "the conversation is shorter than its column, so where it ends is a choice"
                 Expect.isTrue (abs gap < 1.0) (sprintf "the last item ends %.0fpx above the column's foot" gap)
                 return ()
@@ -5008,11 +4961,9 @@ let editorTests =
                 // typed here ARE its name.)
                 do! awaitU (page.Keyboard.PressAsync "End")
                 do! awaitU (page.Keyboard.TypeAsync " — settled")
-                let! kept =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector("#shell [data-chapter-name='msg-filler-8']")
-                             ?.value.endsWith(' — settled') === true""")
-                Expect.isNotNull kept "what was typed is what the rule says, after the render that followed it"
+                do! Wait.until "what was typed to be what the rule says, after the render that followed it"
+                        (fun () -> Read.values page "#shell [data-chapter-name='msg-filler-8']")
+                        (List.tryHead >> Option.exists (fun v -> v.EndsWith " — settled"))
                 return ()
             }
         // The divider of a chapter nobody has named shows no name — the opening message is
@@ -5025,21 +4976,11 @@ let editorTests =
         editorCaseIn 1440 900 "an unnamed chapter's field offers a name only when focused or hovered" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
-                let probe =
-                    """() => {
-                         const field = document.querySelector("#shell [data-chapter-name='msg-filler-8']")
-                         const ink = getComputedStyle(field, '::placeholder').color
-                         return JSON.stringify({
-                           empty: field.value === '',
-                           offered: field.placeholder.length > 0,
-                           shown: ink !== 'rgba(0, 0, 0, 0)' && ink !== 'transparent' })
-                       }"""
                 let read () =
                     async {
-                        let! report = await (page.EvaluateAsync<string> probe)
-                        use doc = System.Text.Json.JsonDocument.Parse report
-                        let flag (name: string) = doc.RootElement.GetProperty(name).GetBoolean ()
-                        return flag "empty", flag "offered", flag "shown"
+                        match! Probe.reading page Yession.App.Probes.Measure.ChapterPlaceholder with
+                        | [ empty; offered; shown ] -> return empty = 1.0, offered = 1.0, shown = 1.0
+                        | _ -> return failwith "the chapter's name field is not there"
                     }
                 // Away from the field, and not focused: the line is clean.
                 do! awaitU (page.Mouse.MoveAsync (700.0f, 10.0f))
@@ -5071,40 +5012,33 @@ let editorTests =
                 // the same place — so somebody names it first, as a person would.
                 do! awaitU (page.ClickAsync "#shell [data-chapter-name='msg-filler-8']")
                 do! awaitU (page.Keyboard.TypeAsync "Where it was settled")
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """document.querySelector("#shell [data-chapter-name='msg-filler-8']")
-                             ?.value === 'Where it was settled'""")
+                do! Wait.until "the name to be what was typed" (fun () -> Read.values page "#shell [data-chapter-name='msg-filler-8']") ((=) [ "Where it was settled" ])
                 do! Harness.run3 page HarnessPage.chapterCaret "msg-filler-8" 3 3
                 // Waited for by EXISTENCE, not visibility: a bare caret is a zero-width
                 // highlight with the caret bar inside it, which every "is it visible" check
                 // in a driver calls hidden.
                 do! waitPresent "#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='peer:brave-owl'] to be on the page" page "#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='peer:brave-owl']"
-                let! inside =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const name = document.querySelector("#shell [data-chapter-name='msg-filler-8']")
-                                 const mark = document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='peer:brave-owl']")
-                                 const n = name.getBoundingClientRect(), m = mark.getBoundingClientRect()
-                                 return m.height > 0
-                                     && m.top >= n.top - 1 && m.bottom <= n.bottom + 1
-                                     && m.left >= n.left - 1 && m.left <= n.right + 1
-                               }""")
+                let! nameAndMark = boxesOf page [ "#shell [data-chapter-name='msg-filler-8']"; "#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='peer:brave-owl']" ]
+                let inside =
+                    match nameAndMark with
+                    | [ n; m ] ->
+                        Yession.App.Probes.Box.height m > 0.0
+                        && m.Top >= n.Top - 1.0 && m.Bottom <= n.Bottom + 1.0
+                        && m.Left >= n.Left - 1.0 && m.Left <= n.Right + 1.0
+                    | _ -> false
                 Expect.isTrue inside "the caret is drawn inside the field it is a caret in"
 
                 // The same caret further along the name is further along the SCREEN. This is
                 // what says the offset is being measured rather than the marker parked at the
                 // start of the field, which every check above would pass.
-                let! at3 =
-                    await (page.EvaluateAsync<float>
-                            """() => document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='peer:brave-owl']").getBoundingClientRect().left""")
+                let caretLeft () =
+                    async {
+                        let! mark = boxesOf page [ "#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='peer:brave-owl']" ]
+                        return (List.head mark).Left
+                    }
+                let! at3 = caretLeft ()
                 do! Harness.run3 page HarnessPage.chapterCaret "msg-filler-8" 9 9
-                let! moved =
-                    await (page.WaitForFunctionAsync
-                            (sprintf
-                                """document.querySelector("#shell [data-chapter-rule='msg-filler-8'] [data-cursor-peer='peer:brave-owl']").getBoundingClientRect().left > %f"""
-                                at3))
-                Expect.isNotNull moved "a caret later in the name is drawn further into it"
+                do! Wait.until "a caret later in the name to be drawn further into it" caretLeft (fun left -> left > at3)
                 return ()
             }
         // Where a peer is can now be as long as a chapter's name — up to the heuristic's own
@@ -5121,13 +5055,12 @@ let editorTests =
                 // this slot can be asked to hold.
                 do! Harness.run3 page HarnessPage.chapterCaret "msg-filler-8" 0 0
                 do! waitPresent "#shell [data-peer-presence='peer:brave-owl'] [data-peer-at] to be on the page" page "#shell [data-peer-presence='peer:brave-owl'] [data-peer-at]"
-                let! fits =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const row = document.querySelector("#shell [data-peer-presence='peer:brave-owl']")
-                                 const at = row.querySelector('[data-peer-at]')
-                                 return at.getBoundingClientRect().right <= row.getBoundingClientRect().right + 1
-                               }""")
+                let row = "#shell [data-peer-presence='peer:brave-owl']"
+                let! rowAndAt = boxesOf page [ row; row + " [data-peer-at]" ]
+                let fits =
+                    match rowAndAt with
+                    | [ r; at ] -> at.Right <= r.Right + 1.0
+                    | _ -> false
                 Expect.isTrue fits "the words stop inside the row rather than running past it"
                 return ()
             }
@@ -5142,14 +5075,12 @@ let editorTests =
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-item-actions]")
                 do! awaitU (page.HoverAsync "#shell [data-conversation] [data-message-id='msg-filler-8']")
-                let! clear =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const item = document.querySelector("#shell [data-conversation] [data-message-id='msg-filler-8']")
-                                 const dots = item.querySelector('[data-item-actions]').getBoundingClientRect()
-                                 const body = item.querySelector('[data-message-body]').getBoundingClientRect()
-                                 return dots.left >= body.right
-                               }""")
+                let item = "#shell [data-conversation] [data-message-id='msg-filler-8']"
+                let! dotsAndBody = boxesOf page [ item + " [data-item-actions]"; item + " [data-message-body]" ]
+                let clear =
+                    match dotsAndBody with
+                    | [ dots; body ] -> dots.Left >= body.Right
+                    | _ -> false
                 Expect.isTrue clear "the words stop before the actions control begins"
                 return ()
             }
@@ -5291,7 +5222,11 @@ let editorTests =
                 async {
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
                     do! toTheEnd page "chat"
-                    do! awaitU (page.EvaluateAsync "() => { document.querySelector(\"#shell [data-tail='chat']\").scrollTop -= 120 }")
+                    match! Probe.scroll page "#shell [data-tail='chat']" with
+                    | Some chat ->
+                        let! _ = Probe.scrollTo page "#shell [data-tail='chat']" (chat.Top - 120.0)
+                        ()
+                    | None -> failwith "there is no chat surface to scroll"
                     do! twoFrames page
                     do! twoFrames page
                     let! offered = jumpOffered page "chat"
@@ -5319,8 +5254,8 @@ let editorTests =
                     do! awaitU (page.FocusAsync "#shell [data-jump-to-latest='chat'] button")
                     do! awaitU (page.Keyboard.PressAsync "Enter")
                     do! Wait.until "the conversation to reach its end" (fun () -> atItsEnd page "chat") id
-                    let! focused = await (page.EvaluateAsync<string> "() => document.activeElement?.getAttribute('data-tail') ?? document.activeElement?.tagName ?? 'nothing'")
-                    Expect.equal focused "chat" "the keyboard is on the conversation it was taken to"
+                    let! focused = focusedAttr page "data-tail"
+                    Expect.equal focused (Some "chat") "the keyboard is on the conversation it was taken to"
                 }
             // The same press over a terminal's blocks, whose scroller is no place for focus of its
             // own: it lands on the panel the blocks are shown in.
@@ -5334,8 +5269,9 @@ let editorTests =
                     do! awaitU (page.FocusAsync "#shell [data-jump-to-latest='blocks:term-harness'] button")
                     do! awaitU (page.Keyboard.PressAsync "Enter")
                     do! Wait.until "the blocks to reach their end" (fun () -> atItsEnd page "blocks:term-harness") id
-                    let! inPane =
-                        await (page.EvaluateAsync<bool> "() => !!document.activeElement?.closest('#shell [data-content-panel]') && !document.activeElement.closest('[data-jump-to-latest]')")
+                    let! inPanel = Read.focused page "#shell [data-content-panel], #shell [data-content-panel] *"
+                    let! onJump = Read.focused page "[data-jump-to-latest], [data-jump-to-latest] *"
+                    let inPane = inPanel && not onJump
                     Expect.isTrue inPane "the keyboard is in the pane, on what holds the blocks it was taken to"
                 }
         ]
@@ -5391,9 +5327,7 @@ let editorTests =
                 while not reached && steps < 60 do
                     do! awaitU (page.Keyboard.PressAsync "Tab")
                     steps <- steps + 1
-                    let! here =
-                        await (page.EvaluateAsync<bool>
-                                "() => document.activeElement?.hasAttribute('data-item-actions') === true")
+                    let! here = Read.focused page "[data-item-actions]"
                     reached <- here
                 Expect.isTrue reached (sprintf "a keyboard reaches an item's actions (gave up after %d tabs)" steps)
 
@@ -5401,11 +5335,8 @@ let editorTests =
                 // sampled on the frame focus landed is the value the transition STARTED from.
                 // Read that way this passed nothing and failed everything — the first version
                 // of this case reported `0` against a control that was on its way to 1.
-                let! _ =
-                    await (page.WaitForFunctionAsync
-                        """getComputedStyle(document.querySelector('#shell [data-item-actions]:focus-visible'))
-                             ?.opacity === '1'""")
-                return ()
+                do! Wait.until "the focused actions control to fade fully in"
+                        (fun () -> Probe.computed page "#shell [data-item-actions]:focus-visible" "opacity") ((=) (Some "1"))
             }
         // A phone never hovers, so an item's actions are either on the screen at rest or they
         // are not on it at all — and they are also what marks where one message ends and the
@@ -5419,11 +5350,9 @@ let editorTests =
         editorCaseOnTouch 390 844 "on a phone every item's actions are on the screen and under the thumb" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-item-actions]")
-                let! noHover = await (page.EvaluateAsync<bool> "() => matchMedia('(hover: none)').matches")
+                let! noHover = Probe.media page "(hover: none)"
                 Expect.isTrue noHover "the page is laid out for a device that cannot hover"
-                let! asked =
-                    await (page.EvaluateAsync<int>
-                            "() => document.querySelectorAll('#shell [data-conversation] [data-item-actions]').length")
+                let! asked = Read.count page "#shell [data-conversation] [data-item-actions]"
                 Expect.isTrue (asked > 1) (sprintf "the fixture draws a run of items to ask about (drew %d)" asked)
                 // Settled first. On a phone the terminals pane slides off to the side as the
                 // shell lays out, and a hit-test taken while it is on its way lands on the pane
@@ -5431,21 +5360,7 @@ let editorTests =
                 // control a thumb cannot reach. Every animation that ends is waited for (a pulse
                 // or a blink never ends, and is not).
                 do! Probe.settled page
-                let! unreachable =
-                    await (page.EvaluateAsync<string[]>
-                            """() => {
-                                 const wrong = []
-                                 for (const control of document.querySelectorAll('#shell [data-conversation] [data-item-actions]')) {
-                                   control.scrollIntoView({ block: 'center' })
-                                   const box = control.getBoundingClientRect()
-                                   const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
-                                   const opacity = Number(getComputedStyle(control).opacity)
-                                   if (opacity === 0 || !hit || !control.contains(hit))
-                                     wrong.push(control.getAttribute('data-item-actions') + ' (opacity ' + opacity
-                                       + ', under ' + (hit ? hit.outerHTML.slice(0, 80) : 'nothing') + ')')
-                                 }
-                                 return wrong
-                               }""")
+                let! unreachable = Probe.verdict page Yession.App.Probes.Measure.ItemActionsUnderThumb
                 Expect.isEmpty
                     unreachable
                     (sprintf "every item's actions are painted and hit-test to themselves; these are not: %s"
@@ -5489,30 +5404,21 @@ let editorTests =
                 // reason this case is not about, and would fail it while the design was right.
                 // (Measured: without the first scroll the caret sits at y=1433 on an 844px
                 // screen, and every hit-test answers null.)
-                let! _ =
-                    await (page.EvaluateAsync<bool>
-                            """() => { document.querySelector('#shell').scrollIntoView()
-                                       const t = document.querySelector('#shell [data-conversation]')
-                                       t.scrollTop = t.scrollHeight
-                                       return t.scrollTop > 0 }""")
-                let! marks =
-                    await (page.EvaluateAsync<int>
-                            """() => [...document.querySelectorAll('#shell [data-agent-writing]')].filter(m => {
-                                 const b = m.getBoundingClientRect()
-                                 if (b.width === 0 || b.height === 0) return false
-                                 const at = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)
-                                 return at !== null && m.contains(at)
-                               }).length""")
+                do! Probe.reveal page "#shell"
+                match! Probe.scroll page "#shell [data-conversation]" with
+                | Some conversation ->
+                    let! _ = Probe.scrollTo page "#shell [data-conversation]" conversation.Height
+                    ()
+                | None -> failwith "there is no conversation to scroll"
+                let! marks = Probe.paintedCount page "#shell [data-agent-writing]"
                 Expect.equal marks 1 "the agent's turn is marked once on the screen"
 
                 // The other half of "once": the sentence a screen reader is told must not also
                 // be a thing anybody sees, or the count above is 1 and the screen still says it
                 // twice. A visually-hidden region occupies no readable area — which is what
                 // `sr-only` MEANS, and the one property every correct spelling of it shares.
-                let! shown =
-                    await (page.EvaluateAsync<float>
-                            """() => { const r = document.querySelector('#shell [data-agent-stream]').getBoundingClientRect()
-                                       return r.width * r.height }""")
+                let! spoken = boxesOf page [ "#shell [data-agent-stream]" ]
+                let shown = spoken |> List.sumBy (fun r -> Yession.App.Probes.Box.width r * Yession.App.Probes.Box.height r)
                 Expect.isTrue (shown < 25.0) (sprintf "the spoken sentence is not painted for anyone (%f px²)" shown)
                 return ()
             }
@@ -5534,42 +5440,8 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
                 do! Harness.run page HarnessPage.agentTurn
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
-                let! misplaced =
-                    await (page.EvaluateAsync<string>
-                            """() => {
-                                 const caret = document.querySelector('#shell [data-agent-writing]')
-                                 const body = caret.closest('[data-message-body]')
-                                 const walk = document.createTreeWalker(body, NodeFilter.SHOW_TEXT)
-                                 let last = null
-                                 while (walk.nextNode()) if (walk.currentNode.textContent.trim()) last = walk.currentNode
-                                 if (!last) return 'the body has no words to stand after'
-                                 const end = last.textContent.trimEnd().length
-                                 const range = document.createRange()
-                                 range.setStart(last, end - 1)
-                                 range.setEnd(last, end)
-                                 const glyph = range.getBoundingClientRect()
-                                 const probe = document.createElement('span')
-                                 probe.style.cssText = 'display:inline-block;width:0;height:1ex'
-                                 last.after(probe)
-                                 const letters = probe.getBoundingClientRect()
-                                 const baseline = letters.bottom
-                                 probe.remove()
-                                 const at = caret.getBoundingClientRect()
-                                 const em = parseFloat(getComputedStyle(last.parentElement).fontSize)
-                                 const wrong = []
-                                 if (at.top < glyph.top || at.bottom > glyph.bottom)
-                                   wrong.push('it is not on the last line (' + at.top + '-' + at.bottom + ' against ' + glyph.top + '-' + glyph.bottom + ')')
-                                 // Within an overshoot: a point is carried a hair past its
-                                 // line, as the round letters beside it are.
-                                 if (Math.abs(at.bottom - baseline) > 0.05 * em)
-                                   wrong.push('its lower point is ' + (at.bottom - baseline) + 'px off the baseline')
-                                 if (Math.abs(at.top - letters.top) > 0.05 * em)
-                                   wrong.push('its upper point is ' + (at.top - letters.top) + 'px off the x-height')
-                                 if (at.left < glyph.right) wrong.push('it starts before the last word ends')
-                                 if (at.left - glyph.right > em) wrong.push('it stands ' + (at.left - glyph.right) + 'px after the last word')
-                                 return wrong.join('; ')
-                               }""")
-                Expect.equal misplaced "" "the caret stands where the next word lands"
+                let! misplaced = Probe.verdict page Yession.App.Probes.Measure.AgentCaretOnLetters
+                Expect.isEmpty misplaced "the caret stands where the next word lands"
                 return ()
             }
         // The thinking mark MOVES — a cube tipped, flipped and tumbled — and a cube turned
@@ -5584,30 +5456,8 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
                 do! Harness.run page HarnessPage.agentThinks
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
-                let! outside =
-                    await (page.EvaluateAsync<string>
-                            """() => {
-                                 const mark = document.querySelector('#shell [data-agent-writing]')
-                                 const box = mark.getBoundingClientRect()
-                                 const em = parseFloat(getComputedStyle(mark).fontSize)
-                                 const leaves = [...mark.querySelectorAll('*')].filter(e => !e.firstElementChild)
-                                 const moves = mark.getAnimations({ subtree: true })
-                                 if (moves.length === 0) return 'the thinking mark does not move'
-                                 const cycle = Math.max(...moves.map(a => a.effect.getComputedTiming().duration))
-                                 let worst = null
-                                 for (let t = 0; t < cycle; t += 20) {
-                                   moves.forEach(a => { a.pause(); a.currentTime = t })
-                                   const boxes = (leaves.length ? leaves : [mark]).map(e => e.getBoundingClientRect())
-                                   const over = Math.max(
-                                     box.top - Math.min(...boxes.map(b => b.top)),
-                                     Math.max(...boxes.map(b => b.bottom)) - box.bottom,
-                                     box.left - Math.min(...boxes.map(b => b.left)),
-                                     Math.max(...boxes.map(b => b.right)) - box.right) - 0.05 * em
-                                   if (over > 0 && (!worst || over > worst.over)) worst = { over, t }
-                                 }
-                                 return worst ? 'it paints ' + worst.over.toFixed(2) + 'px outside its box at ' + worst.t + 'ms' : ''
-                               }""")
-                Expect.equal outside "" "the thinking mark stays inside the box it is placed by"
+                let! outside = Probe.verdict page Yession.App.Probes.Measure.ThinkingMarkInsideBox
+                Expect.isEmpty outside "the thinking mark stays inside the box it is placed by"
                 return ()
             }
         // The turn opens with its mark stood larger where the reply will begin; the first word
@@ -5621,40 +5471,10 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
                 do! Harness.run page HarnessPage.agentThinks
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
-                let! _ =
-                    await (page.EvaluateAsync<bool>
-                            """() => { const r = document.querySelector('#shell [data-agent-writing]').getBoundingClientRect()
-                                       const scrolled = document.querySelector('#shell [data-conversation]').scrollTop
-                                       window.__opening = { x: r.left + r.width / 2, y: r.top + r.height / 2 + scrolled, h: r.height }
-                                       return true }""")
-                // Said and measured in one evaluation, so the arrival is caught at its start
-                // however slow the round trip to the page is.
-                let! apart =
-                    await (page.EvaluateAsync<string>
-                            """async () => {
-                                 window.__agentSays()
-                                 let caret = null
-                                 for (let i = 0; i < 60 && !caret; i++) {
-                                   const m = document.querySelector('#shell [data-agent-writing]')
-                                   if (m && !m.firstElementChild) caret = m
-                                   else await new Promise(r => requestAnimationFrame(r))
-                                 }
-                                 if (!caret) return 'the first word put down no caret'
-                                 await new Promise(r => requestAnimationFrame(r))
-                                 const arriving = caret.getAnimations()
-                                 if (arriving.length === 0) return 'the caret appears where it lands, from nowhere'
-                                 arriving.forEach(a => { a.pause(); a.currentTime = 0 })
-                                 // In the CONVERSATION's coordinates, not the window's: a reader at
-                                 // the end is kept there as the first word lands (`Tail`), and the
-                                 // column scrolling under both marks is not the caret leaving.
-                                 const r = caret.getBoundingClientRect()
-                                 const scrolled = document.querySelector('#shell [data-conversation]').scrollTop
-                                 const at = { x: r.left + r.width / 2, y: r.top + r.height / 2 + scrolled, h: r.height }
-                                 const was = window.__opening
-                                 const off = Math.max(Math.abs(at.x - was.x), Math.abs(at.y - was.y), Math.abs(at.h - was.h))
-                                 return off > 1 ? 'it leaves ' + off.toFixed(2) + 'px from where the turn\'s mark stood' : ''
-                               }""")
-                Expect.equal apart "" "the caret starts from the opening mark"
+                // Remembered, said and measured in one evaluation, so the arrival is caught at its
+                // start however slow the round trip to the page is.
+                let! apart = Probe.verdict page Yession.App.Probes.Measure.FirstWordFromOpening
+                Expect.isEmpty apart "the caret starts from the opening mark"
                 return ()
             }
         // What the band it replaced could not take away, and what a control arriving in a band
@@ -5666,17 +5486,13 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
                 do! Harness.run page HarnessPage.agentTurn
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-interrupt-turn]")
-                let! whole =
-                    await (page.EvaluateAsync<bool>
-                            """() => {
-                                 const inside = sel => {
-                                   const el = document.querySelector('#shell ' + sel)
-                                   if (!el) return false
-                                   const b = el.getBoundingClientRect()
-                                   return b.width > 0 && b.height > 0 && b.left >= 0 && b.right <= window.innerWidth
-                                 }
-                                 return inside('[data-draft-input]') && inside('[data-send-draft]') && inside('[data-interrupt-turn]')
-                               }""")
+                let! window = Probe.window page
+                let! controls = Probe.boxes page [ "#shell [data-draft-input]"; "#shell [data-send-draft]"; "#shell [data-interrupt-turn]" ]
+                let whole =
+                    controls
+                    |> List.forall (function
+                        | Some b -> not (Yession.App.Probes.Box.isEmpty b) && b.Left >= 0.0 && b.Right <= window.InnerWidth
+                        | None -> false)
                 Expect.isTrue whole "the line, its send, and the new stop control all fit the phone at once"
                 return ()
             }

@@ -135,6 +135,11 @@ module Css =
     [<Emit("getComputedStyle($0).getPropertyValue($1)")>]
     let computedProperty (element: Browser.Types.HTMLElement) (name: string) : string = jsNative
 
+    /// The colour a field's placeholder is painted in, as the cascade resolved it for the
+    /// `::placeholder` pseudo-element.
+    [<Emit("getComputedStyle($0, '::placeholder').color")>]
+    let placeholderColor (element: Browser.Types.Element) : string = jsNative
+
 /// The CSSOM's side of a `<link rel="stylesheet">`: the sheet it loaded, and the media that
 /// sheet answers to.
 ///
@@ -194,6 +199,11 @@ module Scrolling =
     /// worth showing with the moments around it, which is most of why they came back.
     [<Emit("$0.scrollIntoView({ block: 'center' })")>]
     let scrollIntoMiddle (element: Browser.Types.HTMLElement) : unit = jsNative
+
+    /// `scrollTo({ top, behavior: 'smooth' })`: a scroll the browser animates, in flight
+    /// until it arrives or something takes it away.
+    [<Emit("$0.scrollTo({ top: $1, behavior: 'smooth' })")>]
+    let smoothlyTo (element: Browser.Types.Element) (top: float) : unit = jsNative
 
     /// `scrollIntoView({ block })`: `start`, `center`, `end` or `nearest`.
     [<Emit("$0.scrollIntoView({ block: $1 })")>]
@@ -648,6 +658,18 @@ module Animations =
     /// The animations one element is running itself.
     [<Emit("$0.getAnimations()")>]
     let on (element: Browser.Types.Element) : RunningAnimation array = jsNative
+
+    /// The animations an element and everything under it are running.
+    [<Emit("$0.getAnimations({ subtree: true })")>]
+    let under (element: Browser.Types.Element) : RunningAnimation array = jsNative
+
+    /// How long one iteration of the animation lasts, in milliseconds.
+    [<Emit("$0.effect.getComputedTiming().duration")>]
+    let duration (animation: RunningAnimation) : float = jsNative
+
+    /// Pause the animation and stand it at this many milliseconds in.
+    [<Emit("(function (animation, at) { animation.pause(); animation.currentTime = at })($0, $1)")>]
+    let pauseAt (animation: RunningAnimation) (at: float) : unit = jsNative
 
     /// Settles when the animation finishes, or is cancelled.
     [<Emit("$0.finished.then(() => undefined, () => undefined)")>]

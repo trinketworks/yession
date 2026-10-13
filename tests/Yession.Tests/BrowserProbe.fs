@@ -93,6 +93,13 @@ module Probe =
     /// What the document's selection holds, as text.
     let selection (page: IPage) : Async<string> = ask page Probes.selection 0
 
+    /// Whether the first match is what is painted at its horizontal centre, `below` pixels
+    /// down from its top.
+    let hitAt (page: IPage) (selector: string) (below: float) : Async<bool> = ask page Probes.hitAt (selector, below)
+
+    /// Whether a media query matches on the page.
+    let media (page: IPage) (query: string) : Async<bool> = ask page Probes.media query
+
     /// Every match's scroll box.
     let scrolls (page: IPage) (selector: string) : Async<Probes.Scroll list> = ask page Probes.scrolls selector
 
