@@ -1503,7 +1503,7 @@ module View =
                 html $"""
                     <button type="button" class="{Style.trayInterrupt}" aria-label="{label}" aria-busy="{if stopping then "true" else "false"}"
                             data-interrupt-turn="{AgentTurnId.value turn}" ?disabled={stopping}
-                            @click={Ev(fun _ -> dispatch (InterruptTurnMsg turn))}>{Icon.stop}{word}</button>"""
+                            @click={Ev(fun _ -> dispatch (InterruptTurnMsg turn))}><span class="{Style.trayMark}">{Icon.stop}</span>{word}</button>"""
         let jump =
             if not away then Lit.nothing
             else

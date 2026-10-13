@@ -4944,6 +4944,34 @@ let editorTests =
                 let! over = controlsOverConversation page
                 Expect.equal over "" "both controls are on screen and neither lies over the conversation"
             }
+        // Interrupt's word stands on the reading rail every message body starts on, its glyph
+        // hanging in the gutter left of it (docs/visual-design.md, "Space"). It started on the
+        // composer's gutter for a while, with the glyph pushing the word in: 12px short of
+        // the line a reader draws down the conversation on a phone.
+        let interruptRailCase width height =
+            editorCaseIn width height (sprintf "at %dpx interrupt's word starts where the conversation's words do" width) <| fun page ->
+                async {
+                    do! Harness.run page HarnessPage.agentTurn
+                    let body = "#shell [data-conversation] [data-message-body]"
+                    let mark = "#shell [data-interrupt-turn] > span"
+                    let! _ = await (page.WaitForSelectorAsync mark)
+                    let px (v: string option) =
+                        match v |> Option.filter (fun p -> p.EndsWith "px") with
+                        | Some p -> float (p.Substring (0, p.Length - 2))
+                        | None -> failwith "a length could not be read"
+                    let! boxes = Probe.boxes page [ body; mark ]
+                    let! padding = Probe.computed page body "padding-left"
+                    let! gap = Probe.computed page "#shell [data-interrupt-turn]" "column-gap"
+                    match boxes with
+                    | [ Some bodyBox; Some markBox ] ->
+                        let column = bodyBox.Left + px padding
+                        let word = markBox.Right + px gap
+                        Expect.floatClose Accuracy.low word column
+                            (sprintf "interrupt's word starts at %g, the conversation's words at %g" word column)
+                    | _ -> failwith "the conversation's first body, or interrupt's glyph, could not be read"
+                }
+        interruptRailCase 390 844
+        interruptRailCase 1440 900
         // The tray takes its own height when a turn starts, and the conversation's box gives
         // it up. A reader who was at the latest message must still be at it, not left with
         // the newest line under the strip.
