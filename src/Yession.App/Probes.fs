@@ -342,6 +342,27 @@ module Probes =
         /// Every fold under an author line: how many, and the furthest an arrow stands off its
         /// author's avatar column.
         | FoldArrowsOnAvatars
+        /// How far a reference's name sits off its line's baseline.
+        | ReferenceBaseline
+        /// The phone pane's grab edge: its left, its width, the gap to the pane, whether it is
+        /// painted at its centre, and the height of that centre.
+        | GrabEdgeShape
+        /// The shut pane's grab edge: invisible, and not what is painted just inside the
+        /// screen's left edge.
+        | GrabEdgeClear
+        /// The shut pane's edge tab inside the header band and the viewport, big enough to
+        /// press, painted where it stands — and, asked with 1, on the title's baseline.
+        | EdgeTabOnBand
+        /// An arrangement rather than a judgement, answering nothing: room this many pixels
+        /// tall below the shell, and the shell's foot brought to the bottom of the screen.
+        | RoomBelowShell
+        /// How far the visible area runs past the shell's foot, in CSS pixels.
+        | PastShell
+        /// Each of the ask card's lines that does not start on the given column.
+        | AskCardColumn
+        /// Each conversation item that, scrolled to the middle, is not what a press in its
+        /// middle lands on.
+        | ItemsClearOfCard
 
     [<RequireQualifiedAccess>]
     module Measure =
@@ -352,15 +373,32 @@ module Probes =
             | Measure.RunningMarkOnCauseLine -> "running-mark-on-cause-line"
             | Measure.FoldArrowsOnRail -> "fold-arrows-on-rail"
             | Measure.FoldArrowsOnAvatars -> "fold-arrows-on-avatars"
+            | Measure.ReferenceBaseline -> "reference-baseline"
+            | Measure.GrabEdgeShape -> "grab-edge-shape"
+            | Measure.GrabEdgeClear -> "grab-edge-clear"
+            | Measure.EdgeTabOnBand -> "edge-tab-on-band"
+            | Measure.RoomBelowShell -> "room-below-shell"
+            | Measure.PastShell -> "past-shell"
+            | Measure.AskCardColumn -> "ask-card-column"
+            | Measure.ItemsClearOfCard -> "items-clear-of-card"
 
         let all =
             [ Measure.RunningMarkOnTitle
               Measure.CauseHeadsOnLines
               Measure.RunningMarkOnCauseLine
               Measure.FoldArrowsOnRail
-              Measure.FoldArrowsOnAvatars ]
+              Measure.FoldArrowsOnAvatars
+              Measure.ReferenceBaseline
+              Measure.GrabEdgeShape
+              Measure.GrabEdgeClear
+              Measure.EdgeTabOnBand
+              Measure.RoomBelowShell
+              Measure.PastShell
+              Measure.AskCardColumn
+              Measure.ItemsClearOfCard ]
 
-    /// What is wrong, by the measure's own account; empty when its promise holds.
+    /// What is wrong, by the measure's own account; empty when its promise holds. Asked with
+    /// a number the measure may read as a parameter (`EdgeTabOnBand` reads 1 as "on a desktop").
     let verdict (measure: Measure) : Probe<int, string list> =
         { Name = "__probeVerdict-" + Measure.name measure
           EncodeAsk = Encode.int

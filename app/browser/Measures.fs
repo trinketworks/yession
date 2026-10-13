@@ -163,20 +163,169 @@ let private foldArrowsOnAvatars () : float list =
             | _ -> None)
     [ float folds.Length; (if apart.IsEmpty then 0.0 else apart |> List.map abs |> List.max) ]
 
-/// What is wrong, by a verdict measure's account.
-let verdict (measure: Probes.Measure) : (unit -> string list) option =
+/// A zero-sized inline box on the baseline, for reading where a line's baseline is: its bottom.
+let private baselineMarker () : HTMLElement =
+    let marker = document.createElement "span"
+    marker.setAttribute ("style", "display:inline-block;width:0;height:0;vertical-align:baseline")
+    marker
+
+/// The baseline of the line `marker` is put at the end of.
+let private baselineIn (parent: Element) : float =
+    let marker = baselineMarker ()
+    parent.appendChild marker |> ignore
+    let bottom = marker.getBoundingClientRect().bottom
+    marker.remove ()
+    bottom
+
+let private referenceBaseline () : float list =
+    match first Root.Document "#shell [data-act-note]" with
+    | None -> []
+    | Some note ->
+        match first (Root.Under note) "[data-entity]", first (Root.Under note) "[data-entity] > span:last-child" with
+        | Some entity, Some name -> [ abs (baselineIn name - baselineIn entity.parentElement) ]
+        | _ -> []
+
+let private paintedAt (element: Element) (x: float) (y: float) : bool =
+    Browser.Dom.document.elementFromPoint (x, y) |> Option.ofObj |> Option.exists element.contains
+
+let private grabEdgeShape () : float list =
+    match first Root.Document "#shell [data-pane-grab-edge]", first Root.Document "#shell [data-content-panel]" with
+    | Some edge, Some pane ->
+        let e = edge.getBoundingClientRect ()
+        let p = pane.getBoundingClientRect ()
+        [ e.left
+          e.width
+          p.left - e.right
+          (if paintedAt edge (e.left + e.width / 2.0) (e.top + e.height / 2.0) then 1.0 else 0.0)
+          e.top + e.height / 2.0 ]
+    | _ -> []
+
+let private grabEdgeClear () : string list =
+    match first Root.Document "#shell [data-pane-grab-edge]" with
+    | None -> [ "the pane has no grab edge" ]
+    | Some edge ->
+        let e = edge.getBoundingClientRect ()
+        [ if Css.computedProperty (edge :?> HTMLElement) "opacity" <> "0" then "the edge is still drawn"
+          if paintedAt edge (e.left + 2.0) (e.top + e.height / 2.0) then "the edge is still what a press at the screen's edge lands on" ]
+
+let private edgeTabOnBand (desktop: bool) : string list =
+    match first Root.Document "#shell [data-content-toggle=\"show\"]", first Root.Document "#shell header" with
+    | Some tab, Some header ->
+        // The harness mounts the shell below its editors, so it is brought on screen first: a
+        // point off screen hits nothing.
+        Scrolling.intoView tab "center"
+        let at = tab.getBoundingClientRect ()
+        let band = header.getBoundingClientRect ()
+        let width = Browser.Dom.window.innerWidth
+        [ if at.top < band.top || at.bottom > band.bottom || at.left < band.left || at.right > band.right then
+              sprintf "outside the header band: %g..%g x %g..%g in %g..%g x %g..%g" at.left at.right at.top at.bottom band.left band.right band.top band.bottom
+          if at.left < 0.0 || at.right > width then
+              sprintf "outside the viewport: %g..%g of %g" at.left at.right width
+          if at.width < 24.0 || at.height < 24.0 then
+              sprintf "too small to press: %gx%g" at.width at.height
+          if not (paintedAt tab (at.left + at.width / 2.0) (at.top + at.height / 2.0)) then
+              "covered at its centre"
+          if desktop then
+              match first (Root.Under tab) "[data-terminals-count]", first Root.Document "#shell [data-session-title]" with
+              | Some words, Some title ->
+                  let tabBaseline = baselineIn words
+                  // An input's baseline is its text's, and it lends it to a line box only in
+                  // flow — so its OFFSET inside the input is read with the wrapper laid out as a
+                  // block for a moment, and added to where the input really is.
+                  let top = title.getBoundingClientRect().top
+                  let wrap = title.parentElement
+                  let was = wrap.getAttribute "style"
+                  wrap.setAttribute ("style", (match was with null -> "" | was -> was + ";") + "display:block")
+                  let theirs = baselineMarker ()
+                  title.parentElement.insertBefore (theirs, title.nextSibling) |> ignore
+                  let offset = theirs.getBoundingClientRect().bottom - title.getBoundingClientRect().top
+                  theirs.remove ()
+                  (match was with
+                   | null -> wrap.removeAttribute "style"
+                   | was -> wrap.setAttribute ("style", was))
+                  let drift = tabBaseline - (top + offset)
+                  if abs drift > 2.0 then sprintf "off the title baseline by %gpx" drift
+              | _ -> "the tab's words or the title are missing" ]
+    | _ -> [ "the edge tab or the header is missing" ]
+
+let private roomBelowShell (height: int) : string list =
+    let room = document.createElement "div"
+    room.setAttribute ("style", sprintf "height:%dpx" height)
+    document.body.appendChild room |> ignore
+    match first Root.Document "#shell" with
+    | Some shell ->
+        Scrolling.intoView shell "end"
+        []
+    | None -> [ "there is no shell" ]
+
+let private pastShell () : float list =
+    match first Root.Document "#shell" with
+    | Some shell -> [ Viewport.visualOffsetTop () + Viewport.visualHeight () - shell.getBoundingClientRect().bottom ]
+    | None -> []
+
+let private paddingLeft (element: Element) : float =
+    let padding = Css.computedProperty (element :?> HTMLElement) "padding-left"
+    if padding.EndsWith "px" then float (padding.Substring (0, padding.Length - 2)) else 0.0
+
+/// Columns are compared as whole pixels, rounded as JavaScript's `Math.round` rounds — half up
+/// — which is how the suite rounds the column it asks about.
+let private askCardColumn (column: int) : string list =
+    match first Root.Document "#shell [data-repo-picker]" with
+    | None -> [ "there is no ask card" ]
+    | Some card ->
+        let box selector = first (Root.Under card) selector |> Option.map (fun e -> int (floor (e.getBoundingClientRect().left + 0.5)))
+        let inside selector =
+            first (Root.Under card) selector
+            |> Option.map (fun e -> int (floor (e.getBoundingClientRect().left + paddingLeft e + 0.5)))
+        [ "the question", box "#repo-picker-title"
+          "the search field", inside "[data-repo-picker-search]"
+          "a row’s name", box "[data-repo-candidate-name]" ]
+        |> List.choose (fun (what, left) ->
+            match left with
+            | Some left when left = column -> None
+            | Some left -> Some (sprintf "%s starts at %dpx, the conversation at %dpx" what left column)
+            | None -> Some (sprintf "%s is missing" what))
+
+let private itemsClearOfCard () : string list =
+    all Root.Document "#shell [data-conversation] [data-message-id]"
+    |> List.choose (fun item ->
+        // To the middle, as far as the scroll allows: the column pins its author line at the
+        // top, and an item scrolled only to the nearest edge stops under that instead.
+        Scrolling.intoView item "center"
+        let box = item.getBoundingClientRect ()
+        if paintedAt item (box.left + box.width / 2.0) (box.top + box.height / 2.0) then None
+        else Some (sprintf "%s is not what a press in its middle lands on" (item.getAttribute "data-message-id")))
+
+/// What is wrong, by a verdict measure's account, asked with its parameter.
+let verdict (measure: Probes.Measure) : (int -> string list) option =
     match measure with
-    | Probes.Measure.RunningMarkOnTitle -> Some runningMarkOnTitle
-    | Probes.Measure.CauseHeadsOnLines -> Some causeHeadsOnLines
-    | Probes.Measure.RunningMarkOnCauseLine -> Some runningMarkOnCauseLine
+    | Probes.Measure.RunningMarkOnTitle -> Some (fun _ -> runningMarkOnTitle ())
+    | Probes.Measure.CauseHeadsOnLines -> Some (fun _ -> causeHeadsOnLines ())
+    | Probes.Measure.RunningMarkOnCauseLine -> Some (fun _ -> runningMarkOnCauseLine ())
+    | Probes.Measure.GrabEdgeClear -> Some (fun _ -> grabEdgeClear ())
+    | Probes.Measure.EdgeTabOnBand -> Some (fun desktop -> edgeTabOnBand (desktop = 1))
+    | Probes.Measure.RoomBelowShell -> Some roomBelowShell
+    | Probes.Measure.AskCardColumn -> Some askCardColumn
+    | Probes.Measure.ItemsClearOfCard -> Some (fun _ -> itemsClearOfCard ())
+    | Probes.Measure.PastShell
     | Probes.Measure.FoldArrowsOnRail
-    | Probes.Measure.FoldArrowsOnAvatars -> None
+    | Probes.Measure.FoldArrowsOnAvatars
+    | Probes.Measure.ReferenceBaseline
+    | Probes.Measure.GrabEdgeShape -> None
 
 /// The numbers a reading measure takes.
-let reading (measure: Probes.Measure) : (unit -> float list) option =
+let reading (measure: Probes.Measure) : (int -> float list) option =
     match measure with
-    | Probes.Measure.FoldArrowsOnRail -> Some foldArrowsOnRail
-    | Probes.Measure.FoldArrowsOnAvatars -> Some foldArrowsOnAvatars
+    | Probes.Measure.FoldArrowsOnRail -> Some (fun _ -> foldArrowsOnRail ())
+    | Probes.Measure.FoldArrowsOnAvatars -> Some (fun _ -> foldArrowsOnAvatars ())
+    | Probes.Measure.ReferenceBaseline -> Some (fun _ -> referenceBaseline ())
+    | Probes.Measure.GrabEdgeShape -> Some (fun _ -> grabEdgeShape ())
+    | Probes.Measure.PastShell -> Some (fun _ -> pastShell ())
+    | Probes.Measure.RoomBelowShell
+    | Probes.Measure.AskCardColumn
+    | Probes.Measure.ItemsClearOfCard
     | Probes.Measure.RunningMarkOnTitle
     | Probes.Measure.CauseHeadsOnLines
-    | Probes.Measure.RunningMarkOnCauseLine -> None
+    | Probes.Measure.RunningMarkOnCauseLine
+    | Probes.Measure.GrabEdgeClear
+    | Probes.Measure.EdgeTabOnBand -> None

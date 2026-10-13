@@ -71,6 +71,10 @@ module Probe =
     /// What is wrong, by a measure's own account; empty when its promise holds.
     let verdict (page: IPage) (measure: Probes.Measure) : Async<string list> = ask page (Probes.verdict measure) 0
 
+    /// A verdict measure asked with its parameter.
+    let verdictWith (page: IPage) (measure: Probes.Measure) (parameter: int) : Async<string list> =
+        ask page (Probes.verdict measure) parameter
+
     /// The numbers a measure reads.
     let reading (page: IPage) (measure: Probes.Measure) : Async<float list> = ask page (Probes.reading measure) 0
 

@@ -233,5 +233,5 @@ awaiting Probes.heldAfterFold heldAfterFold
 answering Probes.window window
 
 for measure in Probes.Measure.all do
-    Measures.verdict measure |> Option.iter (fun read -> answering (Probes.verdict measure) (fun (_: int) -> read ()))
-    Measures.reading measure |> Option.iter (fun read -> answering (Probes.reading measure) (fun (_: int) -> read ()))
+    Measures.verdict measure |> Option.iter (answering (Probes.verdict measure))
+    Measures.reading measure |> Option.iter (answering (Probes.reading measure))
