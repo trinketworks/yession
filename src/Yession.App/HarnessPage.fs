@@ -40,7 +40,17 @@ module HarnessPage =
     let writebacks : PageGlobal<int> = PageGlobal.named "__writebacks"
     let convState : PageGlobal<unit -> string> = PageGlobal.named "__convState"
     /// The typing diagnostic's counters, republished on every change (`TypingDiagnostic`).
-    let benchDiagState : PageGlobal<{| hostKeydowns : int; docKeydowns : int; rafs : int; focus : string array |}> =
+    /// Named rather than anonymous because two assemblies name it — the harness that publishes
+    /// it and this one — and on .NET an anonymous record from one is not the other's. Its
+    /// labels are the page's property names.
+    [<RequireQualifiedAccess>]
+    type BenchDiagState =
+        { hostKeydowns : int
+          docKeydowns : int
+          rafs : int
+          focus : string array }
+
+    let benchDiagState : PageGlobal<BenchDiagState> =
         PageGlobal.named "__benchDiagState"
     let benchDiag : PageGlobal<unit -> string> = PageGlobal.named "__benchDiag"
     let benchSeed : PageGlobal<int -> JS.Promise<int>> = PageGlobal.named "__benchSeed"

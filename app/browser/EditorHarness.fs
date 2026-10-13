@@ -284,10 +284,10 @@ module private TypingDiagnostic =
     let private focus = ResizeArray<string> ()
 
     let private state () =
-        {| hostKeydowns = hostKeydowns
-           docKeydowns = docKeydowns
-           rafs = rafs
-           focus = focus.ToArray () |}
+        { HarnessPage.BenchDiagState.hostKeydowns = hostKeydowns
+          HarnessPage.BenchDiagState.docKeydowns = docKeydowns
+          HarnessPage.BenchDiagState.rafs = rafs
+          HarnessPage.BenchDiagState.focus = focus.ToArray () }
 
     let private publish () : unit = PageGlobal.set HarnessPage.benchDiagState (state ())
 
