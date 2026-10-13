@@ -190,6 +190,79 @@ let private attrAt ((x: float, y: float), (selector: string, attribute: string))
     |> Option.bind (fun hit -> hit.closest selector)
     |> Option.bind (fun found -> found.getAttribute attribute |> Option.ofObj)
 
+let private after (ms: int) : JS.Promise<unit> =
+    Promise.create (fun resolve _ -> Browser.Dom.window.setTimeout ((fun () -> resolve ()), ms) |> ignore)
+
+let private quiet (_: int) : JS.Promise<Probes.Quiet> =
+    let rec poll (last: int option) (still: int) (waited: int) : JS.Promise<Probes.Quiet> =
+        let now = PageGlobal.tryGet Probes.renders
+        let still = if now = last then still + 1 else 0
+        let waited = waited + 250
+        if still >= 6 || waited >= 30000 then
+            Promise.lift
+                { Probes.Quiet.Renders = now
+                  Probes.Quiet.Scans = PageGlobal.tryGet Probes.scans
+                  Probes.Quiet.Still = still >= 6 }
+        else after 250 |> Promise.bind (fun () -> poll now still waited)
+    // `-1` is no count a page publishes, so the first poll is never already still.
+    poll (Some -1) 0 0
+
+/// The start of a text, for a line a person reads.
+let private clipped (length: int) (text: string) =
+    if text.Length > length then text.Substring (0, length) else text
+
+/// What this client KEPT, by store and address. The ADDRESS keyed to its BODY: the address
+/// says which line the entry starts on — a replay with entries but none starting at 0 folds
+/// nothing — and the body says WHICH record it is: a store that kept the `"i"` input line but
+/// not yet the `"o"` output reads the same by address as one that kept both, and only the bytes
+/// tell them apart. Truncated; a recording is small here.
+let private kept () : JS.Promise<string list> =
+    match caches () with
+    | None -> Promise.lift [ "kept: no stores on this page" ]
+    | Some stores ->
+        let origin = Browser.Dom.window.location.origin
+        let address (url: string) =
+            let path = url.Replace (origin, "")
+            match path.IndexOf "?token=" with
+            | -1 -> path
+            | at -> path.Substring (0, at)
+        stores.names ()
+        |> Promise.bind (fun names ->
+            names
+            |> Array.map (fun name ->
+                stores.openStore name
+                |> Promise.bind (fun store ->
+                    store.keys ()
+                    |> Promise.bind (fun requests ->
+                        requests
+                        |> Array.map (fun request ->
+                            cacheMatch store request.url
+                            |> Promise.bind (fun response ->
+                                match Option.ofObj response with
+                                | None -> Promise.lift (sprintf "kept %s %s: (gone)" name (address request.url))
+                                | Some response ->
+                                    response.text ()
+                                    |> Promise.map (fun body -> sprintf "kept %s %s: %s" name (address request.url) (clipped 300 body))))
+                        |> Promise.all)))
+            |> Promise.all)
+        |> Promise.map (Array.concat >> List.ofArray)
+        |> Promise.catch (fun e -> [ "kept: unreadable: " + e.Message ])
+
+let private pageState (_: int) : JS.Promise<string list> =
+    let attribute (selector: string) (name: string) =
+        first selector |> Option.bind (fun e -> e.getAttribute name |> Option.ofObj) |> Option.defaultValue "(none)"
+    let facts =
+        [ "url: " + Browser.Dom.window.location.href
+          "title: " + Browser.Dom.document.title
+          "connection: " + attribute "[data-connection]" "data-connection"
+          "conversation: " + (first "[data-conversation]" |> Option.map (fun e -> clipped 200 e.textContent) |> Option.defaultValue "(none)")
+          "degraded: " + attribute "[data-degraded]" "data-degraded"
+          // Where the keyboard is: a keyboard case that fails has either pressed the wrong thing
+          // or pressed into nothing, and only this tells which.
+          "focused: "
+          + (Browser.Dom.document.activeElement |> Option.ofObj |> Option.map opening |> Option.defaultValue "(none)") ]
+    kept () |> Promise.map (fun kept -> facts @ kept)
+
 let private newest (selector: string, mark: string) : Probes.Newest option =
     first selector
     |> Option.bind (fun surface ->
@@ -314,6 +387,8 @@ answering Probes.selection selection
 answering Probes.media media
 answering Probes.hitAt hitAt
 answering Probes.shows shows
+awaiting Probes.quiet quiet
+awaiting Probes.pageState pageState
 answering Probes.controls controls
 answering Probes.attrAt attrAt
 

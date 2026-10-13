@@ -325,82 +325,15 @@ let internal reporting (label: string) (page: IPage) (ev: Evidence) (body: Async
             // to ask, and that answer is itself worth printing.
             let! state =
                 async {
-                    try
-                        return!
-                            await (page.EvaluateAsync<string>
-                                    """async () => JSON.stringify({
-                                         url: location.href,
-                                         title: document.title,
-                                         connection: document.querySelector('[data-connection]')?.getAttribute('data-connection') ?? null,
-                                         conversation: document.querySelector('[data-conversation]')?.textContent?.slice(0, 200) ?? null,
-                                         degraded: document.querySelector('[data-degraded]')?.getAttribute('data-degraded') ?? null,
-                                         // Where the keyboard is: a keyboard case that fails
-                                         // has either pressed the wrong thing or pressed into
-                                         // nothing, and only this tells which.
-                                         focused: document.activeElement?.outerHTML?.slice(0, 160) ?? null,
-                                         // What this client KEPT, by store and entry count. An
-                                         // offline page renders out of these, so a store that is
-                                         // absent or empty is the difference between "the replay
-                                         // is broken" and "there was nothing to replay" — which
-                                         // a bare timeout cannot tell you and which cost a full
-                                         // run of the gate to tell apart once already.
-                                         kept: await (async () => {
-                                           try {
-                                             const out = {}
-                                             for (const n of await caches.keys()) {
-                                               const c = await caches.open(n)
-                                               const entries = {}
-                                               for (const req of await c.keys()) {
-                                                 // The ADDRESS keyed to its BODY. The address says
-                                                 // which line the entry starts on — a replay with
-                                                 // entries but none starting at 0 folds nothing —
-                                                 // and the body says WHICH record it is: a store
-                                                 // that kept the `"i"` input line but not yet the
-                                                 // `"o"` output reads the same by address as one
-                                                 // that kept both, and only the bytes tell them
-                                                 // apart. Truncated; a recording is small here.
-                                                 const addr = req.url.replace(location.origin, '').replace(/\?token=[^&]*/, '')
-                                                 const resp = await c.match(req)
-                                                 entries[addr] = resp ? (await resp.text()).slice(0, 300) : null
-                                               }
-                                               out[n] = entries
-                                             }
-                                             return out
-                                           } catch (e) { return 'unreadable: ' + e.message }
-                                         })()
-                                       })""")
-                    with pe -> return "unreadable: " + pe.Message
+                    try return! Probe.ask page Yession.App.Probes.pageState 0
+                    with pe -> return [ "unreadable: " + pe.Message ]
                 }
-            printfn "  page: %s" state
+            for fact in state do printfn "  page %s" fact
             printfn "=== end %s ===" label
             raise e
     }
 
 
-/// The text an element really carries, with remote-caret widgets subtracted.
-///
-/// A ProseMirror widget decoration's DOM lives INSIDE the node it is anchored in, so a
-/// co-editor's caret label sitting in a heading makes that heading's `textContent` read
-/// `"Heading oneada"` rather than `"Heading one"`. An assertion comparing `textContent`
-/// exactly is therefore not testing the content — it is testing the content AND whether
-/// anybody's caret happens to be parked in it, which is a race nothing in the test controls.
-///
-/// It cost a full CI run of #210 to learn that, twice, because the failure looks exactly like
-/// lost content: the heading never equals the string, the wait never settles, and the page is
-/// rendering the words perfectly the whole time.
-let private ownTextFn =
-    """((el) => el ? [...el.childNodes]
-          .filter(n => !(n.nodeType === 1 && n.classList.contains('pm-caret')))
-          .map(n => n.textContent).join('') : null)"""
-
-/// The own text of the first match, for a strict comparison.
-let private ownText (selector: string) =
-    sprintf "%s(document.querySelector('%s'))" ownTextFn selector
-
-/// Does any match carry exactly this text, carets aside? The `.some` form, because a page can
-/// hold several editors and the assertion is about one of them saying the words.
-let private someOwnText (selector: string) (text: string) =
-    sprintf "[...document.querySelectorAll('%s')].some(el => %s(el) === '%s')" selector ownTextFn text
 
 /// A page-function wait that says WHICH wait it was. Playwright reports only "Timeout 30000ms
 /// exceeded", and a case with a dozen waits is a case whose red names none of them — telling
@@ -434,9 +367,8 @@ let private openNewTerminal (page: IPage) : Async<unit> =
     async {
         let door = "[data-pane-new], [data-terminal-new]"
         let! _ = await (page.WaitForSelectorAsync door)
-        let! asks =
-            await (page.EvaluateAsync<bool>
-                ("door => document.querySelector(door)?.getAttribute('aria-haspopup') === 'menu'", door))
+        let! popup = Read.attr page door "aria-haspopup"
+        let asks = popup = Some "menu"
         do! awaitU (page.Locator(door).First.ClickAsync ())
         if asks then
             let! _ = await (page.WaitForSelectorAsync "[data-sandbox-new='default']")
@@ -459,7 +391,18 @@ let private waitCount (what: string) (page: IPage) (selector: string) (count: in
 let private waitTextIn (what: string) (page: IPage) (selector: string) (text: string) : Async<unit> =
     Wait.until what (fun () -> Read.texts page selector) (List.exists (fun t -> t.Contains text))
 
-/// Wait until some match's own text — carets aside — is exactly this.
+/// Wait until some match's own text — carets aside — is exactly this: the text an element
+/// really carries, with remote-caret widgets subtracted.
+///
+/// A ProseMirror widget decoration's DOM lives INSIDE the node it is anchored in, so a
+/// co-editor's caret label sitting in a heading makes that heading's `textContent` read
+/// `"Heading oneada"` rather than `"Heading one"`. An assertion comparing `textContent`
+/// exactly is therefore not testing the content — it is testing the content AND whether
+/// anybody's caret happens to be parked in it, which is a race nothing in the test controls.
+///
+/// It cost a full CI run of #210 to learn that, twice, because the failure looks exactly like
+/// lost content: the heading never equals the string, the wait never settles, and the page is
+/// rendering the words perfectly the whole time.
 let private waitOwnText (what: string) (page: IPage) (selector: string) (text: string) : Async<unit> =
     Wait.until what (fun () -> Probe.ownTexts page selector) (List.contains text)
 
@@ -588,10 +531,8 @@ let private commandLinesOn (page: IPage) : Async<string[]> =
 /// showing" is not a state to assume, it is one to wait for.
 let private showTerminal (page: IPage) (terminal: string) : Async<unit> =
     async {
-        let! selected =
-            await (page.EvaluateAsync<bool> (
-                    "id => document.querySelector(`[data-terminal-tab='${id}']`)?.getAttribute('aria-selected') === 'true'",
-                    box terminal))
+        let! tab = Read.attr page (sprintf "[data-terminal-tab='%s']" terminal) "aria-selected"
+        let selected = tab = Some "true"
         if not selected then do! awaitU (page.ClickAsync (sprintf "[data-terminal-tab='%s']" terminal))
         try
             do! await (page.WaitForSelectorAsync (commandLine terminal)) |> Async.Ignore
@@ -790,27 +731,13 @@ let private stoppedAndStillThere (stop: IPage -> Async<unit>) (page: IPage) : As
         do! awaitU (page.ClickAsync commandLine)
         do! awaitU (page.Keyboard.TypeAsync "echo sta''rted; sleep 600")
         do! awaitU (page.Keyboard.PressAsync "Enter")
-        do!
-            waitFor
-                "the long command to start"
-                page
-                """[...document.querySelectorAll('[data-terminal-output]')].some(o => o.textContent.includes('started'))"""
+        do! waitTextIn "the long command to start" page "[data-terminal-output]" "started"
         do! stop page
-        do!
-            waitFor
-                "the long command to end"
-                page
-                """[...document.querySelectorAll('[data-terminal-block]')].some(b => b.textContent.includes('sleep 600')
-                                                                                    && b.getAttribute('data-terminal-block-status') !== 'running')"""
+        do! waitTextIn "the long command to end" page "[data-terminal-block]:not([data-terminal-block-status='running'])" "sleep 600"
         do! awaitU (page.ClickAsync commandLine)
         do! awaitU (page.Keyboard.TypeAsync "echo al''ive")
         do! awaitU (page.Keyboard.PressAsync "Enter")
-        do!
-            waitFor
-                "the same terminal to run the next command"
-                page
-                """[...document.querySelectorAll('[data-terminal-block]')].some(b => b.textContent.includes("echo al''ive")
-                                                                                    && b.getAttribute('data-terminal-block-status') === 'ok')"""
+        do! waitTextIn "the same terminal to run the next command" page "[data-terminal-block][data-terminal-block-status='ok']" "echo al''ive"
     }
 
 /// A case with one peer that also reads the SESSION's own files. Everything above asserts on
@@ -1130,9 +1057,9 @@ let tests =
                 let middle = "[data-pane-tab]:nth-child(2)"
                 let! chosen = await (page.GetAttributeAsync (middle, "data-pane-tab"))
                 do! awaitU (page.ClickAsync middle)
-                let chosenOnTop =
-                    sprintf "document.querySelector(\"[data-pane-tab='%s']\")?.getAttribute('aria-selected') === 'true'" chosen
-                do! waitFor "the middle terminal to be on top" page chosenOnTop
+                let chosenOnTop (what: string) =
+                    Wait.until what (fun () -> Read.attr page (sprintf "[data-pane-tab='%s']" chosen) "aria-selected") ((=) (Some "true"))
+                do! chosenOnTop "the middle terminal to be on top"
                 // A command in it, and that command's preview laid over it — which is not what
                 // comes back; the terminal under it is.
                 let composerInput = "[data-terminal-input^='term-draft:']:not([readonly])"
@@ -1153,15 +1080,17 @@ let tests =
                 do! Shim.install page [ Yession.App.Shims.Shim.FirstOnTop 3 ]
                 let! _ = await (page.ReloadAsync ())
                 do! waitConnectedAs "the reloaded page to connect" page
-                do! waitFor "all three terminals to be back in the strip" page "document.querySelectorAll('[data-pane-tab]').length === 3"
-                do! waitFor "the chosen terminal to be on top again" page chosenOnTop
+                do! waitCount "all three terminals to be back in the strip" page "[data-pane-tab]" 3
+                do! chosenOnTop "the chosen terminal to be on top again"
                 let! firstOnTop = Harness.read page Yession.App.Shims.firstOnTop
                 Expect.equal firstOnTop (Some chosen) "on top from the first moment the strip was back, not once catch-up ended"
-                do! waitFor "no preview, which was a glance" page "!document.querySelector('[data-pane-preview]')"
-                do! waitFor
+                do! waitAbsent "no preview, which was a glance" page "[data-pane-preview]"
+                do! Wait.until
                         "the pane to be open"
-                        page
-                        "(document.querySelector('[data-content-panel]')?.getBoundingClientRect().width ?? 0) > 1"
+                        (fun () -> Probe.boxes page [ "[data-content-panel]" ])
+                        (function
+                         | [ Some pane ] -> Yession.App.Probes.Box.width pane > 1.0
+                         | _ -> false)
             })
 
         // --- Reopening a session, and what it costs -------------------------------------
@@ -1266,39 +1195,25 @@ let tests =
                         let! _ = await (page.ReloadAsync ())
                         do! waitConnectedAs "the reopened session to connect" page
                         do! printed "the reopened session to have replayed its terminal" upTo
-                        let! settled =
-                            await (page.EvaluateAsync<string> """() => new Promise(resolve => {
-                              let last = -1, still = 0, waited = 0
-                              const tick = () => {
-                                const n = globalThis.__yessionRenders ?? -1
-                                if (n === last) still++ ; else { still = 0; last = n }
-                                waited += 250
-                                if (still >= 6 || waited >= 30000) resolve(n + ',' + (still >= 6))
-                                else setTimeout(tick, 250)
-                              }
-                              tick()
-                            })""")
-                        match settled.Split ',' with
-                        | [| n; s |] ->
-                            let renders = int n
-                            // Anti-vacuity, both ways this passes a budget while measuring
-                            // nothing: a counter that was never incremented (the app stopped
-                            // publishing one, so this reads -1 or 0), and a page still
-                            // rendering when time ran out. The third — a transcript too short
-                            // to cost anything — is the wait above, which does not settle
-                            // until the last seeded line is back on screen.
-                            if renders <= 0 then
-                                failwithf
-                                    "the page reports %d renders — `Browser.fs` publishes \
-                                     `globalThis.__yessionRenders` and this budget means nothing without it"
-                                    renders
-                            if s <> "true" then
-                                failwithf
-                                    "the reopened session was still rendering after 30s (%d renders so far, %d \
-                                     seeded lines) — the replay storm this budget exists for, not a slow box"
-                                    renders upTo
-                            return renders
-                        | _ -> return failwithf "the render counter answered '%s', which is not a count" settled
+                        let! settled = Probe.ask page Yession.App.Probes.quiet 0
+                        let renders = settled.Renders |> Option.defaultValue -1
+                        // Anti-vacuity, both ways this passes a budget while measuring
+                        // nothing: a counter that was never incremented (the app stopped
+                        // publishing one, so this reads -1 or 0), and a page still
+                        // rendering when time ran out. The third — a transcript too short
+                        // to cost anything — is the wait above, which does not settle
+                        // until the last seeded line is back on screen.
+                        if renders <= 0 then
+                            failwithf
+                                "the page reports %d renders — `Render.fs` publishes \
+                                 `Probes.renders` and this budget means nothing without it"
+                                renders
+                        if not settled.Still then
+                            failwithf
+                                "the reopened session was still rendering after 30s (%d renders so far, %d \
+                                 seeded lines) — the replay storm this budget exists for, not a slow box"
+                                renders upTo
+                        return renders
                     }
 
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
@@ -1406,56 +1321,42 @@ let tests =
 
                 // Settled when the render count has stopped moving, which is also when the
                 // scans have: they are made in the same pass.
-                let! settled =
-                    await (page.EvaluateAsync<string> """() => new Promise(resolve => {
-                      let last = -1, still = 0, waited = 0
-                      const tick = () => {
-                        const n = globalThis.__yessionRenders ?? -1
-                        if (n === last) still++ ; else { still = 0; last = n }
-                        waited += 250
-                        if (still >= 6 || waited >= 30000)
-                          resolve([n, globalThis.__yessionViewportScans ?? -1, still >= 6].join(','))
-                        else setTimeout(tick, 250)
-                      }
-                      tick()
-                    })""")
-                match settled.Split ',' with
-                | [| r; q; s |] ->
-                    let renders, scans = int r, int q
-                    // Anti-vacuity, both ways this passes while measuring nothing: a counter
-                    // the app stopped publishing (which reads -1, or 0 for a pass that never
-                    // ran), and a page still rendering when time ran out.
-                    if renders <= 0 then
-                        failwithf
-                            "the page reports %d renders — `app/browser/Render.fs` publishes \
-                             `globalThis.__yessionRenders` and this budget means nothing without it"
-                            renders
-                    if scans <= 0 then
-                        failwithf
-                            "the page reports %d viewport scans — `app/browser/Screens.fs` publishes \
-                             `globalThis.__yessionViewportScans` and this budget means nothing without it"
-                            scans
-                    if s <> "true" then
-                        failwithf
-                            "the reopened session was still rendering after 30s (%d renders, %d scans)"
-                            renders scans
-                    let perRender = float scans / float renders
-                    printfn "  reopen with %d terminals open: %d scans over %d renders — %.2f per render"
-                            opened scans renders perRender
-                    // One per render, plus whatever the resize observer added — it fires on a
-                    // box changing rather than on a render, and a load moves boxes. The line
-                    // sits at two, which is well over what one scan a render plus a settling
-                    // layout costs and well under the FOUR this case opens: a scan that goes
-                    // back to being per-terminal cannot pass it, and neither can one that
-                    // creeps to a second question per pass.
-                    let budget = 2.0
-                    if perRender > budget then
-                        failwithf
-                            "the after-render pass asked the document where the terminal boxes are %.2f times \
-                             per render with %d terminals open (%d scans over %d renders); the budget is %.1f. \
-                             Measuring is finding them ONCE — see `viewports` in `app/browser/Screens.fs`."
-                            perRender opened scans renders budget
-                | _ -> failwithf "the counters answered '%s', which is not two counts and a verdict" settled
+                let! settled = Probe.ask page Yession.App.Probes.quiet 0
+                let renders = settled.Renders |> Option.defaultValue -1
+                let scans = settled.Scans |> Option.defaultValue -1
+                // Anti-vacuity, both ways this passes while measuring nothing: a counter
+                // the app stopped publishing (which reads -1, or 0 for a pass that never
+                // ran), and a page still rendering when time ran out.
+                if renders <= 0 then
+                    failwithf
+                        "the page reports %d renders — `app/browser/Render.fs` publishes \
+                         `Probes.renders` and this budget means nothing without it"
+                        renders
+                if scans <= 0 then
+                    failwithf
+                        "the page reports %d viewport scans — `app/browser/Screens.fs` publishes \
+                         `Probes.scans` and this budget means nothing without it"
+                        scans
+                if not settled.Still then
+                    failwithf
+                        "the reopened session was still rendering after 30s (%d renders, %d scans)"
+                        renders scans
+                let perRender = float scans / float renders
+                printfn "  reopen with %d terminals open: %d scans over %d renders — %.2f per render"
+                        opened scans renders perRender
+                // One per render, plus whatever the resize observer added — it fires on a
+                // box changing rather than on a render, and a load moves boxes. The line
+                // sits at two, which is well over what one scan a render plus a settling
+                // layout costs and well under the FOUR this case opens: a scan that goes
+                // back to being per-terminal cannot pass it, and neither can one that
+                // creeps to a second question per pass.
+                let budget = 2.0
+                if perRender > budget then
+                    failwithf
+                        "the after-render pass asked the document where the terminal boxes are %.2f times \
+                         per render with %d terminals open (%d scans over %d renders); the budget is %.1f. \
+                         Measuring is finding them ONCE — see `viewports` in `app/browser/Screens.fs`."
+                        perRender opened scans renders budget
             })
 
         // A command line belongs to ONE terminal. The domain says so — a draft is keyed by
@@ -1630,17 +1531,7 @@ let tests =
                 // A session always has its default work sandbox, so this panel always has a
                 // record to write into — the arrangement cannot silently find nothing.
                 let! _ = await (pageA.WaitForSelectorAsync "[data-query-panel='work_sandboxes'] [data-query-row]")
-                let! overflowing =
-                    await (pageA.EvaluateAsync<string[]> ("""() => {
-                        const panel = document.querySelector('[data-query-panel="work_sandboxes"]')
-                        const long = 'a value far longer than two hundred and eighty pixels of column'
-                        panel.querySelectorAll('[data-query-cell]').forEach(el => { el.textContent = long })
-                        const edge = panel.getBoundingClientRect().right
-                        return [...panel.querySelectorAll('*')]
-                            .filter(el => el.scrollWidth > el.clientWidth + 1
-                                       || el.getBoundingClientRect().right > edge + 1)
-                            .map(el => `${el.tagName}: ${el.textContent.trim().slice(0, 40)}`)
-                    }"""))
+                let! overflowing = Probe.verdict pageA Yession.App.Probes.Measure.LongValueInLane
                 Expect.isEmpty
                     overflowing
                     (sprintf "every part of an answer must stay inside its panel, these do not: %s"
@@ -1672,25 +1563,7 @@ let tests =
             async {
                 do! awaitU (pageA.ClickAsync "[data-settings-toggle='open']")
                 let! _ = await (pageA.WaitForSelectorAsync "[data-query-panel='work_sandboxes'] [data-query-row]")
-                let! starved =
-                    await (pageA.EvaluateAsync<string[]> ("""() => {
-                        const panel = document.querySelector('[data-query-panel="work_sandboxes"]')
-                        const values = () => [...panel.querySelectorAll('dl [data-query-cell]')]
-                        // The same long value in every cell, so what is compared across the
-                        // two measurements is the LABEL and nothing else.
-                        values().forEach(el => {
-                            el.textContent = '/private/etc/ssl/cert.pem, read-only; NIX_SSL_CERT_FILE=/private/etc/ssl/cert.pem'
-                        })
-                        const before = values().map(el => el.getBoundingClientRect().width)
-                        panel.querySelectorAll('dl dt').forEach(el => {
-                            el.textContent = 'a label longer than the lane it is asked to share'
-                        })
-                        return values()
-                            .map((el, at) => [el, before[at], el.getBoundingClientRect().width])
-                            .filter(([_, was, now]) => Math.abs(was - now) > 1)
-                            .map(([el, was, now]) =>
-                                `${el.dataset.queryCell}: ${Math.round(was)}px became ${Math.round(now)}px`)
-                    }"""))
+                let! starved = Probe.verdict pageA Yession.App.Probes.Measure.LabelCostsValue
                 Expect.isEmpty
                     starved
                     (sprintf "a longer label must not narrow the value beside it, these lost room: %s"
@@ -2896,10 +2769,7 @@ let editorTests =
                 // On failure it says WHICH of the four stories happened, because the DOM alone
                 // cannot: what each doc holds and what each editor rendered, side by side.
                 try
-                    do! waitFor
-                            "the co-editor to render the author's remote content"
-                            page
-                            (sprintf "%s === 'Heading one'" (ownText "#peer-b .ProseMirror h1"))
+                    do! waitOwnText "the co-editor to render the author's remote content" page "#peer-b .ProseMirror h1" "Heading one"
                 with e ->
                     let! state = Harness.ask page HarnessPage.convState
                     return failwithf "%s\n  state: %s" e.Message state
@@ -2948,10 +2818,7 @@ let editorTests =
                 do! awaitU (page.Keyboard.TypeAsync "# Heading one")
                 // Over CONTENT: an empty document is the case y-prosemirror short-circuits
                 // anyway (`initialContentChanged`), so a storm over nothing would prove nothing.
-                do! waitFor
-                        "the co-editor to render the author's remote content"
-                        page
-                        (sprintf "%s === 'Heading one'" (ownText "#peer-b .ProseMirror h1"))
+                do! waitOwnText "the co-editor to render the author's remote content" page "#peer-b .ProseMirror h1" "Heading one"
                 do! Wait.until
                         "the caret storm to push a frame while the content was arriving"
                         (fun () -> Harness.read page HarnessPage.caretPushes)
