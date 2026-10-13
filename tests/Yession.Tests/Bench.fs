@@ -32,6 +32,9 @@ open Microsoft.Playwright
 
 open Yession.Domain
 open Yession.Tests.Browser
+open Yession.Tests.BrowserHarness
+
+module HarnessPage = Yession.App.HarnessPage
 
 /// The sweep. Small enough to be a short message, large enough to be a long one, and an order
 /// of magnitude between them so a linear cost is unmistakable in the ratio.
@@ -236,7 +239,7 @@ let private flingWhileStreaming (page: IPage) (cdp: ICDPSession) (records: int) 
             carried <- carried + max 0.0 (before - after)
             if after <= 0.0 then
                 do! awaitU (page.EvaluateAsync "() => { const el = document.querySelector('#shell [data-conversation]'); el.scrollTop = el.scrollHeight }")
-            let! n = await (page.EvaluateAsync<int> "() => window.__benchScrollSent()")
+            let! n = Harness.ask page HarnessPage.benchScrollSent
             sent <- n
         return carried
     }
@@ -268,7 +271,7 @@ let tests =
                             // Seed through the real relay, and check it actually landed: a
                             // sweep whose sizes all ended up the same is a sweep measuring one
                             // size three times, and it would look like a beautifully flat line.
-                            let! seeded = await (page.EvaluateAsync<int> (sprintf "() => window.__benchSeed(%d)" size))
+                            let! seeded = Harness.await1 page HarnessPage.benchSeed size
                             if seeded < size / 2 then
                                 failwithf
                                     "seeding asked for ~%d characters and the co-editor's doc holds %d — the sweep is not sweeping"
@@ -278,7 +281,7 @@ let tests =
                             // Typing is driven from OUT here, with real key events, so what is
                             // timed includes the browser's own dispatch. One drive yields both
                             // halves of a keystroke: the author's echo and the co-editor's screen.
-                            do! awaitU (page.EvaluateAsync "() => window.__benchReset()")
+                            do! Harness.run page HarnessPage.benchReset
                             do! awaitU (page.ClickAsync "#peer-b .ProseMirror")
                             do! awaitU (page.Keyboard.PressAsync "ControlOrMeta+End")
                             do! awaitU (page.Keyboard.TypeAsync (String.replicate samples "x"))
@@ -286,16 +289,16 @@ let tests =
                             // and `receive` sample is recorded in a `requestAnimationFrame`, and
                             // reading the instant `TypeAsync` returns catches them mid-flight —
                             // on a busy frame that truncated the series to a handful or to none.
-                            do! awaitU (page.EvaluateAsync "() => window.__benchSettle()")
-                            let! typing = await (page.EvaluateAsync<string> "() => window.__benchTyping()")
-                            let! diag = await (page.EvaluateAsync<string> "() => window.__benchDiag()")
+                            do! Harness.settle page HarnessPage.benchSettle
+                            let! typing = Harness.ask page HarnessPage.benchTyping
+                            let! diag = Harness.ask page HarnessPage.benchDiag
                             diagBySize.[size] <- diag
                             printfn "  typed %d keystrokes at size %d — %s" samples size diag
                             collected.AddRange (seriesFrom typing size [ "type", "type"; "receive", "receive" ])
 
                             // The caret push, timed twice: the work it sets off, and the wait
                             // until it is on screen.
-                            let! carets = await (page.EvaluateAsync<string> (sprintf "() => window.__benchCarets(%d)" samples))
+                            let! carets = Harness.await1 page HarnessPage.benchCarets samples
                             collected.AddRange (seriesFrom carets size [ "push", "caret.push"; "paint", "caret.paint" ])
 
                         // The transcript read, on its own axis. No seeding through the relay and
@@ -303,10 +306,7 @@ let tests =
                         // off it, which is the part of a render that grows with the recording.
                         for records in transcriptSizes do
                             let! read =
-                                await (page.EvaluateAsync<string> (
-                                    sprintf
-                                        "() => window.__benchTranscript(%d, %d, %d)"
-                                        records recordsPerBlock samples))
+                                Harness.ask3 page HarnessPage.benchTranscript records recordsPerBlock samples
                             collected.AddRange (
                                 seriesFrom read records [ "transcript.read", "transcript.read" ])
                             printfn "  read %d records in %d-record blocks" records recordsPerBlock
@@ -336,15 +336,13 @@ let tests =
                         // from nothing — the cold open, everything over the network a page at
                         // a time, which is where the words under the eye move.
                         let opens =
-                            [ "open", (fun items -> sprintf "__benchOpen(%d, %d)" items eventsPerAnswer)
-                              "cold", (fun items -> sprintf "__benchOpenCold(%d, %d, %d)" items coldPageSize coldRoundTripMs) ]
+                            [ "open", (fun items -> Harness.await2 phonePage HarnessPage.benchOpen items eventsPerAnswer)
+                              "cold", (fun items -> Harness.await3 phonePage HarnessPage.benchOpenCold items coldPageSize coldRoundTripMs) ]
                         for (prefix, call) in opens do
                             for items in conversationSizes do
                                 let opens = ResizeArray<Collections.Generic.Dictionary<string, float>> ()
                                 for _ in 1 .. openRepeats do
-                                    let! report =
-                                        await (phonePage.EvaluateAsync<string> (
-                                            "() => window." + call items))
+                                    let! report = call items
                                     use doc = JsonDocument.Parse report
                                     let number (name: string) = doc.RootElement.GetProperty(name).GetDouble ()
                                     let connection = doc.RootElement.GetProperty("connection").GetString ()
@@ -381,10 +379,9 @@ let tests =
                         let rendersPerRecord = ResizeArray<float> ()
                         for items in conversationSizes do
                             do!
-                                awaitU (phonePage.EvaluateAsync (
-                                    sprintf "() => window.__benchScrollBegin(%d, %d, %d, false)" items streamRecords streamEveryMs))
+                                Harness.run4 phonePage HarnessPage.benchScrollBegin items streamRecords streamEveryMs false
                             let! carried = flingWhileStreaming phonePage cdp streamRecords
-                            let! report = await (phonePage.EvaluateAsync<string> "() => window.__benchScrollEnd()")
+                            let! report = Harness.ask phonePage HarnessPage.benchScrollEnd
                             use doc = JsonDocument.Parse report
                             let renders = doc.RootElement.GetProperty("renders").GetInt32 ()
                             let records = doc.RootElement.GetProperty("records").GetInt32 ()
