@@ -1,6 +1,6 @@
 module Fable.OpenTelemetry
 
-// Fable bindings to the OpenTelemetry JS SDK — the *logs* signal only, the slice the
+// Fable bindings to the OpenTelemetry JS SDK — the logs and traces signals, the slices the
 // session-process telemetry emitter uses (Plan 04). Mirrors Fable.Dockerode: a distinct
 // binding layer over an npm package that declares nothing beyond what we call. A ts2fable
 // pass over the packages' .d.ts is the starting point; this is the hand-trimmed surface.
@@ -10,7 +10,7 @@ module Fable.OpenTelemetry
 // site. Handles we only ever pass back into the SDK are opaque empty interfaces.
 //
 // Packages (pinned centrally in package.json): @opentelemetry/{api,api-logs,sdk-logs,
-// resources,exporter-logs-otlp-http}.
+// resources,exporter-logs-otlp-http,sdk-trace,exporter-trace-otlp-http,context-async-hooks}.
 
 open Fable.Core
 open Fable.Core.JsInterop
@@ -239,3 +239,189 @@ let consoleLogExporter () : LogRecordExporter = consoleExporterClass.Create ()
 
 /// In-memory exporter for tests.
 let inMemoryExporter () : InMemoryLogRecordExporter = inMemoryExporterClass.Create ()
+
+// --- Traces -------------------------------------------------------------------------------
+// The same shape as the logs half: opaque handles passed back into the SDK, constructors
+// typed by the options they take, and readers only for what a test asserts.
+
+/// An OTel status code (`SpanStatusCode`); only the SDK's enum hands one out.
+[<Erase>]
+type SpanStatusCode = private SpanStatusCode of int
+
+/// What `Span.setStatus` takes.
+[<AllowNullLiteral>]
+type SpanStatus =
+    abstract code : SpanStatusCode with get, set
+    abstract message : string with get, set
+
+/// A span in flight. Ended exactly once; its status is set before that, never after.
+type [<AllowNullLiteral>] Span =
+    abstract setStatus: status: SpanStatus -> unit
+    abstract ``end``: unit -> unit
+
+/// What `Tracer.startSpan` takes: the attributes the span starts with.
+[<AllowNullLiteral>]
+type SpanOptions =
+    abstract attributes : Attributes with get, set
+
+/// The propagation context a span is started under: whatever is active, which the
+/// async context manager carries across every await.
+type [<AllowNullLiteral>] Context = interface end
+
+type [<AllowNullLiteral>] Tracer =
+    abstract startSpan: name: string * options: SpanOptions * context: Context -> Span
+
+type [<AllowNullLiteral>] TracerProvider =
+    abstract getTracer: name: string -> Tracer
+    abstract forceFlush: unit -> JS.Promise<unit>
+    abstract shutdown: unit -> JS.Promise<unit>
+
+type [<AllowNullLiteral>] SpanProcessor = interface end
+type [<AllowNullLiteral>] SpanExporter = interface end
+
+/// The identity half of a span's context — what a reader joins parent to child by.
+type [<AllowNullLiteral>] SpanContext =
+    abstract traceId: string
+    abstract spanId: string
+
+/// A span the SDK has FINISHED — what an exporter is handed. These members are what this
+/// repository reads back; the rest stays undeclared.
+type [<AllowNullLiteral>] ReadableSpan =
+    abstract name: string
+    abstract attributes: Attributes
+    abstract spanContext: unit -> SpanContext
+    abstract parentSpanContext: SpanContext option
+    abstract status: ReadableStatus
+
+and [<AllowNullLiteral>] ReadableStatus =
+    abstract code: SpanStatusCode
+    abstract message: string option
+
+type [<AllowNullLiteral>] InMemorySpanExporter =
+    inherit SpanExporter
+    abstract getFinishedSpans: unit -> ReadableSpan array
+    abstract reset: unit -> unit
+
+[<AllowNullLiteral>]
+type private TracerProviderConfig =
+    abstract resource : Resource with get, set
+    abstract spanProcessors : SpanProcessor array with get, set
+
+[<AllowNullLiteral>]
+type private SpanProcessorConfig =
+    abstract exporter : SpanExporter with get, set
+
+type private TracerProviderClass =
+    [<EmitConstructor>]
+    abstract Create : config: TracerProviderConfig -> TracerProvider
+
+type private SpanProcessorClass =
+    [<EmitConstructor>]
+    abstract Create : config: SpanProcessorConfig -> SpanProcessor
+
+type private OtlpSpanExporterClass =
+    [<EmitConstructor>]
+    abstract Create : config: OtlpExporterConfig -> SpanExporter
+    [<EmitConstructor>]
+    abstract Create : unit -> SpanExporter
+
+type private ConsoleSpanExporterClass =
+    [<EmitConstructor>]
+    abstract Create : unit -> SpanExporter
+
+type private InMemorySpanExporterClass =
+    [<EmitConstructor>]
+    abstract Create : unit -> InMemorySpanExporter
+
+type private ContextManager =
+    abstract enable: unit -> ContextManager
+
+type private ContextManagerClass =
+    [<EmitConstructor>]
+    abstract Create : unit -> ContextManager
+
+type private ContextApi =
+    abstract active: unit -> Context
+    abstract ``with``: context: Context * fn: (unit -> 'T) -> 'T
+    abstract setGlobalContextManager: manager: ContextManager -> bool
+
+type private TraceApi =
+    abstract setSpan: context: Context * span: Span -> Context
+
+type private SpanStatusCodes =
+    abstract ERROR : SpanStatusCode
+
+[<Import("TracerProvider", "@opentelemetry/sdk-trace")>]
+let private tracerProviderClass : TracerProviderClass = jsNative
+[<Import("BatchSpanProcessor", "@opentelemetry/sdk-trace")>]
+let private batchSpanProcessorClass : SpanProcessorClass = jsNative
+[<Import("SimpleSpanProcessor", "@opentelemetry/sdk-trace")>]
+let private simpleSpanProcessorClass : SpanProcessorClass = jsNative
+[<Import("ConsoleSpanExporter", "@opentelemetry/sdk-trace")>]
+let private consoleSpanExporterClass : ConsoleSpanExporterClass = jsNative
+[<Import("InMemorySpanExporter", "@opentelemetry/sdk-trace")>]
+let private inMemorySpanExporterClass : InMemorySpanExporterClass = jsNative
+[<Import("OTLPTraceExporter", "@opentelemetry/exporter-trace-otlp-http")>]
+let private otlpSpanExporterClass : OtlpSpanExporterClass = jsNative
+[<Import("AsyncLocalStorageContextManager", "@opentelemetry/context-async-hooks")>]
+let private contextManagerClass : ContextManagerClass = jsNative
+[<Import("context", "@opentelemetry/api")>]
+let private contextApi : ContextApi = jsNative
+[<Import("trace", "@opentelemetry/api")>]
+let private traceApi : TraceApi = jsNative
+[<Import("SpanStatusCode", "@opentelemetry/api")>]
+let private spanStatusCodes : SpanStatusCodes = jsNative
+
+/// The status a span that failed ends with.
+let spanStatusError : SpanStatusCode = spanStatusCodes.ERROR
+
+/// Carry the active context across awaits for the whole process (Node's
+/// AsyncLocalStorage), so a span started inside another's work is its child without
+/// anybody passing the parent down. Without it every span is a root. A second call is
+/// refused by the API and changes nothing, which is what it should do.
+let enableAsyncContext () : unit =
+    contextApi.setGlobalContextManager (contextManagerClass.Create().enable ()) |> ignore
+
+/// A TracerProvider over the resource, fanning every finished span out to `processors`.
+let tracerProvider (resource: Resource) (processors: SpanProcessor list) : TracerProvider =
+    tracerProviderClass.Create (
+        jsOptions<TracerProviderConfig> (fun c ->
+            c.resource <- resource
+            c.spanProcessors <- Array.ofList processors))
+
+/// Start a span under the active context, with its first attributes.
+let startSpan (tracer: Tracer) (name: string) (attributes: Attributes) : Span =
+    tracer.startSpan (name, jsOptions<SpanOptions> (fun o -> o.attributes <- attributes), contextApi.active ())
+
+/// Run `fn` with `span` as the active span — the parent of every span started inside.
+let withSpan (span: Span) (fn: unit -> 'T) : 'T =
+    contextApi.``with`` (traceApi.setSpan (contextApi.active (), span), fn)
+
+/// Mark a span failed, with a reason. Call before `end`.
+let failSpan (span: Span) (message: string) : unit =
+    span.setStatus (
+        jsOptions<SpanStatus> (fun s ->
+            s.code <- spanStatusCodes.ERROR
+            s.message <- message))
+
+let batchSpanProcessor (exporter: SpanExporter) : SpanProcessor =
+    batchSpanProcessorClass.Create (jsOptions<SpanProcessorConfig> (fun c -> c.exporter <- exporter))
+
+let simpleSpanProcessor (exporter: SpanExporter) : SpanProcessor =
+    simpleSpanProcessorClass.Create (jsOptions<SpanProcessorConfig> (fun c -> c.exporter <- exporter))
+
+/// OTLP/HTTP trace exporter configured from the environment
+/// (`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`/`OTEL_EXPORTER_OTLP_ENDPOINT`, + `_HEADERS`).
+let otlpSpanExporterFromEnv () : SpanExporter = otlpSpanExporterClass.Create ()
+
+/// OTLP/HTTP trace exporter posting to `url`; `deadline` bounds one export, retries included.
+let otlpSpanExporter (url: string) (headers: Map<string, string>) (deadline: System.TimeSpan) : SpanExporter =
+    otlpSpanExporterClass.Create (
+        jsOptions<OtlpExporterConfig> (fun c ->
+            c.url <- url
+            c.headers <- flat [ for KeyValue (name, value) in headers -> name, box value ]
+            c.timeoutMillis <- deadline.TotalMilliseconds))
+
+let consoleSpanExporter () : SpanExporter = consoleSpanExporterClass.Create ()
+
+let inMemorySpanExporter () : InMemorySpanExporter = inMemorySpanExporterClass.Create ()
