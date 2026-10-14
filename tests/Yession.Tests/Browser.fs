@@ -6280,6 +6280,24 @@ let editorTests =
                         List.isEmpty
             }
 
+        // A command the kernel killed for memory wears the cause, not a bare 137, wherever a
+        // block's status is drawn. The chip says it in the chat.
+        editorCase "a block killed for memory says so on its chip" <| fun page ->
+            async {
+                let chip = "#shell [data-chat-block='block-killed-memory']"
+                let! _ = await (page.WaitForSelectorAsync chip)
+                do! Wait.until "the chip to name the memory kill" (fun () -> Read.text page chip) (Option.exists (fun t -> t.Contains "killed: out of memory"))
+            }
+
+        // And the block in its terminal says which of the two causes it was.
+        editorCase "a block killed for memory says in its terminal that the machine ran out" <| fun page ->
+            async {
+                do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
+                let fact = "#shell [data-terminal-block='block-killed-memory'] [data-terminal-block-memory='machine']"
+                let! _ = await (page.WaitForSelectorAsync fact)
+                do! Wait.until "the block to name the cause" (fun () -> Read.text page fact) (Option.exists (fun t -> t.Contains "the machine ran out of memory"))
+            }
+
         // A command and its status share a line only while the command keeps the line. With
         // "refused by <name>" beside it the command had a third of a phone's column and broke
         // mid-word in it; the status now goes under, and the command takes the width. What is

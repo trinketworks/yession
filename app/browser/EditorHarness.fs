@@ -752,6 +752,9 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
     /// A refusal on a long command: the status is the widest one a block wears ("refused by"
     /// and a name), and the command is several words past a phone's column.
     let refusedLong : BlockId = BlockId.create "block-refused-long" |> expect
+    /// A build the kernel killed for memory, when the machine ran out: the mark is a phrase
+    /// rather than a number, and the block names which of the two causes it was.
+    let killedForMemory : BlockId = BlockId.create "block-killed-memory" |> expect
     let refusedLongCommand =
         "cd /repos/trinketworks/yession && git fetch origin master -q && git log --oneline -5 origin/master"
     let peerId : PeerId = PeerId.create "ada" |> expect
@@ -925,7 +928,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                       // A tool call, so the page holds the OTHER kind of fold row: its title
                       // is mono and its own type step brings its own line-height, which is
                       // exactly what the arrow used to be measured wrong against.
-                      TimelineToolUse (offset 6L, toolUseId) ]
+                      TimelineToolUse (offset 6L, toolUseId)
+                      TimelineBlock (offset 7L, terminalId, killedForMemory) ]
                 ToolUses =
                     Map.ofList
                         [ ToolUseId.value toolUseId,
@@ -1012,6 +1016,17 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                           FromSeq = 2
                           ToSeq = Some 2
                           Status = BlockRejected (ActorRef.System, None)
+                          StoppedBy = None
+                          StartedAt = harnessRanAt }
+                        { BlockId = killedForMemory
+                          QueueId = None
+                          Authority = Authority.ofAuthor (Principal.Peer peerId)
+                          Command = "dotnet build -m"
+                          Description = None
+                          Background = false
+                          FromSeq = 2
+                          ToSeq = Some 2
+                          Status = BlockFinished (CommandKilledForMemory MachineOutOfMemory)
                           StoppedBy = None
                           StartedAt = harnessRanAt }
                         // Enough history that the scrollback actually OVERFLOWS its box.
