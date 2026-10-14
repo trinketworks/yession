@@ -757,6 +757,114 @@ let make (targets: Target list) =
             "make: %s"
             (failed |> Seq.map (fst >> Target.describe) |> String.concat ", " |> sprintf "could not make %s")
 
+// --- build slots: one heavy build at a time across every sandbox on a daemon ------------------
+//
+// Every session's work sandboxes share one container VM, and a dotnet/Fable build peaks at
+// 3.6–4.2 GB there. Two at once do not fit, and the kernel's OOM killer then takes the largest
+// process on the VM, which is as often the OTHER session's build as this one's. So a heavy verb
+// first takes a slot: an exclusive lock on one of N files on a path every sandbox mounts. The
+// `nix-container-store` volume is that path (`/nix`, the `yession-nix` volume); every sandbox is
+// on the same kernel, so a lock one container takes is a lock every other container sees.
+//
+// The lock is `flock`, through `FileShare.None` (.NET's Unix FileStream takes `LOCK_EX` for it).
+// The kernel drops it when the descriptor closes, and it closes when the process dies, however
+// it dies: an OOM kill or a SIGKILL never leaves a stale slot. .NET opens every file
+// close-on-exec, so a child that outlives this script — an MSBuild node kept for reuse — does not
+// keep the slot.
+//
+// Opt-in through the environment, so a laptop and CI pay nothing:
+//   TASKS_BUILD_SLOTS          how many heavy builds may run at once. Unset: no limit, no lock
+//                                (yession.yaml sets it for `dev` and `gate`). `0`: no limit, for
+//                                one run that must not wait.
+//   TASKS_BUILD_SLOT_DIR       where the slot files are (default /nix/var/yession/build-slots).
+//   TASKS_BUILD_SLOT_TIMEOUT   minutes to wait before failing (default 60; 0 waits for ever).
+// What is NOT here is any limit on the build itself: no `-m:N`, no node-reuse switch, no GC
+// setting. Those make every build slower to make a rare overlap smaller; this makes the overlap
+// not happen, and leaves each build as fast as it was.
+
+/// Set in this process, and so in every child, once a slot is held: a `check` that re-runs itself
+/// under the keyring wrapper is the same build, and must not wait on its own slot.
+let private slotHeldVar = "TASKS_BUILD_SLOT_HELD"
+
+/// Who holds a slot, in words a waiting person can act on: the verb, the sandbox and its
+/// container (docker's hostname is the container's short id, which `docker ps` shows), the pid
+/// inside it, and since when.
+let private slotHolder (verb: string) =
+    let sandbox = Environment.GetEnvironmentVariable "YESSION_SANDBOX" |> Option.ofObj |> Option.defaultValue "?"
+    sprintf
+        "`%s` in sandbox %s on %s, pid %d, since %s"
+        verb
+        sandbox
+        (Environment.MachineName)
+        (Process.GetCurrentProcess ()).Id
+        (DateTime.UtcNow.ToString "HH:mm:ss 'UTC'")
+
+/// Run `body` holding one of the build slots, waiting for one when all are taken. A no-op when
+/// the environment asks for no limit, or when a parent process already holds the slot.
+let withBuildSlot (verb: string) (body: unit -> 'a) : 'a =
+    let env name = Environment.GetEnvironmentVariable name |> Option.ofObj |> Option.filter (String.IsNullOrWhiteSpace >> not)
+    let slots =
+        match env "TASKS_BUILD_SLOTS" with
+        | None -> 0
+        | Some text ->
+            match Int32.TryParse text with
+            | true, n when n >= 0 -> n
+            | _ -> failwithf "TASKS_BUILD_SLOTS=%s: give a whole number of builds (0 for no limit)" text
+    if slots = 0 || (env slotHeldVar).IsSome then body () else
+    let dir = env "TASKS_BUILD_SLOT_DIR" |> Option.defaultValue "/nix/var/yession/build-slots"
+    let timeoutMin =
+        match env "TASKS_BUILD_SLOT_TIMEOUT" with
+        | None -> 60
+        | Some text ->
+            match Int32.TryParse text with
+            | true, n when n >= 0 -> n
+            | _ -> failwithf "TASKS_BUILD_SLOT_TIMEOUT=%s: give whole minutes (0 to wait for ever)" text
+    let holderFile i = Path.Combine (dir, sprintf "slot-%d.holder" i)
+    let holders () =
+        [ for i in 0 .. slots - 1 -> try (File.ReadAllText (holderFile i)).Trim () with _ -> "?" ]
+        |> String.concat "; "
+    let tryTake () =
+        [ 0 .. slots - 1 ]
+        |> List.tryPick (fun i ->
+            try Some (i, new FileStream (Path.Combine (dir, sprintf "slot-%d" i), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            with :? IOException -> None)
+    // A slot directory this box cannot make is a box that cannot take part, and a build that
+    // refused to run for that would be a worse failure than the one the slots prevent.
+    let unusable = try Directory.CreateDirectory dir |> ignore; None with ex -> Some ex.Message
+    if unusable.IsSome then
+        eprintfn "build slot: cannot use %s (%s); building without waiting" dir unusable.Value
+        body ()
+    else
+    let clock = Stopwatch.StartNew ()
+    let rec take (said: string option) (saidAt: TimeSpan) =
+        match tryTake () with
+        | Some held -> held
+        | None ->
+            let now = holders ()
+            if timeoutMin > 0 && clock.Elapsed.TotalMinutes >= float timeoutMin then
+                failwithf
+                    "build slot: waited %d min and every slot (%d) is still held by %s. Wait for it, or run with TASKS_BUILD_SLOTS=0 to build now and risk an out-of-memory kill"
+                    timeoutMin slots now
+            let again =
+                if said <> Some now then
+                    eprintfn "build slot: waiting for another session's build (held by %s) …" now
+                    true
+                elif clock.Elapsed - saidAt >= TimeSpan.FromMinutes 5.0 then
+                    eprintfn "build slot: still waiting after %.0f min (held by %s) …" clock.Elapsed.TotalMinutes now
+                    true
+                else false
+            Threading.Thread.Sleep 1000
+            take (Some now) (if again then clock.Elapsed else saidAt)
+    let i, lock = take None TimeSpan.Zero
+    if clock.Elapsed.TotalSeconds >= 1.0 then
+        eprintfn "build slot: got it after %.0fs" clock.Elapsed.TotalSeconds
+    use _ = lock
+    let me = slotHolder verb
+    (try File.WriteAllText (holderFile i, me) with _ -> ())
+    Environment.SetEnvironmentVariable (slotHeldVar, me)
+    try body ()
+    finally Environment.SetEnvironmentVariable (slotHeldVar, null)
+
 // --- the verbs over it -----------------------------------------------------------------------
 
 /// The tools and `node_modules` — what every other verb calls first. Not the package restore,
@@ -835,7 +943,8 @@ let withScratchDataDir (run: string -> 'a) : 'a =
 // alone whatever Manager this machine already runs on 8321. What to run in a background
 // terminal when a loop needs one Manager across several pictures (`frames --manager`).
 let start (args: string list) =
-    build ()
+    // The slot is for the build, not for the Manager it then runs for as long as you like.
+    withBuildSlot "start" build
     underOwnProfile ()
     let manager = [ "app/out/Main.js"; "--auth"; "localhost" ]
     if List.contains "--scratch" args then withScratchDataDir (fun dataDir -> exec "node" (manager @ managerSmokeArgs dataDir))
@@ -2829,8 +2938,9 @@ let cleanDocker () =
 /// Its arguments pass straight through, so the probe states its own usage.
 let probe (args: string list) =
     let out = Path.Combine (repoRoot, "tools", "Yession.Probe", "out")
-    make [ Target.Tools; Target.Packages ]
-    fable (Path.Combine (repoRoot, "tools", "Yession.Probe", "Yession.Probe.fsproj")) out
+    withBuildSlot "probe" (fun () ->
+        make [ Target.Tools; Target.Packages ]
+        fable (Path.Combine (repoRoot, "tools", "Yession.Probe", "Yession.Probe.fsproj")) out)
     runInherit repoRoot "node" ([ Path.Combine (out, "Probe.js") ] @ args) |> ignore
 
 /// The camera: a session's first load against a real deployment, every painted frame and every
@@ -2849,15 +2959,16 @@ let probe (args: string list) =
 /// They are said once, here, so a skill that wants a picture names a verb and not a recipe.
 let frames (args: string list) =
     let out = Path.Combine (repoRoot, "tools", "Yession.Frames", "out")
-    make [ Target.Tools; Target.Packages ]
-    fable (Path.Combine (repoRoot, "tools", "Yession.Frames", "Yession.Frames.fsproj")) out
+    withBuildSlot "frames" (fun () ->
+        make [ Target.Tools; Target.Packages ]
+        fable (Path.Combine (repoRoot, "tools", "Yession.Frames", "Yession.Frames.fsproj")) out)
     let camera (args: string list) =
         match runInherit repoRoot "node" ([ Path.Combine (out, "Frames.js") ] @ args) with
         | 0 -> ()
         | code -> failwithf "frames: the camera failed (%s)" (diedOf code)
     if not (List.contains "--boot" args) then camera args
     else
-        build ()
+        withBuildSlot "frames" build
         withScratchDataDir (fun dataDir ->
             let manager, said =
                 booted
@@ -3074,14 +3185,14 @@ let rec private verbs () : Verb list =
     // The first argument, or the version computed from the commit history when there is none.
     let orVersion (args: string list) = args |> List.tryHead |> Option.defaultWith defaultVersion
     [ { Name = "restore"; Summary = "install the tools and node_modules"; Run = fun _ -> restore () }
-      { Name = "compile"; Summary = "compile the server, client and assets"; Run = fun _ -> compile () }
-      { Name = "build"; Summary = "build the solution, then compile"; Run = fun _ -> build () }
+      { Name = "compile"; Summary = "compile the server, client and assets"; Run = fun _ -> withBuildSlot "compile" compile }
+      { Name = "build"; Summary = "build the solution, then compile"; Run = fun _ -> withBuildSlot "build" build }
       { Name = "stage"
         Summary = "assemble the npm package in dist/npm. [version]"
-        Run = fun args -> stage (orVersion args) }
+        Run = fun args -> withBuildSlot "stage" (fun () -> stage (orVersion args)) }
       { Name = "package"
         Summary = "stage, smoke-test and npm pack. [version]"
-        Run = fun args -> package (orVersion args) }
+        Run = fun args -> withBuildSlot "package" (fun () -> package (orVersion args)) }
       { Name = "clean"; Summary = "delete the build outputs"; Run = fun _ -> clean () }
       { Name = "lock"; Summary = "re-lock the NuGet packages after adding or bumping one"; Run = fun _ -> lock () }
       { Name = "start"
@@ -3090,13 +3201,13 @@ let rec private verbs () : Verb list =
       { Name = "dev"; Summary = "run the Manager under fable watch"; Run = fun _ -> dev () }
       { Name = "check"
         Summary = "run the suite: cheap tier + caps. [caps…] [--only <text>] [--runtime node|clr|none]"
-        Run = check }
-      { Name = "verify"; Summary = "run the release gate: check with every capability it means. Takes check's args"; Run = verify }
+        Run = fun args -> withBuildSlot "check" (fun () -> check args) }
+      { Name = "verify"; Summary = "run the release gate: check with every capability it means. Takes check's args"; Run = fun args -> withBuildSlot "verify" (fun () -> verify args) }
       { Name = "vm-check"
         Summary = "run a Node tier in the Colima VM, under strict Srt. Takes check's args"
         Run = vmCheck Colima }
-      { Name = "lint"; Summary = "actionlint, then the F# analyzers"; Run = fun _ -> lint () }
-      { Name = "bench"; Summary = "measure client performance against the recorded baseline"; Run = bench }
+      { Name = "lint"; Summary = "actionlint, then the F# analyzers"; Run = fun _ -> withBuildSlot "lint" lint }
+      { Name = "bench"; Summary = "measure client performance against the recorded baseline"; Run = fun args -> withBuildSlot "bench" (fun () -> bench args) }
       { Name = "bench-guard"; Summary = "fail on a large regression against the recorded history"; Run = fun _ -> benchGuard () }
       { Name = "bench-publish"
         Summary = "record this measurement on the bench branch and redraw its chart. [label]"
@@ -3119,7 +3230,7 @@ let rec private verbs () : Verb list =
         Summary = "build and boot an example integration. <name> (see examples/)"
         Run =
             function
-            | name :: _ -> example name
+            | name :: _ -> withBuildSlot "example" (fun () -> example name)
             | [] -> failwith "example <name>   (see examples/)" }
       { Name = "probe"; Summary = "run the headless probe peer (tools/Yession.Probe). Args pass through"; Run = probe }
       { Name = "frames"
@@ -3128,7 +3239,7 @@ let rec private verbs () : Verb list =
       { Name = "brand"; Summary = "regenerate src/Yession.App/Brand.fs from assets/logo"; Run = fun _ -> brand () }
       { Name = "crash-repro"
         Summary = "run the Fable SIGSEGV until it happens. regex|fable [args]"
-        Run = crashRepro }
+        Run = fun args -> withBuildSlot "crash-repro" (fun () -> crashRepro args) }
       { Name = "help"; Summary = "list the verbs and capabilities"; Run = fun _ -> listing (verbs ()) } ]
 
 // --- dispatch --------------------------------------------------------------------------------

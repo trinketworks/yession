@@ -99,6 +99,12 @@ sandboxes:
       # the rest work without `-R`. Where no operator offers the API, gh is simply
       # unauthenticated; nothing here refuses.
       GH_REPO: trinketworks/yession
+      # How many heavy builds (`check`, `build`, `compile`, `lint`, …) may run at once across
+      # EVERY sandbox on this docker daemon; the rest wait, and say who they wait for. One,
+      # because two dotnet/Fable builds do not fit a 5 GiB VM and the OOM killer then takes
+      # either session's build. The lock is on the shared `/nix` volume, so it does nothing
+      # where the operator offers no `nix-container-store`. See `withBuildSlot` in tasks.fsx.
+      TASKS_BUILD_SLOTS: "1"
 
   # `verify` is minutes long. A second sandbox on the same configuration means the gate
   # runs beside interactive work instead of holding the shell.
@@ -120,3 +126,4 @@ sandboxes:
         build-users-group =
         sandbox = false
       CONTAINER_DEVENV_DOTFILE: /root/.devenv   # as in `dev`: one per container
+      TASKS_BUILD_SLOTS: "1"                    # as in `dev`: the same slots, shared
