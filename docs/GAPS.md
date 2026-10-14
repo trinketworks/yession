@@ -1011,6 +1011,13 @@ code matches the doctrine. Each entry names the rule and the sites.
 - **First install downloads the native `claude`** (~240 MB, platform-specific). It is not in the
   300 KB tarball, so npm fetches it. The *first* install therefore needs network and disk. The
   SDK's own resolution finds the binary afterward, so `YESSION_BIN_CLAUDE` is not needed.
+- **Build slots count only this repository's own heavy verbs.** `tasks.fsx` serialises its
+  dotnet/Fable builds and suites across every sandbox on a daemon (`withBuildSlot`, one slot
+  while the Colima VM is 5 GiB). A `dotnet` or `node` run by hand, another repository's build, or
+  a `dev` watch takes no slot, and can still push the shared VM into the kernel's OOM killer,
+  which then picks the largest process in ANY session. The slot is admission, not a limit: what
+  bounds one container is a per-container memory limit (#1312), and what keeps the daemon itself
+  out of reach is a pool cgroup, which nothing sets yet.
 - **The composition E2E and install smoke run on Linux/CI.** Other platforms' npm resolution rides
   npm's own optional-dependency machinery, unverified per-commit.
 - **No per-platform build matrix for the npm route, no code signing.** Release CI ships one
