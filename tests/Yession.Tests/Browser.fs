@@ -3480,11 +3480,18 @@ let editorTests =
                 Expect.isTrue overflows "the strip holds more tabs than it shows, or this proves nothing"
                 let! strip = Probe.boxes page [ "#shell [data-pane-strip]" ]
                 let! tabs = Probe.seen page "#shell [data-pane-strip] [role=tab]"
+                // "Whole" tolerates a couple of px either edge: text shaping sub-pixel widths
+                // differ across engines and architectures (measured: ~1px between an x86 and
+                // an arm64 Chromium for the same strings), and a tab overlapping the edge by
+                // that little reads as whole to an actual reader. What the bug this guards
+                // against produced was not a 1px miss — the selected tab ate half the strip
+                // and its neighbours were cut to a single letter, tens of px short — so this
+                // margin cannot hide that regression returning.
                 let whole =
                     match strip with
                     | [ Some s ] ->
                         tabs
-                        |> List.filter (fun t -> t.Box.Left >= s.Left - 0.5 && t.Box.Right <= s.Right + 0.5)
+                        |> List.filter (fun t -> t.Box.Left >= s.Left - 2.0 && t.Box.Right <= s.Right + 2.0)
                         |> List.map (fun t -> t.Text.Trim ())
                     | _ -> []
                 let shape = (strip, tabs |> List.map (fun t -> t.Text.Trim (), round t.Box.Left, round t.Box.Right))
