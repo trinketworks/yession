@@ -72,9 +72,6 @@ module Style =
         let faint = "border-ink-faint"
         let blue = "border-blue"
         let green = "border-green"
-        /// Present but unpainted — a tab that is not the selected one still occupies its
-        /// border box, so selecting it moves no text.
-        let clear = "border-transparent"
 
         // What a RING does under interaction. `focus:` fires on a control that takes focus
         // ITSELF — which is every ring in the product, because a host whose real input is a
@@ -84,8 +81,13 @@ module Style =
         let hoverInk = "hover:border-ink"
         let hoverErr = "hover:border-err"
         let focus = "focus:border-blue"
-        /// The title's affordance: dotted until you are in it, then solid blue.
-        let dotted = "border-dotted focus:border-solid"
+
+        /// The acrylic's rim: a hairline on the ONE side a floating surface meets what it
+        /// covers, in the tint's own edge tone (`--color-acrylic-edge`) rather than a grey,
+        /// because what is under it shows through and a neutral would read as a painted edge.
+        /// The only stroke whose tone is off the neutral ramp, and the reason `acrylic` below
+        /// composes a name from here rather than writing its own `border-*`.
+        let acrylicTop = "border-t border-acrylic-edge"
 
         /// The region divider: a hairline on ONE side, separating two surfaces rather than
         /// enclosing a control. Named per side because which side it is on is structural,
@@ -129,8 +131,10 @@ module Style =
     // is indistinguishable from the panel, which is the point: nothing depends on the effect,
     // and a reader who declines transparency gets the panel, opaque, and the same edge.
     let acrylic =
-        "bg-acrylic backdrop-blur-acrylic backdrop-saturate-150 border-t border-acrylic-edge "
-        + "reduced-transparency:bg-panel reduced-transparency:backdrop-blur-none reduced-transparency:backdrop-saturate-100"
+        cls [ "bg-acrylic backdrop-blur-acrylic backdrop-saturate-150"
+              Stroke.acrylicTop
+              "reduced-transparency:bg-panel reduced-transparency:backdrop-blur-none"
+              "reduced-transparency:backdrop-saturate-100" ]
 
     // --- Motion (one vocabulary, so every surface that moves moves the same way) ---------
     // Zune's signature: things arrive by sliding a little and fading in, fast, eased out,
@@ -144,6 +148,22 @@ module Style =
         let pace = "duration-200 ease-out motion-reduce:transition-none"
         /// A whole pane crossing the width of its track takes a beat longer.
         let paceLong = "duration-300 ease-out motion-reduce:transition-none"
+        /// The quick pace: 150ms. What a change of TONE takes — a hover brightening its ink,
+        /// a mark turning in place — where nothing moves far enough for the pace to be read
+        /// as travel. Named because the file spelled it by hand at a dozen sites, each of
+        /// which could have drifted on its own (principle 5: one way per job).
+        let quick = "duration-150 ease-out motion-reduce:transition-none"
+
+        /// The lane stagger: what a column of lanes arriving one after another is spaced by,
+        /// so a drawer's rows land in reading order rather than all in one frame.
+        ///
+        /// Literal class names, not a computed `sprintf "delay-[%dms]"`: Tailwind's scanner
+        /// reads this SOURCE, so a composed delay is a class name no stylesheet contains.
+        /// That is also why the same two delays worn under a VARIANT (`[.settings-open_&]:`)
+        /// cannot compose these — the variant is part of the class name, so there is nothing
+        /// to compose, exactly as for the two border literals this file's header names.
+        let lane1 = "delay-[60ms]"
+        let lane2 = "delay-[120ms]"
         /// Slide-and-fade, for content that ARRIVES: it starts a little off and clear, and
         /// settles into place opaque. The opposite state is what it leaves through.
         let slideFade = cls [ "transition-[translate,opacity]"; pace ]
@@ -162,22 +182,29 @@ module Style =
         let turn = cls [ "transition-[rotate]"; pace ]
         let turned = "rotate-90"
 
-    // --- Typography (the ramp lives as `--text-*` tokens in app/tailwind.css) -----------
+    // --- Typography (the ramp lives as `--text-*` tokens in app/tokens.css) -------------
     // Each `text-<step>` utility sets size AND line-height together, so a size can never
-    // drift off its 4px line box; `leading-*` composes over a step where a context needs
-    // a different box (roster rows and fields sit 13/20, a draft summary clamps 13/32).
+    // drift off its 4px line box. A `leading-*` over a step is for a context that genuinely
+    // wants a different box — a draft summary clamped to one 32px line — and never for one
+    // the ramp already has: 13/20 is the `text-note` STEP, so `text-small leading-5` is a
+    // step restated as an override, which is a size off the ramp by another route
+    // (docs/visual-design.md, Type). The sites still spelling it that way are outside this
+    // section; the step they want is `text-note`.
+    //
+    // Tracking is the same rule for the same reason: `tracking-display` and
+    // `tracking-wordmark` are steps, so no face hand-writes an em value.
 
     /// The wordmark: `yession`, at 400 rather than the 200 it was drawn at, because it no
     /// longer stands alone — beside the mark (`lockup`) the extralight read thin, and the
     /// full stop that was its one colour is the mark's job now (assets/logo/lockup.svg).
-    let wordmark = "font-normal text-wordmark tracking-[-0.02em] text-ink"
+    let wordmark = "font-normal text-wordmark tracking-wordmark text-ink"
     /// The mark and the wordmark on one line, the lockup's own proportions scaled to the
     /// band: the mark 56px to the word's 32 (the lockup file draws 64 to 32, which the 88px
     /// band has no room for), its foot 15px below the word's line box so the x-height band
     /// sits where the lockup puts it — on the mark's optical middle, a little above its own.
     let lockup = "flex items-end gap-2"
     let lockupMark = "block w-14 h-14 -mb-[15px] shrink-0 [&>svg]:block [&>svg]:w-full [&>svg]:h-full"
-    let heading = "font-extralight text-heading tracking-[-0.01em] lowercase text-ink truncate"
+    let heading = "font-extralight text-heading tracking-display lowercase text-ink truncate"
     let body = "font-light text-body text-ink"
     /// The body voice one step back: worn by a record that is not live — a stopped, exited or
     /// archived session's name in the Manager's list — so a scan of the column finds what is
@@ -225,48 +252,98 @@ module Style =
     /// so no use site can compose its own weight and reopen the gap.
     let messageVoice (isAgent: bool) =
         if isAgent then "font-agent font-light" else "font-human font-[350]"
+    /// A FIELD's name, and the smallest thing the caps voice says: 11px in the faintest ink
+    /// that still means something. It is the floor of the label hierarchy, so a group's name
+    /// above it has somewhere to stand (`sectionLabel`).
     let label = caps + " text-ink-faint"
+
+    /// A GROUP's name — a section inside a drawer, with field labels under it. One step up the
+    /// ramp from `label` and one step brighter in ink, because a heading and the fields it
+    /// heads were one face set 24px apart: nothing but position said which was which, and
+    /// position is the weakest of the three (principle 2 — within a group, size, weight and
+    /// position say what matters, in that order). Still the caps voice: a group's name is a
+    /// short label like any other, so what changes is the STEP, not the voice.
+    let sectionLabel = capsLg + " text-ink-dim"
+
     let mono = "font-terminal text-code text-ink"
     let monoOut = "font-terminal text-code-sm text-ink-faint whitespace-pre-wrap"
 
     // --- Statuses: text only — never filled, never boxed --------------------------------
 
+    /// LIVE: a running command, a connected peer, a session that runs (docs/visual-design.md,
+    /// Colour). Green is the one voice that says a thing is doing something NOW, which is why
+    /// a WAIT may never wear it — `queued`, `starting` and `looking` are `statusWait`, and
+    /// green on a queued command said the opposite of what it meant.
     let statusOk = caps + " text-green"
     /// A record of something that finished well — `✓ 0`, a tally of done. `ink`, not green:
     /// green is LIVE (a running command, a connected peer), and a command that exited is no
     /// longer doing anything (docs/visual-design.md, Colour). Running keeps `statusOk`.
     let statusDone = caps + " text-ink"
-    /// A wait: reconnecting, starting, looking, busy. `ink-dim`, never blue — blue is never a
-    /// status (docs/visual-design.md, Colour). A LIVE thing is `statusOk` with `statusDotLive`.
+    /// A wait: reconnecting, catching up, queued, looking, no agent yet. `ink-dim`, never blue
+    /// — blue is never a status (docs/visual-design.md, Colour). A LIVE thing is `statusOk`
+    /// with `statusDotLive`; a wait still under way leads with `statusDotBeat`.
+    ///
+    /// Also what a WRONG thing wears once it is no longer the newest wrong thing. The doctrine
+    /// gives a stale fault the record's `ink-dim`, which is this tone, so a surface that mounts
+    /// several faults at once gives this to all but the newest and keeps `statusErr` for that
+    /// one (`ClientModel.newestWrongBlock` picks it). ONE value rather than two names for one
+    /// tone: the rule that dims a stale fault is the rule that dims a wait, and a second name
+    /// would be a second way to draw the same thing (principle 5).
     let statusWait = caps + " text-ink-dim"
+    /// WRONG, and the newest wrong thing on this surface — there is at most one red word on
+    /// screen (docs/visual-design.md, Colour). Anything older that was also wrong is a record
+    /// and wears `statusWait`.
     let statusErr = caps + " text-err"
     let statusFaint = caps + " text-ink-faint"
-    /// The small leading dot a live status may carry (`bg-current` follows the text colour).
-    let statusDot = "inline-block w-1.5 h-1.5 rounded-full bg-current mr-1.5 align-[1px]"
-    /// A wait that is still under way beats its dot (opacity); a LIVE thing wears `statusDotLive`.
-    let statusDotPulse = statusDot + " animate-pulse2 motion-reduce:animate-none"
-    /// The same dot standing still: a state that has SETTLED (a terminal's last command
-    /// failed), where the pulse is one still under way.
-    let statusDotSolid = "inline-block w-1.5 h-1.5 rounded-full bg-current"
-    /// The dot with nothing in it: a state that has ENDED (a terminal that closed).
-    let statusDotHollow = "inline-block w-1.5 h-1.5 rounded-full border border-current"
+
+    /// The one disc every mark in the product is drawn as: 6px, round, inline. The point is
+    /// the second of the two primitives and it is always round (docs/visual-design.md, Form);
+    /// written once, here, because it had been spelled out at nine sites, each free to arrive
+    /// a pixel off. What a mark MEANS is the colour and the motion composed onto it below —
+    /// never its size, and never its shape.
+    let private disc = "inline-block w-1.5 h-1.5 rounded-full"
+
+    /// How a mark that LEADS a word sits: in the gutter to its left, on the text's baseline,
+    /// so the mark never pushes the words in (docs/visual-design.md, Space).
+    let private discLead = "mr-1.5 align-[1px]"
+
+    /// The small leading dot a status may carry (`bg-current` follows the text colour).
+    let statusDot = cls [ disc; "bg-current"; discLead ]
+    /// A wait still under way beats its dot. It beats in COLOUR — the record's ink to its dim
+    /// and back (`beat-wait`) — and never in opacity, which bottomed the mark out at a quarter
+    /// of itself, below the 3:1 a mark owes its surface at every frame of the beat, so a dot
+    /// that meant "still going" was caught reading as no dot at all (docs/visual-design.md,
+    /// Motion). Under reduced motion it stands still in the status's own ink, which is what
+    /// `bg-current` underneath is for.
+    let statusDotBeat = cls [ statusDot; "animate-beat-wait motion-reduce:animate-none" ]
+    /// The same dot standing still: a state that has SETTLED — a terminal's last command
+    /// failed, or a terminal that has closed — where a beat would claim it is still happening.
+    ///
+    /// A closed terminal used to wear a RING here instead. Two reasons it does not any more.
+    /// A ring is a stroke, and `Stroke.ring` is for what you type in or press — a mark is
+    /// neither, so no mark draws one. And the same ring already meant "somebody is watching"
+    /// on a person (`paneViewerDot`): one shape may not mean two things, and the one it means
+    /// nowhere else wins. What tells a closed terminal from a failed one is the colour its
+    /// voice composes — `ink-faint` against `err` — which is the job the doctrine gives colour.
+    let statusDotSolid = cls [ disc; "bg-current" ]
     /// A live dot: a command running. It beats in COLOUR, live's green to live's dim and back
     /// (`beat-live`), never in opacity, so it holds the 3:1 a mark owes its surface at every
     /// frame. Still and green under reduced motion.
-    let statusDotLive = "inline-block w-1.5 h-1.5 rounded-full bg-green animate-beat-live motion-reduce:animate-none"
+    let statusDotLive = cls [ disc; "bg-green animate-beat-live motion-reduce:animate-none" ]
     /// The live dot leading a word or a count on its line, as `statusDot` leads a status.
-    let statusDotLiveLead = statusDotLive + " mr-1.5 align-[1px]"
-    /// The settled dot with a ring round it: something has happened that the person reading
-    /// has not seen yet (`ClientModel.unseen`). An outline rather than a ring utility, so the
-    /// gap between the two is the surface it sits on, whichever that is.
-    let statusDotNews = statusDotSolid + " outline outline-1 outline-current outline-offset-[1.5px]"
+    let statusDotLiveLead = cls [ statusDotLive; discLead ]
+    /// The settled dot with a halo round it: something has happened that the person reading
+    /// has not seen yet (`ClientModel.unseen`). An `outline` rather than a border, so the gap
+    /// between the two is the surface it sits on, whichever that is — and so the mark is still
+    /// a filled point with something around it, rather than the hollow one retired above.
+    let statusDotNews =
+        cls [ statusDotSolid; "outline outline-1 outline-current outline-offset-[1.5px]" ]
 
     /// A standalone dot given its colour explicitly (`bg-green` etc. composed at the use
     /// site) for a row whose text is a DIFFERENT colour — `bg-current` would fight the
     /// composed colour utility, and which `bg-*` wins is stylesheet order, not authoring
     /// order.
-    let syncDot = "inline-block w-1.5 h-1.5 rounded-full shrink-0"
-    let syncDotPulse = syncDot + " animate-pulse2 motion-reduce:animate-none"
+    let syncDot = cls [ disc; "shrink-0" ]
     /// The sidebar's one-line sync summary: dot and status words on one baseline.
     let syncRow = "flex items-center gap-2"
 

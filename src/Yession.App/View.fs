@@ -203,7 +203,7 @@ module View =
             | Retrying (reason, failures) ->
                 Some (
                     Dom.Text.retryingWhy reason failures,
-                    html $"""<span class="{Style.syncRow}"><span class="{Style.statusWait}"><span class="{Style.statusDotPulse}"></span>{Dom.Text.retryingStatus}</span></span>""")
+                    html $"""<span class="{Style.syncRow}"><span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>{Dom.Text.retryingStatus}</span></span>""")
             | _ -> None
         match settled, reopenAction model Style.noAgentAction with
         | Some (reason, status), Some action ->
@@ -270,7 +270,7 @@ module View =
         let why =
             [ if model.EphemeralStorage then Dom.Text.ephemeralAddress ]
         let running (word: string) =
-            html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotPulse}"></span>{word}</span>"""
+            html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>{word}</span>"""
         let stopped (word: string) = html $"""<span class="{Style.statusErr}">{word}</span>"""
         match model.Connection, model.EventConsumer.Feed with
         // The session leg subsumes the history leg: a Process that cannot be reached cannot
@@ -597,10 +597,12 @@ module View =
             html $"""<span class="{Style.pivotMark} {voice}" data-pane-mark="{token}"><span aria-hidden="true">{glyph}</span><span class="{Style.srOnly}">{word}</span></span>"""
         let news = html $"""<span class="{Style.statusDotNews}"></span>"""
         match ClientModel.terminalState view model with
-        // Hollow: the dot with nothing left in it. Not a stop square, which is what a running
-        // command's Stop looks like.
+        // The settled dot in the faintest ink. It was a HOLLOW dot — the one with nothing left
+        // in it — until a ring stopped being a shape a mark may wear (`Style.statusDotSolid`
+        // says why): what tells a closed terminal from a failed one is this voice against the
+        // red one below, which is the job the doctrine gives colour.
         | TerminalState.Closed ->
-            mark "closed" "text-ink-faint" (html $"""<span class="{Style.statusDotHollow}"></span>""") Dom.Text.markClosed
+            mark "closed" "text-ink-faint" (html $"""<span class="{Style.statusDotSolid}"></span>""") Dom.Text.markClosed
         | TerminalState.Running ->
             html $"""<span class="{Style.pivotMark}" data-pane-mark="running">{runningDot}</span>"""
         | TerminalState.UnseenFailed -> mark "unseen-failed" "text-err" news Dom.Text.markUnseenFailed
@@ -614,7 +616,7 @@ module View =
     let private environmentStatus =
         function
         | EnvironmentNotStarted -> Style.statusFaint, html $"""not started"""
-        | EnvironmentStarting -> Style.statusWait, html $"""<span class="{Style.statusDotPulse}"></span>starting"""
+        | EnvironmentStarting -> Style.statusWait, html $"""<span class="{Style.statusDotBeat}"></span>starting"""
         | EnvironmentRunning _ -> Style.statusOk, html $"""<span class="{Style.statusDot}"></span>running"""
         | EnvironmentFailed _ -> Style.statusErr, html $"""failed"""
         | EnvironmentDown -> Style.statusFaint, html $"""stopped"""
@@ -751,7 +753,7 @@ module View =
             // shows it, not merely that the session said yes (`Pending`).
             match claude.Flow with
             | _ when Pending.inFlight claude.Pending ->
-                html $"""<span class="{Style.statusWait}" data-claude-busy><span class="{Style.statusDotPulse}"></span>working…</span>"""
+                html $"""<span class="{Style.statusWait}" data-claude-busy><span class="{Style.statusDotBeat}"></span>working…</span>"""
             | ClaudeAwaitingCode (url, _) ->
                 html $"""
                     <a class="{Style.btnPrimary}" href="{url}" target="_blank" rel="noreferrer" data-claude-authorize>Approve on claude.ai</a>
@@ -814,7 +816,7 @@ module View =
             // As Claude's, for its reason.
             match github.Flow with
             | _ when Pending.inFlight github.Pending ->
-                html $"""<span class="{Style.statusWait}" data-github-busy><span class="{Style.statusDotPulse}"></span>working…</span>"""
+                html $"""<span class="{Style.statusWait}" data-github-busy><span class="{Style.statusDotBeat}"></span>working…</span>"""
             | GitHubAwaitingApproval (userCode, verificationUri, _, _) ->
                 // The code has to reach github.com's form, and on the phone that means the
                 // clipboard: this session is one tab, the approval is another, and eight
@@ -1649,7 +1651,7 @@ module View =
                     match upload |> Option.map (fun u -> u.State) with
                     | Some (UploadState.Sending sent) ->
                         "sending",
-                        html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotPulse}" aria-hidden="true"></span>{Dom.Text.uploadSending (ContentSize.render sent) (ContentSize.render bytes)}</span>"""
+                        html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}" aria-hidden="true"></span>{Dom.Text.uploadSending (ContentSize.render sent) (ContentSize.render bytes)}</span>"""
                     | Some (UploadState.Failed reason) -> "failed", html $"""<span class="{Style.statusErr}">{reason}</span>"""
                     | Some (UploadState.Refused reason) -> "refused", html $"""<span class="{Style.statusErr}">{reason}</span>"""
                     | None -> "attached", html $"""<span class="{Style.draftFileSize}">{ContentSize.render bytes}</span>"""
@@ -1880,11 +1882,18 @@ module View =
     let private pendingStatus (model: ClientModel) (entry: PendingAct) : string * TemplateResult =
         if ClientModel.awaitsIntegration entry model then
             Dom.Text.queuedAwaitingIntegration,
-            html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotPulse}"></span>not marking</span>"""
+            html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>not marking</span>"""
         elif ClientModel.awaitsTerminal entry model then
             Dom.Text.queuedAwaitingTerminal,
-            html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotPulse}"></span>terminal busy</span>"""
-        else Dom.Text.queuedReady, html $"""<span class="{Style.statusOk}">queued</span>"""
+            html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>terminal busy</span>"""
+        else
+            // Queued is a WAIT, like the two holds above it, so it wears their voice and their
+            // dot rather than live green (docs/visual-design.md, Colour). Green said the
+            // opposite of what it meant: a queued command is the one thing in the terminal
+            // that is NOT running, and it was the only status on the surface wearing live's
+            // colour while the command actually running wore it too.
+            Dom.Text.queuedReady,
+            html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>queued</span>"""
 
     /// What the terminal this act is queued in is CALLED — its name, or its id while this
     /// client has not folded the terminal yet. Words, never a raw id when a name exists, for
@@ -2025,7 +2034,7 @@ module View =
         let listing =
             match launch.Listing with
             | ListingUnknown ->
-                note (html $"""<span class="{Style.statusWait}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>""")
+                note (html $"""<span class="{Style.statusWait}" role="status"><span class="{Style.statusDotBeat}"></span>{Dom.Text.repoPickerLooking}</span>""")
             | ListingUnavailable (reason, true) ->
                 let said = note (html $"""<span class="{Style.small}">{reason}</span>""")
                 html $"""
@@ -2096,7 +2105,7 @@ module View =
         let actionsRow =
             match launch.Stage with
             | Resolving _ ->
-                html $"""<span class="{Style.statusWait}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>"""
+                html $"""<span class="{Style.statusWait}" role="status"><span class="{Style.statusDotBeat}"></span>{Dom.Text.repoPickerLooking}</span>"""
             | Choosing -> startButton (Launch.target launch) false
             | Sent (_, target) -> startButton (Some target) true
             | Cloning target -> startButton (Some target) true
@@ -2182,7 +2191,7 @@ module View =
                         note (html $"""<span class="{Style.statusErr}" role="status">{reason}</span>""")
                     | Some BranchesUnknown
                     | None ->
-                        note (html $"""<span class="{Style.statusWait}" role="status"><span class="{Style.statusDotPulse}"></span>{Dom.Text.repoPickerLooking}</span>""")
+                        note (html $"""<span class="{Style.statusWait}" role="status"><span class="{Style.statusDotBeat}"></span>{Dom.Text.repoPickerLooking}</span>""")
                     | Some (BranchesLoaded page) ->
                         let foot =
                             match page.Next, launch.BranchMore, launch.BranchQuery.Trim () with
@@ -4436,7 +4445,7 @@ module View =
                 match upload.State with
                 | UploadState.Sending sent ->
                     "sending",
-                    html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotPulse}" aria-hidden="true"></span>{Dom.Text.uploadSending (ContentSize.render sent) (ContentSize.render upload.Bytes)}</span>""",
+                    html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}" aria-hidden="true"></span>{Dom.Text.uploadSending (ContentSize.render sent) (ContentSize.render upload.Bytes)}</span>""",
                     [ "remove" ]
                 | UploadState.Failed reason ->
                     "failed", html $"""<span class="{Style.statusErr}">{reason}</span>""", [ "retry"; "remove" ]
