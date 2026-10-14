@@ -109,6 +109,54 @@ in
   # some other Chromium that happens to be installed.
   env.PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers-chromium}";
 
+  # This Chromium's own wrapper sets a FONTCONFIG_FILE when none is already in the
+  # environment — but its template ALSO scans `/usr/share/fonts` and friends, which are the
+  # HOST's, not Nix's: a developer's bare container (no fonts at all) and the `ubuntu-latest`
+  # runner `verify` and the release gate run on (a full desktop font set) scan different files
+  # there, and with no `/etc/fonts/conf.d` present in a container to say which face stands for
+  # the generic `sans-serif`/`monospace`, fontconfig's unscoped fallback picks between whatever
+  # it found — differently in each place. `app/tokens.css` falls back to exactly those generics
+  # (`--fallback-sans`, `--fallback-mono`) whenever a vendored face (Noto Sans, Monaspace Neon)
+  # has not painted yet, and a browser E2E that reads a box's width before that paint (`strip
+  # shows at least three whole tabs`, Browser.fs) reads a layout that depends on it.
+  #
+  # `makeFontsConf` does not fix this — it only PREPENDS a directory ahead of the same
+  # host-reading template, `/usr/share/fonts` included — so this is a hand-written config
+  # instead: one `<dir>`, naming only `dejavu_fonts` (pinned by this same nixpkgs), and explicit
+  # `<alias>` stanzas standing the three CSS generics and `system-ui` on its three faces. No
+  # host directory is named at all, so every environment resolves the same fallback regardless
+  # of what fonts happen to be installed on the machine running it.
+  #
+  # Linux-only: fontconfig is the Linux font-matching path. Darwin's Chromium app bundle goes
+  # through CoreText instead and never reads this variable.
+  env.FONTCONFIG_FILE =
+    let
+      fontsConf = pkgs.writeText "fonts.conf" ''
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+        <fontconfig>
+          <dir>${pkgs.dejavu_fonts}/share/fonts</dir>
+          <cachedir prefix="xdg">fontconfig</cachedir>
+          <alias>
+            <family>sans-serif</family>
+            <prefer><family>DejaVu Sans</family></prefer>
+          </alias>
+          <alias>
+            <family>serif</family>
+            <prefer><family>DejaVu Serif</family></prefer>
+          </alias>
+          <alias>
+            <family>monospace</family>
+            <prefer><family>DejaVu Sans Mono</family></prefer>
+          </alias>
+          <alias>
+            <family>system-ui</family>
+            <prefer><family>DejaVu Sans</family></prefer>
+          </alias>
+        </fontconfig>
+      '';
+    in lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${fontsConf}";
+
   # devenv's CLI-vs-modules skew banner, printed on EVERY task invocation, can never be
   # actionable here: the CLI always comes from the pinned nixpkgs (`nix profile install
   # nixpkgs#devenv` in both workflows, and .claude/setup.sh does the same), so nobody in this
