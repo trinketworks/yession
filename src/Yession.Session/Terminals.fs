@@ -671,7 +671,11 @@ module SessionTerminals =
             |> Seq.map (fun c -> if c = '\n' then '\r' else c)
             |> Seq.toArray
             |> System.String
-        "\u0015" + kept + "\r" 
+        "\u0015" + kept + "\r"
+
+    /// How many lines `writeFor` hands a shell for `command`: one per newline, and the one
+    /// the closing return submits — each owed a prompt (`PromptLedger`).
+    let internal linesIn (command: string) : int = (command |> Seq.filter ((=) '\n') |> Seq.length) + 1
 
 
     /// What clears a shell's line editor before the rc is retyped into it on a re-arm. A
@@ -1055,19 +1059,22 @@ module SessionTerminals =
         /// Per terminal rather than per block, because there is one line at a time in a
         /// shell's editor and a block that was typed is the one whose marks are awaited.
         let typedBlock = Collections.Generic.Dictionary<string, BlockId * DateTimeOffset> ()
-        /// What the shell printed behind `awaitingStart` — the window in which nothing is
-        /// recorded. Kept so the detector can SAY what it saw when it fires: nothing, or the
-        /// line's echo with the command's output under it, which are two different faults.
-        /// Bounded, because a shell that is rendering rather than running prints a line or
-        /// two, and one that has gone on past that is already telling its own story.
-        let rendering = Collections.Generic.Dictionary<string, Text.StringBuilder> ()
-        let renderingCap = 512
-        /// Control bytes escaped, so what the shell said cannot carry a mark or an escape
-        /// into a fact that is read back on every screen.
-        let legible (text: string) =
-            text
-            |> Seq.map (fun c -> if Char.IsControl c then sprintf "\\x%02x" (int c) else string c)
-            |> String.concat ""
+        /// What the shell printed behind a block's `awaitingStart` — the window in which
+        /// nothing is recorded. Kept so whatever ends the window can SAY what the shell said:
+        /// the detector, which tells nothing from the line's echo with the command's output
+        /// under it (two different faults), and a refused line, whose reason it is.
+        let answers = Collections.Generic.Dictionary<string, LineAnswer> ()
+        /// The prompts each terminal's shell still owes for the lines it was handed — what
+        /// tells the prompt that answers a block's line from a leftover (`PromptLedger`).
+        let ledgers = Collections.Generic.Dictionary<string, PromptLedger> ()
+        let ledgerOf (key: string) =
+            match ledgers.TryGetValue key with
+            | true, ledger -> ledger
+            | _ -> PromptLedger.Owed 0
+        /// Each instrumented terminal's nonce, so that what its shell said can be quoted
+        /// without it (`LineAnswer`). Minted where the shell is opened; held here because
+        /// the block that quotes the shell is written somewhere else.
+        let nonces = Collections.Generic.Dictionary<string, string> ()
         /// What each open terminal's source declared it can do (Plan 16, part D). Consulted
         /// where a capability is actually USED — before running a block, before resizing —
         /// rather than being re-derived from whether a rearmer happens to exist.
@@ -1303,6 +1310,42 @@ module SessionTerminals =
         /// inside closed, escaped and reopened — nothing else is read inside single quotes.
         let quotedPath (path: string) : string = "'" + path.Replace ("'", "'\\''") + "'"
 
+        /// A lost terminal's marks are back: the queue is released, every client is told, and
+        /// the block the loss left open is settled. ONE path for both ways back, because what
+        /// a terminal owes on its return does not depend on who noticed.
+        ///
+        /// The open block is settled `CommandOutcomeUnknown`, and that is the honest reading
+        /// rather than a cautious one. Its start mark never came — that is what the loss WAS —
+        /// so nothing says it ran; but a shell that has lost its start hook runs commands
+        /// without marking them, so nothing says it did not, either. An exit code here would
+        /// be invented, and "did not run" would be a guess the agent then acts on by sending
+        /// the command again. A block whose start mark DID turn up late is not touched: its
+        /// own `D` finishes it with the code the shell gave. Left open instead, as it used to
+        /// be, it held the terminal busy, so even a re-arm released a queue that could not
+        /// move.
+        let restore (id: TerminalId) (how: IntegrationRestoredBy) : Async<unit> =
+            async {
+                let key = TerminalId.value id
+                lost <- Set.remove key lost
+                match pending.TryGetValue key with
+                | true, (complete, _, _) when not (sawCommandStart.Contains key) ->
+                    pending.Remove key |> ignore
+                    awaitingStart.Remove key |> ignore
+                    answers.Remove key |> ignore
+                    complete (
+                        CommandOutcomeUnknown (
+                            match how with
+                            | Rearmed ->
+                                "the terminal was re-armed before this command was seen to start, so whether it ran is not known"
+                            | PromptReturned ->
+                                "the shell came back to its prompt without this command ever being seen to start, so whether it ran is not known"
+                        )
+                    )
+                | _ -> ()
+                do! append (SessionEvent.TerminalIntegrationRestored { TerminalId = id; How = how })
+                reDrain ()
+            }
+
         /// Open the terminal's ONE instrumented shell.
         ///
         /// Probed by RUNNING it: the shell is launched with our rc typed in, and the
@@ -1327,6 +1370,7 @@ module SessionTerminals =
                 | None -> return ()
                 | Some instrumentation ->
                     let rc = instrumentation.Rc
+                    nonces.[key] <- nonce
                     let carry = ref ""
                     let ready = ref false
                     // Whoever is waiting for the next prompt mark — the open-probe, or a
@@ -1425,6 +1469,50 @@ module SessionTerminals =
                                         note (clean.Length - kept.Length)
                                         emit id current TranscriptOutput kept
                                 | _ -> emit id current TranscriptOutput clean
+                            // A prompt came back: counted against the lines typed, and then
+                            // asked two questions — is it the shell refusing the block's line,
+                            // and is it a lost terminal's shell back at its prompt.
+                            //
+                            // A REFUSED line runs nothing, so it has no start mark; the prompt
+                            // after it is the whole of the answer (and bash prints no `D` at
+                            // all for a `!` expansion that found no event). It is THIS block's
+                            // refusal only when it is a primary prompt answering the block's
+                            // LAST line, which is what the ledger is for: the bootstrap's
+                            // leftover prompts, and the first of two prompts a refused brace
+                            // group draws, would each otherwise settle a block early. Refused,
+                            // the block is over and the terminal is fine — nothing is lost, and
+                            // the queue goes on.
+                            //
+                            // A LOST terminal whose shell prints a primary prompt having answered
+                            // every line it was handed is back: nothing but the shell this
+                            // terminal instrumented can print one with its nonce in it. Before,
+                            // only a re-arm said so, and the terminal stayed held over a shell
+                            // that was plainly marking. While the count is not known (a re-arm
+                            // is under way) this waits for the re-arm, which says so itself.
+                            let prompted (primary: bool) =
+                                let before = ledgerOf key
+                                let after = PromptLedger.prompted before
+                                ledgers.[key] <- after
+                                match pending.TryGetValue key, answers.TryGetValue key with
+                                | (true, (complete, _, _)), (true, answer) when
+                                    awaitingStart.Contains key && not (sawCommandStart.Contains key)
+                                    ->
+                                    match before with
+                                    | PromptLedger.Unknown ->
+                                        if primary then answers.[key] <- LineAnswer.prompted answer
+                                    | PromptLedger.Owed _ when not (PromptLedger.reaches (linesIn answer.Line) before) ->
+                                        // An earlier line's prompt: what it printed was that line's.
+                                        answers.[key] <- LineAnswer.restart answer
+                                    | PromptLedger.Owed _ when primary && PromptLedger.caughtUp after ->
+                                        pending.Remove key |> ignore
+                                        awaitingStart.Remove key |> ignore
+                                        answers.Remove key |> ignore
+                                        complete (CommandNotRun (LineAnswer.words (LineAnswer.answered answer)))
+                                    | PromptLedger.Owed _ ->
+                                        if primary then answers.[key] <- LineAnswer.answered answer
+                                | _ ->
+                                    if primary && Set.contains key lost && PromptLedger.caughtUp after then
+                                        Async.StartImmediate (restore id PromptReturned)
                             for piece in scanned do
                                 match piece with
                                 // What the shell prints between being handed a block's line
@@ -1435,14 +1523,23 @@ module SessionTerminals =
                                     if clean <> "" && ready.Value then
                                         if not (awaitingStart.Contains key) then record clean
                                         else
-                                            match rendering.TryGetValue key with
-                                            | true, said when said.Length < renderingCap ->
-                                                said.Append (clean.Substring (0, min clean.Length (renderingCap - said.Length))) |> ignore
+                                            match answers.TryGetValue key with
+                                            | true, answer -> answers.[key] <- LineAnswer.printed clean answer
                                             | _ -> ()
                                 | Marked MarkPromptStart ->
                                     ready.Value <- true
                                     atPrompt.Add key |> ignore
+                                    prompted true
                                     onReady.Value ()
+                                // Mid-command: the shell read a line that did not finish one.
+                                // Counted, because it answers a line, and never anything more —
+                                // a shell here is waiting for the rest, so the block's line has
+                                // been neither run nor refused, and nothing typed now would be
+                                // a line of its own. Which is also why it is not a prompt a
+                                // lease's loan may be typed at.
+                                | Marked MarkContinuationPrompt ->
+                                    atPrompt.Remove key |> ignore
+                                    prompted false
                                 // Recorded, not acted on. A second `C` inside an open block is
                                 // still not repaired into anything — the Process knows what it
                                 // wrote — but that the mark ARRIVED is the one thing the
@@ -1460,6 +1557,7 @@ module SessionTerminals =
                                     // handed — a block's, or the one a lease typed in — and
                                     // what it prints from here is output again.
                                     awaitingStart.Remove key |> ignore
+                                    answers.Remove key |> ignore
                                     if pending.ContainsKey key then
                                         sawCommandStart.Add key |> ignore
                                         // A start mark on a terminal already declared lost is
@@ -1480,6 +1578,17 @@ module SessionTerminals =
                                     | true, (complete, _, _) when sawCommandStart.Contains key ->
                                         pending.Remove key |> ignore
                                         awaitingStart.Remove key |> ignore
+                                        // A count nobody knew (a re-arm) is known again here:
+                                        // the shell has run the block's command, so every line
+                                        // ahead of it is answered, and the prompt about to
+                                        // follow this mark is the one still owed. A command
+                                        // typed over several lines can leave more than that —
+                                        // the count then errs low by those, which is no worse
+                                        // than what their own start marks already do to the
+                                        // next block.
+                                        match ledgerOf key with
+                                        | PromptLedger.Unknown -> ledgers.[key] <- PromptLedger.Owed 1
+                                        | PromptLedger.Owed _ -> ()
                                         complete (if code = 0 then CommandSucceeded 0 else CommandFailed code)
                                     // A `D` with no block open is the shell's own prompt cycle
                                     // — at startup, or after a peer typed something in live
@@ -1493,7 +1602,7 @@ module SessionTerminals =
                     // bytes a prompt is made of) escaped, so a notice cannot itself carry a
                     // mark or an escape into the transcript.
                     let said () =
-                        let text = legible (overture.ToString ())
+                        let text = LineAnswer.legible (overture.ToString ())
                         if text = "" then "nothing" else text
                     // The profile's directory is the FIRST line the shell is handed, as its
                     // own `cd`, and the spawn itself starts where the sandbox puts a shell.
@@ -1559,6 +1668,10 @@ module SessionTerminals =
                                 // instant the last rc line lands, and a wait registered after
                                 // it would have missed it.
                                 let started = awaitStart false pty.Exited said
+                                // A fresh shell, so what it owes is known exactly: the
+                                // prompts after `PS1` is armed. The profile's `cd` ahead of
+                                // the rc is answered before any prompt carries a mark.
+                                ledgers.[key] <- PromptLedger.opened instrumentation
                                 for line in lines.Split '\n' do
                                     pty.Write (line + "\r")
                                 match! started with
@@ -1576,6 +1689,10 @@ module SessionTerminals =
                                                 ready.Value <- false
                                                 carry.Value <- ""
                                                 let armed = awaitStart true pty.Exited said
+                                                // Typed into a shell in a state nobody knows,
+                                                // so how many prompts answer it is not known
+                                                // either (`PromptLedger.Unknown`).
+                                                ledgers.[key] <- PromptLedger.Unknown
                                                 // Clear the line editor before the rc goes in: a wedged shell (a PS2
                                                 // continuation left by a mis-wrapped line) swallows the rc otherwise, and
                                                 // the re-arm meant to reclaim the terminal never answers. See `unwedge`.
@@ -1899,6 +2016,9 @@ module SessionTerminals =
                     sawCommandStart.Remove (TerminalId.value id) |> ignore
                     awaitingStart.Remove (TerminalId.value id) |> ignore
                     linesTyped.Remove (TerminalId.value id) |> ignore
+                    answers.Remove (TerminalId.value id) |> ignore
+                    ledgers.Remove (TerminalId.value id) |> ignore
+                    nonces.Remove (TerminalId.value id) |> ignore
                     rearmers.Remove (TerminalId.value id) |> ignore
                     // The SOURCE stays. Everything else here is about a terminal that is
                     // running and this is not: "did its output resolve into blocks" is asked
@@ -2116,10 +2236,11 @@ module SessionTerminals =
                                     // before we are ready for it.
                                     let! result =
                                         Async.FromContinuations (fun (cont, _, _) ->
+                                            let complete result =
+                                                settled <- true
+                                                cont result
                                             pending.[key] <-
-                                                ((fun result ->
-                                                     settled <- true
-                                                     cont result),
+                                                (complete,
                                                  (fun () -> written),
                                                  (fun extra ->
                                                      dropped <- dropped + extra
@@ -2131,8 +2252,11 @@ module SessionTerminals =
                                             awaitingStart.Add key |> ignore
                                             let writtenAt = clock.Now ()
                                             typedBlock.[key] <- (blockId, writtenAt)
-                                            rendering.[key] <- Text.StringBuilder ()
-                                            pty.Write (writeFor (Marks.lineFor terminal.Spec.Name stdin lent command))
+                                            let line = Marks.lineFor terminal.Spec.Name stdin lent command
+                                            let nonce = match nonces.TryGetValue key with | true, nonce -> nonce | _ -> ""
+                                            answers.[key] <- LineAnswer.start line lent nonce
+                                            ledgers.[key] <- PromptLedger.handed (linesIn line) (ledgerOf key)
+                                            pty.Write (writeFor line)
                                             // The integration detector (Plan 13, stage 2f), armed
                                             // beside the block rather than awaited: a lost shell
                                             // must not make this block wait, because the block is
@@ -2142,23 +2266,57 @@ module SessionTerminals =
                                             //
                                             // Every dialect marks a start (`ShellInstrumentation`),
                                             // so the detector is armed for every block: it IS "a
-                                            // start mark that did not arrive".
+                                            // start mark that did not arrive" — unless a REFUSAL
+                                            // settled the block first, which the scanner reads off
+                                            // the prompt that answered its line.
                                             Async.StartImmediate (
                                               async {
                                                   do! clock.After integrationWindow
-                                                  if not (sawCommandStart.Contains key)
-                                                     && not settled
-                                                     && not (Set.contains key lost) then
+                                                  let answer =
+                                                      match answers.TryGetValue key with
+                                                      | true, answer -> Some answer
+                                                      | _ -> None
+                                                  match ledgerOf key, answer with
+                                                  // A refusal the count could not see: the prompts
+                                                  // after a re-arm cannot be matched to lines, so no
+                                                  // prompt could settle the block when it came. A
+                                                  // window later, a shell that answered with a
+                                                  // primary prompt and is sitting at it has read the
+                                                  // line — anything still unread would have drawn a
+                                                  // mark of its own by now — and did not start it.
+                                                  // From here the count is known again.
+                                                  | PromptLedger.Unknown, Some answer when
+                                                      not (sawCommandStart.Contains key)
+                                                      && not settled
+                                                      && not (Set.contains key lost)
+                                                      && answer.Prompted
+                                                      && atPrompt.Contains key
+                                                      ->
+                                                      ledgers.[key] <- PromptLedger.Owed 0
+                                                      pending.Remove key |> ignore
+                                                      awaitingStart.Remove key |> ignore
+                                                      answers.Remove key |> ignore
+                                                      complete (CommandNotRun (LineAnswer.words { answer with Verdict = None }))
+                                                  | _ when
+                                                      not (sawCommandStart.Contains key)
+                                                      && not settled
+                                                      && not (Set.contains key lost)
+                                                      ->
                                                       lost <- Set.add key lost
                                                       // A shell that will not mark the start
                                                       // will not mark the boundary of the
                                                       // output either; from here whatever it
                                                       // prints is recorded, wrapper and all.
                                                       awaitingStart.Remove key |> ignore
-                                                      let said =
-                                                          match rendering.TryGetValue key with
-                                                          | true, said -> legible (BlockEnv.redact lent (said.ToString ()))
-                                                          | _ -> ""
+                                                      answers.Remove key |> ignore
+                                                      // A count nobody knew is taken as settled:
+                                                      // a window on, whatever the re-arm typed has
+                                                      // been answered, and the next primary prompt
+                                                      // is what brings this terminal back.
+                                                      match ledgerOf key with
+                                                      | PromptLedger.Unknown -> ledgers.[key] <- PromptLedger.Owed 0
+                                                      | PromptLedger.Owed _ -> ()
+                                                      let said = answer |> Option.map LineAnswer.evidence |> Option.defaultValue ""
                                                       do!
                                                           append
                                                               (SessionEvent.TerminalIntegrationLost
@@ -2171,6 +2329,7 @@ module SessionTerminals =
                                                                             Said = said } })
                                                       reDrain ()
                                                       mayOweWake ()
+                                                  | _ -> ()
                                               }))
                                     return result
                                 }
@@ -2266,9 +2425,7 @@ module SessionTerminals =
                         match! rearmer () with
                         | false -> return Error "the shell did not answer the instrumentation"
                         | true ->
-                            lost <- Set.remove key lost
-                            do! append (SessionEvent.TerminalIntegrationRestored { TerminalId = id })
-                            reDrain ()
+                            do! restore id Rearmed
                             return Ok ()
             }
 
@@ -2327,7 +2484,9 @@ module SessionTerminals =
                                     let typed = typedSoFar key + 1
                                     linesTyped.[key] <- typed
                                     awaitingStart.Add key |> ignore
-                                    pty.Write (writeFor (Marks.lineFor terminal.Spec.Name BlockStdin.Terminal lent ""))
+                                    let line = Marks.lineFor terminal.Spec.Name BlockStdin.Terminal lent ""
+                                    ledgers.[key] <- PromptLedger.handed (linesIn line) (ledgerOf key)
+                                    pty.Write (writeFor line)
                                     leaseLoans.Add key |> ignore
                                     // The same bound a block's start mark is under: a shell that
                                     // does not answer this line with a `C` inside the window has

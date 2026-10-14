@@ -417,6 +417,102 @@ let private integrationLostTests =
                 })
     ]
 
+/// A line bash REFUSES runs nothing — its DEBUG trap never fires, so no start mark comes —
+/// and bash prompts again. Read as a shell that had stopped marking, it lost the terminal and
+/// told the agent a command was still running that had been thrown away (session
+/// YSQA3JTTQD45Q5YPTKX5JQJTT8, a `!p` in double quotes).
+let private refusedLineTests =
+    /// The result of the LAST block on the log.
+    let lastResult (log: EventLog<SessionEvent>) =
+        async {
+            let! results = blockResults log
+            return List.tryLast results
+        }
+    /// Run one block and say how it ended — BOUNDED, because a block nothing settles is the
+    /// very regression these cases guard, and an unbounded wait on one reports as the suite's
+    /// budget running out rather than as itself.
+    let ranTo (terminals: SessionTerminals.SessionTerminals) (id: TerminalId) (log: EventLog<SessionEvent>) (entry: PendingAct) (command: string) =
+        async {
+            let mutable ended = false
+            Async.StartImmediate (
+                async {
+                    do! terminals.RunBlock id entry command ignore
+                    ended <- true
+                })
+            let! settled = until 8000 (fun () -> ended)
+            if not settled then failwithf "`%s` never ended: nothing settled its block" command
+            return! lastResult log
+        }
+    testList "A line a real shell refuses" [
+        // The FIRST block after the shell opens, on purpose: bash still owes the prompts
+        // for two rc lines when it is typed, and either, taken for its answer, would settle it
+        // with nothing to say.
+        testCaseAsync "a syntax error ends the block as not run, in bash's words, and the next block runs" <|
+            withLiveTerminal "refused-syntax" (fun terminals id _ log _ _ ->
+                async {
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
+                    match! ranTo terminals id log (queueEntry id ada "1") "echo (" with
+                    | Some (CommandNotRun said) -> Expect.stringContains said "syntax error" "bash's own reason"
+                    | other -> failwithf "expected the line to be refused, got %A" other
+                    Expect.isEmpty (terminals.Lost ()) "and the terminal is not lost: bash answered"
+                    let! next = ranTo terminals id log (queueEntry id ada "2") "echo next"
+                    Expect.equal next (Some (CommandSucceeded 0)) "the queue goes on, on the same shell"
+                })
+
+        // The shell production composes, whose start mark rides in the line itself: refused,
+        // the line runs nothing, so that mark is never printed either.
+        testCaseAsync "under the shell production composes, a syntax error ends the block as not run" <|
+            withPosixTerminal "refused-posix" (fun terminals id _ log _ _ ->
+                async {
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
+                    match! ranTo terminals id log (agentEntry id ada "1") "echo (" with
+                    | Some (CommandNotRun said) ->
+                        // bash says "syntax error", dash "Syntax error": either is the shell's.
+                        Expect.stringContains (said.ToLowerInvariant ()) "syntax error" "the shell's own reason"
+                    | other -> failwithf "expected the line to be refused, got %A" other
+                })
+
+        // History expansion is on in an interactive bash, inside double quotes too. The
+        // agent's line is a two-line brace group, so bash refuses its `}` as well: two
+        // prompts, and only the second is the block's last word.
+        testCaseAsync "an agent's `!` in double quotes is refused by history expansion, and said so" <|
+            withLiveTerminal "refused-bang" (fun terminals id _ log _ _ ->
+                async {
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
+                    match! ranTo terminals id log (agentEntry id ada "1") "echo \"done!yessionnosuchevent\"" with
+                    | Some (CommandNotRun said) -> Expect.stringContains said "event not found" "the reason, not our brace's"
+                    | other -> failwithf "expected the line to be refused, got %A" other
+                    let! next = ranTo terminals id log (agentEntry id ada "2") "echo 'done!'"
+                    Expect.equal next (Some (CommandSucceeded 0)) "and single-quoted, the same words run"
+                })
+
+        // A quote left open puts bash at its continuation prompt, where the line is neither
+        // run nor refused: no prompt says anything, and the detector calls the terminal lost.
+        // The author's ^C abandons the continuation and bash prompts again — which only the
+        // instrumented shell can do with this terminal's nonce, so the terminal is back.
+        testCaseAsync "a line left at a continuation is lost, and a ^C brings the terminal back" <|
+            withLiveTerminal "continuation" (fun terminals id _ log _ advance ->
+                async {
+                    let ada = Principal.Peer (PeerId.create "ada" |> expect)
+                    Async.StartImmediate (terminals.RunBlock id (queueEntry id ada "1") "echo 'unterminated" ignore)
+                    let! detected =
+                        until 8000 (fun () ->
+                            advance (System.TimeSpan.FromSeconds 3.0)
+                            not (Set.isEmpty (terminals.Lost ())))
+                    Expect.isTrue detected "no start mark, and no prompt to say it was refused"
+                    match! terminals.Write id (Principal.toActor ada) "\u0003" with
+                    | Error e -> failwithf "the block's author may type into it: %s" e
+                    | Ok () -> ()
+                    let! back = until 5000 (fun () -> Set.isEmpty (terminals.Lost ()))
+                    Expect.isTrue back "the prompt after the ^C restored it, with nobody re-arming"
+                    match! lastResult log with
+                    | Some (CommandOutcomeUnknown _) -> ()
+                    | other -> failwithf "the block the loss left open has no outcome to claim, got %A" other
+                    let! next = ranTo terminals id log (queueEntry id ada "2") "echo back"
+                    Expect.equal next (Some (CommandSucceeded 0)) "and the next block runs"
+                })
+    ]
+
 let private liveModeTests =
     testList "Live mode over a real pty (Plan 13, stage 2e)" [
         testCaseAsync "only the lease holder's keystrokes reach the shell, and none are recorded as input" <|
@@ -1624,4 +1720,5 @@ let tests =
         liveModeTests
         agentLeaseTests
         integrationLostTests
+        refusedLineTests
     ]

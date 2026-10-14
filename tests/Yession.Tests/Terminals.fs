@@ -732,6 +732,23 @@ let private markTests =
             let marks, _, _ = scan1 (mark "A")
             Expect.equal marks [ MarkPromptStart ] "A is the handshake that instrumentation took"
 
+        // A shell mid-command is not at a prompt anybody can type at, and reading its `PS2`
+        // as an `A` would settle a block whose line it has not finished reading.
+        testCase "a continuation prompt's mark is not the prompt mark" <| fun () ->
+            let marks, _, _ = scan1 (mark "A;k=s")
+            Expect.equal marks [ MarkContinuationPrompt ] "PS2 is told from PS1"
+
+        // The count of lines against prompts (`PromptLedger`) holds only if EVERY prompt is
+        // marked: a dialect whose continuation went unmarked would drift by one on each
+        // multi-line block, and every agent block is one.
+        testCase "every dialect marks its continuation prompt" <| fun () ->
+            for dialect in [ "bash"; "zsh"; "sh" ] do
+                match Marks.rcFor dialect nonce with
+                | Some instrumentation ->
+                    Expect.stringContains instrumentation.Rc "PS2=" (sprintf "%s arms PS2" dialect)
+                    Expect.stringContains instrumentation.Rc "133;A;k=s;y=" (sprintf "%s marks it as a continuation" dialect)
+                | None -> failwithf "%s has instrumentation" dialect
+
         testCase "the rc payload carries the nonce and reads $? first" <| fun () ->
             // Two properties of the emitted shell, both of which are silent when wrong.
             for shell in [ "bash"; "zsh" ] do
@@ -861,6 +878,104 @@ let private markTests =
             Expect.isEmpty marks3 "a truncated mark is not one yet"
             Expect.equal out3 "x" "and its bracket travels with the fragment"
             Expect.equal carry3 ("\u0001" + (mark "A").Substring (0, 6)) "to be finished by the next chunk"
+    ]
+
+/// Which line a prompt answers, and what the shell said before it — the two things a refused
+/// line is read off.
+let private promptAnswerTests =
+    let bashRc = Marks.rcFor "bash" nonce |> Option.get
+    testList "What a prompt answers" [
+        // bash arms `PS1` and then types two more rc lines, each answered by a marked prompt
+        // that lands AFTER the probe has called the terminal ready.
+        testCase "the bootstrap's leftover prompts come before the first block's" <| fun () ->
+            let ready = PromptLedger.opened bashRc |> PromptLedger.prompted
+            let handed = PromptLedger.handed 1 ready
+            Expect.isFalse (PromptLedger.reaches 1 handed) "the next prompt is the rc's, not the block's"
+            let leftovers = handed |> PromptLedger.prompted |> PromptLedger.prompted
+            Expect.isTrue (PromptLedger.reaches 1 leftovers) "and once they are in, the next is the block's"
+
+        // A refused brace group draws two: one for its first line, one for the `}` that
+        // closes it, which a shell that refused the first reads afresh and refuses as well.
+        testCase "a two-line block is answered only by its second prompt" <| fun () ->
+            let first = PromptLedger.Owed 0 |> PromptLedger.handed 2 |> PromptLedger.prompted
+            Expect.isFalse (PromptLedger.caughtUp first) "a prompt is still owed"
+            Expect.isTrue (PromptLedger.caughtUp (PromptLedger.prompted first)) "until the second"
+
+        // A person holding the terminal presses Enter at their own prompt; nobody typed that
+        // line for a block, and it must not answer the next one.
+        testCase "a prompt nobody typed for is not borrowed against the next line" <| fun () ->
+            let after = PromptLedger.Owed 0 |> PromptLedger.prompted |> PromptLedger.handed 1
+            Expect.isFalse (PromptLedger.caughtUp after) "the next line is still owed its own"
+
+        testCase "after a re-arm, no prompt can be matched to a line" <| fun () ->
+            let after = PromptLedger.Unknown |> PromptLedger.handed 1 |> PromptLedger.prompted
+            Expect.isFalse (PromptLedger.caughtUp after) "nothing is known to be answered"
+            Expect.isFalse (PromptLedger.reaches 1 after) "nor which line a prompt is for"
+
+        // The shell's echo of the line is ours, not its: quoted, the loan in it was most of
+        // what a fact used to carry, and the actual reason was what got cut.
+        testCase "what a refused line said leaves out the shell's echo of it" <| fun () ->
+            let said =
+                LineAnswer.start "echo (" BlockEnv.none nonce
+                |> LineAnswer.printed "\u0007echo (\r\nbash: syntax error near unexpected token `newline'\r\n"
+                |> LineAnswer.answered
+                |> LineAnswer.words
+            Expect.equal said "bash: syntax error near unexpected token `newline'" "the shell's words, and only those"
+
+        testCase "a refused two-line block is quoted for its first refusal, not its closing brace's" <| fun () ->
+            let said =
+                LineAnswer.start "{ echo (\n} </dev/null" BlockEnv.none nonce
+                |> LineAnswer.printed "{ echo (\r\nbash: syntax error near unexpected token `newline'\r\n"
+                |> LineAnswer.answered
+                |> LineAnswer.printed "$ } </dev/null\r\nbash: syntax error near unexpected token `}'\r\n"
+                |> LineAnswer.answered
+                |> LineAnswer.words
+            Expect.stringContains said "`newline'" "what was wrong with the command"
+            Expect.isFalse (said.Contains "`}'") "not the error our own wrapper drew"
+
+        testCase "what a refused line said never carries what the block was lent" <| fun () ->
+            let lent : BlockEnv = { GitConfig = None; Vars = [ "GIT_TOKEN", Some "loan-secret-1" ] }
+            let line = Marks.lineFor "bash" BlockStdin.Terminal lent "echo \"!p\""
+            let said =
+                LineAnswer.start line lent nonce
+                // Behind something that makes the echo NOT a line the stripping recognises, so
+                // the loan is still in what came back and only the redaction stands between.
+                |> LineAnswer.printed ("#" + line + "\r\nbash: !p: event not found\r\n")
+                |> LineAnswer.answered
+                |> LineAnswer.words
+            Expect.stringContains said "event not found" "the reason survives"
+            Expect.isFalse (said.Contains "loan-secret-1") "and the loan does not"
+
+        testCase "what a shell said never carries the terminal's nonce" <| fun () ->
+            let answer =
+                LineAnswer.start "ls" BlockEnv.none nonce
+                |> LineAnswer.printed (" PS1='\\[\\033]133;A;y=" + nonce + "\\007\\]'\r\n")
+            Expect.isFalse ((LineAnswer.evidence answer).Contains nonce) "not as evidence"
+            Expect.isFalse ((LineAnswer.words answer).Contains nonce) "nor as words"
+
+        // The real session's: a long echo, the loan inside it, and the error at the end. Bounded
+        // from the front, the echo spent the budget and the error was cut.
+        testCase "the evidence keeps the end of what the shell said" <| fun () ->
+            let lent : BlockEnv = { GitConfig = None; Vars = [ "GIT_TOKEN", Some (String.replicate 600 "s") ] }
+            let line = Marks.lineFor "bash" BlockStdin.Terminal lent ("echo " + String.replicate 400 "x")
+            let evidence =
+                LineAnswer.start line lent nonce
+                |> LineAnswer.printed (line + "\r\nbash: !p: event not found\r\n")
+                |> LineAnswer.evidence
+            Expect.stringContains evidence "event not found" "the shell's last word is kept"
+            Expect.isTrue (evidence.Length <= LineAnswer.cap) "and the whole is still bounded"
+
+        testCase "the loan is taken out before the evidence is bounded" <| fun () ->
+            // Redacted after bounding, a secret cut at the edge of the window would survive
+            // in part — and a long one would spend the budget the error needed.
+            let secret = String.replicate 2000 "s"
+            let lent : BlockEnv = { GitConfig = None; Vars = [ "GIT_TOKEN", Some secret ] }
+            let evidence =
+                LineAnswer.start "ls" lent nonce
+                |> LineAnswer.printed ("GIT_TOKEN=" + secret + "\r\nbash: oops\r\n")
+                |> LineAnswer.evidence
+            Expect.isFalse (evidence.Contains "sss") "no part of the loan"
+            Expect.stringContains evidence "GIT_TOKEN=" "and the text around it intact"
     ]
 
 // --- The headless emulator (Plan 13, stage 2b) -------------------------------------------
@@ -1241,8 +1356,9 @@ let private integrationTests =
                 "the command that was held runs once marking is back"
 
         testCase "the agent is told the terminal is not free, and does not wait on it" <| fun () ->
-            // Only a person re-arming brings marking back — an unbounded wait, so it
-            // returns at once rather than burning a deadline.
+            // Marking comes back only when somebody acts — a re-arm, or a ^C that brings the
+            // shell back to its prompt — an unbounded wait, so it returns at once rather than
+            // burning a deadline.
             Expect.equal
                 (TerminalCommandWait.step
                     false
@@ -1266,7 +1382,7 @@ let private integrationTests =
                 fold
                     [ opened terminalA "build"
                       SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = None; Evidence = None }
-                      SessionEvent.TerminalIntegrationRestored { TerminalId = terminalA } ]
+                      SessionEvent.TerminalIntegrationRestored { TerminalId = terminalA; How = Rearmed } ]
             Expect.isFalse
                 (Projection.tryFind terminalA repaired |> Option.map (fun t -> t.IntegrationLost) |> Option.defaultValue true)
                 "and stops seeing it once somebody re-armed"
@@ -2148,7 +2264,10 @@ let private codecTests =
                                 Due = System.DateTimeOffset (2026, 9, 20, 0, 14, 46, System.TimeSpan.Zero)
                                 Said = "$ echo hi\\x0d\\x0a" } }
                   SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = None; Evidence = None }
-                  SessionEvent.TerminalIntegrationRestored { TerminalId = terminalA }
+                  SessionEvent.TerminalIntegrationRestored { TerminalId = terminalA; How = Rearmed }
+                  SessionEvent.TerminalIntegrationRestored { TerminalId = terminalA; How = PromptReturned }
+                  completed terminalA "1" (CommandNotRun "bash: !p: event not found") 9
+                  completed terminalA "1" (CommandOutcomeUnknown "the shell came back to its prompt") 9
                   SessionEvent.TerminalMarkedLate
                       { TerminalId = terminalA
                         BlockId = block "1"
@@ -2209,6 +2328,16 @@ let private codecTests =
                 Expect.equal title "build" "the title it did send"
                 Expect.equal sandbox SandboxRef.defaultRef "and the only sandbox it could have meant"
             | other -> failwithf "an open written before sandboxes must still read back, got %A" other
+
+        // Every restoration a log recorded before a terminal could come back on its own was a
+        // person's re-arm, so a line that does not say how was one — and must still read
+        // back, or a session whose log holds one will not open.
+        testCase "a restoration written before it said how still decodes, as a re-arm" <| fun () ->
+            let old = """{"type":"terminalIntegrationRestored","payload":{"terminalId":"term-a"}}"""
+            Expect.equal
+                (Codec.fromString Events.sessionEvent old)
+                (Ok (SessionEvent.TerminalIntegrationRestored { TerminalId = terminalA; How = Rearmed }))
+                "the only way back there was"
 
         testCase "an agent's block written before Plan 20 is refused, not recovered" <| fun () ->
             // The same absent key on an AGENT block says nobody's authority — a value the
@@ -4837,23 +4966,267 @@ let private lostEvidenceTests =
                 Expect.equal late.WrittenAt writtenAt "naming the write it was late for, so how late is the envelope's own arithmetic"
             }
 
-        // The mark does not repair the terminal. Whether it should is a decision the fact
-        // above exists to inform; today only a person re-arming does, and a queue held behind
-        // a shell that has just proved it marks is the cost this fact makes legible.
+        // A start mark arrives in the middle of a command, so it says the shell marks and not
+        // that it is back: the prompt after the command is what says that.
         testCaseAsync "a late start mark does not, by itself, clear the loss" <|
             async {
-                let! terminals, id, log, _, mark, _, _ = lostOverALateShell ()
+                let! terminals, id, _, _, mark, _, _ = lostOverALateShell ()
                 mark "C"
+                Expect.isTrue (Set.contains (TerminalId.value id) (terminals.Lost ())) "the terminal is still held"
+            }
+    ]
+
+/// The ways a lost terminal comes back on its own (Plan 13, stage 2f): its shell prints a
+/// primary prompt, with this terminal's nonce, having answered every line it was handed.
+/// Before, the terminal stayed held over a shell that was plainly marking — a ^C at the
+/// continuation that had swallowed the line put it back at its prompt — until a person
+/// pressed re-arm to say what the marks already had.
+let private comingBackTests =
+    /// The prompt a ^C at the continuation draws, and what the record then says.
+    let promptedAfterLoss () =
+        async {
+            let! terminals, id, log, _, mark, _, _ = lostOverALateShell ()
+            mark "A"
+            let! events = eventsOf log
+            return terminals, id, events
+        }
+    testList "A lost terminal coming back" [
+        testCaseAsync "a lost terminal whose shell prompts again is no longer held" <|
+            async {
+                let! terminals, id, _ = promptedAfterLoss ()
+                Expect.isFalse (Set.contains (TerminalId.value id) (terminals.Lost ())) "the queue is released"
+            }
+
+        testCaseAsync "the record says the prompt brought it back, not a re-arm" <|
+            async {
+                let! _, id, events = promptedAfterLoss ()
+                Expect.equal
+                    (events |> List.choose (function SessionEvent.TerminalIntegrationRestored r when r.TerminalId = id -> Some r.How | _ -> None))
+                    [ PromptReturned ]
+                    "detected, and said to be"
+            }
+
+        // Its start mark never came, so nothing says it ran; and a shell can lose its start
+        // hook and run commands unmarked, so nothing says it did not. Any exit code would be
+        // invented — and the block left open held the terminal busy, so the queue the
+        // restoration released could not move anyway.
+        testCaseAsync "the block a loss left open ends with its outcome unknown" <|
+            async {
+                let! _, id, events = promptedAfterLoss ()
+                match events |> List.choose (function SessionEvent.TerminalBlockCompleted c when c.TerminalId = id -> Some c.Result | _ -> None) with
+                | [ CommandOutcomeUnknown _ ] -> ()
+                | other -> failwithf "expected the open block to end with no outcome claimed, got %A" other
+            }
+
+        testCaseAsync "a block whose start mark came late keeps the code its shell gave" <|
+            async {
+                let! _, id, log, _, mark, _, _ = lostOverALateShell ()
+                mark "C"
+                mark "D;3"
+                mark "A"
+                let! events = eventsOf log
+                Expect.equal
+                    (events |> List.choose (function SessionEvent.TerminalBlockCompleted c when c.TerminalId = id -> Some c.Result | _ -> None))
+                    [ CommandFailed 3 ]
+                    "the shell's own word on it, not an unknown"
+            }
+
+        // A re-arm settles it the same way: the block was left open by the loss whichever
+        // way the terminal comes back, and a terminal back but still busy releases nothing.
+        testCaseAsync "a block a re-arm finds open ends with its outcome unknown" <|
+            async {
+                let! terminals, id, log, _, _, _, _ = lostOverALateShell ()
+                match! terminals.Rearm id with
+                | Error e -> failwithf "the shell answers the re-arm: %s" e
+                | Ok () ->
+                    do! waitUntil "the open block to end" (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
+                    let! events = eventsOf log
+                    match events |> List.choose (function SessionEvent.TerminalBlockCompleted c when c.TerminalId = id -> Some c.Result | _ -> None) with
+                    | [ CommandOutcomeUnknown _ ] -> ()
+                    | other -> failwithf "expected the open block to end with no outcome claimed, got %A" other
+            }
+    ]
+
+/// A shell the CASE speaks for. Its bootstrap is answered the way the dialect's is — the
+/// prompt mark once the line arming `PS1` goes in, and nothing for the lines behind it, whose
+/// prompts are the case's to deliver whenever it likes — and a block's line (the one
+/// `writeFor` begins with a line-kill) is answered with nothing until the case says what.
+let private speakingShell (dialect: TerminalShell) =
+    let environment, _, _ = profileEnvironment (fun () -> Set.empty)
+    let mutable prints : string -> unit = ignore
+    let lines = ResizeArray<string> ()
+    let shell : SessionEnvironment.SessionEnvironment =
+        { environment with
+            Shell = fun () -> Some dialect
+            SpawnPty =
+                fun _ _ _ onOutput ->
+                    async {
+                        prints <- onOutput
+                        let _, never = latch ()
+                        return
+                            Ok
+                                { Write =
+                                    fun line ->
+                                        if line.StartsWith "\u0015" then lines.Add line
+                                        elif line.StartsWith " PS1=" then onOutput "\u001b]133;A;y=test-nonce\u0007"
+                                  Resize = fun _ _ -> ()
+                                  Kill = ignore
+                                  Exited =
+                                    async {
+                                        do! never
+                                        return SandboxExited 0
+                                    } }
+                    } }
+    let say (text: string) = prints text
+    let mark (body: string) = prints (sprintf "\u001b]133;%s;y=test-nonce\u0007" body)
+    shell, lines, say, mark
+
+/// One block, typed at a speaking shell of `dialect` and not yet answered: what the case gets
+/// back is the manager, the terminal, its log, the clock its detector waits on, the lines the
+/// shell has been handed, and the shell's voice.
+let private blockAtASpeakingShell (dialect: TerminalShell) (authority: Authority) (command: string) =
+    async {
+        let log = newLog ()
+        let shell, lines, say, mark = speakingShell dialect
+        let clock = virtualClock (fixedClock ())
+        let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+        let terminals, _, _ =
+            makeTerminalsOn ignore clock.Clock Principal.Peer SessionTerminals.BlockLoans.none AttachTerminal.unavailable Classifier.approveAll log shell openTranscript readTranscript [] ShellProfileProjection.empty
+        let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+        let id = opened |> expect
+        Async.StartImmediate (terminals.RunBlock id (entry "b1" id authority 1.0) command ignore)
+        do! waitUntil "the block's line to be typed" (fun () -> lines.Count = 1)
+        return terminals, id, log, clock, lines, say, mark
+    }
+
+/// How every block on a terminal ended, off its log, in order.
+let private completionsOf (log: EventLog<SessionEvent>) (id: TerminalId) =
+    async {
+        let! events = eventsOf log
+        return events |> List.choose (function SessionEvent.TerminalBlockCompleted c when c.TerminalId = id -> Some c.Result | _ -> None)
+    }
+
+/// A line the shell REFUSES — a syntax error, a quote left open at the end, a `!` expansion
+/// that found no event — runs nothing, so no start mark ever comes; the prompt after it is
+/// the shell's whole answer. It used to be read as a shell that had stopped marking: the
+/// terminal was declared lost, the queue held, and the agent told its command was STILL
+/// RUNNING when it had been thrown away at the prompt.
+let private refusedLineTests =
+    /// `sh`'s refusal of `echo (`, as dash prints it, with the line echoed ahead of it.
+    let refuse (say: string -> unit) (mark: string -> unit) =
+        say "__y_c; echo (\r\nsh: 1: Syntax error: newline unexpected\r\n"
+        mark "D;2"
+        mark "A"
+    let refusedOnce () =
+        async {
+            let! terminals, id, log, clock, lines, say, mark = blockAtASpeakingShell TerminalShell.posix byAda "echo ("
+            refuse say mark
+            do! waitUntil "the refused block to end" (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
+            return terminals, id, log, clock, lines, say, mark
+        }
+    testList "A line the shell refuses" [
+        testCaseAsync "a refused line ends its block as not run, in the shell's words" <|
+            async {
+                let! _, id, log, _, _, _, _ = refusedOnce ()
+                let! completions = completionsOf log id
+                Expect.equal completions [ CommandNotRun "sh: 1: Syntax error: newline unexpected" ] "what the shell said, without its echo of the line"
+            }
+
+        testCaseAsync "a refused line does not lose the terminal" <|
+            async {
+                let! terminals, id, _, clock, _, _, _ = refusedOnce ()
+                // The detector's window passes too: a block that is over is not one whose
+                // start mark is missing.
+                clock.Advance (TimeSpan.FromSeconds 3.0)
+                Expect.isFalse (Set.contains (TerminalId.value id) (terminals.Lost ())) "nothing was lost; the shell answered"
+            }
+
+        testCaseAsync "the block after a refused line runs" <|
+            async {
+                let! terminals, id, log, _, lines, say, mark = refusedOnce ()
+                Async.StartImmediate (terminals.RunBlock id (entry "b2" id byAda 2.0) "echo ok" ignore)
+                do! waitUntil "the next block's line to be typed" (fun () -> lines.Count = 2)
+                mark "C"
+                say "ok\r\n"
                 mark "D;0"
                 mark "A"
-                Expect.isTrue (Set.contains (TerminalId.value id) (terminals.Lost ())) "the terminal is still held"
-                let! events = eventsOf log
-                Expect.isTrue
-                    (events |> List.exists (function SessionEvent.TerminalBlockCompleted c -> c.TerminalId = id | _ -> false))
-                    "even though its block completed with the exit code the marks carried"
-                Expect.isFalse
-                    (events |> List.exists (function SessionEvent.TerminalIntegrationRestored r -> r.TerminalId = id | _ -> false))
-                    "and nothing said it was restored"
+                do! waitUntil "the next block to end" (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
+                let! completions = completionsOf log id
+                Expect.equal (List.last completions) (CommandSucceeded 0) "it ran, and finished on its own marks"
+            }
+
+        // bash arms `PS1` and then reads two more rc lines; the probe calls the shell ready on
+        // the first marked prompt, so the other two can land after the first block's line.
+        // Read as that block's answer, either would settle it before its line was read.
+        testCaseAsync "the bootstrap's leftover prompts do not answer the first block" <|
+            async {
+                let! terminals, id, log, _, _, say, mark = blockAtASpeakingShell TerminalShell.bash byAda "echo ("
+                for _ in 1..2 do
+                    mark "D;0"
+                    mark "A"
+                    say "$ "
+                say "echo (\r\nbash: syntax error near unexpected token `newline'\r\n"
+                mark "D;2"
+                mark "A"
+                do! waitUntil "the block to end" (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
+                let! completions = completionsOf log id
+                Expect.equal completions [ CommandNotRun "bash: syntax error near unexpected token `newline'" ] "settled by its own prompt, with its own words"
+            }
+
+        testCaseAsync "a leftover prompt does not end a block that runs" <|
+            async {
+                let! terminals, id, log, _, _, say, mark = blockAtASpeakingShell TerminalShell.bash byAda "echo ok"
+                for _ in 1..2 do
+                    mark "D;0"
+                    mark "A"
+                mark "C"
+                say "ok\r\n"
+                mark "D;0"
+                mark "A"
+                do! waitUntil "the block to end" (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
+                let! completions = completionsOf log id
+                Expect.equal completions [ CommandSucceeded 0 ] "it ran"
+            }
+
+        // The agent's lines are a brace group over two lines (`BlockStdin.wrap`), and a shell
+        // that refuses the first reads the `}` afresh and refuses that too: two prompts. The
+        // first is not the block's last word, and taken for it, the second would be read as
+        // the NEXT block's.
+        testCaseAsync "a refused two-line block is not over until its last line is answered" <|
+            async {
+                let! _, id, log, _, _, say, mark = blockAtASpeakingShell TerminalShell.posix agentForAda "echo ("
+                say "{ __y_c; echo (\r\nsh: 1: Syntax error: newline unexpected\r\n"
+                mark "D;2"
+                mark "A"
+                let! completions = completionsOf log id
+                Expect.isEmpty completions "a prompt is still owed for the `}`"
+            }
+
+        testCaseAsync "a refused two-line block is quoted for its first refusal" <|
+            async {
+                let! terminals, id, log, _, _, say, mark = blockAtASpeakingShell TerminalShell.posix agentForAda "echo ("
+                say "{ __y_c; echo (\r\n} </dev/null\r\nsh: 1: Syntax error: newline unexpected\r\n"
+                mark "D;2"
+                mark "A"
+                say "sh: 2: Syntax error: \"}\" unexpected\r\n"
+                mark "D;2"
+                mark "A"
+                do! waitUntil "the block to end" (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
+                let! completions = completionsOf log id
+                Expect.equal completions [ CommandNotRun "sh: 1: Syntax error: newline unexpected" ] "what was wrong with the command, not with our brace"
+            }
+
+        // A continuation prompt is a shell waiting for the rest of a command — a quote left
+        // open, say. The line has been neither run nor refused, so the block stays the
+        // detector's, and a ^C is what brings the shell back (`comingBackTests`).
+        testCaseAsync "a line left at a continuation prompt is still the detector's to call lost" <|
+            async {
+                let! terminals, id, _, clock, _, say, mark = blockAtASpeakingShell TerminalShell.posix byAda "echo 'open"
+                say "__y_c; echo 'open\r\n"
+                mark "A;k=s"
+                say "> "
+                clock.Advance (TimeSpan.FromSeconds 3.0)
+                Expect.isTrue (Set.contains (TerminalId.value id) (terminals.Lost ())) "no start mark, and no prompt to say it was refused"
             }
     ]
 
@@ -5578,6 +5951,7 @@ let tests =
         blockStdinTests
         typingTests
         markTests
+        promptAnswerTests
         emulatorTests
         rejectionTests
         leaseTests
@@ -5600,6 +5974,8 @@ let tests =
         shellExitTests
         interruptTests
         lostEvidenceTests
+        comingBackTests
+        refusedLineTests
         codecTests
         orderTests
         managerTests

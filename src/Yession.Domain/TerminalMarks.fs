@@ -32,6 +32,19 @@ type Mark =
     /// `A` — the shell is about to print its prompt. The handshake the open-probe waits for,
     /// and the only evidence that instrumentation took at all.
     | MarkPromptStart
+    /// `A;k=s` — the shell is about to print its CONTINUATION prompt (`PS2`): it has read a
+    /// line that does not finish a command and is waiting for more. kitty's spelling of a
+    /// secondary prompt, so it stays a legal OSC 133 sequence.
+    ///
+    /// Not a prompt anybody can type a command at, which is why it is not `MarkPromptStart`.
+    /// It is marked at all because it is the other half of one count: a shell prints exactly
+    /// one prompt — primary or continuation — for every line it reads, so with both marked
+    /// the prompts that come back can be matched to the lines that went in
+    /// (`PromptLedger`). With only the primary one marked, a line that ends in a
+    /// continuation answers with nothing, and a count of lines against prompts drifts by one
+    /// on every multi-line command — every one the agent sends, since its are wrapped in a
+    /// brace group (`BlockStdin.wrap`).
+    | MarkContinuationPrompt
     /// `C` — the shell has STARTED running a command. Its timing does not depend on how long
     /// the command runs, which is what makes a missing one a reliable signal that the marks
     /// are gone rather than that the command is slow.
@@ -141,6 +154,7 @@ module Marks =
         if not hasNonce then None
         else
             match parts with
+            | "A" :: rest when List.contains "k=s" rest -> Some MarkContinuationPrompt
             | "A" :: _ -> Some MarkPromptStart
             | "C" :: _ -> Some MarkCommandStart
             | "D" :: code :: _ ->
@@ -323,6 +337,11 @@ module Marks =
 
     let rcFor (shell: string) (nonce: string) : ShellInstrumentation option =
         let promptStart = emit nonce "A"
+        // Armed BEFORE `PS1` in every dialect, so it adds no prompt cycle after the first
+        // `A`: the prompts the bootstrap still owes once the terminal is ready are counted
+        // from the `PS1` line on (`promptsOwedBy`), and a line ahead of it costs that count
+        // nothing.
+        let continuation = emit nonce "A;k=s"
         let commandStart = emit nonce "C"
         let commandDone = emit nonce "D;%d"
         match shell with
@@ -349,6 +368,7 @@ module Marks =
                           // mark is recorded, and this is the longest line of the lot.
                           " " + envFunction
                           " PROMPT_COMMAND='__y_post'"
+                          " PS2='\\[" + continuation + "\\]'\"$PS2\""
                           " PS1='\\[" + promptStart + "\\]'\"$PS1\""
                           " __y_armed=1"
                           " trap '__y_pre' DEBUG" ] }
@@ -370,6 +390,7 @@ module Marks =
                           // eleven characters of backslash text, no `A` ever arrived, and a
                           // zsh terminal never became ready — every block on it hung. `%{…%}`
                           // is zsh's own "zero width" bracket, bash's `\[…\]`.
+                          " PS2=$'%{" + continuation + "%}'\"$PS2\""
                           " PS1=$'%{" + promptStart + "%}'\"$PS1\"" ] }
         | "sh"
         | "dash" ->
@@ -411,6 +432,7 @@ module Marks =
                     String.concat "\n"
                         [ " __y_c() { __y_r=$?; command -p printf '" + commandStart + "'; return $__y_r; }"
                           " " + envFunction
+                          " PS2='$(command -p printf \"\\001" + continuation + "\\002\")'\"$PS2\""
                           " PS1='$(command -p printf \"\\001" + commandDone + promptStart + "\\002\" $?)'" ] }
         | _ -> None
 
@@ -450,3 +472,183 @@ module Marks =
     let spawnLineFor (stdin: BlockStdin) (env: BlockEnv) (command: string) : string =
         if BlockEnv.isNone env then BlockStdin.wrap stdin command
         else BlockStdin.wrap stdin (envFunction + "; " + envLine env + command)
+
+    /// How many prompts carrying a mark of ours the bootstrap makes the shell print once it
+    /// is typed: one after the line that arms `PS1`, and one after every line behind it. A
+    /// line ahead of `PS1` is answered by a prompt with no mark in it, so it is not counted;
+    /// and none of them is a continuation, because every rc line is a whole command.
+    ///
+    /// The open-probe returns on the FIRST of these, so the rest are still on their way when
+    /// the first block's line goes in — bash types `__y_armed=1` and the `trap` after `PS1` —
+    /// and each is a primary prompt answering a line typed BEFORE the block's. Counted off the
+    /// text rather than written down beside it, so a line added to an rc moves the count
+    /// with it.
+    let promptsOwedBy (instrumentation: ShellInstrumentation) : int =
+        let lines = instrumentation.Rc.Split '\n'
+        match lines |> Array.tryFindIndex (fun line -> line.StartsWith " PS1=") with
+        | Some armed -> lines.Length - armed
+        | None -> 0
+
+/// The prompts a shell still owes for the lines it has been handed — what tells a prompt
+/// that answers THIS block's line from one that answers a line typed before it.
+///
+/// It rests on one property every dialect here has: a shell prints exactly one prompt for
+/// each line it reads, a primary one (`A`) when the line finished a command and a
+/// continuation (`A;k=s`) when it did not — whether the command then ran, failed, or was
+/// refused unparsed. So the prompts come back in the order the lines went in, and counting
+/// is enough to say which line a prompt is for.
+///
+/// Why it is needed at all: a block whose line the shell REFUSES — a syntax error, a `!`
+/// expansion that found no event — answers with a prompt and no start mark, and that
+/// prompt is the only evidence the line was refused. But a prompt is also what every
+/// earlier line answers with: the bootstrap's own leftovers (`Marks.promptsOwedBy`), and
+/// the second line of a two-line block, which a shell that refused the first reads afresh
+/// and refuses too. Taken for the next block's answer, either would settle that block as
+/// refused before its line was even read.
+///
+/// Where the count can be wrong, it errs high: a prompt nobody typed for (a person's own
+/// Enter while they held the terminal) is floored at nothing owed rather than borrowed
+/// against the next line, and a line a running program reads as input is never answered
+/// at all. A count that is too high only means a refusal goes unnoticed and the terminal
+/// is declared lost instead, which is the older and louder failure.
+[<RequireQualifiedAccess>]
+type PromptLedger =
+    /// This many prompts are owed for lines already typed.
+    | Owed of int
+    /// Not known: the instrumentation was typed into a shell in a state nobody knows (a
+    /// re-arm). Whether its old `PS1` still marked decides how many of the rc's lines answer
+    /// with a mark of ours — and that is exactly what is unknown about a terminal declared
+    /// lost.
+    | Unknown
+
+module PromptLedger =
+
+    /// A shell that has just been handed its bootstrap, from a known state: a fresh one.
+    let opened (instrumentation: ShellInstrumentation) : PromptLedger =
+        PromptLedger.Owed (Marks.promptsOwedBy instrumentation)
+
+    /// `lines` more lines typed at the shell, each owed a prompt.
+    let handed (lines: int) (ledger: PromptLedger) : PromptLedger =
+        match ledger with
+        | PromptLedger.Owed n -> PromptLedger.Owed (n + lines)
+        | PromptLedger.Unknown -> PromptLedger.Unknown
+
+    /// One prompt, of either kind, arrived.
+    let prompted (ledger: PromptLedger) : PromptLedger =
+        match ledger with
+        | PromptLedger.Owed n -> PromptLedger.Owed (max 0 (n - 1))
+        | PromptLedger.Unknown -> PromptLedger.Unknown
+
+    /// Whether the NEXT prompt answers one of the last `lines` typed, rather than a line
+    /// typed ahead of them.
+    let reaches (lines: int) (ledger: PromptLedger) : bool =
+        match ledger with
+        | PromptLedger.Owed n -> n <= lines
+        | PromptLedger.Unknown -> false
+
+    /// Whether every line typed has been answered: the last prompt was the last line's.
+    let caughtUp (ledger: PromptLedger) : bool =
+        match ledger with
+        | PromptLedger.Owed 0 -> true
+        | PromptLedger.Owed _
+        | PromptLedger.Unknown -> false
+
+/// What a shell printed while the line it was handed for a block was awaited — the window
+/// in which nothing is recorded (`Marks.lineFor`), because the shell is rendering the line
+/// rather than running it. Kept so that whatever ends the window can SAY what the shell
+/// said: a loss quotes it as evidence, and a refused line quotes it as the reason.
+[<RequireQualifiedAccess>]
+type LineAnswer =
+    { /// The line as the shell was handed it, so its echo can be told from the shell's words.
+      Line : string
+      /// What the block was lent, which is taken back out of anything this says.
+      Lent : BlockEnv
+      /// The terminal's nonce, taken out too. A re-armed shell echoes its rc — the `PS1`
+      /// line, nonce and all — and a mark's key quoted into a durable fact is the key handed
+      /// to every reader of the log.
+      Nonce : string
+      /// Raw, and only its TAIL kept (`keep`).
+      Printed : string
+      /// What it had printed by the time it first came back to a primary prompt for this
+      /// line: the shell's verdict on the first command it read. Kept apart because a
+      /// two-line block the shell refused at its first line has its second refused as well —
+      /// the `}` closing the agent's brace group, a syntax error of our own making — and the
+      /// first refusal is the one that says what was wrong with the command.
+      Verdict : string option
+      /// Whether ANY primary prompt has come back since the line went in — all a shell whose
+      /// prompts cannot be counted (`PromptLedger.Unknown`) can say about it.
+      Prompted : bool }
+
+module LineAnswer =
+
+    /// The most a fact quotes of what the shell said.
+    let cap = 512
+
+    /// What is kept raw, generous beside `cap` so that the bound is applied AFTER the loan is
+    /// taken out. Bounding first let the shell's echo of our own line — the longest thing in
+    /// the window, loan and all — spend the whole budget, and the actual error, at the end,
+    /// was the part that got cut.
+    let private keep = 16 * 1024
+
+    let start (line: string) (lent: BlockEnv) (nonce: string) : LineAnswer =
+        { Line = line; Lent = lent; Nonce = nonce; Printed = ""; Verdict = None; Prompted = false }
+
+    let private tail (bound: int) (text: string) : string =
+        if text.Length > bound then text.Substring (text.Length - bound) else text
+
+    /// More of what the shell printed.
+    let printed (text: string) (answer: LineAnswer) : LineAnswer =
+        { answer with Printed = tail keep (answer.Printed + text) }
+
+    /// A prompt for a line typed BEFORE this one: what came ahead of it was that line's.
+    let restart (answer: LineAnswer) : LineAnswer = { answer with Printed = "" }
+
+    /// A primary prompt, which nothing can say was this line's or an earlier one's.
+    let prompted (answer: LineAnswer) : LineAnswer = { answer with Prompted = true }
+
+    /// The shell is back at a primary prompt for this line.
+    let answered (answer: LineAnswer) : LineAnswer =
+        match answer.Verdict with
+        | Some _ -> prompted answer
+        | None -> prompted { answer with Verdict = Some answer.Printed }
+
+    let private redacted (answer: LineAnswer) (text: string) : string =
+        let lent = BlockEnv.redact answer.Lent text
+        if answer.Nonce = "" then lent else lent.Replace (answer.Nonce, "•")
+
+    /// Control bytes escaped, so what a shell said cannot carry a mark or an escape into a
+    /// fact that is read back on every screen.
+    let legible (text: string) : string =
+        text
+        |> Seq.map (fun c -> if System.Char.IsControl c then sprintf "\\x%02x" (int c) else string c)
+        |> String.concat ""
+
+    /// Everything the window held, as evidence: the loan and the nonce taken out, control
+    /// bytes escaped, and the END kept — which is where a shell's last word is.
+    let evidence (answer: LineAnswer) : string = answer.Printed |> redacted answer |> legible |> tail cap
+
+    /// What the shell said about the line, as a person would read it off the screen: a line
+    /// per line, a carriage return overwriting what it returned over, escapes dropped, and
+    /// the shell's echo of the line we typed left out — that was never the shell's to say,
+    /// and with the loan in it, it was most of what used to be quoted.
+    let words (answer: LineAnswer) : string =
+        let echoes =
+            answer.Line.Split '\n'
+            |> Array.map (fun line -> (redacted answer line).Trim ())
+            |> Array.filter (fun line -> line <> "")
+        let echo (line: string) =
+            echoes |> Array.exists (fun typed -> line = typed || line.EndsWith (" " + typed))
+        answer.Verdict
+        |> Option.defaultValue answer.Printed
+        |> redacted answer
+        |> Ansi.parse
+        |> List.map (fun line ->
+            let text =
+                line.Spans
+                |> List.map (fun span -> span.Text)
+                |> String.concat ""
+                |> String.filter (fun c -> not (System.Char.IsControl c))
+            text.Trim ())
+        |> List.filter (fun line -> line <> "" && not (echo line))
+        |> String.concat "\n"
+        |> tail cap

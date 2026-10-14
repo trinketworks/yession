@@ -80,6 +80,16 @@ module AgentTools =
             "\n[a write under /tmp was refused: the sandbox does not let you write there. Your writable scratch directory is $TMPDIR, which is set in every sandbox — rerun writing under $TMPDIR instead.]"
         else ""
 
+    /// A line refused by history expansion, named for what it was. An interactive shell reads
+    /// `!` as "an earlier command" even inside double quotes, so `echo "done!p"` never runs —
+    /// it is refused with `!p: event not found`, which says nothing about quoting to anybody
+    /// who did not already know. Signature, not a parse, for `scratchDenialHint`'s reason: a
+    /// hint on a line that was refused anyway.
+    let private historyExpansionHint (said: string) : string =
+        if said.Contains "event not found" then
+            " [`!` is history expansion here, even inside double quotes: put that text in single quotes, or leave the `!` out.]"
+        else ""
+
     let renderOutcome (outcome: TerminalCommandOutcome) : string =
         let where = sprintf "terminal %s" (TerminalId.value outcome.Terminal)
         let handle = QueueId.value outcome.Handle
@@ -126,6 +136,20 @@ module AgentTools =
         | TerminalCommandRan CommandTimedOut -> sprintf "TIMED OUT in %s%s" where output
         | TerminalCommandRan (CommandExecutionFailed reason) ->
             sprintf "EXECUTION FAILED in %s: %s%s" where reason output
+        // The line never ran, and the terminal is not the problem. Said in that order, because
+        // the agent this replaced was told the command was STILL RUNNING while the shell sat at
+        // a prompt having refused it — and what it did next was wait.
+        | TerminalCommandRan (CommandNotRun said) ->
+            let rejected =
+                if said = "" then "the shell rejected the line without saying why"
+                else sprintf "the shell rejected the line: \"%s\"" said
+            sprintf
+                "DID NOT RUN in %s — %s. The terminal is fine. Fix the command and send it again.%s%s"
+                where rejected (historyExpansionHint said) output
+        | TerminalCommandRan (CommandOutcomeUnknown reason) ->
+            sprintf
+                "OUTCOME UNKNOWN in %s: %s. It is not running now. Check for its effects before you send it again.%s"
+                where reason output
         | TerminalCommandEnded reason ->
             sprintf
                 "ENDED in %s with no exit status on record: %s. It is not running; whether it succeeded is not known — read its output.%s"
@@ -174,7 +198,7 @@ module AgentTools =
                 where handle
         | TerminalCommandAwaitingTerminal UnmarkedShell ->
             sprintf
-                "WAITING FOR %s — its shell stopped answering the session's instrumentation, and a person must re-arm it before anything runs there; it has NOT run. open_terminal runs it elsewhere now; check_pending '%s' picks it up once the terminal is repaired."
+                "WAITING FOR %s — its shell stopped answering the session's instrumentation, and nothing runs there until it prompts again: a ctrl-c into the command stuck there (write_terminal keys: [\"ctrl-c\"], if that command is yours) or a person re-arming it brings it back. It has NOT run. open_terminal runs it elsewhere now; check_pending '%s' picks it up once the terminal is back."
                 where handle
         | TerminalCommandRefused (by, reason) ->
             let who = ActorRef.token by

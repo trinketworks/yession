@@ -1790,12 +1790,16 @@ module View =
 
     let private ansiText (text: string) : TemplateResult list = ansiLines (Ansi.parse text) None
 
-    /// How a block went, as its HOOKS spell it: five tokens for seven outcomes, because what a
-    /// hook is asked is whether it went, not how.
+    /// How a block went, as its HOOKS spell it: six tokens for nine outcomes, because what a
+    /// hook is asked is whether it went, not how. A line the shell refused is its own token
+    /// because it did not go at all — and an outcome nobody knows borrows `ended`, which
+    /// already means exactly that.
     let private terminalBlockStatusLabel =
         function
         | BlockRunning -> Dom.Text.blockRunning
         | BlockFinished (CommandSucceeded _) -> Dom.Text.blockOk
+        | BlockFinished (CommandNotRun _) -> Dom.Text.blockNotRun
+        | BlockFinished (CommandOutcomeUnknown _) -> Dom.Text.blockEnded
         | BlockFinished _ -> Dom.Text.blockFailed
         | BlockRejected _ -> Dom.Text.blockRejected
         | BlockEnded _ -> Dom.Text.blockEnded
@@ -1809,6 +1813,8 @@ module View =
         | BlockFinished (CommandFailed code) -> Dom.Text.blockExitFailed code
         | BlockFinished CommandTimedOut -> Dom.Text.blockTimedOut
         | BlockFinished (CommandExecutionFailed _) -> Dom.Text.failed
+        | BlockFinished (CommandNotRun _) -> Dom.Text.blockDidNotRun
+        | BlockFinished (CommandOutcomeUnknown _) -> Dom.Text.blockEnded
         | BlockRejected (by, _) -> Dom.Text.blockRefusedBy (Entity.actorName model by)
         | BlockEnded _ -> Dom.Text.blockEnded
 
@@ -1840,10 +1846,12 @@ module View =
         | BlockFinished (CommandSucceeded code) -> pictured Style.statusDone (html $"""{Icon.checkSm} {code}""")
         | BlockFinished (CommandFailed code) -> pictured wrong (html $"""{Icon.crossSm} {code}""")
         | BlockFinished CommandTimedOut
-        | BlockFinished (CommandExecutionFailed _) ->
+        | BlockFinished (CommandExecutionFailed _)
+        | BlockFinished (CommandNotRun _) ->
             html $"""<span class="{wrong}" data-block-mark="{token}">{terminalBlockStatusWord model status}</span>"""
         // A record, not a wrong thing: nothing says it failed, so it is not red. Faint like
         // any other status with nothing to report, and the block's facts carry why it ended.
+        | BlockFinished (CommandOutcomeUnknown _)
         | BlockEnded _ ->
             html $"""<span class="{Style.statusFaint}" data-block-mark="{token}">{terminalBlockStatusWord model status}</span>"""
         // Named, not merely absent. "refused by nick" in line with the commands that ran
@@ -3304,6 +3312,10 @@ module View =
         else
             match block.Status with
             | BlockRunning -> html $"""<div class="{Style.terminalOutputEmpty}" data-terminal-output>…</div>"""
+            // Not "no output", which reads as a command that ran quietly. Why it did not run
+            // is the block's fact, in the shell's words.
+            | BlockFinished (CommandNotRun _) ->
+                html $"""<div class="{Style.terminalOutputEmpty}" data-terminal-output>did not run</div>"""
             | BlockFinished _
             | BlockEnded _ -> html $"""<div class="{Style.terminalOutputEmpty}" data-terminal-output>no output</div>"""
             // "no output" would be true and useless. A refused command has no output
@@ -3426,14 +3438,22 @@ module View =
         let reason =
             match block.Status with
             | BlockFinished (CommandExecutionFailed reason)
+            | BlockFinished (CommandOutcomeUnknown reason)
             | BlockEnded reason ->
                 html $"""<span class="{Style.terminalBlockFact}">{reason}</span>"""
+            // The shell's own words, which are the whole of why: the line never ran, so there
+            // is no output under it to read them in.
+            | BlockFinished (CommandNotRun said) ->
+                let said = if said = "" then "the shell refused the line without saying why" else said
+                html $"""<span class="{Style.terminalBlockFact}" data-terminal-block-not-run>{said}</span>"""
             | BlockRunning
             | BlockFinished _
             | BlockRejected _ -> Lit.nothing
         let facts =
             match block.Status, block.StoppedBy with
             | BlockFinished (CommandExecutionFailed _), _
+            | BlockFinished (CommandNotRun _), _
+            | BlockFinished (CommandOutcomeUnknown _), _
             | BlockEnded _, _
             | _, Some _ -> html $"""<div class="{Style.terminalBlockFacts}" data-terminal-block-facts>{reason}{stoppedBy}</div>"""
             | _ -> Lit.nothing

@@ -331,7 +331,10 @@ module Events =
                 | CommandFailed code -> Encode.object [ "kind", Encode.string "failed"; "exitCode", Encode.int code ]
                 | CommandTimedOut -> Encode.object [ "kind", Encode.string "timedOut" ]
                 | CommandExecutionFailed reason ->
-                    Encode.object [ "kind", Encode.string "executionFailed"; "reason", Encode.string reason ])
+                    Encode.object [ "kind", Encode.string "executionFailed"; "reason", Encode.string reason ]
+                | CommandNotRun said -> Encode.object [ "kind", Encode.string "notRun"; "said", Encode.string said ]
+                | CommandOutcomeUnknown reason ->
+                    Encode.object [ "kind", Encode.string "outcomeUnknown"; "reason", Encode.string reason ])
           Decode =
             Decode.field "kind" Decode.string
             |> Decode.andThen (function
@@ -339,6 +342,8 @@ module Events =
                 | "failed" -> Decode.field "exitCode" Decode.int |> Decode.map CommandFailed
                 | "timedOut" -> Decode.succeed CommandTimedOut
                 | "executionFailed" -> Decode.field "reason" Decode.string |> Decode.map CommandExecutionFailed
+                | "notRun" -> Decode.field "said" Decode.string |> Decode.map CommandNotRun
+                | "outcomeUnknown" -> Decode.field "reason" Decode.string |> Decode.map CommandOutcomeUnknown
                 | other -> Decode.fail (sprintf "Unknown command result: %s" other)) }
 
     let private commandRequested : Codec<CommandRequested> =
@@ -561,11 +566,35 @@ module Events =
                   TerminalBlockInterrupted.BlockId = get.Required.Field "blockId" Codec.blockId.Decode
                   TerminalBlockInterrupted.By = get.Required.Field "by" Codec.actor.Decode }) }
 
+    let private integrationRestoredBy : Codec<IntegrationRestoredBy> =
+        { Encode =
+            fun how ->
+                Encode.string (
+                    match how with
+                    | Rearmed -> "rearmed"
+                    | PromptReturned -> "promptReturned"
+                )
+          Decode =
+            Decode.string
+            |> Decode.andThen (function
+                | "rearmed" -> Decode.succeed Rearmed
+                | "promptReturned" -> Decode.succeed PromptReturned
+                | other -> Decode.fail (sprintf "Unknown way integration was restored: %s" other)) }
+
     let private terminalIntegrationRestored : Codec<TerminalIntegrationRestored> =
-        { Encode = fun (p: TerminalIntegrationRestored) -> Encode.object [ "terminalId", Codec.terminalId.Encode p.TerminalId ]
+        { Encode =
+            fun (p: TerminalIntegrationRestored) ->
+                Encode.object
+                    [ "terminalId", Codec.terminalId.Encode p.TerminalId
+                      "how", integrationRestoredBy.Encode p.How ]
           Decode =
             Decode.object (fun get ->
-                { TerminalIntegrationRestored.TerminalId = get.Required.Field "terminalId" Codec.terminalId.Decode }) }
+                { TerminalIntegrationRestored.TerminalId = get.Required.Field "terminalId" Codec.terminalId.Decode
+                  // Absent only from a log written before a terminal could come back on its
+                  // own — when the re-arm control was the one way back, so `Rearmed` is what
+                  // such a line recorded, not a guess at it.
+                  TerminalIntegrationRestored.How =
+                    get.Optional.Field "how" integrationRestoredBy.Decode |> Option.defaultValue Rearmed }) }
 
     let private terminalLeaseTaken : Codec<TerminalLeaseTaken> =
         { Encode =
