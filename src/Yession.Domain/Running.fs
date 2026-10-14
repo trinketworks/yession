@@ -70,11 +70,10 @@ module MemoryKill =
 
 /// The OOM counters of one cgroup v2 memory controller, as `memory.events` holds them.
 ///
-/// Two of its five lines are read, and nothing else. `oom` counts the times this cgroup hit
+/// Two of its lines are read, and nothing else. `oom` counts the times this cgroup hit
 /// its own `memory.max` and the kernel had to act. `oom_kill` counts processes in this cgroup
 /// that ANY OOM killer stopped, its own or one above it. The difference between the two is the
 /// whole classification: a kill that this cgroup's own `oom` does not explain came from above.
-/// The counters are hierarchical, so a sandbox's file also counts the kills inside it.
 type MemoryEvents =
     { Oom : int64
       OomKill : int64 }

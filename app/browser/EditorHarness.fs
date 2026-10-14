@@ -741,8 +741,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
     /// A CLOSED terminal, for the list's other half — a recording rather than a place to type.
     let doneId : TerminalId = TerminalId.create "term-done" |> expect
     let blockId : BlockId = BlockId.create "block-harness" |> expect
-    /// A burst: three commands ONE agent turn ran, so the chat has a task card to draw
-    /// (Plan 20, stage 4). Three rather than two, and in three different states, because
+    /// A burst: commands ONE agent turn ran, so the chat has a task card to draw
+    /// (Plan 20, stage 4). More than two, and in different states, because
     /// what a card does that a chip cannot is count and order them — a burst that was all
     /// one state would exercise the disclosure and nothing else.
     let agentTurn : AgentTurnId = AgentTurnId.create "turn-harness" |> expect
@@ -752,8 +752,9 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
     /// A refusal on a long command: the status is the widest one a block wears ("refused by"
     /// and a name), and the command is several words past a phone's column.
     let refusedLong : BlockId = BlockId.create "block-refused-long" |> expect
-    /// A build the kernel killed for memory, when the machine ran out: the mark is a phrase
-    /// rather than a number, and the block names which of the two causes it was.
+    /// A build in the same burst that the kernel killed for memory, when the machine ran
+    /// out: the mark is a phrase rather than a number, and the block names which of the two
+    /// causes it was.
     let killedForMemory : BlockId = BlockId.create "block-killed-memory" |> expect
     let refusedLongCommand =
         "cd /repos/trinketworks/yession && git fetch origin master -q && git log --oneline -5 origin/master"
@@ -924,12 +925,12 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     [ TimelineBlock (offset 2L, terminalId, blockId)
                       TimelineBlock (offset 3L, terminalId, burstOk)
                       TimelineBlock (offset 4L, terminalId, burstFailed)
-                      TimelineBlock (offset 5L, terminalId, burstRunning)
+                      TimelineBlock (offset 5L, terminalId, killedForMemory)
+                      TimelineBlock (offset 6L, terminalId, burstRunning)
                       // A tool call, so the page holds the OTHER kind of fold row: its title
                       // is mono and its own type step brings its own line-height, which is
                       // exactly what the arrow used to be measured wrong against.
-                      TimelineToolUse (offset 6L, toolUseId)
-                      TimelineBlock (offset 7L, terminalId, killedForMemory) ]
+                      TimelineToolUse (offset 7L, toolUseId) ]
                 ToolUses =
                     Map.ofList
                         [ ToolUseId.value toolUseId,
@@ -946,6 +947,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     Map.ofList
                         [ BlockId.value burstOk, agentTurn
                           BlockId.value burstFailed, agentTurn
+                          BlockId.value killedForMemory, agentTurn
                           BlockId.value burstRunning, agentTurn ] }
         Terminals =
             { Terminals =
@@ -996,6 +998,17 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                           Status = BlockFinished (CommandFailed 1)
                           StoppedBy = None
                           StartedAt = harnessRanAt }
+                        { BlockId = killedForMemory
+                          QueueId = None
+                          Authority = Authority.agentFor (Principal.Peer peerId)
+                          Command = "dotnet build -m"
+                          Description = None
+                          Background = false
+                          FromSeq = 2
+                          ToSeq = Some 2
+                          Status = BlockFinished (CommandKilledForMemory MachineOutOfMemory)
+                          StoppedBy = None
+                          StartedAt = harnessRanAt }
                         { BlockId = burstRunning
                           QueueId = None
                           Authority = Authority.agentFor (Principal.Peer peerId)
@@ -1016,17 +1029,6 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                           FromSeq = 2
                           ToSeq = Some 2
                           Status = BlockRejected (ActorRef.System, None)
-                          StoppedBy = None
-                          StartedAt = harnessRanAt }
-                        { BlockId = killedForMemory
-                          QueueId = None
-                          Authority = Authority.ofAuthor (Principal.Peer peerId)
-                          Command = "dotnet build -m"
-                          Description = None
-                          Background = false
-                          FromSeq = 2
-                          ToSeq = Some 2
-                          Status = BlockFinished (CommandKilledForMemory MachineOutOfMemory)
                           StoppedBy = None
                           StartedAt = harnessRanAt }
                         // Enough history that the scrollback actually OVERFLOWS its box.
