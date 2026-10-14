@@ -3549,11 +3549,10 @@ module Style =
     /// Stop: the bare danger verb with its glyph, which is what the chat's interrupt says too.
     let terminalStop = cls [ btnBareDanger; "h-full min-w-11 px-1.5 gap-1.5 justify-center" ]
 
-    /// Who ran a command, on the command's own line — a reference, so it carries the mark AND
-    /// the name. `shrink-0` with a bounded name, because the command beside it is the longer
-    /// thing and the one that should give way; `min-w-0` lets the name itself give way before
-    /// the row does, on a phone where neither fits.
-    let terminalBlockAuthor = "shrink-0 min-w-0 max-w-[60%] @min-[40rem]:max-w-full inline-flex items-baseline font-ui font-light text-small text-ink-dim"
+    /// Who ran a command, on its byline or its run's line, in the transcript's face
+    /// (`View.actorHead`): the square and the name. Bounded, so the time and state beside it
+    /// keep their room; the name is what gives way, on a phone where neither fits.
+    let terminalBlockAuthor = "shrink-0 min-w-0 max-w-[60%] @min-[40rem]:max-w-full inline-flex items-center gap-2 [&>:last-child]:truncate"
 
     let terminalPrompt = "shrink-0 font-terminal text-code text-green select-none"
     /// A command breaks where a shell would let you: at its spaces. `anywhere` is the last resort
