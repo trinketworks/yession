@@ -102,6 +102,21 @@ let private diedOf (code: int) : string =
     | Some signal -> sprintf "%d, killed by %s" code signal
     | None -> string code
 
+/// A child that did not exit 0. A type rather than a string, so that `make` can tell a child
+/// that said no from one a signal ended part way, and name the second in the last line it prints.
+exception ChildFailed of tool: string * code: int * report: string with
+    override this.Message = this.report
+
+/// Why a child died, when a signal ended it, in the words a failed run ends with. SIGKILL gets
+/// a guess, because nothing in this build sends it and an out-of-memory killer does: `build`
+/// was killed half way through the browser client, and its last line named the target and no
+/// cause.
+let private killedWhy (code: int) : string option =
+    match killedBy code with
+    | Some _ when code - 128 = 9 -> Some "signal 9, likely out of memory"
+    | Some _ -> Some (sprintf "signal %d" (code - 128))
+    | None -> None
+
 // Run a command capturing stdout (fails on non-zero); used where the output is a value.
 //
 // A failure carries what the command PRINTED. `compile` restores the solution through this, and
@@ -118,13 +133,15 @@ let runIn (workingDir: string) (command: string) (arguments: string list) : stri
     let output = p.StandardOutput.ReadToEnd ()
     p.WaitForExit ()
     if p.ExitCode <> 0 then
-        failwithf
-            "%s %s failed (%s):\n%s%s"
-            command
-            (String.concat " " arguments)
-            (diedOf p.ExitCode)
-            (output.Trim ())
-            (crashEvidence ())
+        let report =
+            sprintf
+                "%s %s failed (%s):\n%s%s"
+                command
+                (String.concat " " arguments)
+                (diedOf p.ExitCode)
+                (output.Trim ())
+                (crashEvidence ())
+        raise (ChildFailed (Path.GetFileName command, p.ExitCode, report))
     output.Trim ()
 
 let run (command: string) (arguments: string list) : string = runIn repoRoot command arguments
@@ -142,7 +159,8 @@ let runInherit (workingDir: string) (command: string) (arguments: string list) :
 let exec (command: string) (arguments: string list) : unit =
     let code = runInherit repoRoot command arguments
     if code <> 0 then
-        failwithf "%s %s failed (%s)%s" command (String.concat " " arguments) (diedOf code) (crashEvidence ())
+        let report = sprintf "%s %s failed (%s)%s" command (String.concat " " arguments) (diedOf code) (crashEvidence ())
+        raise (ChildFailed (Path.GetFileName command, code, report))
 
 // --- version: the continuous-delivery number, bumped from commit messages ---------------------
 
@@ -371,6 +389,21 @@ let private packageGraph (project: string) : string =
 /// still held beta0219, and the build was green against the previous library; it was only loud
 /// because that release changed the API's shape, and a source-compatible bump would have passed
 /// in silence. So key the out dir on the graph here: if it moved, the cached crack is void.
+///
+/// Fable's own idea of fresh is one timestamp: a source older than
+/// `fable_modules/project_cracked.json` is not compiled again. Fable can write that file BEFORE
+/// it compiles, so a run that did not succeed can leave a cache newer than every source:
+///
+/// - `build` was killed (out of memory) while the browser client was being written. The next
+///   `build` said "done in 1s" over an `app/out/browser` with no `Browser.js`, and esbuild failed
+///   on the missing import.
+/// - A compile error, run again with nothing edited, can pass: Fable skips the file it rejected.
+///
+/// So this records the half Fable does not. `.succeeded` goes before Fable starts and comes back
+/// only once Fable has exited 0. A cache without it belongs to a run that did not succeed, and
+/// `--noCache` throws that run's claims away. That costs the attempt after a failure a compile
+/// from scratch, packages included. That is cheap next to a green build over a tree that is not
+/// one.
 let private fable (project: string) (outDir: string) =
     let stamp = Path.Combine (outDir, ".package-graph")
     let graph = packageGraph project
@@ -379,12 +412,22 @@ let private fable (project: string) (outDir: string) =
         if Directory.Exists modules then Directory.Delete (modules, true)
     // Stamped BEFORE compiling, not after: it records which graph `fable_modules` holds, and
     // once the stale copy is gone that is settled. A compile error in OUR sources says nothing
-    // about the packages, and re-deleting them on every attempt would make an error-fix loop
-    // pay a full dependency re-copy each time round.
+    // about the packages.
     Directory.CreateDirectory outDir |> ignore
     File.WriteAllText (stamp, graph)
-    run "dotnet" [ "fable"; project; "-o"; outDir; "--noRestore" ] |> ignore
+    let succeeded = Path.Combine (outDir, ".succeeded")
+    let unproven =
+        File.Exists (Path.Combine (outDir, "fable_modules", "project_cracked.json"))
+        && not (File.Exists succeeded)
+    if unproven then
+        printfn "fable: nothing records that the last compile into %s succeeded. Fable compiles it from scratch." outDir
+    File.Delete succeeded
+    try
+        run "dotnet" [ "fable"; project; "-o"; outDir; "--noRestore"; if unproven then "--noCache" ] |> ignore
+    with ChildFailed (_, code, report) ->
+        raise (ChildFailed ("Fable", code, report))
     declareEsm outDir
+    File.WriteAllText (succeeded, "")
 
 // The asset set a build ships. What goes in it is declared once, in `AssetFile` — which this
 // script loads rather than restates, so the build cannot emit a file the servers will not serve
@@ -753,9 +796,22 @@ let make (targets: Target list) =
         // same exception, and saying so again would read as more faults than there are.
         for target, ex in failed do
             eprintfn "make: could not make %s:\n%s\n" (Target.describe target) ex.Message
+        // The last line is the one a reader sees, below everything the failed children printed.
+        // So a child a signal killed is named there, and the cause does not hide in a report
+        // above it.
+        let killed =
+            failed
+            |> Seq.choose (fun (target, ex) ->
+                match ex with
+                | ChildFailed (tool, code, _) ->
+                    killedWhy code
+                    |> Option.map (sprintf "\n%s: %s was killed (%s)." (Target.describe target) tool)
+                | _ -> None)
+            |> String.concat ""
         failwithf
-            "make: %s"
+            "make: %s%s"
             (failed |> Seq.map (fst >> Target.describe) |> String.concat ", " |> sprintf "could not make %s")
+            killed
 
 // --- build slots: one heavy build at a time across every sandbox on a daemon ------------------
 //
