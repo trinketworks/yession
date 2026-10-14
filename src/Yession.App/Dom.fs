@@ -115,6 +115,11 @@ module Dom =
         let peerPresence = "data-peer-presence"
         let peerAt = "data-peer-at"
         let environment = "data-environment"
+        /// On the element that carries `environment`: the words the environment gave for failing
+        /// to start. Empty in every other state. A hook for a reader that is not a person — a
+        /// test that is waiting for a command to run, and would otherwise sit out its deadline
+        /// beside a page that already holds the reason.
+        let environmentReason = "data-environment-reason"
         // Conversation timeline.
         let conversation = "data-conversation"
         /// The float that takes a reader who has scrolled away back to the tail, valued with
