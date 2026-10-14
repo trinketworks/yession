@@ -13,6 +13,19 @@
 # to keep) or any surprise below ends in exit 0 and no output: the call goes on to the user's
 # permission prompts. A deny is printed only after a command word has matched.
 #
+# WHERE `jq` COMES FROM. One place: the devshell's own profile, `<dotfile>/profile/bin/jq`, which
+# devenv links on every entry (`pkgs.jq` is in devenv.nix's `packages`). `<dotfile>` is
+# $DEVENV_DOTFILE, devenv's own record of where it put the profile, and the `.devenv` of the
+# checkout this script is in when that is unset. The harness runs this hook with ITS environment,
+# outside the devshell, so PATH says nothing about the devshell and is never searched: a `jq`
+# found there would be whichever one the box happens to have. Reading `jq` off PATH is how this
+# hook went blind on a box without one, silently.
+#
+# A checkout nobody has entered the devshell in has no profile yet, so the hook is blind there.
+# `--check` says so: it prints one line when the profile has no `jq`, and nothing when it has.
+# `.claude/setup.sh --hook` runs it at session start, so the model is told rather than left
+# believing the hook is on. The path is spelled here and nowhere else.
+#
 # The escape: prefix the command with YESSION_DIRECT_TOOL="<reason>" (non-empty). It passes, and
 # one line goes to .devenv/direct-tool.log (gitignored): timestamp, tool and first subcommand,
 # reason. From the 3rd escape of the same `dotnet test` on, the model is told in
@@ -36,9 +49,18 @@
 #   * A command after a heredoc's `<<` on the same line.
 #   * An escaped quote inside a quoted string misreads that string. At worst it hides a command.
 
+here=${BASH_SOURCE[0]}
+[[ $here == */* ]] && here=${here%/*} || here=.
+jq=${DEVENV_DOTFILE:-$here/../.devenv}/profile/bin/jq
+
+if [[ ${1-} == --check ]]; then
+  [[ -x $jq ]] || echo "direct-tool hook is OFF: no jq at $jq, so .claude/direct-tool-hook.sh lets every direct dotnet, fable and esbuild call through. devenv puts jq there when the devshell is entered: run \`devenv shell -- check\` (any task) once in this checkout. A fresh Claude Code container does it when its background setup ends."
+  exit 0
+fi
+
 payload=$(cat)
-command -v jq >/dev/null 2>&1 || exit 0
-cmd=$(jq -r '.tool_input.command // empty' <<<"$payload" 2>/dev/null) || exit 0
+[[ -x $jq ]] || exit 0
+cmd=$("$jq" -r '.tool_input.command // empty' <<<"$payload" 2>/dev/null) || exit 0
 
 # Fast path: nearly every call names none of the three.
 [[ $cmd == *dotnet* || $cmd == *fable* || $cmd == *esbuild* ]] || exit 0
@@ -73,7 +95,7 @@ deny() {
 Instead: \`devenv shell -- <task>\` (\`devenv shell -- help\` lists the verbs), or \`dotnet fsi tasks.fsx <verb>\` when there is no devenv.
 
 If no verb covers what you need, run the same command prefixed with YESSION_DIRECT_TOOL=\"<why no verb covers this>\" (a non-empty reason). The reason is logged, and repeated escapes are how a missing verb gets added."
-  jq -n --arg reason "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $reason}}'
+  "$jq" -n --arg reason "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $reason}}'
   exit 0
 }
 
@@ -155,6 +177,6 @@ done
 context=${context%$'\n'}
 
 if [[ -n $context ]]; then
-  jq -n --arg context "$context" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $context}}'
+  "$jq" -n --arg context "$context" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $context}}'
 fi
 exit 0

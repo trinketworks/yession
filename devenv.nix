@@ -62,8 +62,13 @@ in
   # procps (`ps`, `pkill`) on Linux only: the work sandboxes' nixos/nix image has none, and
   # an agent stopping a scratch Manager there fell back to walking /proc by hand (session
   # NR5KB8B5). macOS has its own, which the store's would shadow for no gain.
+  #
+  # jq parses the payload of the PreToolUse hook (.claude/direct-tool-hook.sh). The harness runs
+  # that hook outside this shell, so it reads jq from this shell's profile, which devenv links
+  # at $DEVENV_DOTFILE/profile on every entry, and never from PATH. Declared here and not assumed
+  # of the box: without one the hook fails open and says nothing.
   packages =
-    [ pkgs.git pkgs.gh pkgs.actionlint pkgs.uv pkgs.python312 pkgs.caddy pkgs.zsh ]
+    [ pkgs.git pkgs.gh pkgs.actionlint pkgs.uv pkgs.python312 pkgs.caddy pkgs.zsh pkgs.jq ]
     ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux
          [ pkgs.dbus pkgs.gnome-keyring pkgs.bubblewrap pkgs.socat pkgs.ripgrep pkgs.eudev pkgs.procps ];
 

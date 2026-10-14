@@ -13,10 +13,16 @@ module Yession.Tests.DirectToolHook
 // whatever it prints on stdout, and an exit code that must be 0. Each runs in a checkout of its
 // own (a temp directory), because the log the escape keeps lives in it.
 //
-// The script FAILS OPEN, so a box with no `jq` would read as a pass in every case that expects
-// nothing said. A missing `jq` therefore fails the suite by name, rather than skipping it.
+// The script FAILS OPEN, so a checkout with no `jq` in the devshell's profile (the one place the
+// hook reads it from: PATH is never searched) would read as a pass in every case that expects
+// nothing said. A missing `jq` therefore fails the suite by name, rather than skipping it. The
+// suite asks the hook itself (`--check`), so it looks exactly where the hook looks.
 //
-// No capability: a shell and `jq`, which every box that runs `check` has.
+// The session-start line (`.claude/setup.sh --hook` relaying `--check`) is what keeps a hook that
+// is off from being silent, so the cases below pin it too. They run COPIES of the scripts in a
+// checkout of their own, so the directory a script finds itself in is one the case controls.
+//
+// No capability: a shell, and the `jq` that `check` runs beside inside the devshell.
 
 open Fable.Core
 open Fable.NodeExtras
@@ -80,12 +86,18 @@ let private hook : Lazy<string> = lazy (repoRoot () + "/.claude/direct-tool-hook
 
 /// The first thing every case asks, because a hook that fails open without `jq` answers
 /// "nothing" to every payload and a case that expects nothing would pass for the wrong reason.
+/// The hook is the one that knows where it looks, so it is the one asked.
 let private jqIsHere : Lazy<unit> =
     lazy (
-        let found = spawnSync "jq" [ "--version" ] SyncOptions.none
-        if found.status <> Some 0 then
-            failwith
-                "jq is not on PATH. The hook parses its payload with jq and fails OPEN without it, so on this box every case that expects the hook to say nothing would pass vacuously and the denials could not be reached. Install jq (nixpkgs#jq, or your package manager) and run the suite again"
+        let found = spawnSync hook.Value [ "--check" ] SyncOptions.none
+        match found.status, found.stdout with
+        | Some 0, Some line when line.Trim () = "" -> ()
+        | Some 0, Some line ->
+            failwithf
+                "%s\n\nThe hook fails OPEN without that jq, so on this checkout every case that expects the hook to say nothing would pass vacuously and the denials could not be reached. Do what the line says and run the suite again"
+                (line.Trim ())
+        | status, _ ->
+            failwithf "`%s --check` must exit 0, and exited %A (stderr: %A)" hook.Value status found.stderr
     )
 
 /// A checkout of its own for one case, removed after it, a failure too.
@@ -160,24 +172,66 @@ let private logged (checkout: string) : string list list =
 let private eachOf (what: string) (check: string -> unit) (commands: string list) =
     testList what [ for command in commands -> testCase (command.Replace ("\n", "\\n")) <| fun () -> check command ]
 
-/// A box with no `jq`: a PATH holding a shell and `cat` and nothing else.
-let private withoutJq (checkout: string) : SyncResult =
-    let whereIs (tool: string) =
-        (execFileSync "sh" [ "-c"; "command -v \"$1\""; "sh"; tool ] SyncOptions.none).Trim ()
+/// Where this box's PATH finds a tool.
+let private whereIs (tool: string) : string =
+    (execFileSync "sh" [ "-c"; "command -v \"$1\""; "sh"; tool ] SyncOptions.none).Trim ()
+
+let private scripts : string list = [ "direct-tool-hook.sh"; "setup.sh" ]
+
+/// A checkout of its own that holds COPIES of the hook and of `setup.sh`, so the directory a
+/// script finds itself in is one the case controls. It has no devshell profile until a case
+/// puts one in.
+let private inScriptCheckout (body: string -> unit) : unit =
+    inCheckout (fun checkout ->
+        TestFiles.ensureDir (checkout + "/.claude")
+        for name in scripts do
+            let copy = checkout + "/.claude/" + name
+            TestFiles.copyFile (repoRoot () + "/.claude/" + name) copy
+            TestFiles.chmod copy 0o755
+        body checkout)
+
+/// A devshell profile under `dotfile`, the way devenv links one (`<dotfile>/profile`), holding a
+/// working `jq`.
+let private putJqProfile (dotfile: string) : unit =
+    jqIsHere.Force ()
+    let bin = dotfile + "/profile/bin"
+    TestFiles.ensureDir bin
+    TestFiles.symlink (whereIs "jq") (bin + "/jq")
+
+/// What the copy of the hook in `checkout` says to `dotnet build`, as the harness spawns it
+/// but with a PATH of a shell, `cat` and `onPath` and nothing else, and with `dotfile` as
+/// DEVENV_DOTFILE when given. Nothing more of this process's environment reaches it.
+let private askCopy (checkout: string) (dotfile: string option) (onPath: string list) : Said =
     let bin = checkout + "/bin"
     TestFiles.ensureDir bin
-    for tool in [ "bash"; "cat" ] do
+    for tool in "bash" :: "cat" :: onPath do
         TestFiles.symlink (whereIs tool) (bin + "/" + tool)
-    spawnSync
-        hook.Value
-        []
-        { SyncOptions.none with
-            Input = Some (payload "dotnet build")
-            Env = ChildEnv.Replacing (Map [ "PATH", bin; "CLAUDE_PROJECT_DIR", checkout ]) }
+    let env = Map [ "PATH", bin; "CLAUDE_PROJECT_DIR", checkout ]
+    hookSaid (
+        spawnSync
+            (checkout + "/.claude/direct-tool-hook.sh")
+            []
+            { SyncOptions.none with
+                Input = Some (payload "dotnet build")
+                Env = ChildEnv.Replacing (match dotfile with Some dot -> Map.add "DEVENV_DOTFILE" dot env | None -> env) }
+    )
 
-let private registrations : Decoder<(string * string list) list> =
+/// What a script in `checkout` prints when run with `arguments` and `dotfile` as DEVENV_DOTFILE.
+/// `CLAUDE_CODE_REMOTE` is emptied: `setup.sh` stops at its gate for a box that is not a Claude
+/// Code sandbox, and past it the script would install and build for real.
+let private printed (checkout: string) (script: string) (arguments: string list) (dotfile: string) : string =
+    let run =
+        spawnSync
+            (checkout + "/.claude/" + script)
+            arguments
+            { SyncOptions.none with Env = ChildEnv.Adding (Map [ "DEVENV_DOTFILE", dotfile; "CLAUDE_CODE_REMOTE", "" ]) }
+    match run.status, run.stdout with
+    | Some 0, Some stdout -> stdout.Trim ()
+    | status, _ -> failwithf "`%s %s` must exit 0, and exited %A (stderr: %A)" script (String.concat " " arguments) status run.stderr
+
+let private registrations (event: string) : Decoder<(string * string list) list> =
     Decode.at
-        [ "hooks"; "PreToolUse" ]
+        [ "hooks"; event ]
         (Decode.list (
             Decode.object (fun get ->
                 get.Required.Field "matcher" Decode.string,
@@ -314,12 +368,58 @@ let tests =
             inCheckout (fun checkout ->
                 Expect.equal (hookSaid (result checkout "{\"tool_name\":\"Bash\",\"tool_input\":{}}")) Said.Nothing "fail open")
 
-        testCase "a box with no jq passes" <| fun () ->
-            inCheckout (fun checkout ->
-                Expect.equal (hookSaid (withoutJq checkout)) Said.Nothing "fail open: the hook cannot read a payload, so it cannot judge one")
+        // Where `jq` comes from: the devshell's profile and nowhere else.
+        testCase "jq is read from the profile beside the script, with none on PATH" <| fun () ->
+            inScriptCheckout (fun checkout ->
+                putJqProfile (checkout + "/.devenv")
+                match askCopy checkout None [] with
+                | Said.Denied _ -> ()
+                | other -> failwithf "`dotnet build` is direct, the profile beside the script holds a jq, and the hook said %s" (describe other))
+
+        testCase "DEVENV_DOTFILE moves the profile jq is read from" <| fun () ->
+            inScriptCheckout (fun checkout ->
+                putJqProfile (checkout + "/elsewhere")
+                match askCopy checkout (Some (checkout + "/elsewhere")) [] with
+                | Said.Denied _ -> ()
+                | other -> failwithf "`dotnet build` is direct, the profile DEVENV_DOTFILE names holds a jq, and the hook said %s" (describe other))
+
+        testCase "a profile with no jq passes the call, though PATH has one" <| fun () ->
+            inScriptCheckout (fun checkout ->
+                Expect.equal
+                    (askCopy checkout None [ "jq" ])
+                    Said.Nothing
+                    "fail open, and PATH is not a second place to look: a jq found there is whichever one the box has")
+
+        // The line that keeps a hook that is off from being silent.
+        testCase "--check says nothing when the profile holds a jq" <| fun () ->
+            inScriptCheckout (fun checkout ->
+                putJqProfile (checkout + "/.devenv")
+                Expect.equal (printed checkout "direct-tool-hook.sh" [ "--check" ] (checkout + "/.devenv")) "" "a hook that is on has nothing to report")
+
+        testCase "--check names the profile path it looked in when there is no jq" <| fun () ->
+            inScriptCheckout (fun checkout ->
+                let dotfile = checkout + "/.devenv"
+                Expect.stringContains (printed checkout "direct-tool-hook.sh" [ "--check" ] dotfile) (dotfile + "/profile/bin/jq") "the model reads this line and nothing else, so it must say where jq was expected")
+
+        testCase "--check says how to get a jq when there is none" <| fun () ->
+            inScriptCheckout (fun checkout ->
+                Expect.stringContains
+                    (printed checkout "direct-tool-hook.sh" [ "--check" ] (checkout + "/.devenv"))
+                    "devenv shell --"
+                    "the model reads this line and nothing else, so it must say what to run")
+
+        testCase "session start tells the model the hook has no jq, on a box that is not a Claude Code sandbox" <| fun () ->
+            inScriptCheckout (fun checkout ->
+                let dotfile = checkout + "/.devenv"
+                Expect.stringContains (printed checkout "setup.sh" [ "--hook" ] dotfile) (dotfile + "/profile/bin/jq") "setup.sh --hook relays the hook's line before its Claude-Code-only gate")
+
+        testCase "session start says nothing about jq when the hook has one" <| fun () ->
+            inScriptCheckout (fun checkout ->
+                putJqProfile (checkout + "/.devenv")
+                Expect.equal (printed checkout "setup.sh" [ "--hook" ] (checkout + "/.devenv")) "" "a hook that is on has nothing to report, or the line is read as noise")
 
         testCase "settings.json runs the hook before every Bash call" <| fun () ->
-            match Decode.fromString registrations (TestFiles.read (repoRoot () + "/.claude/settings.json")) with
+            match Decode.fromString (registrations "PreToolUse") (TestFiles.read (repoRoot () + "/.claude/settings.json")) with
             | Ok groups ->
                 Expect.isTrue
                     (groups
@@ -327,4 +427,12 @@ let tests =
                          matcher.Contains "Bash" && commands |> List.exists (fun command -> command.EndsWith ".claude/direct-tool-hook.sh")))
                     "a hook nothing runs enforces nothing: .claude/settings.json needs a PreToolUse entry matching Bash whose command is .claude/direct-tool-hook.sh"
             | Error reason -> failwithf ".claude/settings.json has no PreToolUse hooks this can read: %s" reason
+
+        testCase "settings.json runs setup.sh --hook at session start" <| fun () ->
+            match Decode.fromString (registrations "SessionStart") (TestFiles.read (repoRoot () + "/.claude/settings.json")) with
+            | Ok groups ->
+                Expect.isTrue
+                    (groups |> List.exists (fun (_, commands) -> commands |> List.exists (fun command -> command.EndsWith ".claude/setup.sh --hook")))
+                    "a line nothing runs tells nobody: .claude/settings.json needs a SessionStart entry whose command is .claude/setup.sh --hook, which relays the direct-tool hook's report that it has no jq"
+            | Error reason -> failwithf ".claude/settings.json has no SessionStart hooks this can read: %s" reason
     ]

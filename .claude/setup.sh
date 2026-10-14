@@ -5,7 +5,8 @@
 # use the committed devenv.yaml (see AGENTS.md Bootstrap).
 #
 # Also the SessionStart hook (.claude/settings.json): with --hook it refreshes
-# devenv.local.yaml and settles devenv.lock, and never installs or builds itself. When Nix or
+# devenv.local.yaml and settles devenv.lock, and never installs or builds itself. (It also relays
+# direct-tool-hook.sh --check, on any box, before the Claude-Code-only gate below.) When Nix or
 # the devenv CLI is missing it starts this script's FULL run detached in the background and
 # returns at once, so a fresh container installs itself without anybody asking: see the
 # hand-off below.
@@ -13,6 +14,13 @@ set -euo pipefail
 
 hook_only=false
 [ "${1:-}" = "--hook" ] && hook_only=true
+
+# The PreToolUse hook fails open without a `jq` of its own, and a hook that is off says nothing.
+# So the session is told, here, once: the hook prints the line (it alone knows where it looks for
+# `jq`), or nothing when it has one. BEFORE the gate below because it is not a cloud-container
+# concern: a laptop's Claude Code runs the same hook and goes blind the same way. It never fails
+# this script, since it only informs.
+$hook_only && { "$(dirname "$0")/direct-tool-hook.sh" --check || true; }
 
 # Only for Claude Code remote sandboxes; everywhere else this script has no business running.
 if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
