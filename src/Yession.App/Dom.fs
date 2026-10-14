@@ -1234,7 +1234,7 @@ module Dom =
         let mcpWithdraw = "data-mcp-withdraw"
         let mcpAudience = "data-mcp-audience"
         /// The opening screen's hooks. Its program is inline and literal
-        /// (`ManagerUi.openingProgram`), so it names these three by VALUE: rename one here and
+        /// (`ManagerUi.openingProgram`), so it names these four by VALUE: rename one here and
         /// rename it there.
         ///
         /// The readiness address (`/sessions/{id}/ready`), on the screen it polls for —
@@ -1245,6 +1245,10 @@ module Dom =
         /// The classes the opening screen's status line takes when it gives up waiting, carried
         /// on that line so its program is handed them rather than spelling them.
         let openingFailed = "data-opening-failed"
+        /// The session's own shell address, on the screen only where it is known before the
+        /// launch (`PublicAccess.stableSessionAddress`). A browser that already keeps a copy of
+        /// that shell goes there at once instead of waiting for the session to answer.
+        let openingShell = "data-opening-shell"
         // Process status words shown in a row.
         let statusStopped = "stopped"
         let statusRunning = "running"

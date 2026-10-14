@@ -196,6 +196,9 @@ let all =
         // only place the difference between "the address answered" and "the session answered"
         // is observable, because it is the browser that acts on the answer.
         Tag.needs "Creating a session behind a front door (browser)" [ Tag.Browser; Tag.Native ] (fun () -> Browser.frontDoorTests)
+        // Opening a stopped session from the Manager, in a browser that kept its shell and
+        // history: only a browser with a service worker and a profile can keep either.
+        Tag.needs "Opening a session this browser keeps (browser)" [ Tag.Browser; Tag.Native ] (fun () -> Browser.keptOpenTests)
         Tag.needs "A fronted deployment, for real (browser)" [ Tag.Browser; Tag.Native; Tag.Caddy ] (fun () -> Browser.frontedTests)
         // The one promise a filter chip makes that only a browser with a history can check:
         // Back undoes it. Needs a Manager, which spawns its default session (Native).

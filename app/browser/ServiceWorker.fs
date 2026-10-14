@@ -118,19 +118,44 @@ let private keepAnswer (request: RequestInfo) (response: Response) : JS.Promise<
         return response
     }
 
+/// How long the shell waits for the network before it serves the kept copy.
+///
+/// A session that is down behind a front door does not always fail fast. A route that accepts
+/// the connection and then says nothing held the page on a blank screen for as long as the
+/// browser cared to wait, with the kept copy unused in the store.
+let private shellPatienceMs = 3000
+
+/// `work`'s value, or `None` when `afterMs` passes first. A rejection of `work` before then is
+/// passed on. `work` itself is not cancelled: it runs on, and whoever holds it still gets it.
+let private within (afterMs: int) (work: JS.Promise<'T>) : JS.Promise<'T option> =
+    Promise.create (fun resolve reject ->
+        JS.setTimeout (fun () -> resolve None) afterMs |> ignore
+        work |> Promise.eitherEnd (fun value -> resolve (Some value)) reject)
+
 /// The shell: the network first, the kept copy when the network does not answer.
 ///
 /// `not response.Ok` counts as failure, and that is not defensive coding. A session behind an
 /// operator's proxy that is still up answers a DEAD session with 502 — a perfectly successful
 /// fetch carrying an error — and a worker that only caught thrown requests would serve that 502
 /// as the page, which is the exact case this exists for.
-let private shellFirst (request: Request) : JS.Promise<Response> =
-    promise {
-        try
-            let! fresh = GlobalFetch.fetch (RequestInfo.Req request)
-            if not fresh.Ok then failwithf "shell answered %d" fresh.Status
-            return! keepAnswer (RequestInfo.Url shell) fresh
-        with err ->
+///
+/// A network that is slow, not dead, also gets the kept copy after `shellPatienceMs`. The fetch
+/// is not abandoned: it runs on under `waitUntil`, and a good answer is kept when it arrives.
+/// So the NEXT load gets the fresh shell, even if every load is slower than the bound. And
+/// where nothing is kept, the page waits for the network as long as it takes, because there is
+/// nothing better to show.
+let private shellFirst (event: FetchEvent) : JS.Promise<Response> =
+    let request = event.request
+    let fresh =
+        promise {
+            let! answer = GlobalFetch.fetch (RequestInfo.Req request)
+            if not answer.Ok then failwithf "shell answered %d" answer.Status
+            return! keepAnswer (RequestInfo.Url shell) answer
+        }
+    // Held open until the network has answered, whichever answer the page was given.
+    event.waitUntil (fresh |> Promise.either ignore ignore)
+    let fallBack (reason: string) (orElse: unit -> JS.Promise<Response>) =
+        promise {
             let! kept = scope.caches.lookup (RequestInfo.Url shell)
             // The one moment this worker makes a decision nobody can otherwise see: the session
             // did not answer, and either there is a shell kept here or the page is about to be a
@@ -140,12 +165,20 @@ let private shellFirst (request: Request) : JS.Promise<Response> =
             JS.console.debug (
                 "yession/sw: shell unreachable",
                 {| asked = request.url
-                   reason = string err
+                   reason = reason
                    served = (if kept.IsSome then "kept copy" else "nothing kept") |}
             )
             match kept with
             | Some response -> return response
-            | None -> return raise err
+            | None -> return! orElse ()
+        }
+    promise {
+        try
+            match! within shellPatienceMs fresh with
+            | Some answer -> return answer
+            | None -> return! fallBack (sprintf "no answer in %d ms" shellPatienceMs) (fun () -> fresh)
+        with err ->
+            return! fallBack (string err) (fun () -> Promise.reject err)
     }
 
 /// A fingerprinted asset: what is kept is served, and what is not is fetched and kept. An
@@ -165,6 +198,6 @@ scope.onFetch (fun event ->
     if request.``method`` = "GET" then
         let url = request.url
         if ServiceWorkerScope.isNavigation request && isShell url then
-            event.respondWith (shellFirst request)
+            event.respondWith (shellFirst event)
         elif url.StartsWith (assets, StringComparison.Ordinal) then
             event.respondWith (assetFirst request))
