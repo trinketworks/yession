@@ -2281,10 +2281,13 @@ module View =
     /// in the caps voice, the agent's in blue. One face wherever an author heads what follows —
     /// a run of messages, a command in a terminal — so one person reads as one person
     /// whichever column they are found in, you included.
-    let private actorHead (model: ClientModel) (actor: ActorRef) : TemplateResult =
+    ///
+    /// `square` sizes the square: the transcript's, or a terminal's, which is smaller where the
+    /// line it heads is a phone's.
+    let private actorHead (model: ClientModel) (square: string) (actor: ActorRef) : TemplateResult =
         let whoClass = if actor = ActorRef.Agent then Style.whoAgent else Style.who
         html $"""
-            <span class="{Style.cls [ Style.avatar; Entity.actorMark model actor ]}"></span>
+            <span class="{Style.cls [ square; Entity.actorMark model actor ]}"></span>
             <span class="{whoClass}">{Entity.actorName model actor}</span>"""
 
     let private chat (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
@@ -3176,7 +3179,7 @@ module View =
         let group (actor: ActorRef) (members: TemplateResult list) =
             html $"""
                 <section class="{Style.messageGroup}" data-message-author="{Entity.actorToken actor}">
-                  <header class="{Style.messageGroupHead}">{actorHead model actor}</header>
+                  <header class="{Style.messageGroupHead}">{actorHead model Style.avatar actor}</header>
                   {members}
                 </section>"""
         let items =
@@ -3418,7 +3421,7 @@ module View =
             else
                 html $"""
                     <span class="{Style.terminalBlockAuthor}" data-terminal-block-author="{Entity.actorToken who}"
-                          >{actorHead model who}</span>"""
+                          >{actorHead model Style.terminalAuthorSquare who}</span>"""
         // The facts the command line does not already say, as a LINE under it. They were
         // behind a `…` that read as a menu, and opening it said "ran by <you> · exit 1" — the
         // author the line leaves out because it is you, and the exit the mark beside the
@@ -3543,7 +3546,7 @@ module View =
         let author =
             html $"""
                 <span class="{Style.terminalBlockAuthor}" data-terminal-block-author="{Entity.actorToken runAuthor}"
-                      >{actorHead model runAuthor}</span>"""
+                      >{actorHead model Style.terminalAuthorSquare runAuthor}</span>"""
         html $"""
             <article class="{Style.terminalBlock}" data-terminal-block-run="{BlockId.value leader.BlockId}">
               <details class="group" ?open={opened} @toggle={Ev toggled} data-fold-open="{if opened then "yes" else "no"}">

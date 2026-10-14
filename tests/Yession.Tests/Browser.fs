@@ -2712,6 +2712,24 @@ let private runLineOnScreen (page: IPage) (run: string) : Async<bool> =
         | measured -> return failwithf "the history and the fold's line were not both there: %A" measured
     }
 
+/// A reader at the end of the harness terminal's history, on a page tall enough that the newest
+/// fold's line is on screen there — the cases about pressing it from the end mean nothing with it
+/// off screen, and how far above the end it sits is the history's styling (each command's byline,
+/// the gaps between commands, a Stop strip), not what those cases are about. Grown by what it
+/// lacks, once, so a case reads the same at whatever height the history's rhythm asks for.
+let private atTheEndWithRunOnScreen (page: IPage) : Async<string> =
+    async {
+        do! toTheEnd page "blocks:term-harness"
+        let! run = newestRun page
+        match! Probe.boxes page [ tailSurface "blocks:term-harness"; runLine run ] with
+        | [ Some box; Some at ] when at.Top < box.Top ->
+            let size = page.ViewportSize
+            do! awaitU (page.SetViewportSizeAsync (size.Width, size.Height + int (ceil (box.Top - at.Top)) + 48))
+            do! toTheEnd page "blocks:term-harness"
+        | _ -> ()
+        return run
+    }
+
 /// Press a fold one way or another, and wait for the press to have been drawn — open if it was
 /// shut, shut if it was open — and the frame after.
 let private pressRunBy (press: IPage -> string -> Async<unit>) (page: IPage) (run: string) : Async<unit> =
@@ -6085,15 +6103,11 @@ let editorTests =
         // Opening a fold of earlier commands with a pointer, from the end of the history, leaves
         // the latest command where the reader was looking at it: what the fold holds came before,
         // so it appears ABOVE. It used to push the latest command off the bottom of the pane.
-        //
-        // 1440px tall: the fold's line has to be on screen at the end for a reader there to
-        // press it, and under it stand the harness's later commands, each with its byline
-        // over it, and the Stop strip over the command line.
-        editorCaseIn 1440 1440 "clicking open the earlier commands leaves the latest command where a reader at the end saw it" <| fun page ->
+
+        editorCaseIn 1440 900 "clicking open the earlier commands leaves the latest command where a reader at the end saw it" <| fun page ->
             async {
                 do! paneOnBlocks page
-                do! toTheEnd page "blocks:term-harness"
-                let! run = newestRun page
+                let! run = atTheEndWithRunOnScreen page
                 let! reachable = runLineOnScreen page run
                 Expect.isTrue reachable "the fold's line is on screen at the end of the history"
                 let! before = latestCommandTop page
@@ -6137,11 +6151,10 @@ let editorTests =
         // stays: the earlier commands open below it, and the line and its focus ring stay on
         // screen. Held like a pointer's press, Enter took the line off the top of the pane and
         // appeared to do nothing.
-        editorCaseIn 1440 1440 "Enter on the earlier commands keeps their line where it was, on screen" <| fun page ->
+        editorCaseIn 1440 900 "Enter on the earlier commands keeps their line where it was, on screen" <| fun page ->
             async {
                 do! paneOnBlocks page
-                do! toTheEnd page "blocks:term-harness"
-                let! run = newestRun page
+                let! run = atTheEndWithRunOnScreen page
                 let! reachable = runLineOnScreen page run
                 Expect.isTrue reachable "the fold's line is on screen at the end of the history"
                 let! before = topOf page (runLine run)

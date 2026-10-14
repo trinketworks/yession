@@ -3471,9 +3471,15 @@ module Style =
     let terminalScrollback = "relative flex-1 min-h-0 overflow-y-auto flex flex-col px-3"
     /// A query container (`@container`), so a block lays out by the PANE's width — set by its
     /// splitter — rather than the screen's (`terminalBlockSummary`).
-    let terminalStream = "@container flex flex-col gap-2 py-3"
+    ///
+    /// Read like a document: the space BETWEEN commands (20px) is several times the space
+    /// inside one — the byline over its command (`terminalBlockByline`, 4px), the command over
+    /// its output — so a command's lines group with each other and not with the next one's.
+    /// At one gap throughout, an output's last line sat as close to the next author as to its
+    /// own command.
+    let terminalStream = "@container flex flex-col gap-5 py-3"
     /// The commands inside a run's fold: the stream's rhythm, without its edges.
-    let terminalBlockRunBody = "flex flex-col gap-2 phone:gap-0"
+    let terminalBlockRunBody = "flex flex-col gap-5"
 
     /// One block: the command that ran, then everything it printed.
     ///
@@ -3509,11 +3515,11 @@ module Style =
     /// gutter beside the command instead, the author over the time — the width a short
     /// command leaves empty at its end is put to use, and the commands stand in one column.
     let terminalBlockSummary =
-        cls [ "sticky top-0 z-10 bg-surface -mx-3 px-3 py-1.5 flex flex-col gap-0.5"
+        cls [ "sticky top-0 z-10 bg-surface -mx-3 px-3 py-1.5 flex flex-col gap-1"
               "@min-[40rem]:flex-row @min-[40rem]:items-baseline @min-[40rem]:gap-3" ]
     /// Who ran it at the start, when and how it went at the end: one line, or the gutter.
     let terminalBlockByline =
-        cls [ "flex items-center gap-2 min-w-0 min-h-6"
+        cls [ "flex items-center gap-2 min-w-0 min-h-5"
               "@min-[40rem]:w-30 @min-[40rem]:shrink-0 @min-[40rem]:flex-col @min-[40rem]:items-start @min-[40rem]:gap-0 @min-[40rem]:min-h-0" ]
     /// When it ran and its state, at the byline's far end; under the author in the gutter.
     let terminalBlockWhen =
@@ -3552,7 +3558,11 @@ module Style =
     /// Who ran a command, on its byline or its run's line, in the transcript's face
     /// (`View.actorHead`): the square and the name. Bounded, so the time and state beside it
     /// keep their room; the name is what gives way, on a phone where neither fits.
-    let terminalBlockAuthor = "shrink-0 min-w-0 max-w-[60%] @min-[40rem]:max-w-full inline-flex items-center gap-2 [&>:last-child]:truncate"
+    let terminalBlockAuthor = "shrink-0 min-w-0 max-w-[60%] @min-[40rem]:max-w-full inline-flex items-center gap-1.5 @min-[40rem]:gap-2 [&>:last-child]:truncate"
+    /// Its square: the transcript's 20px in the gutter a wide pane gives it, 14px on the
+    /// narrow line over the command, where a 20px square stood taller than the caps beside it
+    /// and than the command it heads.
+    let terminalAuthorSquare = "w-3.5 h-3.5 shrink-0 @min-[40rem]:w-5 @min-[40rem]:h-5"
 
     let terminalPrompt = "shrink-0 font-terminal text-code text-green select-none"
     /// A command breaks where a shell would let you: at its spaces. `anywhere` is the last resort
