@@ -362,30 +362,104 @@ module Style =
     /// The sidebar's one-line sync summary: dot and status words on one baseline.
     let syncRow = "flex items-center gap-2"
 
-    // --- Buttons: bordered Metro rectangles — hover brightens, press fills --------------
+    // --- Buttons: four weights, in this order of scarcity -------------------------------
     //
-    // WHEN A BUTTON WEARS ITS BORDER, and when it wears none — the rule, because "some have
-    // borders" is how two conventions breed a third:
+    // The doctrine's hierarchy of controls (docs/visual-design.md), and the whole of it,
+    // because "some have borders" is how two conventions breed a third:
     //
-    //   * BORDERED — a STANDALONE act on the ground: it begins or ends something of its own
-    //     (connect, interrupt, sign in, open the terminal list). A Metro button IS its
-    //     rectangle; the rectangle is the claim to be a thing you press.
-    //   * BORDERLESS — a verb RIDING the thing it acts on: send/discard at a field's trailing
-    //     edge, reorder/delete on a listed row. The row or field already carries the
-    //     structure, so the verb borrows it — quiet at rest, ink (or err) under the hand —
-    //     and a second rectangle inside the first would be chrome describing chrome.
+    //   * FILLED — a solid `blue` rectangle with its text in `bg`. *The* verb of a surface,
+    //     and at most one of them on screen. While a flow is under way, the step it waits on
+    //     wears the fill and every other verb on that surface drops a weight.
+    //   * BORDERED — ONE face, and only one: `ring` in the `edge` tone with `ink` text, and
+    //     interaction brightens the ring. A STANDALONE act on the ground — it begins or ends
+    //     something of its own (connect, interrupt, sign in, open the terminal list). A Metro
+    //     button IS its rectangle; the rectangle is the claim to be a thing you press. There
+    //     is no blue-ringed button: blue text is a link's, the fill's and Send's.
+    //   * BARE — a word or an icon, no rectangle: a verb RIDING the thing it acts on
+    //     (send/discard at a field's trailing edge, reorder/delete on a listed row). The row
+    //     or the field already carries the structure, so the verb borrows it, and a second
+    //     rectangle inside the first would be chrome describing chrome. ONE voice: the caps
+    //     label step, `ink-dim` at rest, because the thing it rides is the subject.
+    //   * TEXT — a status, not pressable at all. Those are the `status*` values above.
+    //
+    // Two STATES cut across all four, and neither of them is `disabled`, which does not
+    // exist in this product (docs/visual-design.md, State):
+    //
+    //   * WAITING — nothing to act on YET. It stays in the layout and in focus order, its
+    //     border drops to the quiet hairline, and its word stays legible. `btnWaiting` and
+    //     `btnWaitingSwap` are the bordered box's; `bareInkWaiting` is a bare verb's.
+    //   * HELD — the act has been pressed and is still landing. That is the `pressed:`
+    //     variant every face below carries: `:active` OR `aria-busy` in ONE variant
+    //     (app/tailwind.css), so a face cannot fill for the finger and forget the hold. A
+    //     site adopts it by setting `aria-busy` from the model, and `whenReady`/`whenBusy`
+    //     swap the word inside it.
+    //
+    // Nothing in this section writes two utilities on ONE property. Which of them wins is
+    // stylesheet order rather than authoring order, so a base that sets a background, a
+    // cursor or a border tone takes the choice away from the face composed over it — and
+    // `!important` is what that mistake looks like once somebody has worked around it. The
+    // background, the cursor and the border tone therefore live on each FACE, and the shared
+    // `btnFace` holds only what no face disagrees about.
+
+    /// What a BARE control IS: the user agent's own button box, taken away. The bare weight
+    /// is a word or an icon with no rectangle, so the ABSENCE of the rectangle is one value
+    /// written once rather than `border-0` spelled out at every bare control in the file —
+    /// it was spelled out at thirty-odd. Public, because a bare verb rides a surface in
+    /// nearly every section below.
+    ///
+    /// Padding is deliberately NOT in it: `p-*` and `px-*` are one property to the cascade,
+    /// so a base that zeroed the padding and a site that set its own would race. Nor is the
+    /// cursor, which the waiting faces have to be able to answer differently.
+    ///
+    /// Nor, and this one was a live bug, the BACKGROUND. It used to carry `bg-transparent`,
+    /// and Tailwind emits `.bg-transparent` AFTER `.bg-err` — so `btnIconBareDangerArmed`,
+    /// which is this base plus `bg-err`, painted no fill at all: the armed queue delete, the
+    /// one control in the product whose whole job is to LOOK armed before the second press,
+    /// looked exactly like the unarmed one. A bare control does not need the utility anyway:
+    /// Tailwind's own preflight already gives every `button` a transparent background, and an
+    /// `<a>` or a `<span>` has one by default.
+    ///
+    /// Not a `Stroke` tone either: this is the user agent's own border being cancelled,
+    /// which is a fact about the control rather than an edge this product draws.
+    let bareBox = "border-0"
+
+    /// The ONE voice a bare verb speaks in, and the three tones it has. The caps label step
+    /// comes from the box it is composed into; this is the ink:
+    ///
+    ///   * `bareInk` — `ink-dim` at rest, because the THING it rides is the subject; full
+    ///     ink under the hand; and full ink while the press lands. That last one is not
+    ///     decoration — a touch screen has no hover, so `pressed:` is the only feedback a
+    ///     thumb gets from a verb with no rectangle to fill.
+    ///   * `bareInkDanger` — the same, reddening for a verb that destroys.
+    ///   * `bareInkWaiting` — nothing to act on: one role further back in ink, still
+    ///     legible, still in focus order, and with no hover promise, because a control that
+    ///     brightens under the hand promises something it cannot do.
+    ///
+    /// They are ALTERNATIVES, never layers: each one names the same two properties, so a
+    /// site picks exactly one of the three.
+    let bareInk = "cursor-pointer text-ink-dim hover:text-ink pressed:text-ink"
+    let bareInkDanger = "cursor-pointer text-ink-dim hover:text-err pressed:text-err"
+    let bareInkWaiting = "cursor-default text-ink-faint"
 
     /// Sized by construction, not padding arithmetic: the box is `h-control` with the line
     /// flex-centred in it — the old `py-[7px]` was that same height, hand-derived and
     /// easy to break. A FIELD is built the same way from the same token (`fieldFace`), which
     /// is what makes a button and an input in one row actually line up.
     ///
+    /// On a phone it grows to `spacing-touch`, which is what every control does there
+    /// (docs/visual-design.md, Space). `phone:` and not a width: a phone turned sideways is
+    /// still a phone, and its controls are still under a thumb.
+    ///
+    /// `whitespace-nowrap`, because the height is FIXED. A label let wrap inside a one-line
+    /// box puts its second line outside the rectangle, which is how APPROVE ON GITHUB.COM
+    /// came to be two lines in a 32px button.
+    ///
     /// Layout is split from the rest of the face (`btnFlex`/`btnGrid`) because one button
     /// — Create — needs a different one: its two words (`whenReady`/`whenBusy`)
     /// share a box whose size cannot depend on which of them is showing.
     let private btnFace =
-        cls [ "group/btn bg-transparent cursor-pointer font-ui"; caps
-              "h-control px-3.5 transition-colors"
+        cls [ "group/btn font-ui"; caps
+              "h-control phone:h-touch px-3.5 whitespace-nowrap transition-colors"
               Stroke.ring; focusRing ]
 
     /// The ordinary layout: one line of content, centred. What every button used before a
@@ -401,18 +475,53 @@ module Style =
     /// to prevent.
     let private btnGrid = "inline-grid grid-cols-1 place-items-center"
 
-    /// The three faces, as (rest tone, hover, press) — the only thing that varies
-    /// between them, so a fourth would be three tokens rather than another hand-written
-    /// string.
+    /// THE bordered face, and the only one: `ring` in the `edge` tone with `ink` text, and
+    /// interaction brightens the ring (docs/visual-design.md, Hierarchy of controls).
     ///
-    /// The press face is `pressed:` (app/tailwind.css) rather than `active:` — the
-    /// finger's press AND the hold after it (`aria-busy`), for a button whose act takes the
-    /// browser somewhere else and has nothing to show on this page until it arrives. Filled
-    /// while down, and down until it lands.
-    let private btnPrimaryFace = cls [ Stroke.blue; "text-blue hover:text-blue-up-1 pressed:bg-blue pressed:text-bg" ]
-
+    /// There used to be two — this one in `ink-dim`, and a blue-ringed one beside it —
+    /// standing in for a primary and a secondary weight that the hierarchy does not have.
+    /// What it has is a FILL for the surface's one verb and a border for every standalone
+    /// act. So the second bordered face became the fill (`btnPrimary`, below) and this one
+    /// came up to `ink`: a bordered button is not a quieter button, it is a different KIND
+    /// of control, and dimming its word was the half-weight the extra face was invented for.
+    ///
+    /// The press face is `pressed:` rather than `active:` — the finger's press AND the hold
+    /// after it (`aria-busy`), for a button whose act takes the browser somewhere else and
+    /// has nothing to show on this page until it arrives. Filled while down, and down until
+    /// it lands. `prefers-reduced-motion` keeps exactly this fill and drops the tilt
+    /// (app/tailwind.css), which is what makes the fill the press state and the tilt its
+    /// motion rather than the other way round.
     let btn =
-        cls [ btnFace; btnFlex; Stroke.rim; "text-ink-dim"; Stroke.hoverInk; "hover:text-ink pressed:bg-ink pressed:text-bg" ]
+        cls [ btnFace; btnFlex; "bg-transparent cursor-pointer"; Stroke.rim; "text-ink"
+              Stroke.hoverInk; "pressed:bg-ink pressed:text-bg" ]
+
+    /// The same face with `err` where the interaction goes: a standalone act that DESTROYS
+    /// something. Not a second bordered face — at rest it is the one above to the pixel,
+    /// because `err` at rest is this product's tone for *something is wrong* rather than for
+    /// *this could go wrong*, and what a control does is not visible until you reach for it.
+    /// An ARMED control is the exception, and it wears the err FILL at rest instead
+    /// (`btnIconBareDangerArmed`).
+    let btnDanger =
+        cls [ btnFace; btnFlex; "bg-transparent cursor-pointer"; Stroke.rim; "text-ink"
+              Stroke.hoverErr; "hover:text-err pressed:bg-err pressed:text-bg" ]
+
+    /// The FILL: a solid `blue` rectangle with its text in `bg` — *the* verb of this
+    /// surface, and at most one on screen (docs/visual-design.md, Hierarchy of controls).
+    /// `btnPrimary` is the doctrine's own word for it: each surface has one PRIMARY act, and
+    /// only that act wears the fill.
+    ///
+    /// Blue, and the only blue rectangle there is. It used to be a blue RING with blue text,
+    /// which is the one bordered face above wearing the interactive colour to mean "this one
+    /// matters more" — a weight said twice, in a hue the doctrine spends on links, on this
+    /// fill and on the composer's Send. Filling it says the same thing once.
+    ///
+    /// `Stroke.clear` keeps the border BOX while painting nothing on it, so a filled button
+    /// and a bordered one standing in one row are the same size and sit on the same
+    /// baseline. Interaction brightens the fill the way it brightens a ring, and `pressed:`
+    /// holds that brightening past the finger while the act lands.
+    let private btnPrimaryFace =
+        cls [ Stroke.clear; "bg-blue text-bg cursor-pointer"
+              "hover:bg-blue-up-1 pressed:bg-blue-up-1" ]
 
     let btnPrimary =
         cls [ btnFace; btnFlex; btnPrimaryFace ]
@@ -425,8 +534,31 @@ module Style =
     let btnPrimarySwap =
         cls [ btnFace; btnGrid; btnPrimaryFace ]
 
-    let btnDanger =
-        cls [ btnFace; btnFlex; Stroke.rim; "text-ink-dim"; Stroke.hoverErr; "hover:text-err pressed:bg-err pressed:text-bg" ]
+    /// The WAITING face: a control with NOTHING TO ACT ON yet (docs/visual-design.md,
+    /// State). It stays in the layout and in focus order — its work is coming, and a control
+    /// that appears mid-sentence moves everything under the reader's hand — and it is never
+    /// `disabled`, in either spelling, because that attribute does not exist here. The
+    /// BORDER carries the waiting, dropping from the working rim to the quiet hairline so
+    /// the rectangle reads as an outline not yet filled, which is this design's own
+    /// vocabulary: a Metro button IS its border, hover brightens it, press fills it. The
+    /// word steps back one role of ink and stays legible.
+    ///
+    /// Deliberately NOT an opacity dim: fading an 11px caps label takes it under the AA
+    /// floor this product holds, and opacity would dim the focus ring riding the same
+    /// element with it.
+    ///
+    /// A whole FACE rather than the override it used to be. It was `"!border-edge"`, and the
+    /// `!important` was not emphasis — it was the only way one `border-*` utility could beat
+    /// another in the same class list. A face names each property once, so there is nothing
+    /// to beat. It was also worn NOWHERE, so the override was never once tested.
+    let btnWaiting =
+        cls [ btnFace; btnFlex; "bg-transparent cursor-default"; Stroke.hair; "text-ink-dim" ]
+
+    /// The waiting face on the box-stable layout, for a control whose word swaps when its
+    /// act lands (`whenReady`/`whenBusy`): one size waiting, ready and held, so admission
+    /// never resizes the one control a surface asks a thumb to find twice.
+    let btnWaitingSwap =
+        cls [ btnFace; btnGrid; "bg-transparent cursor-default"; Stroke.hair; "text-ink-dim" ]
 
     /// The two words a held button can be saying — the verb, and the verb under way
     /// — as siblings inside it, both always laid out (`btnGrid`, on `btnPrimarySwap`)
@@ -471,19 +603,27 @@ module Style =
     /// Real links, because the filter IS the page's location, so these are chips only in how
     /// they look; everything about how they behave comes free from `<a>`.
     ///
-    /// The two faces differ by TONE and border, in the same vocabulary the buttons above use:
-    /// a selected chip sits on the working rim in full ink, an unselected one recedes to the
-    /// hairline in the faint step and comes up to ink under the pointer. No fill on either —
-    /// a filled chip would read as the page's CTA, and the CTA here is Create.
+    /// They are NOT a third face at a height of their own. They were — a bordered pair at
+    /// 24px, one tone of ring for the selected chip and a quieter one for the rest — which
+    /// is two bordered faces, and there is one. So the SELECTED chip is that one face, and
+    /// the others are bare words: selection is said by the ring appearing at all rather than
+    /// by a second tone of it, which is chrome showing structure (principle 2 — blur the
+    /// screen until no word reads, and the selection is still visible). `Stroke.clear` keeps
+    /// the border box on the bare ones, so choosing a filter moves no text.
+    ///
+    /// `h-control`, and a thumb's height on a phone, like every other control: a row of
+    /// chips beside the page's Create button is a row of things of one height.
+    ///
+    /// No fill on any of them — the filled weight on this page belongs to Create.
     let private filterChipBase =
-        cls [ caps; "h-6 px-2 inline-flex items-center no-underline cursor-pointer transition-colors"
-              Stroke.ring; focusRing ]
+        cls [ caps; "h-control phone:h-touch px-2 inline-flex items-center no-underline"
+              "whitespace-nowrap transition-colors"; Stroke.ring; focusRing ]
 
-    let filterChipOn = cls [ filterChipBase; Stroke.rim; "text-ink" ]
+    let filterChipOn = cls [ filterChipBase; Stroke.rim; "cursor-pointer text-ink" ]
     /// The count a chip wears, in the chip's own voice and colour — the word is the filter,
     /// the number is what it holds, and they light and dim together.
     let filterChipCount = "ml-1.5 tabular-nums"
-    let filterChipOff = cls [ filterChipBase; Stroke.hair; "text-ink-faint"; Stroke.hoverInk; "hover:text-ink" ]
+    let filterChipOff = cls [ filterChipBase; Stroke.clear; bareInk ]
 
     /// A sortable column header. Wears the header's own caps-faint voice so a sortable column
     /// does not shout over the ones that are not, and comes up to ink under the pointer — the
@@ -492,48 +632,46 @@ module Style =
     let sortHeader =
         cls [ label; "no-underline cursor-pointer hover:text-ink transition-colors"; focusRing ]
 
-    /// A button with nothing to do YET — composed over one of the faces above, never used
-    /// alone. It stays in the layout and in focus order (its work is coming, and a control
-    /// that appears mid-sentence moves everything under the reader's hand); the BORDER carries
-    /// the waiting, dropping to the quiet rim so the rectangle reads as an outline not yet
-    /// filled. Which is this design's own vocabulary: a Metro button IS its border, hover
-    /// brightens it, press fills it.
-    ///
-    /// Deliberately NOT an opacity dim: fading `text-blue` on the composer's surface takes it
-    /// from 6.5:1 to about 2.5:1, and an 11px caps label at 2.5:1 is below the AA floor this
-    /// product holds. The word stays exactly as legible as it was; only the frame changes.
-    let btnWaiting = "!border-edge"
-
-    /// Square icon buttons — self-contained, NOT composed over `btn`: Tailwind emits `p-0`
+    /// Square icon buttons — the BORDERED weight with a glyph in it instead of a word, for a
+    /// standalone icon act. Self-contained, NOT composed over `btn`: Tailwind emits `p-0`
     /// BEFORE `px-*`/`py-*` in the stylesheet, so "btn + p-0" kept the text button's padding
     /// and crushed the glyph into a corner of a lopsided box (measured live: 30×24, ×
     /// touching the bottom-right edge).
+    ///
+    /// `spacing-control` square, and a thumb's target on a phone — the same height as every
+    /// other control, because a bordered rectangle is a control whatever is drawn inside it.
+    /// It used to be 24px "composed up to 32 where it stands in a bar", which is the second
+    /// control height that sentence admits to.
     let private btnIconBase =
-        cls [ "bg-transparent cursor-pointer p-0 grid place-items-center transition-colors"; Stroke.ring; focusRing ]
+        cls [ "w-control h-control phone:w-touch phone:h-touch bg-transparent cursor-pointer p-0"
+              "grid place-items-center transition-colors"; Stroke.ring; focusRing ]
 
-    let private btnIconNeutralFace =
-        " " + cls [ Stroke.rim; "text-ink-dim"; Stroke.hoverInk; "hover:text-ink active:bg-ink active:text-bg" ]
+    /// The standalone icon acts. Row-riding verbs are `btnIconBare` below, and the press is
+    /// `pressed:` rather than `active:` for the reason `btn` gives: a glyph button whose act
+    /// is a round trip has to be able to stay down until it lands.
+    /// There is no danger reading of this face any more: `btnIconDangerLg` was a 32px err
+    /// version of it and nothing wore it, so it went (docs/visual-design.md, Deciding —
+    /// taste prefers removal). A destructive verb on a row is bare (`btnIconBareDanger`),
+    /// and a destructive standalone act says its word (`btnDanger`).
+    let btnIcon =
+        cls [ btnIconBase; Stroke.rim; "text-ink"; Stroke.hoverInk
+              "pressed:bg-ink pressed:text-bg" ]
 
-    let private btnIconDangerFace =
-        " " + cls [ Stroke.rim; "text-ink-dim"; Stroke.hoverErr; "hover:text-err active:bg-err active:text-bg" ]
-
-    /// 24px square (composed up to 32 where it stands in a bar): the STANDALONE icon acts —
-    /// currently the terminal pane's list toggle. Row-riding verbs are `btnIconBare` below.
-    let btnIcon = btnIconBase + " w-6 h-6" + btnIconNeutralFace
-    /// 32px square, destructive: the composer's discard — the same height as the Send
-    /// button it sits beside, so the pair shares top and bottom edges.
-    let btnIconDangerLg = btnIconBase + " w-8 h-8" + btnIconDangerFace
-
-    /// The borderless icon verbs (see the rule at the head of this section): 24px square,
+    /// The borderless icon verbs (the BARE weight at the head of this section): 24px square,
     /// grid-centred, riding a listed row they act on — the queue's reorder and delete, a
-    /// terminal row's verbs, a roster row's disconnect. Faint at rest because the ROW is the
-    /// subject; ink (or err, when what they do destroys) under the hand; the focus ring is
-    /// the one piece of chrome they keep, because the keyboard has no hover.
+    /// terminal row's verbs, a roster row's disconnect. The focus ring is the one piece of
+    /// chrome they keep, because the keyboard has no hover.
+    ///
+    /// 24px and not `spacing-control`: a bare verb has no rectangle, so there is no control
+    /// box for the control height to govern — the height it occupies is the ROW's, and a
+    /// 32px box inside a 24px row would push the row open to make room for a verb that is
+    /// supposed to be riding it. What a phone needs instead is a bigger HIT area, which
+    /// `btnIconBareTouch` grows without moving the box.
     let private btnIconBareBase =
-        cls [ "w-6 h-6 shrink-0 bg-transparent border-0 cursor-pointer p-0 grid place-items-center"
-              "transition-colors"; focusRing ]
-    let btnIconBare = cls [ btnIconBareBase; "text-ink-faint hover:text-ink" ]
-    let btnIconBareDanger = cls [ btnIconBareBase; "text-ink-faint hover:text-err" ]
+        cls [ "w-6 h-6 shrink-0 grid place-items-center transition-colors"; bareBox; "p-0"
+              focusRing ]
+    let btnIconBare = cls [ btnIconBareBase; bareInk ]
+    let btnIconBareDanger = cls [ btnIconBareBase; bareInkDanger ]
     /// `btnIconBareDanger`, ARMED: a second press away from actually deleting (the queue's
     /// delete — see `View.queue`), which this says by wearing the err fill AT REST rather
     /// than only under the hand. A touch has no hover to hold the hint up, so the state a
@@ -542,7 +680,7 @@ module Style =
     /// twice, this one specifically IS, between the two presses the confirm needs.
     /// Un-arms itself back to `btnIconBareDanger` on its own (`armedMs`), so a
     /// press nobody confirms cannot leave a row looking primed for ever.
-    let btnIconBareDangerArmed = cls [ btnIconBareBase; "bg-err text-bg" ]
+    let btnIconBareDangerArmed = cls [ btnIconBareBase; "cursor-pointer bg-err text-bg" ]
     /// A terminal's kill, ARMED (`View.killControl`): a second press away from ending it, which
     /// it says by being in the error red AT REST — a touch has no hover to hold the warning up —
     /// and by saying what it will end: `kill`, then what is running there. A sentence in the
@@ -553,42 +691,43 @@ module Style =
     /// wider, growing leftwards from its right edge, so the second press lands where the
     /// first did.
     let btnKillArmed =
-        cls [ "h-6 shrink-0 inline-flex items-center gap-1.5 px-1 bg-transparent border-0 cursor-pointer"
-              "font-ui font-normal text-body lowercase whitespace-nowrap text-err transition-colors"; focusRing ]
+        cls [ "h-6 shrink-0 inline-flex items-center gap-1.5 px-1 cursor-pointer"; bareBox
+              "font-ui font-normal text-body lowercase whitespace-nowrap text-err transition-colors"
+              focusRing ]
     /// What the armed kill says is running, inside it: the command as typed — case kept — cut
     /// short rather than allowed to push the row's name out of its column.
     let killArmedRunning =
         "font-terminal text-code normal-case tracking-normal truncate max-w-[7rem]"
     /// The same verb where it is the only control a row offers a thumb — the Manager's
     /// archive, which on a phone is the one per-row target there is. 24px is WCAG 2.5.8's
-    /// minimum exactly and far under a comfortable touch target, so the HIT area is 44px
-    /// while the glyph, the box and the row stay as they were: an empty `::before` reaches
-    /// 10px past the box on every side, and a press on a pseudo-element is a press on its
-    /// element. The box itself stays 24px on purpose — it is what the focus ring is drawn
-    /// round, and a ring round the 44px area crowded the verb beside it and the screen's
-    /// edge. Not the default, because the other bare icons ride in pairs (the queue's up
-    /// and down) whose areas would overlap; a site wearing this keeps 10px clear of its
+    /// minimum exactly and far under a comfortable touch target, so the HIT area is
+    /// `spacing-touch` while the glyph, the box and the row stay as they were: an empty
+    /// `::before` reaches 10px past the box on every side, and a press on a pseudo-element is
+    /// a press on its element. The box itself stays 24px on purpose — it is what the focus
+    /// ring is drawn round, and a ring round the 44px area crowded the verb beside it and the
+    /// screen's edge. Not the default, because the other bare icons ride in pairs (the queue's
+    /// up and down) whose areas would overlap; a site wearing this keeps 10px clear of its
     /// neighbour so the area it grows never lands on one.
     let btnIconBareTouch =
         cls [ btnIconBareBase; "relative before:absolute before:-inset-2.5 before:content-['']"
-              "text-ink-faint hover:text-ink" ]
+              bareInk ]
 
     /// The borderless verb as a WORD rather than an icon, for a row whose verb has no glyph
-    /// that says it (stop, unarchive). Same rule, same box height, same rest and hover tones
-    /// as the icon form; the caps voice because that is what every button here speaks.
+    /// that says it (stop, unarchive). Same rule, same box height, same ink as the icon form;
+    /// the caps voice, because that is the one voice a bare verb speaks in.
     let private btnBareBase =
-        cls [ "h-6 px-1 shrink-0 inline-flex items-center bg-transparent border-0 cursor-pointer font-ui"; caps
+        cls [ "h-6 px-1 shrink-0 inline-flex items-center font-ui"; caps; bareBox
               "transition-colors"; focusRing ]
-    let btnBare = cls [ btnBareBase; "text-ink-faint hover:text-ink" ]
-    let btnBareDanger = cls [ btnBareBase; "text-ink-faint hover:text-err" ]
+    let btnBare = cls [ btnBareBase; bareInk ]
+    let btnBareDanger = cls [ btnBareBase; bareInkDanger ]
     /// A bare verb at the right of a roster row (`person`): pushed to the row's trailing edge,
     /// `-mr-1` so its WORD, not its padding, lines up with the status words other rows end in,
     /// and a thumb's height on a phone, where a 24px word is not a target. It keeps the row's
     /// baseline, so its word stands on the same line as the name beside it however tall its
     /// hit area grows.
-    let rosterVerb = "ml-auto -mr-1 phone:min-h-11"
+    let rosterVerb = "ml-auto -mr-1 phone:min-h-touch"
 
-    /// 32px square and BORDERLESS: the verb parked INSIDE a field, over the text.
+    /// `spacing-control` square and BORDERLESS: the verb parked INSIDE a field, over the text.
     ///
     /// A Metro button IS its rectangle, so dropping the rectangle is not a quieter button, it
     /// is a different kind of control — and it earns that by living inside the field it acts
@@ -602,15 +741,18 @@ module Style =
     /// a preference: the composer's verbs have a row to themselves, and a row with room in it
     /// should say the word.
     ///
-    /// 44px square on a phone, where the field it rides is a thumb's height too.
+    /// A thumb's target on a phone, where the field it rides is one too.
     let private btnInField =
-        cls [ "w-8 h-8 phone:w-11 phone:h-11 shrink-0 grid place-items-center bg-transparent border-0 cursor-pointer p-0"
-              "transition-colors"; focusRing ]
-    let btnSendInField = cls [ btnInField; "text-blue hover:text-blue-up-1" ]
-    /// Waiting for something to run. The same control in the same place, at the weight of a
-    /// thing with nothing to do — never `disabled`, in either spelling: an empty command line
-    /// is not a blocked one.
-    let btnSendInFieldWaiting = cls [ btnInField; "text-ink-faint hover:text-ink" ]
+        cls [ "w-control h-control phone:w-touch phone:h-touch shrink-0 grid place-items-center"
+              bareBox; "p-0 transition-colors"; focusRing ]
+    /// The terminal command line's Run. Blue, as the composer's Send is: this is the same
+    /// verb on the terminal's own composer, and blue is what the doctrine spends on the one
+    /// bare verb that IS the surface's act (docs/visual-design.md, Hierarchy of controls).
+    let btnSendInField = cls [ btnInField; "cursor-pointer text-blue hover:text-blue-up-1" ]
+    /// Waiting for something to run: the same control in the same place, at the weight of a
+    /// thing with nothing to do — never `disabled`, in either spelling, because an empty
+    /// command line is not a blocked one.
+    let btnSendInFieldWaiting = cls [ btnInField; bareInkWaiting ]
 
     /// Send is a WORD: the caps voice one step up (`capsLg`), in blue, with no rectangle
     /// around it. It wore a solid blue box for a while — a thumb finds a filled rectangle
@@ -620,20 +762,27 @@ module Style =
     /// colour says "press" on its own, and the word is what sits on the 16px gutter.
     ///
     /// Bare, as the doctrine has a verb that rides the thing it acts on — the draft — and
-    /// blue, as the one bare verb that is the surface's own act (docs/visual-design.md,
-    /// Hierarchy of controls). No `rounded-*`, no border, no fill.
+    /// blue, as the one bare verb that is the surface's own act, which the doctrine blesses
+    /// by name (docs/visual-design.md, Hierarchy of controls). No `rounded-*`, no border, no
+    /// fill.
+    ///
+    /// The step UP the caps ramp is the composer's alone, and deliberately: the tray's verbs
+    /// sit directly above it on `caps`, and at Send's size they stood level with the verb the
+    /// composer is for (`trayVerb` says the same thing from its end). One voice, two steps.
     ///
     /// 40px tall, which is the composer's resting line box below its top room (`draftInput`:
-    /// a 24px line, `pb-2`) — so it bottom-aligns onto that line with no correction.
+    /// a 24px line, `pb-2`) — so it bottom-aligns onto that line with no correction. The
+    /// thumb's target comes from the hit area below rather than from the box, which is why
+    /// this is one of the two heights in this file that does not compose `spacing-control`.
     let private btnComposerBox =
         // `pr` is `px-3` less one caps tracking: letter-spacing is laid after EVERY glyph,
         // the last included, so a tracked word's ink ends 0.16em before its box does and the
         // D stopped 2px short of the gutter the draft's text keeps from the same edge.
-        cls [ "h-10 pl-3 pr-[calc(0.75rem-var(--tracking-caps))] shrink-0 inline-flex items-center justify-center cursor-pointer font-ui"
+        cls [ "h-10 pl-3 pr-[calc(0.75rem-var(--tracking-caps))] shrink-0 inline-flex items-center justify-center font-ui"
               // No colour tween on a phone: there is no hover there, so the only colour change
               // is waiting → ready, which arrives with the row's fade (`draftCommit`), and two
               // tweens at once read as the word blooming from grey through teal to blue.
-              "bg-transparent border-0"; capsLg; "transition-colors max-md:transition-none"; focusRing
+              bareBox; capsLg; "transition-colors max-md:transition-none"; focusRing
               // On a phone, the one item of its row that takes part in baseline alignment, so
               // the row's baseline is Send's word (`draftActionsRow`). Without it the row
               // reported the baseline of its FIRST item — the presence span, usually empty,
@@ -648,28 +797,31 @@ module Style =
     let private btnComposerSendTouch =
         "relative before:absolute before:content-[''] before:-top-1.5 before:-bottom-1.5 before:-right-1.5"
     let btnComposerSend =
-        cls [ btnComposerBox; btnComposerSendTouch; "text-blue hover:text-blue-up-1" ]
-    /// Waiting for something to send. The same word in the same place at the weight of a
-    /// thing with nothing to do, never `disabled` in either spelling: an empty composer is
-    /// not a blocked one.
+        cls [ btnComposerBox; btnComposerSendTouch
+              "cursor-pointer text-blue hover:text-blue-up-1" ]
+    /// Waiting for something to send: the same word in the same place at the weight of a
+    /// thing with nothing to do, never `disabled` in either spelling, because an empty
+    /// composer is not a blocked one.
     let btnComposerSendWaiting =
-        cls [ btnComposerBox; btnComposerSendTouch; "text-ink-faint hover:text-ink" ]
-    /// Chrome, not an action: the small sidebar collapse/reveal chevrons. They lean the way
-    /// they travel on hover and lead further on press — the only motion chrome earns, and the
-    /// reason the two directions are separate values rather than one class plus a guess.
+        cls [ btnComposerBox; btnComposerSendTouch; bareInkWaiting ]
+    /// Chrome, not an action: the small sidebar collapse/reveal chevrons, and the terminal
+    /// column's own door, which composes these (`terminalReopen`) so that the two ways to
+    /// the other column are one control. They lean the way they travel on hover and lead
+    /// further while pressed — the only motion chrome earns, and the reason the two
+    /// directions are separate values rather than one class plus a guess. `pressed:` and not
+    /// `active:`, so the lean is one variant with every other press in this file.
     ///
-    /// On a phone the glyph stays small and the BOX does not: 44px each way, the target this
-    /// product holds a thumb to (UI baseline), with the glyph centred in it. The `-m-1.5`
-    /// still pays the padding back to the flow, so a site that needs the rest paid back too
-    /// says so itself (`navReopen`).
+    /// On a phone the glyph stays small and the BOX does not: it grows to `spacing-touch`
+    /// each way, with the glyph centred in it. The `-m-1.5` still pays the padding back to
+    /// the flow, so a site that needs the rest paid back too says so itself (`navReopen`).
     let private navChevronBase =
-        "bg-transparent border-0 cursor-pointer text-ink-faint hover:text-ink text-small p-1.5 -m-1.5 "
+        bareBox + " cursor-pointer text-ink-faint hover:text-ink text-small p-1.5 -m-1.5 "
         + "flex items-center gap-1 transition-[translate,color] duration-150 ease-out "
-        + "phone:min-w-11 phone:min-h-11 phone:justify-center "
+        + "phone:min-w-touch phone:min-h-touch phone:justify-center "
         + "motion-reduce:transition-none " + focusRing
 
-    let navChevronBack = navChevronBase + " hover:-translate-x-0.5 active:-translate-x-1"
-    let navChevronForward = navChevronBase + " hover:translate-x-0.5 active:translate-x-1"
+    let navChevronBack = navChevronBase + " hover:-translate-x-0.5 pressed:-translate-x-1"
+    let navChevronForward = navChevronBase + " hover:translate-x-0.5 pressed:translate-x-1"
 
     /// Worn by every control you TYPE INTO, and nowhere else. iOS zooms the page in when it
     /// focuses a text control whose type is under 16px and never zooms back out — tapping the
@@ -2083,13 +2235,21 @@ module Style =
     /// Full width on a phone, where a thumb is the pointer and the band is the screen; on a
     /// desktop it takes the room its word needs.
     let askStartWidth = "w-full md:w-auto"
-    /// The commit button, which is disabled until something is held — and looks it: the
-    /// rim recedes to a hairline and the type to faint, so the press state is one a held row
-    /// visibly buys. On `btnPrimarySwap` rather than `btnPrimary`: pressing it holds through
+    /// The commit button, which is disabled until something is held — and looks it: the fill
+    /// and the rim recede to the waiting face's hairline and the type to faint, so the filled
+    /// state is one a held row visibly buys. On `btnPrimarySwap` rather than `btnPrimary`:
+    /// pressing it holds through
     /// `Sent`/`Cloning` (`Launch.LaunchStage`), and "Start"/"starting…" share its box the same
     /// way Create's two words do, so admission does not resize the one control the card asks
     /// a thumb to find twice.
-    let askStart = cls [ btnPrimarySwap; askStartWidth; "h-12 disabled:border-hair disabled:text-ink-faint disabled:cursor-default" ]
+    let askStart =
+        cls [ btnPrimarySwap; askStartWidth
+              // The fill is cancelled along with the rim while there is nothing to start:
+              // `disabled:text-ink-faint` over a blue fill is 1.05:1, and the floor is never
+              // traded (docs/visual-design.md, Deciding). The face this stands in for is
+              // `btnWaitingSwap`, which is what the `disabled` attribute itself gives way to.
+              "h-12 disabled:bg-transparent disabled:border-hair disabled:text-ink-faint"
+              "disabled:cursor-default" ]
     let caretIdle = caret + " opacity-50"
 
 

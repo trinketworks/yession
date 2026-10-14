@@ -529,7 +529,7 @@ module View =
                         <div class="{Style.noAgentBody}">
                           {legendView (GrantNotation.legendFor granted)}
                           <ul class="{Style.cls [ Style.label; "w-full min-w-0 whitespace-normal" ]}">{lines}</ul>
-                          <button type="button" class="{Style.cls [ Style.btnPrimary; Style.noAgentAction; "w-full min-w-0" ]}"
+                          <button type="button" class="{Style.cls [ Style.btn; Style.noAgentAction; "w-full min-w-0" ]}"
                                   data-repo-approve="{RepoRef.value repo}"
                                   @click={Ev(fun _ -> dispatch (ApproveRepoCapabilitiesMsg (repo, granted)))}>Approve</button>
                         </div>
@@ -767,7 +767,7 @@ module View =
                            .value={claude.Code}
                            @input={EvVal(fun v -> dispatch (ClaudeCodeTyped v))} />
                     <div class="flex gap-2">
-                      <button type="button" class="{Style.btnPrimary}" data-claude-complete @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Complete))}>Complete</button>
+                      <button type="button" class="{Style.btn}" data-claude-complete @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Complete))}>Complete</button>
                       <button type="button" class="{Style.btn}" data-claude-cancel @click={Ev(fun _ -> dispatch (ClaudeFlowMsg ClaudeIdle))}>Cancel</button>
                     </div>"""
             | ClaudeIdle ->
@@ -778,7 +778,7 @@ module View =
                       <option value="mine" ?selected={claude.Scope = "mine"}>{sharedScopeLabel (claude.Status |> Option.map (fun panel -> panel.Owner))}</option>
                       <option value="session" ?selected={claude.Scope = "session"}>This session only</option>
                     </select>
-                    <button type="button" class="{Style.btnPrimary}" data-claude-connect @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Connect))}>Connect Claude</button>
+                    <button type="button" class="{Style.btn}" data-claude-connect @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Connect))}>Connect Claude</button>
                     <label class="{Style.label} pt-2" for="claude-token">setup token / api key</label>
                     <input id="claude-token" type="password" class="{Style.field}" data-claude-token placeholder="sk-ant-…"
                            .value={claude.Token}
@@ -852,7 +852,7 @@ module View =
                       <option value="mine" ?selected={github.Scope = "mine"}>{sharedScopeLabel (github.Status |> Option.map (fun panel -> panel.Owner))}</option>
                       <option value="session" ?selected={github.Scope = "session"}>This session only</option>
                     </select>
-                    <button type="button" class="{Style.btnPrimary}" data-github-connect @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.Connect))}>Connect GitHub</button>
+                    <button type="button" class="{Style.btn}" data-github-connect @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.Connect))}>Connect GitHub</button>
                     <label class="{Style.label} pt-2" for="github-token">personal access token</label>
                     <input id="github-token" type="password" class="{Style.field}" data-github-token placeholder="github_pat_…"
                            .value={github.Token}
@@ -2090,7 +2090,7 @@ module View =
                 html $"""
                     {said}
                     <div class="{Style.askActions}">
-                      <button type="button" class="{Style.btnPrimary}" data-repo-picker-connect @click={Ev(fun _ -> dispatch RevealSettingsMsg)}>{Dom.Text.repoPickerConnect}</button>
+                      <button type="button" class="{Style.btn}" data-repo-picker-connect @click={Ev(fun _ -> dispatch RevealSettingsMsg)}>{Dom.Text.repoPickerConnect}</button>
                     </div>"""
             | ListingUnavailable (reason, false) ->
                 note (html $"""<span class="{Style.statusErr}" role="status" data-repo-picker-failed>{reason}</span>""")
