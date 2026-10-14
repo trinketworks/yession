@@ -472,18 +472,20 @@ let private refusedLineTests =
                     | other -> failwithf "expected the line to be refused, got %A" other
                 })
 
-        // History expansion is on in an interactive bash, inside double quotes too. The
-        // agent's line is a two-line brace group, so bash refuses its `}` as well: two
-        // prompts, and only the second is the block's last word.
-        testCaseAsync "an agent's `!` in double quotes is refused by history expansion, and said so" <|
+        // The agent's line is a two-line brace group, so bash refuses its `}` as well: two
+        // prompts, and only the second is the block's last word — the next block must not
+        // be settled by the first. That next block holds a `!` in double quotes, which runs:
+        // history expansion is off in every dialect's rc (`Marks.rcFor`), so it is not an
+        // event designator, and the line is not refused with `event not found`.
+        testCaseAsync "an agent's refused line answers twice, and its next line, `!` and all, runs" <|
             withLiveTerminal "refused-bang" (fun terminals id _ log _ _ ->
                 async {
                     let ada = Principal.Peer (PeerId.create "ada" |> expect)
-                    match! ranTo terminals id log (agentEntry id ada "1") "echo \"done!yessionnosuchevent\"" with
-                    | Some (CommandNotRun said) -> Expect.stringContains said "event not found" "the reason, not our brace's"
+                    match! ranTo terminals id log (agentEntry id ada "1") "echo (" with
+                    | Some (CommandNotRun said) -> Expect.stringContains said "syntax error" "the reason, not our brace's"
                     | other -> failwithf "expected the line to be refused, got %A" other
-                    let! next = ranTo terminals id log (agentEntry id ada "2") "echo 'done!'"
-                    Expect.equal next (Some (CommandSucceeded 0)) "and single-quoted, the same words run"
+                    let! next = ranTo terminals id log (agentEntry id ada "2") "echo \"done!yessionnosuchevent\""
+                    Expect.equal next (Some (CommandSucceeded 0)) "history expansion is off, so the line runs"
                 })
 
         // A quote left open puts bash at its continuation prompt, where the line is neither
