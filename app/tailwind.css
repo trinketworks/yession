@@ -145,9 +145,23 @@
    card's height is fixed, so there is a definite height to grow into. `motion-reduce:animate-none`
    on the element drops it to the plain appearance. */
 
+/* The one opacity pulse left, and it is not a dot: the caret that says the agent is writing
+   (`Style.caretWorking`), a 7px bar whose own comment says why it must never go fully clear.
+   No MARK may ride this — a dot that beats moves its colour (docs/visual-design.md, Motion),
+   because an opacity floor is a contrast floor and the two beats below are what dots wear. */
 @keyframes pulse2 {
   0%, 100% { opacity: 0.25; }
   50% { opacity: 1; }
+}
+/* A waiting dot's beat (`Style.statusDotBeat`): reconnecting, starting, looking, queued. The
+   same tempo as the live beat below and the same rule — the COLOUR moves, between the record's
+   ink and its dim, never the opacity, so the mark owes its surface 3:1 at every frame of the
+   beat rather than only at the top of it. The old opacity pulse bottomed out at a quarter,
+   which is where a dot saying "still going" read as no dot at all. Both colours are pinned to
+   that floor by the theme-contrast suite (Phase4), which reads them from this rule. */
+@keyframes beat-wait {
+  0%, 100% { background-color: var(--color-ink-faint); }
+  50% { background-color: var(--color-ink-dim); }
 }
 /* A live dot's beat (`Style.statusDotLive`): a running command. Its COLOUR moves, between
    live's green and live's dim, never its opacity (docs/visual-design.md, Motion) — a mark owes

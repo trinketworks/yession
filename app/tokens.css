@@ -123,6 +123,7 @@
   /* --- Motion: named and timed here. The keyframes, and why each thing moves as it does, are in app/tailwind.css. --- */
   --animate-pulse2: pulse2 1.1s ease-in-out infinite;
   --animate-beat-live: beat-live 1.1s ease-in-out infinite;
+  --animate-beat-wait: beat-wait 1.1s ease-in-out infinite;  /* a wait's dot, on the live one's tempo */
   --animate-blink: blink 1s steps(1) infinite;
   --animate-beat: beat 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
   --animate-reveal: reveal 1.6s ease-out 1;

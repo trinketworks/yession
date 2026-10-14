@@ -962,7 +962,7 @@ let openingPage (sessionId: SessionId) (target: string) (readyUrl: string) (shel
             Style.startStatus
             Dom.Manager.openingFailed
             (Ssr.escapeAttr (Style.statusErr + " " + Style.startStatus))
-            Style.statusDotPulse
+            Style.statusDotBeat
             Dom.Manager.openingWord
             Style.startStatusId
             (Ssr.escapeText (SessionId.value sessionId))
