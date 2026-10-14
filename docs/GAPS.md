@@ -863,7 +863,8 @@ code matches the doctrine. Each entry names the rule and the sites.
     in `yession.yaml` only if its scope is a sandbox.** What that leaves out, deliberately:
     - **No inter-sandbox networking.** A `db:` sandbox's process is reachable from inside that
       sandbox only. A compose-like shared network is a design of its own.
-    - **A `command` (`cmd`), an `entrypoint`, a `memory` and a `dialect` are docker-only.** They
+    - **A `command` (`cmd`), an `entrypoint`, the limits (`memory`, `oom-score-adj`,
+      `pids-limit`, `cgroup-parent`) and a `dialect` are docker-only.** They
       live inside or beside the `container:` block. Under `srt` or `host`, there is nowhere to
       write one, instead of a refusal to explain. The exception is `dialect`, which is refused on a sandbox with no
       container because it reads as if it would apply.
@@ -879,6 +880,10 @@ code matches the doctrine. Each entry names the rule and the sites.
     - **No operator ceiling on a container's memory.** A repo's `memory:` is checked against
       what the daemon has, not against a share the operator chose. Six sessions that each
       declare most of the VM are each accepted.
+    - **A `cgroup-parent` is the repo's to name, and the host's to make.** Nothing in yession
+      creates the parent cgroup or gives it a limit. Docker makes a missing parent with no
+      limit, which changes nothing. A `memory:` is also not checked against the parent's limit,
+      only against the daemon's total.
     - **No `${VAR}` in an entrypoint.** compose interpolates from the host's environment at parse
       time. That is the wrong environment here: the sandbox's is the one that means something.
       Nothing has needed it. The string form is read into words and nothing else. A value that

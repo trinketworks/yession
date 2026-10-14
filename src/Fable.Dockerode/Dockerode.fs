@@ -94,6 +94,12 @@ type HostConfig =
     /// Memory plus swap, in bytes — `--memory-swap`. Equal to `Memory`, no swap; absent,
     /// the daemon allows as much swap again as `Memory`.
     abstract MemorySwap: float with get, set
+    /// `--oom-score-adj`, -1000 to 1000. Every process in the container has it, execs too.
+    abstract OomScoreAdj: int with get, set
+    /// `--pids-limit`: the container's `pids.max`.
+    abstract PidsLimit: int with get, set
+    /// `--cgroup-parent`: a path under the cgroupfs driver, a slice name under systemd.
+    abstract CgroupParent: string with get, set
     /// `/dev/shm`, in bytes.
     abstract ShmSize: int with get, set
 
@@ -133,9 +139,10 @@ type ListContainersOptions =
     abstract all: bool with get, set
     abstract filters: ContainerFilters with get, set
 
-/// What `listContainers` answers with one of per container. Nothing here reads into it.
+/// What `listContainers` answers with one of per container, of it.
 type ContainerSummary =
-    interface end
+    /// The full container id, which `getContainer` takes.
+    abstract Id: string
 
 /// `container.logs`' options.
 [<AllowNullLiteral>]
@@ -199,6 +206,11 @@ type [<AllowNullLiteral>] Exec =
 type Unread =
     interface end
 
+/// What `container.inspect()` answers with, of it.
+type [<AllowNullLiteral>] ContainerInspect =
+    /// The host configuration the daemon created the container with.
+    abstract HostConfig: HostConfig
+
 /// A container handle (created, or looked up by name/id).
 type [<AllowNullLiteral>] Container =
     /// The full container id assigned by the daemon.
@@ -206,7 +218,7 @@ type [<AllowNullLiteral>] Container =
     abstract start: unit -> JS.Promise<Unread>
     abstract remove: options: RemoveOptions -> JS.Promise<Unread>
     abstract exec: options: ExecOptions -> JS.Promise<Exec>
-    abstract inspect: unit -> JS.Promise<Unread>
+    abstract inspect: unit -> JS.Promise<ContainerInspect>
     /// The container's own output. With `follow: true` a stream that stays open as the
     /// process prints; multiplexed like an exec's, so `demuxStream` reads it.
     abstract logs: options: LogsOptions -> JS.Promise<Stream>
@@ -256,6 +268,8 @@ type [<AllowNullLiteral>] Modem =
 type [<AllowNullLiteral>] DockerInfo =
     /// The memory the daemon's host has, in bytes — on a Mac, the VM's, not the Mac's.
     abstract MemTotal: float
+    /// "cgroupfs" or "systemd": which spelling of `HostConfig.CgroupParent` the daemon takes.
+    abstract CgroupDriver: string
 
 /// The dockerode client, bound to the local daemon socket.
 type [<AllowNullLiteral>] Docker =

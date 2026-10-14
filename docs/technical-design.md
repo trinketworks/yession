@@ -381,6 +381,14 @@ above the daemon's total refuses the sandbox, because a ceiling the host never r
 nothing. A ceiling bounds one container. It does not make the host bigger: containers that
 each stay under theirs can still add up to more than the VM has.
 
+When they do, the kernel's global killer chooses from every process on the VM, the daemon's
+included. So every container also gets an OOM score adjustment of 500 (`oom-score-adj:`, 0 to
+1000). The daemon's processes are below zero, so the kernel kills a sandbox process first.
+Every container also gets a process limit of 4096 (`pids-limit:`), so a fork bomb uses up its
+own container and not the host. `cgroup-parent:` puts the container's cgroup under a parent,
+such as `/yession`, that the host's operator gives a memory limit below the VM's total. An OOM
+then stays inside that parent. With no parent declared, the daemon's own is used.
+
 The file has two top-level keys, and one is a version. **The whole file is sandboxes**,
 because a sandbox is the only scope where "two repos both said something" has a total answer.
 Each sandbox has a name, and its repo scopes that name. So `config(session) = ⋃ over repos r of

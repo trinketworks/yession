@@ -215,6 +215,106 @@ module ContainerMemory =
                     (describe daemonTotal))
         | Some declared -> Ok declared
 
+/// How strongly the kernel prefers a container's processes as OOM victims —
+/// `docker run --oom-score-adj`, from 0 to 1000. Every process in the container has it,
+/// each exec included.
+///
+/// A ceiling (`ContainerMemory`) does not stop the host itself from running out: containers
+/// that each stay under theirs can still add up to more than the host has. The kernel's
+/// global killer then picks from every process on the host, and on a Colima VM that
+/// includes the processes that run the containers. Their own values are below zero
+/// (measured: dockerd −500, containerd −999) and a container's are 0 by default, so the
+/// kernel can choose them. At 500, any sandbox process is chosen before any of them.
+///
+/// Not below zero: a sandbox that could rank itself with the daemon's own processes
+/// removes what this protects. A repo can only make its processes a more likely victim.
+type OomScoreAdj = private OomScoreAdj of int
+
+[<RequireQualifiedAccess>]
+module OomScoreAdj =
+
+    /// What a container gets when its declaration names none.
+    let standard = OomScoreAdj 500
+
+    let value (OomScoreAdj n) : int = n
+
+    let ofInt (n: int) : Result<OomScoreAdj, string> =
+        if n < 0 || n > 1000 then
+            Error (
+                sprintf
+                    "oom-score-adj: %d is not from 0 to 1000 — a sandbox can make its processes a more likely OOM victim, not a less likely one than the daemon's own"
+                    n)
+        else Ok (OomScoreAdj n)
+
+    /// What a container is created with: what it declared, or `standard`. Never docker's
+    /// own default of 0, which ranks a sandbox with the daemon's processes.
+    let forContainer (declared: OomScoreAdj option) : OomScoreAdj =
+        declared |> Option.defaultValue standard
+
+/// How many processes and threads a container can hold at once — its cgroup's
+/// `pids.max`, `docker run --pids-limit`.
+///
+/// Memory is not the only thing a container can take from the host it shares. A fork bomb,
+/// or a build that starts threads without limit, uses up the kernel's process table for
+/// every session on that host. The most measured in a working dev container is 136, during
+/// a dotnet build, so the standard 4096 does not stop real work.
+type PidsLimit = private PidsLimit of int
+
+[<RequireQualifiedAccess>]
+module PidsLimit =
+
+    /// What a container gets when its declaration names none.
+    let standard = PidsLimit 4096
+
+    let value (PidsLimit n) : int = n
+
+    /// Docker reads 0 and below as no limit, so they are refused, not passed through:
+    /// a limit that is not a limit must not look like one.
+    let ofInt (n: int) : Result<PidsLimit, string> =
+        if n < 1 then Error (sprintf "pids-limit: %d is not a limit — write a number of processes, 1 or more" n)
+        else Ok (PidsLimit n)
+
+    /// What a container is created with: what it declared, or `standard`. Never docker's
+    /// own default, which is no limit.
+    let forContainer (declared: PidsLimit option) : PidsLimit =
+        declared |> Option.defaultValue standard
+
+/// The cgroup that a container's cgroup is put under — `docker run --cgroup-parent`.
+///
+/// With one parent for every sandbox (`/yession`), the host can give the parent a memory
+/// limit below its total. When all the sandboxes together reach it, the kernel kills inside
+/// that parent, and the processes outside it (the daemon, its shims) are not candidates.
+/// Who makes that parent and gives it its limit is the host's operator, not this setting:
+/// if the parent does not exist, docker makes it with no limit, which changes nothing.
+///
+/// `None` — the usual — keeps the daemon's own parent.
+type CgroupParent = private CgroupParent of string
+
+[<RequireQualifiedAccess>]
+module CgroupParent =
+
+    let value (CgroupParent path) : string = path
+
+    let parse (raw: string) : Result<CgroupParent, string> =
+        let text = raw.Trim ()
+        if text = "" then Error "cgroup-parent cannot be blank"
+        elif text |> Seq.exists Char.IsWhiteSpace then Error (sprintf "cgroup-parent: '%s' contains a space" text)
+        elif text.Split '/' |> Array.contains ".." then Error (sprintf "cgroup-parent cannot climb, and '%s' does" text)
+        else Ok (CgroupParent text)
+
+    /// The parent, checked against the daemon's cgroup driver before anything is pulled.
+    /// Under the systemd driver docker accepts only a slice name (`yession.slice`); under
+    /// cgroupfs, a path (`/yession`). A refusal here names the driver, which docker's own
+    /// refusal at create does not.
+    let forDriver (declared: CgroupParent option) (driver: string) : Result<CgroupParent option, string> =
+        match declared with
+        | Some (CgroupParent path) when driver = "systemd" && not (path.EndsWith ".slice") ->
+            Error (
+                sprintf
+                    "the container declares cgroup-parent: %s, and the docker daemon uses the systemd cgroup driver, which takes only a slice name, like yession.slice"
+                    path)
+        | declared -> Ok declared
+
 /// What a CONTAINER is. Every field here is one only a container has — an image to run, a
 /// filesystem to build, volumes to mount, a process to be.
 type ContainerSpec =
@@ -245,12 +345,27 @@ type ContainerSpec =
       /// `deploy.resources.limits.memory`, written `memory:`. `None` — the usual — takes the
       /// default share of the daemon's memory (`ContainerMemory.defaultFor`): never no
       /// ceiling, because no ceiling is the whole host.
-      Memory : ContainerMemory option }
+      Memory : ContainerMemory option
+      /// `oom-score-adj:`. `None` — the usual — is `OomScoreAdj.standard`.
+      OomScoreAdj : OomScoreAdj option
+      /// `pids-limit:`. `None` — the usual — is `PidsLimit.standard`.
+      PidsLimit : PidsLimit option
+      /// `cgroup-parent:`. `None` — the usual — keeps the daemon's own parent.
+      CgroupParent : CgroupParent option }
 
 module ContainerSpec =
 
     let defaults : ContainerSpec =
-        { Image = None; Build = None; Mounts = []; Command = None; Entrypoint = None; Dialect = None; Memory = None }
+        { Image = None
+          Build = None
+          Mounts = []
+          Command = None
+          Entrypoint = None
+          Dialect = None
+          Memory = None
+          OomScoreAdj = None
+          PidsLimit = None
+          CgroupParent = None }
 
 /// What the sandbox IS, and the distinction is load-bearing rather than descriptive.
 ///

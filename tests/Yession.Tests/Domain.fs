@@ -2553,6 +2553,52 @@ let private configTests =
             | Ok _ -> failwith "a ceiling the host runs out before reaching contains nothing"
             | Error reason -> Expect.stringContains reason "16g" "the refusal names what was declared"
 
+        // The other limits on the container block, read and refused like `memory:`.
+        testCase "a container's oom-score-adj, pids-limit and cgroup-parent are read from its block" <| fun () ->
+            let container =
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "oom-score-adj": 800, "pids-limit": 512, "cgroup-parent": "/yession" } } } }"""
+                |> expect
+                |> fun file -> (file.Sandboxes |> Map.find (sandboxName "dev")).Container |> Option.get
+            Expect.equal (container.OomScoreAdj |> Option.map OomScoreAdj.value) (Some 800) "oom-score-adj as written"
+            Expect.equal (container.PidsLimit |> Option.map PidsLimit.value) (Some 512) "pids-limit as written"
+            Expect.equal (container.CgroupParent |> Option.map CgroupParent.value) (Some "/yession") "cgroup-parent as written"
+
+        testCase "an oom-score-adj below zero, a pids-limit that is no limit, and a blank cgroup-parent are refused, saying why" <| fun () ->
+            let refusal (field: string) =
+                match ConfigFile.parse (sprintf """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", %s } } } }""" field) with
+                | Ok _ -> failwithf "%s was accepted" field
+                | Error reason -> reason
+            Expect.stringContains (refusal "\"oom-score-adj\": -500") "not from 0 to 1000" "a sandbox cannot rank itself with the daemon"
+            Expect.stringContains (refusal "\"oom-score-adj\": 1001") "not from 0 to 1000" "nor past the kernel's range"
+            Expect.stringContains (refusal "\"pids-limit\": 0") "is not a limit" "docker reads 0 as no limit"
+            Expect.stringContains (refusal "\"cgroup-parent\": \" \"") "cannot be blank" "a blank parent"
+            Expect.stringContains (refusal "\"cgroup-parent\": \"/yession/../docker\"") "cannot climb" "a parent with a climb"
+
+        testCase "the container limits survive the round trip the command gate rides" <| fun () ->
+            let dev =
+                ConfigFile.parse """{ "version": 2, "sandboxes": { "dev": { "container": { "image": "alpine", "oom-score-adj": 700, "pids-limit": 1024, "cgroup-parent": "yession.slice" } } } }"""
+                |> expect
+                |> fun file -> file.Sandboxes |> Map.find (sandboxName "dev")
+            let back = ConfigFile.encodeSandbox dev |> ConfigFile.parseSandbox |> expect
+            Expect.equal back.Container dev.Container "what `encode` writes, `parseSandbox` reads back whole"
+
+        // What the docker backend creates a container with when the block names nothing.
+        testCase "a container that declares no oom-score-adj or pids-limit gets 500 and 4096" <| fun () ->
+            Expect.equal (OomScoreAdj.value (OomScoreAdj.forContainer None)) 500 "a victim before the daemon's own processes (0, -500, -999)"
+            Expect.equal (PidsLimit.value (PidsLimit.forContainer None)) 4096 "never docker's default, which is no limit"
+            let declared = OomScoreAdj.ofInt 900 |> expect
+            Expect.equal (OomScoreAdj.forContainer (Some declared)) declared "a declaration is the value"
+
+        testCase "a cgroup-parent is checked against the daemon's cgroup driver" <| fun () ->
+            let path = CgroupParent.parse "/yession" |> expect
+            let slice = CgroupParent.parse "yession.slice" |> expect
+            Expect.equal (CgroupParent.forDriver (Some path) "cgroupfs") (Ok (Some path)) "a path under cgroupfs"
+            Expect.equal (CgroupParent.forDriver (Some slice) "systemd") (Ok (Some slice)) "a slice under systemd"
+            Expect.equal (CgroupParent.forDriver None "systemd") (Ok None) "none declared keeps the daemon's own"
+            match CgroupParent.forDriver (Some path) "systemd" with
+            | Ok _ -> failwith "the systemd driver takes only a slice name"
+            | Error reason -> Expect.stringContains reason "systemd cgroup driver" "the refusal names the driver"
+
         // A repo saying where the session's checkouts should appear in its own container.
         testCase "a sandbox can say where it wants the checkouts" <| fun () ->
             let file =
