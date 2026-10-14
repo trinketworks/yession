@@ -73,7 +73,7 @@ step is one level of nesting or a selection. Three hues mean three things:
 - `err` is wrong. There is at most one red word on screen.
 
 Blue is never a status. A wait is `ink-dim` text. Reconnecting, catching up, queued, looking
-and no agent yet are waits. A wait may lead with a dot. The dot beats if the wait is live.
+and no agent yet are waits. A wait leads with a dot. The dot beats if the wait is live.
 
 Live is `green` text. A running command, a connected peer and a session that runs are live. A
 record of something that finished is `ink`.
@@ -87,8 +87,11 @@ People are told apart by square display pics, never by a name colour.
 The blue→green gradient exists exactly once, on the composer's focus edge. It marks the one
 place where the person and the agent meet.
 
-A status is text in its colour, with at most a dot. It is never a filled badge and never a
-boxed one.
+A status is text in its colour, and it leads with a dot. It is never a filled badge and never
+a boxed one. A verb never leads with a mark. So the dot, and not a tone, says that a word
+cannot be pressed. A tone is one step of grey that a blur or a greyscale print hides, and
+principle 2 blurs the screen.
+*Test: a caps word with a dot is a status. A caps word without one can be pressed.*
 
 Dimming is a role (`ink-dim`, `ink-faint`), never opacity. Opacity breaks the contrast floor
 and dims the focus ring with it.
@@ -115,8 +118,10 @@ A stroke also has a tone at rest and a rule for what interaction does to it. Nob
 
 ### Space
 
-Positions derive from the grid, never from the eye. Every control is one height,
-`spacing-control`, so a row is things of one height. On a phone, controls grow to the touch
+Positions derive from the grid, never from the eye. Every control with an edge is one height,
+`spacing-control`, so a row is things of one height. A filled control, a bordered control and
+a field have an edge. A bare verb has no edge. It takes the height of its row. On a phone, a
+control with an edge grows to the touch target. A bare verb grows only its hit area to that
 target. Rows align on the text baseline. Padding is spent outward, so text sits on the
 column's rail.
 
@@ -159,7 +164,10 @@ Four weights. A surface uses them in this order of scarcity:
 | **Filled** | solid `blue` rectangle, text in `bg` | *the* verb of this surface | 0 or 1 |
 | **Bordered** | transparent rectangle, `ring` | a standalone act on the ground | few |
 | **Bare** | a word or an icon, no rectangle | a verb that rides the thing it acts on | as needed |
-| **Text** | coloured caps, maybe a dot | a status, not pressable | as needed |
+| **Text** | coloured caps that lead with a dot | a status, not pressable | as needed |
+
+Count the filled rectangles on a rendered surface, because a value in `Style.fs` cannot know
+how many of its wearers meet on one screen.
 
 A bordered button *is* its border. Remove the border and you have a different kind of control,
 not a quieter button. A setting is bare. A status is never pressable. When two controls fight,
