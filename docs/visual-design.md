@@ -120,8 +120,8 @@ Positions derive from the grid, never from the eye. Every control is one height,
 target. Rows align on the text baseline. Padding is spent outward, so text sits on the
 column's rail.
 
-Every column has one rail at `spacing-rail` from its edge. On a phone it is
-`spacing-rail-phone`. Every line of text in the column starts on it. A mark that leads a line
+Every column has one rail at `spacing-rail` from its edge. The rail does not change with the
+screen. Every line of text in the column starts on it. A mark that leads a line
 hangs in the gutter to the left of the rail. A prompt, a reply mark, a fold arrow and a dot
 are such marks. A mark never pushes the words in.
 *Test: draw a vertical line on the rail. Every first letter touches it.*
