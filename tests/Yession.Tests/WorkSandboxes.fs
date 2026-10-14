@@ -102,7 +102,8 @@ let private fakeEnvironmentHolding (realisation: string list) =
        // Gated on `running` like `CurrentRef` beside it, because the real one is: what a
        // sandbox holds is a fact about a sandbox that exists. A fake that answered either way
        // would let the listing test pass while the panel spoke for a sandbox that had gone.
-       Realisation = fun () -> if running then realisation else [] }
+       Realisation = fun () -> if running then realisation else []
+       MemoryEvents = fun () -> async { return None } }
      : SessionEnvironment.SessionEnvironment)
 
 let private fakeEnvironment () = fakeEnvironmentHolding []
@@ -115,7 +116,8 @@ let private fakeEnvironmentFailing (reason: string) : SessionEnvironment.Session
       Stop = fun () -> async { return () }
       CurrentRef = fun () -> None
       Shell = fun () -> None
-      Realisation = fun () -> [] }
+      Realisation = fun () -> []
+      MemoryEvents = fun () -> async { return None } }
 
 /// A `default` as an operator declares one: nothing in particular about it.
 let private declaredDefault : (SandboxName * SandboxRequest) list =

@@ -144,6 +144,7 @@ let scriptedSandbox
                             }
                       SpawnPty = None
                       Shell = None
+                      MemoryEvents = fun () -> async { return None }
                       Dispose = fun () -> async { recorder.Disposed <- recorder.Disposed + 1 } }
         }
 

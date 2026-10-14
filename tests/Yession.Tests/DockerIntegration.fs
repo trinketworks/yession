@@ -93,6 +93,18 @@ let tests =
 
             // -- Tier 2: the current engine ------------------------------------------------
 
+            // The counters a block's memory kill is read from (`MemoryEvents`). A fresh
+            // container is its own cgroup, so it reads a file of its own with nothing
+            // killed in it yet. That the KERNEL then counts a kill at the container's own
+            // limit as `oom` and `oom_kill` together needs a container with a limit, which
+            // the docker backend cannot ask for yet (GAPS, "killed for memory").
+            testCaseAsync "a container reads its own memory counters, with nothing killed yet" (async {
+                let! _, sandbox = startOrFail alpineSpec
+                let! counters = sandbox.MemoryEvents ()
+                Expect.equal (counters |> Option.map (fun c -> c.OomKill)) (Some 0L) "its own cgroup, read by a bare exec"
+                do! sandbox.Dispose ()
+            })
+
             testCaseAsync "lifecycle: create, stream stdout, dispose, container is gone" (async {
                 let! name, sandbox = startOrFail alpineSpec
                 let! run, out, _ = runInSandbox sandbox "echo" [ "streamed-out" ] Map.empty None

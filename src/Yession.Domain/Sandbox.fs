@@ -534,6 +534,11 @@ type Sandbox =
       /// for the dialects it can instrument and says which it found. `None` is the host
       /// and srt backends — the session's own `/bin/sh` is the right answer there.
       Shell : TerminalShell option
+      /// Read the OOM counters of the sandbox's own memory cgroup (`MemoryEvents`), so that a
+      /// command the kernel killed for memory can be told from one killed for another
+      /// reason. `None` when this backend has no cgroup of its own to read (the host and
+      /// srt), or the read failed. A container reads `MemoryEvents.path` with a bare exec.
+      MemoryEvents : unit -> Async<MemoryEvents option>
       Dispose : unit -> Async<unit> }
 
 /// Create a sandbox under a policy. The policy is assembled fresh per creation —

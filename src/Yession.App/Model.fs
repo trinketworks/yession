@@ -2893,7 +2893,7 @@ module ClientModel =
             | Some Unseen.Succeeded -> TerminalState.UnseenOk
             | None ->
                 match view.Blocks |> List.tryLast |> Option.map (fun block -> block.Status) with
-                | Some (BlockFinished (CommandFailed _ | CommandTimedOut | CommandExecutionFailed _ | CommandNotRun _))
+                | Some (BlockFinished (CommandFailed _ | CommandTimedOut | CommandExecutionFailed _ | CommandNotRun _ | CommandKilledForMemory _))
                 | Some (BlockRejected _) -> TerminalState.Failed
                 | Some (BlockFinished (CommandSucceeded _))
                 | Some (BlockFinished (CommandOutcomeUnknown _))

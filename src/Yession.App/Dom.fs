@@ -922,6 +922,8 @@ module Dom =
         let blockSucceeded (exitCode: int) = sprintf "succeeded, exit %d" exitCode
         let blockExitFailed (exitCode: int) = sprintf "failed, exit %d" exitCode
         let blockTimedOut = "timed out"
+        /// The kernel killed it for memory (`MemoryKill`). The same words the agent reads.
+        let blockKilledForMemory = Yession.Domain.MemoryKill.headline
         /// A refusal names who refused, as a person's name — the visible mark draws them as
         /// a reference after this word.
         let blockRefused = "refused by"

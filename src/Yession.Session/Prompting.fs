@@ -310,6 +310,7 @@ module Prompting =
                 | BlockFinished CommandTimedOut -> "timed out"
                 | BlockFinished (CommandNotRun said) -> sprintf "did not run. The shell rejected the line: %s" said
                 | BlockFinished (CommandOutcomeUnknown reason) -> sprintf "result unknown. %s" reason
+                | BlockFinished (CommandKilledForMemory kill) -> sprintf "%s: %s" MemoryKill.headline (MemoryKill.cause kill)
                 | BlockEnded reason -> sprintf "ended, exit status unknown: %s" reason
                 // The agent is told it was refused, and by whom. This is the feedback the
                 // review gate owes whoever it refused: without it a rejected command is

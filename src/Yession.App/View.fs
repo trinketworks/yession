@@ -1822,6 +1822,7 @@ module View =
         | BlockFinished (CommandNotRun _) -> Dom.Text.blockDidNotRun
         | BlockFinished (CommandOutcomeUnknown _) -> Dom.Text.blockEnded
         | BlockRejected ((ActorRef.Session | ActorRef.System), _) -> Dom.Text.blockRefusedPlain
+        | BlockFinished (CommandKilledForMemory _) -> Dom.Text.blockKilledForMemory
         | BlockRejected (by, _) -> Dom.Text.blockRefusedBy (Entity.actorName model by)
         | BlockEnded _ -> Dom.Text.blockEnded
 
@@ -1854,7 +1855,8 @@ module View =
         | BlockFinished (CommandFailed code) -> pictured wrong (html $"""{Icon.crossSm} {code}""")
         | BlockFinished CommandTimedOut
         | BlockFinished (CommandExecutionFailed _)
-        | BlockFinished (CommandNotRun _) ->
+        | BlockFinished (CommandNotRun _)
+        | BlockFinished (CommandKilledForMemory _) ->
             html $"""<span class="{wrong}" data-block-mark="{token}">{terminalBlockStatusWord model status}</span>"""
         // A record, not a wrong thing: nothing says it failed, so it is not red. Faint like
         // any other status with nothing to report, and the block's facts carry why it ended.
@@ -3616,6 +3618,10 @@ module View =
             | BlockFinished (CommandNotRun said) ->
                 let said = if said = "" then "The shell rejected the line and gave no reason." else said
                 html $"""<span class="{Style.terminalBlockFact}" data-terminal-block-not-run>{said}</span>"""
+            // Which of the two it was. The mark says "killed: out of memory"; this says
+            // whether the sandbox or the machine ran out.
+            | BlockFinished (CommandKilledForMemory kill) ->
+                html $"""<span class="{Style.terminalBlockFact}" data-terminal-block-memory="{MemoryKill.token kill}">{MemoryKill.cause kill}</span>"""
             | BlockRunning
             | BlockFinished _
             | BlockRejected _ -> Lit.nothing
@@ -3624,6 +3630,7 @@ module View =
             | BlockFinished (CommandExecutionFailed _), _
             | BlockFinished (CommandNotRun _), _
             | BlockFinished (CommandOutcomeUnknown _), _
+            | BlockFinished (CommandKilledForMemory _), _
             | BlockEnded _, _
             | _, Some _ -> html $"""<div class="{Style.terminalBlockFacts}" data-terminal-block-facts>{reason}{stoppedBy}</div>"""
             | _ -> Lit.nothing

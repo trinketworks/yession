@@ -134,6 +134,8 @@ module AgentTools =
         | TerminalCommandRan (CommandSucceeded code) -> sprintf "FINISHED with exit code %d in %s%s" code where output
         | TerminalCommandRan (CommandFailed code) -> sprintf "FAILED with exit code %d in %s%s" code where output
         | TerminalCommandRan CommandTimedOut -> sprintf "TIMED OUT in %s%s" where output
+        | TerminalCommandRan (CommandKilledForMemory kill) ->
+            sprintf "KILLED for memory (exit 137) in %s: %s. %s%s" where (MemoryKill.cause kill) (MemoryKill.advice kill) output
         | TerminalCommandRan (CommandExecutionFailed reason) ->
             sprintf "EXECUTION FAILED in %s: %s%s" where reason output
         // The line never ran, and the terminal is not the problem. Said in that order, because

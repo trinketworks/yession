@@ -2644,7 +2644,8 @@ let private scriptedEnvironment (script: string -> (OutputStream * string) list 
           Stop = fun () -> async { return () }
           CurrentRef = fun () -> Some "scripted"
           Shell = fun () -> None
-          Realisation = fun () -> [] }
+          Realisation = fun () -> []
+          MemoryEvents = fun () -> async { return None } }
     environment, spawned
 
 /// An in-memory transcript, a reader for what it holds, and a reader for the keyframes the
@@ -4592,7 +4593,8 @@ let private profileEnvironment (present: unit -> Set<string>) =
           Stop = fun () -> async { return () }
           CurrentRef = fun () -> Some "scripted"
           Shell = fun () -> None
-          Realisation = fun () -> [] }
+          Realisation = fun () -> []
+          MemoryEvents = fun () -> async { return None } }
     environment, ptySpawned, typed
 
 /// A sandbox whose BLOCKS do not finish until the test says so — the only way to hold a
@@ -4623,7 +4625,8 @@ let private blockingEnvironment () =
           Stop = fun () -> async { return () }
           CurrentRef = fun () -> Some "scripted"
           Shell = fun () -> None
-          Realisation = fun () -> [] }
+          Realisation = fun () -> []
+          MemoryEvents = fun () -> async { return None } }
     environment, spawned, release
 
 /// A terminal's shell is the sandbox's own when its backend found one, and a block that
@@ -6184,6 +6187,113 @@ let private shownOutputTests =
                 "the window's worth of lines drawn, the rest counted"
     ]
 
+/// A scripted sandbox whose memory counters answer `readings` in turn, one per read, and
+/// stay at the last one. Returns how many reads were made.
+let private countingMemory (exitCode: int) (readings: MemoryEvents list) =
+    let environment, _ = scriptedEnvironment (fun _ -> [], exitCode)
+    let mutable reads = 0
+    let read () =
+        async {
+            let index = min reads (List.length readings - 1)
+            reads <- reads + 1
+            return Some readings.[index]
+        }
+    { environment with MemoryEvents = read }, (fun () -> reads)
+
+/// How one block ended, run in a sandbox whose counters answer `readings`.
+let private blockResultUnder (exitCode: int) (readings: MemoryEvents list) =
+    async {
+        let log = newLog ()
+        let environment, reads = countingMemory exitCode readings
+        let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+        let terminals, _, _ = makeTerminals log environment openTranscript readTranscript []
+        let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+        let id = opened |> expect
+        do! terminals.RunBlock id (entry "a1" id byAda 1.0) "dotnet build" ignore
+        let! events = eventsOf log
+        let result = events |> List.pick (function SessionEvent.TerminalBlockCompleted e -> Some e.Result | _ -> None)
+        return result, reads ()
+    }
+
+let private counters (oom: int64) (oomKill: int64) : MemoryEvents = { Oom = oom; OomKill = oomKill }
+
+/// A command the kernel killed for memory (proposal 4.6). The counters are the sandbox's
+/// cgroup `memory.events`; a kill that its own `oom` does not explain came from above it.
+let private memoryKillTests =
+    testList "A command killed for memory" [
+        testCase "the counters are read from memory.events as the kernel writes it" <| fun () ->
+            let text = "low 0\nhigh 0\nmax 12\noom 3\noom_kill 4\noom_group_kill 0\n"
+            Expect.equal (MemoryEvents.parse text) (Some (counters 3L 4L)) "oom and oom_kill, nothing else"
+
+        testCase "a file without the counters reads as no reading, not as zero" <| fun () ->
+            Expect.isNone (MemoryEvents.parse "cat: can't open '/sys/fs/cgroup/memory.events'") "cannot tell is not nothing happened"
+
+        testCase "a kill with the sandbox's own oom is its own limit" <| fun () ->
+            Expect.equal (MemoryEvents.killed (counters 0L 0L) (counters 1L 1L)) (Some SandboxLimit) "case (a)"
+
+        testCase "a kill without the sandbox's own oom came from above it" <| fun () ->
+            // XJKR dev's `oom 0, oom_kill 4` on 2026-10-14: killed by a sibling's allocation.
+            Expect.equal (MemoryEvents.killed (counters 0L 3L) (counters 0L 4L)) (Some MachineOutOfMemory) "case (b)"
+
+        testCase "no kill in the window is no memory kill" <| fun () ->
+            Expect.isNone (MemoryEvents.killed (counters 2L 4L) (counters 3L 4L)) "an oom that killed nothing killed nothing"
+
+        testCase "only a SIGKILL exit becomes a memory kill" <| fun () ->
+            let result = CommandResult.withMemory (Some (counters 0L 0L)) (Some (counters 0L 1L)) (CommandFailed 1)
+            Expect.equal result (CommandFailed 1) "exit 1 is the command's own answer, whatever died beside it"
+
+        testCase "a SIGKILL with a missing reading stays exit 137" <| fun () ->
+            let result = CommandResult.withMemory None (Some (counters 0L 1L)) (CommandFailed 137)
+            Expect.equal result (CommandFailed 137) "no cause is said without both readings"
+
+        testCase "a memory kill crosses the wire" <| fun () ->
+            let event =
+                SessionEvent.TerminalBlockCompleted
+                    { TerminalId = terminalA; BlockId = block "1"; Result = CommandKilledForMemory MachineOutOfMemory; ToSeq = 4 }
+            Expect.equal (roundTrip event) (Ok event) "the cause survives"
+
+        // An older reader, and an older log, both meet the plain failure. The cause is one
+        // optional key beside it.
+        testCase "a memory kill is written as exit 137 with one more key" <| fun () ->
+            let encoded =
+                Codec.toString Events.sessionEvent (
+                    SessionEvent.TerminalBlockCompleted
+                        { TerminalId = terminalA; BlockId = block "1"; Result = CommandKilledForMemory SandboxLimit; ToSeq = 4 })
+            Expect.stringContains encoded "\"kind\":\"failed\",\"exitCode\":137" (sprintf "a reader that knows no cause reads exit 137: %s" encoded)
+
+        testCase "a failure written before the cause existed reads as the failure it was" <| fun () ->
+            let old =
+                """{"type":"terminalBlockCompleted","payload":{"terminalId":"term-a","blockId":"blk-1","""
+                + """"result":{"kind":"failed","exitCode":137},"toSeq":4}}"""
+            match Codec.fromString Events.sessionEvent old with
+            | Ok (SessionEvent.TerminalBlockCompleted decoded) -> Expect.equal decoded.Result (CommandFailed 137) "exit 137, no cause"
+            | other -> failwithf "an old completion must still read back, got %A" other
+
+        testCaseAsync "a block the sandbox's limit killed completes as killed for memory" <|
+            async {
+                let! result, _ = blockResultUnder 137 [ counters 0L 0L; counters 1L 1L ]
+                Expect.equal result (CommandKilledForMemory SandboxLimit) "the block says why it died"
+            }
+
+        testCaseAsync "a block the machine's OOM killed completes as killed for memory" <|
+            async {
+                let! result, _ = blockResultUnder 137 [ counters 0L 4L; counters 0L 5L ]
+                Expect.equal result (CommandKilledForMemory MachineOutOfMemory) "the block says the machine ran out"
+            }
+
+        testCaseAsync "a block killed with no OOM kill in the sandbox stays exit 137" <|
+            async {
+                let! result, _ = blockResultUnder 137 [ counters 0L 4L; counters 0L 4L ]
+                Expect.equal result (CommandFailed 137) "a kill -9 is not a memory kill"
+            }
+
+        testCaseAsync "a block that did not die from SIGKILL reads the counters once" <|
+            async {
+                let! _, reads = blockResultUnder 0 [ counters 0L 0L; counters 0L 1L ]
+                Expect.equal reads 1 "only a SIGKILL exit pays for the second read"
+            }
+    ]
+
 let tests =
     testList "Terminals (Plan 13)" [
         feedSliceTests
@@ -6227,6 +6337,7 @@ let tests =
         codecTests
         orderTests
         managerTests
+        memoryKillTests
         attributionTests
         schedulerTests
         syncTests
