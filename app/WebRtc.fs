@@ -137,14 +137,162 @@ let private gatherDescription (kind: SdpKind) (pc: PeerConnection) : Async<strin
                 | None -> waiter <- Some cont)
     }
 
-/// Server side: apply a remote offer and resolve with the answer SDP (JSON). Auto-
-/// negotiation generates the answer automatically when the remote description is set.
-let answerOffer (pc: PeerConnection) (offerSdp: string) : Async<string> =
-    async {
-        let answerReady = gatherDescription SdpKind.Answer pc
-        pc.setRemoteDescription (offerSdp, SdpKind.wire SdpKind.Offer)
-        return! answerReady
-    }
+/// The session's side of a handshake: answering an offer, and every peer connection an answer
+/// made, held until it is closed.
+///
+/// Both halves are bounded, because the browser's are. A browser gives a whole handshake
+/// ten seconds (`channelOpenTimeoutMs`) and then tries again with a new peer connection. The
+/// answer used to wait for this side's ICE gathering to say `complete`, with no limit: on a
+/// machine where gathering is slow to finish, every attempt timed out before its answer was
+/// sent, and the next attempt met the same wait. Each abandoned attempt also left its peer
+/// connection open here for the life of the session, with a port and a thread behind it.
+module Answering =
+
+    type Bounds =
+        { /// How long the answer waits for gathering to finish before it goes with the
+          /// candidates it has.
+          Gathering : System.TimeSpan
+          /// How long an answered connection has to open its data channel before it counts
+          /// as abandoned and is closed.
+          Open : System.TimeSpan }
+
+    /// Gathering: this side asks no STUN or TURN server, so its candidates are host
+    /// candidates, local work that arrives in a burst of milliseconds. Two seconds is a
+    /// margin of orders of magnitude over that, and is the part of a slow `complete` that
+    /// a browser's ten-second handshake can afford. A candidate that misses it does not
+    /// cost the connection: the browser's offer carries ITS candidates, and an address this
+    /// answer left out is learned from the check that arrives from it.
+    ///
+    /// Open: twice the browser's whole handshake. A browser that has not opened by then
+    /// has given up, closed its end, and is trying again with a new connection.
+    let shipped =
+        { Gathering = System.TimeSpan.FromSeconds 2.0
+          Open = System.TimeSpan.FromSeconds 20.0 }
+
+    /// The answer, bounded: what gathering resolves with when it finishes inside `limit`,
+    /// and otherwise what `soFar` has gathered at the limit. `Error` only when there is
+    /// nothing to send at all. `sleep` is a parameter so a test drives this rule on its own
+    /// clock.
+    let within
+        (sleep: System.TimeSpan -> Async<unit>)
+        (limit: System.TimeSpan)
+        (gathered: Async<string>)
+        (soFar: unit -> string option)
+        : Async<Result<string, string>> =
+        async {
+            let complete () = async { let! answer = gathered in return Ok answer }
+            match! Resilience.Policy.deadline sleep limit () complete () with
+            | Ok answer -> return Ok answer
+            | Error () ->
+                match soFar () with
+                | Some answer -> return Ok answer
+                | None -> return Error "the session had no answer to give when gathering ran out of time"
+        }
+
+    /// The answer as it stands, candidates gathered so far included: libdatachannel adds
+    /// each local candidate to the local description as it is gathered.
+    let private described (pc: PeerConnection) : string option =
+        let local = pc.localDescription ()
+        if isNull local || System.String.IsNullOrEmpty local.sdp then None
+        else Some (Codec.toString Sdp.message { Kind = SdpKind.Answer; Sdp = local.sdp })
+
+    /// Run `work` once, however many ask. Every ask awaits that one run. A peer connection is
+    /// released from three places (its channel ending, its open deadline, the session
+    /// stopping), and `closePeerConnection` claims the connection's one state-change slot, so
+    /// a second close would take the first one's waiter and leave it waiting for ever.
+    let private once (work: Async<unit>) : Async<unit> =
+        let mutable started = false
+        let mutable finished = false
+        let waiters = ResizeArray<unit -> unit> ()
+        async {
+            if not started then
+                started <- true
+                Async.StartImmediate (
+                    async {
+                        try do! work
+                        finally
+                            finished <- true
+                            for waiter in List.ofSeq waiters do waiter ()
+                            waiters.Clear ()
+                    })
+            if not finished then
+                do! Async.FromContinuations (fun (cont, _, _) -> if finished then cont () else waiters.Add cont)
+        }
+
+    /// Every peer connection the session has answered and not yet closed.
+    type Peers = private { Live : ResizeArray<PeerConnection * Async<unit>> }
+
+    let create () : Peers = { Live = ResizeArray () }
+
+    /// How many are held: open, or still closing. Read by the tests, which hold the session
+    /// to closing what it answered.
+    let count (peers: Peers) : int = peers.Live.Count
+
+    /// Close one, and stop holding it. The same close however often it is asked for.
+    let private release (peers: Peers) (pc: PeerConnection) : Async<unit> =
+        match peers.Live |> Seq.tryFind (fun (p, _) -> obj.ReferenceEquals (p, pc)) with
+        | Some (_, close) -> close
+        | None -> async.Return ()
+
+    /// Answer `offerSdp` on a new peer connection. The data channel it opens goes to
+    /// `onChannel`. The connection is closed when that channel ends, when no channel has
+    /// opened within `bounds.Open`, or when the answer cannot be given. `Error` says why
+    /// there is no answer.
+    let answer
+        (bounds: Bounds)
+        (peers: Peers)
+        (onChannel: FrameChannel<string> -> unit)
+        (offerSdp: string)
+        : Async<Result<string, string>> =
+        let pc = createPeerConnection "yession-process"
+        let mutable openDeadline : int option = None
+        let close =
+            once (
+                async {
+                    openDeadline |> Option.iter JS.clearTimeout
+                    do! closePeerConnection pc
+                    // Held until the close has finished, not merely begun, so `closeAll`
+                    // still awaits a close that something else started.
+                    match peers.Live |> Seq.tryFindIndex (fun (p, _) -> obj.ReferenceEquals (p, pc)) with
+                    | Some i -> peers.Live.RemoveAt i
+                    | None -> ()
+                })
+        peers.Live.Add ((pc, close))
+        pc.onDataChannel (fun dc ->
+            openDeadline |> Option.iter JS.clearTimeout
+            openDeadline <- None
+            let channel = frameChannel dc
+            onChannel
+                { channel with
+                    Receive =
+                        fun () ->
+                            async {
+                                let! frame = channel.Receive ()
+                                // The channel ended: the connection under it has nothing left
+                                // to carry. Closed in the background, so whoever is pumping
+                                // learns of the end without waiting on the native close.
+                                if Option.isNone frame then Async.StartImmediate close
+                                return frame
+                            } })
+        openDeadline <-
+            Some (JS.setTimeout (fun () -> Async.StartImmediate close) (int bounds.Open.TotalMilliseconds))
+        async {
+            let gathered = gatherDescription SdpKind.Answer pc
+            pc.setRemoteDescription (offerSdp, SdpKind.wire SdpKind.Offer)
+            match! within Resilience.Policy.sleep bounds.Gathering gathered (fun () -> described pc) with
+            | Ok answer -> return Ok answer
+            | Error reason ->
+                do! release peers pc
+                return Error reason
+        }
+
+    /// Close every peer connection still held, and resolve once libdatachannel has reported
+    /// each one closed.
+    let closeAll (peers: Peers) : Async<unit> =
+        async {
+            for (_, close) in List.ofSeq peers.Live do
+                do! close
+        }
 
 /// Client side: connect to a Session by posting an offer to its signalling URL,
 /// applying the returned answer, and resolving once the data channel is open. Auto-

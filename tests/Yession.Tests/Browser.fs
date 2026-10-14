@@ -1944,6 +1944,27 @@ let tests =
                     (sprintf "an offer posted inside %dms of page time, short of the %dms cap" spent cap)
             }
 
+        // A connect that lasts is said, and said where a phone reader can see it. It used to be
+        // said nowhere: `Connecting` put no words on the page at any width, so a cold session
+        // whose first attempt did not land was a page with nothing on it for as long as that
+        // took. The session's answer is held at the browser's edge, so the first attempt runs
+        // for as long as the case looks; the page's own handshake deadline is far beyond the
+        // moment the report is due.
+        sessionCase "a connect that lasts is on screen at phone width" <|
+            fun page ->
+            async {
+                let signal = "**" + Yession.App.RelativeUrl.under "" (Yession.App.SessionRoute.relative Yession.App.SessionRoute.Signal)
+                do! awaitU (page.RouteAsync (signal, fun route ->
+                        // The offer is never answered: a session that has not answered yet.
+                        if route.Request.Method <> "POST" then route.ContinueAsync () |> ignore))
+                do! awaitU (page.SetViewportSizeAsync (390, 844))
+                let! _ = await (page.ReloadAsync ())
+                let report = "[" + Yession.App.Dom.attr Yession.App.Dom.Hooks.degraded Yession.App.Dom.Text.degradedConnecting + "]"
+                do! Wait.until "the connect to be reported where a phone reader can see it"
+                        (fun () -> Probe.seen page report)
+                        (List.exists (fun seen -> seen.Painted))
+            }
+
         // A session that answers but cannot be reached is not a session that said nothing. The
         // route between the two is taken away on the wire: the offer reaches the session with
         // none of the browser's candidates, so the session cannot find the browser either, and

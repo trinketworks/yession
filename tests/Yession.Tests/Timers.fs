@@ -220,6 +220,37 @@ let tests =
             clock.Advance (ClientModel.catchUpQuietMs / 2)
             Expect.isTrue (model ()).EventConsumer.CatchUpIsSlow "still behind at the interval, however many pages came"
 
+        // The connect's status follows the catch-up's rule: every client starts connecting, so
+        // only a connect that has LASTED is said. A cold session that takes a minute used to
+        // say nothing for that minute, on any width.
+        testCase "a connect that runs past its quiet interval is reported" <| fun () ->
+            let clock, _, model = program ()
+            clock.Advance ClientModel.connectingQuietMs
+            Expect.equal (model ()).Connection (Connecting true) "a connect that lasted is a connect worth saying"
+
+        testCase "a connect that lands inside its quiet interval is never reported" <| fun () ->
+            let clock, send, model = program ()
+            clock.Advance (ClientModel.connectingQuietMs / 2)
+            send (ConnectedMsg { SessionId = sessionId; AssignedDisplayName = "Ada"; LatestOffset = None })
+            clock.Advance ClientModel.connectingQuietMs
+            Expect.equal (model ()).Connection Connected "a quick connect is not news"
+
+        // The channel coming up says `Connecting` again, inside the same attempt.
+        testCase "the channel coming up does not push a connect's report out" <| fun () ->
+            let clock, send, model = program ()
+            clock.Advance (ClientModel.connectingQuietMs / 2)
+            send ConnectingMsg
+            clock.Advance (ClientModel.connectingQuietMs / 2)
+            Expect.equal (model ()).Connection (Connecting true) "still connecting at the interval, however often it was said"
+
+        testCase "a connect that follows a failure is timed afresh" <| fun () ->
+            let clock, send, model = program ()
+            clock.Advance (ClientModel.connectingQuietMs / 2)
+            send (RetryingMsg ("the session did not answer", 1))
+            send ConnectingMsg
+            clock.Advance (ClientModel.connectingQuietMs / 2)
+            Expect.equal (model ()).Connection (Connecting false) "the failed attempt's time is not the new one's"
+
         testCase "a copy's confirmation is taken back after its moment" <| fun () ->
             let clock, send, model = program ()
             send (CopiedMsg (Some "data-box"))
@@ -330,7 +361,10 @@ let tests =
             Expect.equal (model ()).Claude.Pending Pending.Ready "an answered wait keeps its answer"
 
         testCase "a finished message asks for no wait" <| fun () ->
+            // The agent's waits only: a client folded from nothing is still connecting, and
+            // times that too.
             Expect.isEmpty
-                (ClientModel.timers (fold [ opened; delta 3L "Looking"; completed 4L "Looking" ]))
+                (ClientModel.timers (fold [ opened; delta 3L "Looking"; completed 4L "Looking" ])
+                 |> List.filter (fun timer -> List.head timer.Key = "agent-quiet"))
                 "nothing is being written, so there is no quiet to wait for"
     ]

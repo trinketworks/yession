@@ -1834,7 +1834,7 @@ do
                             (int (conversation ()).children.length)
                             (match model.Connection with
                              | Connected -> "Connected"
-                             | Connecting -> "Connecting"
+                             | Connecting _ -> "Connecting"
                              | Reconnecting -> "Reconnecting"
                              | Retrying _ -> "Retrying"
                              | Disconnected _ -> "Disconnected")
