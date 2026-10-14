@@ -658,13 +658,13 @@ against each other. The last section holds trust boundaries as sharp as the firs
 does not yet do.
 
 A full audit ran on 2026-10-06 against the master of that day. Eleven reviewers read the
-doctrine, then read the product: every surface pictured at three anchors (1440x900, 390x844 and
-844x390, the last because the stylesheet says a short screen is a phone however wide), plus two
-static passes over `Style.fs` and over every class literal written outside it. It found 203
-defects. They are listed below, by the part of the code that owns the fix, then by the
-doctrine's own "Deciding" order: floor, honesty, one verb, vocabulary, grid, less.
+doctrine, then read the product: every surface pictured at three anchors (1440x900, 390x844
+and 844x390, the last because the stylesheet says a short screen is a phone however wide),
+plus two static passes over `Style.fs` and over every class literal written outside it. It
+found 203 defects. They are listed below, by the part of the code that owns the fix, then by
+the doctrine's own "Deciding" order: floor, honesty, one verb, vocabulary, grid, less.
 
-Read this list as DATED. The line numbers the audit recorded are not reproduced here because
+Read this list as DATED. The line numbers the audit recorded are not reproduced here, because
 they are already wrong; what identifies a defect is the value's name. Verify a finding against
 today's code before you fix it — some are fixed already. An entry that no longer reproduces is
 closed, not forced.
@@ -673,6 +673,7 @@ The list is a snapshot, not a worklog: it is not edited one line per fix. One pa
 to whatever still reproduces once the fixes have landed.
 
 ### The marks and voices (Strokes, Motion, Typography, Statuses)
+
 - **C-19** (honesty) — Waiting statuses wear the colour that means interactive
 - **C-4** (honesty) — Two red marks on one screen when a credential is lost
 - **H-17** (honesty) — A ring means "ended" on a terminal and "watching" on a person
@@ -691,8 +692,10 @@ to whatever still reproduces once the fixes have landed.
 - **S1-34** (less) — Dead vocabulary
 
 ### The control faces (Buttons)
+
 - **A-1** (floor) — Phone controls stay 24-32px, below the touch target
 - **B-7** (floor) — Phone buttons in the launch card are 32px, and START states a height it
+  never gets
 - **S1-8** (honesty) — Icon buttons press with `active:` and cannot be held
 - **S1-9** (honesty) — `disabled:*` on three controls
 - **X-5** (one verb) — Two bordered faces stand in for two weights
@@ -708,9 +711,9 @@ to whatever still reproduces once the fixes have landed.
 - **D-12** (grid) — Chapter name grows to 16px on a phone, off the ramp
 - **S1-27** (grid) — Control heights other than spacing-control
 - **X-19** (grid) — APPROVE ON GITHUB.COM wraps inside a 32px button
-never gets
 
 ### Fields, listed rows, pivots, display pics, the starting screen and the editable title
+
 - **C-1** (floor) — The phone's "Details" disclosure is a 16px target
 - **C-2** (floor) — Settings fields and bar actions are 32px on a phone
 - **F-3** (floor) — Picker, New message and draft summaries are under 44px on a phone
@@ -726,13 +729,14 @@ never gets
 - **C-7** (grid) — On a phone, NO AGENT takes the title's room and clips the session id
 - **C-8** (grid) — The phone band is 56px in the header and 88px in the drawer
 - **C-9** (grid) — The sidebar's rule leaves the band's hairline whenever a connection
-report is
+  report is up
 - **X-15** (grid) — Each column has its own gutter
 - **X-17** (grid) — The sidebar's rule is not the band's, and moves
 - **C-17** (less) — In landscape, the notice bar and header take about a quarter of the
   screen
 
 ### The timeline, the fold, the ask card
+
 - **E-1** (floor) — On a sideways phone the card has no field, no list and no CONNECT GITHUB
 - **E-9** (floor) — The search field's focus is a one-pixel colour change on a rule
 - **H-1** (floor) — The ⋮ handle rests at 2.8:1 because it is dimmed by opacity
@@ -743,12 +747,13 @@ report is
 - **F-5** (honesty) — The picker's "nothing to choose" is said only to a screen reader
 - **E-5** (one verb) — LOOKING… is drawn in the face the card's links wear
 - **E-6** (one verb) — On a phone the waiting START is the widest control and the live verb
-is small
+  is small
 - **D-1** (vocabulary) — A person's words quoted in the machine's face
 - **D-16** (vocabulary) — Remote selection: rounded corners seen in the picture
 - **E-10** (vocabulary) — At rest the search field is a placeholder over a row rule
 - **E-8** (vocabulary) — The card's lead is a fourth way to draw the blue edge
 - **H-7** (vocabulary) — The reply mark is a curved text glyph from a face this build does
+  not ship
 - **S1-16** (vocabulary) — Borders on things that are neither a field nor a button
 - **S1-21** (vocabulary) — A second gradient, and fades by mask
 - **X-11** (vocabulary) — Fields: the search is an underline, the only field without a ring
@@ -762,9 +767,9 @@ is small
 - **D-14** (less) — The phone spends a fifth of every line on gutters
 - **D-4** (less) — On a phone the terminal's caps name eats the command
 - **E-2** (less) — On a phone the repository name is cut while its description keeps 45%
-not ship
 
 ### Chapters, the composer and its tray, the queue, settings, the agent's absence
+
 - **F-2** (floor) — Queued text wraps and is cut by the next row at 390
 - **H-2** (floor) — Icon-only controls stay 24px on a phone: ⋮, queue ↑ ↓ ×, ×
 - **S1-2** (floor) — Collapsed composer row hidden by opacity, still focusable
@@ -775,6 +780,9 @@ not ship
 - **H-3** (honesty) — The queue's ↑ ↓ × are not there at all on a phone turned sideways
 - **S1-5** (honesty) — Hover-only reveal of queue reorder and delete
 - **B-8** (one verb) — "NO AGENT" is a status in the colour of the button under it, drawn
+  the same way
+- **B-9** (vocabulary) — The absent agent's mark is dimmed with opacity, and its row is
+  written with raw utilities
 - **D-5** (vocabulary) — Chapter and break are drawn rules; type alone does not divide
 - **F-6** (vocabulary) — A joined draft names its author with a faint label only
 - **H-18** (vocabulary) — A person's presence is a coloured round dot with the name in a
@@ -785,14 +793,12 @@ not ship
 - **D-6** (grid) — Session break label centred on no rail
 - **F-8** (grid) — Composer and queue sit on a 16px rail, the timeline on 32
 - **X-14** (grid) — The composer dock sits on its own 16px rail
-- **D-7** (less) — Break then chapter: two dividers and ~80px of nothing
-the same way
-- **B-9** (vocabulary) — The absent agent's mark is dimmed with opacity, and its row is
-written with raw utilities
 - **C-16** (less) — CONNECT CLAUDE is drawn twice at two indents, and its blue edge hangs
-beside nothing
+  beside nothing
+- **D-7** (less) — Break then chapter: two dividers and ~80px of nothing
 
 ### Terminals, the pane, the `all` page, ANSI, the document shell
+
 - **H-21** (floor) — The phone's pane grab edge is a 6px wide target
 - **S1-4** (floor) — ANSI faint renders as opacity-75
 - **G-11** (honesty) — At 844x390 the player's play control sits half under the closed band
@@ -803,10 +809,11 @@ beside nothing
 - **C-10** (vocabulary) — The terminals pivot is a third face of the pivot
 - **D-11** (vocabulary) — The agent's `$` is the people's green
 - **G-10** (vocabulary) — The recording player brings a white fill, round corners and its
-own ground
+  own ground
 - **G-8** (vocabulary) — The pane's bare verbs are spoken in four voices
 - **H-10** (vocabulary) — `+` and `$` are text glyphs at raw sizes off the ramp
 - **H-11** (vocabulary) — The replay's play button is a large filled white triangle, and the
+  set's outline play mark has no caller
 - **H-19** (vocabulary) — Every command's `$` is green, including the agent's and finished
   ones
 - **S1-17** (vocabulary) — Outline used as a border: terminal caret and two focus rings
@@ -819,10 +826,14 @@ own ground
 - **X-18** (grid) — The two command bands do not meet across the divider
 - **G-16** (less) — The phone's grab-edge mark is an ornament on a hidden duplicate
 - **G-17** (less) — At 844x390 a refused pane leaves one block of content
-set's outline play mark has no caller
 
 ### `View.fs`, `Icon.fs`, the brand mark and the stylesheet
+
 - **E-13** (floor) — A button inside a row button
+- **H-4** (floor) — A tally of ticks and crosses says nothing to a screen reader about which
+  is which
+- **H-5** (floor) — The collaborator caret flag is a rounded rectangle, white text on a
+  person colour, below the contrast floor at some seats
 - **H-6** (floor) — The idle agent's diamond in the sidebar is dimmed by opacity to 2:1
 - **C-15** (honesty) — A flow under way does not change the weight of the idle verbs beside
   it
@@ -838,19 +849,25 @@ set's outline play mark has no caller
 - **X-4** (honesty) — More than one red word on a screen
 - **C-6** (one verb) — A status phrased as the button's verb
 - **C-13** (vocabulary) — The Claude and GitHub connect flows are two arrangements of the
-same parts
+  same parts
 - **C-5** (vocabulary) — One stopped session, two names for it
 - **D-15** (vocabulary) — Two arrows for the one fold
 - **F-7** (vocabulary) — Draft summary edge is a person's colour set inline
 - **G-6** (vocabulary) — The run fold's sentence is set in the terminal face
-- **H-20** (vocabulary) — A command's outcome is drawn as ✓ 0 / × 1 beside TIMED OUT /
-FAILED / REFUSED
-- **H-9** (vocabulary) — A fold's chevron is an SVG in the chat and a text `›` in the
-terminal and the
 - **H-12** (vocabulary) — The gem is a lit, translucent, glowing object, and nothing says it
+  is exempt
+- **H-13** (vocabulary) — Icon strokes render in five weights, and the 12px marks are
+  thinner than the caps beside them
+- **H-14** (vocabulary) — `Icon.down` means four things, and the caret drawn for "opens
+  beneath" has no caller
+- **H-20** (vocabulary) — A command's outcome is drawn as ✓ 0 / × 1 beside TIMED OUT /
+  FAILED / REFUSED
+- **H-9** (vocabulary) — A fold's chevron is an SVG in the chat and a text `›` in the
+  terminal and the
 - **M0-2** (vocabulary) — The camera calls a sideways phone a desktop
 - **S1-33** (vocabulary) — Box-shadow rim in a keyframe
 - **S2-1** (vocabulary) — Layout literals in View.fs (flex, gap, layout)
+- **S2-2** (vocabulary) — Typography literals in `View.fs`, including a size off the ramp
 - **S2-3** (vocabulary) — Truncation and overflow literals in View.fs
 - **S2-4** (vocabulary) — Margin and flex spacing literals in View.fs
 - **S2-5** (vocabulary) — Whitespace and layout modifiers in View.fs
@@ -865,25 +882,12 @@ terminal and the
 - **D-13** (less) — The thinking cube is shaded, lit from one side
 - **E-12** (less) — The "starting…" hold on START can never be seen
 - **G-18** (less) — A file's own name is the faintest thing in its pane
-is exempt
-- **H-13** (vocabulary) — Icon strokes render in five weights, and the 12px marks are
-thinner than the caps beside them
-- **H-14** (vocabulary) — `Icon.down` means four things, and the caret drawn for "opens
-beneath" has no caller
-- **H-4** (floor) — A tally of ticks and crosses says nothing to a screen reader about which
-is which
-- **H-5** (floor) — The collaborator caret flag is a rounded rectangle, white text on a
-person colour, below the contrast floor at some seats
-- **S2-2** (vocabulary) — Typography literals in `View.fs`, including a size off the ramp
-- **Not from the audit: the browser tier tests the sideways phone in three cases, and should
-  have one per shell surface.** `Browser.fs` holds three cases at 844x390 (`thumbSized`,
-  `navOverPane` and the chat-width case). The stylesheet's `phone:`/`wide:` pair answers by
-  height as well as width, so every shell surface has a sideways-phone layout of its own, and
-  only those three are pinned.
 
 ### The Manager's own pages (`app/ManagerUi.fs`)
+
 - **B-1** (floor) — Unrouted browser paths get a bare text/plain 404, not a page
 - **B-4** (floor) — The way back is a text-height inline link with no focus ring and no
+  touch target
 - **A-2** (honesty) — Resolves M0-3: camera seeded wrong; unnamed row is the designed state
 - **A-24** (honesty) — On a phone the MCP row loses its address
 - **A-25** (honesty) — REACHES draws a scope word and a session's name in the same face
@@ -894,6 +898,9 @@ person colour, below the contrast floor at some seats
 - **B-3** (honesty) — The refusal page wears nothing wrong; the opening screen's failure
   does
 - **B-6** (honesty) — The starting screen's status does not change when the state does
+- **H-8** (honesty) — The Manager's open mark vanishes under truncation on a phone, and its
+  arrows are outside the shipped font subsets
+- **M0-3** (honesty) — Rows show the id where a name goes while the ID column stays blank
 - **S1-10** (honesty) — Sort header and record link show they are controls only on hover
 - **A-6** (one verb) — Create and Declare are the same blue-bordered primary; neither is
   filled
@@ -922,10 +929,12 @@ person colour, below the contrast floor at some seats
 - **A-20** (less) — The ID column is a head and 210px over empty cells in every pictured row
 - **A-21** (less) — The 88pt band is sticky at 390pt tall
 - **X-20** (less) — Confirms A-21: the Manager band is 88px on an upright phone too
-touch target
-- **H-8** (honesty) — The Manager's open mark vanishes under truncation on a phone, and its
-arrows are outside the shipped font subsets
-- **M0-3** (honesty) — Rows show the id where a name goes while the ID column stays blank
+
+- **Not from the audit: the browser tier tests the sideways phone in three cases, and should
+  have one per shell surface.** `Browser.fs` holds three cases at 844x390 (`thumbSized`,
+  `navOverPane` and the chat-width case). The stylesheet's `phone:`/`wide:` pair answers by
+  height as well as width, so every shell surface has a sideways-phone layout of its own,
+  and only those three are pinned.
 
 <!-- 203 findings. The audit's own ids are kept so a fix can say what it closes. -->
 
