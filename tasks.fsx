@@ -1130,7 +1130,11 @@ let private runNodeSuite (target: string) (caps: string list) (timeoutMs: int) =
 // The deadline is a parameter because one probe is not cheap: resolving a Python environment
 // fetches wheels the first time, and thirty seconds would make `check Jumpstarter` refuse on a
 // cold cache and pass on a warm one — a capability that depends on what you did yesterday.
-let private probeWithin (timeoutMs: int) (command: string) (arguments: string list) =
+//
+// `probeFailure` runs it and answers WHY as well as whether (`None` is a pass). A probe that only
+// says no sends a person to rerun it by hand to learn what the box refused; `probeWithin` is the
+// yes-or-no of it.
+let private probeFailure (timeoutMs: int) (command: string) (arguments: string list) : string option =
     try
         let psi = ProcessStartInfo command
         arguments |> List.iter psi.ArgumentList.Add
@@ -1138,11 +1142,26 @@ let private probeWithin (timeoutMs: int) (command: string) (arguments: string li
         psi.RedirectStandardOutput <- true
         psi.RedirectStandardError <- true
         use p = Process.Start psi
-        if p.WaitForExit timeoutMs then p.ExitCode = 0
+        // Both pipes are read as the probe runs, so one that fills a pipe is not left blocked on it.
+        let said = p.StandardError.ReadToEndAsync ()
+        p.StandardOutput.ReadToEndAsync () |> ignore
+        if p.WaitForExit timeoutMs then
+            if p.ExitCode = 0 then None
+            else
+                said.Wait 2000 |> ignore
+                let lines =
+                    if said.IsCompletedSuccessfully then
+                        said.Result.Split '\n' |> Array.map (fun line -> line.Trim ()) |> Array.filter (fun line -> line <> "")
+                    else [||]
+                let detail = lines |> Array.truncate 3 |> String.concat " / "
+                Some (if detail = "" then sprintf "`%s` exited %d, saying nothing" command p.ExitCode else detail)
         else
             p.Kill true
-            false
-    with _ -> false
+            Some (sprintf "`%s` gave no answer in %ds" command (timeoutMs / 1000))
+    with e -> Some e.Message
+
+let private probeWithin (timeoutMs: int) (command: string) (arguments: string list) =
+    probeFailure timeoutMs command arguments |> Option.isNone
 
 let private probeSucceeds (command: string) (arguments: string list) = probeWithin 30000 command arguments
 
@@ -1190,13 +1209,20 @@ let private agentCredentials () =
     |> List.exists (fun name -> not (String.IsNullOrEmpty (Environment.GetEnvironmentVariable name)))
 
 // The srt backend confines with bubblewrap on Linux and Seatbelt on macOS. Seatbelt is part
-// of the OS, so darwin always has the capability; on Linux it is bubblewrap, socat (the bridge
-// into the unshared network namespace), ripgrep (srt refuses to start a sandbox without
-// one) and util-linux's setsid (a terminal's shell takes its pty with it) that have to be
-// there — and, since bwrap needs unprivileged user namespaces, being
-// installed is not the same as WORKING. Run the profile the suites will run under, rather than
-// look for binaries: a kernel that forbids the nested namespace fails here, where the reason
-// is one line, instead of inside a suite.
+// of the OS, so darwin always has the capability. On Linux, bubblewrap, socat (the bridge into
+// the unshared network namespace), ripgrep (srt refuses to start a sandbox without one) and
+// util-linux's setsid (a terminal's shell takes its pty with it) have to be there, and being
+// installed is not the same as WORKING: bwrap needs unprivileged user namespaces, and what it
+// may do inside them depends on who runs it.
+//
+// So the probe asks srt. It runs `true` through srt's own command line, configured as a session
+// configures srt, and srt builds the bwrap profile itself. THE PROFILE IS NOT RESTATED HERE.
+// It was: a pair of nested `bwrap --cap-drop ALL … --unshare-user` calls standing in for srt's,
+// and srt does not issue that pair. For a uid-0 caller it adds `--cap-add CAP_SETFCAP`
+// (`capabilityArgs` in srt's linux-sandbox-utils.js). Without it this kernel refuses the nested
+// namespace's uid map ("bwrap: setting up uid map: Operation not permitted"). The copy lacked
+// the flag, so `check Srt` refused a root container where srt's strict profile runs, and any
+// other copy goes stale the same way at srt's next release.
 
 /// Whether the run configures srt's WEAKER nesting profile (`enableWeakerNestedSandbox`): the
 /// host's `/proc` stays visible and capabilities are not dropped. Read as `SrtSandbox.toolsFrom`
@@ -1204,26 +1230,57 @@ let private agentCredentials () =
 let private weakNesting () =
     (match Environment.GetEnvironmentVariable "YESSION_NESTED_SANDBOX" with null -> "" | v -> v.Trim().ToLowerInvariant ()) = "weak"
 
-/// A sandbox this box can run a command in, under the profile the run configures. That is all
-/// `Sandbox` asks; `Srt` asks for more (see `srtRefusal`).
-let private sandboxAvailable () =
-    if OperatingSystem.IsMacOS () then true
+/// srt's own command line, in the package `restore` installs.
+let private srtCli = Path.Combine (repoRoot, "node_modules", "@anthropic-ai", "sandbox-runtime", "dist", "cli.js")
+
+/// The settings file the probe hands srt's command line: the fields of the config a session builds
+/// (`toJs` in app/Sandboxes.fs) that decide WHICH profile srt builds. Those are the tools it runs
+/// and the weak-nesting flag, which is absent when strict, as `toJs` leaves it. The network and
+/// filesystem rules are present and empty, because with none srt applies none and the run is not
+/// confined at all. What they list changes no namespace and no capability, which is all a box can refuse.
+let private srtSettings (weak: bool) (bwrap: string option) (socat: string option) (ripgrep: string option) : string =
+    let settings =
+        Text.Json.Nodes.JsonNode.Parse
+            """{ "network": { "allowedDomains": [], "deniedDomains": [] },
+                 "filesystem": { "denyRead": [], "allowWrite": [], "denyWrite": [] } }"""
+        :?> Text.Json.Nodes.JsonObject
+    bwrap |> Option.iter (fun path -> settings.["bwrapPath"] <- Text.Json.Nodes.JsonValue.Create path)
+    socat |> Option.iter (fun path -> settings.["socatPath"] <- Text.Json.Nodes.JsonValue.Create path)
+    ripgrep
+    |> Option.iter (fun command ->
+        let config = Text.Json.Nodes.JsonObject ()
+        config.["command"] <- Text.Json.Nodes.JsonValue.Create command
+        settings.["ripgrep"] <- config)
+    if weak then settings.["enableWeakerNestedSandbox"] <- Text.Json.Nodes.JsonValue.Create true
+    settings.ToJsonString ()
+
+/// Why this box cannot run a command in a work sandbox under the profile the run configures, or
+/// `None` when it can. That is all `Sandbox` asks; `Srt` asks for more (see `srtRefusal`).
+///
+/// srt answers for bubblewrap, socat, ripgrep and the user namespace: it refuses to start without
+/// the first three and the fourth is its own profile. Only setsid is the product's, not srt's.
+let private sandboxProblem () : string option =
+    if OperatingSystem.IsMacOS () then None
     else
-        let named name = Environment.GetEnvironmentVariable name
-        let bwrap = match named "YESSION_BIN_BWRAP" with null | "" -> "bwrap" | path -> path
-        let socat = match named "YESSION_BIN_SOCAT" with null | "" -> "socat" | path -> path
-        let ripgrep = match named "YESSION_BIN_RIPGREP" with null | "" -> "rg" | path -> path
-        let setsid = match named "YESSION_BIN_SETSID" with null | "" -> "setsid" | path -> path
-        let confines =
-            if weakNesting () then
-                probeSucceeds bwrap [ "--ro-bind"; "/"; "/"; "--dev"; "/dev"; "--unshare-net"; "--unshare-pid"
-                                      "--unshare-user"; "--bind"; "/proc"; "/proc"; "true" ]
-            else
-                probeSucceeds bwrap [ "--ro-bind"; "/"; "/"; "--dev"; "/dev"; "--unshare-net"; "--unshare-pid"
-                                      "--unshare-user"; "--cap-drop"; "ALL"; "--proc"; "/proc"; "--"
-                                      bwrap; "--ro-bind"; "/"; "/"; "--unshare-user"; "true" ]
-        probeSucceeds socat [ "-V" ] && probeSucceeds ripgrep [ "--version" ] && probeSucceeds setsid [ "--version" ]
-        && confines
+        let named name =
+            match Environment.GetEnvironmentVariable name with
+            | null | "" -> None
+            | path -> Some path
+        let setsid = named "YESSION_BIN_SETSID" |> Option.defaultValue "setsid"
+        match probeFailure 30000 setsid [ "--version" ] with
+        | Some why -> Some (sprintf "setsid: %s" why)
+        | None ->
+            let weak = weakNesting ()
+            let settings = Path.GetTempFileName ()
+            try
+                File.WriteAllText (
+                    settings,
+                    srtSettings weak (named "YESSION_BIN_BWRAP") (named "YESSION_BIN_SOCAT") (named "YESSION_BIN_RIPGREP")
+                )
+                probeFailure 30000 "node" [ srtCli; "--settings"; settings; "true" ]
+                |> Option.map (fun why -> sprintf "srt could not run `true` under the %s profile: %s" (if weak then "weak" else "strict") why)
+            finally
+                File.Delete settings
 
 // A real serial engine, probed by USING it rather than by looking for files — the same rule
 // `Srt` follows, and for a sharper reason here: the `serialport` addon can be present and still
@@ -1272,6 +1329,11 @@ type private Capability =
 let private unless (hosted: unit -> bool) (reason: string) () : string option =
     if hosted () then None else Some reason
 
+/// Refused with `reason`, and what the probe said, when `problem` finds one. For a probe that can
+/// say WHY, so a refusal is never a reason to rerun it by hand.
+let private because (reason: string) (problem: unit -> string option) () : string option =
+    problem () |> Option.map (fun said -> sprintf "%s. The probe said: %s" reason said)
+
 /// A capability nothing probes: its suites find out for themselves, and skip or fail by name.
 let private unprobed () : string option = None
 
@@ -1284,14 +1346,15 @@ let private srtRefusal () : string option =
         Some (
             "Srt: confinement under test needs the strict profile, and YESSION_NESTED_SANDBOX=weak is set. "
             + "Weak nesting only gives a suite somewhere to RUN: run the suites that run a command with "
-            + "`Sandbox`. The strict probes run in CI (pr.yaml), or with `vm-check Srt` on a Mac"
+            + "`Sandbox`. The strict probes run in CI (pr.yaml), with `vm-check Srt` on a Mac, and on any "
+            + "box that hosts the strict profile once the variable is unset"
         )
     else
-        unless
-            sandboxAvailable
+        because
             ("Srt: no working strict confinement (bubblewrap, socat, ripgrep, setsid and a nested user "
              + "namespace; an unprivileged container cannot host it — run `Sandbox` there under "
              + "YESSION_NESTED_SANDBOX=weak, and leave the strict probes to CI (pr.yaml) or `vm-check Srt` on a Mac)")
+            sandboxProblem
             ()
 
 let private capabilities : Capability list =
@@ -1336,14 +1399,14 @@ let private capabilities : Capability list =
         Gated = true
         Refusal = unless nixAvailable "NixBuild: no `nix` on PATH" }
       { Name = "Sandbox"
-        Needs = "a work sandbox to run a command in: bubblewrap, socat, ripgrep, setsid. Probe: runs the confinement profile the run configures (weak under YESSION_NESTED_SANDBOX=weak)."
+        Needs = "a work sandbox to run a command in: bubblewrap, socat, ripgrep, setsid. Probe: srt's own command line runs `true` under the profile the run configures (weak under YESSION_NESTED_SANDBOX=weak)."
         Gated = true
         Refusal =
-            unless
-                sandboxAvailable
+            because
                 ("Sandbox: no working work sandbox (bubblewrap, socat, ripgrep, setsid, and — under the "
                  + "strict profile — a nested user namespace; an unprivileged container needs "
-                 + "YESSION_NESTED_SANDBOX=weak)") }
+                 + "YESSION_NESTED_SANDBOX=weak)")
+                sandboxProblem }
       { Name = "Srt"
         Needs = "confinement under test, so the STRICT profile only; also grants Sandbox. Probe: as Sandbox, and refused under YESSION_NESTED_SANDBOX=weak."
         Gated = true
