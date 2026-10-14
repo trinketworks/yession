@@ -49,8 +49,9 @@ which repoints the input at devenv's own source, substituted from `cache.nixos.o
 uses the committed `devenv.yaml`.
 
 Run the task scripts: `devenv shell -- <task>`, or bare inside the shell. The main ones are
-`check`, `build` and `verify`. They run `restore` for you. Do NOT invoke `dotnet`, `fable` or
-`esbuild` directly to "run the suite". The scripts match tool versions and PATH to CI.
+`check`, `build` and `verify`. They run `restore` for you. Never run `dotnet`, `fable` or
+`esbuild` directly: the scripts match tool versions and PATH to CI (`.claude/direct-tool-hook.sh`
+enforces it).
 
 A Claude Code container has Chromium (`$PLAYWRIGHT_BROWSERS_PATH`) and the `node-datachannel`
 addon preinstalled. The `Browser` and `Native` capabilities work (see Testing).
@@ -218,8 +219,8 @@ fine.
 ## Type safety
 
 F# is the type system. JavaScript is only what it compiles to. Each construct below re-opens the
-hole Fable closed. Only two have an analyzer rule, and it covers part of each, so the rest is on the
-author. Do not introduce any of these, and remove them from code you are already changing:
+hole Fable closed. Where a rule reports one, it is named. The rest is on the author. Do not
+introduce any of these, and remove them from code you are already changing:
 
 - **A JavaScript program in a string.** An `[<Emit>]` outside `src/Fable.*` (rule YES011 reports
   it), an inline `<script>` body, a CDP `Runtime.evaluate` source, a Playwright `EvaluateAsync`
@@ -233,10 +234,8 @@ author. Do not introduce any of these, and remove them from code you are already
   type whatever produced it.
 - **`obj` in a signature.** Both ends are free to disagree about the contract. If it crosses a
   wire, use a codec. If it configures a binding, use that binding's options type.
-- **`createObj` / `==>` handed to a binding project.** Give the binding an interface and
-  `jsOptions`. A header name spelled by hand is eventually spelled wrong, and nothing says so.
-- **`[<AllowNullLiteral>]` outside `src/Fable.*`.** A nullable JavaScript interface in product code
-  is a binding that never moved into a binding project.
+- **`createObj`, `==>` or `[<AllowNullLiteral>]` outside a binding project** (rule YES013 reports
+  them). A hand-built object or a nullable interface in product code is a binding that never moved.
 - **A decode that cannot refuse.** `Option.defaultValue ""` over a field read makes absent, garbage
   and genuinely-empty arrive identically (rule YES009 reports that literal). Answer `None`, or say
   in the code why the default is the right answer.
@@ -255,6 +254,6 @@ has. `check` refuses a capability the box cannot host. Run `help` for the verbs 
 To eyeball a rich-editor change, run `check Browser`. For real screenshots of a server-rendered
 surface, read `.agents/skills/ui-exploration/SKILL.md` first. Naive headless mobile shots lie.
 
-- `tests/AGENTS.md`: capability notes (`Srt`, `LiveGitHub`, `Dogfood`), running a tier this box cannot
-  host (`verify.yml`), and the rules for writing tests.
+- `tests/AGENTS.md`: capability notes (`Sandbox`, `Srt`, `LiveGitHub`, `Dogfood`), running a tier
+  this box cannot host (`verify.yml`), and the rules for writing tests.
 - `analyzers/AGENTS.md`: working on the F# analyzers that `lint` runs.

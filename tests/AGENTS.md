@@ -16,25 +16,19 @@ in `tasks.fsx` probes each one and holds the refusal text. Read those, not a cop
 - `Dogfood` on macOS with Colima: keep fixtures under `$HOME`. Colima shares only `$HOME` into its VM,
   so a bind source elsewhere mounts empty.
 
-### Srt
+### Sandbox and Srt
 
-- The default work sandbox IS srt. Every suite that runs a real command needs `Srt`, not only the
-  escape probes.
-- Without a sandbox, such a suite hangs and does not fail. The command never runs and the block never
-  reaches `ok`. The `Srt` tag turns the hang into a one-line skip. Tag a suite that runs a command
-  `Srt`.
-- This container cannot nest the user namespace the strict profile needs. Here, `check Srt` runs only
-  under `YESSION_NESTED_SANDBOX=weak`.
-- Set `YESSION_NESTED_SANDBOX=weak` only to give a suite a sandbox to RUN in. Example:
-  `YESSION_NESTED_SANDBOX=weak check Browser Ports Native Srt` runs the whole PR tier here. Profile
-  strength does not touch what those suites test.
-- Never set it when CONFINEMENT is under test. `weak` is srt's `enableWeakerNestedSandbox`, so a green
-  escape probe under it describes a profile production never uses. Strict is CI's job. `pr.yaml` clears
-  `kernel.apparmor_restrict_unprivileged_userns`, so the probes run for real there.
+- `Sandbox`: the suite runs a real command in the work sandbox, which is srt by default. Tag every
+  such suite `Sandbox`, or a box without a sandbox fails it (Node) or times it out (Browser).
+- `Srt`: confinement is under test (the escape probes). `check Srt` refuses
+  `YESSION_NESTED_SANDBOX=weak`, and a granted `Srt` also grants `Sandbox`.
+- This container fails the strict probe. Here, `YESSION_NESTED_SANDBOX=weak check Browser Ports
+  Native Sandbox` runs the PR tier without the probes. Strict is CI's job: `pr.yaml` clears
+  `kernel.apparmor_restrict_unprivileged_userns`.
 - Weaker confinement in production is the operator's decision. Never use it to get a passing session
   here.
-- On a Mac, `vm-check <caps>` runs the Srt tier under STRICT nesting in the Colima VM. It takes
-  seconds, not a `verify.yml` round trip. Example: `vm-check Srt --only "<text>"`.
+- On a Mac, `vm-check <caps>` runs under STRICT nesting in the Colima VM, in seconds:
+  `vm-check Srt --only "<text>"`.
 
 ## Running a tier this box cannot host
 
