@@ -113,6 +113,208 @@ module SelectionGrant =
           SelectionGrant.Bound = leaves |> List.choose bound |> Map.ofList
           SelectionGrant.WantedOnly = wantedOnly |> Set.toList |> List.choose bound |> List.map fst |> Set.ofList }
 
+/// How much memory a container may hold, in bytes: its cgroup's ceiling, past which the
+/// kernel kills a process INSIDE it rather than choosing a victim from the whole host.
+///
+/// Every container on a daemon shares that daemon's memory — on a Mac, one Colima VM — and
+/// a container with no ceiling can take all of it. When it does, the kernel's global OOM
+/// killer picks by size across every container on the host, so one session's build kills
+/// another session's work: six sessions' devshells building at once on a 5 GiB VM did
+/// exactly that, and the session whose `build` died was told only "exit 137". A ceiling
+/// makes the one that overran its own budget the one that pays.
+///
+/// What a ceiling cannot do is make the host bigger: containers that each stay under theirs
+/// can still add up to more than the host has, and then the global killer is back. That is
+/// the host's size to answer, not this.
+type ContainerMemory = private ContainerMemory of bytes: int64
+
+[<RequireQualifiedAccess>]
+module ContainerMemory =
+
+    /// The least the daemon accepts — docker refuses a ceiling under 6 MiB at create, with
+    /// a sentence that would arrive long after the file was read.
+    let minimum : int64 = 6L * 1024L * 1024L
+
+    let bytes (ContainerMemory b) : int64 = b
+
+    let private units : (string * int64) list =
+        [ "b", 1L
+          "k", 1024L
+          "kb", 1024L
+          "m", 1024L * 1024L
+          "mb", 1024L * 1024L
+          "g", 1024L * 1024L * 1024L
+          "gb", 1024L * 1024L * 1024L ]
+
+    let ofBytes (b: int64) : Result<ContainerMemory, string> =
+        if b < minimum then
+            Error (sprintf "memory: %d bytes is under docker's 6m minimum for a container" b)
+        else Ok (ContainerMemory b)
+
+    /// Compose's byte-value grammar, which is what `mem_limit` and
+    /// `deploy.resources.limits.memory` take: a whole number and an optional unit — `b`,
+    /// `k`/`kb`, `m`/`mb`, `g`/`gb`, any case, binary multiples — so `4g` copied out of a
+    /// compose file means the same thing here. No unit is bytes.
+    let parse (raw: string) : Result<ContainerMemory, string> =
+        let text = raw.Trim().ToLowerInvariant ()
+        let digits = text |> Seq.takeWhile Char.IsDigit |> Seq.length
+        let number, unit = text.Substring (0, digits), text.Substring(digits).Trim ()
+        let refuse () =
+            Error (sprintf "memory: '%s' is not a size — a whole number and an optional unit (b, k, m, g), like 4g" raw)
+        let scale =
+            if unit = "" then Some 1L
+            else units |> List.tryFind (fun (u, _) -> u = unit) |> Option.map snd
+        match scale, Int64.TryParse number with
+        | Some scale, (true, n) when n <= Int64.MaxValue / scale -> ofBytes (n * scale)
+        | _ -> refuse ()
+
+    /// The exact compose spelling — the largest unit that divides it — which `parse` reads
+    /// back as the same number.
+    let render (ContainerMemory b) : string =
+        match units |> List.rev |> List.filter (fun (u, _) -> u.Length = 1) |> List.tryFind (fun (_, scale) -> b % scale = 0L) with
+        | Some (u, scale) when u <> "b" -> sprintf "%d%s" (b / scale) u
+        | _ -> string b
+
+    /// For a person reading a refusal: approximate, in GiB.
+    let describe (b: int64) : string =
+        sprintf "%.1f GiB" (float b / (1024.0 * 1024.0 * 1024.0))
+
+    /// The share of the daemon's memory a container gets when its declaration names none:
+    /// three quarters.
+    ///
+    /// Derived from the daemon rather than fixed, because a fixed number is wrong at both
+    /// ends: above a small VM's total it contains nothing (the ceiling is never reached
+    /// before the host runs out), and on a large host it kills a build that had room. The
+    /// job of the default is that no ONE container can take the host — so a quarter is
+    /// held back for everything else on it (the daemon, every other session's shells) and
+    /// a runaway hits its own ceiling first. It is not a partition: dividing the host by
+    /// how many sessions might run would starve a lone build to guard against a crowd,
+    /// and a crowd is the host's size to answer.
+    ///
+    /// Three quarters rather than a half because of what a work container runs: a
+    /// dotnet build with an MSBuild node per CPU and Fable beside it, and Chromium for a
+    /// browser suite. The one dev container whose cgroup recorded a build on a 4.8 GiB
+    /// Colima VM peaked at 2.3 GiB (`memory.peak`), and that while the global OOM killer
+    /// was already taking processes from it — a floor on what a build needs, not the
+    /// figure. Half that VM is 2.4 GiB, which a build lands on; three quarters is 3.6.
+    let defaultFor (daemonTotal: int64) : ContainerMemory =
+        ContainerMemory (max minimum (daemonTotal / 4L * 3L))
+
+    /// The ceiling a container is created with: what it declared, or the default share of
+    /// what the daemon has. A declaration above the daemon's total is refused rather than
+    /// applied — a ceiling the host runs out before reaching contains nothing, and the
+    /// repo asked for memory this host cannot give.
+    let forDaemon (declared: ContainerMemory option) (daemonTotal: int64) : Result<ContainerMemory, string> =
+        match declared with
+        | None -> Ok (defaultFor daemonTotal)
+        | Some (ContainerMemory b) when b > daemonTotal ->
+            Error (
+                sprintf
+                    "the container declares memory: %s, and the docker daemon has %s in all — a ceiling the host runs out before reaching contains nothing. Give the daemon more memory (Colima: `colima start --memory <GiB>`) or declare less"
+                    (render (ContainerMemory b))
+                    (describe daemonTotal))
+        | Some declared -> Ok declared
+
+/// How strongly the kernel prefers a container's processes as OOM victims —
+/// `docker run --oom-score-adj`, from 0 to 1000. Every process in the container has it,
+/// each exec included.
+///
+/// A ceiling (`ContainerMemory`) does not stop the host itself from running out: containers
+/// that each stay under theirs can still add up to more than the host has. The kernel's
+/// global killer then picks from every process on the host, and on a Colima VM that
+/// includes the processes that run the containers. Their own values are below zero
+/// (measured: dockerd −500, containerd −999) and a container's are 0 by default, so the
+/// kernel can choose them. At 500, any sandbox process is chosen before any of them.
+///
+/// Not below zero: a sandbox that could rank itself with the daemon's own processes
+/// removes what this protects. A repo can only make its processes a more likely victim.
+type OomScoreAdj = private OomScoreAdj of int
+
+[<RequireQualifiedAccess>]
+module OomScoreAdj =
+
+    /// What a container gets when its declaration names none.
+    let standard = OomScoreAdj 500
+
+    let value (OomScoreAdj n) : int = n
+
+    let ofInt (n: int) : Result<OomScoreAdj, string> =
+        if n < 0 || n > 1000 then
+            Error (
+                sprintf
+                    "oom-score-adj: %d is not from 0 to 1000 — a sandbox can make its processes a more likely OOM victim, not a less likely one than the daemon's own"
+                    n)
+        else Ok (OomScoreAdj n)
+
+    /// What a container is created with: what it declared, or `standard`. Never docker's
+    /// own default of 0, which ranks a sandbox with the daemon's processes.
+    let forContainer (declared: OomScoreAdj option) : OomScoreAdj =
+        declared |> Option.defaultValue standard
+
+/// How many processes and threads a container can hold at once — its cgroup's
+/// `pids.max`, `docker run --pids-limit`.
+///
+/// Memory is not the only thing a container can take from the host it shares. A fork bomb,
+/// or a build that starts threads without limit, uses up the kernel's process table for
+/// every session on that host. The most measured in a working dev container is 136, during
+/// a dotnet build, so the standard 4096 does not stop real work.
+type PidsLimit = private PidsLimit of int
+
+[<RequireQualifiedAccess>]
+module PidsLimit =
+
+    /// What a container gets when its declaration names none.
+    let standard = PidsLimit 4096
+
+    let value (PidsLimit n) : int = n
+
+    /// Docker reads 0 and below as no limit, so they are refused, not passed through:
+    /// a limit that is not a limit must not look like one.
+    let ofInt (n: int) : Result<PidsLimit, string> =
+        if n < 1 then Error (sprintf "pids-limit: %d is not a limit — write a number of processes, 1 or more" n)
+        else Ok (PidsLimit n)
+
+    /// What a container is created with: what it declared, or `standard`. Never docker's
+    /// own default, which is no limit.
+    let forContainer (declared: PidsLimit option) : PidsLimit =
+        declared |> Option.defaultValue standard
+
+/// The cgroup that a container's cgroup is put under — `docker run --cgroup-parent`.
+///
+/// With one parent for every sandbox (`/yession`), the host can give the parent a memory
+/// limit below its total. When all the sandboxes together reach it, the kernel kills inside
+/// that parent, and the processes outside it (the daemon, its shims) are not candidates.
+/// Who makes that parent and gives it its limit is the host's operator, not this setting:
+/// if the parent does not exist, docker makes it with no limit, which changes nothing.
+///
+/// `None` — the usual — keeps the daemon's own parent.
+type CgroupParent = private CgroupParent of string
+
+[<RequireQualifiedAccess>]
+module CgroupParent =
+
+    let value (CgroupParent path) : string = path
+
+    let parse (raw: string) : Result<CgroupParent, string> =
+        let text = raw.Trim ()
+        if text = "" then Error "cgroup-parent cannot be blank"
+        elif text |> Seq.exists Char.IsWhiteSpace then Error (sprintf "cgroup-parent: '%s' contains a space" text)
+        elif text.Split '/' |> Array.contains ".." then Error (sprintf "cgroup-parent cannot climb, and '%s' does" text)
+        else Ok (CgroupParent text)
+
+    /// The parent, checked against the daemon's cgroup driver before anything is pulled.
+    /// Under the systemd driver docker accepts only a slice name (`yession.slice`); under
+    /// cgroupfs, a path (`/yession`). A refusal here names the driver, which docker's own
+    /// refusal at create does not.
+    let forDriver (declared: CgroupParent option) (driver: string) : Result<CgroupParent option, string> =
+        match declared with
+        | Some (CgroupParent path) when driver = "systemd" && not (path.EndsWith ".slice") ->
+            Error (
+                sprintf
+                    "the container declares cgroup-parent: %s, and the docker daemon uses the systemd cgroup driver, which takes only a slice name, like yession.slice"
+                    path)
+        | declared -> Ok declared
+
 /// What a CONTAINER is. Every field here is one only a container has — an image to run, a
 /// filesystem to build, volumes to mount, a process to be.
 type ContainerSpec =
@@ -138,12 +340,32 @@ type ContainerSpec =
       /// backend detect what is on the far side of the entrypoint, most capable first.
       /// Written at the sandbox level as `dialect:`, and carried here because only a
       /// container has a shell to choose.
-      Dialect : string option }
+      Dialect : string option
+      /// The container's memory ceiling, as the repo declared it — compose's
+      /// `deploy.resources.limits.memory`, written `memory:`. `None` — the usual — takes the
+      /// default share of the daemon's memory (`ContainerMemory.defaultFor`): never no
+      /// ceiling, because no ceiling is the whole host.
+      Memory : ContainerMemory option
+      /// `oom-score-adj:`. `None` — the usual — is `OomScoreAdj.standard`.
+      OomScoreAdj : OomScoreAdj option
+      /// `pids-limit:`. `None` — the usual — is `PidsLimit.standard`.
+      PidsLimit : PidsLimit option
+      /// `cgroup-parent:`. `None` — the usual — keeps the daemon's own parent.
+      CgroupParent : CgroupParent option }
 
 module ContainerSpec =
 
     let defaults : ContainerSpec =
-        { Image = None; Build = None; Mounts = []; Command = None; Entrypoint = None; Dialect = None }
+        { Image = None
+          Build = None
+          Mounts = []
+          Command = None
+          Entrypoint = None
+          Dialect = None
+          Memory = None
+          OomScoreAdj = None
+          PidsLimit = None
+          CgroupParent = None }
 
 /// What the sandbox IS, and the distinction is load-bearing rather than descriptive.
 ///

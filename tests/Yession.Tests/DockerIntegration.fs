@@ -83,6 +83,8 @@ let private startOrFail (spec: EnvironmentSpec) : Async<string * Sandbox> =
 
 let private label (name: string) = sprintf "yession-session=%s" name
 
+module DK = Fable.Dockerode
+
 // --- The suite ---------------------------------------------------------------------------
 
 let tests =
@@ -99,6 +101,98 @@ let tests =
                 do! sandbox.Dispose ()
                 let! remaining = Sandboxes.DockerSandbox.countByLabel (label name)
                 Expect.equal remaining 0 "the sandbox's container is removed on dispose"
+            })
+
+            // The memory ceiling (`ContainerMemory`), read where the kernel keeps it: the
+            // container's own cgroup, which cgroup v2 mounts at /sys/fs/cgroup inside it.
+            testCaseAsync "a container is created with the memory ceiling its declaration names" (async {
+                let spec = alpineSpec |> withContainer (fun c -> { c with Memory = Some (ContainerMemory.parse "256m" |> expect) })
+                let! _, sandbox = startOrFail spec
+                let! run, out, err = runInSandbox sandbox "cat" [ "/sys/fs/cgroup/memory.max" ] Map.empty None
+                Expect.equal run (SandboxExited 0) (sprintf "the cgroup was read: %s" err)
+                Expect.equal (out.Trim ()) (string (256 * 1024 * 1024)) "the kernel holds the container to 256m"
+                do! sandbox.Dispose ()
+            })
+
+            // No declaration is the default share, never `max`: no ceiling is the whole
+            // host, and the whole host is what the global OOM killer chooses victims from.
+            // Compared against the host's total as the container sees it in /proc/meminfo,
+            // which is the figure the daemon reports as its own.
+            testCaseAsync "a container that declares no memory still has a ceiling below the host's total" (async {
+                let! _, sandbox = startOrFail alpineSpec
+                let probe =
+                    "limit=$(cat /sys/fs/cgroup/memory.max); total=$(awk '/^MemTotal:/{print $2 * 1024}' /proc/meminfo); "
+                    + "if [ \"$limit\" != max ] && [ \"$limit\" -lt \"$total\" ]; then echo bounded; else echo \"limit=$limit total=$total\"; fi"
+                let! run, out, err = runInSandbox sandbox "sh" [ "-c"; probe ] Map.empty None
+                Expect.equal run (SandboxExited 0) (sprintf "the probe ran: %s" err)
+                Expect.equal (out.Trim ()) "bounded" "the container's ceiling is below what the host has"
+                do! sandbox.Dispose ()
+            })
+
+            // What the ceiling is FOR: an overrun is killed inside the container that made
+            // it, and nothing else. `tail` over /dev/zero holds every byte it reads (it is
+            // waiting for a tenth newline that never comes), so it grows until the kernel
+            // stops it — at 64m, with no swap to spill into. The container itself, and the
+            // next command in it, carry on.
+            testCaseAsync "a process that overruns the container's memory is killed inside it, and the container carries on" (async {
+                let spec = alpineSpec |> withContainer (fun c -> { c with Memory = Some (ContainerMemory.parse "64m" |> expect) })
+                let! _, sandbox = startOrFail spec
+                let! overrun, _, _ = runInSandbox sandbox "sh" [ "-c"; "head -c 512m /dev/zero | tail" ] Map.empty None
+                Expect.equal overrun (SandboxExited 137) "the overrun was SIGKILLed by the kernel"
+                let! after, out, _ = runInSandbox sandbox "echo" [ "still-here" ] Map.empty None
+                Expect.equal (after, out.Trim ()) (SandboxExited 0, "still-here") "and the container runs the next command"
+                do! sandbox.Dispose ()
+            })
+
+            // The OOM score and the process bound, read where the kernel keeps them: a
+            // process's own `oom_score_adj` (an exec has the container's, which is the
+            // point — the work runs in execs) and the container's cgroup `pids.max`.
+            testCaseAsync "a container is created with the oom-score-adj and pids-limit its declaration names" (async {
+                let spec =
+                    alpineSpec
+                    |> withContainer (fun c ->
+                        { c with
+                            OomScoreAdj = Some (OomScoreAdj.ofInt 700 |> expect)
+                            PidsLimit = Some (PidsLimit.ofInt 256 |> expect) })
+                let! _, sandbox = startOrFail spec
+                let! run, out, err = runInSandbox sandbox "sh" [ "-c"; "cat /proc/self/oom_score_adj /sys/fs/cgroup/pids.max" ] Map.empty None
+                Expect.equal run (SandboxExited 0) (sprintf "both were read: %s" err)
+                Expect.equal (out.Split '\n' |> Array.map (fun l -> l.Trim ()) |> Array.filter ((<>) "") |> List.ofArray) [ "700"; "256" ] "the kernel holds the declared values"
+                do! sandbox.Dispose ()
+            })
+
+            // No declaration is 500 and 4096, never docker's 0 and no limit: a sandbox
+            // process is the kernel's victim before the daemon's own, and a fork bomb
+            // uses up its own container.
+            testCaseAsync "a container that declares neither gets oom-score-adj 500 and pids-limit 4096" (async {
+                let! _, sandbox = startOrFail alpineSpec
+                let! run, out, err = runInSandbox sandbox "sh" [ "-c"; "cat /proc/self/oom_score_adj /sys/fs/cgroup/pids.max" ] Map.empty None
+                Expect.equal run (SandboxExited 0) (sprintf "both were read: %s" err)
+                Expect.equal (out.Split '\n' |> Array.map (fun l -> l.Trim ()) |> Array.filter ((<>) "") |> List.ofArray) [ "500"; "4096" ] "the standard values"
+                do! sandbox.Dispose ()
+            })
+
+            // A cgroup parent is not visible from inside (the container has its own cgroup
+            // namespace), so this asks the daemon. The parent is the one the daemon uses
+            // anyway, for its driver, so the case creates no cgroup on the host that
+            // outlives it: what it shows is that a declared parent reaches the daemon.
+            testCaseAsync "a container is created under the cgroup parent its declaration names" (async {
+                let client = DK.create ()
+                let! info = client.info () |> Interop.awaitPromise
+                let parent = if info.CgroupDriver = "systemd" then "system.slice" else "/docker"
+                let spec = alpineSpec |> withContainer (fun c -> { c with CgroupParent = Some (CgroupParent.parse parent |> expect) })
+                let! name, sandbox = startOrFail spec
+                let! found =
+                    client.listContainers (
+                        jsOptions<DK.ListContainersOptions> (fun o ->
+                            o.all <- true
+                            o.filters <- jsOptions<DK.ContainerFilters> (fun f -> f.label <- [| label name |]))
+                    )
+                    |> Interop.awaitPromise
+                Expect.equal found.Length 1 "the sandbox's one container"
+                let! inspected = client.getContainer(found.[0].Id).inspect () |> Interop.awaitPromise
+                Expect.equal inspected.HostConfig.CgroupParent parent "the daemon created it under the declared parent"
+                do! sandbox.Dispose ()
             })
 
             // /dev/shm, raised above docker's 64MB default so Chromium's compositor does not

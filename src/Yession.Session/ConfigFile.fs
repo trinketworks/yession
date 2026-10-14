@@ -234,7 +234,36 @@ module ConfigFile =
                   | Ok words -> Decode.succeed words
                   | Error reason -> Decode.fail (sprintf "%s: %s" field reason)) ]
 
-    let private containerKeys = [ "image"; "build"; "volumes"; "cmd"; "command"; "entrypoint" ]
+    /// `memory:` — the container's ceiling, in compose's byte-value grammar (`4g`), or a
+    /// bare number of bytes, which is what YAML makes of one written without a unit.
+    /// The JSON is read first and judged after, so a size that is refused is refused in
+    /// the one sentence that says why, not beside a second decoder's complaint.
+    let private memory : Decoder<ContainerMemory> =
+        Decode.oneOf
+            [ Decode.string |> Decode.map ContainerMemory.parse
+              Decode.int64 |> Decode.map ContainerMemory.ofBytes ]
+        |> Decode.andThen (function
+            | Ok limit -> Decode.succeed limit
+            | Error reason -> Decode.fail reason)
+
+    /// A whole number, judged after it is read, for the same reason as `memory`.
+    let private judgedInt (judge: int -> Result<'T, string>) : Decoder<'T> =
+        Decode.int
+        |> Decode.andThen (fun n ->
+            match judge n with
+            | Ok value -> Decode.succeed value
+            | Error reason -> Decode.fail reason)
+
+    /// `cgroup-parent:` — the cgroup the container's own is put under (`CgroupParent`).
+    let private cgroupParent : Decoder<CgroupParent> =
+        Decode.string
+        |> Decode.andThen (fun raw ->
+            match CgroupParent.parse raw with
+            | Ok parent -> Decode.succeed parent
+            | Error reason -> Decode.fail reason)
+
+    let private containerKeys =
+        [ "image"; "build"; "volumes"; "cmd"; "command"; "entrypoint"; "memory"; "oom-score-adj"; "pids-limit"; "cgroup-parent" ]
 
     /// The container block. `command` lives HERE and nowhere else, which is the whole reason
     /// the block exists: a sandbox with no container has no place to write one. `cmd` is the
@@ -250,7 +279,11 @@ module ConfigFile =
                   Mounts = get.Optional.Field "volumes" (Decode.list mount) |> Option.defaultValue []
                   Command = (match cmd, command with | Some _, Some _ -> None | Some c, None | None, Some c -> Some c | None, None -> None)
                   Entrypoint = get.Optional.Field "entrypoint" (argv "entrypoint")
-                  Dialect = None },
+                  Dialect = None
+                  Memory = get.Optional.Field "memory" memory
+                  OomScoreAdj = get.Optional.Field "oom-score-adj" (judgedInt OomScoreAdj.ofInt)
+                  PidsLimit = get.Optional.Field "pids-limit" (judgedInt PidsLimit.ofInt)
+                  CgroupParent = get.Optional.Field "cgroup-parent" cgroupParent },
                 (cmd, command)))
         |> Decode.andThen (fun (spec, (cmd, command)) ->
             match cmd, command with
@@ -467,7 +500,12 @@ module ConfigFile =
                                       Encode.string (match mount.Mode with ReadOnly -> "ro" | ReadWrite -> "rw") ]))
                       if container.Command.IsSome then "command", Encode.string container.Command.Value
                       if container.Entrypoint.IsSome then
-                        "entrypoint", Encode.list (container.Entrypoint.Value |> List.map Encode.string) ])
+                        "entrypoint", Encode.list (container.Entrypoint.Value |> List.map Encode.string)
+                      if container.Memory.IsSome then "memory", Encode.string (ContainerMemory.render container.Memory.Value)
+                      if container.OomScoreAdj.IsSome then "oom-score-adj", Encode.int (OomScoreAdj.value container.OomScoreAdj.Value)
+                      if container.PidsLimit.IsSome then "pids-limit", Encode.int (PidsLimit.value container.PidsLimit.Value)
+                      if container.CgroupParent.IsSome then
+                        "cgroup-parent", Encode.string (CgroupParent.value container.CgroupParent.Value) ])
         let env =
             decl.EnvironmentVariables
             |> Map.toList
