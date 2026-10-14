@@ -187,3 +187,13 @@ module HarnessPage =
     /// whether what it lands on is really the thing ON SCREEN — which only a laid-out page
     /// can answer.
     let freshViewer : PageGlobal<unit -> unit> = PageGlobal.named "__freshViewer"
+    /// Swap the shell to one NAMED state — the camera's switch. Every key above stands for the
+    /// question one case asks; this stands for the pictures somebody wants to LOOK at, which
+    /// are many more than the cases and have no question each. One key taking a name rather
+    /// than a key per picture, so a camera can walk them all without knowing what any of them
+    /// is. A name it does not know is the CALLER'S mistake, and it says so with the names it
+    /// does know rather than drawing nothing.
+    let state : PageGlobal<string -> unit> = PageGlobal.named "__state"
+    /// Every name `__state` takes, in the order a camera would want them: what there is to
+    /// walk, published so the walker never carries a copy of the list that can go stale.
+    let states : PageGlobal<string array> = PageGlobal.named "__states"
