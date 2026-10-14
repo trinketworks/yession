@@ -165,7 +165,7 @@ let all =
         // what a session reads, the allowed helper scripts, no docs/plans, examples standalone.
         Tag.needs "Repo layout" [] (fun () -> RepoLayout.tests)
         // The PreToolUse hook that keeps agents on the task verbs, spawned with payloads on stdin
-        // the way the harness runs it. Cheap: a shell and `jq`, which a box that runs `check` has.
+        // the way the harness runs it. Cheap: a shell and the devshell's `jq`, which `check` runs inside.
         Tag.needs "Direct tool hook" [] (fun () -> DirectToolHook.tests)
         Tag.needs "Control routes" [] (fun () -> ControlRoutes.tests)
         Tag.needs "Declared setup" [] (fun () -> DeclaredSetup.tests)
