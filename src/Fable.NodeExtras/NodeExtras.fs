@@ -409,6 +409,12 @@ module Processes =
     [<Emit("process.kill($0, $1)")>]
     let kill (pid: int) (signal: string) : unit = jsNative
 
+    /// Whether this process runs as uid 0. `false` where there are no uids at all: Windows
+    /// has no `process.getuid`, and `Fable.Node` types it as always there, so a call through
+    /// that binding would throw on the one platform the question has no answer for.
+    [<Emit("process.getuid?.() === 0")>]
+    let isRoot () : bool = jsNative
+
     /// `process.exit(code)`, typed as the call it IS: one that does not come back. `Fable.Node`
     /// types it `unit`, which is true of an exit written as a statement and useless to the
     /// caller that has to answer with a value it will never produce — a command line refused

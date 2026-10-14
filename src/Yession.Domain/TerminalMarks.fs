@@ -335,6 +335,14 @@ module Marks =
                     | None -> shellQuote ("-" + name))
             "__y_env " + String.concat " " (git @ vars) + "; "
 
+    /// Every dialect's FIRST line turns history expansion off. An interactive bash has
+    /// `histexpand` on, and zsh `BANG_HIST`, so a `!` inside double quotes — `"if (!p) …"`,
+    /// a block an agent writes routinely — is read as an event designator: the shell
+    /// prints `!p: event not found` and discards the whole line. Nothing ran, so no start
+    /// mark came, and the detector declared a working shell lost and held its queue.
+    /// Every line typed here is machine-authored, never a recall from history, so there is
+    /// nothing for expansion to do. First, because expansion happens as each line is
+    /// READ: the line that turns it off is the one line it still applies to.
     let rcFor (shell: string) (nonce: string) : ShellInstrumentation option =
         let promptStart = emit nonce "A"
         // Armed BEFORE `PS1` in every dialect, so it adds no prompt cycle after the first
@@ -362,7 +370,8 @@ module Marks =
             Some
                 { Rc =
                     String.concat "\n"
-                        [ " __y_pre() { case \"$BASH_COMMAND\" in __y_post) return;; esac; [ -n \"$__y_armed\" ] && { command -p printf '" + commandStart + "'; unset __y_armed; }; }"
+                        [ " set +H"
+                          " __y_pre() { case \"$BASH_COMMAND\" in __y_post) return;; esac; [ -n \"$__y_armed\" ] && { command -p printf '" + commandStart + "'; unset __y_armed; }; }"
                           " __y_post() { __y_code=$?; command -p printf '" + commandDone + "' \"$__y_code\"; __y_armed=1; }"
                           // Before `PS1` is armed: nothing typed before the first prompt
                           // mark is recorded, and this is the longest line of the lot.
@@ -379,7 +388,8 @@ module Marks =
             Some
                 { Rc =
                     String.concat "\n"
-                        [ " __y_pre() { command -p printf '" + commandStart + "'; }"
+                        [ " unsetopt BANG_HIST"
+                          " __y_pre() { command -p printf '" + commandStart + "'; }"
                           " __y_post() { __y_code=$?; command -p printf '" + commandDone + "' \"$__y_code\"; }"
                           " autoload -Uz add-zsh-hook"
                           " add-zsh-hook preexec __y_pre"
@@ -427,10 +437,17 @@ module Marks =
             // starts — after the shell has finished echoing the line, which is what makes it
             // the boundary of the block's output. It hands `$?` through untouched, because the
             // command after it may be `echo $?`.
+            //
+            // History expansion is off here too, conditionally: `/bin/sh` is often bash (macOS,
+            // NixOS, this repo's container), and posix mode does not turn it off — an unquoted
+            // `!word` expands in every bash, and macOS's 3.2 expands one inside double quotes
+            // as well, which is how the pty case found it. dash has no `-H` and refuses an
+            // option it does not know, hence the guard.
             Some
                 { Rc =
                     String.concat "\n"
-                        [ " __y_c() { __y_r=$?; command -p printf '" + commandStart + "'; return $__y_r; }"
+                        [ " [ -n \"$BASH_VERSION\" ] && set +H"
+                          " __y_c() { __y_r=$?; command -p printf '" + commandStart + "'; return $__y_r; }"
                           " " + envFunction
                           " PS2='$(command -p printf \"\\001" + continuation + "\\002\")'\"$PS2\""
                           " PS1='$(command -p printf \"\\001" + commandDone + promptStart + "\\002\" $?)'" ] }
