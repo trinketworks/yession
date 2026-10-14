@@ -199,7 +199,7 @@ module View =
             | Retrying (reason, failures) ->
                 Some (
                     Dom.Text.retryingWhy reason failures,
-                    html $"""<span class="{Style.syncRow}"><span class="{Style.statusWait}"><span class="{Style.statusDotPulse}"></span>{Dom.Text.retryingStatus failures}</span></span>""")
+                    html $"""<span class="{Style.syncRow}"><span class="{Style.statusWait}"><span class="{Style.statusDotPulse}"></span>{Dom.Text.retryingStatus}</span></span>""")
             | _ -> None
         match settled, reopenAction model Style.noAgentAction with
         | Some (reason, status), Some action ->
@@ -282,7 +282,7 @@ module View =
         | Retrying (reason, failures), _ ->
             Some (
                 Dom.Text.degradedRetrying,
-                running (Dom.Text.retryingStatus failures),
+                running Dom.Text.retryingStatus,
                 promise :: Dom.Text.retryingWhy reason failures :: why)
         | _, FeedRetrying (attempt, reason) ->
             Some (Dom.Text.feedRetrying, running "history retrying", promise :: sprintf "%s · attempt %d" reason attempt :: why)

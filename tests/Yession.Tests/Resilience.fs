@@ -1484,7 +1484,7 @@ let private surfaceTests =
         testCase "a client still trying to reach its session says it is trying, and how far it has got" <| fun () ->
             // Positive feedback, not a fault: what a person should take from a session that is
             // not there yet is that the client is at work on it. The status is the running
-            // kind and its count moves with every failure; the fault goes behind it.
+            // kind; the fault and the count of failed attempts go behind it.
             let model = ClientModel.init (peer "ada" "Ada")
             let retrying failures =
                 Support.render { model with Connection = Retrying ("the session did not answer", failures) }
@@ -1492,10 +1492,10 @@ let private surfaceTests =
             Expect.isTrue
                 (second.Contains (Dom.attr Dom.Hooks.degraded Dom.Text.degradedRetrying))
                 "the strip reports a session leg that is retrying"
-            Expect.isTrue (second.Contains (Dom.Text.retryingStatus 1)) "the attempt under way is on the status"
+            Expect.isTrue (second.Contains Dom.Text.retryingStatus) "the status says it is retrying"
             Expect.isFalse (second.Contains "not connected") "and it does not read as broken"
             Expect.isTrue
-                ((retrying 2).Contains (Dom.Text.retryingStatus 2))
+                ((retrying 2).Contains (Dom.Text.retryingWhy "the session did not answer" 2))
                 "the count moves when another attempt fails"
             Expect.isTrue
                 (second.Contains (Dom.Text.retryingWhy "the session did not answer" 1))
@@ -1518,15 +1518,16 @@ let private surfaceTests =
             let html = Support.render { model with Connection = Connecting true }
             Expect.isFalse (html.Contains "data-retry-now") "an attempt that is still running is not offered again"
 
-        testCase "a retry's status names the attempt under way" <| fun () ->
-            // The count is the attempt running now: one has failed, so this is the second.
-            Expect.stringContains (Dom.Text.retryingStatus 1) "attempt 2" "the attempt under way, counted from one"
+        testCase "a retry's status carries no count" <| fun () ->
+            // One word, so it fits beside the way back on a phone. It said "… · attempt 2"
+            // there, and the count was cut off at 390px. The count is behind the disclosure.
+            Expect.isFalse (Dom.Text.retryingStatus.Contains "attempt") "the status is the word alone"
 
         testCase "a retry's status does not claim a reconnect" <| fun () ->
             // A page that has never connected has nothing to reconnect to. The status said
             // "reconnecting" on a cold open whose every attempt had failed.
             Expect.isFalse
-                ((Dom.Text.retryingStatus 1).Contains "reconnect")
+                (Dom.Text.retryingStatus.Contains "reconnect")
                 "a retry is a retry, whether or not a connection came before it"
 
         testCase "a stalled feed shows history paused with its reason, and the composer stays live" <| fun () ->

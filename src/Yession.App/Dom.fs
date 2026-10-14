@@ -729,12 +729,11 @@ module Dom =
         /// once that has lasted long enough to say (`ClientModel.connectingQuietMs`).
         let connectingStatus = "connecting"
         /// What a client that cannot reach its session says while it keeps trying: the work
-        /// going on, and how far it has got, rather than the fault. The count is the attempt
-        /// under way or next, so it moves every time one fails — which is what tells a person
-        /// it is being worked on and not stuck. "Retrying", not "reconnecting": a page that has
-        /// never connected has nothing to reconnect to, and a session that dropped is
-        /// `Reconnecting` before it is this.
-        let retryingStatus (failures: int) = sprintf "retrying · attempt %d" (failures + 1)
+        /// going on, rather than the fault. One word, so it fits beside the way back on a
+        /// phone; how many attempts have failed is behind the disclosure (`retryingWhy`).
+        /// "Retrying", not "reconnecting": a page that has never connected has nothing to
+        /// reconnect to, and a session that dropped is `Reconnecting` before it is this.
+        let retryingStatus = "retrying"
         /// Why it is still trying, behind the disclosure: the last attempt's fault and how many
         /// have failed, in the shape the history feed's retries already use.
         let retryingWhy (reason: string) (failures: int) = sprintf "%s · attempt %d" reason failures
