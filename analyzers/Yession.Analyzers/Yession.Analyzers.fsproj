@@ -40,6 +40,7 @@
     <Compile Include="AwaitSeam.fs" />
     <Compile Include="EmitHome.fs" />
     <Compile Include="PageScripts.fs" />
+    <Compile Include="BindingOnly.fs" />
   </ItemGroup>
 
   <ItemGroup>

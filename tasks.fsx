@@ -2352,7 +2352,12 @@ let private fixtures =
       "YES011", "EmitInProductFixture", [ "Product.fs" ]
       "YES011", "Yession.EmitInDomainFixture", [ "Domain.fs" ]
       "YES011", "EmitInBindingFixture", [ "Binding.fs" ]
-      "YES012", "PageScriptFixture", [ "Typed.fs"; "Seam.fs"; "Elsewhere.fs" ] ]
+      "YES012", "PageScriptFixture", [ "Typed.fs"; "Seam.fs"; "Elsewhere.fs" ]
+      // Two for YES013, which shares YES011's line between product and binding (`Population.reach`):
+      // a Yession project, which must be reported, and one with nothing Yession in reach, which
+      // must stay silent over the same constructs.
+      "YES013", "Yession.BindingOnlyFixture", [ "Product.fs" ]
+      "YES013", "BindingOnlyInBindingFixture", [ "Binding.fs" ] ]
 
 let private fixtureProject name =
     Path.Combine ("analyzers", "fixtures", name, name + ".fsproj")

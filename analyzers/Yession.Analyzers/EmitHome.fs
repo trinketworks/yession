@@ -23,13 +23,10 @@ open FSharp.Analyzers.SDK
 /// reputation. This is the invariant.
 ///
 /// The population is derived, not listed: a binding project is one with nothing Yession in its
-/// reach — it is not itself a `Yession.*` project and references none. That is the structural
-/// definition of "an API we do not own, bound for our use": a binding knows nothing of the
-/// product it serves. It exempts the `src/Fable.*` projects, the serial example (which owns its
-/// copies, as the examples rule requires, and references nothing of the product by the same
-/// rule), and the analyzer fixtures, with no list for any of them to be missing from. And it
-/// judges the Domain, which references nothing at all but IS the product — and is where the
-/// twelve tool definitions sat in their macro.
+/// reach (`Population.reach`, which holds the definition for every rule that asks). It exempts
+/// the `src/Fable.*` projects, the serial example and the analyzer fixtures, with no list for
+/// any of them to be missing from. And it judges the Domain, which references nothing at all
+/// but IS the product — and is where the twelve tool definitions sat in their macro.
 ///
 /// Every attribute of the Emit family counts, not only the raw macro the other emit rules read:
 /// `[<EmitMethod>]` has no string to get wrong, but it is still a binding to somebody else's
@@ -39,31 +36,6 @@ open FSharp.Analyzers.SDK
 
 [<Literal>]
 let Code = "YES011"
-
-let private isProduct (assembly: string) =
-    assembly = "Yession" || assembly.StartsWith "Yession."
-
-/// Every `Yession.*` assembly in this project's reach, itself included. Empty for a binding
-/// project. One answer per project, so it is computed once and kept while that project is the
-/// one being analyzed — it holds names, not symbols, but `Kept` is the shape the rules share.
-let private kept = Kept.Answer<string list> ()
-
-let private reach (ctx: CliContext) =
-    let project = ctx.ProjectOptions.ProjectFileName
-
-    kept.For (
-        project,
-        fun () ->
-            let own = Path.GetFileNameWithoutExtension project
-
-            let referenced =
-                [ for assembly in ctx.CheckProjectResults.ProjectContext.GetReferencedAssemblies () do
-                      match (try Some assembly.SimpleName with _ -> None) with
-                      | Some name -> yield name
-                      | None -> () ]
-
-            own :: referenced |> List.filter isProduct |> List.distinct |> List.sort
-    )
 
 let private message (project: string) (reach: string list) =
     let named = String.concat ", " reach
@@ -77,7 +49,7 @@ let private message (project: string) (reach: string list) =
 let emitHome: Analyzer<CliContext> =
     fun ctx ->
         async {
-            match ctx.TypedTree, reach ctx with
+            match ctx.TypedTree, Population.reach ctx with
             | _, [] -> return []
             | None, _ -> return []
             | Some tree, reach ->
