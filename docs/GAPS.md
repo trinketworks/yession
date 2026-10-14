@@ -664,10 +664,13 @@ plus two static passes over `Style.fs` and over every class literal written outs
 found 203 defects. They are listed below, by the part of the code that owns the fix, then by
 the doctrine's own "Deciding" order: floor, honesty, one verb, vocabulary, grid, less.
 
-Read this list as DATED. The line numbers the audit recorded are not reproduced here, because
-they are already wrong; what identifies a defect is the value's name. Verify a finding against
-today's code before you fix it — some are fixed already. An entry that no longer reproduces is
-closed, not forced.
+Read this list as DATED, and dated against a doctrine that has since moved. The line numbers
+the audit recorded are not reproduced here, because they are already wrong; what identifies a
+defect is the value's name. Verify a finding against today's code AND against today's doctrine
+before you fix it. Some are fixed. Some are no longer defects: #1276 rewrote principle 2, so
+chrome may now show grouping, nesting and selection, and it deleted the rule that nothing but
+a field or a button carries a border. An entry that no longer reproduces, or that cites a rule
+that no longer exists, is closed and not forced.
 
 The list is a snapshot, not a worklog: it is not edited one line per fix. One pass rewrites it
 to whatever still reproduces once the fixes have landed.
