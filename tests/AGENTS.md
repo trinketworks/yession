@@ -19,7 +19,8 @@ in `tasks.fsx` probes each one and holds the refusal text. Read those, not a cop
 ### Sandbox and Srt
 
 - `Sandbox`: the suite runs a real command in the work sandbox, which is srt by default. Tag every
-  such suite `Sandbox`. On a box without a sandbox, an untagged one fails at once, quoting srt.
+  such suite `Sandbox`. On a box without a sandbox, an untagged one fails at once, quoting srt
+  (Node), or times out (Browser).
 - `Srt`: confinement is under test (the escape probes). `check Srt` refuses
   `YESSION_NESTED_SANDBOX=weak`, and a granted `Srt` also grants `Sandbox`.
 - An unprivileged container (Docker's default) fails the strict probe. There,

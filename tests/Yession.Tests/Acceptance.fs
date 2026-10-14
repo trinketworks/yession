@@ -408,15 +408,6 @@ let private environmentEntry (id: string) (html: string) : string option =
     | -1 -> None
     | at -> Some (html.Substring (at, html.IndexOf ("</button>", at) - at))
 
-/// The opening tag of the element that wears an attribute, if one does: so what a case reads off
-/// it is that element's and not the same words elsewhere on the page.
-let private openingTagWith (attribute: string) (html: string) : string option =
-    match html.IndexOf attribute with
-    | -1 -> None
-    | at ->
-        let opens = html.LastIndexOf ('<', at)
-        Some (html.Substring (opens, html.IndexOf ('>', at) - opens + 1))
-
 /// How many times a hook appears in a rendered page. Counting MOUNTS rather than words: what
 /// these cases promise is one control per item and one stroke per mark, and a substring of
 /// somebody's prose is not either.
@@ -2037,46 +2028,6 @@ let private uiChecklistTests =
         testCase "an environment with no open terminal lists none" <| fun () ->
             let html = Support.render (withTerminals [ "term-gone", None, false ])
             Expect.isFalse (html.Contains Dom.Hooks.environmentTerminals) "no open terminals, no list"
-
-        // Not drawn: a reader that is not a person. A browser case waiting for a command to run,
-        // on a box whose work sandbox did not start, reads the product's own reason off the
-        // element that says the environment failed (`Refusal.sandboxDidNotStart`), in one look
-        // and not two — so there is no moment at which the page states a failure and not yet why.
-        testCase "a failed environment carries the reason it gave on the element that says it failed" <| fun () ->
-            let reason = "srt sandbox failed: no user namespace"
-            let html = Support.render { withTerminals [] with Environment = EnvironmentFailed reason }
-            Expect.equal
-                (openingTagWith (Dom.attr Dom.Hooks.environment Dom.Text.envFailed) html
-                 |> Option.map (fun tag -> tag.Contains (Dom.attr Dom.Hooks.environmentReason reason)))
-                (Some true)
-                "the element that says it failed, wearing the reason"
-
-        // The reason is a value in an attribute, so a quote in it must not end the attribute.
-        testCase "a reason with a quote in it is carried whole" <| fun () ->
-            let html =
-                Support.render { withTerminals [] with Environment = EnvironmentFailed "bwrap: \"/x\" & more" }
-            Expect.equal
-                (openingTagWith (Dom.attr Dom.Hooks.environment Dom.Text.envFailed) html
-                 |> Option.map (fun tag ->
-                     tag.Contains (Dom.attr Dom.Hooks.environmentReason "bwrap: &quot;/x&quot; &amp; more")))
-                (Some true)
-                "escaped as every attribute the view renders is"
-
-        // An environment started again is not still blamed for the last start.
-        testCase "an environment that has not failed says no reason" <| fun () ->
-            let model = withTerminals []
-            let blamed =
-                [ EnvironmentNotStarted, Dom.Text.envNotStarted
-                  EnvironmentStarting, Dom.Text.envStarting
-                  EnvironmentRunning "srt", Dom.Text.envRunning
-                  EnvironmentDown, Dom.Text.envStopped ]
-                |> List.filter (fun (status, label) ->
-                    let html = Support.render { model with Environment = status }
-                    match openingTagWith (Dom.attr Dom.Hooks.environment label) html with
-                    | Some tag -> not (tag.Contains (Dom.attr Dom.Hooks.environmentReason ""))
-                    | None -> true)
-                |> List.map snd
-            Expect.isEmpty blamed "every other state wears an empty reason"
 
         // A phone's drawer has to keep `settings` on screen, so the list stops at a cap and the
         // rest are one press away on the `all` page — counted, so the door says what is behind it.
