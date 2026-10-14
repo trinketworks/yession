@@ -262,8 +262,34 @@ Capabilities gate suites, not folders (`tests/Yession.Tests/Tags.fs`). Pass the 
 has. `check` refuses a capability the box cannot host. Run `help` for the verbs and capabilities.
 `check --only "<text>"` narrows a run to the cases whose full name contains `<text>`.
 
-To eyeball a rich-editor change, run `check Browser`. For real screenshots of a server-rendered
-surface, read `.agents/skills/ui-exploration/SKILL.md` first. Naive headless mobile shots lie.
+To eyeball a rich-editor change, run `check Browser`.
+
+To screenshot ANY UI change, use the camera. It boots a scratch Manager, takes one picture, and
+stops it:
+
+```
+dotnet fsi tasks.fsx frames --boot --still                   # a session's page, true phone size
+dotnet fsi tasks.fsx frames --boot --still --desktop         # 1280x800 (--size WxH for any size)
+dotnet fsi tasks.fsx frames --boot --still --page /          # another page: the Manager's own
+dotnet fsi tasks.fsx frames --boot --still --measure "<js>"  # and print what <js> returns
+```
+
+Run it in the dev shell. It writes `./frames/still.png` (`--out` moves it) and prints `vw`,
+`docW`, `overflowX` and `hover`. Open the PNG and look at it. Do NOT use
+`chrome --headless --screenshot`. Its window clamps to about 500px and it has no hover or focus,
+so its pictures lie. As root (a sandbox), Chromium needs `--no-sandbox`. `frames` adds it by
+itself from PR #1281 on. If a run as root fails with "never wrote DevToolsActivePort", your
+checkout predates that fix. `.agents/skills/ui-exploration/SKILL.md` has the full loop.
+
+For a question the camera cannot ask, script Playwright by hand. `node_modules` has no
+`playwright`. The dev shell sets `$PLAYWRIGHT_CORE` to the `playwright-core` that matches its
+Chromium. Import it, and launch with `channel: "chromium"`, because the shell has no headless
+shell build:
+
+```
+const { chromium } = await import(process.env.PLAYWRIGHT_CORE + "/index.mjs")
+const browser = await chromium.launch({ channel: "chromium" })
+```
 
 - `tests/AGENTS.md`: capability notes (`Sandbox`, `Srt`, `LiveGitHub`, `Dogfood`), running a tier
   this box cannot host (`verify.yml`), and the rules for writing tests.

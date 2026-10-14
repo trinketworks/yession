@@ -108,11 +108,25 @@ in
   # apt nor root; on darwin it is the same app bundle Playwright would have downloaded, where
   # `--with-deps` was never anything but a no-op.
   #
-  # Same browser either way: this nixpkgs pins playwright-driver 1.61.1 — the exact version
-  # tasks.fsx pinned for npx, and the pair Microsoft.Playwright 1.61.0 expects. That agreement
-  # is the point of pinning a revision at all, and it is why the test may not fall back to
-  # some other Chromium that happens to be installed.
+  # The versions do NOT match exactly. The locked nixpkgs has playwright-driver 1.63.0, whose
+  # browsers are chromium-1243. Microsoft.Playwright (Directory.Packages.props) is 1.61.0, and
+  # left alone it would look for its own revision. It never looks: Browser.fs and Frames.fs find
+  # the executable by NAME under any `chromium-*` directory and pass it as the launch path, and
+  # `check Browser` passes across that gap. What the pin buys is that the browser comes from
+  # this lock and not from the host, so the test may not fall back to some other installed
+  # Chromium. A `devenv update` that moves playwright-driver moves the revision too, and
+  # nothing here names it.
   env.PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers-chromium}";
+
+  # The Node Playwright library that matches those browsers, for an ad hoc script:
+  # `import(process.env.PLAYWRIGHT_CORE + "/index.mjs")`. playwright-driver's `$out` IS the
+  # `playwright-core` package, so this adds no second pin and nothing to node_modules (a
+  # read-only store link, where `import "playwright"` finds nothing). Not `playwright-test`:
+  # that drags in Firefox and WebKit, about a gigabyte. A script must launch with
+  # `{ channel: "chromium" }`. Plain headless asks for `chromium_headless_shell-<rev>`, and
+  # `browsers-chromium` leaves that out on every platform. To LOOK at the UI, use the camera
+  # (`frames`, see AGENTS.md). This is the fallback for a question the camera cannot ask.
+  env.PLAYWRIGHT_CORE = "${pkgs.playwright-driver}";
 
   # This Chromium's own wrapper sets a FONTCONFIG_FILE when none is already in the
   # environment — but its template ALSO scans `/usr/share/fonts` and friends, which are the
