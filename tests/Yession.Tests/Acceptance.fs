@@ -177,7 +177,7 @@ let private representativeModel : ClientModel =
                 IsOpen = true
                 Closed = None
                 Lease = None
-                IntegrationLost = false
+                Lost = None
                 Blocks =
                   [ { BlockId = blockId
                       QueueId = None
@@ -503,7 +503,8 @@ let private lostIntegrationModel : ClientModel =
         Terminals =
             { Terminals =
                 representativeModel.Terminals.Terminals
-                |> List.map (fun t -> { t with IntegrationLost = true }) } }
+                |> List.map (fun t ->
+                    { t with Lost = Some { TerminalId = t.TerminalId; BlockId = None; Evidence = None; Refused = [] } }) } }
 
 /// The same session after the terminal has closed (Plan 13, stage 3e) — the audit read. The
 /// choice is explicit because that is the real flow: the panel LANDS on a live terminal, and
@@ -1104,18 +1105,21 @@ let private uiChecklistTests =
                 (html.Contains (Dom.attr Dom.Hooks.terminalQueuedStatus Dom.Text.queuedAwaitingTerminal))
                 "the hold names the terminal"
 
-        testCase "a terminal that stopped marking says so, and offers the repair" <| fun () ->
-            // Named, not shown as a stall. The queue really is held, and a surface that only
-            // showed "pending" would be indistinguishable from a bug.
+        testCase "a terminal whose shell was replaced says so, and offers a new terminal" <| fun () ->
+            // Named, not shown as a stall: the terminal runs no commands, and a surface that
+            // only showed "pending" would be indistinguishable from a bug.
             let html = Support.render lostIntegrationModel
             for label, marker in
                 [ "the state is named", Dom.attr Dom.Hooks.terminalLost (TerminalId.value terminalId)
-                  "with the control that repairs it", Dom.attr Dom.Hooks.terminalRearm (TerminalId.value terminalId)
-                  // ...and the held command says WHICH hold it is under: this one ends when
-                  // somebody re-arms the terminal, not when a person finishes a task.
-                  "the held command names this hold",
-                  Dom.attr Dom.Hooks.terminalQueuedStatus Dom.Text.queuedAwaitingIntegration ] do
+                  "with the way on", Dom.attr Dom.Hooks.terminalLostNew (TerminalId.value terminalId) ] do
                 Expect.isTrue (html.Contains marker) (sprintf "%s (`%s`) must render" label marker)
+
+        testCase "no surface offers to re-arm a terminal" <| fun () ->
+            // Re-arming typed our rc into whatever read the pty — over ssh, the remote host —
+            // and handed it every later block's loan. The control is gone, and so is its word.
+            let html = (Support.render lostIntegrationModel).ToLowerInvariant ()
+            Expect.isFalse (html.Contains "re-arm") "no re-arm"
+            Expect.isFalse (html.Contains "marking") "and no word for the marks a person never sees"
 
         testCase "a closed terminal is reachable, and shows what it ran rather than a composer" <| fun () ->
             let html = Support.render closedTerminalModel

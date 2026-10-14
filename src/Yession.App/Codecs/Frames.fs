@@ -124,8 +124,6 @@ module Frames =
                 | ReleaseTerminalLease id ->
                     Encode.object
                         [ "kind", Encode.string "releaseTerminalLease"; "terminalId", Codec.terminalId.Encode id ]
-                | RearmTerminal id ->
-                    Encode.object [ "kind", Encode.string "rearmTerminal"; "terminalId", Codec.terminalId.Encode id ]
                 | ReattachTerminal id ->
                     Encode.object [ "kind", Encode.string "reattachTerminal"; "terminalId", Codec.terminalId.Encode id ]
                 | ApproveRepoCapabilities (repo, granted) ->
@@ -164,7 +162,6 @@ module Frames =
                 | "takeTerminalLease" -> Decode.field "terminalId" Codec.terminalId.Decode |> Decode.map TakeTerminalLease
                 | "releaseTerminalLease" ->
                     Decode.field "terminalId" Codec.terminalId.Decode |> Decode.map ReleaseTerminalLease
-                | "rearmTerminal" -> Decode.field "terminalId" Codec.terminalId.Decode |> Decode.map RearmTerminal
                 | "reattachTerminal" -> Decode.field "terminalId" Codec.terminalId.Decode |> Decode.map ReattachTerminal
                 | other -> Decode.fail (sprintf "Unknown session command: %s" other)) }
 

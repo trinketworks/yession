@@ -955,7 +955,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     IsOpen = true
                     Closed = None
                     Lease = None
-                    IntegrationLost = false
+                    Lost = None
                     Blocks =
                       [ { BlockId = blockId
                           QueueId = None
@@ -1038,7 +1038,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     IsOpen = true
                     Closed = None
                     Lease = Some (PeerRef peerId)
-                    IntegrationLost = false
+                    Lost = None
                     Blocks = []
                     DroppedBytes = 0 }
                   // A finished one, so the terminal LIST (Plan 20, stage 0) has both its
@@ -1053,7 +1053,7 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                     IsOpen = false
                     Closed = Some { TerminalId = doneId; Reason = "the shell exited with code 0"; By = Some ActorRef.System }
                     Lease = None
-                    IntegrationLost = false
+                    Lost = None
                     Blocks = []
                     DroppedBytes = 0 } ] }
         // The live terminal has a recording behind it too — that is what makes it
@@ -1411,7 +1411,7 @@ let private statusesModel : ClientModel =
           IsOpen = true
           Closed = None
           Lease = None
-          IntegrationLost = false
+          Lost = None
           Blocks = blocks
           DroppedBytes = 0 }
     let feed : TerminalFeed =
@@ -1675,6 +1675,7 @@ do
     /// What `HarnessPage.closed` reads, kept here for `typed`'s reason: the count is this
     /// instrument's output, not the place it keeps it.
     let mutable closed : string array = [||]
+    let mutable openedTerminals : string array = [||]
     /// Where a render's cost goes while the scroll scenario below is running, and nowhere
     /// otherwise. Timed around the whole of `render` — the view, Lit's diff, and the syncs
     /// after it — because that is the task a frame waits on when a record lands mid-scroll.
@@ -1690,12 +1691,13 @@ do
         | ClientEffect.CloseTerminal id ->
             closed <- Array.append closed [| TerminalId.value id |]
             PageGlobal.set HarnessPage.closed closed
+        | ClientEffect.OpenTerminal (_, sandbox) ->
+            openedTerminals <- Array.append openedTerminals [| SandboxRef.render sandbox |]
+            PageGlobal.set HarnessPage.opened openedTerminals
         | ClientEffect.ReleaseTerminal _
         | ClientEffect.SendPresence _
         | ClientEffect.InterruptTerminal _
-        | ClientEffect.RearmTerminal _
         | ClientEffect.ReattachTerminal _
-        | ClientEffect.OpenTerminal _
         | ClientEffect.InterruptTurn _
         | ClientEffect.ApproveRepoCapabilities _ -> ()
         // The listing's next page, answered here because this harness has no session to
@@ -1828,6 +1830,12 @@ do
         // A page that will not decode is the CASE's mistake, and it says so where the case
         // can read it rather than folding nothing and passing on the silence.
         | Error fault -> failwithf "__fold: the page did not decode: %s" (Client.FeedFault.describe fault))
+    PageGlobal.set HarnessPage.withdraw (fun id ->
+        match QueueId.create id with
+        | Ok queued ->
+            model <- { model with Synced = { model.Synced with Pending = Map.remove queued model.Synced.Pending } }
+            render ()
+        | Error _ -> ())
     PageGlobal.set HarnessPage.take (fun id ->
         match TerminalId.create id with
         | Ok terminal -> takeRef terminal

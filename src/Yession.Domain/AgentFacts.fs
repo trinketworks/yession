@@ -54,9 +54,10 @@ and WakeReason =
     /// still open to tell it so.
     | StreamEnded of TerminalId
     /// A terminal's shell stopped answering our marks (Plan 13, stage 2f) while the agent had
-    /// a block open there. This is the one wake that reports the agent being STUCK rather than
-    /// something finishing: from here the Process cannot tell when that block ended, so the
-    /// queue behind it is held and nothing else will arrive to say why.
+    /// work there: a block open, or an act queued that the loss refused. This is the one wake
+    /// that reports the agent's work NOT happening rather than something finishing: nothing
+    /// will say how an open block ended, and a refused act runs only if the agent sends it
+    /// again somewhere else.
     | IntegrationLost of TerminalId
     /// A pull request somebody here watches changed while the agent was not running.
     ///

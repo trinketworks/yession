@@ -87,7 +87,7 @@ module AgentTools =
     /// hint on a line that was refused anyway.
     let private historyExpansionHint (said: string) : string =
         if said.Contains "event not found" then
-            " [`!` is history expansion here, even inside double quotes: put that text in single quotes, or leave the `!` out.]"
+            " [The shell reads `!` as history expansion, also inside double quotes. Put that text in single quotes, or remove the `!`.]"
         else ""
 
     let renderOutcome (outcome: TerminalCommandOutcome) : string =
@@ -141,14 +141,14 @@ module AgentTools =
         // a prompt having refused it — and what it did next was wait.
         | TerminalCommandRan (CommandNotRun said) ->
             let rejected =
-                if said = "" then "the shell rejected the line without saying why"
-                else sprintf "the shell rejected the line: \"%s\"" said
+                if said = "" then "The shell rejected the line and gave no reason."
+                else sprintf "The shell rejected the line: \"%s\"." said
             sprintf
-                "DID NOT RUN in %s — %s. The terminal is fine. Fix the command and send it again.%s%s"
+                "DID NOT RUN in %s. %s The terminal can run commands. Correct the command. Then send it again.%s%s"
                 where rejected (historyExpansionHint said) output
         | TerminalCommandRan (CommandOutcomeUnknown reason) ->
             sprintf
-                "OUTCOME UNKNOWN in %s: %s. It is not running now. Check for its effects before you send it again.%s"
+                "OUTCOME UNKNOWN in %s. %s The command is not running now. Before you send it again, examine its effects.%s"
                 where reason output
         | TerminalCommandEnded reason ->
             sprintf
@@ -196,10 +196,14 @@ module AgentTools =
             sprintf
                 "WAITING FOR %s — somebody is typing there; it has NOT run, and runs when they finish, which is theirs to decide. check_pending '%s' later, or open_terminal to run it elsewhere now."
                 where handle
-        | TerminalCommandAwaitingTerminal UnmarkedShell ->
+        // Refused by the SESSION: that terminal cannot run commands, so nothing can run
+        // there (`TerminalQueueDrain.cannotRunReason`). Unlike a classifier's refusal, the way
+        // on is to run it elsewhere — the command is fine, the terminal is not.
+        | TerminalCommandRefused (ActorRef.Session, reason) ->
             sprintf
-                "WAITING FOR %s — its shell stopped answering the session's instrumentation, and nothing runs there until it prompts again: a ctrl-c into the command stuck there (write_terminal keys: [\"ctrl-c\"], if that command is yours) or a person re-arming it brings it back. It has NOT run. open_terminal runs it elsewhere now; check_pending '%s' picks it up once the terminal is back."
-                where handle
+                "REFUSED in %s. %sUse open_terminal to open a new terminal. Then send the command there with execute_command."
+                where
+                (reason |> Option.map (fun why -> why + " ") |> Option.defaultValue "")
         | TerminalCommandRefused (by, reason) ->
             let who = ActorRef.token by
             match reason with

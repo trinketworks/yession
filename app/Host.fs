@@ -362,6 +362,9 @@ let startFull
         // The same shape of forward reference for the wake: the scheduler is built from
         // things the terminal manager is built first for.
         let mutable wakeScheduler : unit -> unit = ignore
+        // And for what a terminal's queue holds: the queue is the doc's, and the scheduler is
+        // what reads it. Nothing is queued before there is a scheduler to have queued it.
+        let mutable queuedOnTerminal : TerminalId -> QueuedAct list = fun _ -> []
         let mintBlockId () =
             match BlockId.create (string (Guid.NewGuid ())) with
             | Ok id -> id
@@ -422,6 +425,7 @@ let startFull
                 // dropped peer — has nothing the scheduler could have observed.
                 (fun () -> reDrainTerminals ())
                 (fun () -> wakeScheduler ())
+                (fun id -> queuedOnTerminal id)
                 // How a foreign stream is reached (Plan 16, part D). One implementation, not
                 // a configurable one: the wire is part of the seam's contract, so a second
                 // way to attach would be a second contract nobody wrote down.
@@ -758,6 +762,7 @@ let startFull
         let terminalScheduler = TerminalScheduler.create doc terminals scheduler.Wake initialTerminalConsumed
         let drainTerminals () = terminalScheduler.Drain ()
         reDrainTerminals <- drainTerminals
+        queuedOnTerminal <- terminalScheduler.Queued
         // The bound on the starvation a live holder can cause (Plan 13, stage 3c). Reclaims
         // only a lease that has gone idle WITH something queued behind it, so a peer nobody is
         // waiting on keeps their terminal for as long as they like.
@@ -1012,7 +1017,6 @@ let startFull
                         terminals.Interrupt
                         terminals.Take
                         terminals.Release
-                        terminals.Rearm
                         streamAttacher.Reattach
                         approveCapabilities
                         launchRepo

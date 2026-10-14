@@ -308,12 +308,15 @@ module Prompting =
                 | BlockFinished (CommandFailed code) -> sprintf "exit %d" code
                 | BlockFinished (CommandExecutionFailed reason) -> sprintf "could not run: %s" reason
                 | BlockFinished CommandTimedOut -> "timed out"
-                | BlockFinished (CommandNotRun said) -> sprintf "did not run, the shell rejected the line: %s" said
-                | BlockFinished (CommandOutcomeUnknown reason) -> sprintf "ended, outcome unknown: %s" reason
+                | BlockFinished (CommandNotRun said) -> sprintf "did not run. The shell rejected the line: %s" said
+                | BlockFinished (CommandOutcomeUnknown reason) -> sprintf "result unknown. %s" reason
                 | BlockEnded reason -> sprintf "ended, exit status unknown: %s" reason
                 // The agent is told it was refused, and by whom. This is the feedback the
                 // review gate owes whoever it refused: without it a rejected command is
                 // indistinguishable from one that vanished, and the model reasonably tries again.
+                // The session's own refusals name no party: its token is internal, and the
+                // reason already says why.
+                | BlockRejected ((ActorRef.Session | ActorRef.System), Some why) -> sprintf "refused: %s" why
                 | BlockRejected (by, Some why) -> sprintf "refused by %s: %s" (label context.People by) why
                 | BlockRejected (by, None) -> sprintf "refused by %s" (label context.People by)
             let elided =
@@ -375,8 +378,13 @@ module Prompting =
             "You are running because your previous turn was cut off: the session stopped while it was running, so whatever you were in the middle of did not finish, and nothing you were waiting on reported back to it. Check where things actually stand before you continue — a command may have stopped half-way, a push may not have landed — then pick up where you left off, and say that you are resuming."
         | PrChanged _ ->
             "You are running because a pull request watched here changed state — the conversation above says how. Say what it means for what you were doing, and carry on."
-        | IntegrationLost _ ->
-            "You are running because a terminal you had a command running in stopped reporting, so nothing will say how that command ended — the terminal activity above is what is known. A shell left waiting for the rest of a command (an unclosed quote, say) comes back with a ctrl-c through write_terminal. Decide what to do about it, and say so."
+        // Simplified Technical English, as the tool answers are: one term for the terminal's
+        // state ("cannot run commands") and one for what became of its queue ("refused"). The
+        // session knows only that the marks stopped, so the cause is said with "may".
+        | IntegrationLost terminal ->
+            sprintf
+                "You are running because terminal %s cannot run commands. The session cannot tell when a command starts or ends there. Another program may be running in place of the shell. You had work in that terminal. The session refused your queued commands there. They did not run. A command of yours that was running there may have run. Its result is not known. The terminal activity above shows all that the session knows. Decide which commands to send again. Use open_terminal to open a new terminal. Send the commands there. Then say what you did."
+                (TerminalId.value terminal)
         | StreamEnded _ ->
             "You are running because the stream behind a terminal you were working in has ended — the terminal activity above is the last of it. Say what it means for what you were doing."
         | CommandFinished ->

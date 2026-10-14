@@ -130,6 +130,14 @@ module HarnessPage =
     /// because a kill is two presses and only the second may ask: what the page SENT is the
     /// whole question, and with no session behind it nothing else would record it.
     let closed : PageGlobal<string array> = PageGlobal.named "__closed"
+    /// Every terminal this page has asked the session to OPEN, by the sandbox named, in order.
+    /// Read back for `closed`'s reason: what the page sent is the question.
+    let opened : PageGlobal<string array> = PageGlobal.named "__opened"
+    /// Take a queued act out of the page's queue, as the session's own doc write does when a
+    /// command starts or is refused (`SyncedStateSync.removePending`). This page has no
+    /// session behind its doc, so a refusal folded in as an event would otherwise leave the
+    /// entry queued — a state no real client is ever in.
+    let withdraw : PageGlobal<string -> unit> = PageGlobal.named "__withdraw"
     /// Fold a page of events into the shell, as the server serves one — an envelope per line,
     /// in the wire's own encoding (`EventFetch.decodeLines`, the one decoder the real client
     /// reads pages with). How a fact that arrives from ELSEWHERE reaches this page: a terminal

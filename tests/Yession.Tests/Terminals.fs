@@ -1345,56 +1345,72 @@ let private retentionTests =
 
 let private integrationTests =
     testList "Integration lost (Plan 13, stage 2f)" [
-        testCase "a terminal that stopped marking holds its queue" <| fun () ->
-            // Draining into an unmarked shell would produce blocks that never close: the
-            // Process would not know when the command started or finished. Holding says so.
+        testCase "a terminal that cannot run commands runs nothing" <| fun () ->
+            // Typing into an unmarked shell types into whatever reads that pty now — ssh, a
+            // REPL — and nothing would say when the command started or finished.
             let entries = [ entry "a1" terminalA byAda 1.0 ]
             let lost = Set.singleton (TerminalId.value terminalA)
             Expect.isEmpty (planLost Set.empty lost allOpen entries).Ready "nothing runs"
-            Expect.equal
-                (TerminalQueueDrain.holdOf Set.empty Set.empty Set.empty lost allOpen (queueOf entries) terminalA)
-                (Some TerminalQueueDrain.AwaitingIntegration)
-                "and the hold names the repair, not a person"
 
-        testCase "re-arming yields the entry Ready, unchanged" <| fun () ->
+        testCase "what is queued on a terminal that cannot run commands is refused — every entry" <| fun () ->
+            // Refused rather than held: nobody has to decide later whether an old command is
+            // still wanted. Every entry, not just the head, because a refusal waits on nothing.
+            let entries = [ entry "a1" terminalA byAda 1.0; entry "a2" terminalA byBob 2.0 ]
+            let lost = Set.singleton (TerminalId.value terminalA)
+            Expect.equal
+                ((planLost Set.empty lost allOpen entries).CannotRun |> List.map (fun (_, e) -> QueueId.value e.QueueId))
+                [ "q-a1"; "q-a2" ]
+                "both, in queue order"
+
+        testCase "a refusal is not stopped by the block the loss left open" <| fun () ->
+            // That block keeps the terminal busy until the shell prompts again; the queue
+            // behind it must still hear no, at once.
+            let entries = [ entry "a1" terminalA byAda 1.0 ]
+            let busyLost = Set.singleton (TerminalId.value terminalA)
+            Expect.equal
+                ((TerminalQueueDrain.plan Set.empty Set.empty busyLost Set.empty busyLost allOpen (queueOf entries)).CannotRun
+                 |> List.map (fun (_, e) -> QueueId.value e.QueueId))
+                [ "q-a1" ]
+                "refused while busy"
+
+        testCase "a terminal whose shell came back runs its queue again" <| fun () ->
             let entries = [ entry "a1" terminalA byAda 1.0 ]
             Expect.equal
                 ((planLost Set.empty Set.empty allOpen entries).Ready
                  |> List.map (fun (_, e) -> QueueId.value e.QueueId))
                 [ "q-a1" ]
-                "the command that was held runs once marking is back"
+                "what is queued after it is back runs"
 
-        testCase "the agent is told the terminal is not free, and does not wait on it" <| fun () ->
-            // Marking comes back only when somebody acts — a re-arm, or a ^C that brings the
-            // shell back to its prompt — an unbounded wait, so it returns at once rather than
-            // burning a deadline.
+        testCase "a command queued on a terminal that cannot run commands is waited on until its refusal lands" <| fun () ->
+            // The refusal is a moment away, and it is the answer. Returning a hold instead
+            // would answer "waiting" about a command that is about to be refused.
             Expect.equal
                 (TerminalCommandWait.step
                     false
                     { TerminalCommandWait.Observation.Block = None
                       TerminalCommandWait.Observation.InQueue = true
                       TerminalCommandWait.Observation.IsHead = true
-                      TerminalCommandWait.Observation.Hold = Some TerminalQueueDrain.AwaitingIntegration
+                      TerminalCommandWait.Observation.Hold = Some TerminalQueueDrain.CannotRunHere
                       TerminalCommandWait.Observation.Interactive = false; AheadOutranDeadline = false })
-                (TerminalCommandWait.Return (TerminalCommandAwaitingTerminal UnmarkedShell))
-                "no waiting at all, and the answer says the shell is the problem"
+                TerminalCommandWait.KeepWaiting
+                "no answer of its own"
 
-        testCase "the projection remembers, and forgets on repair" <| fun () ->
+        testCase "the projection remembers, and forgets when the prompt returns" <| fun () ->
             let lost =
                 fold
                     [ opened terminalA "build"
-                      SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = Some (block "1"); Evidence = None } ]
+                      SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = Some (block "1"); Evidence = None; Refused = [] } ]
             Expect.isTrue
-                (Projection.tryFind terminalA lost |> Option.map (fun t -> t.IntegrationLost) |> Option.defaultValue false)
+                (Projection.tryFind terminalA lost |> Option.exists (fun t -> Option.isSome t.Lost))
                 "every client sees it, because it is an event rather than a screen"
-            let repaired =
+            let back =
                 fold
                     [ opened terminalA "build"
-                      SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = None; Evidence = None }
-                      SessionEvent.TerminalIntegrationRestored { TerminalId = terminalA; How = Rearmed } ]
-            Expect.isFalse
-                (Projection.tryFind terminalA repaired |> Option.map (fun t -> t.IntegrationLost) |> Option.defaultValue true)
-                "and stops seeing it once somebody re-armed"
+                      SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = None; Evidence = None; Refused = [] }
+                      SessionEvent.TerminalIntegrationRestored { TerminalId = terminalA; How = PromptReturned } ]
+            Expect.isTrue
+                (Projection.tryFind terminalA back |> Option.exists (fun t -> Option.isNone t.Lost))
+                "and stops seeing it once the shell prompts again"
     ]
 
 let private idleLeaseTests =
@@ -1670,7 +1686,6 @@ let private waitTests =
                   TerminalCommandAwaitingTerminal BehindBlock
                   TerminalCommandAwaitingTerminal BehindQueue
                   TerminalCommandAwaitingTerminal HeldByPerson
-                  TerminalCommandAwaitingTerminal UnmarkedShell
                   TerminalCommandRefused (PeerRef bob, None) ]
             Expect.equal (List.distinct statuses |> List.length) (List.length statuses) "no two are the same value"
 
@@ -1711,11 +1726,6 @@ let private leaseCommandTests =
                             })
                         (fun id ->
                             async {
-                                calls.Add (sprintf "rearm:%s" (TerminalId.value id))
-                                return Ok ()
-                            })
-                        (fun id ->
-                            async {
                                 calls.Add (sprintf "reattach:%s" (TerminalId.value id))
                                 return Ok id
                             })
@@ -1729,10 +1739,6 @@ let private leaseCommandTests =
                     released
                     (CommandRejected "another peer holds this terminal")
                     "and a release you are not entitled to is refused, with the reason"
-                // Re-arming carries no actor at all: it repairs a terminal rather than taking
-                // anything from anyone, so who pressed it decides nothing.
-                let! rearmed = handle bob (RearmTerminal terminalA)
-                Expect.equal rearmed CommandAccepted "any peer may re-arm"
                 // An interrupt is somebody's act on somebody's command, so it carries them.
                 let! interrupted = handle bob (InterruptTerminal terminalA)
                 Expect.equal interrupted CommandAccepted "any peer may interrupt"
@@ -1740,9 +1746,8 @@ let private leaseCommandTests =
                     (List.ofSeq calls)
                     [ sprintf "take:%s:%A" (TerminalId.value terminalA) (PeerRef ada)
                       sprintf "release:%s:%A" (TerminalId.value terminalA) (PeerRef ada)
-                      sprintf "rearm:%s" (TerminalId.value terminalA)
                       sprintf "interrupt:%s:%A" (TerminalId.value terminalA) (PeerRef bob) ]
-                    "the lease commands and the interrupt carry the asking peer's actor; the repair carries none"
+                    "the lease commands and the interrupt carry the asking peer's actor"
             }
     ]
 
@@ -1770,7 +1775,6 @@ let private peerOpenTests =
                 (fun _ _ -> async { return Error "not this test" })
                 (fun _ _ -> async { return Error "not this test" })
                 (fun _ _ -> async { return Error "not this test" })
-                (fun _ -> async { return Error "not this test" })
                 (fun id -> async { return Ok id })
                 (fun _ _ _ -> async { return Error "no repos in this composition" })
                 (fun _ _ _ -> async { return Error "no repos in this composition" })
@@ -2263,16 +2267,21 @@ let private codecTests =
                       { TerminalId = terminalA; Was = ActorRef.Agent; Reason = LeaseHolderGone; ToSeq = 0 }
                   SessionEvent.TerminalLeaseReleased
                       { TerminalId = terminalA; Was = PeerRef ada; Reason = LeaseIdle; ToSeq = 0 }
-                  SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = Some (block "1"); Evidence = None }
+                  SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = Some (block "1"); Evidence = None; Refused = [] }
                   SessionEvent.TerminalIntegrationLost
                       { TerminalId = terminalA
                         BlockId = Some (block "1")
+                        // What it refused, the agent's and a person's: the wake reads whose.
+                        Refused =
+                          [ { QueueId = queue "a1"; Authority = Authority.agentFor (Principal.Peer ada) }
+                            { QueueId = queue "a2"; Authority = byBob } ]
                         Evidence =
                           Some
                               { WrittenAt = System.DateTimeOffset (2026, 9, 20, 0, 14, 44, System.TimeSpan.Zero)
                                 Due = System.DateTimeOffset (2026, 9, 20, 0, 14, 46, System.TimeSpan.Zero)
                                 Said = "$ echo hi\\x0d\\x0a" } }
-                  SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = None; Evidence = None }
+                  SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = None; Evidence = None; Refused = [] }
+                  // Nothing writes a re-arm now; a log that holds one must still round-trip.
                   SessionEvent.TerminalIntegrationRestored { TerminalId = terminalA; How = Rearmed }
                   SessionEvent.TerminalIntegrationRestored { TerminalId = terminalA; How = PromptReturned }
                   completed terminalA "1" (CommandNotRun "bash: !p: event not found") 9
@@ -2347,6 +2356,22 @@ let private codecTests =
                 (Codec.fromString Events.sessionEvent old)
                 (Ok (SessionEvent.TerminalIntegrationRestored { TerminalId = terminalA; How = Rearmed }))
                 "the only way back there was"
+
+        // The control that wrote these is gone. Its lines are not: a log holding one opens.
+        testCase "a re-arm a person recorded before re-arming was removed still decodes" <| fun () ->
+            let old = """{"type":"terminalIntegrationRestored","payload":{"terminalId":"term-a","how":"rearmed"}}"""
+            Expect.equal
+                (Codec.fromString Events.sessionEvent old)
+                (Ok (SessionEvent.TerminalIntegrationRestored { TerminalId = terminalA; How = Rearmed }))
+                "read as what it was"
+
+        // A loss written before it refused its queue held it instead, and named nothing.
+        testCase "a loss written before it named what it refused still decodes, refusing nothing" <| fun () ->
+            let old = """{"type":"terminalIntegrationLost","payload":{"terminalId":"term-a"}}"""
+            Expect.equal
+                (Codec.fromString Events.sessionEvent old)
+                (Ok (SessionEvent.TerminalIntegrationLost { TerminalId = terminalA; BlockId = None; Evidence = None; Refused = [] }))
+                "an old loss is a loss"
 
         testCase "an agent's block written before Plan 20 is refused, not recovered" <| fun () ->
             // The same absent key on an AGENT block says nobody's authority — a value the
@@ -2482,7 +2507,6 @@ let private codecTests =
                   Command (Request (RequestId.fresh (), CloseTerminal terminalA))
                   Command (Request (RequestId.fresh (), TakeTerminalLease terminalA))
                   Command (Request (RequestId.fresh (), ReleaseTerminalLease terminalA))
-                  Command (Request (RequestId.fresh (), RearmTerminal terminalA))
                   Presence
                       { Who = PeerRef ada
                         DisplayName = "Ada"
@@ -2663,7 +2687,10 @@ let private mintFrom (ids: string list) =
         if remaining.Count > 1 then remaining.RemoveAt 0
         next
 
-let private makeTerminalsOn (mayOweWake: unit -> unit) (clock: Clock) (principalFor: PeerId -> Principal) (loans: SessionTerminals.BlockLoans) attach classifier (log: EventLog<SessionEvent>) environment openTranscript readTranscript openAtBoot profilesAtBoot =
+/// `queuedOn` is what the manager is told a terminal's queue holds — the scheduler's answer in
+/// the Process. A case with a doc and a scheduler hands that in; every other case has no
+/// queue for a loss to refuse.
+let private makeTerminalsQueued (queuedOn: TerminalId -> QueuedAct list) (mayOweWake: unit -> unit) (clock: Clock) (principalFor: PeerId -> Principal) (loans: SessionTerminals.BlockLoans) attach classifier (log: EventLog<SessionEvent>) environment openTranscript readTranscript openAtBoot profilesAtBoot =
     let mintTerminal = mintFrom [ "term-a"; "term-b"; "term-c"; "term-d"; "term-e"; "term-f" ]
     let mintBlock = mintFrom [ "b-1"; "b-2"; "b-3" ]
     let records = ResizeArray<TerminalId * int * TranscriptRecord> ()
@@ -2697,11 +2724,15 @@ let private makeTerminalsOn (mayOweWake: unit -> unit) (clock: Clock) (principal
             // while making every manager assertion depend on it.
             ignore
             mayOweWake
+            queuedOn
             attach
             classifier
             openAtBoot
             profilesAtBoot
     terminals, records, opens
+
+let private makeTerminalsOn mayOweWake clock principalFor loans attach classifier log environment openTranscript readTranscript openAtBoot profilesAtBoot =
+    makeTerminalsQueued (fun _ -> []) mayOweWake clock principalFor loans attach classifier log environment openTranscript readTranscript openAtBoot profilesAtBoot
 
 /// A fixed NOW, and real waiting: most cases are about the manager's rules, and the few
 /// that hold a read open (`Tail` with a wait) look again in real time. A case about a
@@ -4247,7 +4278,7 @@ let private viewOf (isOpen: bool) (renewable: bool) : TerminalView =
       IsOpen = isOpen
       Closed = (if isOpen then None else Some { TerminalId = terminalA; Reason = "closed by a peer"; By = Some (PeerRef ada) })
       Lease = None
-      IntegrationLost = false
+      Lost = None
       Blocks = []
       DroppedBytes = 0 }
 
@@ -5040,19 +5071,185 @@ let private comingBackTests =
                     "the shell's own word on it, not an unknown"
             }
 
-        // A re-arm settles it the same way: the block was left open by the loss whichever
-        // way the terminal comes back, and a terminal back but still busy releases nothing.
-        testCaseAsync "a block a re-arm finds open ends with its outcome unknown" <|
+    ]
+
+/// A terminal whose shell stops marking, with two commands queued behind its open block in a
+/// real doc — the agent's, then bob's — a scheduler to drain them, and the manager told what
+/// the queue holds: the Process's own composition, without the Host. The manager's re-drain
+/// is the scheduler's, as in the Process, so the loss refuses the queue on its own.
+let private cannotRunHoldingTwo () =
+    async {
+        let log = newLog ()
+        let shell, mark = lateMarkingShell ()
+        let clock = virtualClock (fixedClock ())
+        let openTranscript, _, _, _, readTranscript = recordingTranscripts ()
+        let queued = ref (fun (_: TerminalId) -> ([] : QueuedAct list))
+        let drain = ref ignore
+        let woken = ref 0
+        let terminals, _, _ =
+            makeTerminalsQueued
+                (fun id -> queued.Value id)
+                (fun () -> woken.Value <- woken.Value + 1)
+                clock.Clock
+                Principal.Peer
+                SessionTerminals.BlockLoans.none
+                AttachTerminal.unavailable
+                Classifier.approveAll
+                log
+                shell
+                openTranscript
+                readTranscript
+                []
+                ShellProfileProjection.empty
+        let doc = Y.Doc.Create ()
+        let scheduler = TerminalScheduler.create doc terminals ignore Set.empty
+        queued.Value <- scheduler.Queued
+        let! opened = terminals.Open (PeerRef ada) (SandboxShell SandboxRef.defaultRef) (TerminalTitle.fromProse "build")
+        let id = opened |> expect
+        Async.StartImmediate (terminals.RunBlock id (entry "b1" id byAda 1.0) "echo hi" ignore)
+        do! clock.Armed ()
+        SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (Principal.Peer ada)) 1.0 "echo one" false false None
+        SyncedStateSync.enqueueTerminalCommand doc (queue "a2") id byBob 2.0 "echo two" false false None
+        let wokenBefore = woken.Value
+        clock.Advance (TimeSpan.FromSeconds 3.0)
+        do! waitUntil "the terminal to be lost" (fun () -> Set.contains (TerminalId.value id) (terminals.Lost ()))
+        // The Process re-drains on the loss (`reDrain`); this composition drains by hand.
+        scheduler.Drain ()
+        return terminals, scheduler, doc, id, log, mark, (fun () -> woken.Value > wokenBefore)
+    }
+
+/// The refusals on the log, as (queue id, refused by, reason).
+let private refusalsOf (log: EventLog<SessionEvent>) =
+    async {
+        let! events = eventsOf log
+        return
+            events
+            |> List.choose (function
+                | SessionEvent.TerminalCommandRejected r -> Some (QueueId.value r.QueueId, r.RejectedBy, r.Reason)
+                | _ -> None)
+    }
+
+/// Wait, bounded, until `count` refusals are on the log.
+let private untilRefused (log: EventLog<SessionEvent>) (count: int) =
+    let rec look (left: int) =
+        async {
+            let! refusals = refusalsOf log
+            if List.length refusals >= count then return ()
+            elif left = 0 then return failwithf "expected %d refusals, got %A" count refusals
+            else
+                do! Async.Sleep 10
+                return! look (left - 1)
+        }
+    look 200
+
+/// What a terminal that cannot run commands does with its queue, and with itself.
+let private cannotRunTests =
+    testList "A terminal that cannot run commands" [
+        testCaseAsync "the loss refuses everything queued there, the agent's and a person's, with the reason" <|
             async {
-                let! terminals, id, log, _, _, _, _ = lostOverALateShell ()
-                match! terminals.Rearm id with
-                | Error e -> failwithf "the shell answers the re-arm: %s" e
-                | Ok () ->
-                    do! waitUntil "the open block to end" (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
-                    let! events = eventsOf log
-                    match events |> List.choose (function SessionEvent.TerminalBlockCompleted c when c.TerminalId = id -> Some c.Result | _ -> None) with
-                    | [ CommandOutcomeUnknown _ ] -> ()
-                    | other -> failwithf "expected the open block to end with no outcome claimed, got %A" other
+                let! _, _, _, _, log, _, _ = cannotRunHoldingTwo ()
+                do! untilRefused log 2
+                let! refusals = refusalsOf log
+                Expect.equal
+                    refusals
+                    [ "q-a1", ActorRef.Session, Some TerminalQueueDrain.cannotRunReason
+                      "q-a2", ActorRef.Session, Some TerminalQueueDrain.cannotRunReason ]
+                    "both refused by the session, in queue order, saying where to run them instead"
+            }
+
+        // What a peer's chip reads is the doc's queue: a refusal that left the entry in the doc
+        // would leave "queued" on every screen, under a command that will never run.
+        testCaseAsync "after the loss, nothing it refused is left in the queue" <|
+            async {
+                let! _, _, doc, _, log, _, _ = cannotRunHoldingTwo ()
+                do! untilRefused log 2
+                Expect.isEmpty (SyncedStateSync.ofDoc doc).Pending "both entries left the doc with their refusal"
+            }
+
+        testCaseAsync "a client built from that doc and log shows no queued command" <|
+            async {
+                let! _, _, doc, id, log, _, _ = cannotRunHoldingTwo ()
+                do! untilRefused log 2
+                let! events = eventsOf log
+                let model =
+                    { ClientModel.init { PeerId = ada; DisplayName = "ada" } with
+                        Synced = SyncedStateSync.ofDoc doc
+                        Terminals = fold events }
+                Expect.isEmpty (ClientModel.pendingActs model) "no chip in the chat"
+                Expect.isEmpty (ClientModel.terminalQueue id model) "and no card in the terminal"
+            }
+
+        testCaseAsync "the loss names what it refused, for the wake to read whose it was" <|
+            async {
+                let! _, _, _, id, log, _, _ = cannotRunHoldingTwo ()
+                let! events = eventsOf log
+                let lost = events |> List.pick (function SessionEvent.TerminalIntegrationLost l when l.TerminalId = id -> Some l | _ -> None)
+                Expect.equal (lost.Refused |> List.map (fun act -> QueueId.value act.QueueId)) [ "q-a1"; "q-a2" ] "both, the agent's first"
+            }
+
+        testCaseAsync "a command queued after the loss is refused, not held" <|
+            async {
+                let! _, scheduler, doc, id, log, _, _ = cannotRunHoldingTwo ()
+                do! untilRefused log 2
+                SyncedStateSync.enqueueTerminalCommand doc (queue "a3") id (Authority.agentFor (Principal.Peer ada)) 3.0 "echo three" false false None
+                scheduler.Drain ()
+                do! untilRefused log 3
+                let! refusals = refusalsOf log
+                Expect.equal (refusals |> List.last) ("q-a3", ActorRef.Session, Some TerminalQueueDrain.cannotRunReason) "at once, with the same reason"
+                Expect.isEmpty (SyncedStateSync.ofDoc doc).Pending "and nothing is left waiting in the queue"
+            }
+
+        testCaseAsync "the terminal is not killed: it stays open, and a person can take its keyboard" <|
+            async {
+                let! terminals, _, _, id, _, _, _ = cannotRunHoldingTwo ()
+                Expect.isTrue (terminals.IsOpen id) "still open"
+                let! taken = terminals.Take id (PeerRef ada)
+                Expect.isOk taken "and typeable"
+            }
+
+        testCaseAsync "the manager says the wake may be owed when the loss refuses the queue" <|
+            async {
+                let! _, _, _, _, _, _, woke = cannotRunHoldingTwo ()
+                Expect.isTrue (woke ()) "the wake is asked to look"
+            }
+
+        testCaseAsync "when the prompt returns, the terminal runs commands again" <|
+            async {
+                let! terminals, scheduler, doc, id, log, mark, _ = cannotRunHoldingTwo ()
+                do! untilRefused log 2
+                // The instrumented shell's own primary prompt: the only thing that brings it back.
+                mark "A"
+                do! waitUntil "the terminal to come back" (fun () -> not (Set.contains (TerminalId.value id) (terminals.Lost ())))
+                do! waitUntil "the open block to be settled" (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
+                SyncedStateSync.enqueueTerminalCommand doc (queue "a4") id byAda 4.0 "echo four" false false None
+                scheduler.Drain ()
+                let rec started (left: int) =
+                    async {
+                        let! events = eventsOf log
+                        if events |> List.exists (function SessionEvent.TerminalBlockStarted b -> b.QueueId = Some (queue "a4") | _ -> false) then
+                            return ()
+                        elif left = 0 then return failwith "the command queued after the prompt returned never started"
+                        else
+                            do! Async.Sleep 10
+                            return! started (left - 1)
+                    }
+                do! started 200
+            }
+
+        testCaseAsync "what the loss refused is not run when the prompt returns" <|
+            async {
+                let! terminals, scheduler, _, id, log, mark, _ = cannotRunHoldingTwo ()
+                do! untilRefused log 2
+                mark "A"
+                do! waitUntil "the terminal to come back" (fun () -> not (Set.contains (TerminalId.value id) (terminals.Lost ())))
+                scheduler.Drain ()
+                let! events = eventsOf log
+                Expect.isFalse
+                    (events
+                     |> List.exists (function
+                         | SessionEvent.TerminalBlockStarted b -> b.QueueId = Some (queue "a1") || b.QueueId = Some (queue "a2")
+                         | _ -> false))
+                    "its author decides whether to send it again"
             }
     ]
 
@@ -5984,6 +6181,7 @@ let tests =
         interruptTests
         lostEvidenceTests
         comingBackTests
+        cannotRunTests
         refusedLineTests
         codecTests
         orderTests

@@ -55,10 +55,10 @@ type SessionCommand =
     /// releasing someone else's lease is a steal wearing a polite word, and a steal is
     /// `TakeTerminalLease`, which says so on the record.
     | ReleaseTerminalLease of TerminalId
-    /// Type the shell instrumentation into the terminal again (Plan 13, stage 2f), after its
-    /// shell stopped emitting marks. Any peer may: it repairs a terminal rather than taking
-    /// anything from anyone. Rejected when the terminal is not in that state.
-    | RearmTerminal of TerminalId
+    // There is no re-arm. A terminal whose marks stopped may be read by some other program, and
+    // typing our rc into it would hand that program every later block's loan; the loss
+    // refuses its queue instead (`TerminalIntegrationLost.Refused`). Commands are frames, not
+    // log lines, so nothing persisted names the verb that was here.
     /// Ask the provider for this terminal's stream again (Plan 19, step 4), when the stream
     /// it was attached to has ended.
     ///

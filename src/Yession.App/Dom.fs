@@ -418,10 +418,18 @@ module Dom =
         let terminalStolenDismiss = "data-terminal-stolen-dismiss"
         /// Where a live screen's cursor stands.
         let terminalCaret = "data-terminal-caret"
-        /// The banner shown when a terminal's shell stopped emitting marks (Plan 13, stage
-        /// 2f), and the control that types the instrumentation in again.
+        /// The banner shown when a terminal cannot run commands (Plan 13, stage 2f): its shell's
+        /// marks stopped, so the session cannot bound a command there. Its value is the terminal.
         let terminalLost = "data-terminal-lost"
-        let terminalRearm = "data-terminal-rearm"
+        /// One command the loss refused, on that banner, carrying its block's id — so a test
+        /// counts what is listed without reading the words.
+        let terminalRefused = "data-terminal-refused"
+        /// The banner's one act: open a new terminal in the same sandbox.
+        let terminalLostNew = "data-terminal-lost-new"
+        /// In the CHAT: the agent's commands a loss refused, said where a person reads the
+        /// conversation. Its value is the terminal's id; its control shows that terminal.
+        let chatRefused = "data-chat-refused"
+        let chatRefusedOpen = "data-chat-refused-open"
         /// Ask the provider for a closed terminal's stream again (Plan 19, step 4).
         let terminalReattach = "data-terminal-reattach"
         /// The replay of a CLOSED terminal (Plan 13, stage 3e): the mount the player attaches
@@ -894,7 +902,13 @@ module Dom =
         /// the command, which never started, and said as what it was.
         let blockNotRun = "not-run"
         /// The same, in words.
-        let blockDidNotRun = "didn't run"
+        let blockDidNotRun = "did not run"
+        /// The block a loss left open: the record still calls it running, and nothing will say
+        /// how it ended. Not the pulse — a spinner over a command nobody can see the end of
+        /// says "be patient" about a thing that may already be over.
+        let blockUnknown = "unknown"
+        /// The same, in words. The hedge is the fact: it may have run, and it may not.
+        let blockMayHaveRun = "may have run"
         /// How a block went, in WORDS — what a screen reader hears where a sighted reader
         /// sees `✓ 0` or `✕ 1`, and what a chip's accessible name carries. The mark is a
         /// glyph and a number; neither says what it means to anybody who cannot see it.
@@ -905,6 +919,10 @@ module Dom =
         /// a reference after this word.
         let blockRefused = "refused by"
         let blockRefusedBy (who: string) = sprintf "%s %s" blockRefused who
+        /// A refusal by the session or the system: no party a person knows, so no name. The
+        /// actor's token (`session-process`) is an internal word, and a block reading
+        /// "refused by session-process" named it to someone who could do nothing with it.
+        let blockRefusedPlain = "refused"
         /// How a lease stretch ended, on its chat item (Plan 14, stage 1). Four tokens rather
         /// than one, because the question a reader asks afterwards — "did nick finish, get
         /// taken over, drop out, or just wander off?" — has four different answers.
@@ -1085,17 +1103,46 @@ module Dom =
         /// 2e) — it resolves when the person finishes their task, and a queue that said
         /// only *pending* would leave that looking like a stall.
         let queuedAwaitingTerminal = "awaiting-terminal"
-        /// What a terminal that stopped marking costs, and why, on that terminal's own band.
-        /// The status word says the fault; this says what it does to the queue, which is the
-        /// thing a person is about to wonder about.
-        let terminalNotMarking = "Queued commands are held until the terminal is re-armed."
-        let terminalNotMarkingWhy =
-            "The shell stopped reporting when a command starts and finishes, so nothing here can "
-            + "tell when one has run."
-        /// A queued command held because its terminal's shell stopped marking (Plan 13, stage
-        /// 2f). Apart from `queuedAwaitingTerminal` because it resolves differently: one ends
-        /// when a person finishes a task, this one when somebody repairs the terminal.
-        let queuedAwaitingIntegration = "awaiting-integration"
+        /// A terminal that cannot run commands, on its own band (Plan 13, stage 2f). Written to
+        /// Simplified Technical English: one term for the state ("cannot run commands") and one
+        /// for what became of its queue ("refused"), everywhere, on every surface. The session
+        /// knows only that the marks stopped, so the cause is said with "may".
+        let terminalCannotRun = "This terminal cannot run commands. The session cannot tell when a command starts or ends here. Another program may be running in place of the shell."
+        /// When, and after which command. `since` is a `Moment.stamp`.
+        let terminalCannotRunSince (since: string option) (after: string option) =
+            match since, after with
+            | Some at, Some command -> sprintf "Since %s, after %s." at command
+            | Some at, None -> sprintf "Since %s." at
+            | None, Some command -> sprintf "After %s." command
+            | None, None -> ""
+        /// The mechanism, in the banner's detail note.
+        let terminalCannotRunWhy =
+            "The shell stopped sending the marks that show when a command starts and ends."
+        /// What the shell printed when the session stopped waiting for it: the evidence.
+        let terminalShellPrinted (said: string) =
+            if said = "" then "The shell printed nothing after the command."
+            else sprintf "The shell printed: “%s”" said
+        /// The command the loss left open. The hedge is exactly as strong as the fact.
+        let terminalOpenUnknown (command: string) = sprintf "%s may have run. Its result is not known." command
+        /// What the loss refused here.
+        let terminalRefusedHere (n: int) =
+            match n with
+            | 0 -> ""
+            | 1 -> "The session refused 1 queued command. It did not run:"
+            | n -> sprintf "The session refused %d queued commands. They did not run:" n
+        /// What a person can still do: the terminal is not closed, only its commands.
+        let terminalStillTypes = "You can still type in this terminal."
+        let openNewTerminal = "Open a new terminal"
+        /// The chat's row for the agent's refused commands. The terminal's name is the row's
+        /// control, never the sentence's subject: a name is often a long command.
+        let chatRefused (n: int) =
+            if n = 1 then
+                "The session refused 1 command from the agent. It did not run. Its terminal cannot run commands."
+            else
+                sprintf
+                    "The session refused %d commands from the agent. They did not run. Their terminal cannot run commands."
+                    n
+        let showTerminal = "Show terminal"
         let system = "system"
         /// Why a turn nobody asked for exists (Plan 20, stage 2). The token a test reads off
         /// `data-message-woke`; the word beside it on screen is `turnWoke`.
@@ -1115,7 +1162,7 @@ module Dom =
         /// the chat's meta line is three short words wide.
         let turnWokeCommandFinished = "The agent picked this up on its own: a command it left running in the background finished."
         let turnWokeStreamEnded = "The agent picked this up on its own: the stream behind a terminal it was working in has ended."
-        let turnWokeIntegrationLost = "The agent picked this up on its own: a terminal it had a command running in stopped reporting, so nothing will say how that command ended."
+        let turnWokeIntegrationLost = "The agent started on its own. A terminal where the agent had work cannot run commands."
         let turnWokePrChanged = "The agent picked this up on its own: a pull request watched here changed state."
         let turnWokeCutOff = "The agent picked this up on its own: its previous turn was cut off when the session stopped, so it is resuming."
         /// Stands where the quoted message would be when the ref points past the loaded page —
