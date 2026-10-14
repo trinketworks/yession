@@ -578,11 +578,15 @@ module View =
     /// A terminal's state, as a small mark beside its name: running, its last command failed,
     /// or closed — and nothing at all for one that is open, idle and fine, which is most of
     /// them. ONE vocabulary for the pivot, the `all` page and the sidebar's environment, so a
-    /// terminal reads the same in the row of names and in each list of them: the pulse is the running block's own
-    /// (`runningDot`), a failure the same dot standing still in the error red, and a closed
-    /// terminal the dot hollowed out. A mark beside the name, never a
+    /// terminal reads the same in the row of names and in each list of them: the beat is the
+    /// running block's own (`runningDot`), a failure the same dot standing still in the error
+    /// red, and a closed terminal the dot hollowed out. A mark beside the name, never a
     /// box round it or a word in caps after it — a row of names is what a reader scans — and
     /// each says itself to a screen reader.
+    ///
+    /// Running, failed and closed are three SHAPES — beating, filled, hollow — not one shape
+    /// in three colours. Each word here is `srOnly`, so a sighted reader has only the mark,
+    /// and colour may not be the only thing that distinguishes two of them (WCAG 2.0 SC 1.4.1).
     ///
     /// And what is NEWS to the person reading (`ClientModel.unseen`): a terminal that finished
     /// something since they last looked at it wears the settled dot with a ring round it — in
@@ -597,12 +601,12 @@ module View =
             html $"""<span class="{Style.pivotMark} {voice}" data-pane-mark="{token}"><span aria-hidden="true">{glyph}</span><span class="{Style.srOnly}">{word}</span></span>"""
         let news = html $"""<span class="{Style.statusDotNews}"></span>"""
         match ClientModel.terminalState view model with
-        // The settled dot in the faintest ink. It was a HOLLOW dot — the one with nothing left
-        // in it — until a ring stopped being a shape a mark may wear (`Style.statusDotSolid`
-        // says why): what tells a closed terminal from a failed one is this voice against the
-        // red one below, which is the job the doctrine gives colour.
+        // Hollow: the dot with nothing left in it. Not a stop square, which is what a running
+        // command's Stop looks like. The SHAPE is what tells this from the failed row below,
+        // whose word is `srOnly` as this one's is — colour alone would leave a sighted reader
+        // nothing (`Style.statusDotHollow` has the criterion).
         | TerminalState.Closed ->
-            mark "closed" "text-ink-faint" (html $"""<span class="{Style.statusDotSolid}"></span>""") Dom.Text.markClosed
+            mark "closed" "text-ink-faint" (html $"""<span class="{Style.statusDotHollow}"></span>""") Dom.Text.markClosed
         | TerminalState.Running ->
             html $"""<span class="{Style.pivotMark}" data-pane-mark="running">{runningDot}</span>"""
         | TerminalState.UnseenFailed -> mark "unseen-failed" "text-err" news Dom.Text.markUnseenFailed

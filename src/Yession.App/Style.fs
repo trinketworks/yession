@@ -72,6 +72,10 @@ module Style =
         let faint = "border-ink-faint"
         let blue = "border-blue"
         let green = "border-green"
+        /// The tone that follows the TEXT colour, for a stroke whose voice composes at the use
+        /// site rather than here — the hollow mark (`statusDotHollow`), drawn in whatever ink
+        /// the status around it is speaking in.
+        let current = "border-current"
 
         // What a RING does under interaction. `focus:` fires on a control that takes focus
         // ITSELF — which is every ring in the product, because a host whose real input is a
@@ -316,16 +320,27 @@ module Style =
     /// Motion). Under reduced motion it stands still in the status's own ink, which is what
     /// `bg-current` underneath is for.
     let statusDotBeat = cls [ statusDot; "animate-beat-wait motion-reduce:animate-none" ]
-    /// The same dot standing still: a state that has SETTLED — a terminal's last command
-    /// failed, or a terminal that has closed — where a beat would claim it is still happening.
-    ///
-    /// A closed terminal used to wear a RING here instead. Two reasons it does not any more.
-    /// A ring is a stroke, and `Stroke.ring` is for what you type in or press — a mark is
-    /// neither, so no mark draws one. And the same ring already meant "somebody is watching"
-    /// on a person (`paneViewerDot`): one shape may not mean two things, and the one it means
-    /// nowhere else wins. What tells a closed terminal from a failed one is the colour its
-    /// voice composes — `ink-faint` against `err` — which is the job the doctrine gives colour.
+    /// The same dot standing still: a state that has SETTLED, such as a terminal whose last
+    /// command failed, where a beat would claim it is still happening.
     let statusDotSolid = cls [ disc; "bg-current" ]
+
+    /// The dot with nothing in it: a state that has ENDED (a terminal that closed). Its ring
+    /// composes `Stroke` rather than writing a bare `border-*`, which is the rule every other
+    /// border in this file answers to — that was the whole defect, and deleting the shape was
+    /// never the remedy for it.
+    ///
+    /// Because the SHAPE here is holding a floor criterion up. A closed terminal and a failed
+    /// one sit in the same row of names, their words are `srOnly`, and their voices differ
+    /// only in ink — so with one shape between them, colour would be the only visual means of
+    /// telling them apart, which WCAG 2.0 SC 1.4.1 (Use of Color, Level A) forbids. The floor
+    /// is first in the doctrine's Deciding order and is never traded; vocabulary is fourth and
+    /// cannot buy it.
+    ///
+    /// That leaves a real question open, and open on purpose: this ring also means "somebody
+    /// is watching" on a person (`paneViewerDot`, which still draws its own bare border), and
+    /// one shape may not mean two things. Watching is the rarer meaning and the one with
+    /// somewhere else to go, so it is the one to move — not this.
+    let statusDotHollow = cls [ disc; Stroke.ring; Stroke.current ]
     /// A live dot: a command running. It beats in COLOUR, live's green to live's dim and back
     /// (`beat-live`), never in opacity, so it holds the 3:1 a mark owes its surface at every
     /// frame. Still and green under reduced motion.
@@ -334,8 +349,8 @@ module Style =
     let statusDotLiveLead = cls [ statusDotLive; discLead ]
     /// The settled dot with a halo round it: something has happened that the person reading
     /// has not seen yet (`ClientModel.unseen`). An `outline` rather than a border, so the gap
-    /// between the two is the surface it sits on, whichever that is — and so the mark is still
-    /// a filled point with something around it, rather than the hollow one retired above.
+    /// between the two is the surface it sits on, whichever that is — and so this stays a
+    /// FILLED point with something around it, which is what keeps it clear of the hollow one.
     let statusDotNews =
         cls [ statusDotSolid; "outline outline-1 outline-current outline-offset-[1.5px]" ]
 
