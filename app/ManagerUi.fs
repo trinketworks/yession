@@ -678,9 +678,18 @@ let private seeOther (res: ServerResponse) (location: string) =
     res.writeHead (303, [ ResponseHeader.Location location; ResponseHeader.CacheControl "no-store" ])
     res.``end`` ""
 
-/// GET a URL and report the status its answer carried; `0` when nothing answered at all.
-/// Redirects are followed, because a session that bounces its shell through sign-in has
-/// still answered. Nothing reads the body, so nothing reads it.
+/// How long the readiness check waits for the session's address to answer.
+///
+/// Shorter than the opening screen's own bound on one poll (`openingProgram`), so the screen
+/// hears this route's `503` and never has to abort it. Without a bound, an address that
+/// accepted the connection and then said nothing held the screen's poll for ever, and the
+/// screen's give-up never fired.
+let private readinessDeadlineMs = 3000.0
+
+/// GET a URL and report the status its answer carried; `0` when nothing answered at all,
+/// inside `readinessDeadlineMs` or never. Redirects are followed, because a session that
+/// bounces its shell through sign-in has still answered. Nothing reads the body, so nothing
+/// reads it.
 let private statusOf (url: string) : Async<int> =
     async {
         let! attempt =
@@ -688,7 +697,8 @@ let private statusOf (url: string) : Async<int> =
                 (fun _ -> Promise.lift ())
                 url
                 [ Fetch.Types.RequestProperties.Redirect Fetch.Types.RedirectMode.Follow
-                  Fetch.Types.RequestProperties.Cache Fetch.Types.RequestCache.Nostore ]
+                  Fetch.Types.RequestProperties.Cache Fetch.Types.RequestCache.Nostore
+                  Http.deadline readinessDeadlineMs ]
 
         match attempt with
         | Http.Answered (response, ()) -> return response.Status
@@ -817,9 +827,9 @@ let private screenPage (title: string) (body: string) : string =
 /// That is why this one page keeps a program in a string, against the rule that says not to.
 ///
 /// It is a constant: every value it needs is an attribute on the screen (`openingPage`, below),
-/// named here by the `Dom.Manager` hooks' values — `openingReady`, `openingWord`,
-/// `openingFailed` — or the readiness route's answer, which is where the session's address
-/// arrives: the page is sent before the launch has a port. Written out rather than spliced so
+/// named here by the `Dom.Manager` hooks' values — `openingReady`, `openingShell`,
+/// `openingWord`, `openingFailed` — or the readiness route's answer, which is where the
+/// session's address arrives: the page is sent before the launch has a port. Written out rather than spliced so
 /// the program is literal text; rename one of the first two without it and the screen never
 /// hands over, which the opening page's browser cases see.
 let private openingProgram =
@@ -828,22 +838,44 @@ let private openingProgram =
   // motion there is no intro, and nothing to wait for.
   const DWELL = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 2800
   const shownAt = performance.now()
-  const ready = document.querySelector('[data-opening-ready]').getAttribute('data-opening-ready')
+  const screen = document.querySelector('[data-opening-ready]')
+  const ready = screen.getAttribute('data-opening-ready')
+  const shell = screen.getAttribute('data-opening-shell')
   const status = document.getElementById('status')
   const giveUp = (why) => {
     status.className = status.getAttribute('data-opening-failed')
     status.textContent = why
   }
-  let attempts = 0
+  // Does this browser already keep the session's shell? Only a shell this browser has opened
+  // before is kept: its service worker is registered for that address, and the worker's store
+  // holds the page. Such a shell paints the session's history from this browser's own store
+  // at once, says it is connecting, and signs in by itself once the session answers. So it
+  // needs neither this screen's wait nor the sign-in entry, and a phone that waited here saw
+  // a blank or an opening page for as long as the session took to come up. Anything that
+  // cannot answer (no worker support, an address on another origin) is "no": the screen does
+  // what it did before.
+  async function kept () {
+    if (!shell || !navigator.serviceWorker || !self.caches) return false
+    try {
+      const at = new URL(shell, location.href).href
+      const registration = await navigator.serviceWorker.getRegistration(at)
+      if (!registration || !registration.active || !at.startsWith(registration.scope)) return false
+      return Boolean(await caches.match(at))
+    } catch (e) { return false }
+  }
+  // The bound is TIME since the launch finished, not a count of polls. A count advances only
+  // when a poll settles, and a poll that never settled held the screen for ever.
+  let since = null
   async function poll () {
-    attempts++
     try {
       // `ok`, not "the request settled". A front door that has not mapped this session yet
       // answers — with a 404, or a gateway error — and a fetch that only caught THROWN
       // requests reads that as the session answering, redirects into it, and leaves whoever
       // pressed Create looking at the front door's 404. The readiness route reports the
       // difference, and says where to go: the address only exists once the launch does.
-      const answer = await fetch(ready, { cache: 'no-store' })
+      // Bounded too, past the Manager's own bound on its check, so a Manager that does not
+      // answer is the same wait as a session that does not.
+      const answer = await fetch(ready, { cache: 'no-store', signal: AbortSignal.timeout(5000) })
       // Still launching: the Manager bounds that itself and says so if it fails, so it is
       // not counted against the wait for the session's address below.
       if (answer.status === 202) {
@@ -864,8 +896,8 @@ let private openingProgram =
         return
       }
     } catch (e) { /* the Manager itself is unreachable: the same wait, bounded the same way */ }
-    // 40 at 500ms is the 20 seconds these words promise.
-    if (attempts >= 40) {
+    since = since ?? performance.now()
+    if (performance.now() - since >= 20000) {
       giveUp(
         'The session started, but its address is not answering after 20 seconds. ' +
         'If this deployment maps session ports through a proxy, that mapping has not appeared.')
@@ -873,7 +905,7 @@ let private openingProgram =
     }
     setTimeout(poll, 500)
   }
-  poll()
+  kept().then((yes) => yes ? location.replace(shell) : poll())
 """
 
 /// What the screen looks like: the mark's intro at 224px (`Brand.intro`, one SVG, SMIL),
@@ -896,11 +928,20 @@ let private openingProgram =
 /// the screen at all: this page is sent before the launch it covers has a port, so the way out
 /// it offers is the open route itself (which redirects once the session runs), and the address
 /// the program goes to is the readiness route's answer.
-let openingPage (sessionId: SessionId) (target: string) (readyUrl: string) : string =
+///
+/// `shell` is the session's own shell address where the deployment knows it before the launch
+/// (`PublicAccess.stableSessionAddress`). A browser that keeps a copy of that shell is sent
+/// there at once and skips the wait (`openingProgram`). Where it is `None` the screen has no
+/// such attribute, and every browser waits.
+let openingPage (sessionId: SessionId) (target: string) (readyUrl: string) (shell: string option) : string =
+    let shellAttr =
+        match shell with
+        | Some url -> sprintf " %s=\"%s\"" Dom.Manager.openingShell (Ssr.escapeAttr url)
+        | None -> ""
     screenPage
         "Opening session…"
         (sprintf
-            """<main class="%s" %s="%s">
+            """<main class="%s" %s="%s"%s>
 <div class="%s" data-mark-intro aria-hidden="true">%s</div>
 <div class="%s" data-mark-static aria-hidden="true">%s</div>
 <p class="%s">yession</p>
@@ -911,6 +952,7 @@ let openingPage (sessionId: SessionId) (target: string) (readyUrl: string) : str
             Style.startScreen
             Dom.Manager.openingReady
             (Ssr.escapeAttr readyUrl)
+            shellAttr
             Style.startMarkIntro
             (Ssr.render Brand.intro)
             Style.startMarkStill
@@ -1136,7 +1178,9 @@ let tryHandle
                             (openingPage
                                 sessionId
                                 (ManagerRoute.path (ManagerRoute.OpenSession sessionId))
-                                (ManagerRoute.path (ManagerRoute.SessionReady sessionId)))
+                                (ManagerRoute.path (ManagerRoute.SessionReady sessionId))
+                                (PublicAccess.stableSessionAddress sessionId pm.Public
+                                 |> Option.map (fun address -> address.Url + "/")))
         // Does this deployment's front door reach the session yet? The question the
         // opening page above is really asking, answered HERE because here is the only
         // place it CAN be answered: a browser can read the status of a same-origin

@@ -34,6 +34,36 @@ http://:{$YESSION_PROXY_PORT} {
 	# only thing that should be able to reach here.
 	bind {$YESSION_PROXY_BIND:127.0.0.1}
 
+	# One line per request: the method, the URI, the status and how long it took, beside the
+	# time, level and logger every Caddy line carries. Enough to see which step of a slow open hung (the `/open` screen, its readiness
+	# poll, the sign-in bounce, the shell), and nothing about who asked. On stdout, apart
+	# from Caddy's own errors on stderr, so whatever keeps this process's output keeps it.
+	# The sign-in bounce carries a one-time code and its state in the query, so those two
+	# are dropped from the URI.
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					delete code
+					delete state
+				}
+				request>remote_ip delete
+				request>remote_port delete
+				request>client_ip delete
+				request>proto delete
+				request>host delete
+				request>headers delete
+				request>tls delete
+				bytes_read delete
+				user_id delete
+				size delete
+				resp_headers delete
+			}
+		}
+	}
+
 	# Sessions first. Each is a `handle` over its own `/s/<id>` mount, rendered per frame by
 	# main.mjs through the template the deployment gives it. A glob matching nothing is a
 	# warning at adapt time and not an error, so a cold boot with no map yet still serves the

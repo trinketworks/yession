@@ -239,3 +239,16 @@ module PublicAccess =
     /// most needs to say so on, because it is the one you get with no configuration at all.
     let sessionAddressIsStable (access: PublicAccess) : bool =
         sessions access |> SessionTemplate.value |> fun template -> not (template.Contains "{port}")
+
+    /// A session's address where it is known before the session has a port, and `None` where
+    /// the port decides it (`sessionAddressIsStable`).
+    ///
+    /// The Manager's opening screen reads this. A browser that kept the session's shell at
+    /// this address can open it at once, before the launch has finished, because the address
+    /// will not move under it.
+    let stableSessionAddress (sessionId: SessionId) (access: PublicAccess) : SessionAddress option =
+        if sessionAddressIsStable access then
+            // No `{port}` in a stable template, so the port given here is never written.
+            Some (sessionAddress sessionId 0 access)
+        else
+            None

@@ -141,15 +141,37 @@ let internal awaitU (t: Task) : Async<unit> = Async.AwaitTask t
 // otherwise turn every case after it red, and every one of those reds would be a lie about
 // the case it is printed under.
 
+let private launchArgs = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |]
+
 let private browserLaunch () =
     BrowserTypeLaunchOptions (
         ExecutablePath = chromiumPath (),
-        Args = [| "--disable-features=WebRtcHideLocalIpsWithMdns" |])
+        Args = launchArgs)
 
 /// One at a time through the launch, so two cases asking at once get one browser between them.
 let private launching = new SemaphoreSlim (1, 1)
 let mutable private playwright : IPlaywright option = None
 let mutable private browser : IBrowser option = None
+
+/// The process's Playwright driver, started on first use. The caller holds `launching`.
+let private driver () : Async<IPlaywright> =
+    match playwright with
+    | Some pw -> async.Return pw
+    | None ->
+        async {
+            let! pw = await (Playwright.CreateAsync ())
+            playwright <- Some pw
+            // Closed with the process. Pyxpecto ends a run with an explicit exit,
+            // so nothing after `runTests` ever runs — this is the one place left
+            // to say goodbye from. Bounded: a browser refusing to close must not
+            // hold the exit code hostage.
+            AppDomain.CurrentDomain.ProcessExit.Add (fun _ ->
+                match browser with
+                | Some b -> try b.CloseAsync().Wait (TimeSpan.FromSeconds 5.0) |> ignore with _ -> ()
+                | None -> ()
+                try pw.Dispose () with _ -> ())
+            return pw
+        }
 
 /// The process's Chromium, launched on first use and relaunched if it has gone.
 let private sharedBrowser () : Async<IBrowser> =
@@ -159,24 +181,7 @@ let private sharedBrowser () : Async<IBrowser> =
             match browser with
             | Some live when live.IsConnected -> return live
             | _ ->
-                let! pw =
-                    match playwright with
-                    | Some pw -> async.Return pw
-                    | None ->
-                        async {
-                            let! pw = await (Playwright.CreateAsync ())
-                            playwright <- Some pw
-                            // Closed with the process. Pyxpecto ends a run with an explicit exit,
-                            // so nothing after `runTests` ever runs — this is the one place left
-                            // to say goodbye from. Bounded: a browser refusing to close must not
-                            // hold the exit code hostage.
-                            AppDomain.CurrentDomain.ProcessExit.Add (fun _ ->
-                                match browser with
-                                | Some b -> try b.CloseAsync().Wait (TimeSpan.FromSeconds 5.0) |> ignore with _ -> ()
-                                | None -> ()
-                                try pw.Dispose () with _ -> ())
-                            return pw
-                        }
+                let! pw = driver ()
                 let! launched = await (pw.Chromium.LaunchAsync (browserLaunch ()))
                 browser <- Some launched
                 return launched
@@ -235,6 +240,35 @@ let internal withContexts (body: Contexts -> Async<'a>) : Async<'a> =
         let contexts = Contexts br
         let! outcome = Async.Catch (Wait.refusing contexts.Refusal (body contexts))
         do! contexts.CloseAll ()
+        return
+            match outcome with
+            | Choice1Of2 value -> value
+            | Choice2Of2 e -> raise e
+    }
+
+/// Run a case in a browser profile on DISK, as a phone's is, closed and deleted however the
+/// case ends.
+///
+/// A Chromium of its own rather than a context of the shared one. A context of the shared one
+/// keeps its storage in memory, and a case about what a browser KEPT between visits should not
+/// rest on how an engine treats storage it never meant to keep: WebKit's in-memory context
+/// loses Cache API entries when the page navigates.
+let internal withPersistentContext
+    (options: BrowserTypeLaunchPersistentContextOptions)
+    (body: IBrowserContext -> Async<'a>)
+    : Async<'a> =
+    async {
+        do! awaitU (launching.WaitAsync ())
+        let! pw = async { try return! driver () finally launching.Release () |> ignore }
+        let profile = Path.Combine (Path.GetTempPath (), sprintf "yession-profile-%s" (Guid.NewGuid().ToString "N"))
+        options.ExecutablePath <- chromiumPath ()
+        options.Args <- launchArgs
+        let! context = await (pw.Chromium.LaunchPersistentContextAsync (profile, options))
+        let! outcome = Async.Catch (async {
+            do! Probe.install context
+            return! body context })
+        try do! awaitU (context.CloseAsync ()) with _ -> ()
+        try Directory.Delete (profile, true) with _ -> ()
         return
             match outcome with
             | Choice1Of2 value -> value
@@ -338,10 +372,16 @@ let internal reporting (label: string) (page: IPage) (ev: Evidence) (body: Async
             printfn "=== %s failed — what the page saw ===" label
             for line in ev.Lines do printfn "  %s" line
             // The page's own state, best-effort: on a navigation failure there is no page left
-            // to ask, and that answer is itself worth printing.
+            // to ask, and that answer is itself worth printing. Bounded, because a page with a
+            // navigation that never commits never answers, and the failure must still reach
+            // the run.
             let! state =
                 async {
-                    try return! Probe.ask page Yession.App.Probes.pageState 0
+                    try
+                        let asked = Async.StartAsTask (Probe.ask page Yession.App.Probes.pageState 0)
+                        let! first = Async.AwaitTask (Task.WhenAny (asked :> Task, Task.Delay 5000))
+                        if obj.ReferenceEquals (first, asked) then return! Async.AwaitTask asked
+                        else return [ "unreadable: no answer in 5s" ]
                     with pe -> return [ "unreadable: " + pe.Message ]
                 }
             for fact in state do printfn "  page %s" fact
@@ -7689,15 +7729,24 @@ let private deployProduct
 let private FRONT_SESSION = "front-default"
 let private frontDataDir = "tests/browser/.data-front"
 
-/// The operator's front door, with its reconciler's lag made into something a test can
-/// depend on: a session is routed only from its `lag`-th request onward.
-///
-/// Counted in REQUESTS, not milliseconds, so no sleep anywhere decides whether this passes —
-/// and sticky once it catches up, like a real reconciler: a mapping that has appeared does not
-/// go away again. Where each session actually listens is read off the Manager's registry
-/// stream, the same subscription an operator's proxy holds open, because a fixture that was
-/// TOLD the port would not be standing where the lag is.
-let private startFrontDoor (managerPort: int) (lag: int) : Serving =
+/// What the front door does with a request for a session it does not route.
+[<RequireQualifiedAccess>]
+type private DoorMiss =
+    /// Answers `404 not found` itself.
+    | Answers404
+    /// Hands it to the Manager, as the proxy example's Caddyfile does with every path no
+    /// session route claims. The Manager has no such route, so it answers 404.
+    | ToManager
+    /// Takes the connection and never answers: an upstream that went quiet.
+    | Stalls
+
+/// The operator's front door. `admits` says from which request on a session's route is live,
+/// given the session's id and how many requests for it the door has seen (this one included);
+/// `miss` says what the door does before then. A session is routed only while the registry
+/// says it runs, as behind a real reconciler. Where each session actually listens is read off
+/// the Manager's registry stream, the same subscription an operator's proxy holds open,
+/// because a fixture that was TOLD the port would not be standing where the lag is.
+let private startFrontDoorWith (managerPort: int) (admits: string -> int -> bool) (miss: DoorMiss) : Serving =
     let served = listenOnLoopback ()
     let listener = served.Listener
     let client = new HttpClient (new HttpClientHandler (AllowAutoRedirect = false, UseCookies = false))
@@ -7726,6 +7775,11 @@ let private startFrontDoor (managerPort: int) (lag: int) : Serving =
                         // 100ms and the case timed out naming the wait, never the frame.
                         match Yession.Manager.ControlWire.fromString Yession.Manager.ControlWire.sessionRegistryFrame (line.Substring 5) with
                         | Ok frame ->
+                            // A frame is the whole running set, so a session missing from it
+                            // has stopped, and its route goes with it.
+                            let running = frame.Sessions |> List.map (fun entry -> Yession.Domain.SessionId.value entry.Id)
+                            for gone in ports.Keys |> Seq.filter (fun id -> not (List.contains id running)) |> List.ofSeq do
+                                ports.TryRemove gone |> ignore
                             for entry in frame.Sessions do
                                 ports.[Yession.Domain.SessionId.value entry.Id] <- entry.Port
                         | Error reason -> printfn "front door: a registry frame it could not read: %s" reason
@@ -7739,7 +7793,14 @@ let private startFrontDoor (managerPort: int) (lag: int) : Serving =
         if m.Success then Some m.Groups.[1].Value else None
     let routes (id: string) =
         let asks = asked.AddOrUpdate (id, 1, fun _ n -> n + 1)
-        asks > lag && ports.ContainsKey id
+        admits id asks && ports.ContainsKey id
+    // Where one request goes, decided once: `Some port` is forwarded there, `None` is a miss.
+    let upstream (raw: string) : int option =
+        match sessionIn (raw.Split('?').[0]) with
+        | None -> Some managerPort
+        | Some id when routes id -> Some ports.[id]
+        | Some _ when miss = DoorMiss.ToManager -> Some managerPort
+        | Some _ -> None
     let copyHeader (reply: HttpResponseMessage) (ctx: HttpListenerContext) (name: string) =
         let values =
             match reply.Headers.TryGetValues name with
@@ -7753,59 +7814,67 @@ let private startFrontDoor (managerPort: int) (lag: int) : Serving =
         async {
             match! Async.Catch (listener.GetContextAsync () |> Async.AwaitTask) with
             | Choice1Of2 ctx ->
-                Async.Start (
-                    async {
-                        try
-                            let raw = ctx.Request.RawUrl
-                            let session = sessionIn (raw.Split('?').[0])
-                            match session with
-                            | Some id when not (routes id) ->
-                                // What a front door says about an address it has no route
-                                // for. Verbatim, because being indistinguishable from a
-                                // session's own answer is the point.
-                                ctx.Response.StatusCode <- 404
-                                ctx.Response.ContentType <- "text/plain"
-                                let bytes = Text.Encoding.UTF8.GetBytes "not found"
-                                ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
-                            | _ ->
-                                // The path goes through UNCHANGED: a session strips its own
-                                // `/s/<id>` mount, and the Manager is what
-                                // this origin's root is.
-                                let port =
-                                    match session with
-                                    | Some id -> ports.[id]
-                                    | None -> managerPort
-                                let target = sprintf "http://127.0.0.1:%d%s" port raw
-                                use request = new HttpRequestMessage (HttpMethod ctx.Request.HttpMethod, target)
-                                if ctx.Request.HasEntityBody then
-                                    use buffer = new MemoryStream ()
-                                    ctx.Request.InputStream.CopyTo buffer
-                                    let content = new ByteArrayContent (buffer.ToArray ())
-                                    match ctx.Request.ContentType with
+                let raw = ctx.Request.RawUrl
+                let goes = upstream raw
+                // A stalled request is taken and never answered: held until the listener stops.
+                if not (goes.IsNone && miss = DoorMiss.Stalls) then
+                    Async.Start (
+                        async {
+                            try
+                                match goes with
+                                | None ->
+                                    // What a front door says about an address it has no route
+                                    // for. Verbatim, because being indistinguishable from a
+                                    // session's own answer is the point.
+                                    ctx.Response.StatusCode <- 404
+                                    ctx.Response.ContentType <- "text/plain"
+                                    let bytes = Text.Encoding.UTF8.GetBytes "not found"
+                                    ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
+                                | Some port ->
+                                    // The path goes through UNCHANGED: a session strips its own
+                                    // `/s/<id>` mount, and the Manager is what
+                                    // this origin's root is.
+                                    let target = sprintf "http://127.0.0.1:%d%s" port raw
+                                    use request = new HttpRequestMessage (HttpMethod ctx.Request.HttpMethod, target)
+                                    if ctx.Request.HasEntityBody then
+                                        use buffer = new MemoryStream ()
+                                        ctx.Request.InputStream.CopyTo buffer
+                                        let content = new ByteArrayContent (buffer.ToArray ())
+                                        match ctx.Request.ContentType with
+                                        | null | "" -> ()
+                                        | contentType -> content.Headers.TryAddWithoutValidation ("content-type", contentType) |> ignore
+                                        request.Content <- content
+                                    match ctx.Request.Headers.["Cookie"] with
                                     | null | "" -> ()
-                                    | contentType -> content.Headers.TryAddWithoutValidation ("content-type", contentType) |> ignore
-                                    request.Content <- content
-                                match ctx.Request.Headers.["Cookie"] with
-                                | null | "" -> ()
-                                | cookie -> request.Headers.TryAddWithoutValidation ("cookie", cookie) |> ignore
-                                let! reply = client.SendAsync request |> Async.AwaitTask
-                                ctx.Response.StatusCode <- int reply.StatusCode
-                                copyHeader reply ctx "Location"
-                                copyHeader reply ctx "Set-Cookie"
-                                copyHeader reply ctx "Cache-Control"
-                                match reply.Content.Headers.ContentType with
-                                | null -> ()
-                                | contentType -> ctx.Response.ContentType <- string contentType
-                                let! bytes = reply.Content.ReadAsByteArrayAsync () |> Async.AwaitTask
-                                ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
-                        with _ -> ctx.Response.StatusCode <- 502
-                        ctx.Response.Close ()
-                    })
+                                    | cookie -> request.Headers.TryAddWithoutValidation ("cookie", cookie) |> ignore
+                                    let! reply = client.SendAsync request |> Async.AwaitTask
+                                    ctx.Response.StatusCode <- int reply.StatusCode
+                                    copyHeader reply ctx "Location"
+                                    copyHeader reply ctx "Set-Cookie"
+                                    copyHeader reply ctx "Cache-Control"
+                                    match reply.Content.Headers.ContentType with
+                                    | null -> ()
+                                    | contentType -> ctx.Response.ContentType <- string contentType
+                                    let! bytes = reply.Content.ReadAsByteArrayAsync () |> Async.AwaitTask
+                                    ctx.Response.OutputStream.Write (bytes, 0, bytes.Length)
+                            with _ -> ctx.Response.StatusCode <- 502
+                            ctx.Response.Close ()
+                        })
                 return! loop ()
             | Choice2Of2 _ -> ()   // listener stopped
         }
     Async.Start (loop ())
     served
+
+/// The operator's front door, with its reconciler's lag made into something a test can
+/// depend on: a session is routed only from its `lag`-th request onward, and a miss is the
+/// door's own 404.
+///
+/// Counted in REQUESTS, not milliseconds, so no sleep anywhere decides whether this passes —
+/// and sticky once it catches up, like a real reconciler: a mapping that has appeared does not
+/// go away again while the session runs.
+let private startFrontDoor (managerPort: int) (lag: int) : Serving =
+    startFrontDoorWith managerPort (fun _ asks -> asks > lag) DoorMiss.Answers404
 
 let mutable private frontedHost : Process = null
 
@@ -7889,6 +7958,175 @@ let frontDoorTests =
                     door.Stop ()
                     try if frontedHost <> null then frontedHost.Kill true with _ -> ()
             }
+    ]
+
+// --- Opening a session this browser keeps (browser) -----------------------------------------
+//
+// A phone opened a stopped session from the Manager's list and looked at a blank page, or the
+// opening screen, for 92 seconds. The browser had the session's shell and history all along:
+// the session's service worker keeps the shell, and the shell keeps the history. But the
+// screen waited for the session to answer and then went through sign-in, and nothing on that
+// path is the shell.
+//
+// So the screen sends a browser that keeps the shell straight to it. The cases below hold the
+// door's route for the session off while they open it: what the browser shows then is what it
+// kept, and nothing else.
+
+let private KEPT_SESSION = "kept-open"
+let private keptDataDir = "tests/browser/.data-kept"
+
+/// One public origin with the Manager at its root and the session under `/s/<id>`, behind a
+/// door whose route for the session the case can hold off (`hold true`). A held route is a
+/// miss, and `miss` says what the door does with one. The session runs from boot.
+let private withKeptDeployment (miss: DoorMiss) (body: Serving -> (bool -> unit) -> Async<unit>) : Async<unit> =
+    async {
+        if Directory.Exists keptDataDir then Directory.Delete (keptDataDir, true)
+        let managerPort = freeLoopbackPort ()
+        let held = ref false
+        let door = startFrontDoorWith managerPort (fun _ _ -> not held.Value) miss
+        try
+            let manager =
+                deployProduct
+                    "the Manager"
+                    [ "--auth"; "localhost"
+                      "--port"; string managerPort
+                      "--default-session"; KEPT_SESSION
+                      "--data-dir"; keptDataDir ]
+                    [ "YESSION_MANAGER_URL", door.Origin
+                      "YESSION_SESSION_URL", door.Origin + "/s/{id}" ]
+                    (fun line -> line.Contains "management UI at")
+            try
+                // Routed once the door has read the session's port off the registry. Asked with
+                // a bound, because a door that stalls its misses never answers one.
+                use http = new HttpClient (Timeout = TimeSpan.FromSeconds 2.0)
+                let routed () =
+                    async {
+                        try
+                            let! answer = await (http.GetAsync (door.At (sprintf "/s/%s/me" KEPT_SESSION)))
+                            return int answer.StatusCode
+                        with _ -> return 0
+                    }
+                do! Wait.until "the door to route the session" routed (fun status -> status <> 0 && status <> 404)
+                do! body door (fun hold -> held.Value <- hold)
+            finally
+                manager.Stop ()
+        finally
+            door.Stop ()
+    }
+
+let private keptShell = sprintf "/s/%s/" KEPT_SESSION
+let private keptOpen = sprintf "/sessions/%s/open" KEPT_SESSION
+
+/// Signed in, connected, a message said and kept, and the worker running. Then the session is
+/// stopped and the door's route to it held off, so nothing after this can reach it.
+let private keepThenStop (door: Serving) (hold: bool -> unit) (page: IPage) : Async<unit> =
+    async {
+        let! _ = await (page.GotoAsync (door.At keptShell))
+        do! waitConnected page
+        let composerSel = """[data-rich-readonly="false"] .ProseMirror"""
+        let! _ = await (page.WaitForSelectorAsync composerSel)
+        do! awaitU (page.ClickAsync composerSel)
+        do! awaitU (page.Keyboard.TypeAsync saidInTimeline)
+        do! awaitU (page.Locator("[data-send-draft]").First.ClickAsync ())
+        do! inTimeline page
+        do! conversationKept page
+        do! Wait.until "the service worker to be active" (fun () -> Probe.ask page Yession.App.Probes.workerActive 0) id
+        hold true
+        use http = new HttpClient ()
+        let! stopped = await (http.PostAsync (door.At (sprintf "/sessions/%s/stop" KEPT_SESSION), new StringContent ""))
+        Expect.isTrue stopped.IsSuccessStatusCode "the session stops"
+    }
+
+/// Open the session the way its row in the Manager does. Waited on only until the screen
+/// commits, because the screen may leave at once.
+let private openKept (door: Serving) (page: IPage) : Async<unit> =
+    async {
+        let! _ = await (page.GotoAsync (door.At keptOpen, PageGotoOptions (WaitUntil = WaitUntilState.Commit)))
+        return ()
+    }
+
+/// At the session's own address, with the kept conversation on the screen.
+///
+/// The page is asked for its text only once it is at that address. Until a navigation there
+/// commits, a read of the page waits for it, and a navigation that never commits would hold
+/// the read, and this wait, for ever instead of failing it.
+let private onKeptHistory (page: IPage) () : Async<string * string option> =
+    async {
+        let! at = Read.url page
+        if at.AbsolutePath <> keptShell then return at.AbsolutePath, None
+        else
+            let! text = timelineText page ()
+            return at.AbsolutePath, text
+    }
+
+let private showsKeptHistory (path: string, text: string option) =
+    path = keptShell && text |> Option.exists (fun t -> t.Contains saidInTimeline)
+
+/// A profile per case, on disk. `body` gets its one page.
+let private inProfile (name: string) (body: IPage -> Async<unit>) : Async<unit> =
+    withPersistentContext (BrowserTypeLaunchPersistentContextOptions ()) (fun context -> async {
+        let! page =
+            match List.ofSeq context.Pages with
+            | first :: _ -> async.Return first
+            | [] -> await (context.NewPageAsync ())
+        page.SetDefaultTimeout 30000.0f
+        let evidence = watching page
+        do! reporting name page evidence (body page)
+    })
+
+let keptOpenTests =
+    testList "Opening a session this browser keeps (browser)" [
+        // The route is held off for the whole case, and the door hands its misses to the
+        // Manager, which answers 404, as behind the proxy example's Caddyfile. So the session
+        // cannot answer anything: the history on the screen is what this browser kept.
+        testCaseAsync "a browser that keeps the session opens on its history before the session answers" <|
+            withKeptDeployment DoorMiss.ToManager (fun door hold ->
+                inProfile "kept: before the session answers" (fun page -> async {
+                    do! keepThenStop door hold page
+                    do! openKept door page
+                    do! Wait.within 15000.0 "the kept history, at the session's own address" (onKeptHistory page) showsKeptHistory
+                }))
+
+        // The same, with the route a door that takes the request and never answers. The worker
+        // gives the network a bound and then serves the shell it kept.
+        testCaseAsync "a session whose address never answers still opens on its kept history" <|
+            withKeptDeployment DoorMiss.Stalls (fun door hold ->
+                inProfile "kept: an address that never answers" (fun page -> async {
+                    do! keepThenStop door hold page
+                    do! openKept door page
+                    do! Wait.within 20000.0 "the kept history, at the session's own address" (onKeptHistory page) showsKeptHistory
+                }))
+
+        // The shell that opened early signs in by itself. The cookie is cleared, so the
+        // session's `/me` answers 401 once it is reachable, and the shell has to go through
+        // sign-in on its own to connect.
+        testCaseAsync "a kept session that opened early signs in once the session answers" <|
+            withKeptDeployment DoorMiss.ToManager (fun door hold ->
+                inProfile "kept: signs in later" (fun page -> async {
+                    do! keepThenStop door hold page
+                    do! awaitU (page.Context.ClearCookiesAsync ())
+                    do! openKept door page
+                    do! Wait.until "the kept history, at the session's own address" (onKeptHistory page) showsKeptHistory
+                    hold false
+                    do! Wait.within 60000.0 "the shell to sign in and connect" (connectionState page) ((=) (Some Yession.App.Dom.Text.connected))
+                }))
+
+        // A browser that has never opened the session keeps nothing, and goes the way it always
+        // did: the screen polls the Manager. A poll is the proof, because the screen polls only
+        // once it has found nothing kept.
+        testCaseAsync "a browser that keeps nothing waits on the opening screen" <|
+            withKeptDeployment DoorMiss.ToManager (fun door hold ->
+                inProfile "kept: nothing kept" (fun page -> async {
+                    hold true
+                    use http = new HttpClient ()
+                    let! stopped = await (http.PostAsync (door.At (sprintf "/sessions/%s/stop" KEPT_SESSION), new StringContent ""))
+                    Expect.isTrue stopped.IsSuccessStatusCode "the session stops"
+                    let polled = page.WaitForRequestAsync (fun (request: IRequest) -> request.Url.EndsWith "/ready")
+                    do! openKept door page
+                    let! _ = await polled
+                    let! at = Read.url page
+                    Expect.equal at.AbsolutePath keptOpen "the screen is still showing, and polling"
+                }))
     ]
 
 // --- A fronted deployment, for real (browser) ---------------------------------------------
@@ -8470,6 +8708,7 @@ let editorTests : Fable.Pyxpecto.Model.TestCase = testList "Editor rendering (br
 let mountedTests : Fable.Pyxpecto.Model.TestCase = testList "Path-mounted session (browser)" []
 let frontDoorTests : Fable.Pyxpecto.Model.TestCase = testList "Creating a session behind a front door (browser)" []
 let frontedTests : Fable.Pyxpecto.Model.TestCase = testList "A fronted deployment, for real (browser)" []
+let keptOpenTests : Fable.Pyxpecto.Model.TestCase = testList "Opening a session this browser keeps (browser)" []
 let filterTests : Fable.Pyxpecto.Model.TestCase = testList "The management page's filters (browser)" []
 let installedAppTests : Fable.Pyxpecto.Model.TestCase = testList "Opening a session from an installed Manager (browser)" []
 let pressTests : Fable.Pyxpecto.Model.TestCase = testList "Pressing Create (browser)" []

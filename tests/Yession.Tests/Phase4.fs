@@ -1304,11 +1304,16 @@ let private managerWithUi (name: string) =
 /// answers are different facts. A reconciler driven by `/sessions/stream` reaches a
 /// just-created session a few hundred milliseconds after the Manager has launched it, and
 /// everything that arrives in that window meets this.
-let private startFrontDoor () : Async<HttpServer * string * (unit -> unit)> =
+///
+/// Or it can be told to stall: take every request and never answer, as a proxy does whose
+/// upstream accepted the connection and went quiet.
+let private startFrontDoor () : Async<HttpServer * string * (unit -> unit) * (unit -> unit)> =
     async {
         let mutable mapped = false
+        let mutable stalls = false
         let handler (_: IncomingMessage) (res: ServerResponse) =
-            if mapped then
+            if stalls then ()
+            elif mapped then
                 res.writeHead (200, [ ResponseHeader.ContentType "text/html; charset=utf-8" ])
                 res.``end`` "<!doctype html><title>a session</title>"
             else
@@ -1317,7 +1322,7 @@ let private startFrontDoor () : Async<HttpServer * string * (unit -> unit)> =
         let server = createServer handler
         let! listening =
             Async.FromContinuations (fun (cont, _, _) -> server.listen (0, "127.0.0.1", fun () -> cont server) |> ignore)
-        return listening, sprintf "http://127.0.0.1:%d" (serverPort listening), (fun () -> mapped <- true)
+        return listening, sprintf "http://127.0.0.1:%d" (serverPort listening), (fun () -> mapped <- true), (fun () -> stalls <- true)
     }
 
 /// A Manager publishing its sessions at a front door this test owns, with one session created
@@ -1325,7 +1330,7 @@ let private startFrontDoor () : Async<HttpServer * string * (unit -> unit)> =
 /// only in what the door is doing when they ask.
 let private managerBehindFrontDoor (name: string) =
     async {
-        let! door, doorOrigin, mapIt = startFrontDoor ()
+        let! door, doorOrigin, mapIt, stallIt = startFrontDoor ()
         let dataDir =
             sprintf "tests/Yession.Tests/out/.data/%s-%d" name (int (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds ()) % 1000000)
         let! managerPort = freePort ()
@@ -1345,7 +1350,7 @@ let private managerBehindFrontDoor (name: string) =
         let sessionId = SessionId.create name |> expect
         let! launched = pm.Launch sessionId
         Expect.isTrue (Result.isOk launched) "the session launches"
-        return pm, origin, mapIt, door
+        return pm, origin, mapIt, stallIt, door
     }
 
 /// The one module script a Manager page names, resolved from the page's own address, answers
@@ -1370,7 +1375,7 @@ let private readinessTests =
     testList "Is the session reachable yet (Plan 11)" [
         testCaseAsync "a session the front door has not mapped yet is not ready" <|
             async {
-                let! pm, baseUrl, _, door = managerBehindFrontDoor "ready-miss"
+                let! pm, baseUrl, _, _, door = managerBehindFrontDoor "ready-miss"
                 let! answer = TestHttp.get (baseUrl + "/sessions/ready-miss/ready")
                 Expect.equal answer.Status 503 "the session is running and its published address is not"
                 do! pm.StopAll ()
@@ -1379,10 +1384,23 @@ let private readinessTests =
 
         testCaseAsync "a session whose published address answers is ready" <|
             async {
-                let! pm, baseUrl, mapIt, door = managerBehindFrontDoor "ready-hit"
+                let! pm, baseUrl, mapIt, _, door = managerBehindFrontDoor "ready-hit"
                 mapIt ()
                 let! answer = TestHttp.get (baseUrl + "/sessions/ready-hit/ready")
                 Expect.equal answer.Status 200 "the door routes to it now, so it is reachable"
+                do! pm.StopAll ()
+                door.close ignore
+            }
+
+        // An address that takes the request and never answers is not ready either, and the
+        // route says so inside its bound. Unbounded, it held the opening screen's poll for
+        // ever, and the screen's own give-up never fired.
+        testCaseAsync "a session whose published address never answers is not ready, and is told so in time" <|
+            async {
+                let! pm, baseUrl, _, stallIt, door = managerBehindFrontDoor "ready-stall"
+                stallIt ()
+                let! answer = TestHttp.get (baseUrl + "/sessions/ready-stall/ready")
+                Expect.equal answer.Status 503 "the address did not answer within the bound"
                 do! pm.StopAll ()
                 door.close ignore
             }
@@ -3410,6 +3428,18 @@ let private publicAccessTests =
             // The zero-config default is the one that most needs to say so, because it is
             // what someone gets without having thought about addressing at all.
             Expect.isFalse (PublicAccess.sessionAddressIsStable Loopback) "loopback is 127.0.0.1:{port}"
+
+        // The opening screen sends a browser that keeps a session's shell straight to it, so it
+        // must know that address before the launch. Only a stable template gives one.
+        testCase "a session's address is known before its launch exactly when it is stable" <| fun () ->
+            let sessionId = SessionId.create "early" |> expect
+            let earlyOf sessionUrl =
+                PublicAccess.create "https://example.com" sessionUrl
+                |> Result.map (PublicAccess.stableSessionAddress sessionId >> Option.map (fun address -> address.Url))
+            Expect.equal (earlyOf "https://example.com/s/{id}") (Ok (Some "https://example.com/s/early")) "path-mounted"
+            Expect.equal (earlyOf "https://{id}.example.com") (Ok (Some "https://early.example.com")) "a subdomain per session"
+            Expect.equal (earlyOf "https://example.com:{port}") (Ok None) "a port mirror waits for the port"
+            Expect.equal (PublicAccess.stableSessionAddress sessionId Loopback) None "and so does loopback"
 
         testCase "the auth cookie is scoped to the path the session is served under" <| fun () ->
             // A real narrowing where sessions share a host: a path-mounted session's
