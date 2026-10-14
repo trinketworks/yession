@@ -2252,6 +2252,16 @@ module View =
     let private thinkingCube : TemplateResult =
         html $"""<span class="{Style.agentThinkingTip}"><span class="{Style.agentThinkingCube}"><i></i><i></i><i></i><i></i><i></i><i></i></span></span>"""
 
+    /// Who did something, as the transcript heads what they said: their square and their name
+    /// in the caps voice, the agent's in blue. One face wherever an author heads what follows —
+    /// a run of messages, a command in a terminal — so one person reads as one person
+    /// whichever column they are found in, you included.
+    let private actorHead (model: ClientModel) (actor: ActorRef) : TemplateResult =
+        let whoClass = if actor = ActorRef.Agent then Style.whoAgent else Style.who
+        html $"""
+            <span class="{Style.cls [ Style.avatar; Entity.actorMark model actor ]}"></span>
+            <span class="{whoClass}">{Entity.actorName model actor}</span>"""
+
     let private chat (actions: ViewActions) (dispatch: ClientMsg -> unit) (model: ClientModel) : TemplateResult =
         // Where chapters open, asked once for the whole transcript: every row and every
         // item's menu below looks itself up here rather than asking again.
@@ -3139,13 +3149,9 @@ module View =
         // whose it is; and it is what makes a lone tool run or command wear the same
         // attribution a message does, instead of a private caps label of its own.
         let group (actor: ActorRef) (members: TemplateResult list) =
-            let whoClass = if actor = ActorRef.Agent then Style.whoAgent else Style.who
             html $"""
                 <section class="{Style.messageGroup}" data-message-author="{Entity.actorToken actor}">
-                  <header class="{Style.messageGroupHead}">
-                    <span class="{Style.cls [ Style.avatar; Entity.actorMark model actor ]}"></span>
-                    <span class="{whoClass}">{Entity.actorName model actor}</span>
-                  </header>
+                  <header class="{Style.messageGroupHead}">{actorHead model actor}</header>
                   {members}
                 </section>"""
         let items =
@@ -3360,9 +3366,9 @@ module View =
         (block: Block)
         : TemplateResult =
         let body = terminalBlockHistoryOutput dispatch model feed terminal block
-        // Whose command this was: shown only when the answer is not the obvious one. Your own
-        // commands need no attribution in your own terminal — but a command the AGENT ran, or
-        // a collaborator did, is the thing a person scanning a scrollback is looking for.
+        // Whose command this was — yours too, as your messages wear your name in the
+        // transcript: a terminal shared with the agent and collaborators is read by whoever is
+        // looking, and "the ones without a name are mine" is a rule nobody else can read.
         //
         // Named, not merely MARKED. It was a bare coloured square whose only identification
         // was a `title`: nothing on a phone, which has no hover, and nothing to a screen
@@ -3371,20 +3377,19 @@ module View =
         // told them apart by hue, and the name was reachable only by opening the facts below.
         // Three colours and no words is a legend a reader has to have been given.
         //
-        // As a REFERENCE (`Entity.render`), which is the same mark and name the person wears
-        // on every other surface — the roster, the timeline, the chip in the chat — rather
-        // than a second way of saying who somebody is.
+        // In the transcript's own face (`actorHead`): the square and the name in caps, the
+        // agent's in blue, so a command and a message by one author read as one author's.
         //
         // On its own line OVER the command (`Style.terminalBlockByline`), with when it ran
         // and how it went at the far end: beside the command, the name pushed a long command
         // into a column a third of a phone's width.
         let author =
             let who = Authority.author block.Authority
-            if not showAuthor || ClientModel.isMine who model then Lit.nothing
+            if not showAuthor then Lit.nothing
             else
                 html $"""
                     <span class="{Style.terminalBlockAuthor}" data-terminal-block-author="{Entity.actorToken who}"
-                          >{Entity.render model who (EntityRef.Actor who)}</span>"""
+                          >{actorHead model who}</span>"""
         // The facts the command line does not already say, as a LINE under it. They were
         // behind a `…` that read as a menu, and opening it said "ran by <you> · exit 1" — the
         // author the line leaves out because it is you, and the exit the mark beside the
@@ -3497,12 +3502,11 @@ module View =
         // (`BlockGroup.ofBlocks`), and the line says so rather than reading as everything.
         let commands = if tally.Commands = 1 then "1 earlier command" else sprintf "%d earlier commands" tally.Commands
         let runAuthor = Authority.author leader.Authority
+        // Whose run it is, in the face every author wears (`actorHead`), yours included.
         let author =
-            if ClientModel.isMine runAuthor model then Lit.nothing
-            else
-                html $"""
-                    <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model runAuthor ]}" title="{Entity.actorName model runAuthor}"
-                          data-terminal-block-author="{Entity.actorToken runAuthor}"></span>"""
+            html $"""
+                <span class="{Style.terminalBlockAuthor}" data-terminal-block-author="{Entity.actorToken runAuthor}"
+                      >{actorHead model runAuthor}</span>"""
         html $"""
             <article class="{Style.terminalBlock}" data-terminal-block-run="{BlockId.value leader.BlockId}">
               <details class="group" ?open={opened} @toggle={Ev toggled} data-fold-open="{if opened then "yes" else "no"}">

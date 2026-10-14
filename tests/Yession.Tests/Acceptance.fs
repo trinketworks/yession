@@ -3701,12 +3701,15 @@ let private semanticsTests =
                 (visibleTextOf line |> fun text -> text.Contains "agent")
                 (sprintf "the name is on the line as words, not inside an attribute: %s" (visibleTextOf line))
 
-        testCase "your own commands are not attributed in your own terminal" <| fun () ->
-            // The other half, and what keeps the rule above from becoming a mark on every
-            // line: a scrollback of your own commands wearing your own name on each is a
-            // column that distinguishes nothing.
+        // "your own commands are not attributed in your own terminal" was here. A terminal is
+        // shared, and a scrollback where your commands alone wore no name read, to everyone
+        // else looking at it, as commands by nobody. Your commands wear your name as your
+        // messages do in the transcript.
+        testCase "your own command wears your own name, as your messages do" <| fun () ->
             let line = blockLineOf "block-ui" (Support.render representativeModel)
-            Expect.isFalse (line.Contains Dom.Hooks.terminalBlockAuthor) "nothing to say"
+            Expect.isTrue
+                ((visibleTextOf line).Contains representativeModel.Peer.DisplayName)
+                (sprintf "your name, as words on the line: %s" (visibleTextOf line))
 
         /// The same lookup, keyed by the author hook's raw TOKEN rather than a `PeerId` —
         /// what a `UserRef` author's message carries (`UserId.value`, per `authorLabel`).
