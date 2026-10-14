@@ -501,9 +501,12 @@ let private frameSerializationTests =
                   // are not recorded at all.
                   ToolUseStarted { ToolUseId = toolUseId; AgentTurnId = turnId; Namespace = "yession"; Name = "set_secret"; Arguments = Some """{"name":"DEPLOY_TOKEN","value":null}""" }
                   ToolUseStarted { ToolUseId = toolUseId; AgentTurnId = turnId; Namespace = "serial"; Name = "acquire_device"; Arguments = None }
-                  ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallOk; Block = None; Result = Some "repo: octo/hello, branch: master" }
-                  ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallOk; Block = Some blockId; Result = None }
-                  ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallFailed "no such tool"; Block = None; Result = None }
+                  ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallOk; Block = None; Result = Some "repo: octo/hello, branch: master"; Queueing = None }
+                  ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallOk; Block = Some blockId; Result = None; Queueing = None }
+                  ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallFailed "no such tool"; Block = None; Result = None; Queueing = None }
+                  // A command call says what it did with its command: queued it, or not.
+                  ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallOk; Block = None; Result = Some "queued"; Queueing = Some (CommandQueued (QueueId.create "q-1" |> expect)) }
+                  ToolUseFinished { ToolUseId = toolUseId; Outcome = ToolCallOk; Block = None; Result = Some "could not run the command"; Queueing = Some NothingQueued }
                   // Plan 17: the two the operator's declarations produce.
                   McpServerAvailable { MessageId = messageId; Name = McpServerName.create "serial" |> expect }
                   SessionResumed { MessageId = messageId; LastHeardAt = DateTimeOffset (2026, 9, 25, 4, 0, 0, TimeSpan.Zero) }

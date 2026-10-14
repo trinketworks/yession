@@ -125,7 +125,7 @@ let openToolSessionTracing (tracer: Telemetry.Tracer) (services: Commands.Comman
     { Call =
         fun name args ->
             async {
-                match! registry.Invoke { Namespace = AgentTools.Namespace; Name = name; Arguments = args } with
+                match! registry.Invoke { Namespace = AgentTools.Namespace; Name = name; Arguments = args; ToolUseId = None } with
                 | Ok answer -> return Ok answer.Text
                 | Error reason -> return Error reason
             }

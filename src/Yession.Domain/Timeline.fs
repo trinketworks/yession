@@ -196,13 +196,52 @@ type ToolUse =
       /// What the call answered, capped, for the chip to disclose — `None` while it runs, and
       /// `None` when it finished with nothing to show here (a block, a foreign tool, a
       /// failure). See `ToolUseFinished.Result`.
-      Result : string option }
+      Result : string option
+      /// What the call did with a command, for the one tool that runs one. See
+      /// `ToolUseFinished.Queueing`.
+      Queueing : ToolQueueing option }
+
+/// Where a call that runs a command (`execute_command`) has got to while it is not yet the
+/// block it becomes, or when it never will be.
+///
+/// The chat draws such a call AS its command, from the moment the call starts: the same chip,
+/// in the same place, that the block will fill when it starts. So these are the states that
+/// chip has before there is a block to read a status from.
+type CommandCall =
+    /// The call is under way and no command has started: a terminal opening, a shell
+    /// starting, a command queued behind another.
+    | CommandStarting
+    /// The call answered, and the command it queued has not started yet: one sent to the
+    /// background, or one that outlasted the wait behind a busy terminal.
+    | CommandWaiting
+    /// No command ran, and none will: the call failed, or it queued nothing. The reason is
+    /// what the call answered, when it answered anything.
+    | CommandDidNotStart of reason: string option
 
 module ToolUse =
 
     /// Where a reader is sent, and what a link carries: `<namespace>/<name>` names the tool
     /// and the minted id names the call.
     let label (use': ToolUse) : string = sprintf "%s/%s" use'.Namespace use'.Name
+
+    /// Whether this is a call that runs a command: the one tool the chat draws as the
+    /// command it becomes rather than as a tool.
+    let runsCommand (use': ToolUse) : bool =
+        use'.Namespace = SessionTool.Namespace && use'.Name = SessionTool.ExecuteCommand
+
+    /// Where a command call has got to, while it is not (yet) a block. `None` for any other
+    /// tool, for a call whose block is known, and for a call recorded before calls said what
+    /// they queued. That one answered and named no block, which then meant either "still
+    /// queued" or "never ran", so it is drawn as the tool it was rather than guessed at.
+    let commandCall (use': ToolUse) : CommandCall option =
+        if not (runsCommand use') || Option.isSome use'.Block then None
+        else
+            match use'.Outcome, use'.Queueing with
+            | None, _ -> Some CommandStarting
+            | Some (ToolCallFailed reason), _ -> Some (CommandDidNotStart (Some reason))
+            | Some ToolCallOk, Some (CommandQueued _) -> Some CommandWaiting
+            | Some ToolCallOk, Some NothingQueued -> Some (CommandDidNotStart use'.Result)
+            | Some ToolCallOk, None -> None
 
 /// One DRAWN row of the chat. A row is usually one item; a run of consecutive WORK from one
 /// turn — its tool calls, and the acts it did between them — is one row holding several, so
@@ -284,6 +323,10 @@ type TimelineProjection =
       /// which names the same pair. The tool call finishes when the COMMAND does, so that
       /// join arrives too late to group a running block — and a card whose lines appear only
       /// once they are done is a card that is empty for exactly as long as it matters.
+      ///
+      /// A block that names its call (`TerminalBlockStarted.ToolUseId`) takes the CALL's
+      /// turn, not the one running when it started. A background command can start after its
+      /// turn has ended, and it is still the work of the turn that asked for it.
       BlockTurns : Map<string, AgentTurnId> }
 
 module TimelineProjection =
@@ -316,6 +359,43 @@ module TimelineProjection =
         | Some use' -> Option.isNone use'.Block
         | None -> false
 
+    /// A command call's block takes the call's place in the chat. The item anchored at the
+    /// call's START becomes the block, and nothing is added where the block started.
+    ///
+    /// The call's slot rather than the block's, because the call's chip is the one a reader
+    /// has already seen. Anything can land between the two: the terminal opening, a message,
+    /// a person taking a lease. A chip that moved down past them as its command started would
+    /// be a line jumping under a reader watching it. In the call's slot, the swap changes what
+    /// the chip SAYS and nothing about where it is.
+    ///
+    /// `None` when the block cannot claim one: no call named, a call this fold has not seen
+    /// (a page boundary), a call that is not a command call or already has its block, or a
+    /// block somebody other than the agent wrote. The last because the name rides a doc entry
+    /// any peer can write (`PendingAct.ToolUseId`), and the agent's calls are the agent's.
+    let private claim
+        (toolUseId: ToolUseId option)
+        (author: ActorRef)
+        (terminal: TerminalId)
+        (block: BlockId)
+        (proj: TimelineProjection)
+        : TimelineProjection option =
+        match toolUseId |> Option.bind (fun id -> toolUse id proj), author with
+        | Some use', ActorRef.Agent when ToolUse.runsCommand use' && Option.isNone use'.Block ->
+            proj.TerminalItems
+            |> List.tryPick (function
+                | TimelineToolUse (offset, id) when id = use'.ToolUseId -> Some offset
+                | _ -> None)
+            |> Option.map (fun offset ->
+                { proj with
+                    TerminalItems =
+                        proj.TerminalItems
+                        |> List.map (function
+                            | TimelineToolUse (_, id) when id = use'.ToolUseId -> TimelineBlock (offset, terminal, block)
+                            | item -> item)
+                    ToolUses = Map.add (ToolUseId.value use'.ToolUseId) { use' with Block = Some block } proj.ToolUses
+                    BlockTurns = Map.add (BlockId.value block) use'.AgentTurnId proj.BlockTurns })
+        | _ -> None
+
     /// A range is `None` unless it holds at least one line. `[from, to)` with `to <= from`
     /// is what a rejected command carries and what a pre-Plan-14 lease event decodes to;
     /// both mean the same thing to a reader, so they get the same answer.
@@ -339,15 +419,22 @@ module TimelineProjection =
             // Anchored at the START, and it mutates in place as it finishes — so a
             // four-minute build's result lands above messages sent while it ran. The
             // alternative, appearing only on completion, makes long work invisible while it
-            // is the only thing happening.
-            append (TimelineBlock (envelope.Offset, e.TerminalId, e.BlockId))
-            |> attributed (Authority.author e.Authority) e.BlockId
+            // is the only thing happening. A command an agent's call asked for starts where
+            // the call did (`claim`), which is earlier still.
+            match claim e.ToolUseId (Authority.author e.Authority) e.TerminalId e.BlockId proj with
+            | Some claimed -> claimed
+            | None ->
+                append (TimelineBlock (envelope.Offset, e.TerminalId, e.BlockId))
+                |> attributed (Authority.author e.Authority) e.BlockId
         | SessionEvent.TerminalCommandRejected e ->
             // A refusal gets a chip too. "The agent proposed this and a human said no" is
             // the more interesting half of the two, and a rejection that appears nowhere is
-            // indistinguishable from a bug.
-            append (TimelineBlock (envelope.Offset, e.TerminalId, e.BlockId))
-            |> attributed (Authority.author e.Authority) e.BlockId
+            // indistinguishable from a bug. A refused call reads as refused where it asked.
+            match claim e.ToolUseId (Authority.author e.Authority) e.TerminalId e.BlockId proj with
+            | Some claimed -> claimed
+            | None ->
+                append (TimelineBlock (envelope.Offset, e.TerminalId, e.BlockId))
+                |> attributed (Authority.author e.Authority) e.BlockId
         | SessionEvent.TerminalLeaseTaken e ->
             { proj with
                 OpenLeases =
@@ -387,7 +474,8 @@ module TimelineProjection =
                   Arguments = e.Arguments
                   Outcome = None
                   Block = None
-                  Result = None }
+                  Result = None
+                  Queueing = None }
             { proj with
                 TerminalItems = proj.TerminalItems @ [ TimelineToolUse (envelope.Offset, e.ToolUseId) ]
                 ToolUses = Map.add (ToolUseId.value e.ToolUseId) use' proj.ToolUses }
@@ -395,12 +483,42 @@ module TimelineProjection =
             // No new item: the call already has its place. Only what it SAYS changes.
             match Map.tryFind (ToolUseId.value e.ToolUseId) proj.ToolUses with
             | Some use' ->
-                { proj with
+                // A log from before blocks named their call: the finish is the first this
+                // fold hears of the pair, so the block moves into the call's place now. One
+                // chip from here on, where a log written today would have drawn it.
+                let unclaimed =
+                    match e.Block with
+                    | Some block when Option.isNone use'.Block ->
+                        proj.TerminalItems
+                        |> List.tryPick (function
+                            | TimelineBlock (_, terminal, id) when id = block -> Some (terminal, block)
+                            | _ -> None)
+                    | _ -> None
+                let joined =
+                    match unclaimed with
+                    | Some (terminal, block) ->
+                        let withoutBlock =
+                            { proj with
+                                TerminalItems =
+                                    proj.TerminalItems
+                                    |> List.filter (function
+                                        | TimelineBlock (_, _, id) -> id <> block
+                                        | _ -> true) }
+                        claim (Some use'.ToolUseId) ActorRef.Agent terminal block withoutBlock
+                        |> Option.defaultValue proj
+                    | None -> proj
+                { joined with
                     ToolUses =
                         Map.add
                             (ToolUseId.value e.ToolUseId)
-                            { use' with Outcome = Some e.Outcome; Block = e.Block; Result = e.Result }
-                            proj.ToolUses }
+                            { use' with
+                                Outcome = Some e.Outcome
+                                // A block the start already joined stays joined: the finish
+                                // names the same one, or (a log from before it said so) none.
+                                Block = Option.orElse e.Block use'.Block
+                                Result = e.Result
+                                Queueing = e.Queueing }
+                            joined.ToolUses }
             | None -> proj
         | SessionEvent.TerminalClosed e ->
             // The lease goes with the terminal, and WITHOUT a release event — that is the
@@ -476,9 +594,19 @@ module TimelineProjection =
     /// reader would take it for speech. `items` carries it for whoever asks, which is what
     /// makes showing it later a change to this line rather than to the fold.
     let rows (conversation: ConversationProjection) (proj: TimelineProjection) : TimelineRow list =
+        // A command call is a COMMAND here, not a tool: it is drawn as the command it becomes,
+        // so it groups as one from the start. Grouped as a tool, it would sit in the turn's
+        // run until its command started and then leave it for a card, moving everything
+        // under it.
+        let commandOf item =
+            match item with
+            | TimelineToolUse (_, id) ->
+                toolUse id proj |> Option.filter (ToolUse.commandCall >> Option.isSome)
+            | _ -> None
         let turnOf item =
             match item with
-            | TimelineToolUse (_, id) -> toolUse id proj |> Option.map (fun u -> u.AgentTurnId)
+            | TimelineToolUse (_, id) when Option.isNone (commandOf item) ->
+                toolUse id proj |> Option.map (fun u -> u.AgentTurnId)
             | _ -> None
         // An act the AGENT did carries no turn of its own, but one that lands while a turn's
         // run is open is that turn's work — the write a `write_file` call made, the sandbox
@@ -492,6 +620,7 @@ module TimelineProjection =
         let burstOf item =
             match item with
             | TimelineBlock (_, _, id) -> blockTurn id proj
+            | TimelineToolUse _ -> commandOf item |> Option.map (fun u -> u.AgentTurnId)
             | _ -> None
         items conversation proj
         |> List.filter (fun item ->
@@ -512,13 +641,15 @@ module TimelineProjection =
                 | None, _, RowWorkRun (turn, earlier) :: rest when agentAct item ->
                     RowWorkRun (turn, earlier @ [ item ]) :: rest
                 | None, _, RowItem (TimelineToolUse _ as first) :: rest when agentAct item ->
-                    RowWorkRun ((turnOf first).Value, [ first; item ]) :: rest
+                    match turnOf first with
+                    | Some turn -> RowWorkRun (turn, [ first; item ]) :: rest
+                    | None -> RowItem item :: rows
                 | _, Some turn, RowTaskCard (previous, earlier) :: rest when previous = turn ->
                     RowTaskCard (turn, earlier @ [ item ]) :: rest
                 // The card forms on the SECOND command, not the first: one command from a
                 // turn is a chip, and wrapping it in a disclosure would hide the only thing
                 // the row has to say behind a click.
-                | _, Some turn, RowItem (TimelineBlock _ as first) :: rest when burstOf first = Some turn ->
+                | _, Some turn, RowItem first :: rest when burstOf first = Some turn ->
                     RowTaskCard (turn, [ first; item ]) :: rest
                 | _, _, _ -> RowItem item :: rows)
             []
@@ -564,10 +695,15 @@ module TimelineProjection =
         | TimelineToolUse (_, id) ->
             match toolUse id proj with
             | Some use' ->
-                match use'.Outcome with
-                | None -> Some TaskRunning
-                | Some ToolCallOk -> None
-                | Some (ToolCallFailed _) -> Some TaskFailed
+                // A command call is live until its command starts, whether or not the call
+                // has answered — and a command that never ran is a failure however the call
+                // ended.
+                match ToolUse.commandCall use', use'.Outcome with
+                | Some (CommandStarting | CommandWaiting), _ -> Some TaskRunning
+                | Some (CommandDidNotStart _), _ -> Some TaskFailed
+                | None, None -> Some TaskRunning
+                | None, Some ToolCallOk -> None
+                | None, Some (ToolCallFailed _) -> Some TaskFailed
             | None -> None
         | TimelineStretch _
         | TimelineThought _ -> None

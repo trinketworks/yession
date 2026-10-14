@@ -365,13 +365,17 @@ type CommandRequest =
       /// What the command is for, in a few words (`BlockDescription`) — the name its block
       /// wears on every surface. `None` when the agent said nothing, and the block is then
       /// called after its command.
-      Description : string option }
+      Description : string option
+      /// The tool call asking for it, when one is (`ToolCall.ToolUseId`). Carried through the
+      /// queue onto the block (`TerminalBlockStarted.ToolUseId`), so the chat can draw the
+      /// call and the command as one chip from the moment the command starts.
+      ToolUseId : ToolUseId option }
 
 module CommandRequest =
 
     /// The plain case: a command, waited for, in the default sandbox's agent terminal.
     let ofCommand (command: string) : CommandRequest =
-        { Command = command; Target = None; Background = false; Stdin = false; Description = None }
+        { Command = command; Target = None; Background = false; Stdin = false; Description = None; ToolUseId = None }
 
 type ExecuteCommand = CommandRequest -> Async<Result<TerminalCommandOutcome, string>>
 

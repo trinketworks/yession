@@ -267,7 +267,7 @@ let private answer (registries: ToolRegistry list) (tool: string) (args: string)
     | None -> failwith "the session has no registry for the jumpstarter namespace"
     | Some registry ->
         async {
-            match! registry.Invoke { Namespace = "jumpstarter"; Name = tool; Arguments = args } with
+            match! registry.Invoke { Namespace = "jumpstarter"; Name = tool; Arguments = args; ToolUseId = None } with
             | Ok answer -> return answer
             | Error e -> return failwithf "the call never reached the tool: %s" e
         }

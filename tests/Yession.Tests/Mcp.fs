@@ -538,7 +538,7 @@ let private toolNames (registries: ToolRegistry list) =
 let private call (registries: ToolRegistry list) (ns: string) (name: string) (args: string) =
     match registries |> List.tryFind (fun r -> ToolRegistry.namespaces r = [ ns ]) with
     | None -> failwithf "no registry for namespace '%s'" ns
-    | Some registry -> registry.Invoke { Namespace = ns; Name = name; Arguments = args }
+    | Some registry -> registry.Invoke { Namespace = ns; Name = name; Arguments = args; ToolUseId = None }
 
 let portsTests =
     testList "Talking to a declared MCP server" [

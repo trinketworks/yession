@@ -36,7 +36,7 @@ let private expect result =
     | Ok v -> v
     | Error e -> failwithf "invariant: %A" e
 
-let private call ns name args : ToolCall = { Namespace = ns; Name = name; Arguments = args }
+let private call ns name args : ToolCall = { Namespace = ns; Name = name; Arguments = args; ToolUseId = None }
 
 /// A registry of one tool that answers with its own namespace, so a dispatch test can see
 /// WHERE a call landed rather than merely that it landed.
@@ -573,7 +573,26 @@ let private sessionTests =
                         }))
                 let! answer = registry.Invoke (call "yession" "execute_command" """{"command":"echo hi"}""")
                 Expect.equal seen "echo hi" "the argument was decoded and passed through"
-                Expect.equal answer (Ok (ToolAnswer.text "FINISHED with exit code 0 in terminal t1\necho hi")) "and the outcome came back as text"
+                Expect.equal
+                    answer
+                    (Ok { ToolAnswer.text "FINISHED with exit code 0 in terminal t1\necho hi" with Queueing = Some (CommandQueued (QueueId.create "q1" |> expect)) })
+                    "and the outcome came back as text"
+            }
+
+        // The call's id rides the request, so the block the command becomes can name the call
+        // from the moment it starts, and the chat draws the two as one chip.
+        testCaseAsync "a command names the call that asked for it" <|
+            async {
+                let mutable named = None
+                let registry =
+                    AgentTools.registry (capabilities (fun (request: CommandRequest) ->
+                        async {
+                            named <- request.ToolUseId
+                            return Ok (ran request.Command)
+                        }))
+                let id = ToolUseId.create "t-1" |> expect
+                let! _ = registry.Invoke { call "yession" "execute_command" """{"command":"ls"}""" with ToolUseId = Some id }
+                Expect.equal named (Some id) "the request carries the call"
             }
 
         testCase "a finished command is told apart from a running one at the first word" <| fun () ->
@@ -704,8 +723,8 @@ let private sessionTests =
                 let! answer = registry.Invoke (call "yession" "execute_command" """{"command":"ls"}""")
                 Expect.equal
                     answer
-                    (Ok (ToolAnswer.text "could not run the command: no terminal capability"))
-                    "the call happened; it is the command that did not"
+                    (Ok { ToolAnswer.text "could not run the command: no terminal capability" with Queueing = Some NothingQueued })
+                    "the call happened; it is the command that did not, and nothing was queued"
             }
 
         // Reading a terminal with no blocks (Plan 19), paged in Plan 25. Every answer says
@@ -1020,7 +1039,40 @@ let private auditTests =
                         (capabilities (fun (request: CommandRequest) -> async { return Ok { ran request.Command with Block = Some block } }))
                     |> ToolUseLog.wrap log
                 let! _ = registry.Invoke (call "yession" "execute_command" """{"command":"ls"}""")
-                Expect.equal (Seq.head finished) { Outcome = ToolCallOk; Block = Some block; Result = None } "the block travelled to the record, with no separate result to disclose"
+                Expect.equal
+                    (Seq.head finished)
+                    { Outcome = ToolCallOk; Block = Some block; Result = None; Queueing = Some (CommandQueued (QueueId.create "q1" |> expect)) }
+                    "the block travelled to the record, with no separate result to disclose"
+            }
+
+        // The seam mints the id, and the body is the one that queues the command: so the id
+        // has to reach the body, or the block cannot name the call when it starts.
+        testCaseAsync "a command's request carries the id its call was recorded under" <|
+            async {
+                let log, _, _ = recorder ()
+                let mutable named = None
+                let registry =
+                    AgentTools.registry
+                        (capabilities (fun (request: CommandRequest) ->
+                            async {
+                                named <- request.ToolUseId
+                                return Ok (ran request.Command)
+                            }))
+                    |> ToolUseLog.wrap log
+                let! _ = registry.Invoke (call "yession" "execute_command" """{"command":"ls"}""")
+                Expect.equal named (Some (ToolUseId.create "use-1" |> expect)) "the minted id reached the command"
+            }
+
+        // The two ways a command call can end without a block are opposite answers: one is
+        // still queued, the other never ran. The record says which, or the chat would guess.
+        testCaseAsync "a command that could not run is recorded as having queued nothing" <|
+            async {
+                let log, _, finished = recorder ()
+                let registry =
+                    AgentTools.registry (capabilities (fun _ -> async { return Error "that terminal is not open" }))
+                    |> ToolUseLog.wrap log
+                let! _ = registry.Invoke (call "yession" "execute_command" """{"command":"ls"}""")
+                Expect.equal (Seq.head finished).Queueing (Some NothingQueued) "nothing queued, so nothing will start"
             }
 
         // An audit that loses exactly the calls that went worst is worse than none.

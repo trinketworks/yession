@@ -267,7 +267,13 @@ and TerminalBlockStarted =
       /// anything: the agent names each command it runs, a person typing one does not.
       /// `None` on every block written before the field, which is what a log from then
       /// still reads as.
-      Description : string option }
+      Description : string option
+      /// The agent's tool call this command came from (`execute_command`), when one did.
+      /// Recorded at the START, so the chat can draw the call and its command as one chip
+      /// from the moment the command starts. `ToolUseFinished.Block` names the same pair,
+      /// but only when the command ends. `None` for a person's command, for one the Session
+      /// ran on its own behalf, and for every block written before the field.
+      ToolUseId : ToolUseId option }
 /// A queued command a peer refused (Plan 13, stage 2a). The other half of the approval
 /// gate: a log that records every yes and no no is the weaker thing wearing the stronger
 /// thing's face, and "the agent proposed this and a human said no" is the more interesting
@@ -298,7 +304,10 @@ and TerminalCommandRejected =
       /// What its author said it was for, snapshotted for the reason `Command` is — so a
       /// refused block is called what a started one would have been.
       Description : string option
-      Reason : string option }
+      Reason : string option
+      /// The agent's tool call that proposed it, when one did — `TerminalBlockStarted.ToolUseId`,
+      /// for a refusal, so a refused call reads as refused in the place it was asked.
+      ToolUseId : ToolUseId option }
 /// The shell stopped emitting marks (Plan 13, stage 2f). `exec sh`, or an image whose shell
 /// drops into another, replaces the process we instrumented while the pty stays open — so
 /// `Exited` never fires and the marks simply stop.

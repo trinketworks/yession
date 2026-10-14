@@ -236,7 +236,8 @@ let private queueEntry (terminal: TerminalId) (author: Principal) (n: string) : 
       Size = None
       Description = None
       Background = false
-      Stdin = false }
+      Stdin = false
+      ToolUseId = None }
 
 /// The same, authored by the agent on a peer's credential — the only way an agent-authored
 /// act can be built, and what makes these cases about the agent rather than about a peer

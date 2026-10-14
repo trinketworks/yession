@@ -451,6 +451,14 @@ module Events =
         | Some text -> [ "description", Encode.string text ]
         | None -> []
 
+    /// The agent's tool call a command came from, as a block's facts carry it: the key only
+    /// when there is one, for `descriptionField`'s reason — a log written before the field
+    /// reads back with none, and a person's command never had one.
+    let private toolUseField (toolUse: ToolUseId option) =
+        match toolUse with
+        | Some id -> [ "toolUseId", Codec.toolUseId.Encode id ]
+        | None -> []
+
     let private terminalBlockStarted : Codec<TerminalBlockStarted> =
         { Encode =
             fun (p: TerminalBlockStarted) ->
@@ -462,6 +470,7 @@ module Events =
                       "fromSeq", Encode.int p.FromSeq
                       "background", Encode.bool p.Background ]
                     @ descriptionField p.Description
+                    @ toolUseField p.ToolUseId
                     @ Codec.authorityFields p.Authority)
           Decode =
             Decode.object (fun get ->
@@ -478,7 +487,8 @@ module Events =
                   // whose absence already means `false`.
                   TerminalBlockStarted.Background =
                     get.Optional.Field "background" Decode.bool |> Option.defaultValue false
-                  TerminalBlockStarted.Description = get.Optional.Field "description" Decode.string }) }
+                  TerminalBlockStarted.Description = get.Optional.Field "description" Decode.string
+                  TerminalBlockStarted.ToolUseId = get.Optional.Field "toolUseId" Codec.toolUseId.Decode }) }
 
     let private terminalBlockCompleted : Codec<TerminalBlockCompleted> =
         { Encode =
@@ -653,6 +663,7 @@ module Events =
                       "command", Encode.string p.Command
                       "reason", Encode.option Encode.string p.Reason ]
                     @ descriptionField p.Description
+                    @ toolUseField p.ToolUseId
                     @ Codec.authorityFields p.Authority)
           Decode =
             Decode.object (fun get ->
@@ -663,7 +674,8 @@ module Events =
                   TerminalCommandRejected.RejectedBy = get.Required.Field "rejectedBy" Codec.actor.Decode
                   TerminalCommandRejected.Command = get.Required.Field "command" Decode.string
                   TerminalCommandRejected.Description = get.Optional.Field "description" Decode.string
-                  TerminalCommandRejected.Reason = get.Required.Field "reason" (Decode.option Decode.string) }) }
+                  TerminalCommandRejected.Reason = get.Required.Field "reason" (Decode.option Decode.string)
+                  TerminalCommandRejected.ToolUseId = get.Optional.Field "toolUseId" Codec.toolUseId.Decode }) }
 
     let private terminalTranscriptTruncated : Codec<TerminalTranscriptTruncated> =
         { Encode =
@@ -1447,16 +1459,35 @@ module Events =
                   ToolUseStarted.Name = get.Required.Field "name" Decode.string
                   ToolUseStarted.Arguments = get.Required.Field "arguments" (Decode.option Decode.string) }) }
 
+    /// What a command call did with its command (`ToolQueueing`).
+    let private toolQueueing : Codec<ToolQueueing> =
+        { Encode =
+            function
+            | CommandQueued queueId -> Encode.object [ "type", Encode.string "queued"; "queueId", Codec.queueId.Encode queueId ]
+            | NothingQueued -> Encode.object [ "type", Encode.string "nothing" ]
+          Decode =
+            Decode.field "type" Decode.string
+            |> Decode.andThen (fun t ->
+                match t with
+                | "queued" -> Decode.field "queueId" Codec.queueId.Decode |> Decode.map CommandQueued
+                | "nothing" -> Decode.succeed NothingQueued
+                | other -> Decode.fail (sprintf "Unknown tool queueing: %s" other)) }
+
     let private toolUseFinished : Codec<ToolUseFinished> =
         { Encode =
             fun (p: ToolUseFinished) ->
-                Encode.object
+                Encode.object (
                     [ "toolUseId", Codec.toolUseId.Encode p.ToolUseId
                       "outcome", toolOutcome.Encode p.Outcome
                       "block", (match p.Block with Some b -> Codec.blockId.Encode b | None -> Encode.nil)
                       // Written only when there is one, so an event that carries no disclosable
                       // result is byte-identical to one from before the field existed.
                       "result", (match p.Result with Some r -> Encode.string r | None -> Encode.nil) ]
+                    // The key only for the one tool that runs commands: every other call's
+                    // event is byte-identical to one from before the field.
+                    @ (match p.Queueing with
+                       | Some queueing -> [ "queueing", toolQueueing.Encode queueing ]
+                       | None -> []))
           Decode =
             Decode.object (fun get ->
                 { ToolUseFinished.ToolUseId = get.Required.Field "toolUseId" Codec.toolUseId.Decode
@@ -1465,7 +1496,10 @@ module Events =
                   // Optional so every tool-use event written before this field decodes: an
                   // absent `result` is a call with nothing to disclose, same as an explicit null.
                   ToolUseFinished.Result =
-                    get.Optional.Field "result" (Decode.option Decode.string) |> Option.flatten }) }
+                    get.Optional.Field "result" (Decode.option Decode.string) |> Option.flatten
+                  // Optional for every event written before the field, which says nothing
+                  // about a command either way.
+                  ToolUseFinished.Queueing = get.Optional.Field "queueing" toolQueueing.Decode }) }
 
     let sessionEvent : Codec<SessionEvent> =
         { Encode =

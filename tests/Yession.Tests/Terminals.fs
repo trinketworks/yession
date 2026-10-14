@@ -93,7 +93,8 @@ let private entry (id: string) (terminal: TerminalId) (authority: Authority) (or
       Order = order
       Description = None
       Background = false
-      Stdin = false }
+      Stdin = false
+      ToolUseId = None }
 
 let private queueOf entries =
     entries |> List.map (fun (e: PendingAct) -> e.QueueId, e) |> Map.ofList
@@ -209,7 +210,8 @@ let private drainTests =
                       Command = "ls"
                       FromSeq = 0
                       Description = None
-                      Background = false }
+                      Background = false
+                      ToolUseId = None }
             Expect.equal (TerminalQueueDrain.consumedOf started) (Some "q-a1") "a started block consumes its entry"
             Expect.equal
                 (TerminalQueueDrain.consumedOf (SessionEvent.TerminalClosed { TerminalId = terminalA; Reason = "x"; By = None }))
@@ -231,7 +233,8 @@ let private started (id: TerminalId) (b: string) (command: string) (fromSeq: int
           Command = command
           FromSeq = fromSeq
           Description = None
-          Background = false }
+          Background = false
+          ToolUseId = None }
 
 let private completed (id: TerminalId) (b: string) (result: CommandResult) (toSeq: int) =
     SessionEvent.TerminalBlockCompleted { TerminalId = id; BlockId = block b; Result = result; ToSeq = toSeq }
@@ -528,7 +531,8 @@ let private describedStart (b: string) (command: string) (description: string op
           Command = command
           FromSeq = 0
           Description = description
-          Background = false }
+          Background = false
+          ToolUseId = None }
 
 /// A command of the agent's somebody refused, saying what it was for.
 let private describedRefusal (description: string option) =
@@ -540,7 +544,8 @@ let private describedRefusal (description: string option) =
           RejectedBy = PeerRef bob
           Command = "rm -rf build"
           Description = description
-          Reason = Some "not yet" }
+          Reason = Some "not yet"
+          ToolUseId = None }
 
 /// The one block a fold of `events` into a fresh terminal holds.
 let private onlyBlock events =
@@ -1134,7 +1139,8 @@ let private rejectedEvent (id: TerminalId) (q: string) (b: string) (by: PeerId) 
           RejectedBy = PeerRef by
           Description = None
           Command = "rm -rf /"
-          Reason = reason }
+          Reason = reason
+          ToolUseId = None }
 
 let private rejectionTests =
     testList "Terminal rejection" [
@@ -1900,7 +1906,8 @@ let private digestTests =
                         Command = "rm -rf build"
                         FromSeq = 0
                         Description = None
-                        Background = false }
+                        Background = false
+                        ToolUseId = None }
                   completed terminalA "1" (CommandSucceeded 0) 3 ]
             let entry = (digestOf events).Head
             Expect.equal entry.Author ActorRef.Agent "the agent's own command"
@@ -2252,7 +2259,29 @@ let private codecTests =
                         Command = "ls -la"
                         FromSeq = 3
                         Description = None
-                        Background = false }
+                        Background = false
+                        ToolUseId = None }
+                  // The agent's, naming the call that asked for it.
+                  SessionEvent.TerminalBlockStarted
+                      { TerminalId = terminalA
+                        BlockId = block "2"
+                        QueueId = Some (queue "a2")
+                        Authority = Authority.agentFor (Principal.Peer bob)
+                        Command = "make test"
+                        FromSeq = 9
+                        Description = Some "tested the app"
+                        Background = false
+                        ToolUseId = Some (ToolUseId.create "t-1" |> expect) }
+                  SessionEvent.TerminalCommandRejected
+                      { TerminalId = terminalA
+                        QueueId = queue "a3"
+                        BlockId = block "3"
+                        Authority = Authority.agentFor (Principal.Peer bob)
+                        RejectedBy = ActorRef.System
+                        Description = None
+                        Command = "rm -rf /"
+                        Reason = Some "no"
+                        ToolUseId = Some (ToolUseId.create "t-2" |> expect) }
                   completed terminalA "1" CommandTimedOut 9
                   SessionEvent.TerminalTranscriptTruncated
                       { TerminalId = terminalA; BlockId = None; DroppedBytes = 17 }
@@ -2308,7 +2337,8 @@ let private codecTests =
                       Command = "ls -la"
                       FromSeq = 3
                       Description = None
-                      Background = false }
+                      Background = false
+                      ToolUseId = None }
                 |> Codec.toString Events.sessionEvent
             for key in [ "\"author\""; "\"onBehalfOf\"" ] do
                 Expect.isTrue (encoded.Contains key) (sprintf "%s is still written: %s" key encoded)
@@ -2327,6 +2357,16 @@ let private codecTests =
                 Expect.isFalse decoded.Background "it ran in the foreground, which is what its absence means"
                 Expect.equal decoded.Authority (Authority.ofAuthor (Principal.Peer ada)) "and it is her own act"
             | other -> failwithf "a pre-Plan-20 block must still read back, got %A" other
+
+        testCase "a block written before blocks named their call decodes with no call" <| fun () ->
+            // Every block in a log from before the field: the chat then joins the call and its
+            // block when the call finishes, as it always did, rather than refusing the line.
+            let old =
+                """{"type":"terminalBlockStarted","payload":{"terminalId":"term-a","blockId":"blk-1","queueId":"q-1","""
+                + """"author":{"kind":"agent"},"onBehalfOf":{"kind":"peer","peerId":"ada"},"command":"make","fromSeq":0,"background":false}}"""
+            match Codec.fromString Events.sessionEvent old with
+            | Ok (SessionEvent.TerminalBlockStarted decoded) -> Expect.isNone decoded.ToolUseId "no call named"
+            | other -> failwithf "a block from before the field must still read back, got %A" other
 
         testCase "an open written before a peer could name a sandbox still decodes" <| fun () ->
             // Every client that could not say where meant `default`, because that was the
@@ -2397,7 +2437,8 @@ let private codecTests =
                       RejectedBy = PeerRef bob
                       Description = None
                       Command = "rm -rf /"
-                      Reason = Some "no" }
+                      Reason = Some "no"
+                      ToolUseId = None }
             let encoded = Codec.toString Events.sessionEvent refused
             Expect.isTrue (encoded.Contains "\"onBehalfOf\"") (sprintf "whose turn it was is on the wire: %s" encoded)
             Expect.equal (Codec.fromString Events.sessionEvent encoded) (Ok refused) "and reads back whole"
@@ -3162,7 +3203,7 @@ let private schedulerTests =
                 let doc = Y.Doc.Create ()
                 let scheduler = TerminalScheduler.create doc terminals ignore Set.empty
                 // Queued exactly as the agent's capability queues one — same doc write.
-                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.ofAuthor (Principal.Peer ada)) 1.0 "echo ok" false false None
+                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.ofAuthor (Principal.Peer ada)) 1.0 "echo ok" false false None None
                 scheduler.Drain ()
                 do! Async.Sleep 20
 
@@ -3190,7 +3231,7 @@ let private schedulerTests =
                 let doc = Y.Doc.Create ()
                 let scheduler = TerminalScheduler.create doc terminals ignore Set.empty
                 let! _ = terminals.Close id ActorRef.System "killed"
-                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.ofAuthor (Principal.Peer ada)) 1.0 "echo late" false false None
+                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.ofAuthor (Principal.Peer ada)) 1.0 "echo late" false false None None
                 scheduler.Drain ()
                 do! Async.Sleep 20
 
@@ -3213,7 +3254,7 @@ let private schedulerTests =
                 let id = opened |> expect
                 let doc = Y.Doc.Create ()
                 let scheduler = TerminalScheduler.create doc terminals ignore Set.empty
-                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (Principal.Peer ada)) 1.0 "echo hi" false false None
+                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (Principal.Peer ada)) 1.0 "echo hi" false false None None
                 scheduler.Drain ()
                 do! Async.Sleep 20
                 Expect.equal (List.length (List.ofSeq spawned)) 1 "it ran, with nobody asked"
@@ -3239,8 +3280,8 @@ let private schedulerTests =
                 let id = opened |> expect
                 let doc = Y.Doc.Create ()
                 let scheduler = TerminalScheduler.create doc terminals ignore Set.empty
-                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (Principal.Peer ada)) 1.0 "rm -rf /" false false None
-                SyncedStateSync.enqueueTerminalCommand doc (queue "a2") id (Authority.ofAuthor (Principal.Peer ada)) 2.0 "echo ok" false false None
+                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (Principal.Peer ada)) 1.0 "rm -rf /" false false None None
+                SyncedStateSync.enqueueTerminalCommand doc (queue "a2") id (Authority.ofAuthor (Principal.Peer ada)) 2.0 "echo ok" false false None None
                 scheduler.Drain ()
                 do! Async.Sleep 50
                 let! events = eventsOf log
@@ -3276,7 +3317,7 @@ let private schedulerTests =
                 let id = opened |> expect
                 let doc = Y.Doc.Create ()
                 let scheduler = TerminalScheduler.create doc terminals ignore Set.empty
-                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (Principal.Peer ada)) 1.0 "echo draft" false false None
+                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (Principal.Peer ada)) 1.0 "echo draft" false false None None
                 // Edited after the enqueue, before the drain — a peer fixing the command.
                 (doc.getText (BodyKey.terminalQueued (queue "a1"))).delete (0, 10)
                 (doc.getText (BodyKey.terminalQueued (queue "a1"))).insert (0, "echo final")
@@ -3301,7 +3342,7 @@ let private schedulerTests =
                 let doc = Y.Doc.Create ()
                 // The crash window: a block start reached the log, the doc removal did not.
                 let scheduler = TerminalScheduler.create doc terminals ignore (Set.singleton "q-a1")
-                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.ofAuthor (Principal.Peer ada)) 1.0 "make" false false None
+                SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.ofAuthor (Principal.Peer ada)) 1.0 "make" false false None None
                 scheduler.Drain ()
                 do! Async.Sleep 20
                 Expect.isEmpty (List.ofSeq spawned) "it does not run a second time"
@@ -3503,7 +3544,7 @@ let private syncTests =
     testList "Terminal collaborative state" [
         testCase "a terminal queue entry survives a doc round-trip" <| fun () ->
             let doc = Y.Doc.Create ()
-            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 3.0 "git status" false false None
+            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 3.0 "git status" false false None None
             let synced = SyncedStateSync.ofDoc doc
             let entry = synced.Pending |> Map.find (queue "a1")
             Expect.equal entry.Terminal terminalA "the entry names its terminal"
@@ -3519,8 +3560,8 @@ let private syncTests =
         // person writes — reads as no ask, which is the state `BlockStdinPolicy` closes.
         testCase "an ask for stdin rides the queue entry, and no ask is no field" <| fun () ->
             let doc = Y.Doc.Create ()
-            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 1.0 "npx create-thing" false true None
-            SyncedStateSync.enqueueTerminalCommand doc (queue "a2") terminalA (Authority.agentFor (Principal.Peer ada)) 2.0 "ls" false false None
+            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 1.0 "npx create-thing" false true None None
+            SyncedStateSync.enqueueTerminalCommand doc (queue "a2") terminalA (Authority.agentFor (Principal.Peer ada)) 2.0 "ls" false false None None
             let synced = SyncedStateSync.ofDoc doc
             Expect.isTrue (synced.Pending |> Map.find (queue "a1")).Stdin "asked for, and read back"
             Expect.isFalse (synced.Pending |> Map.find (queue "a2")).Stdin "not asked for"
@@ -3531,7 +3572,7 @@ let private syncTests =
             // would carry out an act nobody released; dropping it at decode is the safe
             // direction, and the terminal entry beside it is untouched.
             let doc = Y.Doc.Create ()
-            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 1.0 "ls" false false None
+            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 1.0 "ls" false false None None
             legacyPendingInDoc doc "q-cmd" "command:add_repo" "agent"
             let synced = SyncedStateSync.ofDoc doc
             Expect.isTrue (Map.containsKey (queue "a1") synced.Pending) "the terminal entry survives"
@@ -3542,7 +3583,7 @@ let private syncTests =
             // old browser tab may still write them. Thoth-style structural reads ignore
             // fields nobody asks for — pinned, because replay depends on it.
             let doc = Y.Doc.Create ()
-            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 1.0 "x" false false None
+            SyncedStateSync.enqueueTerminalCommand doc (queue "a1") terminalA (Authority.agentFor (Principal.Peer ada)) 1.0 "x" false false None None
             setQueuedFieldInDoc doc (queue "a1") "approvedBy" "bob"
             setQueuedFieldInDoc doc (queue "a1") "rejectedBy" "bob"
             let synced = SyncedStateSync.ofDoc doc
@@ -5108,8 +5149,8 @@ let private cannotRunHoldingTwo () =
         let id = opened |> expect
         Async.StartImmediate (terminals.RunBlock id (entry "b1" id byAda 1.0) "echo hi" ignore)
         do! clock.Armed ()
-        SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (Principal.Peer ada)) 1.0 "echo one" false false None
-        SyncedStateSync.enqueueTerminalCommand doc (queue "a2") id byBob 2.0 "echo two" false false None
+        SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (Principal.Peer ada)) 1.0 "echo one" false false None None
+        SyncedStateSync.enqueueTerminalCommand doc (queue "a2") id byBob 2.0 "echo two" false false None None
         let wokenBefore = woken.Value
         clock.Advance (TimeSpan.FromSeconds 3.0)
         do! waitUntil "the terminal to be lost" (fun () -> Set.contains (TerminalId.value id) (terminals.Lost ()))
@@ -5191,7 +5232,7 @@ let private cannotRunTests =
             async {
                 let! _, scheduler, doc, id, log, _, _ = cannotRunHoldingTwo ()
                 do! untilRefused log 2
-                SyncedStateSync.enqueueTerminalCommand doc (queue "a3") id (Authority.agentFor (Principal.Peer ada)) 3.0 "echo three" false false None
+                SyncedStateSync.enqueueTerminalCommand doc (queue "a3") id (Authority.agentFor (Principal.Peer ada)) 3.0 "echo three" false false None None
                 scheduler.Drain ()
                 do! untilRefused log 3
                 let! refusals = refusalsOf log
@@ -5221,7 +5262,7 @@ let private cannotRunTests =
                 mark "A"
                 do! waitUntil "the terminal to come back" (fun () -> not (Set.contains (TerminalId.value id) (terminals.Lost ())))
                 do! waitUntil "the open block to be settled" (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
-                SyncedStateSync.enqueueTerminalCommand doc (queue "a4") id byAda 4.0 "echo four" false false None
+                SyncedStateSync.enqueueTerminalCommand doc (queue "a4") id byAda 4.0 "echo four" false false None None
                 scheduler.Drain ()
                 let rec started (left: int) =
                     async {

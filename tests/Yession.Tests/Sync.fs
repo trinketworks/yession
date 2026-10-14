@@ -108,7 +108,8 @@ let private agentsBackgroundAct (queueId: QueueId) (terminal: TerminalId) : Pend
       Description = Some "Watch the build"
       Background = true
       Stdin = true
-      Size = None }
+      Size = None
+      ToolUseId = None }
 
 // -----------------------------------------------------------------------------
 // Model tests — the codec through the public surface (program encode + doc decode).
@@ -401,7 +402,7 @@ let private codecTests =
             let doc = Y.Doc.Create ()
             let terminal = TerminalId.create "term-a" |> expect
             let queueId = QueueId.create "q-bg" |> expect
-            SyncedStateSync.enqueueTerminalCommand doc queueId terminal (Authority.agentFor (Principal.Peer ada)) 1.0 "make watch" true true None
+            SyncedStateSync.enqueueTerminalCommand doc queueId terminal (Authority.agentFor (Principal.Peer ada)) 1.0 "make watch" true true None None
             let p = Harness.run (Client.makeProgram Client.Ports.offline doc (ClientModel.init (peer "ada" "Ada")))
             p.Dispatch (user (ReorderPendingMsg (queueId, 5.0)))
 
@@ -419,7 +420,7 @@ let private codecTests =
             let terminal = TerminalId.create "term-a" |> expect
             let act = agentsBackgroundAct (QueueId.create "q-bg" |> expect) terminal
             let direct = Y.Doc.Create ()
-            SyncedStateSync.enqueueTerminalCommand direct act.QueueId terminal act.Authority act.Order "make watch" act.Background act.Stdin act.Description
+            SyncedStateSync.enqueueTerminalCommand direct act.QueueId terminal act.Authority act.Order "make watch" act.Background act.Stdin act.Description act.ToolUseId
             let encoded = Y.Doc.Create ()
             (codecProgram encoded).Dispatch (user (Replaced { (SyncedSessionState.empty CollabText.ylmish) with Pending = Map.ofList [ act.QueueId, act ] }))
 

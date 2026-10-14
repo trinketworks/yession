@@ -17,6 +17,19 @@ type ToolOutcome =
     | ToolCallOk
     | ToolCallFailed of reason: string
 
+/// What a call that runs a COMMAND (`execute_command`) did with it: put it in a terminal's
+/// queue, or not. Recorded because "the call answered and named no block" means two opposite
+/// things otherwise: a command still queued (a background one, or one that outlasted the
+/// wait behind a busy terminal) and a command that never ran at all (a terminal that could not
+/// open, a target that does not exist, an entry withdrawn before it started). A chip that
+/// guessed between them would either call a refused command pending or a queued one failed.
+and ToolQueueing =
+    /// The command went into a terminal's queue as this entry. Its block names the call when
+    /// it starts (`TerminalBlockStarted.ToolUseId`), whenever that is.
+    | CommandQueued of QueueId
+    /// Nothing was queued, so nothing ran.
+    | NothingQueued
+
 and ToolUseStarted =
     { /// Minted by the Process, so the chip has a handle a link can carry.
       ToolUseId : ToolUseId
@@ -58,7 +71,11 @@ and ToolUseFinished =
       /// failed (the reason is the outcome). Recorded for the SCREEN, never fed back to the
       /// agent — the conversation projection ignores tool-use events, so this cannot
       /// double-feed a turn that already has the answer in its own transcript.
-      Result : string option }
+      Result : string option
+      /// What the call did with a command, for the one tool that runs one
+      /// (`ToolQueueing`). `None` for every other tool, and for every call recorded before
+      /// the field — a log from then still reads, and says nothing either way.
+      Queueing : ToolQueueing option }
 
 module McpServerNoted =
 

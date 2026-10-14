@@ -88,7 +88,8 @@ let private started (id: TerminalId) (n: string) (authority: Authority) (command
           Command = command
           FromSeq = fromSeq
           Description = None
-          Background = false }
+          Background = false
+          ToolUseId = None }
 
 let private completed (id: TerminalId) (n: string) (result: CommandResult) (toSeq: int) =
     SessionEvent.TerminalBlockCompleted { TerminalId = id; BlockId = block n; Result = result; ToSeq = toSeq }
@@ -206,7 +207,8 @@ let private chipTests =
                                 RejectedBy = PeerRef ada
                                 Description = None
                                 Command = "rm -rf /"
-                                Reason = Some "no" }) ]
+                                Reason = Some "no"
+                                ToolUseId = None }) ]
             Expect.equal (shapes items) [ "ran:b-no" ] "the refusal is in the chat where it was proposed"
     ]
 
@@ -2130,7 +2132,8 @@ let private videoTests =
                             RejectedBy = PeerRef ada
                             Description = None
                             Command = "rm -rf /"
-                            Reason = Some "no" }) ]
+                            Reason = Some "no"
+                            ToolUseId = None }) ]
             let model = withRecords (clientOf rejected)
             Expect.isNone (ClientModel.previewReplay (PreviewSubject.Block (terminalA, block "no")) model) "it never ran"
             Expect.isNone (ClientModel.missingKeyframe (Support.step (chip terminalA "no") model)) "so there is no screen to fetch"
@@ -2562,10 +2565,10 @@ let private used (n: string) (t: string) (name: string) =
           Arguments = Some "{}" }
 
 let private toolDone (n: string) (outcome: ToolOutcome) (blk: BlockId option) =
-    SessionEvent.ToolUseFinished { ToolUseId = toolUse n; Outcome = outcome; Block = blk; Result = None }
+    SessionEvent.ToolUseFinished { ToolUseId = toolUse n; Outcome = outcome; Block = blk; Result = None; Queueing = None }
 
 let private toolDoneWith (n: string) (outcome: ToolOutcome) (blk: BlockId option) (result: string option) =
-    SessionEvent.ToolUseFinished { ToolUseId = toolUse n; Outcome = outcome; Block = blk; Result = result }
+    SessionEvent.ToolUseFinished { ToolUseId = toolUse n; Outcome = outcome; Block = blk; Result = result; Queueing = None }
 
 let private drawn (events: EventEnvelope<SessionEvent> list) : string list =
     let conversation, _ = ConversationProjection.applyEvents None events ConversationProjection.empty
@@ -2697,7 +2700,8 @@ let private toolTests =
         testCase "arguments are laid out for reading, and the record is untouched" <| fun () ->
             let use' : ToolUse =
                 { ToolUseId = toolUse "1"; AgentTurnId = turn "a"; Namespace = "yession"; Name = "read_file"
-                  Arguments = Some """{"path":"a.fs","offset":2}"""; Outcome = None; Block = None; Result = None }
+                  Arguments = Some """{"path":"a.fs","offset":2}"""; Outcome = None; Block = None; Result = None
+                  Queueing = None }
             Expect.equal (ToolUseText.arguments use') (Some "{\n  \"path\": \"a.fs\",\n  \"offset\": 2\n}") "one field per line"
             Expect.equal (ToolUseText.arguments { use' with Arguments = Some "not json" }) (Some "not json") "what is not JSON is shown as it is"
             Expect.equal (ToolUseText.arguments { use' with Arguments = None }) None "a foreign tool's arguments were never recorded"
@@ -2803,6 +2807,165 @@ let private toolTests =
                     (Some "yession/set_secret")
                     "and it resolves to the call it names"
             | other -> failwithf "expected one tool-use item, got %A" other
+    ]
+
+// --- A command call is drawn as its command ------------------------------------------------
+
+/// The agent asking for `make test`, described, as `execute_command` records it.
+let private calledCommand (n: string) (t: string) =
+    SessionEvent.ToolUseStarted
+        { ToolUseId = toolUse n
+          AgentTurnId = turn t
+          Namespace = SessionTool.Namespace
+          Name = SessionTool.ExecuteCommand
+          Arguments = Some """{"command":"make test","description":"tested the app"}""" }
+
+/// The block that call's command became, naming the call (`None`: a log from before the field).
+let private startedFor (n: string) (call: string option) (authority: Authority) =
+    SessionEvent.TerminalBlockStarted
+        { TerminalId = terminalA
+          BlockId = block n
+          QueueId = Some (QueueId.create ("q-" + n) |> expect)
+          Authority = authority
+          Command = "make test"
+          FromSeq = 1
+          Description = Some "tested the app"
+          Background = false
+          ToolUseId = call |> Option.map toolUse }
+
+let private callAnswered (n: string) (blk: BlockId option) (queueing: ToolQueueing option) (result: string option) =
+    SessionEvent.ToolUseFinished
+        { ToolUseId = toolUse n; Outcome = ToolCallOk; Block = blk; Result = result; Queueing = queueing }
+
+/// A turn that asks for one command while other things land: the terminal opening, and a
+/// message, between the call and its command starting. The real order, from a session whose
+/// new shell took 2.7 seconds to start.
+let private oneCommandCall =
+    [ at 1L 0.0 (sent "1" "run the tests")
+      at 2L 1.0 (calledCommand "1" "a")
+      at 3L 1.1 (opened terminalA "agent")
+      at 4L 2.0 (sent "2" "while that starts")
+      at 5L 3.7 (startedFor "1" (Some "1") agentForAda)
+      at 6L 9.0 (completed terminalA "1" (CommandSucceeded 0) 3)
+      at 7L 9.1 (callAnswered "1" (Some (block "1")) (Some (CommandQueued (QueueId.create "q-1" |> expect))) None) ]
+
+/// Every prefix of a log that reaches the call: what a client folding it live has seen.
+let private prefixesFrom (from: int) (events: EventEnvelope<SessionEvent> list) =
+    [ for n in from .. List.length events -> List.take n events ]
+
+/// Where the call's command is drawn, by row: the call's chip or its block's, and nothing else.
+let private commandRows (rows: string list) : int list =
+    rows |> List.indexed |> List.filter (fun (_, row) -> row = "used:t-1" || row = "ran:b-1") |> List.map fst
+
+/// The one chip that call is on screen, as (which, status), for every chip there is of it.
+let private commandChips (html: string) : (string * string) list =
+    (attributeOf (Dom.attr Dom.Hooks.chatCommandCall "t-1") Dom.Hooks.chatCommandCallStatus html
+     |> List.map (fun status -> "call", status))
+    @ (attributeOf (Dom.attr Dom.Hooks.chatBlock "b-1") Dom.Hooks.chatBlockStatus html
+       |> List.map (fun status -> "block", status))
+
+let private commandCallTests =
+    testList "A command call is drawn as its command" [
+        testCase "a command call holds one row, in its own place, at every step" <| fun () ->
+            // The bug: the call's chip stood until the call FINISHED, beside the block's chip
+            // from the moment the command started. Now the block takes the call's row when it
+            // starts, so nothing is drawn twice and nothing moves.
+            for prefix in prefixesFrom 2 oneCommandCall do
+                Expect.equal (commandRows (drawn prefix)) [ 1 ] (sprintf "after %d events: %A" prefix.Length (drawn prefix))
+
+        testCase "the chip says starting, then running, then how it went" <| fun () ->
+            let seen = prefixesFrom 2 oneCommandCall |> List.map (clientOf >> Support.render >> commandChips)
+            Expect.equal
+                seen
+                [ [ "call", Dom.Text.commandStarting ]
+                  [ "call", Dom.Text.commandStarting ]
+                  [ "call", Dom.Text.commandStarting ]
+                  [ "block", Dom.Text.blockRunning ]
+                  [ "block", Dom.Text.blockOk ]
+                  [ "block", Dom.Text.blockOk ] ]
+                "one chip throughout, and only what it says changes"
+
+        testCase "a starting chip reads as the command it will be" <| fun () ->
+            let html = Support.render (clientOf (List.take 2 oneCommandCall))
+            let said = textAt (Dom.attr Dom.Hooks.chatCommandCall "t-1") html
+            Expect.isTrue (said.StartsWith "ran tested the app") $"ran, then the description the call gave: {said}"
+
+        testCase "a message that landed while the command started stays below its chip" <| fun () ->
+            let html = Support.render (clientOf (List.take 5 oneCommandCall))
+            let chipAt = html.IndexOf (Dom.attr Dom.Hooks.chatBlock "b-1")
+            let messageAt = html.IndexOf "data-message-id=\"m-2\""
+            Expect.isTrue (chipAt >= 0 && chipAt < messageAt) "the block is drawn where the call was, above what came after it"
+
+        testCase "a log from before blocks named their call draws one chip once the call finishes" <| fun () ->
+            let old =
+                oneCommandCall
+                |> List.map (fun e ->
+                    match e.Event with
+                    | SessionEvent.TerminalBlockStarted s -> { e with Event = SessionEvent.TerminalBlockStarted { s with ToolUseId = None } }
+                    | SessionEvent.ToolUseFinished f -> { e with Event = SessionEvent.ToolUseFinished { f with Queueing = None } }
+                    | _ -> e)
+            Expect.equal (drawn old) [ "said:m-1"; "ran:b-1"; "said:m-2" ] "one chip, in the call's place"
+
+        testCase "a command call that never started ends failed, in its own place" <| fun () ->
+            let events =
+                List.take 4 oneCommandCall
+                @ [ at 5L 1.2 (callAnswered "1" None (Some NothingQueued) (Some "could not run the command: that terminal is not open")) ]
+            Expect.equal (commandRows (drawn events)) [ 1 ] "still in the call's row"
+            Expect.equal
+                (commandChips (Support.render (clientOf events)))
+                [ "call", Dom.Text.commandNotStarted ]
+                "and it says the command did not start"
+
+        testCase "a command call that failed outright ends failed too" <| fun () ->
+            let events =
+                List.take 2 oneCommandCall @ [ at 3L 1.0 (toolDone "1" (ToolCallFailed "unreadable arguments") None) ]
+            Expect.equal
+                (commandChips (Support.render (clientOf events)))
+                [ "call", Dom.Text.commandNotStarted ]
+                "a call that never reached the tool started nothing"
+
+        testCase "a background command waits in its place until it starts" <| fun () ->
+            let queued = at 3L 1.0 (callAnswered "1" None (Some (CommandQueued (QueueId.create "q-1" |> expect))) (Some "STARTED"))
+            let answered = List.take 2 oneCommandCall @ [ queued ]
+            let started = answered @ [ at 4L 3.0 (startedFor "1" (Some "1") agentForAda) ]
+            Expect.equal (commandChips (Support.render (clientOf answered))) [ "call", Dom.Text.queuedReady ] "queued, not finished"
+            Expect.equal (drawn started) [ "said:m-1"; "ran:b-1" ] "and its block takes the call's row when it starts"
+
+        testCase "a person's block cannot take the agent's call's place" <| fun () ->
+            // The call's name rides a doc entry any peer can write. A block somebody else
+            // wrote is theirs, wherever its entry said it came from.
+            let events = List.take 2 oneCommandCall @ [ at 3L 2.0 (startedFor "1" (Some "1") byAda) ]
+            Expect.equal (drawn events) [ "said:m-1"; "used:t-1"; "ran:b-1" ] "the person's block stands on its own"
+
+        testCase "two commands from one turn are one card from the first call to the last start" <| fun () ->
+            // Grouped as commands from the start, so a command starting moves nothing in or
+            // out of the card, and the card keeps its key (the turn) throughout.
+            let events =
+                [ at 1L 0.0 (sent "1" "run both")
+                  at 2L 1.0 (calledCommand "1" "a")
+                  at 3L 1.1 (calledCommand "2" "a")
+                  at 4L 2.0 (startedFor "1" (Some "1") agentForAda)
+                  at 5L 3.0 (startedFor "2" (Some "2") agentForAda) ]
+            for prefix in prefixesFrom 3 events do
+                Expect.equal (drawn prefix) [ "said:m-1"; "card:turn-a:2" ] (sprintf "after %d events" prefix.Length)
+
+        testCase "a queued command its call asked for is drawn once, as the call's chip" <| fun () ->
+            // The entry's own chip at the tail would be the same command a second time.
+            let entry : PendingAct =
+                { QueueId = QueueId.create "q-1" |> expect
+                  Terminal = terminalA
+                  Authority = agentForAda
+                  Order = 1.0
+                  Background = false
+                  Stdin = false
+                  Description = Some "tested the app"
+                  ToolUseId = Some (toolUse "1")
+                  Size = None }
+            let model = clientOf (List.take 3 oneCommandCall)
+            let queued = { model with Synced = { model.Synced with Pending = Map.ofList [ entry.QueueId, entry ] } }
+            let html = Support.render queued
+            Expect.equal (attributeOf (Dom.attr Dom.Hooks.chatPending "q-1") "class" html) [] "no second chip at the tail"
+            Expect.equal (commandChips html) [ "call", Dom.Text.queuedReady ] "the call's chip says where the entry is"
     ]
 
 // --- The terminal list (Plan 20, stage 0) --------------------------------------------------
@@ -4486,7 +4649,8 @@ let private rejected (id: TerminalId) (n: string) (authority: Authority) (comman
           RejectedBy = PeerRef ada
           Description = None
           Command = command
-          Reason = Some "not that one" }
+          Reason = Some "not that one"
+          ToolUseId = None }
 
 let private cardTests =
     testList "Task cards (Plan 20, stage 4)" [
@@ -5777,6 +5941,7 @@ let tests =
         tabTests
         orderTests
         toolTests
+        commandCallTests
         cardTests
         tallyTests
         chipTests

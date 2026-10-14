@@ -825,7 +825,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                             Background = false
                             Stdin = false
                             Description = None
-                            Size = None } ] }
+                            Size = None
+                            ToolUseId = None } ] }
         Conversation =
                 [ // Two of a repo's sandboxes, up. The menu behind the strip's `+` (Plan 20,
                   // stage 1) reads the starts on the timeline for somewhere to open a
@@ -935,7 +936,8 @@ let private shellModelOf (filler: Filler) (fillerItems: int) : ClientModel =
                             Arguments = Some """{"path":"src/Program.fs"}"""
                             Outcome = Some ToolCallOk
                             Block = None
-                            Result = Some "src/Program.fs lines 1-2 of 2" } ]
+                            Result = Some "src/Program.fs lines 1-2 of 2"
+                            Queueing = None } ]
                 BlockTurns =
                     Map.ofList
                         [ BlockId.value burstOk, agentTurn
@@ -1554,7 +1556,8 @@ let private openFixture (items: int) (perAnswer: int) : OpenFixture =
                           Command = sprintf "echo build %d" i
                           FromSeq = seq
                           Description = None
-                          Background = false })
+                          Background = false
+                          ToolUseId = None })
                 for line in 1 .. 3 do
                     records.Add { At = float seq; Kind = TranscriptOutput; Data = sprintf "build %d line %d\r\n" i line }
                     seq <- seq + 1

@@ -85,6 +85,11 @@ type PendingAct =
       /// anything — only the agent does. On the entry for the reason `Background` is: the
       /// drain mints the block that records it, and the drain reads the doc.
       Description : string option
+      /// The agent's tool call that queued it (`CommandRequest.ToolUseId`), when one did. On
+      /// the entry for the reason `Background` is: the drain mints the block that records it,
+      /// and the drain reads the doc. Any peer can write here, so a reader trusts it only on
+      /// an act the agent authored.
+      ToolUseId : ToolUseId option
       /// How wide the author's terminal was when they asked for this, if they had one.
       ///
       /// The size rides the ACT rather than sitting in a register beside the terminal, and

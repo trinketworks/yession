@@ -1905,6 +1905,24 @@ module View =
         | LeaseHolderGone -> html $"""<span class="{voice}">holder left</span>"""
         | LeaseIdle -> html $"""<span class="{voice}">went idle</span>"""
 
+    /// One line of a task card: a command's block, or a command the turn asked for that has
+    /// no block yet (`TimelineProjection.rows` groups the two alike, so a card does not lose
+    /// a line, or gain one, when a command starts).
+    [<RequireQualifiedAccess>]
+    type private CardLine =
+        | Block of TerminalId * Block
+        | Call of ToolUse * CommandCall
+
+    module private CardLine =
+
+        /// How the line reads on the card's summary. A call with no block is still going
+        /// until it says it will never start.
+        let state =
+            function
+            | CardLine.Block (_, block) -> TaskCard.stateOf block.Status
+            | CardLine.Call (_, CommandDidNotStart _) -> TaskFailed
+            | CardLine.Call (_, (CommandStarting | CommandWaiting)) -> TaskRunning
+
     /// Which hold a queued command is under, and how that hold reads.
     ///
     /// One function because two surfaces say this one fact — the chip in the chat and the
@@ -2909,6 +2927,71 @@ module View =
                   <span class="{Style.chatChipLine}" title="{block.Command}"><span class="{Style.chatChipVerb}">{Dom.Text.ran}</span> {what}</span>
                   <span class="shrink-0">{terminalBlockStatusAt true model terminalId block}</span>
                 </button>"""
+        // A command the agent's call asked for, before its block exists — or when it never
+        // will. The SAME chip the block will be, in the same place (`TimelineProjection`'s
+        // `claim` puts the block there): "ran", then what the call said the command is for, or
+        // the command in mono. Only the mark differs, so the swap reads as one chip changing
+        // state rather than one thing replaced by another.
+        //
+        // "ran" before anything has run, on purpose: it is the chip's verb, not a claim — the
+        // block chip says it while its command is still running, and a description is written
+        // to follow it (`Dom.Text.ran`). Where the command has got to is the mark's to say.
+        //
+        // Queued, it is the queue entry's chip as well: the hold it is under, and a press that
+        // opens the terminal it waits in, which is where it can be edited or withdrawn. That
+        // entry's own chip at the tail (`pendingChip`) is not drawn beside it.
+        let commandCallChip (chip: string) (use': ToolUse) (call: CommandCall) =
+            let queued =
+                ClientModel.pendingActs model
+                |> List.tryFind (fun entry ->
+                    entry.ToolUseId = Some use'.ToolUseId && Authority.author entry.Authority = ActorRef.Agent)
+            let command, description =
+                match ToolUseText.command use' with
+                | Some (command, description) -> Some command, description
+                | None -> None, None
+            let what =
+                match description |> Option.bind BlockDescription.ofProse, command with
+                | Some description, _ -> html $"""<span class="{Style.chatChipName}">{description}</span>"""
+                | None, Some command -> html $"""<code class="{Style.chatChipCommand}">{BlockLabel.ofCommand command}</code>"""
+                | None, None -> html $"""<code class="{Style.chatChipCommand}">{ToolUse.label use'}</code>"""
+            let statusToken, statusLine =
+                match call, queued with
+                | CommandDidNotStart _, _ ->
+                    Dom.Text.commandNotStarted,
+                    html $"""<span class="{Style.statusErr}">{Dom.Text.commandDidNotStart}</span>"""
+                | _, Some entry -> pendingStatus model entry
+                | CommandStarting, None ->
+                    Dom.Text.commandStarting,
+                    html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>{Dom.Text.commandStarting}</span>"""
+                // Answered and queued, and the entry is not in this replica's doc: the block
+                // that drained it is on its way. Said as the queue says a ready command.
+                | CommandWaiting, None ->
+                    Dom.Text.queuedReady,
+                    html $"""<span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>queued</span>"""
+            let opens =
+                match queued with
+                | Some entry -> Some entry.Terminal
+                | None -> None
+            // Why it did not start, where a pointer finds it: the chip has nothing to open,
+            // and the reason is what a reader of a failure wants.
+            let title =
+                match call with
+                | CommandDidNotStart (Some reason) -> reason
+                | _ -> command |> Option.defaultValue (ToolUse.label use')
+            html $"""
+                <button type="button" class="{chip}"
+                        data-chat-command-call="{ToolUseId.value use'.ToolUseId}"
+                        data-chat-command-call-status="{statusToken}"
+                        title="{title}"
+                        ?disabled={Option.isNone opens}
+                        @click={Ev(fun _ -> opens |> Option.iter (fun terminal -> dispatch (OpenInPaneMsg (Reading terminal))))}>
+                  <span class="{Style.chatChipLine}"><span class="{Style.chatChipVerb}">{Dom.Text.ran}</span> {what}</span>
+                  <span class="shrink-0">{statusLine}</span>
+                </button>"""
+        let cardLine (chip: string) =
+            function
+            | CardLine.Block (terminalId, block) -> blockChip chip terminalId block
+            | CardLine.Call (use', call) -> commandCallChip chip use' call
         let stretchItem (stretch: TerminalStretch) =
             let length = durationText (TerminalStretch.duration stretch)
             let where = Entity.terminalName model stretch.TerminalId |> Option.defaultValue stretch.Title
@@ -3023,10 +3106,13 @@ module View =
         // lines ARE block chips — same element, same click, same hooks — so a chip does not
         // change what it is by being grouped, and nothing here has to be kept in step with
         // the ungrouped case.
-        let taskCard (turn: AgentTurnId) (blocks: (TerminalId * Block) list) =
+        //
+        // A line is a block, or a command the turn asked for that has no block yet
+        // (`commandCallChip`) — still going while it waits, failed if it never started.
+        let taskCard (turn: AgentTurnId) (commands: CardLine list) =
             let lines =
-                blocks
-                |> List.map (fun (terminalId, block) -> (terminalId, block), TaskCard.stateOf block.Status)
+                commands
+                |> List.map (fun line -> line, CardLine.state line)
                 |> TaskCard.ordered
             let tally = TaskCard.tally (lines |> List.map snd)
             // Each count in the glyph and colour its status already wears on a chip, and only
@@ -3050,7 +3136,7 @@ module View =
             let arrow = foldArrow key Icon.rights Dom.Text.details
             let body =
                 foldBodyWide key Style.chatTaskCardInner
-                    (lines |> List.map (fun ((terminalId, block), _) -> blockChip Style.chatChipCarded terminalId block))
+                    (lines |> List.map (fun (line, _) -> cardLine Style.chatChipCarded line))
             let header =
                 foldClickRow key alwaysToggle
                     [ arrow
@@ -3159,10 +3245,14 @@ module View =
                     |> Option.map (fun block ->
                         Some (Authority.author block.Authority), blockChip Style.chatChip terminalId block)
                 | RowItem (TimelineStretch stretch) -> Some (Some stretch.Holder, stretchItem stretch)
-                // A lone call: `rows` leaves one call as its own row, and it draws as one.
+                // A lone call: `rows` leaves one call as its own row, and it draws as one —
+                // as the command it asked for, when it asked for one.
                 | RowItem (TimelineToolUse (_, id)) ->
                     TimelineProjection.toolUse id model.Timeline
-                    |> Option.map (fun use' -> Some ActorRef.Agent, loneCall use')
+                    |> Option.map (fun use' ->
+                        match ToolUse.commandCall use' with
+                        | Some call -> Some ActorRef.Agent, commandCallChip Style.chatChip use' call
+                        | None -> Some ActorRef.Agent, loneCall use')
                 // Nor a thought: `rows` drops the kind outright, because reasoning was never
                 // said to anyone. Here for the same reason as the line above — the filter is
                 // a rule the type cannot hold — and this is the line that changes on the day
@@ -3170,19 +3260,24 @@ module View =
                 | RowItem (TimelineThought _) -> None
                 | RowWorkRun (turn, items) -> Some (Some ActorRef.Agent, workRun turn items)
                 | RowTaskCard (turn, items) ->
-                    let blocks =
+                    let lines =
                         items
                         |> List.choose (function
                             | TimelineBlock (_, terminalId, blockId) ->
-                                blockOf terminalId blockId |> Option.map (fun block -> terminalId, block)
+                                blockOf terminalId blockId |> Option.map (fun block -> CardLine.Block (terminalId, block))
+                            | TimelineToolUse (_, id) ->
+                                TimelineProjection.toolUse id model.Timeline
+                                |> Option.bind (fun use' ->
+                                    ToolUse.commandCall use' |> Option.map (fun call -> CardLine.Call (use', call)))
                             | _ -> None)
                     // A card at a page boundary can be short a line, exactly as a lone chip
                     // can be missing: the next page brings it. Below two it is no longer a
                     // burst, so it draws as the chips it is — never as a card of one.
-                    match blocks with
+                    match lines with
                     | [] -> None
-                    | [ (terminalId, block) ] ->
+                    | [ CardLine.Block (terminalId, block) ] ->
                         Some (Some (Authority.author block.Authority), blockChip Style.chatChip terminalId block)
+                    | [ CardLine.Call (use', call) ] -> Some (Some ActorRef.Agent, commandCallChip Style.chatChip use' call)
                     | many -> Some (Some ActorRef.Agent, taskCard turn many)
         // What is about to run, at the tail — after everything that has happened, which is
         // where it happens. `rows` is a fold over EVENTS and a pending act is not one, so it
@@ -3190,8 +3285,15 @@ module View =
         // this chip is replaced by that block's own in the same place. The two mounts it used
         // to have (a dock above the composer, a card in the terminal) are now the read and
         // the write of it — see `pendingChip`.
+        //
+        // Not a command an agent's call queued, while that call is on the timeline: the
+        // call's own chip already stands for it, in the call's place (`commandCallChip`).
         let pending : (ActorRef option * TemplateResult) list =
             ClientModel.pendingActs model
+            |> List.filter (fun entry ->
+                match entry.ToolUseId, Authority.author entry.Authority with
+                | Some id, ActorRef.Agent -> Option.isNone (TimelineProjection.toolUse id model.Timeline)
+                | _ -> true)
             |> List.map (fun entry ->
                 Some (Authority.author entry.Authority), pendingChip actions dispatch model entry)
         // The agent's commands a loss refused, said where a person reads the conversation —

@@ -707,7 +707,8 @@ let private blockStarted (n: string) (background: bool) (owner: Principal) =
           Command = "make"
           FromSeq = 0
           Description = None
-          Background = background }
+          Background = background
+          ToolUseId = None }
 
 let private blockCompleted (n: string) =
     SessionEvent.TerminalBlockCompleted
@@ -728,7 +729,8 @@ let private toolFinished (block: string option) =
         { ToolUseId = ToolUseId.create "u1" |> expect
           Outcome = Yession.Domain.Tools.ToolCallOk
           Block = block |> Option.map (fun n -> BlockId.create n |> expect)
-          Result = None }
+          Result = None
+          Queueing = None }
 
 /// What a boot writes for the turn a dead process was running.
 let private cutOff (id: AgentTurnId) =
@@ -962,7 +964,8 @@ let private blockStartedIn (id: TerminalId) (n: string) (background: bool) (owne
           Command = "make"
           FromSeq = 0
           Description = None
-          Background = background }
+          Background = background
+          ToolUseId = None }
 
 let private integrationLost (id: TerminalId) =
     SessionEvent.TerminalIntegrationLost { TerminalId = id; BlockId = None; Evidence = None; Refused = [] }

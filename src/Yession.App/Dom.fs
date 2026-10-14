@@ -478,6 +478,13 @@ module Dom =
         /// Which hold it is under, in the same tokens the terminal's own card uses
         /// (`terminalQueuedStatus`): one vocabulary for one fact on two surfaces.
         let chatPendingStatus = "data-chat-pending-status"
+        /// A command the agent's call asked for that has not started: the call's own chip,
+        /// carrying the call's minted id, drawn as the command it will be and where its block
+        /// will be. When the command starts, the block's chip (`chatBlock`) takes its place.
+        let chatCommandCall = "data-chat-command-call"
+        /// Where it has got to: `commandStarting`, a queued command's hold (the tokens
+        /// `chatPendingStatus` uses), or `commandNotStarted`.
+        let chatCommandCallStatus = "data-chat-command-call-status"
         /// The pane's tab strip (Plan 14, stage 2). Every tab in it is a terminal's (P2-1),
         /// and its value is the terminal's tab key (`ClientModel.tabKey`, `terminal:<id>`).
         let paneTab = "data-pane-tab"
@@ -1000,6 +1007,13 @@ module Dom =
         /// change the execute_command guidance in `Yession.Session/AgentTools.fs` with it —
         /// that prompt tells the agent to write its description to follow this word.
         let ran = "ran"
+        /// A command the agent asked for, before it has started anywhere: a terminal opening,
+        /// a shell starting. The token and the word are one.
+        let commandStarting = "starting"
+        /// A command the agent asked for that will not run: the call failed, or it queued
+        /// nothing. The token, and the word a reader sees.
+        let commandNotStarted = "not-started"
+        let commandDidNotStart = "did not start"
         /// The strip's `+`, when there is a choice behind it.
         let openSomethingNew = "Open something new"
         /// The same control when there is only one thing it could make, and the word the

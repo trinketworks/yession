@@ -188,6 +188,8 @@ module SyncedStateSync =
           // Absent rather than blank when the author said nothing, which every person's
           // command and every entry from before the field is.
           "description", q.Description |> Option.map PendingValue.Word
+          // The agent's call that queued it, when one did — what the block it becomes names.
+          "toolUse", q.ToolUseId |> Option.map (ToolUseId.value >> PendingValue.Word)
           // `"120x40"`, the same spelling the transcript's `r` record uses (`Size.format`),
           // so one format serves the doc and the recording and neither can drift from the
           // other.
@@ -335,6 +337,9 @@ module SyncedStateSync =
           /// What the author said the command is for, as written. Bounded on the way to the
           /// domain (`pendingToDomain`), because any peer can write here.
           Description : string option
+          /// The agent's tool call that queued it, as written. Checked on the way to the
+          /// domain, because any peer can write here.
+          ToolUse : string option
           /// The author's terminal width, `"120x40"`. `None` for an act with no viewport —
           /// the doc said nothing rather than said a blank.
           Size : string option }
@@ -358,6 +363,8 @@ module SyncedStateSync =
             // Through `slot`, like the width: a description nobody can read names nothing,
             // and the command it would have named still runs.
             let! description = slot "description" Decode.string
+            // Through `slot` too: a call nobody can read names no call, and the command runs.
+            let! toolUse = slot "toolUse" Decode.string
             // The one field read through `slot` rather than failing its entry: a width nobody
             // can read is NO claim (`pendingToDomain`), not a reason to drop the command.
             let! size = slot "size" Decode.string
@@ -374,6 +381,7 @@ module SyncedStateSync =
                   Background = background
                   Stdin = stdin
                   Description = description
+                  ToolUse = toolUse
                   Size = present size }
         }
 
@@ -524,6 +532,8 @@ module SyncedStateSync =
                       // The doc is shared with peers we do not control, and this is what the
                       // drain records: one line, bounded, blank as none.
                       Description = f.Description |> Option.bind BlockDescription.ofProse
+                      // Unreadable reads as no call, which is what a person's entry is.
+                      ToolUseId = f.ToolUse |> Option.bind (ToolUseId.create >> Result.toOption)
                       // Unreadable or absent is NO claim rather than a guessed one: an entry
                       // written before the field existed, or by something that put nonsense
                       // there, leaves the terminal at the width it had.
@@ -845,6 +855,9 @@ module SyncedStateSync =
         // What the command is for (`BlockDescription`), when the author said; on the entry
         // for the same reason again.
         (description: string option)
+        // The agent's tool call asking for it, when one is (`PendingAct.ToolUseId`); on the
+        // entry for the same reason again.
+        (toolUse: ToolUseId option)
         : unit =
         let act : PendingAct =
             { QueueId = id
@@ -854,6 +867,7 @@ module SyncedStateSync =
               Background = background
               Stdin = stdin
               Description = description
+              ToolUseId = toolUse
               // The Process has no screen to measure, so it claims no width: the terminal
               // keeps the one it has.
               Size = None }

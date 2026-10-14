@@ -2577,6 +2577,56 @@ let private messageLands (page: IPage) (offset: int64) (body: string) : Async<un
               Yession.Domain.Chat.MessageSent.Author = Yession.Domain.Principal.Peer (Yession.Domain.PeerId.create "brave-owl" |> expect)
               Yession.Domain.Chat.MessageSent.Body = body } ]
 
+/// The agent asks for a command at the end of the conversation, and the command then starts:
+/// the call's chip, then its block's, measured in the same box both times.
+let private commandChipHolds (page: IPage) : Async<unit> =
+    async {
+        let expect r = Result.defaultWith failwith r
+        let call = Yession.Domain.ToolUseId.create "tool-command" |> expect
+        let callChip = "#shell [data-chat-command-call='tool-command']"
+        let blockChip = "#shell [data-chat-block='block-command']"
+        let rectOf (selector: string) =
+            async {
+                match! Probe.boxes page [ selector ] with
+                | [ Some b ] ->
+                    return
+                        [ b.Left; b.Top; Yession.App.Probes.Box.width b; Yession.App.Probes.Box.height b ]
+                        |> List.map System.Math.Round
+                | _ -> return failwithf "nothing matches %s to measure" selector
+            }
+        let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+        do! foldHarness page [
+                400L,
+                Yession.Domain.SessionEvent.ToolUseStarted
+                    { Yession.Domain.Tools.ToolUseStarted.ToolUseId = call
+                      Yession.Domain.Tools.ToolUseStarted.AgentTurnId = Yession.Domain.AgentTurnId.create "turn-command" |> expect
+                      Yession.Domain.Tools.ToolUseStarted.Namespace = Yession.Domain.Tools.SessionTool.Namespace
+                      Yession.Domain.Tools.ToolUseStarted.Name = Yession.Domain.Tools.SessionTool.ExecuteCommand
+                      Yession.Domain.Tools.ToolUseStarted.Arguments =
+                        Some """{"command":"dotnet fsi tasks.fsx build","description":"built the app"}""" } ]
+        let! _ = await (page.WaitForSelectorAsync callChip)
+        let! revealed = Probe.ask page Yession.App.Probes.reveal (callChip, "center")
+        Expect.isTrue revealed "the call's chip is there to bring into view"
+        let! before = rectOf callChip
+        do! foldHarness page [
+                401L,
+                Yession.Domain.SessionEvent.TerminalBlockStarted
+                    { Yession.Domain.Terminals.TerminalBlockStarted.TerminalId = harnessTerminal "term-harness"
+                      Yession.Domain.Terminals.TerminalBlockStarted.BlockId = Yession.Domain.BlockId.create "block-command" |> expect
+                      Yession.Domain.Terminals.TerminalBlockStarted.QueueId = None
+                      Yession.Domain.Terminals.TerminalBlockStarted.Authority =
+                          Yession.Domain.Authority.agentFor (Yession.Domain.Principal.Peer (Yession.Domain.PeerId.create "ada" |> expect))
+                      Yession.Domain.Terminals.TerminalBlockStarted.Command = "dotnet fsi tasks.fsx build"
+                      Yession.Domain.Terminals.TerminalBlockStarted.FromSeq = 3
+                      Yession.Domain.Terminals.TerminalBlockStarted.Background = false
+                      Yession.Domain.Terminals.TerminalBlockStarted.Description = Some "built the app"
+                      Yession.Domain.Terminals.TerminalBlockStarted.ToolUseId = Some call } ]
+        let! _ = await (page.WaitForSelectorAsync blockChip)
+        do! waitAbsent "the call's own chip to be gone" page callChip
+        let! after = rectOf blockChip
+        Expect.equal after before "the block's chip is the call's chip's box, not one moved below it"
+    }
+
 /// The pane open on the harness's block-mode terminal, finished opening — its width
 /// transitions from nothing, and until it has, its scrollback is clipped by the column.
 let private paneOnBlocks (page: IPage) : Async<unit> =
@@ -2615,7 +2665,8 @@ let private harnessReplaced (page: IPage) : Async<unit> =
                   Command = "dotnet fsi tasks.fsx build 2>&1 | tail -30"
                   FromSeq = 0
                   Background = false
-                  Description = None }
+                  Description = None
+                  ToolUseId = None }
             900L,
             Yession.Domain.SessionEvent.TerminalIntegrationLost
                 { TerminalId = harnessTerminal "term-harness"
@@ -2631,7 +2682,8 @@ let private harnessReplaced (page: IPage) : Async<unit> =
                   RejectedBy = Yession.Domain.ActorRef.Session
                   Command = "npm run lint"
                   Description = Some "Inspect lint and check logs"
-                  Reason = Some Yession.Session.TerminalQueueDrain.cannotRunReason } ]
+                  Reason = Some Yession.Session.TerminalQueueDrain.cannotRunReason
+                  ToolUseId = None } ]
       do! Harness.run1 page HarnessPage.withdraw "queue-harness"
     }
 
@@ -5564,11 +5616,20 @@ let editorTests =
                                   Yession.Domain.Terminals.TerminalBlockStarted.Command = "make"
                                   Yession.Domain.Terminals.TerminalBlockStarted.FromSeq = 3
                                   Yession.Domain.Terminals.TerminalBlockStarted.Background = false
-                                  Yession.Domain.Terminals.TerminalBlockStarted.Description = None } ]
+                                  Yession.Domain.Terminals.TerminalBlockStarted.Description = None
+                                  Yession.Domain.Terminals.TerminalBlockStarted.ToolUseId = None } ]
                     do! Harness.run4 page HarnessPage.record "term-harness" 3 "o" "tail-mark-blocks\r\n"
                     let! shown = newestShown page "blocks:term-harness" "tail-mark-blocks"
                     Expect.isTrue (shownFully shown) (sprintf "the newest line of output is wholly on screen: %A" shown)
                 }
+            // The agent's command call is drawn as the command from the moment the call starts,
+            // and when the command starts its block's chip takes the call's chip's place. Only a
+            // rendered page can say the two occupy the same box: the markup of each is right
+            // whether or not the swap moves the line under a reader watching it.
+            editorCaseIn 1440 900 "a command's chip stays where it stood when its command starts, on a desktop" <| fun page ->
+                commandChipHolds page
+            editorCaseOnTouch 390 844 "a command's chip stays where it stood when its command starts, on a phone" <| fun page ->
+                commandChipHolds page
             // And over the live screen: a program printing below the cursor scrolls the screen, and
             // a reader at its end goes with it.
             editorCaseIn 1440 900 "a reader at the end of a live screen sees the output that arrives next" <| fun page ->

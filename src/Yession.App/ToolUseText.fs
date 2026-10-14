@@ -25,3 +25,13 @@ module ToolUseText =
             match Decode.fromString Decode.value raw with
             | Ok value -> Encode.toString 2 value
             | Error _ -> raw)
+
+    /// What a command call (`ToolUse.runsCommand`) asked to run, and what it said the command
+    /// is for, read from its recorded arguments — so the call's chip can say what its block
+    /// will say before there is a block. `None` when nothing readable was recorded; the
+    /// description is `None` when the call gave none, as a block's is.
+    let command (use': ToolUse) : (string * string option) option =
+        let fields =
+            Decode.object (fun get ->
+                get.Required.Field "command" Decode.string, get.Optional.Field "description" Decode.string)
+        use'.Arguments |> Option.bind (fun raw -> Decode.fromString fields raw |> Result.toOption)

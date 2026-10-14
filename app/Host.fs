@@ -582,7 +582,11 @@ let startFull
                             log.Append
                                 ActorRef.Agent
                                 (SessionEvent.ToolUseFinished
-                                    { ToolUseId = id; Outcome = ended.Outcome; Block = ended.Block; Result = ended.Result })
+                                    { ToolUseId = id
+                                      Outcome = ended.Outcome
+                                      Block = ended.Block
+                                      Result = ended.Result
+                                      Queueing = ended.Queueing })
                         return ()
                     }
               // Read through the CONVERSATION's own projection rather than by matching event
