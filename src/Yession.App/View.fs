@@ -613,17 +613,6 @@ module View =
         | EnvironmentFailed _ -> Style.statusErr, html $"""failed"""
         | EnvironmentDown -> Style.statusFaint, html $"""stopped"""
 
-    /// The words the environment gave for failing to start: not drawn, but carried on the section
-    /// (`Dom.Hooks.environmentReason`) for whatever waits on the page. Total over the status, so
-    /// a new state is a decision here and not a silent blank.
-    let private environmentReason =
-        function
-        | EnvironmentFailed reason -> reason
-        | EnvironmentNotStarted
-        | EnvironmentStarting
-        | EnvironmentRunning _
-        | EnvironmentDown -> ""
-
     /// How many terminals the environment lists before it hands the rest to the pane's `all`
     /// page. A CAP rather than a column that scrolls: on a phone this column is a drawer, and
     /// a list that grew with the session pushed `settings` off the bottom of it — the one way
@@ -673,7 +662,7 @@ module View =
                       {shown |> List.map entry}{more}
                     </div>"""
         html $"""
-            <section class="{Style.cls [ Style.sideSection; Style.navLane2 ]}" data-environment="{environmentLabel status}" data-environment-reason="{environmentReason status}">
+            <section class="{Style.cls [ Style.sideSection; Style.navLane2 ]}" data-environment="{environmentLabel status}">
               <div class="{Style.sideRow}"><span class="{Style.label}">environment</span><span class="{statusClass}">{statusInner}</span></div>
               {terminals}
             </section>"""

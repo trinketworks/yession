@@ -184,12 +184,9 @@ let private sharedBrowser () : Async<IBrowser> =
             launching.Release () |> ignore
     }
 
-/// A case's share of the browser: the contexts it opened, every one closed when it ends — and the
-/// pages it opened in them, which are what the case's waits ask whether the work sandbox behind
-/// them did not start (`Wait.refusing`, installed by `withContexts`).
+/// A case's share of the browser: the contexts it opened, every one closed when it ends.
 type internal Contexts (browser: IBrowser) =
     let opened = ResizeArray<IBrowserContext> ()
-    let pages = ResizeArray<IPage> ()
 
     /// A fresh context — one person, with nothing kept from anybody before them.
     member _.Open (options: BrowserNewContextOptions option) : Async<IBrowserContext> =
@@ -207,15 +204,8 @@ type internal Contexts (browser: IBrowser) =
     member this.Page (options: BrowserNewContextOptions option) : Async<IPage> =
         async {
             let! context = this.Open options
-            let! page = await (context.NewPageAsync ())
-            lock pages (fun () -> pages.Add page)
-            return page
+            return! await (context.NewPageAsync ())
         }
-
-    /// Why a wait in this case will not be met, if the session behind any of its pages has said
-    /// its work sandbox did not start.
-    member internal _.Refusal : Refusal =
-        Refusal.sandboxDidNotStart (fun () -> lock pages (fun () -> List.ofSeq pages))
 
     member internal _.CloseAll () : Async<unit> =
         async {
@@ -223,17 +213,12 @@ type internal Contexts (browser: IBrowser) =
                 try do! awaitU (context.CloseAsync ()) with _ -> ()
         }
 
-/// Run a case against the shared browser, its contexts closed however it ends, and every wait in
-/// it ended at once by a session whose work sandbox did not start.
-///
-/// The refusal is installed HERE, with the contexts, because this is the one door every page of
-/// every case comes through: a case that could open a page without the refusal is a case whose
-/// first wait on a box with no sandbox sits out its timeout and names nothing about the box.
+/// Run a case against the shared browser, its contexts closed however it ends.
 let internal withContexts (body: Contexts -> Async<'a>) : Async<'a> =
     async {
         let! br = sharedBrowser ()
         let contexts = Contexts br
-        let! outcome = Async.Catch (Wait.refusing contexts.Refusal (body contexts))
+        let! outcome = Async.Catch (body contexts)
         do! contexts.CloseAll ()
         return
             match outcome with
@@ -376,14 +361,6 @@ let private openNewTerminal (page: IPage) : Async<unit> =
 let private waitPresent (what: string) (page: IPage) (selector: string) : Async<unit> =
     Wait.until what (fun () -> Read.count page selector) (fun n -> n > 0)
 
-/// Wait until some match is visible: what Playwright's own `WaitForSelectorAsync` waits for, but
-/// through `Wait`, which a session whose work sandbox did not start ends at once with its reason.
-/// A wait for something that only a running sandbox brings (a terminal, a command's block) is
-/// this and not Playwright's, which sits out its thirty seconds beside a page that already says
-/// why, and names the selector at best.
-let private waitVisible (what: string) (page: IPage) (selector: string) : Async<unit> =
-    Wait.until what (fun () -> Read.visible page selector) id
-
 /// Wait until nothing matches a selector.
 let private waitAbsent (what: string) (page: IPage) (selector: string) : Async<unit> =
     Wait.until what (fun () -> Read.count page selector) ((=) 0)
@@ -463,7 +440,7 @@ let private commandLine (terminal: string) =
 /// What a command line currently says, once it exists.
 let private commandLineValue (page: IPage) (selector: string) : Async<string> =
     async {
-        do! waitVisible (sprintf "the command line %s to be on screen" selector) page selector
+        let! _ = await (page.WaitForSelectorAsync selector)
         match! Read.values page selector with
         | value :: _ -> return value
         | [] -> return failwithf "the command line %s went as it was read" selector
@@ -512,17 +489,14 @@ let private showTerminal (page: IPage) (terminal: string) : Async<unit> =
         let! tab = Read.attr page (sprintf "[data-terminal-tab='%s']" terminal) "aria-selected"
         let selected = tab = Some "true"
         if not selected then do! awaitU (page.ClickAsync (sprintf "[data-terminal-tab='%s']" terminal))
-        // The pane's offer is read beside the line, so the red of a wait that never settles says
-        // which fault it was.
-        do! Wait.until
-                (sprintf "terminal %s to be showing its own command line" terminal)
-                (fun () ->
-                    async {
-                        let! shown = Read.visible page (commandLine terminal)
-                        let! offered = commandLinesOn page
-                        return shown, offered
-                    })
-                fst
+        try
+            do! await (page.WaitForSelectorAsync (commandLine terminal)) |> Async.Ignore
+        with _ ->
+            let! lines = commandLinesOn page
+            failwithf
+                "expected terminal %s to be showing its own command line, the pane offers: %s"
+                terminal
+                (String.Join (", ", lines))
     }
 
 /// The terminals the tab strip is offering, in the order it offers them.
@@ -708,7 +682,7 @@ let private stoppedAndStillThere (stop: IPage -> Async<unit>) (page: IPage) : As
         do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
         do! openNewTerminal page
         let commandLine = "[data-terminal-input^='term-draft:']:not([readonly])"
-        do! waitVisible "the new terminal's command line" page commandLine
+        let! _ = await (page.WaitForSelectorAsync commandLine)
         do! awaitU (page.ClickAsync commandLine)
         do! awaitU (page.Keyboard.TypeAsync "echo sta''rted; sleep 600")
         do! awaitU (page.Keyboard.PressAsync "Enter")
@@ -760,152 +734,6 @@ let private refusedInPane (page: IPage) : Async<unit> =
         do! openNewTerminal page
         do! Wait.until "a refusal on screen" (refusalsOnScreen page) (not << List.isEmpty)
     }
-
-// --- Waits that end when the work sandbox did not start -----------------------------------
-//
-// A suite that runs a command on a box with no sandbox used to wait out its timeout: thirty
-// seconds of "waiting for X — timed out" while the page already said why. The cases below are the
-// page as the view renders its environment (`environmentSection`: the status, and the words on
-// the same element), put in front of the fixture every case runs in (`withContexts`) — so what
-// is pinned is the wait a real case makes, ended by what a real page says, and not a stand-in
-// for either. The Node tier's clients have the same cases (`Sync.fs`, "Test harness").
-
-/// The environment's section as the view renders it: its status, and the words it carries.
-let private environmentSectionOf (status: string) (reason: string) : string =
-    sprintf "<section %s %s></section>"
-        (Yession.App.Dom.attr Yession.App.Dom.Hooks.environment status)
-        (Yession.App.Dom.attr Yession.App.Dom.Hooks.environmentReason reason)
-
-/// What a wait for something that never comes says when it ends, on a page whose environment
-/// says this. `limitMs` is the deadline, so a wait that is NOT refused ends by it quickly.
-let private neverComes (status: string) (reason: string) (limitMs: float) : Async<string> =
-    withContexts (fun contexts ->
-        async {
-            let! page = contexts.Page None
-            do! awaitU (page.SetContentAsync (environmentSectionOf status reason))
-            let! outcome =
-                Async.Catch (
-                    Wait.within limitMs "a thing that never comes" (fun () -> Read.count page "[data-never]") (fun n -> n > 0))
-            match outcome with
-            | Choice1Of2 () -> return failwith "a wait for a thing that never comes must not resolve"
-            | Choice2Of2 error -> return error.Message
-        })
-
-let waitTests =
-    testList "Browser waits" [
-        testCaseAsync "a wait ends with the product's reason when the work sandbox failed to start" <|
-            async {
-                let! said = neverComes Yession.App.Dom.Text.envFailed "srt sandbox failed: no user namespace" 2000.0
-                Expect.stringContains
-                    said
-                    "the work sandbox did not start: srt sandbox failed: no user namespace"
-                    "the failure quotes the reason the session recorded"
-            }
-
-        // The message is read by whoever's suite just went red, on a box they may not have.
-        testCaseAsync "the refusal says what a suite does about a box with no sandbox" <|
-            async {
-                let! said = neverComes Yession.App.Dom.Text.envFailed "boom" 2000.0
-                Expect.stringContains
-                    said
-                    "the suite needs `Sandbox` in its `needs`"
-                    "the refusal names the capability a command-running suite declares"
-            }
-
-        // The order that lets a suite expect a failure: the predicate is asked before the
-        // refusal, so a wait FOR the failed environment is answered and not refused by it.
-        testCaseAsync "a wait for the failed environment itself is answered, not refused" <|
-            async {
-                do! withContexts (fun contexts ->
-                        async {
-                            let! page = contexts.Page None
-                            do! awaitU (page.SetContentAsync (environmentSectionOf Yession.App.Dom.Text.envFailed "boom"))
-                            do! Wait.until
-                                    "the environment to have failed"
-                                    (fun () -> Read.attr page (Sel.hook Yession.App.Dom.Hooks.environment) Yession.App.Dom.Hooks.environment)
-                                    ((=) (Some Yession.App.Dom.Text.envFailed))
-                        })
-            }
-
-        // A wait that began before the failure is ended by it, and not left to its deadline.
-        testCaseAsync "a wait pending when the work sandbox fails to start ends with the product's reason" <|
-            async {
-                let! said =
-                    withContexts (fun contexts ->
-                        async {
-                            let! page = contexts.Page None
-                            do! awaitU (page.SetContentAsync (environmentSectionOf Yession.App.Dom.Text.envStarting ""))
-                            let waiting =
-                                Async.StartAsTask (
-                                    Async.Catch (
-                                        Wait.within 20000.0 "a thing that never comes" (fun () -> Read.count page "[data-never]") (fun n -> n > 0)))
-                            do! awaitU (page.SetContentAsync (environmentSectionOf Yession.App.Dom.Text.envFailed "srt sandbox failed: late"))
-                            match! Async.AwaitTask waiting with
-                            | Choice1Of2 () -> return failwith "a wait for a thing that never comes must not resolve"
-                            | Choice2Of2 error -> return error.Message
-                        })
-                Expect.stringContains said "the work sandbox did not start: srt sandbox failed: late" "the failure quotes the reason"
-            }
-
-        // Only a failed start is a reason to stop waiting. An environment that is starting,
-        // running, down or never asked for is one a wait may still outlast.
-        testCaseAsync "every state of the environment but a failed start leaves a wait to wait" <|
-            async {
-                let! outcomes =
-                    [ Yession.App.Dom.Text.envNotStarted
-                      Yession.App.Dom.Text.envStarting
-                      Yession.App.Dom.Text.envRunning
-                      Yession.App.Dom.Text.envStopped ]
-                    |> List.map (fun status ->
-                        async {
-                            let! said = neverComes status "" 300.0
-                            return status, said
-                        })
-                    |> Async.Sequential
-                let refused = outcomes |> Array.filter (fun (_, said) -> not (said.Contains "timed out after"))
-                Expect.isEmpty refused "no state but a failed start refuses a wait; the rest ran to their deadline"
-            }
-
-        // A case opens pages as it goes, and one may be gone — a peer that left — while another
-        // still says why.
-        testCaseAsync "a page that cannot be asked leaves the others to say why" <|
-            async {
-                let! said =
-                    withContexts (fun contexts ->
-                        async {
-                            let! gone = contexts.Page None
-                            let! staying = contexts.Page None
-                            do! awaitU (staying.SetContentAsync (environmentSectionOf Yession.App.Dom.Text.envFailed "srt sandbox failed: kept"))
-                            do! awaitU (gone.CloseAsync ())
-                            let! outcome =
-                                Async.Catch (
-                                    Wait.within 2000.0 "a thing that never comes" (fun () -> Read.count staying "[data-never]") (fun n -> n > 0))
-                            match outcome with
-                            | Choice1Of2 () -> return failwith "a wait for a thing that never comes must not resolve"
-                            | Choice2Of2 error -> return error.Message
-                        })
-                Expect.stringContains said "srt sandbox failed: kept" "the page still open said it"
-            }
-
-        // The refusal belongs to the case it was installed for. Two in force at once would end
-        // one case's waits by another case's page.
-        testCaseAsync "a second refusal installed while one is in force is refused" <|
-            async {
-                let refusal : Refusal = fun () -> async.Return None
-                let! outcome = Async.Catch (Wait.refusing refusal (Wait.refusing refusal (async.Return ())))
-                match outcome with
-                | Choice1Of2 () -> failwith "two refusals in force at once must not be allowed"
-                | Choice2Of2 error -> Expect.stringContains error.Message "already in force" "it says why"
-            }
-
-        testCaseAsync "a refusal is released when its case fails, so the next case can install its own" <|
-            async {
-                let refusal : Refusal = fun () -> async.Return None
-                let! failed = Async.Catch (Wait.refusing refusal (async { return failwith "the case failed" }))
-                Expect.isTrue (match failed with Choice2Of2 _ -> true | Choice1Of2 () -> false) "the case failed"
-                do! Wait.refusing refusal (async.Return ())
-            }
-    ]
 
 let tests =
     testList "Browser E2E" [
@@ -1033,11 +861,10 @@ let tests =
         //
         // `Sandbox` because of that last clause, and it is not a formality: the product's default
         // work sandbox IS srt (`SessionMain.fs`, `YESSION_SESSION_WORK_BACKEND`), so on a box that
-        // cannot host one the command never runs. Untagged, the first wait ends at once and quotes
-        // the sandbox's own reason (`Refusal.sandboxDidNotStart`) — a red that says "this machine
-        // is not a machine this test can run on", where the tag makes it a skip, which is
-        // precisely what a capability is for. It used to be thirty seconds of timeout naming
-        // nothing about the box, and cost an agent a stash-and-re-run to discover that once.
+        // cannot host one the command never runs, the block never reaches `ok`, and this waits
+        // out its timeout — thirty seconds to report, in effect, "this machine is not a
+        // machine this test can run on", which is precisely what a capability is for. It cost
+        // an agent a stash-and-re-run to discover that once.
         Tag.needs "a command that really runs" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         sessionPair "a command typed in the terminal composer converges, runs in the sandbox, and both peers see the block" <|
             fun pageA pageB ->
@@ -1146,7 +973,7 @@ let tests =
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 do! openNewTerminal page
                 let composerInput = "[data-terminal-input^='term-draft:']:not([readonly])"
-                do! waitVisible "the new terminal's command line" page composerInput
+                let! _ = await (page.WaitForSelectorAsync composerInput)
                 do! awaitU (page.ClickAsync composerInput)
                 do! awaitU (page.Keyboard.TypeAsync "echo one")
                 do! awaitU (page.ClickAsync "[data-terminal-send]")
@@ -1191,7 +1018,7 @@ let tests =
                 // A command in it, and that command's preview laid over it — which is not what
                 // comes back; the terminal under it is.
                 let composerInput = "[data-terminal-input^='term-draft:']:not([readonly])"
-                do! waitVisible "the middle terminal's command line" page composerInput
+                let! _ = await (page.WaitForSelectorAsync composerInput)
                 do! awaitU (page.ClickAsync composerInput)
                 do! awaitU (page.Keyboard.TypeAsync "echo kept")
                 do! awaitU (page.ClickAsync "[data-terminal-send]")
@@ -1250,8 +1077,7 @@ let tests =
         // still there. Tightening this constant is how the fix that removes it gets proved.
         //
         // `Sandbox` because the seed is a command that really runs: on a box that cannot host a
-        // sandbox it never would, and untagged this would fail at once, quoting the sandbox's
-        // reason, rather than skip.
+        // sandbox it never would, and this would wait out its timeout rather than skip.
         Tag.needs "what reopening a session costs" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         hostSessionCase "reopening a session renders a bounded number of times per transcript record" <|
             fun host page ->
@@ -1299,7 +1125,7 @@ let tests =
                     async {
                         let! shut = Read.count page "[data-content-toggle='show']"
                         if shut > 0 then do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
-                        do! waitVisible "the terminal's command line" page composerInput
+                        let! _ = await (page.WaitForSelectorAsync composerInput)
                         do! awaitU (page.FocusAsync composerInput)
                         do!
                             awaitU (page.Keyboard.TypeAsync (
@@ -1430,8 +1256,8 @@ let tests =
         // document starts them at zero and a reopen is a burst of renders worth measuring.
         //
         // `Sandbox` because opening a terminal starts a shell in the session's work sandbox: on a
-        // box that cannot host one no terminal ever appears, and untagged this would fail at once,
-        // quoting the sandbox's reason, rather than skip.
+        // box that cannot host one no terminal ever appears, and this would wait out its
+        // timeout rather than skip.
         Tag.needs "measuring several terminals" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         sessionCase "measuring the terminals costs one look at the document, however many are open" <|
             fun page ->
@@ -1500,8 +1326,8 @@ let tests =
         // writing into its neighbour, wiped by every render that pushed its own text back in.
         //
         // `Sandbox` because opening a terminal starts a shell in the session's work sandbox: on a
-        // box that cannot host one, no terminal ever appears, and untagged this would fail at
-        // once, quoting the sandbox's reason, rather than skip.
+        // box that cannot host one, no terminal ever appears and this waits out its timeout
+        // instead of failing.
         Tag.needs "two terminals at once" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         sessionCase "each terminal's composer types into that terminal's command line" <|
             fun page ->
@@ -1558,7 +1384,7 @@ let tests =
             async {
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                 do! openNewTerminal page
-                do! waitVisible "the new terminal in the strip" page "[data-terminal-tab]"
+                do! await (page.WaitForSelectorAsync "[data-terminal-tab]") |> Async.Ignore
                 let! tabs = terminalTabs page
                 do! Wait.until "the first terminal's command line to have focus"
                         (fun () -> Read.focused page (commandLine tabs.[0])) id
@@ -7433,8 +7259,8 @@ let mountedTests =
 
         // Plan 22, and the other half of the bug report: the conversation came back offline
         // and the terminal under it did not. `Sandbox` because this really runs a command — on a
-        // box that cannot host a sandbox the block never reaches `ok`, and untagged this would
-        // fail at once, quoting the sandbox's reason, rather than skip.
+        // box that cannot host a sandbox the block never reaches `ok` and this would HANG
+        // rather than fail.
         Tag.needs "a terminal that really ran something" [ Tag.Browser; Tag.Native; Tag.Sandbox ] (fun () ->
         offlineReopen
             "the session is gone, the page is still there, and so is what its terminal printed"
@@ -7443,7 +7269,7 @@ let mountedTests =
                     do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
                     do! openNewTerminal page
                     let composerInput = "[data-terminal-input^='term-draft:']:not([readonly])"
-                    do! waitVisible "the new terminal's command line" page composerInput
+                    let! _ = await (page.WaitForSelectorAsync composerInput)
                     do! awaitU (page.ClickAsync composerInput)
                     do! awaitU (page.Keyboard.TypeAsync (sprintf "echo %s" printedInTerminal))
                     do! awaitU (page.ClickAsync "[data-terminal-send]")
@@ -8334,7 +8160,6 @@ let openingTests =
 // are compiled out. These stubs only exist so the module compiles under Fable; they are never
 // forced — the `[Browser]` need fails on Node and reports the skip itself.
 let tests : Fable.Pyxpecto.Model.TestCase = testList "Browser E2E" []
-let waitTests : Fable.Pyxpecto.Model.TestCase = testList "Browser waits" []
 let editorTests : Fable.Pyxpecto.Model.TestCase = testList "Editor rendering (browser)" []
 let mountedTests : Fable.Pyxpecto.Model.TestCase = testList "Path-mounted session (browser)" []
 let frontDoorTests : Fable.Pyxpecto.Model.TestCase = testList "Creating a session behind a front door (browser)" []
