@@ -279,6 +279,17 @@ module Style =
     let mono = "font-terminal text-code text-ink"
     let monoOut = "font-terminal text-code-sm text-ink-faint whitespace-pre-wrap"
 
+    /// A NAME in a row that has to GIVE WAY: it ellipsises, and `min-w-0` is what lets it. A
+    /// flex item's floor is the intrinsic width of its content, so without that the row widens
+    /// instead and pushes whatever follows the name — a state mark, a count, a label — off the
+    /// end of it. The two utilities are one move and nothing wants one without the other, so
+    /// they are one name rather than the pair that was written out at five sites (principle 5:
+    /// search for the raw utility, and fold it back into the vocabulary that owns it).
+    ///
+    /// The give comes from ONE side. What rides beside such a name holds its width
+    /// (`shrink-0`), which is the other half of the same arrangement.
+    let givesWay = "min-w-0 truncate"
+
     // --- Statuses: text only — never filled, never boxed --------------------------------
 
     /// LIVE: a running command, a connected peer, a session that runs (docs/visual-design.md,
@@ -1144,6 +1155,25 @@ module Style =
     /// on this page is somebody: blue the agent, the checker tones the people.
     let thingAvatar =
         "bg-surface-2 grid place-items-center after:content-[''] after:w-2 after:h-2 after:bg-ink-faint"
+
+    /// The agent's mark with NOTHING connected: `agentAvatar`'s square and `agentAvatar`'s
+    /// turned diamond, with the colour taken out of the diamond — the same sentence
+    /// `thingAvatar` speaks one line up, and the shape still says agent while the grey says
+    /// nobody is there.
+    ///
+    /// It was the live mark under `opacity-40`, and dimming is a ROLE, never opacity
+    /// (docs/visual-design.md, Colour): an opacity floor is a contrast floor, and 40% took the
+    /// diamond to about 2:1 against the panel it sits on. `ink-faint` is the faintest ink that
+    /// still means something — 5.7:1 on the agent's own ground — so the state is worn rather
+    /// than faded.
+    ///
+    /// The geometry is spelt out again rather than composed onto `agentAvatar`, because a
+    /// second `after:bg-*` in the same class attribute is settled by the order Tailwind emits
+    /// the two colours in, not by the order written here: that would be a mark whose colour
+    /// depends on where a token sits in `app/tokens.css`. The two faces of this one mark want
+    /// a shared base, and that is an edit to `agentAvatar` rather than an addition beside it.
+    let agentAvatarAbsent =
+        "bg-agent-ground grid place-items-center after:content-[''] after:w-2 after:h-2 after:bg-ink-faint after:rotate-45"
 
     // --- The starting screen: what a browser looks at while a session launches -----------
     // Black, one object, one line of type. The mark's intro plays once at 224px, the

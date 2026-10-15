@@ -454,7 +454,7 @@ module View =
                         </div>""")
             html $"""
                 <details class="{Style.queryLegend}" data-legend="{List.length entries}">
-                  <summary class="{Style.queryLegendSummary}">how to read<span class="{Style.queryLegendMark}" aria-hidden="true">›</span></summary>
+                  <summary class="{Style.queryLegendSummary}">how to read<span class="{Style.queryLegendMark}">{Icon.rights}</span></summary>
                   <dl class="{Style.queryLegendEntries}">{rows}</dl>
                 </details>"""
 
@@ -491,9 +491,9 @@ module View =
             // hang here.
             | Some false ->
                 html $"""
-                    <div class="{Style.person}" data-agent-presence="absent" data-no-agent><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]} opacity-40"></span><span class="text-ink-faint">agent</span><button type="button" class="{Style.cls [ Style.btnBare; Style.rosterVerb ]}" data-settings-toggle="prompt" data-no-agent-connect @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>connect</button></div>"""
+                    <div class="{Style.person}" data-agent-presence="absent" data-no-agent><span class="{Style.cls [ Style.avatar; Style.agentAvatarAbsent; Style.personAvatar ]}"></span><span class="text-ink-faint">agent</span><button type="button" class="{Style.cls [ Style.btnBare; Style.rosterVerb ]}" data-settings-toggle="prompt" data-no-agent-connect @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>connect</button></div>"""
             | None ->
-                html $"""<div class="{Style.person}" data-agent-presence="unknown"><span class="{Style.cls [ Style.avatar; Style.agentAvatar; Style.personAvatar ]} opacity-40"></span><span class="text-ink-faint">agent</span></div>"""
+                html $"""<div class="{Style.person}" data-agent-presence="unknown"><span class="{Style.cls [ Style.avatar; Style.agentAvatarAbsent; Style.personAvatar ]}"></span><span class="text-ink-faint">agent</span></div>"""
 
         // What a checkout asks for, when somebody still has to decide about it.
         //
@@ -521,7 +521,7 @@ module View =
                 html $"""
                     <div class="{Style.cls [ Style.noAgentBlock; "min-w-0" ]}" data-repo-approval="{RepoRef.value repo}">
                       <div class="{Style.person}">
-                        <span class="truncate min-w-0 text-ink-faint">{RepoRef.value repo}</span>
+                        <span class="{Style.cls [ Style.givesWay; "text-ink-faint" ]}">{RepoRef.value repo}</span>
                         <span class="{Style.label} ml-auto shrink-0">asks for</span>
                       </div>
                       <div class="{Style.noAgentPrompt}">
@@ -558,7 +558,7 @@ module View =
                 html $"""
                     <div class="{Style.person}" data-peer-presence="{ActorRef.token who}">
                       <span class="{Style.cls [ Style.avatar; Entity.actorMark model who; Style.personAvatar ]}"></span>
-                      <span class="truncate min-w-0">{name}</span>
+                      <span class="{Style.givesWay}">{name}</span>
                       {slot}
                     </div>""")
         html $"""
@@ -664,7 +664,7 @@ module View =
                         data-environment-terminal="{TerminalId.value view.TerminalId}"
                         aria-current="{if shown = Some view.TerminalId then "true" else "false"}"
                         @click={Ev(fun _ -> dispatch (OpenInPaneMsg (ClientModel.chosenRead view.TerminalId model)))}>
-                  <span class="truncate min-w-0">{TerminalName.display model.Terminals view}</span>{terminalMark model view}
+                  <span class="{Style.givesWay}">{TerminalName.display model.Terminals view}</span>{terminalMark model view}
                 </button>"""
         let terminals =
             // In the order they were opened, as the strip reads.
@@ -1051,7 +1051,7 @@ module View =
                             data-chapter-entry="{MessageId.value item.MessageId}"
                             @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealMessage item.MessageId)))}>
                       <span class="{Style.chapterEntryDot}"></span>
-                      <span class="truncate min-w-0">{ClientModel.chapterName model item}</span>
+                      <span class="{Style.givesWay}">{ClientModel.chapterName model item}</span>
                     </button>"""
             html $"""
                 <section class="{Style.cls [ Style.sideSection; Style.navLane1 ]}" data-chapters>
@@ -2937,13 +2937,13 @@ module View =
                             <button type="button" class="{Style.replyRefJump}" data-reply-ref="{MessageId.value target}" data-reply-jump
                                     aria-label="{Dom.Text.replyRefJumpLabel}"
                                     @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealMessage target)))}>
-                              <span class="{Style.replyRefMark}" aria-hidden="true">↩</span>
+                              <span class="{Style.replyRefMark}">{Icon.replySm}</span>
                               <span class="{quote}">{ConversationItem.said parent}</span>
                             </button>"""
                     | None ->
                         html $"""
                             <div class="{Style.replyRef}" data-reply-ref="{MessageId.value target}" aria-label="{Dom.Text.replyRefLabel}">
-                              <span class="{Style.replyRefMark}" aria-hidden="true">↩</span>
+                              <span class="{Style.replyRefMark}">{Icon.replySm}</span>
                               <span class="{Style.replyRefQuote}">{Dom.Text.replyRefMissing}</span>
                             </div>"""
             html $"""
@@ -3177,13 +3177,18 @@ module View =
             // Each count in the glyph and colour its status already wears on a chip, and only
             // when it is non-zero: `0 ✗` prints red where nothing is wrong, which is the one
             // thing this line must never do.
+            //
+            // And each count says WHICH count it is, in the word the block's own status wears
+            // (`terminalBlockStatus`): the mark and the colour are the picture, and a tally
+            // read out as "1 3" to somebody who cannot see them says nothing at all
+            // (docs/visual-design.md, Deciding: the floor is never traded).
             let count n inner = if n = 0 then Lit.nothing else inner
             let failed =
-                count tally.Failed (html $"""<span class="{Style.statusErr}">{Icon.crossSm} {tally.Failed}</span>""")
+                count tally.Failed (html $"""<span class="{Style.statusErr}">{Icon.crossSm} {tally.Failed}<span class="{Style.srOnly}"> {Dom.Text.failed}</span></span>""")
             let running =
-                count tally.Running (html $"""<span class="{Style.statusOk}"><span class="{Style.statusDotLiveLead}"></span>{tally.Running}</span>""")
+                count tally.Running (html $"""<span class="{Style.statusOk}"><span class="{Style.statusDotLiveLead}"></span>{tally.Running}<span class="{Style.srOnly}"> {Dom.Text.blockRunning}</span></span>""")
             let done' =
-                count tally.Done (html $"""<span class="{Style.statusDone}">{Icon.checkSm} {tally.Done}</span>""")
+                count tally.Done (html $"""<span class="{Style.statusDone}">{Icon.checkSm} {tally.Done}<span class="{Style.srOnly}"> {Dom.Text.blockOk}</span></span>""")
             let counts =
                 html $"""<span class="{Style.chatTaskCounts}">{failed}{running}{done'}</span>"""
             let commands =
@@ -3767,9 +3772,11 @@ module View =
             dispatch (FoldSetMsg (key, not opened))
         let tally = blocks |> List.map (fun b -> TaskCard.stateOf b.Status) |> TaskCard.tally
         let count n inner = if n = 0 then Lit.nothing else inner
-        let failed = count tally.Failed (html $"""<span class="{Style.statusErr}">{Icon.crossSm} {tally.Failed}</span>""")
+        // Each count says which it is, as the chat's own tally does (`taskCard`): the mark
+        // and the colour are the picture, and `1 3` read out says nothing.
+        let failed = count tally.Failed (html $"""<span class="{Style.statusErr}">{Icon.crossSm} {tally.Failed}<span class="{Style.srOnly}"> {Dom.Text.failed}</span></span>""")
         // No running count: a running command is never in a run (`BlockGroup.ofBlocks`).
-        let done' = count tally.Done (html $"""<span class="{Style.statusDone}">{Icon.checkSm} {tally.Done}</span>""")
+        let done' = count tally.Done (html $"""<span class="{Style.statusDone}">{Icon.checkSm} {tally.Done}<span class="{Style.srOnly}"> {Dom.Text.blockOk}</span></span>""")
         let counts = html $"""<span class="{Style.terminalBlockRunCounts}">{failed}{done'}</span>"""
         // EARLIER commands: a run is only ever history older than what the pane draws whole
         // (`BlockGroup.ofBlocks`), and the line says so rather than reading as everything.
@@ -3787,7 +3794,7 @@ module View =
                   {author}
                   <span class="{Style.terminalCommandText}">ran {commands}</span>
                   {counts}
-                  <span class="{Style.terminalBlockRunMark}" aria-hidden="true">›</span>
+                  <span class="{Style.terminalBlockRunMark}">{Icon.rights}</span>
                 </summary>
                 <div class="{Style.terminalBlockRunBody}" data-terminal-block-run-body>
                   {blocks |> List.map (terminalBlockView dispatch model feed terminal newestWrong false)}
@@ -4414,7 +4421,7 @@ module View =
                      else. -->
                 <div class="{Style.terminalQueuedRow}">
                   <span class="{Style.paneWho}">{Entity.actorName model stretch.Holder}</span>
-                  <span class="{Style.small} min-w-0 truncate">typed in {where}</span>
+                  <span class="{Style.cls [ Style.small; Style.givesWay ]}">typed in {where}</span>
                   <span class="ml-auto shrink-0 whitespace-nowrap">{stretchEnding Style.paneSays model stretch.End}</span>
                   <span class="{Style.small} shrink-0 whitespace-nowrap tabular-nums">{length}</span>
                 </div>
@@ -5300,10 +5307,15 @@ module View =
             // Which is why the menu hangs from HERE when the press asks, with the promise said
             // through `aria-haspopup` like the `+` says it — the cursor stays on the control
             // that was pressed, and the menu opens under it.
+            //
+            // The prompt is `text-heading`, not the `text-[28px] leading-8` it was: the same
+            // 28/32 the step already holds, written as two numbers off the ramp
+            // (docs/visual-design.md, Type — nothing sits off the ramp). Still a literal, and
+            // it wants a name in the Terminals section beside `terminalEmpty`.
             | None, None ->
                 html $"""
                     <div class="{Style.terminalEmpty}">
-                      <span class="font-terminal text-[28px] leading-8 text-ink-faint select-none" aria-hidden="true">$</span>
+                      <span class="font-terminal text-heading text-ink-faint select-none" aria-hidden="true">$</span>
                       <div class="{Style.terminalEmptyNewCell}" @keydown={Ev shutsOnEscape}>
                         <button type="button" class="{Style.paneActPrimary}" data-terminal-new
                                 aria-haspopup="{if newAsks then "menu" else "false"}"

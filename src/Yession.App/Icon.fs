@@ -12,22 +12,68 @@ open Yession.Domain.Content
 /// clickable and their `aria-label`s stayed correct, but a delete button that shows a tofu box
 /// is a broken button.
 ///
-/// Drawn instead: one 16px grid, `currentColor` (so `hover:`/`active:` colour them like text),
-/// square caps and a 1.5 stroke — Metro's geometry, no curves, no fills. `aria-hidden` because
-/// every icon here sits inside a control that carries its own accessible name.
+/// Drawn instead: one 16-unit grid, `currentColor` (so `hover:`/`active:` colour them like
+/// text), square caps — Metro's geometry, no curves, no fills. `aria-hidden` because every icon
+/// here sits inside a control that carries its own accessible name.
+///
+/// A mark is a BOX and a WEIGHT, and the two are not independent: see `Box` and `Weight`.
 module Icon =
 
-    /// A stroked path on the shared 16px grid. `size` is the Tailwind box (icons are `block`,
-    /// so they never inherit a text baseline gap inside a grid-centred button), `weight` the
-    /// stroke — the icons carry two, for the same reason the type carries several: 1.5 for the
-    /// working controls, and a lighter 1.1 for the marks that ride display type, whose word is
-    /// set extralight and would be shouted down by a UI-weight stroke.
-    let private strokedAt (weight: string) (size: string) (d: string) : TemplateResult =
+    /// The grid every path below is drawn on, in user units. One square, so the sizes of an
+    /// icon can never drift from each other.
+    let private grid = 16.0
+
+    /// A box a mark is drawn into: the Tailwind utility AND the pixels it resolves to, as one
+    /// value, because what reaches the screen as a stroke is computed FROM those pixels
+    /// (`Weight`) and a class string on its own cannot say how wide the mark will be.
+    type private Box = { Cls: string; Px: float }
+
+    /// 14px: a mark inside a 24px icon button, or hanging in a column's gutter.
+    let private box14 = { Cls = "w-3.5 h-3.5"; Px = 14.0 }
+    /// 12px: where a mark rides a caps-label line, inline with the word it belongs to.
+    let private box12 = { Cls = "w-3 h-3"; Px = 12.0 }
+
+    /// The stroke weights, in SCREEN PIXELS, and the type each one is matched to
+    /// (docs/visual-design.md, Form: a stroke weight matched to the type it sits beside).
+    ///
+    /// Screen pixels and not grid units, because a stroke written in grid units is SCALED by
+    /// the box it is drawn in. The one `1.5` this file used to carry painted 1.31px in a 14px
+    /// box and 1.13px in a 12px one, so every mark riding a caps word was a sixth lighter than
+    /// the chrome's marks beside it and lighter than the word's own stems — two weights from
+    /// one number, and neither of them chosen. Each weight below is written as the grid stroke
+    /// it has always had in the 14px box, so the chrome does not move and the 12px marks join
+    /// it.
+    module private Weight =
+        /// The chrome's marks, matched to the caps voice (`text-label`, semibold) and to the
+        /// `text-small` lines beside it. The weight every mark wears unless it rides display
+        /// type, whatever box it is drawn in.
+        let chrome = 1.5 * 14.0 / grid
+        /// A mark that rides DISPLAY type, whose word is set extralight and would be shouted
+        /// down by a UI-weight stroke: the marks of an act's cause (`chained`).
+        let display = 1.25 * 14.0 / grid
+        /// Not a segment weight at all: an ellipsis is drawn as zero-length subpaths, so what
+        /// this sets is the SIZE OF A CAP. At the chrome's weight those caps are the smallest
+        /// mark in the file and read as dirt on the screen rather than as a control.
+        let dot = 2.5 * 14.0 / grid
+
+    /// A stroked path: a weight in screen pixels, a box, and whatever the SITE adds to say how
+    /// the mark sits in its line. `units` is the square the path is drawn on — `grid` for
+    /// everything but the chain's head, which is measured in its own pixels (see `chained`).
+    let private strokedOn (units: float) (weight: float) (box: Box) (extra: string) (d: string) =
+        let painted = sprintf "%g" (weight * units / box.Px)
+        let viewBox = sprintf "0 0 %g %g" units units
         html
-            $"""<svg class="{size} block" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="{weight}"
+            $"""<svg class="{box.Cls} {extra}" viewBox="{viewBox}" fill="none" stroke="currentColor" stroke-width="{painted}"
                      stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" focusable="false"><path d="{d}"></path></svg>"""
 
-    let private stroked = strokedAt "1.5"
+    /// A mark that stands on its own — in a control, or hanging in a column's gutter. `block`,
+    /// so it never inherits a text baseline gap inside a grid-centred button.
+    let private stroked (d: string) = strokedOn grid Weight.chrome box14 "block" d
+
+    /// A mark that rides a word: the small box, nudged onto the caps baseline beside it. The
+    /// nudge is measured inside the box and so is untouched by the weight the box now paints.
+    let private strokedInline (nudge: string) (d: string) =
+        strokedOn grid Weight.chrome box12 ("inline-block " + nudge) d
 
     // --- Paths (one place, so the two sizes of an icon can never drift) ---------------------
 
@@ -110,78 +156,98 @@ module Icon =
     /// download. Deliberately not a downward arrow — the arrow is the CONTROL's to wear, and
     /// this is a statement about what the thing is.
     let private filePath = "M4 2.5 L9.5 2.5 L12 5 L12 13.5 L4 13.5 Z M9.5 2.5 L9.5 5 L12 5"
+    /// What a reply answers: a line that comes down from where the parent was said and turns
+    /// back, with the head on the turn. It was the text glyph `↩`, which is a CURVE — a shape
+    /// this vocabulary does not have — carried by no face this build ships, so it rendered as
+    /// whatever the reader's system substituted for it (docs/visual-design.md, Form, and
+    /// principle 5: a glyph where an SVG mark exists is the second way).
+    let private replyPath = "M12.5 3.5 L12.5 9.5 L4 9.5 M7.5 6 L4 9.5 L7.5 13"
 
     // --- The vocabulary ----------------------------------------------------------------------
-    // 14px inside a 24px icon button; 12px where an icon rides a caps-label line.
+    // One mark per job. `box14` inside a 24px icon button or hanging in a gutter; `box12`
+    // where a mark rides a caps-label line. Every one of them paints `Weight.chrome` unless
+    // its own comment says which other type it is matched to.
 
-    let close = stroked "w-3.5 h-3.5" closePath
-    let up = stroked "w-3.5 h-3.5" upPath
-    let down = stroked "w-3.5 h-3.5" downPath
+    let close = stroked closePath
+    /// Downward and upward, on ONE axis: move this item that way in an order
+    /// (`Style.btnIconBare` on a queued act), or go that way to the end of a list (the
+    /// timeline's jump-to-latest). An arrow with a stem is the axis; a disclosure is a
+    /// chevron and wears `caret` or `right`/`rights` instead, so neither arrow ever means
+    /// "this opens".
+    let up = stroked upPath
+    let down = stroked downPath
     /// A lighter stroke than the chevrons': a cause's marks say how acts are linked, and
-    /// recede behind the controls beside them.
+    /// recede behind the controls beside them — `Weight.display`, because the word they
+    /// travel with is set extralight.
     ///
-    /// Drawn in its own pixels rather than on the shared 16px grid, because where its tip
-    /// lands is measured in pixels: it hangs from a one-pixel line 7px into the same box
+    /// Drawn in its own pixels rather than on the shared grid, because where its tip lands is
+    /// measured in pixels: it hangs from a one-pixel line 7px into the same box
     /// (`Style.causeCornerTurn`), so the tip is at 7.5, the middle of that column. On the
     /// shared grid it was at 8 of 16 — 7px, the box's middle, which is the edge between two
-    /// pixels, while the line paints on one of them. Same strokes as before, scaled by 14/16:
-    /// the arms, the depth and the weight (1.25 → 1.09) are unchanged on screen.
-    let chained =
-        html
-            $"""<svg class="w-3.5 h-3.5 block" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.09375"
-                     stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" focusable="false"><path d="{chainedPath}"></path></svg>"""
-    let left = stroked "w-3.5 h-3.5" leftPath
-    let right = stroked "w-3.5 h-3.5" rightPath
-    let rights = stroked "w-3.5 h-3.5" rightsPath
-    let send = stroked "w-3.5 h-3.5" sendPath
+    /// pixels, while the line paints on one of them.
+    let chained = strokedOn 14.0 Weight.display box14 "block" chainedPath
+    let left = stroked leftPath
+    /// A disclosure over ONE thing — an act's particulars, a tool call's input and output.
+    /// `rights` is the disclosure over SEVERAL, and nothing in the product opens a fold with
+    /// any other mark.
+    let right = stroked rightPath
+    let rights = stroked rightsPath
+    let send = stroked sendPath
     /// Put what this sits on onto the clipboard, and — the same control, once it has — the
     /// check that says it went. Button-sized: `checkSm` below is the inline mark that rides
     /// a status word, and a control's glyph is never the one a sentence wears.
-    let copy = stroked "w-3.5 h-3.5" copyPath
-    let check = stroked "w-3.5 h-3.5" checkPath
-    /// What else can be done to the thing this sits on. Heavier than the working stroke,
-    /// because the dots are square CAPS rather than segments: at 1.5 they are a smaller mark
-    /// than any other glyph here, and read as dirt on the screen rather than as a control.
-    let more = strokedAt "2.5" "w-3.5 h-3.5" morePath
+    let copy = stroked copyPath
+    let check = stroked checkPath
+    /// What else can be done to the thing this sits on. `Weight.dot`, because the dots are
+    /// square CAPS rather than segments and the chrome's weight makes them the smallest mark
+    /// in the file, read as dirt on the screen rather than as a control.
+    let more = strokedOn grid Weight.dot box14 "block" morePath
 
     /// Stop: the interrupt beside a running turn. It was also the terminal list's kill, and
     /// a square beside a command reads as stopping the command, not ending the terminal —
     /// the list says its verbs as words now (`Dom.Text.kill`, `reattach`).
-    let stop = stroked "w-3.5 h-3.5" stopPath
+    let stop = stroked stopPath
     /// A terminal's acts in the pane's toolbar: taking the keyboard, going back through its
     /// recording, and playing a closed one's.
-    let keyboard = stroked "w-3.5 h-3.5" keyboardPath
-    let list = stroked "w-3.5 h-3.5" listPath
-    let rewind = stroked "w-3.5 h-3.5" rewindPath
-    let play = stroked "w-3.5 h-3.5" playPath
-    /// The switcher's door, before the head's name (P2-2).
-    let caret = stroked "w-3 h-3 shrink-0" caretPath
+    let keyboard = stroked keyboardPath
+    let list = stroked listPath
+    let rewind = stroked rewindPath
+    let play = stroked playPath
+    /// The mark of a thing that opens BENEATH its control: the switcher's door before the
+    /// head's name (P2-2), a select's own caret where `appearance-none` took the native one
+    /// away, and the content list's closed-terminals fold. The small box, because every one
+    /// of those sits on a caps line.
+    let caret = strokedOn grid Weight.chrome box12 "block shrink-0" caretPath
     /// Retire this session from the working list. A row-riding verb that needs no word: it is
     /// rendered only on a row that can be archived, and an archived row wears the word
     /// `Unarchive` instead.
-    let archive = stroked "w-3.5 h-3.5" archivePath
+    let archive = stroked archivePath
 
     /// Inline with a status word: smaller, and nudged onto the caps baseline. `-3px`, not
     /// `-1px`: the strokes sit inside the 12px box with ~3px of clear space under them (the
     /// check's lowest vertex lands at y≈8.4 of 12), so at -1px the paint floated a couple of
-    /// pixels above the digits beside it — measured against the caps line in a tally.
-    let checkSm = stroked "w-3 h-3 inline-block align-[-3px]" checkPath
-    let crossSm = stroked "w-3 h-3 inline-block align-[-3px]" crossPath
+    /// pixels above the digits beside it — measured against the caps line in a tally. The
+    /// nudge is a position inside the box, so the weight the box paints does not move it.
+    let checkSm = strokedInline "align-[-3px]" checkPath
+    let crossSm = strokedInline "align-[-3px]" crossPath
     /// The mark a row wears when what it holds is a RECORDING rather than a terminal you
     /// can type into. Sits on the caps baseline beside the row's state, like the two above.
-    let playSm = stroked "w-3 h-3 inline-block align-[-1px]" playPath
+    let playSm = strokedInline "align-[-1px]" playPath
     /// The stop, at the size a mark rides a small line: what a turn's stop signpost wears in
     /// the slot a chip's prompt glyph takes.
-    let stopSm = stroked "w-3 h-3 inline-block align-[-2px]" stopPath
+    let stopSm = strokedInline "align-[-2px]" stopPath
+    /// What a detached reply answers (`Style.replyRefMark`), hanging in the gutter left of the
+    /// column's rail. The small box, because the quote it leads is set in `text-small`.
+    let replySm = strokedInline "align-[-2px]" replyPath
     /// The repository mark at the size an entity wears inline in a sentence: the same box
     /// as a person's small avatar, so a repo and a person referenced side by side sit on one
     /// line at one height.
-    let repoSm = stroked "w-3.5 h-3.5 block" repoPath
-    let keySm = stroked "w-3.5 h-3.5 block" keyPath
-    let sandboxSm = stroked "w-3.5 h-3.5 block" sandboxPath
-    let prSm = stroked "w-3.5 h-3.5 block" prPath
-    let imageSm = stroked "w-3.5 h-3.5 block" imagePath
-    let fileSm = stroked "w-3.5 h-3.5 block" filePath
+    let repoSm = stroked repoPath
+    let keySm = stroked keyPath
+    let sandboxSm = stroked sandboxPath
+    let prSm = stroked prPath
+    let imageSm = stroked imagePath
+    let fileSm = stroked filePath
 
     /// The mark a piece of content wears wherever it is NAMED — a chip in a message, a row in
     /// the content list, a tab in the strip. One function rather than the same two-armed match
@@ -197,7 +263,8 @@ module Icon =
     /// exception to its vocabulary, because a brand's mark is not ours to redraw in strokes
     /// — a reader knows this shape, and a Metro-stroked octocat would be a different thing
     /// wearing its name. `currentColor`, so it takes the ink of the name beside it. The
-    /// mark a `github` connection wears wherever a sentence points at one.
+    /// mark a `github` connection wears wherever a sentence points at one. `box14.Cls`, like
+    /// every other mark, so the one box in this file is written in one place.
     let githubSm =
         html
-            $"""<svg class="w-3.5 h-3.5 block" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>"""
+            $"""<svg class="{box14.Cls} block" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>"""

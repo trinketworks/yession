@@ -425,16 +425,28 @@ summary::-webkit-details-marker { display: none; }
   pointer-events: none;
   word-break: normal;
 }
+/* Whose caret it is: their name on their own colour. A SHARP rectangle — the two primitives
+   are the rectangle and the point, and a rounded rectangle is a hybrid of the two that does
+   not exist in this product (docs/visual-design.md, Form). It had `border-radius: 3px`.
+
+   The word is set in the ground's black, not in `ink`. The six seat colours are each chosen to
+   carry 3:1 as a MARK on a dark surface (`app/tokens.css`), which makes them light, so white
+   on them measured 1.13:1 (person-3) to 3.21:1 (person-5) — below the 4.5 text floor at every
+   one of the six seats, worst where the seat is palest. Black on the same six is 6.54:1
+   (person-5) to 18.52:1 (person-3). The floor is never traded (docs/visual-design.md,
+   Deciding), and a name nobody can read is not an attribution.
+
+   The caps step, as the token names it, rather than the same 11px written as a number: a size
+   sets its line box with it (docs/visual-design.md, Type). */
 .pm-caret-label {
   position: absolute;
   top: -1.25em;
   left: -2px;
   padding: 1px 4px;
-  border-radius: 3px;
-  font-size: 11px;
-  line-height: 1.3;
+  font-size: var(--text-label);
+  line-height: var(--text-label--line-height);
   white-space: nowrap;
-  color: var(--color-ink);
+  color: var(--color-bg);
   pointer-events: none;
   user-select: none;
 }
@@ -466,7 +478,17 @@ summary::-webkit-details-marker { display: none; }
    leaves the depth full size. The veils are Lambert against a light up and to the left, with
    the face toward you at full strength, sampled with the scale. Everything that moves is
    `rotate`, `scale` and `opacity`, so it runs on the compositor and never lays out or paints.
-   The browser tier holds the outline to the letters through the whole cycle. */
+   The browser tier holds the outline to the letters through the whole cycle.
+
+   DISAGREEMENT WITH THE DOCTRINE, filed where the code is (docs/visual-design.md, Deciding),
+   finding D-13. "No surface may look lit from somewhere" (principle 6), and the exemption is
+   written for one value: `Brand.mark` is the one lit object. The veils below are Lambert
+   against a light up and to the left, so this object is lit, and it is not `Brand.mark`. It is
+   a PICTURE of it — the same cube, the same two side blues, turned in the hand — which is the
+   half of the exemption the doctrine does not say: it names a value where it means a thing.
+   Taking the veils out does not make the cube flat, it makes the turn invisible, so there is
+   nothing left to see and nothing fixed; the question is whether the exemption follows the
+   mark or the identifier, and that one is the doctrine's to answer. */
 .agent-think {
   display: inline-block;
   position: relative;
