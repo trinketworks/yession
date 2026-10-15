@@ -323,16 +323,16 @@ module Style =
     /// — blue is never a status (docs/visual-design.md, Colour). A LIVE thing is `statusOk`
     /// with `statusDotLive`; a wait still under way leads with `statusDotBeat`.
     ///
-    /// Also what a WRONG thing wears once it is no longer the newest wrong thing. The doctrine
-    /// gives a stale fault the record's `ink-dim`, which is this tone, so a surface that mounts
-    /// several faults at once gives this to all but the newest and keeps `statusErr` for that
-    /// one (`ClientModel.newestWrongBlock` picks it). ONE value rather than two names for one
-    /// tone: the rule that dims a stale fault is the rule that dims a wait, and a second name
-    /// would be a second way to draw the same thing (principle 5).
+    /// A WRONG thing never wears this. It is the one tone a failure may not be quieted into:
+    /// this value once carried "a fault that is no longer the newest" as a second meaning, and
+    /// what wore it was four failed commands out of five in one scrollback, each reading as a
+    /// wait (see `View.terminalBlockStatus`).
     let statusWait = caps + " text-ink-dim"
-    /// WRONG, and the newest wrong thing on this surface — there is at most one red word on
-    /// screen (docs/visual-design.md, Colour). Anything older that was also wrong is a record
-    /// and wears `statusWait`.
+    /// WRONG. There is at most one red word on a SURFACE, and a repeated row — a block's line
+    /// in a scrollback, a repeated item in the conversation — is a surface of its own, so a
+    /// failed row keeps its own red word however many failed rows are on the screen
+    /// (docs/visual-design.md, Colour). Nothing dims a failure into a record: what makes a
+    /// wrong thing quiet is a surface holding two of them, which is the surface's bug.
     let statusErr = caps + " text-err"
     let statusFaint = caps + " text-ink-faint"
 
@@ -3774,9 +3774,16 @@ module Style =
     /// The strip is the ground (`bg`), black like the chat's head beside it, and the selected
     /// tab wears the pane's own ground (`panel`), so it runs on into the toolbar and the body
     /// under it: the chrome says which tab the page belongs to, before a word is read
-    /// (docs/visual-design.md, principle 2). Every control in it is 44px tall, so the strip is
-    /// a thumb's height on a phone and the same on a desktop, and it needs no padding of its own.
-    let panePivotRow = "shrink-0 h-11 flex items-stretch bg-bg"
+    /// (docs/visual-design.md, principle 2). Every control in it is `spacing-touch`, so the
+    /// strip is a thumb's height on a phone and the same on a desktop, and it needs no padding
+    /// of its own.
+    ///
+    /// Two of those rows are `spacing-band` exactly, which is the head this column owes the
+    /// hairline. On a PHONE the band is `spacing-band-phone` and these two rows are 88 against
+    /// its 56: the touch target is the floor, the band is the grid, and the floor is first in
+    /// the Deciding order, so the rows keep their height and the band gives. Written as the
+    /// token rather than as `h-11`, which is the same 44px spelled a second way (principle 5).
+    let panePivotRow = "shrink-0 h-touch flex items-stretch bg-bg"
     /// The tablist: `all`, then the scroller of tabs. `all` stays put at the row's head however
     /// many tabs follow it. `min-w-0` so the scroller is what gives way when the names outgrow
     /// the row.
@@ -3806,7 +3813,7 @@ module Style =
     /// and lift a step (`surface`) under the hand. Ink follows, a step quieter on the tabs not
     /// chosen; both inks clear 4.5:1 on every ground here (Phase4). Selecting moves no text.
     let private pivotItemBase =
-        cls [ "shrink-0 border-0 cursor-pointer h-11 min-w-11 px-3 phone:px-2 inline-flex items-center justify-center gap-1.5"
+        cls [ "shrink-0 border-0 cursor-pointer h-touch min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5"
               "font-ui font-normal text-body whitespace-nowrap transition-colors duration-150 ease-out"
               "motion-reduce:transition-none"; focusRingInset ]
     let pivotItem = cls [ pivotItemBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
@@ -3823,10 +3830,10 @@ module Style =
     let pivotMark = "inline-flex items-center self-center"
     /// A tab's ×: it closes the tab and ends nothing, so it is neutral under the hand rather
     /// than the error red. Sat on the name's line so it costs the row no height. On a phone its
-    /// box is a thumb's 44 with the glyph centred, pulled in by as much again up and down
-    /// (`-my-2.5`) and sideways (`-mx-2`), so the item it rides is still the 44 every item is
-    /// and the selected tab is not half the strip.
-    let pivotTabClose = cls [ btnIconBare; "self-center phone:min-w-11 phone:min-h-11 phone:-my-2.5 phone:-mx-2" ]
+    /// box is the touch target with the glyph centred, pulled in by as much again up and down
+    /// (`-my-2.5`) and sideways (`-mx-2`), so the item it rides is still the one height every
+    /// item in the strip is and the selected tab is not half the strip.
+    let pivotTabClose = cls [ btnIconBare; "self-center phone:min-w-touch phone:min-h-touch phone:-my-2.5 phone:-mx-2" ]
     /// The pivot's one way to make something: a `+` in the pivot's own type, unboxed, faint at
     /// rest like every item not chosen. The cell is the positioning context its menu hangs
     /// from, outside the scroller, because a menu hung inside an `overflow-x-auto` box is
@@ -3835,13 +3842,13 @@ module Style =
     /// A square act at the strip's end — `+`, and the way back to the chat: the strip's
     /// height square, its glyph in the tabs' resting ink.
     let paneStripAct =
-        cls [ "shrink-0 w-11 h-11 grid place-items-center bg-transparent border-0 cursor-pointer p-0"
+        cls [ "shrink-0 w-touch h-touch grid place-items-center bg-transparent border-0 cursor-pointer p-0"
               "text-ink-dim hover:text-ink hover:bg-surface transition-colors motion-reduce:transition-none"; focusRingInset ]
     /// The list button: the list's glyph and how many terminals it holds — on a phone only
     /// one tab fits, and the count is the one clue that there are others. As tall as the
     /// strip, at least as wide, its figures in the tabs' type so they read as one line.
     let private paneListButtonBase =
-        cls [ "shrink-0 h-11 min-w-11 px-3 phone:px-2 inline-flex items-center justify-center gap-1.5 border-0 cursor-pointer"
+        cls [ "shrink-0 h-touch min-w-touch px-3 phone:px-2 inline-flex items-center justify-center gap-1.5 border-0 cursor-pointer"
               "font-ui font-normal text-body tabular-nums transition-colors motion-reduce:transition-none"; focusRingInset ]
     let paneListButton = cls [ paneListButtonBase; "bg-transparent text-ink-dim hover:text-ink hover:bg-surface" ]
     /// The same with its sheet down: the sheet's own ground (`allSheet`), flush with it, so
@@ -3864,11 +3871,17 @@ module Style =
     /// on the right — the acts used to stand at the column's foot, under the composer, a long
     /// way from the name of what they act on. Its hairline is the band's.
     let paneToolbar =
-        cls [ "shrink-0 h-11 flex items-center gap-4 min-w-0 pl-3 pr-1.5 font-ui"; Stroke.dividerBottom ]
-    /// The toolbar under a command's preview: the command LIFTED out of its terminal — the
-    /// highlight a command lands with when it settles back (`animate-reveal-line`), a ground
-    /// two steps up and a leading edge in ink, held for as long as it is lifted.
-    let paneToolbarLifted = cls [ paneToolbar; "bg-surface-2 shadow-[inset_2px_0_0_var(--color-ink)]" ]
+        cls [ "shrink-0 h-touch flex items-center gap-4 min-w-0 pl-3 pr-1.5 font-ui"; Stroke.dividerBottom ]
+    /// The toolbar under a command's preview: the command LIFTED out of its terminal, said by
+    /// a ground two steps up and held for as long as it is lifted — which is how this product
+    /// says nesting and selection (docs/visual-design.md, principle 2).
+    ///
+    /// No edge beside it. It carried a 2px leading edge in ink as an inset shadow, which is a
+    /// painted edge saying depth — the one thing "Honest materials" names twice, and belt-and-
+    /// braces besides, since the surface step already says it. The highlight the command lands
+    /// with when it settles BACK (`animate-reveal-line`) keeps its rim: there the rim has to
+    /// animate, and a border would reflow the row mid-animation.
+    let paneToolbarLifted = cls [ paneToolbar; "bg-surface-2" ]
     /// The name a lifted command and the place it settles back into share, so the browser
     /// morphs one into the other (`ViewActions.Morph`, app/tailwind.css). Inline style: a
     /// property with a value no utility composes.
@@ -3892,7 +3905,7 @@ module Style =
     let panePreviewName = "min-w-0 truncate text-ink"
     /// Its close: a bare ×, neutral rather than red — closing a preview ends nothing — and a
     /// thumb's 44 on a phone.
-    let panePreviewClose = cls [ btnIconBare; "phone:min-w-11 phone:min-h-11" ]
+    let panePreviewClose = cls [ btnIconBare; "phone:min-w-touch phone:min-h-touch" ]
 
     /// The pane's verbs, as WORDS in the shell's own type — `settings ›`'s voice rather than a
     /// button's. Lowercase and light, no rectangle: the pivot over them is names in light type
@@ -3920,16 +3933,16 @@ module Style =
     /// An act in the toolbar: its mark and its word in the caps voice, the face the agent's
     /// interrupt wears — a verb about the whole thing on screen, not a word in a sentence.
     let paneToolbarAct =
-        cls [ "h-11 px-1.5 shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer no-underline"
+        cls [ "h-touch px-1.5 shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer no-underline"
               caps; "whitespace-nowrap text-ink-dim hover:text-ink transition-colors motion-reduce:transition-none"; focusRingInset ]
     /// The one act a surface is FOR — the empty pane's way to make a terminal: blue, which is
     /// what interactive means here, and nothing louder than that.
     let paneActPrimary = cls [ paneActBase; "text-pivot leading-6 text-blue hover:text-blue-up-1" ]
     /// An act inside a line of the command band (the lease bar, the cannot-run notice): the same word
     /// at the size of the line it sits in, so it reads as part of the sentence it ends.
-    let bandAct = cls [ paneActBase; "text-body text-ink-dim hover:text-ink phone:min-h-11" ]
+    let bandAct = cls [ paneActBase; "text-body text-ink-dim hover:text-ink phone:min-h-touch" ]
     /// The band act the line is asking for: handing the keyboard back, opening a new terminal.
-    let bandActPrimary = cls [ paneActBase; "text-body text-blue hover:text-blue-up-1 phone:min-h-11" ]
+    let bandActPrimary = cls [ paneActBase; "text-body text-blue hover:text-blue-up-1 phone:min-h-touch" ]
 
     /// A state said in words, in the pane: lowercase as written, small and light — a caption,
     /// never a label. What it says is in `ink-dim`; nothing here is in the error red unless a
@@ -3952,8 +3965,9 @@ module Style =
     /// `focusRingInset`, composed rather than spelled out: the ring had been written here as
     /// its four utilities, a second way to draw the one ring the product has (principle 5).
     let panePanel = cls [ paneBody; focusRingInset ]
-    /// The panel under a command's preview, on its lifted ground (`paneToolbarLifted`).
-    let panePanelLifted = cls [ panePanel; "bg-surface-2 shadow-[inset_2px_0_0_var(--color-ink)]" ]
+    /// The panel under a command's preview, on its lifted ground and with no edge of its own,
+    /// for the reason the toolbar over it has none (`paneToolbarLifted`).
+    let panePanelLifted = cls [ panePanel; "bg-surface-2" ]
     /// A read-only region: a player's own mount, or text shown rather than typed into. The
     /// same scrolling box the block history uses, so a block read from the chat looks exactly
     /// like the block read in its terminal — without the bottom anchoring, because a player
@@ -4049,9 +4063,15 @@ module Style =
     /// Its focus ring is `focusRingInset` — inset because the sheet scrolls and clips, and
     /// composed because there is one ring in this product: it had been written here as its
     /// four utilities, which is a second way to draw it (principle 5).
+    ///
+    /// No drop shadow. It carried one, and a surface lit from above is the whole of what
+    /// "Honest materials" forbids (docs/visual-design.md, Form: surfaces are flat, depth is
+    /// said by blur over something real). What the shadow was for is already said by three
+    /// things that are real — a step up the ground, a rim where the sheet ends, and the pane
+    /// dimmed under it (`allSheetScrim`).
     let allSheet =
         cls [ "absolute inset-x-0 top-0 max-h-full z-30 overflow-y-auto overscroll-contain"
-              "bg-surface border-b border-edge shadow-[0_12px_32px_rgb(0_0_0/0.5)]"; focusRingInset ]
+              "bg-surface border-b border-edge"; focusRingInset ]
 
     /// What the sheet is laid over, dimmed: the pane goes on showing under it, a step back.
     /// Under the sheet in the stack and over everything else the pane has.
@@ -4565,9 +4585,15 @@ module Style =
 
     /// A span's colours, resolved with `Inverse` and `Dim` already applied — both are
     /// render-time swaps, which is exactly why the parser leaves them as flags rather than
-    /// pre-swapping colours it does not know the defaults for. A background fill also forces
-    /// the foreground to the page ground, so inverted text stays readable when only one side
-    /// of the pair was ever set.
+    /// pre-swapping colours it does not know the defaults for.
+    ///
+    /// INVERSE (SGR 7) swaps the pair, and fills in whichever half the program never set from
+    /// this palette's own ends: a default background becomes the foreground as index 0, a
+    /// default foreground becomes the fill as index 7. So a run that set only one side still
+    /// inverts to a pair a reader can read. A fill on its own moves no foreground — this said
+    /// for a while that a background forces the foreground to the page ground, which neither
+    /// half of was true: nothing here reads the page ground, and index 0 in this palette is
+    /// `ink-faint` rather than `bg` (app/tokens.css).
     ///
     /// DIM (SGR 2) is resolved HERE, as a colour, because dimming is a role and never opacity
     /// (docs/visual-design.md, Colour): opacity breaks the contrast floor, and the floor is
