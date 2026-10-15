@@ -63,7 +63,7 @@ let private eventsOf (log: EventLog<SessionEvent>) =
 // binding the production writers use (`Collab/Sync.fs`), and deliberately without `doc.transact`
 // under the process origin: what a peer's update arrives as is a write nothing here owns.
 
-let private pendingMap (doc: Y.Doc) : Y.Map<obj> = doc.getMap "pending"
+let private pendingMap (doc: Y.Doc) : Y.Map<'value> = doc.getMap "pending"
 
 /// A queue entry field, set to whatever a peer we do not control might have written.
 let private setQueuedFieldInDoc (doc: Y.Doc) (id: QueueId) (field: string) (value: string) : unit =

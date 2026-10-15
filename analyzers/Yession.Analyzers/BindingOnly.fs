@@ -40,12 +40,6 @@ open Yession.Analyzers.Expressions
 [<Literal>]
 let Code = "YES013"
 
-/// A function of the module `home`, by the name the compiler gave it. Read the safe way: a
-/// symbol FCS declines to describe is simply not the one being matched.
-let private isFunction (home: string) (name: string) (mfv: FSharpMemberOrFunctionOrValue) =
-    (try mfv.LogicalName = name with _ -> false)
-    && (try mfv.DeclaringEntity |> Option.bind (fun e -> e.TryFullName) with _ -> None) = Some home
-
 let private isCreateObj = isFunction "Fable.Core.JsInterop" "createObj"
 
 /// `==>`, whose compiled name is the spelling of its characters.

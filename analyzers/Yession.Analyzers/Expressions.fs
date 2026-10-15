@@ -42,6 +42,15 @@ type Binding =
 let same (a: FSharpSymbol) (b: FSharpSymbol) =
     try a.IsEffectivelySameAs b with _ -> false
 
+/// Whether a callee is the function `name` of the module `home`, by the name the compiler gave
+/// it: an operator's is the spelling of its characters, so `==>` is `op_EqualsEqualsGreater`.
+/// The function, not the spelling, which is what a rule about a LIBRARY's function means: one of
+/// the same name declared somewhere else is not it. Read the safe way, because a symbol FCS
+/// declines to describe is simply not the one being matched.
+let isFunction (home: string) (name: string) (mfv: FSharpMemberOrFunctionOrValue) =
+    (try mfv.LogicalName = name with _ -> false)
+    && (try mfv.DeclaringEntity |> Option.bind (fun e -> e.TryFullName) with _ -> None) = Some home
+
 let rec private within (e: FSharpExpr) =
     seq {
         match e with

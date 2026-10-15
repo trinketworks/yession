@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    One of two projects for YES016, and the one that carries the rule's cases: a Yession project,
+    which is product code whatever it references, so every unchecked cast it writes is reported,
+    and every cast the rule leaves alone is here beside them. It has the Domain's shape, a Yession
+    project that references nothing, because YES016 judges a project by what is in its reach
+    (`Population.reach`, shared with YES011 and YES013).
+
+    Its pair is UncheckedCastInBindingFixture, which writes the same casts with nothing Yession in
+    reach and must be reported clean. Not in Yession.slnx, for the reason no fixture is.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Product.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+  </ItemGroup>
+
+</Project>

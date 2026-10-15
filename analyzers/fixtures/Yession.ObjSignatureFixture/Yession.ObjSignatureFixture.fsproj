@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    One of two projects for YES017, and the one that carries the rule's cases: a Yession project,
+    which is product code whatever it references, so every signature with `obj` in it is
+    reported, and every declaration the rule leaves alone is here beside them.
+
+    It references ObjSignatureInBindingFixture, its pair, for one case only: a binding's own name
+    for a type it owns is that name, even when it abbreviates `obj`, and a product signature that
+    uses it is not reported. The pair is also a project with nothing Yession in reach, which
+    declares the same signatures and must be reported clean. Not in Yession.slnx, for the reason
+    no fixture is.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Signatures.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ObjSignatureInBindingFixture\ObjSignatureInBindingFixture.fsproj" />
+  </ItemGroup>
+
+</Project>

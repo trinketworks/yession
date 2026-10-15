@@ -33,12 +33,6 @@ open Yession.Analyzers.Expressions
 [<Literal>]
 let Code = "YES009"
 
-/// The compiled home and name of a core function, read the safe way — `TryFullName` throws for
-/// some entities, and a callee that cannot answer is simply not the one being matched.
-let private isFunction (moduleFullName: string) (logicalName: string) (mfv: FSharpMemberOrFunctionOrValue) =
-    mfv.LogicalName = logicalName
-    && (try mfv.DeclaringEntity |> Option.bind (fun e -> e.TryFullName) with _ -> None) = Some moduleFullName
-
 // `module Option` compiles to `OptionModule` so it does not clash with the `Option<_>` type;
 // `defaultArg` and the pipe operators are operators, so they live in `Operators`.
 let private isOptionDefaultValue = isFunction "Microsoft.FSharp.Core.OptionModule" "defaultValue"

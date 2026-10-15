@@ -60,7 +60,7 @@ type private ResponseDouble (reply: Reply) =
             // `Buffer` is an interface, and Fable cannot type-test one (the test compiles to
             // `false`), so the case that is not a string is read as the only other one the
             // union admits — on this line, and typed at once.
-            | _ -> (unbox<Node.Buffer.Buffer> body).toString ()
+            | _ -> (unbox<Node.Buffer.Buffer> body).toString () // fsharpanalyzer: ignore-line YES016
 
 /// The double, as the response `serve` is handed. F# has no structural typing to say that an
 /// object answering these members IS one, so this line says it — about an object built on it.
