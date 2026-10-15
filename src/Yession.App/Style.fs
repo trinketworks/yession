@@ -2647,22 +2647,33 @@ module Style =
     // --- Chapters: where the session divides ------------------------------------------
 
     /// A bare icon verb's thumb target, on a phone and only there: the box pads out to
-    /// `spacing-touch` and pays the padding straight back as margin, so the BORDER box is
-    /// 44px — which is what a finger lands on, and what the focus ring is drawn round — while
-    /// the box the flow sees, and the glyph centred in it, are exactly where they were. The
-    /// doctrine asks for precisely this: a control with an edge grows on a phone, a bare verb
-    /// grows only its hit area (docs/visual-design.md, Space).
+    /// `spacing-touch`, so the BORDER box is 44px — which is what a finger lands on, and what
+    /// the focus ring is drawn round — while the glyph, centred in the content box the
+    /// padding leaves, does not move. The doctrine asks for precisely this: a control with an
+    /// edge grows on a phone, a bare verb grows only its hit area (docs/visual-design.md,
+    /// Space).
     ///
-    /// Two such verbs side by side must keep 20px between their boxes, or their targets
-    /// overlap and the later one in the document steals the other's edge. `queueTools` spends
-    /// that gap; `itemActions` has no neighbour to clear.
+    /// It grows LEFT and DOWN, never right, and that asymmetry is the whole of what is
+    /// delicate here. Every verb this is worn by sits at the trailing edge of something — a
+    /// message's handle in the timeline's right gutter, the queue's delete at its row's — so
+    /// a box that grew rightward reached past the gutter it was parked in and gave the
+    /// conversation column a sideways scroll at 390, which two browser cases pin and which is
+    /// how this was caught. Twenty pixels of `pl` against nothing on the right keeps the
+    /// right edge exactly where it was.
+    ///
+    /// Sideways the box really grows, and vertically it only pretends to: `-my` hands the
+    /// vertical padding straight back, so the row it rides keeps the height it had, which is
+    /// what the doctrine's "a bare verb takes the height of its row" is about. Across the row
+    /// there is nothing to protect — a verb 44px wide simply sits beside the next one, and
+    /// targets that tile are the point. Growing the box instead of overlaying a `::before`
+    /// is what lets a trio of them do that.
     ///
     /// Its home is really the button vocabulary, beside `btnIconBareTouch` — which grows the
     /// same 44px with a `::before` overlay instead, for a verb whose neighbours are far
     /// enough away that an overlay can reach past the box without landing on one. The two are
     /// one job drawn two ways, which principle 5 does not admit; this pass may not edit that
     /// section, so the fold-back is left said rather than done.
-    let private hitTouch = "phone:w-touch phone:h-touch phone:p-2.5 phone:-m-2.5"
+    let private hitTouch = "phone:w-touch phone:h-touch phone:pl-5 phone:py-2.5 phone:-my-2.5"
 
     /// The rule a chapter draws across the transcript.
     ///
@@ -3188,8 +3199,11 @@ module Style =
     /// at 390 the second one in the fixture ("check the phone layout too — the pane was
     /// clipped last time") wrapped, and its second line was painted under the next band,
     /// unreadable. A queue you cannot read is a queue you cannot edit, which is the one
-    /// thing it is for. `py-2` holds the one-line row at exactly the 40px it was — the
-    /// verbs' 24px box plus 16 — and every further line simply makes the band taller.
+    /// thing it is for. `py-2` holds a one-line row at exactly the 40px it was — the verbs'
+    /// 24px box plus 16 — and every further line simply makes the band taller. On a phone
+    /// most rows DO take a second line, and that is the clipping being undone rather than a
+    /// new cost: the queued message is set at `touchType`'s 16px there, so it was already
+    /// two lines tall inside a host held to one.
     let queueItem =
         cls [ "group flex items-center gap-3 min-h-10 py-2 px-4 bg-surface transition-colors"; rowLift ]
 
@@ -3211,11 +3225,7 @@ module Style =
     /// at all on a device with no hover to reveal it. Worn, not hinted (docs/visual-design.md,
     /// principle 4), and the doctrine already names the rest a row's verb keeps: bare, in
     /// `ink-dim`, which is what `btnIconBare` rests at.
-    ///
-    /// `phone:gap-5` is what the grown targets need (`hitTouch`): 20px between the boxes is
-    /// exactly 44px of pitch, so three verbs in a row tile their targets instead of stealing
-    /// each other's edges.
-    let queueTools = "flex gap-1 phone:gap-5"
+    let queueTools = "flex gap-1"
 
     /// Move-up and move-down. A verb riding a listed row, so bare, and a thumb's target on a
     /// phone without the band moving to make room for it.
@@ -3520,11 +3530,21 @@ module Style =
 
     let draftSummaryName = "shrink-0 " + caps + " text-ink-faint"
 
-    /// The clamped body: the same read-only editor as anywhere else, held to one line. `truncate`
-    /// on the host would fight ProseMirror's block children, so the clamp is on its descendants.
+    /// The clamped body: the same read-only editor as anywhere else, held to one line, and
+    /// ending in an ELLIPSIS rather than at whatever letter the edge fell on. The truncation
+    /// used to be asked of the descendants (`[&_*]:truncate`) to keep it off a host whose
+    /// children are ProseMirror's blocks — but `text-overflow` is a property of the box that
+    /// overflows, and those children are made inline on the line above, so no box was ever
+    /// asked to draw the mark. A word cut mid-letter reads as a rendering fault; a word cut
+    /// with a mark reads as "there is more of this", which is what a summary is saying.
+    /// `[&_*]:inline` is what makes the host's own content inline, so the clamp belongs here.
+    /// The descendants still need `whitespace-nowrap` of their own, and that is the half the
+    /// old `[&_*]:truncate` was really doing: ProseMirror sets `white-space: pre-wrap` on its
+    /// own root, so without it the words wrap and spill out of the row rather than running
+    /// off its end.
     let draftSummaryBody =
         "flex-1 min-w-0 " + messageVoice false + " text-small leading-8 text-ink-dim "
-        + "overflow-hidden whitespace-nowrap [&_*]:inline [&_*]:truncate [&_*]:m-0"
+        + "truncate [&_*]:inline [&_*]:whitespace-nowrap [&_*]:m-0"
 
     /// Who is in this draft right now: one dot per live caret, coloured by peer (`Entity.presenceColour`).
     let draftEditors = "shrink-0 flex items-center gap-1 pr-1"
