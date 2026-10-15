@@ -30,6 +30,11 @@ open Lit
 /// and every row obeys them, so what a row contains can never move a column — a launch
 /// cannot squeeze `name` into a second line, and the two tables hang their controls on the
 /// same right rail. The name column takes whatever is left.
+///
+/// What yields is decided by `phone:`, the shell's own layout question, and not by `max-md:`
+/// — a reading column's width, which is a different question (docs/visual-design.md, Phone
+/// and wide). The page's band answers `phone:`, so a column that answered `md:` beside it
+/// disagreed with the head above it on a phone turned sideways.
 module private Col =
     let table = "w-full text-left border-collapse table-fixed"
     /// Wide enough for a whole Crockford id — a half id identifies nothing, so this column is
@@ -37,7 +42,7 @@ module private Col =
     /// of 12px Monaspace Neon is 194px, plus the cell's own 16px gutter. It was 204px when the
     /// ids were set in whatever monospace a box happened to have, and the switch to a shipped
     /// face made them 6px too wide for it. The first thing to go on a phone.
-    let id = "w-[210px] max-md:hidden"
+    let id = "w-[210px] phone:hidden"
     /// The MCP table's audience column. It was the session table's status column too, until
     /// status moved under the name (`stateLine`) — where it has the name's whole width instead
     /// of a 100px cell on a phone, which was the word and nothing else.
@@ -46,17 +51,24 @@ module private Col =
     /// id beside it: 17 characters of 12px Monaspace Neon is 123px, and the caps header over
     /// it is narrower than that. Goes with the id on a phone — it is the sort KEY, and a sort
     /// you cannot see is still one you can read off the order of the rows.
-    let created = "w-[144px] max-md:hidden"
-    /// One `h-8` control, full-bleed in its column, plus the cell's left gutter (the MCP
-    /// table's Withdraw).
-    let actions = "w-[128px]"
-    /// The session rail is its widest row and not a pixel more, plus the cell's 16px left
-    /// gutter. MEASURED: an active row is Stop (43px) and the 24px archive icon, 10px apart
-    /// (its 44px hit area overhangs the box by 10, into that gap and the page's gutter) — 93px;
-    /// an archived row is Unarchive alone (87px rendered at 390px, no icon), unclipped at
-    /// 100px. It was 128px, sized as if
-    /// one row could hold Unarchive AND the icon, which none can, and on a phone that was a
-    /// 35px hole in front of Stop that the name could have had.
+    let created = "w-[144px] phone:hidden"
+    /// What a yielding column's CELLS wear: the same answer about the phone as the head above
+    /// them (`id`, `created`) and not the width, which a fixed-layout table takes from the head
+    /// row alone. One value, so a column cannot yield in its head and stay in its body.
+    let yields = "phone:hidden"
+    /// The rail BOTH tables hang their verbs on, which is what the sentence at the top of this
+    /// module claims and what it now does: the session rail is its widest row and not a pixel
+    /// more, plus the cell's 16px left gutter. MEASURED: an active row is Stop (43px) and the
+    /// 24px archive icon, 10px apart (its 44px hit area overhangs the box by 10, into that gap
+    /// and the page's gutter) — 93px; an archived row is Unarchive alone (87px rendered at
+    /// 390px, no icon), unclipped at 100px. It was 128px, sized as if one row could hold
+    /// Unarchive AND the icon, which none can, and on a phone that was a 35px hole in front of
+    /// Stop that the name could have had.
+    ///
+    /// The MCP table's Withdraw used to have a 128px column of its own, because it was a
+    /// bordered button stretched full-bleed across it. A verb riding a listed row is bare
+    /// (docs/visual-design.md, Hierarchy of controls), and bare it is a word narrower than
+    /// Unarchive — so the two tables agree on one width rather than on nearly one.
     let rail = "w-[100px]"
 
 /// The row's second line: the session's state, and beside it the one line the session says
@@ -64,11 +76,22 @@ module private Col =
 /// page exists for (which of six sessions wants me), and it used to yield below `xl`, which
 /// is to say on the phone the page is most often opened from.
 ///
-/// UNCOLOURED, but for a fault. `running` and `stopped` were green and faint caps; that spent
-/// the palette on the commonest fact in the list, and the name above already carries it — a
-/// running session's name is full ink, any other's is a step back (`nameText`). `exited (n)`
-/// keeps the err tone because it is the one state that is not an operator's doing. The word
-/// is always there beside the colour, so nothing rests on colour alone.
+/// A STATUS, in the product's one voice for one: the caps label step, in its role's colour,
+/// leading with a dot (docs/visual-design.md, Colour — "a status is text in its colour, and it
+/// leads with a dot", and the dot is what says the word cannot be pressed). It was 13px
+/// lowercase with no mark, which is the voice of a sentence, and read as something to press
+/// beside the bare verbs in the same row.
+///
+/// The roles are the doctrine's, not this page's: `running` is LIVE, so green, and its dot
+/// beats; `starting` is a wait, so `ink-dim` with a beating dot; `stopped` is a settled record,
+/// `archived` one step further back again, both still; a launch that failed or an exit is
+/// WRONG, so it is the one red word in its row. The word is always there beside the colour, so
+/// nothing rests on colour alone (WCAG 2.0 SC 1.4.1). The name above carries the same fact by
+/// weight of ink (`nameText`), which is what lets a blurred screen find what is live.
+///
+/// The red words are counted per ROW, which is the surface a row's hover tone, its rail of
+/// verbs and its one record make it. A registry of twenty exited sessions is twenty records,
+/// and dimming all but the newest would be this page guessing which fault anybody came for.
 ///
 /// Absent from the list, and deliberately: `port · pid · build`. That was plumbing — the
 /// answer to "which process, running what" — and a diagnostic does not outrank the reason a
@@ -79,33 +102,49 @@ module private Col =
 /// clipping is the line's own (`truncate` on the block; `overflow` does nothing to an inline
 /// span). The worst it can lose is the tail of a count; the state is first and always whole.
 let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
+    let nothing = html $""""""
+    // ONE shape for every state, so no state can arrive wearing a voice of its own: the status
+    // word in its role's face, leading with its dot, then whatever this row has to add in the
+    // line's own small voice. The dot hangs in the gutter to the LEFT of the rail — `-ml-3` is
+    // the mark's 6px and the 6px of clearance after it — so the status word stands on the same
+    // rail as the name above it and the mark never pushes the words in (docs/visual-design.md,
+    // Space).
+    let line (face: string) (dot: string) (hook: string) (word: string) (rest: TemplateResult) =
+        html
+            $"""<div class="{Style.small} truncate -ml-3"><span class="{face}" data-status="{hook}"><span class="{dot}" aria-hidden="true"></span>{word}</span>{rest}</div>"""
     match view.Record.ArchivedAt, view.Status with
     // An operator's decision, not a process state — but it belongs on this line, because
     // "archived" is the answer a reader wants here and "stopped" for a session that can no
-    // longer start is true and useless.
-    | Some _, _ ->
-        html $"""<div class="{Style.small} truncate"><span data-status="{Dom.Manager.statusArchived}">archived</span></div>"""
+    // longer start is true and useless. A step fainter than `stopped`: it is the one state
+    // nothing can be done to without first being undone.
+    | Some _, _ -> line Style.statusFaint Style.statusDot Dom.Manager.statusArchived "archived" nothing
     | None, ProcessManager.NotRunning ->
-        html $"""<div class="{Style.small} truncate"><span data-status="{Dom.Manager.statusStopped}">stopped</span></div>"""
+        line Style.statusWait Style.statusDot Dom.Manager.statusStopped "stopped" nothing
     | None, ProcessManager.Running _ ->
-        // Rendered opaquely and NOT toned. The Manager stores a line it was told and never
-        // learns what it is made of, so any colour it chose would be a colour it guessed;
-        // only the session knows whether its own sentence is good news. It exists in this
-        // arm alone because a summary is launch-scoped — a session that is not running has
-        // no work in flight to describe.
+        // Rendered in the line's own voice and NOT toned. The Manager stores a line it was
+        // told and never learns what it is made of, so any colour it chose would be a colour
+        // it guessed; only the session knows whether its own sentence is good news. It exists
+        // in this arm alone because a summary is launch-scoped — a session that is not running
+        // has no work in flight to describe.
         let summary =
             match view.Summary with
-            | Some line -> html $"""<span data-session-summary> · {line}</span>"""
-            | None -> html $""""""
-        html
-            $"""<div class="{Style.small} truncate"><span data-status="{Dom.Manager.statusRunning}">running</span>{summary}</div>"""
+            | Some said -> html $"""<span data-session-summary> · {said}</span>"""
+            | None -> nothing
+        line Style.statusOk Style.statusDotLiveLead Dom.Manager.statusRunning "running" summary
     | None, ProcessManager.Launching ->
-        html $"""<div class="{Style.small} truncate"><span data-status="{Dom.Manager.statusStarting}">starting</span></div>"""
+        line Style.statusWait Style.statusDotBeat Dom.Manager.statusStarting "starting" nothing
     | None, ProcessManager.LaunchFailed reason ->
-        html $"""<div class="{Style.smallErr} truncate" title="{reason}"><span data-status="{Dom.Manager.statusFailed}">failed to start</span> · {reason}</div>"""
+        // The reason stays in the line's own voice: the red is the WORD's, and a sentence set
+        // in it would be the red statement the doctrine allows one of, twice.
+        line
+            Style.statusErr
+            Style.statusDot
+            Dom.Manager.statusFailed
+            "failed to start"
+            (html $"""<span title="{reason}"> · {reason}</span>""")
     | None, ProcessManager.Exited code ->
         let reason = code |> Option.map string |> Option.defaultValue "signal"
-        html $"""<div class="{Style.smallErr} truncate"><span data-status="{Dom.Manager.statusExited}">exited ({reason})</span></div>"""
+        line Style.statusErr Style.statusDot Dom.Manager.statusExited (sprintf "exited (%s)" reason) nothing
 
 /// The name text, styled by state but carrying no link of its own — the cell around it
 /// (`rowTemplate`) is the one hit area, covering this and `stateLine` both. A session that
@@ -139,13 +178,18 @@ let private nameText (view: ProcessManager.SessionView) : TemplateResult =
 /// the row already carries the structure, so the verb borrows it, faint at rest and ink (or
 /// err, for the one that ends something) under the hand. Stop used to be exempted as "the
 /// lifecycle verb" and wore a rectangle; that put the loudest chrome on the rarest act, and on
-/// a phone it cost the name 40px. With both verbs quiet, the page has ONE bordered rectangle,
-/// and it is Create.
+/// a phone it cost the name 40px. With both verbs quiet, the page's one FILL is Create and its
+/// one bordered rectangle is Declare, which is the hierarchy spent in the order of scarcity it
+/// asks for (docs/visual-design.md, Hierarchy of controls).
 ///
 /// An ARCHIVED row offers Unarchive and nothing else: no archive icon, because the word it
 /// wears is already the act. Everything sits on the rail's right edge, so the icon does not
 /// move when a Stop appears or disappears beside it — a control that moves when a process
 /// stops is under a pointer that was aimed at its neighbour.
+///
+/// Every one of them NAMES THE SESSION it acts on. A column of "Stop" says nothing about which
+/// row you are on, which is the same floor criterion the archive icon has always answered
+/// (WCAG 2.0 SC 2.4.4), and the accessible name leads with the visible word so the two agree.
 let private actions (view: ProcessManager.SessionView) : TemplateResult =
     let id = SessionId.value view.Record.SessionId
     let name = view.Record.DisplayName
@@ -155,24 +199,24 @@ let private actions (view: ProcessManager.SessionView) : TemplateResult =
     match view.Record.ArchivedAt with
     | Some _ ->
         html $"""
-            <div class="flex items-center justify-end gap-2">
-              <button type="button" class="{Style.btnBare}" data-unarchive="{id}" data-post="{posts SessionVerb.Unarchive}">Unarchive</button>
+            <div class="{Style.tableRailVerbs}">
+              <button type="button" class="{Style.btnBare}" data-unarchive="{id}" data-post="{posts SessionVerb.Unarchive}"
+                      aria-label="Unarchive {name}">Unarchive</button>
             </div>"""
     | None ->
         let verb =
             match view.Status with
             | ProcessManager.Running _ ->
-                html $"""<button type="button" class="{Style.btnBareDanger}" data-stop="{id}" data-post="{posts SessionVerb.Stop}">Stop</button>"""
+                html $"""<button type="button" class="{Style.btnBareDanger}" data-stop="{id}" data-post="{posts SessionVerb.Stop}"
+                                 aria-label="Stop {name}">Stop</button>"""
             // Nothing to stop until there is a child: a launch in flight ends on its own
             // bound, either way.
             | ProcessManager.NotRunning
             | ProcessManager.Launching
             | ProcessManager.LaunchFailed _
             | ProcessManager.Exited _ -> html $""""""
-        // 10px apart rather than 8: the archive's hit area reaches 10px past its box
-        // (`btnIconBareTouch`), and at 8 its first two pixels would sit over Stop.
         html $"""
-            <div class="flex items-center justify-end gap-2.5">
+            <div class="{Style.tableRailVerbs}">
               {verb}
               <button type="button" class="{Style.btnIconBareTouch}" data-archive="{id}" data-post="{posts SessionVerb.Archive}"
                       aria-label="Archive {name}" title="Archive {name}">{Icon.archive}</button>
@@ -225,13 +269,13 @@ let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
             let openUrl = ManagerRoute.path (ManagerRoute.OpenSession view.Record.SessionId)
             html $"""<a class="{Style.recordRowLink}" href="{openUrl}" target="_blank" data-open>{cell}</a>"""
     html $"""
-        <tr class="border-b border-hair hover:bg-surface transition-colors" data-session="{id}">
-          <td class="py-3 pr-4 align-middle" title="{view.Record.DisplayName}">
+        <tr class="{Style.tableRow}" data-session="{id}">
+          <td class="{Style.tableCell}" title="{view.Record.DisplayName}">
             {nameCell}
           </td>
-          <td class="py-3 pr-4 align-middle font-terminal text-code text-ink-faint truncate max-md:hidden">{idCell}</td>
-          <td class="py-3 pr-4 align-middle font-terminal text-code text-ink-faint tabular-nums truncate max-md:hidden">{createdView view.Record.CreatedAt}</td>
-          <td class="py-3 pl-4 align-middle">{actions view}</td>
+          <td class="{Style.tableCell} {Style.monoFaint} truncate {Col.yields}">{idCell}</td>
+          <td class="{Style.tableCell} {Style.monoFaint} tabular-nums truncate {Col.yields}">{createdView view.Record.CreatedAt}</td>
+          <td class="{Style.tableCellRail}">{actions view}</td>
         </tr>"""
 
 /// One filter chip, wearing the COUNT of what it filters. A real `<a>`, because the filter
@@ -293,7 +337,7 @@ let private tableTemplate
         | [] ->
             [ html $"""
                 <tr>
-                  <td colspan="4" class="py-10 text-center {Style.small}">{emptyWord}</td>
+                  <td colspan="4" class="{Style.tableEmpty}">{emptyWord}</td>
                 </tr>""" ]
         | views -> views |> List.map rowTemplate
     // The `created` header IS the sort control — the canonical accessible table sort, and it
@@ -305,9 +349,9 @@ let private tableTemplate
         | NewestFirst -> "↓", "descending"
         | OldestFirst -> "↑", "ascending"
     // Create sits on the section's own header line, at the right: the list and the one act
-    // that adds to it are one thing, and this is the page's one bordered rectangle, so it
-    // does not need a section of its own to be found. It takes nothing but the press — the
-    // id is minted server-side (a Docker-safe Crockford one) and a session is NAMED from
+    // that adds to it are one thing, and this is the page's one FILLED rectangle — its one
+    // verb — so it does not need a section of its own to be found. It takes nothing but the
+    // press — the id is minted server-side (a Docker-safe Crockford one) and a session is NAMED from
     // inside itself, in the title field at the top of its own header, which reports back
     // here over the control channel. Asking for the name here as well made two naming
     // surfaces out of one fact: what was typed on this page never reached the session.
@@ -323,7 +367,7 @@ let private tableTemplate
                `basis-full` + `order-last` is a decision, a wrap is luck. -->
           <div class="flex items-center gap-y-3 gap-x-2.5 flex-wrap">
             <span class="{Style.label}">sessions</span>
-            <div class="flex items-center gap-1.5 ml-2 max-md:ml-0 max-md:basis-full max-md:order-last" role="group" aria-label="Show sessions">
+            <div class="flex items-center gap-1.5 ml-2 phone:ml-0 phone:basis-full phone:order-last" role="group" aria-label="Show sessions">
               {filterChip query (countOf Active) Active}
               {filterChip query (countOf Archived) Archived}
             </div>
@@ -335,13 +379,13 @@ let private tableTemplate
           </div>
           <table class="{Col.table}">
             <thead>
-              <tr class="border-b border-hair">
-                <th scope="col" class="py-2 pr-4 {Style.label}">name</th>
-                <th scope="col" class="py-2 pr-4 {Style.label} {Col.id}">id</th>
-                <th scope="col" class="py-2 pr-4 {Col.created}" aria-sort="{sortedBy}">
+              <tr class="{Style.tableRule}">
+                <th scope="col" class="{Style.tableHead}">name</th>
+                <th scope="col" class="{Style.tableHead} {Col.id}">id</th>
+                <th scope="col" class="{Style.tableHead} {Col.created}" aria-sort="{sortedBy}">
                   <a class="{Style.sortHeader}" href="{sortHref}" data-filter="sort">created <span aria-hidden="true">{sortMark}</span></a>
                 </th>
-                <th scope="col" class="py-2 pl-4 {Col.rail}"><span class="sr-only">actions</span></th>
+                <th scope="col" class="{Style.tableHeadRail} {Col.rail}"><span class="sr-only">actions</span></th>
               </tr>
             </thead>
             <tbody>{rows}</tbody>
@@ -374,14 +418,22 @@ let private mcpRowTemplate (views: ProcessManager.SessionView list) (declaration
                 |> Option.map (fun v -> v.Record.DisplayName)
                 |> Option.defaultValue (SessionId.value id)
             label, SessionId.value id
+    // Withdraw is a verb RIDING this row, so it is bare, and reddening rather than red at rest
+    // (docs/visual-design.md, Hierarchy of controls — a bordered button is a standalone act on
+    // the ground). It was a bordered err rectangle stretched across a 128px column of its own:
+    // the loudest chrome on the page, on every row, for the act nobody came here to do — while
+    // the session rows beside it said Stop as a word.
     html $"""
-        <tr class="border-b border-hair hover:bg-surface transition-colors" data-mcp-server="{name}">
-          <td class="py-3 pr-4 align-middle {Style.body} truncate" title="{name}">{name}</td>
-          <td class="py-3 pr-4 align-middle font-terminal text-code text-ink-faint truncate max-md:hidden"
+        <tr class="{Style.tableRow}" data-mcp-server="{name}">
+          <td class="{Style.tableCell} {Style.body} truncate" title="{name}">{name}</td>
+          <td class="{Style.tableCell} {Style.monoFaint} truncate {Col.yields}"
               title="{McpTransport.describe declaration.Server.Transport}">{McpTransport.describe declaration.Server.Transport}</td>
-          <td class="py-3 pr-4 align-middle {Style.small} truncate" title="{audience}">{audience}</td>
-          <td class="py-3 pl-4 align-middle">
-            <button type="button" class="{Style.btnDanger} w-full" data-mcp-withdraw="{name}" data-mcp-audience="{audienceValue}" data-post="{ManagerRoute.path ManagerRoute.WithdrawMcpServer}">Withdraw</button>
+          <td class="{Style.tableCell} {Style.small} truncate" title="{audience}">{audience}</td>
+          <td class="{Style.tableCellRail}">
+            <div class="{Style.tableRailVerbs}">
+              <button type="button" class="{Style.btnBareDanger}" data-mcp-withdraw="{name}" data-mcp-audience="{audienceValue}"
+                      data-post="{ManagerRoute.path ManagerRoute.WithdrawMcpServer}" aria-label="Withdraw {name}">Withdraw</button>
+            </div>
           </td>
         </tr>"""
 
@@ -389,14 +441,25 @@ let private mcpRowTemplate (views: ProcessManager.SessionView list) (declaration
 /// stale against the rows they describe. This is the ONE place a url is ever written: a
 /// session does not select from these, and the agent has no command that changes them.
 let private mcpTemplate (views: ProcessManager.SessionView list) (declarations: McpDeclaration list) : TemplateResult =
-    let rows =
+    // Nothing declared draws NO TABLE: three column heads, a count and a centred sentence over
+    // an empty body is chrome describing nothing (principle 1 — remove the element and the
+    // content is no harder to see). What is left is the sentence and the form that fills it.
+    let table =
         match declarations with
-        | [] ->
-            [ html $"""
-                <tr>
-                  <td colspan="4" class="py-10 text-center {Style.small}">no MCP servers — a session reaches only its own tools</td>
-                </tr>""" ]
-        | declarations -> declarations |> List.map (mcpRowTemplate views)
+        | [] -> html $"""<p class="{Style.small}">no MCP servers — a session reaches only its own tools</p>"""
+        | declarations ->
+            html $"""
+              <table class="{Col.table}">
+                <thead>
+                  <tr class="{Style.tableRule}">
+                    <th scope="col" class="{Style.tableHead}">name</th>
+                    <th scope="col" class="{Style.tableHead} {Col.id}">address</th>
+                    <th scope="col" class="{Style.tableHead} {Col.reaches}">reaches</th>
+                    <th scope="col" class="{Style.tableHeadRail} {Col.rail}"><span class="sr-only">actions</span></th>
+                  </tr>
+                </thead>
+                <tbody>{declarations |> List.map (mcpRowTemplate views)}</tbody>
+              </table>"""
     let options =
         views
         |> List.map (fun view ->
@@ -405,19 +468,9 @@ let private mcpTemplate (views: ProcessManager.SessionView list) (declarations: 
         <section class="flex flex-col gap-3" data-mcp>
           <div class="flex items-baseline gap-2.5">
             <span class="{Style.label}">MCP servers</span>
-            <span class="font-semibold text-[11px] leading-4 tracking-[0.18em] text-ink-faint tabular-nums">{List.length declarations}</span>
+            <span class="{Style.labelCount}">{List.length declarations}</span>
           </div>
-          <table class="{Col.table}">
-            <thead>
-              <tr class="border-b border-hair">
-                <th scope="col" class="py-2 pr-4 {Style.label}">name</th>
-                <th scope="col" class="py-2 pr-4 {Style.label} {Col.id}">address</th>
-                <th scope="col" class="py-2 pr-4 {Style.label} {Col.reaches}">reaches</th>
-                <th scope="col" class="py-2 pl-4 {Col.actions}"><span class="sr-only">actions</span></th>
-              </tr>
-            </thead>
-            <tbody>{rows}</tbody>
-          </table>
+          {table}
           <form class="flex flex-col gap-3 pt-3" method="post" action="{ManagerRoute.path ManagerRoute.DeclareMcpServer}" data-declare-mcp>
             <div class="flex flex-wrap items-end gap-3">
               <div class="flex flex-col gap-1.5">
@@ -479,28 +532,30 @@ let private hooksTemplate (access: PublicAccess) (endpoints: WebhookRelay.HookEn
                     html $"""
                         <div class="flex items-baseline gap-2.5">
                           <span class="{Style.label}">{label}</span>
-                          <code class="font-terminal text-code text-ink-faint break-all">{secret}</code>
+                          <code class="{Style.monoFaint} break-all">{secret}</code>
                         </div>""")
+            // `tableRule` and not `tableRow`: nothing on this row can be pressed, and a
+            // surface that lifts under the hand promises a press that is not there.
             html $"""
-                <tr class="border-b border-hair" data-hook-endpoint="{endpoint.Name}">
-                  <td class="py-3 pr-4 align-top {Style.body}">{endpoint.Name}</td>
-                  <td class="py-3 pr-4 align-top font-terminal text-code text-ink-faint break-all">{origin}/hooks/{endpoint.Name}</td>
-                  <td class="py-3 pr-4 align-top font-terminal text-code text-ink-faint break-all" data-hook-declared>--webhook {WebhookRelay.EndpointSpec.encode endpoint.Declared}</td>
-                  <td class="py-3 pl-4 align-top">{secrets}</td>
+                <tr class="{Style.tableRule}" data-hook-endpoint="{endpoint.Name}">
+                  <td class="{Style.tableCellTop} {Style.body}">{endpoint.Name}</td>
+                  <td class="{Style.tableCellTop} {Style.monoFaint} break-all">{origin}/hooks/{endpoint.Name}</td>
+                  <td class="{Style.tableCellTop} {Style.monoFaint} break-all" data-hook-declared>--webhook {WebhookRelay.EndpointSpec.encode endpoint.Declared}</td>
+                  <td class="{Style.tableCellRail}">{secrets}</td>
                 </tr>""")
     html $"""
         <section class="flex flex-col gap-3" data-hooks>
           <div class="flex items-baseline gap-2.5">
             <span class="{Style.label}">hook endpoints</span>
-            <span class="font-semibold text-[11px] leading-4 tracking-[0.18em] text-ink-faint tabular-nums">{List.length endpoints}</span>
+            <span class="{Style.labelCount}">{List.length endpoints}</span>
           </div>
           <table class="{Col.table}">
             <thead>
-              <tr class="border-b border-hair">
-                <th scope="col" class="py-2 pr-4 {Style.label}">name</th>
-                <th scope="col" class="py-2 pr-4 {Style.label}">deliver to</th>
-                <th scope="col" class="py-2 pr-4 {Style.label} {Col.reaches}">declared as</th>
-                <th scope="col" class="py-2 pl-4 {Style.label}">secret</th>
+              <tr class="{Style.tableRule}">
+                <th scope="col" class="{Style.tableHead}">name</th>
+                <th scope="col" class="{Style.tableHead}">deliver to</th>
+                <th scope="col" class="{Style.tableHead} {Col.reaches}">declared as</th>
+                <th scope="col" class="{Style.tableHeadRail}">secret</th>
               </tr>
             </thead>
             <tbody>{rows}</tbody>
@@ -511,22 +566,19 @@ let private hooksTemplate (access: PublicAccess) (endpoints: WebhookRelay.HookEn
 let mcpSection (views: ProcessManager.SessionView list) (declarations: McpDeclaration list) : string =
     Ssr.render (mcpTemplate views declarations)
 
-/// The page's content rail: the registry's measure, centred, inside the page's gutter. Worn
-/// by the header band's CONTENTS and by the sections under it, as one value, so the lockup
-/// and the table's left edge cannot drift apart.
-///
-/// The measure, not a reading column's. `name` is the only elastic column, and it gets
-/// whatever the fixed ones leave: at the 896px this used to be, five columns (name, id,
-/// created, status, and a rail carrying two controls) left it 38px and every session on the
-/// page rendered as a single letter and an ellipsis. 1152px leaves it 318px — wider than the
-/// 254px it had when there were four — and gives the MCP table's address column room it was
-/// already short of.
-let private pageRail = "max-w-6xl w-full mx-auto px-8 max-md:px-4"
+/// The band's CONTENTS, as one template: the lockup, and beside it which of the Manager's
+/// pages this is. Shared by the registry and by the standalone pages under it, because a
+/// refusal that drew its own head is how the two became two designs — one with a band and a
+/// rail, the other a 32rem column with 4rem of air over it and nothing of the product on it.
+let private bandLockup : TemplateResult =
+    html
+        $"""<h1 class="{Style.lockup}"><span class="{Style.pageBandMark}" aria-hidden="true">{Brand.mark}</span><span class="{Style.wordmark} phone:hidden">yession</span> <span class="{Style.label} pb-2 phone:pb-0">manager</span></h1>"""
 
-// The page keeps the workspace anatomy: the shared 88px header band (wordmark on the
-// common baseline, hairline below), then labelled sections on one left rail. The body
-// shell is `Style.app` (the visible viewport's height, overflow-hidden), so <main> owns the
-// scrolling — a long registry scrolls under a fixed viewport instead of clipping.
+// The page keeps the workspace anatomy: the band every head in the product shares
+// (`Style.pageBand` — `spacing-band`, and one thumb-sized row on a phone, hairline below),
+// then labelled sections on one rail (`Style.pageRail`). The body shell is `Style.app` (the
+// visible viewport's height, overflow-hidden), so <main> owns the scrolling — a long registry
+// scrolls under a fixed viewport instead of clipping.
 let private bodyTemplate
     (access: PublicAccess)
     (query: SessionQuery)
@@ -539,17 +591,18 @@ let private bodyTemplate
         else html $"""<div class="pb-10">{hooksTemplate access hooks}</div>"""
     html $"""
         <main class="flex-1 min-w-0 overflow-y-auto flex flex-col">
-          <!-- Sticky, and acrylic: the band floats over the registry as it scrolls under it,
-               which is the one place on this page a surface sits over another. It is a BAND,
-               running edge to edge of the viewport; only what is in it keeps to the rail.
-               Inset to the rail, it was a card whose edges stopped mid-canvas against the
-               black page — 168px short of each side at 1440. -->
-          <header class="h-[88px] shrink-0 border-b border-hair sticky top-0 z-10 {Style.acrylic}">
-            <div class="{pageRail} h-full flex items-end pb-5">
-              <h1 class="{Style.lockup}"><span class="{Style.lockupMark}" aria-hidden="true">{Brand.mark}</span><span class="{Style.wordmark}">yession</span> <span class="{Style.label} pb-2">manager</span></h1>
-            </div>
+          <!-- A BAND, running edge to edge of the viewport; only what is in it keeps to the
+               rail. Inset to the rail, it was a card whose edges stopped mid-canvas against
+               the black page — 168px short of each side at 1440. It is sticky over the
+               registry that scrolls under it, and opaque: the one band in the product that
+               was frosted grey where every other is black.
+               The wordmark yields on a phone, where the band is one thumb-sized row and the
+               mark steps down into it (`Style.pageBandMark`) — the same trade the session's
+               own phone band makes, and what the heading says there is in the <title>. -->
+          <header class="{Style.pageBand}">
+            <div class="{Style.pageRail} w-full">{bandLockup}</div>
           </header>
-          <div class="{pageRail} flex-1 flex flex-col">
+          <div class="{Style.pageRail} flex-1 flex flex-col">
             <div class="pt-6 pb-10">{tableTemplate query views}</div>
             <div class="pb-10">{mcpTemplate views declarations}</div>
             <!-- Only when there are any: a deployment that declared no hook endpoints has
@@ -562,7 +615,7 @@ let private bodyTemplate
                exec'd until something restarts it, so it is routinely the oldest Yession
                running. The content above is `flex-1`, so on a short page this sits at the
                viewport's foot, and on a long one after the last section. -->
-          <footer class="{pageRail} shrink-0 pb-6">
+          <footer class="{Style.pageFoot}">
             <span class="{Style.buildMark}" data-manager-build>yession {Version.current}</span>
           </footer>
         </main>"""
@@ -740,6 +793,11 @@ let private answeredFor (status: int) : bool =
 /// And the Manager page's OTHER head tags — its icon, and the tint it asks of the browser's
 /// own bars — because this page sits between two that carry them: a phone's toolbar that is
 /// black on the Manager and black in the session went light for the seconds in between.
+/// And the page's own ANATOMY, which it used not to have: the band every Manager page wears,
+/// the rail its text starts on, and the build at its foot. It was a 32rem column with 4rem of
+/// air above it — no band, no rail, no mark, and nothing saying which Manager had answered —
+/// so the one surface a reader meets when something has gone wrong was the one surface that
+/// did not look like the product (docs/visual-design.md, Space: every head shares the band).
 let private standalonePage (title: string) (body: string) : string =
     sprintf
         """<!doctype html>
@@ -747,26 +805,45 @@ let private standalonePage (title: string) (body: string) : string =
 <meta name="viewport" content="width=device-width, initial-scale=1">
 %s%s
 </head><body class="%s">
-<main class="max-w-[32rem] mx-auto my-16 px-4 flex flex-col gap-3">
+<header class="%s"><div class="%s w-full">%s</div></header>
+<main class="%s">
 <h1 class="%s">%s</h1>
 %s
 </main>
+<footer class="%s"><span class="%s" %s>yession %s</span></footer>
 </body></html>"""
         (Ssr.escapeText title)
         (Style.headTags cssUrl)
         (WebApp.managerHeadTags (ManagerRoute.path ManagerRoute.Manifest) (ManagerRoute.path ManagerRoute.Icon) (ManagerRoute.path ManagerRoute.Favicon))
         Style.standalone
+        Style.pageBand
+        Style.pageRail
+        (Ssr.render bandLockup)
+        Style.pageProse
         Style.heading
         (Ssr.escapeText title)
         body
+        Style.pageFoot
+        Style.buildMark
+        Dom.Manager.managerBuild
+        Version.current
 
 /// What `/open` says when it cannot hand the browser over: the refusal, and the way back to
 /// the page that can do something about it.
+///
+/// The REASON wears the err tone, because this page's whole subject is a thing that went
+/// wrong, and a page that said so in the same ink as the registry's prose wore nothing wrong
+/// at all (docs/visual-design.md, Honesty). One red statement, not two: the heading stays
+/// `ink`, because the reason is the newest and more particular of the two.
+///
+/// The way back is a real control: the one hyperlink face with the product's focus ring on it
+/// and a thumb's target on a phone (`pageWayBack`). It had neither, and it is the only way off
+/// this page.
 let problemPage (title: string) (detail: string) : string =
     standalonePage
         title
         (sprintf """<p class="%s">%s</p>
-<p><a class="%s" href="%s">Back to the session manager</a></p>""" Style.body (Ssr.escapeText detail) Style.proseLink (ManagerRoute.path ManagerRoute.Home))
+<p><a class="%s" href="%s">Back to the session manager</a></p>""" Style.bodyErr (Ssr.escapeText detail) Style.pageWayBack (ManagerRoute.path ManagerRoute.Home))
 
 /// A refusal a BROWSER is holding: the status it deserves, and a page that says so.
 let private problem (res: ServerResponse) (status: int) (title: string) (detail: string) =
@@ -961,15 +1038,15 @@ let openingPage (sessionId: SessionId) (target: string) (readyUrl: string) (shel
             Style.statusWait
             Style.startStatus
             Dom.Manager.openingFailed
-            (Ssr.escapeAttr (Style.statusErr + " " + Style.startStatus))
+            (Ssr.escapeAttr Style.startFailed)
             Style.statusDotBeat
             Dom.Manager.openingWord
             Style.startStatusId
             (Ssr.escapeText (SessionId.value sessionId))
             Style.startLinks
-            Style.proseLink
+            Style.pageWayBack
             (Ssr.escapeAttr target)
-            Style.proseLink
+            Style.pageWayBack
             (ManagerRoute.path ManagerRoute.Home)
             openingProgram)
 
@@ -1236,8 +1313,30 @@ let tryHandle
                 | Attributed _ | Unattributed _ -> answer ()
             })
         true
+    // A refusal a BROWSER is holding gets a page; everything else gets the line its reader
+    // reads. The page's own script reads every other answer this file gives, so `text/plain`
+    // is right for those — but a browser that is handed one does not necessarily show it, and
+    // a phone downloads it. An unrouted path used to fall through to the composing server's
+    // bare `text/plain` 404, which is a document with no viewport meta, no rail and no way
+    // back: a phone rendered it at 980px, zoomed out, and left whoever followed a stale
+    // bookmark with nothing to press (docs/visual-design.md, Deciding — the floor).
+    //
+    // The question is answered by what the request ASKS FOR rather than by what its path looks
+    // like: a GET that accepts HTML is a navigation, and nothing else is. The composing
+    // server's 404 stays as it is, which is the downstream half — this claims the navigations,
+    // and that one still answers everything no handler claimed (AGENTS.md "Fixing bugs").
+    let navigating =
+        req.``method`` = "GET"
+        && (Interop.headerOf req "accept"
+            |> Option.map (fun accept -> accept.Contains "text/html")
+            |> Option.defaultValue false)
     match ManagerRoute.parse req.``method`` path with
-    | Error ManagerMiss.Unclaimed -> false
+    | Error ManagerMiss.Unclaimed when not navigating -> false
+    | Error ManagerMiss.Unclaimed ->
+        gated (fun () ->
+            problem res 404 "No such page" (sprintf "This Manager has nothing at %s." path))
+    | Error (ManagerMiss.MalformedSessionId (raw, reason)) when navigating ->
+        gated (fun () -> problem res 400 "No such session" (sprintf "%s is not a session id: %s" raw reason))
     | Error (ManagerMiss.MalformedSessionId (raw, reason)) ->
         gated (fun () -> respond res 400 "text/plain" (sprintf "%s is not a session id: %s" raw reason))
     | Ok route -> gated (fun () -> handle route)
