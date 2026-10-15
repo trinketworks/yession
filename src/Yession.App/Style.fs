@@ -1793,16 +1793,33 @@ module Style =
     /// The ring is drawn INSIDE: focus lands on the column itself when the "jump to latest"
     /// that brought a keyboard reader here goes, and a ring outside a box that fills its
     /// region would be clipped to nothing.
+    ///
+    /// NOT DRAWN while the column has less room than one of its items (`too-short`,
+    /// app/tailwind.css). A column that scrolls and cannot be touched promises what it cannot
+    /// give, and the honest answer is absence (docs/visual-design.md, Space). At 844x390 the
+    /// ask card's floor left this column 24px with 608px of extent under it, and every one of
+    /// its fourteen items, scrolled to the middle, landed under the author line the column
+    /// pins — which was the whole strip. `display: none` and not a cover, because a drawn
+    /// column is one Tab reaches: the fault the card stopped being an overlay to fix.
+    /// What takes the room carries the way back, and here that is the card's own way out
+    /// (`askWay`): the conversation is one press away for as long as it is not drawn.
     let timeline =
         "flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-8 pb-6 flex flex-col gap-6 "
-        + "before:grow [&>*:first-child]:mt-0 "
+        + "before:grow [&>*:first-child]:mt-0 too-short:hidden "
         + "max-md:px-4 max-md:pb-4 max-md:gap-5 max-md:before:-mb-1 break-words "
         + focusRingInset
 
     /// The box around `timeline`, the scroller. Nothing floats over it any more: the way back
     /// to the latest message stands in the composer's tray (`composerTray`), below the words
     /// rather than on them.
-    let chatRegion = "relative flex-1 min-h-0 flex flex-col"
+    ///
+    /// It is the SIZE CONTAINER the room rule reads (`room-for-items`), because this box is
+    /// what the column was actually given — the screen less the header, the composer and the
+    /// ask card standing beside it — and that is a height no media query can name. A container
+    /// cannot query itself, which is why the rule lands on the scroller inside rather than
+    /// here. Containment costs nothing: this box never sized itself from what is in it, it is
+    /// `flex-1` of a column whose height is imposed from above.
+    let chatRegion = "relative flex-1 min-h-0 flex flex-col room-for-items"
 
     /// How wide anything in the timeline is allowed to get.
     ///
