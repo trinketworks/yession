@@ -111,6 +111,7 @@
   --spacing-touch: 44px;    /* the touch target: what a control grows to on a phone */
   --spacing-bar: 48px;      /* the degraded bar's height on a phone, which the content clears */
   --spacing-measure: 38rem; /* the reading column's measure */
+  --spacing-ask: 17rem;     /* the least room a card that asks can be answered in: its question, its field, one row and its verb (`Style.ask`) */
 
   /* --- Layers: stacking order, low to high (`z-ground`, `z-floating`, `z-overlay`; the
      utilities are in app/tailwind.css, since Tailwind has no theme namespace for z-index).
