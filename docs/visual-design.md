@@ -80,8 +80,11 @@ Live is `green` text. A running command, a connected peer and a session that run
 record of something that finished is `ink`.
 
 Wrong is `err`. The one red word on a surface is the newest wrong thing. An older wrong thing
-is a record and wears `ink-dim`.
-*Test: count the red words on a surface. The count is one or zero.*
+is a record and wears `ink-dim`. A repeated row is a surface of its own. So is a repeated item
+in the conversation. Twenty rows that failed are twenty surfaces, and each one keeps its red
+word.
+*Test: count the red words on a surface. The count is one or zero. Count a repeated row by
+itself.*
 
 People are told apart by square display pics, never by a name colour.
 
@@ -126,11 +129,19 @@ control with an edge grows to the touch target. A bare verb grows only its hit a
 target. Rows align on the text baseline. Padding is spent outward, so text sits on the
 column's rail.
 
-Every column has one rail at `spacing-rail` from its edge. The rail does not change with the
-screen. Every line of text in the column starts on it. A mark that leads a line
-hangs in the gutter to the left of the rail. A prompt, a reply mark, a fold arrow and a dot
-are such marks. A mark never pushes the words in.
-*Test: draw a vertical line on the rail. Every first letter touches it.*
+Each column has one rail. Every line of text in the column starts on it. The rail belongs to
+the column, and no screen width moves it. A column also keeps an inset from the screen edge,
+and a phone can make that inset smaller. The inset is not the rail.
+
+Columns do not share one rail. `spacing-rail` is the conversation column's rail, because the
+conversation is the reading column this rule is for. A narrower column has a narrower rail,
+because two rails of 32 pixels spend 64 of a phone's 390 pixels. Such a column names its own
+value in `app/tokens.css`. Nobody writes a rail as a number at the site.
+
+A mark that leads a line hangs in the gutter to the left of the rail. A prompt, a reply mark, a
+fold arrow and a dot are such marks. A mark never pushes the words in.
+*Test: draw a vertical line on one column's rail. Every first letter in that column touches the
+line. Then make the screen a phone. The line keeps its distance from the column's inset.*
 
 The header band is `spacing-band` tall. On a phone it is `spacing-band-phone`. Every head on a
 surface shares the band. The hairline under it runs across every column at one height.
@@ -178,6 +189,11 @@ the one closer to the surface's verb keeps its weight, and the other drops one.
 There is one bordered face. It is `ring` in the `edge` tone, with `ink` text. Interaction
 brightens the ring. There is no blue-ringed button. Blue text belongs to a link (`askLink`), to
 the fill, and to the composer's Send, which says its verb as a bare blue word.
+
+A word and an icon never stand as bare verbs on the same row. Prefer the word, because a word
+is its own accessible name and a reader learns no glyph. Where the words do not fit the row,
+make every bare verb on that row an icon, because a list pays each word's width on every row.
+An icon verb carries an accessible name.
 
 While a flow is under way, its awaited step wears the fill. Every other verb on that surface
 drops to bordered or bare. A verb that rides a listed row is bare and `ink-dim` at rest.
