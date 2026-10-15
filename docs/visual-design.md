@@ -60,6 +60,11 @@ Every size is a step on the ramp (`text-label` … `text-wordmark`, and `text-co
 A step sets the size and the line box together, on the rhythm that `app/tokens.css` names for
 the ramp. Nothing sits off the ramp.
 
+One size is not a step and is still right: a field a person types into on a phone takes
+`text-touch`. Under it, a phone zooms the page to the field and stays zoomed, which moves
+every other column off the screen. That is the floor, and the floor is never traded for the
+ramp. The exemption is a field under a finger, not a size to reach for elsewhere.
+
 The caps voice — `text-label`, `tracking-caps`, semibold — is for short labels, statuses and
 buttons. A stack of caps lines is a wall of text. Where it would form one, let a surface say
 the grouping instead.
@@ -67,7 +72,10 @@ the grouping instead.
 ### Colour
 
 The ground is `bg`, black. It steps up in greys — `panel`, `surface`, `surface-2` — and each
-step is one level of nesting or a selection. Three hues mean three things:
+step is one level of nesting or a selection. Where a step says a thing is chosen, a mark says
+it too, and the mark is the carrier: the step is emphasis. So a step may be shared with
+hover, which is transient and which no thumb has, while the mark is what a reader finds at
+rest. Three hues mean three things:
 
 - `blue` is interactive, and it is the agent.
 - `green` is live, and it is the people.
@@ -91,11 +99,28 @@ People are told apart by square display pics, never by a name colour.
 The blue→green gradient exists exactly once, on the composer's focus edge. It marks the one
 place where the person and the agent meet.
 
+A fade is a gradient under another name, and the one gradient is spent. A mask that fades
+content out is a fade. It may never cross text, because the faded glyphs fall under the
+contrast floor and the floor is not traded for an edge treatment. Where a surface holds more
+than fits, it says so with a control or with a rule.
+*Test: find every mask and every fade. No glyph is under one.*
+
 A status is text in its colour, and it leads with a dot. It is never a filled badge and never
 a boxed one. A verb never leads with a mark. So the dot, and not a tone, says that a word
 cannot be pressed. A tone is one step of grey that a blur or a greyscale print hides, and
 principle 2 blurs the screen.
 *Test: a caps word with a dot is a status. A caps word without one can be pressed.*
+
+A status names a state. A reason says why, and a reason is not a status: it is body text in
+the body voice, it leads with no dot, and it never takes the caps voice. A surface may carry
+both, the state first and the reason under it.
+*Test: do the words answer "what state" or "why"? What state leads with a dot. Why does not,
+and is not in caps.*
+
+A state has one name. The name does not change with the screen, with the column, or with
+which side of the wire draws it. A token a test reads is not a second name. It is the
+same name spelled for a machine. A state with two names is a state a reader cannot look up.
+*Test: find every face that draws one state. They all say one word.*
 
 Dimming is a role (`ink-dim`, `ink-faint`), never opacity. Opacity breaks the contrast floor
 and dims the focus ring with it.
@@ -152,6 +177,13 @@ fold arrow and a dot are such marks. A mark never pushes the words in.
 *Test: draw a vertical line on one column's rail. Every first letter in that column touches the
 line. Then make the screen a phone. The line keeps its distance from the column's inset.*
 
+A table's column is a column, so this rule governs it. "The layout of one surface" below means
+which arrangement a surface chooses, and it does not exempt a column of text from its rail.
+Where a form edits what a table lists, the form's fields stand on that table's columns. Two
+surfaces that list the same kind of thing agree on their columns, or they are listing two
+kinds of thing.
+*Test: draw a vertical line down a table's column. The field that edits it touches the line.*
+
 The rhythm governs a line box and a position. A mark's own size is neither, and a type size
 is neither. A mark takes its size from the type beside it, and its position still derives
 from the grid.
@@ -166,8 +198,23 @@ way back is one control. A person who cannot see the column must still be able t
 *Test: shorten the screen until a column has less room than one item. The column is gone, and
 one press on the surface over it brings the column back.*
 
-The header band is `spacing-band` tall. On a phone it is `spacing-band-phone`. Every head on a
-surface shares the band. The hairline under it runs across every column at one height.
+This governs every column, not the reading column alone. A pane, a list and a strip each
+answer it for themselves.
+
+The header band is `spacing-band` tall. On a phone it is `spacing-band-phone`. That is the
+height of a head of one row, and every such head shares it. The hairline under it runs across
+every column at one height.
+
+A head that holds two rows of controls is taller, because each row of controls meets the touch
+target and the floor is never traded for the band. Such a head states its rows. It does not
+restate its total. Its hairline is its own, and it lines up with nothing.
+
+A thing that leaves the ground sits on a named layer, and `app/tokens.css` names them. There
+are four: the ground, the scrim that dims the ground, what floats over the scrim, and what
+must stay reachable above all of it. Four, because a phone stacks all four at once — a drawer
+over a scrim over the page, with a notice the reader must still be able to answer. Nobody
+writes a stacking order as a number.
+*Test: search for a `z-` utility with a number in it. There are none.*
 
 ### Motion
 
@@ -260,3 +307,6 @@ right*. Ask both questions, in that order.
 
 Copy. Which element marks an empty state. The layout of one surface. Whether a thing is
 worth building. These are the design changing, which is what a design is for.
+
+"The layout of one surface" is which arrangement a surface chooses, not whether its text
+stands on a rail. Space governs the rail in every column, a table's columns included.
