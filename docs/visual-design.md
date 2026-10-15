@@ -30,8 +30,9 @@ Each principle has a test. Apply the test before you change a surface.
    still be visible.*
 
 3. **One verb per surface.** Each surface has one primary act, and only that act wears the
-   fill. Every other control wears a border, nothing, or text.
-   *Test: count the filled rectangles on screen. The count is one or zero.*
+   blue fill. Every other control wears a border, nothing, or text. An armed control's `err`
+   fill is a different mark with a different job, and a surface may wear one of each.
+   *Test: count the blue filled rectangles on a surface. The count is one or zero.*
 
 4. **State is worn, not hinted.** What a thing is doing — waiting, held, armed, live, wrong —
    is visible at rest. A thumb has no hover. A reader has no tooltip.
@@ -70,7 +71,7 @@ step is one level of nesting or a selection. Three hues mean three things:
 
 - `blue` is interactive, and it is the agent.
 - `green` is live, and it is the people.
-- `err` is wrong. There is at most one red word on screen.
+- `err` is wrong. There is at most one red word on a surface.
 
 Blue is never a status. A wait is `ink-dim` text. Reconnecting, catching up, queued, looking
 and no agent yet are waits. A wait leads with a dot. The dot beats if the wait is live.
@@ -80,7 +81,7 @@ record of something that finished is `ink`.
 
 Wrong is `err`. The one red word on a surface is the newest wrong thing. An older wrong thing
 is a record and wears `ink-dim`.
-*Test: count the red words. The count is one or zero.*
+*Test: count the red words on a surface. The count is one or zero.*
 
 People are told apart by square display pics, never by a name colour.
 
@@ -147,13 +148,14 @@ fill and drops the geometry.
 ### State
 
 A control with nothing to act on wears the *waiting* face. It stays in the layout and in focus
-order. Its border drops to the quiet rim, and its word stays legible. A control whose act is
+order. Its border drops to the quiet rim, and its word stays legible. A bare verb has no
+border. Its word drops to `ink-faint`, which keeps AA on every surface. A control whose act is
 landing is `aria-busy`. It wears the *held* face, which is the `pressed` variant, until the act
 lands. Neither is `disabled`. The attribute `disabled` does not exist in this product.
 *Test: search for `disabled`. It appears nowhere.*
 
 An armed control is a destructive act that is one tap from done. It wears the `err` fill at
-rest.
+rest. The `err` fill is not the surface's verb, so principle 3 does not count it.
 
 ## Hierarchy of controls
 
@@ -184,13 +186,14 @@ one way.*
 
 ## Phone and wide
 
-There is one layout breakpoint, and it is a question: *is this screen a phone?* Width and
-height both answer it. A short screen is a phone however wide it is. The two answers are the
-variants `phone:` and `wide:`, and they are exact complements.
+The shell's layout has one breakpoint, and it is a question: *is this screen a phone?* Width
+and height both answer it. A short screen is a phone however wide it is. The two answers are
+the variants `phone:` and `wide:`, and they are exact complements.
 
 Use `phone:` and `wide:` for the shell's layout. Use `md:` and `max-md:` only for how wide a
-reading column is, because there the width is the question. A `md:` beside a `phone:` is the
-bug the pair exists to stop: on a phone turned sideways, both match.
+reading column is, because there the width is the question. A reading column's width is not the
+shell's layout, so the `md:` pair is not a second layout breakpoint. A `md:` beside a `phone:`
+is the bug the pair exists to stop: on a phone turned sideways, both match.
 
 Picture three anchors: desktop, phone upright, and phone sideways.
 
