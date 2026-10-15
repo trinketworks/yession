@@ -1993,7 +1993,7 @@ module View =
                     data-chat-pending-status="{statusToken}"
                     data-terminal-id="{TerminalId.value entry.Terminal}"
                     @click={Ev(fun _ -> dispatch (OpenInPaneMsg (Reading entry.Terminal)))}>
-              <span class="{Style.terminalPrompt}">$</span>
+              <span class="{Style.cls [ Style.chatChipPrompt; Style.terminalPrompt ]}">$</span>
               <code class="{Style.chatChipCommand}" data-terminal-text="{BodyKey.terminalQueued entry.QueueId}"></code>
               <span class="{Style.chatChipSubject}" data-pending-subject="terminal:{TerminalId.value entry.Terminal}">{what}</span>
               <span class="shrink-0">{statusLine}</span>
@@ -2044,19 +2044,30 @@ module View =
         // a field inside a row is a second thing to operate in a surface whose whole grammar
         // is "tap the thing you mean", and a repository with six hundred branches was a
         // datalist nobody could reach the end of.
+        // It is a SIBLING of the row's button, on its own line under the name — never a child
+        // of it. A button inside a button is not content a browser parses as written and no
+        // keyboard can reach the inner half of it (`Style.askRowAside` says the rest). Being a
+        // sibling is also what retires the `stopPropagation` that used to live here: the press
+        // no longer travels through the row that holds the repo on its way out.
+        //
+        // While the clone is under way there is nothing for it to act on, so it wears the bare
+        // weight's waiting face and is `aria-disabled` rather than `disabled`, which is an
+        // attribute this product does not have (docs/visual-design.md, State). It stays in
+        // focus order and the handler refuses the press.
         let branchLink (candidate: Repos.RepoCandidate) =
             let name = RepoRef.value candidate.Repo
             html $"""
-                <button type="button" class="{Style.askRowBranch}" data-repo-candidate-branch="{name}" ?disabled={busy}
-                        aria-label="{Dom.Text.repoPickerBranchOf} {Launch.branchOf launch candidate}"
-                        @click={Ev(fun (e: Browser.Types.Event) ->
-                                       // The row under it holds this repo already; letting the
-                                       // press through would let it go again on the way past.
-                                       e.stopPropagation ()
-                                       openBranches candidate.Repo)}>
-                  <span class="{Style.askRowBranchName}">{Launch.branchOf launch candidate}</span>
-                  {Icon.right}
-                </button>"""
+                <div class="{Style.askRowAside}">
+                  <div class="{Style.askRowAsideLine}">
+                    <button type="button" class="{if busy then Style.askRowBranchWaiting else Style.askRowBranch}"
+                            data-repo-candidate-branch="{name}" aria-disabled="{if busy then "true" else "false"}"
+                            aria-label="{Dom.Text.repoPickerBranchOf} {Launch.branchOf launch candidate}"
+                            @click={Ev(fun _ -> if not busy then openBranches candidate.Repo)}>
+                      <span class="{Style.askRowBranchName}">{Launch.branchOf launch candidate}</span>
+                      {Icon.right}
+                    </button>
+                  </div>
+                </div>"""
         let row (candidate: Repos.RepoCandidate) =
             let name = RepoRef.value candidate.Repo
             let heldNow = launch.Selected = Some candidate.Repo
@@ -2076,15 +2087,16 @@ module View =
             html $"""
                 <li class="{if heldNow then Style.askRowHeld else Style.askRow}">
                   <button type="button" class="{Style.askRowButton}" data-repo-candidate="{name}"
-                          aria-pressed="{if heldNow then "true" else "false"}" ?disabled={busy}
-                          @click={Ev(fun _ -> hold candidate)}>
+                          aria-pressed="{if heldNow then "true" else "false"}"
+                          aria-disabled="{if busy then "true" else "false"}"
+                          @click={Ev(fun _ -> if not busy then hold candidate)}>
                     <span class="{Style.askRowLine}">
                       {mark}
                       <span class="{Style.askRowName}" data-repo-candidate-name="{name}">{name}</span>
                       {description}
-                      {if heldNow then branchLink candidate else Lit.nothing}
                     </span>
                   </button>
+                  {if heldNow then branchLink candidate else Lit.nothing}
                 </li>"""
         // A line the card says rather than one it offers stands where the first row would
         // have been (`askNote`), so an answer and the absence of one arrive in one place.
@@ -2099,7 +2111,9 @@ module View =
                 html $"""
                     {said}
                     <div class="{Style.askActions}">
-                      <button type="button" class="{Style.btn}" data-repo-picker-connect @click={Ev(fun _ -> dispatch RevealSettingsMsg)}>{Dom.Text.repoPickerConnect}</button>
+                      <div class="{Style.askActionsLine}">
+                        <button type="button" class="{Style.btn}" data-repo-picker-connect @click={Ev(fun _ -> dispatch RevealSettingsMsg)}>{Dom.Text.repoPickerConnect}</button>
+                      </div>
                     </div>"""
             | ListingUnavailable (reason, false) ->
                 note (html $"""<span class="{Style.statusErr}" role="status" data-repo-picker-failed>{reason}</span>""")
@@ -2154,11 +2168,16 @@ module View =
         // focus doing. `target` is the STAGE's own, not re-derived from `Selected`, so a row
         // that drops out of the listing while the clone is under way cannot blank a target
         // already committed.
+        // Nothing held is the WAITING face, not a `disabled` attribute — which does not exist
+        // in this product (docs/visual-design.md, State). The button stays in the layout and in
+        // focus order, its border carries the waiting, its word stays legible, and the handler
+        // is what refuses a press that has nothing to start.
         let startButton (target: LaunchTarget option) (busy: bool) : TemplateResult =
+            let ready = target.IsSome && not busy
             html $"""
-                <button type="button" class="{Style.askStart}" data-repo-picker-start
-                        ?disabled={target.IsNone || busy} aria-busy="{if busy then "true" else "false"}"
-                        @click={Ev(fun _ -> dispatch (LaunchMsg LaunchStartPressed))}>
+                <button type="button" class="{if ready || busy then Style.askStart else Style.askStartWaiting}" data-repo-picker-start
+                        aria-disabled="{if ready || busy then "false" else "true"}" aria-busy="{if busy then "true" else "false"}"
+                        @click={Ev(fun _ -> if ready then dispatch (LaunchMsg LaunchStartPressed))}>
                   <span class="{Style.whenReady}">{Dom.Text.repoPickerStart}</span><span class="{Style.whenBusy}">{Dom.Text.repoPickerCloning}</span>
                 </button>"""
         let actionsRow =
@@ -2209,7 +2228,18 @@ module View =
             match subject with
             | Some repo ->
                 let name = RepoRef.value repo
-                let chosen = launch.Named |> Map.tryFind repo
+                let repoCandidate = Launch.candidates launch |> List.tryFind (fun c -> c.Repo = repo)
+                // The branch START WILL LAUNCH ON, which is what the tick marks. It was
+                // `launch.Named` alone, so a pane opened before anybody had named a branch
+                // ticked nothing at all while START stood lit and would clone the provider's
+                // default — the card showing no answer to a question it had already answered.
+                // State is worn, not hinted (docs/visual-design.md, principle 4), and what the
+                // row says and what the command carries are now the same answer
+                // (`Launch.branchOf`).
+                let chosen =
+                    match repoCandidate with
+                    | Some candidate -> Some (Launch.branchOf launch candidate)
+                    | None -> launch.Named |> Map.tryFind repo
                 let pick (branch: string) =
                     dispatch (LaunchMsg (LaunchBranchNamed (repo, branch)))
                     dispatch (LaunchMsg LaunchBranchPaneClosed)
@@ -2218,8 +2248,9 @@ module View =
                     html $"""
                         <li class="{if heldNow then Style.askRowHeld else Style.askRow}">
                           <button type="button" class="{Style.askRowButton}" data-repo-branch="{branch}"
-                                  aria-pressed="{if heldNow then "true" else "false"}" ?disabled={busy}
-                                  @click={Ev(fun _ -> pick branch)}>
+                                  aria-pressed="{if heldNow then "true" else "false"}"
+                                  aria-disabled="{if busy then "true" else "false"}"
+                                  @click={Ev(fun _ -> if not busy then pick branch)}>
                             <span class="{Style.askRowLine}">
                               <span class="{Style.askRowMark}" aria-hidden="true">{if heldNow then Icon.check else Lit.nothing}</span>
                               <span class="{Style.askRowName}" data-repo-branch-name="{branch}">{branch}</span>
@@ -2239,8 +2270,11 @@ module View =
                 let rows =
                     listed
                     |> List.map (fun branch ->
+                        // THIS pane's repo's default, not whichever row happens to be held in
+                        // the pane behind it — the two are the same while the pane was opened
+                        // from the held row and differ the moment it was not.
                         let note =
-                            if branch = (Launch.held launch |> Option.map (fun c -> c.DefaultBranch) |> Option.defaultValue "") then
+                            if Some branch = (repoCandidate |> Option.map (fun c -> c.DefaultBranch)) then
                                 html $"""<span class="{Style.askRowNote}">{Dom.Text.repoPickerBranchDefault}</span>"""
                             else Lit.nothing
                         branchRow branch note)
@@ -2287,12 +2321,14 @@ module View =
                          data-repo-picker-pane="branch" ?inert={not onBranchPane}>
                       {branchHead}
                       <label class="{Style.srOnly}" for="repo-branch-search">{Dom.Text.repoPickerBranchSearchLabel}</label>
-                      <input id="repo-branch-search" type="search" class="{Style.askSearch}" data-repo-branch-search
-                             placeholder="{Dom.Text.repoPickerBranchSearchPlaceholder}"
-                             autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
-                             ?disabled={busy}
-                             .value={launch.BranchQuery}
-                             @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchBranchQueryTyped v)))} />
+                      <div class="{Style.askField}">
+                        <input id="repo-branch-search" type="search" class="{Style.askSearch}" data-repo-branch-search
+                               placeholder="{Dom.Text.repoPickerBranchSearchPlaceholder}"
+                               autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
+                               ?readonly={busy}
+                               .value={launch.BranchQuery}
+                               @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchBranchQueryTyped v)))} />
+                      </div>
                       <div class="{Style.askScroll}" data-repo-branch-body>{branchBody}</div>
                     </div>"""
             // No row held: there is no repository to have branches of, so the pane is not
@@ -2307,13 +2343,19 @@ module View =
                      data-repo-picker-pane="repo" ?inert={onBranchPane}>
                   {repoHead}
                   <label class="{Style.srOnly}" for="repo-picker-search">{Dom.Text.repoPickerSearchLabel}</label>
-                  <input id="repo-picker-search" type="search" class="{Style.askSearch}" data-repo-picker-search
-                         placeholder="{Dom.Text.repoPickerSearchPlaceholder}"
-                         autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
-                         enterkeyhint="go" ?disabled={busy}
-                         .value={launch.Query}
-                         @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchQueryTyped v)))}
-                         @keydown={Ev onFieldKey} />
+                  <!-- `readonly` and not `disabled`: the attribute `disabled` does not exist in
+                       this product (docs/visual-design.md, State). While the clone it started
+                       runs there is nothing to search for, and a field that is still focusable
+                       and still legible says that without leaving the document. -->
+                  <div class="{Style.askField}">
+                    <input id="repo-picker-search" type="search" class="{Style.askSearch}" data-repo-picker-search
+                           placeholder="{Dom.Text.repoPickerSearchPlaceholder}"
+                           autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
+                           enterkeyhint="go" ?readonly={busy}
+                           .value={launch.Query}
+                           @input={EvVal(fun v -> dispatch (LaunchMsg (LaunchQueryTyped v)))}
+                           @keydown={Ev onFieldKey} />
+                  </div>
                   <div class="{Style.askScroll}" data-repo-picker-body>
                     {listing}
                     {problem}
@@ -2327,7 +2369,7 @@ module View =
                   {repoPane}
                   {branchPane}
                 </div>
-                <div class="{Style.askActions}">{actionsRow}</div>
+                <div class="{Style.askActions}"><div class="{Style.askActionsLine}">{actionsRow}</div></div>
               </div>
             </section>"""
 
@@ -2883,12 +2925,20 @@ module View =
                 | Some (Cause.Item target) ->
                     match model.Conversation.Items |> List.tryFind (fun i -> i.MessageId = target) with
                     | Some parent ->
+                        // In the PARENT'S voice, because the typeface says who is talking
+                        // before a reader reaches the author line (docs/visual-design.md,
+                        // Type) — and what is quoted here is whatever they said, in a group
+                        // headed by whoever is replying. With no voice composed it inherited
+                        // the chrome's sans, which put a person's quoted words in the
+                        // machine's face inside the agent's own run: the one thing that rule
+                        // forbids.
+                        let quote = Style.cls [ Style.replyRefQuote; Style.messageVoice (parent.Author = ActorRef.Agent) ]
                         html $"""
                             <button type="button" class="{Style.replyRefJump}" data-reply-ref="{MessageId.value target}" data-reply-jump
                                     aria-label="{Dom.Text.replyRefJumpLabel}"
                                     @click={Ev(fun _ -> dispatch (MoveMsg (DomMove.RevealMessage target)))}>
                               <span class="{Style.replyRefMark}" aria-hidden="true">↩</span>
-                              <span class="{Style.replyRefQuote}">{ConversationItem.said parent}</span>
+                              <span class="{quote}">{ConversationItem.said parent}</span>
                             </button>"""
                     | None ->
                         html $"""
@@ -3374,10 +3424,12 @@ module View =
         // nothing about where the conversation starts or that the near-black composer below it
         // is where you type. So the chat carries its OWN idle symbol — a caret standing where
         // the first message will land — exactly as the terminals pane stands an idle `$` in its
-        // empty pane. A mark, not a sentence: it is the blinking caret every text field in the
-        // world wears, so it reads as "text goes here" without a word of instruction. Blinking
-        // and not pulsing, which is the other half of the same vocabulary — a message being
-        // written pulses (`Style.caretWorking`), and nothing is being written here.
+        // empty pane. A mark, not a sentence: it is the caret every text field in the world
+        // wears, so it reads as "text goes here" without a word of instruction. STILL and not
+        // pulsing, which is the other half of the same vocabulary — a message being written
+        // pulses (`Style.caretWorking`), and nothing is being written here. It used to blink,
+        // and `Style.caretIdle` says why a blink that is `steps(1)` was a mark that half of
+        // every photograph of an empty session did not have in it.
         //
         // Keyed on the ROWS, not on the rendered list: the mapping above answers a bare tool
         // use and an empty run with `Lit.nothing`, so a timeline can hold rows and still draw

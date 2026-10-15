@@ -1851,8 +1851,13 @@ module Style =
     /// has to clear the first item's own GROUND rather than just its first line, and that
     /// starts 8px above the words in it. At `pb-1` a hovered first message came within four
     /// pixels of the name.
+    /// The phone's FULL BLEED, exactly as an item carries it (`itemGround`): the band escapes
+    /// the scroller's padding and puts the same back, so the opaque strip reaches both edges of
+    /// the screen and the name still stands on the line. Without it the band stopped at the
+    /// column's padding while every item under it ran 16px past, so a scrolled item's own
+    /// trailing control showed in that strip, beside the author line pinned over it.
     let messageGroupHead =
-        "sticky top-0 z-10 bg-bg flex items-center gap-3 pb-2 -mb-1"
+        "sticky top-0 z-10 bg-bg flex items-center gap-3 pb-2 -mb-1 max-md:-mx-4 max-md:px-4"
 
     /// THE GROUND one item stands on — the rectangle that lights under the pointer, and that
     /// a jump from the rail flashes (`animate-reveal`). Shared by a message and an act note,
@@ -1901,7 +1906,12 @@ module Style =
     /// to the screen's edges (`itemGround`) puts the bleed back as padding, exactly as a
     /// message does (`max-md:pl-4`), rather than widening its gutter by it — which put a
     /// bled row's arrow sixteen pixels left of a nested row's on a phone and nowhere else.
-    let foldRow = cls [ "grid grid-cols-[2rem_1fr] leading-5" ]
+    /// And it is the RAIL's width, composed from the token that names it rather than spelled
+    /// as a length: the column has one rail, every line of text in it starts on that rail, and
+    /// a mark that leads a line hangs in the gutter to its left (docs/visual-design.md, Space).
+    /// This grid IS that gutter, so the number it is wide is the token's or it is a second
+    /// answer to where the rail is.
+    let foldRow = cls [ "grid grid-cols-[var(--spacing-rail)_1fr] leading-5" ]
     /// Everything that is not the arrow sits in the content column, and says so: a row is a
     /// grid, and a child that did not name its column would be placed in the gutter under
     /// the arrow. `min-w-0` so a long line truncates inside the column rather than widening
@@ -1942,28 +1952,44 @@ module Style =
     let messageItem = cls [ itemGround; "max-md:pl-4"; "flex flex-col gap-1" ]
     /// The meta line carries only what is NEWS — streaming, failed, woke unasked. The author
     /// is the group's to say, so a settled message has no meta line at all.
-    let messageMeta = "flex items-baseline gap-2.5 pl-8"
+    let messageMeta = "flex items-baseline gap-2.5 pl-rail"
     let who = caps + " text-ink-dim"
     let whoAgent = caps + " text-blue"
-    /// `pl-8` is the group head's own geometry — 20px avatar + 12px gutter — so bodies, chips
-    /// (`chatChip`, already at 32px) and tool runs all share one reading edge under the name.
+    /// `pl-rail` is THE rail of this column — `spacing-rail`, the one every line of text in it
+    /// starts on, with the group head's avatar and every leading mark hanging in the gutter to
+    /// its left (docs/visual-design.md, Space). It was `pl-8`, which is the same length written
+    /// as a number: the same number the fold's gutter and the chips each spelled their own way,
+    /// so the column had one rail by coincidence and three places to change it.
     // No weight here: these compose with `messageVoice`, which owns the body weight.
-    let messageBody = "pl-8 text-body text-ink"
-    let messageBodyStreaming = "pl-8 text-body text-ink-dim"
+    let messageBody = "pl-rail text-body text-ink"
+    let messageBodyStreaming = "pl-rail text-body text-ink-dim"
 
-    /// A detached reply's quote of what it answers — one quiet line above the body, on the
-    /// same `pl-8` reading edge, dimmed so it reads as context rather than as the message.
-    /// The mark is a corner glyph; the quote truncates in one line so a long parent cannot
-    /// push the reply itself down the screen.
-    let replyRef = "pl-8 flex items-baseline gap-1.5 text-small text-ink-faint"
-    let replyRefMark = "shrink-0 text-ink-faint"
+    /// A detached reply's quote of what it answers — one quiet line above the body, dimmed so
+    /// it reads as context rather than as the message. The quote truncates in one line so a
+    /// long parent cannot push the reply itself down the screen.
+    ///
+    /// A ROW with a gutter (`foldRow`), not a padded flex line: the corner mark LEADS this
+    /// line, so it hangs in the gutter left of the rail and the words start on the rail with
+    /// every other line in the column. Padded and flexed, the mark stood ON the rail and shoved
+    /// the quote in by its own width plus a gap — a fourth left edge in a column that has one.
+    let replyRef = cls [ foldRow; "items-baseline text-small text-ink-faint" ]
+    /// The mark, in the gutter: the avatar's own width at the gutter's start (`w-5`), as every
+    /// other mark this margin carries stands there (`fold`, `causeMark`).
+    let replyRefMark = "col-start-1 justify-self-start w-5 flex justify-center text-ink-faint"
     /// `pr-px` beside `truncate`: italic leans its last glyph's ink past its own advance
     /// width, and a box whose `overflow: hidden` edge sits flush on that advance width
     /// slices the overhang off with no ellipsis to show for it — text measured as fitting
     /// exactly, rendered one stroke short ("The session resumed" losing the tail of its
     /// "d"). The truncate/ellipsis path is unaffected: it still fires on real overflow:
     /// this is for the near-exact-fit case where the browser never thought it had any.
-    let replyRefQuote = "truncate min-w-0 italic pr-px"
+    ///
+    /// No FACE here, on purpose. The typeface says who is talking before a reader reaches the
+    /// author line (docs/visual-design.md, Type), and what this holds is whatever the parent
+    /// said — so the use site composes `messageVoice` for the parent's own author. Set here it
+    /// inherited the chrome's sans, which put a person's quoted words in the machine's face,
+    /// the one thing that rule forbids. The act's cause reuses this value with no voice
+    /// composed over it, which is right: that sentence IS the machine's account.
+    let replyRefQuote = cls [ foldContent; "truncate italic pr-px" ]
     /// An act's cause, ABOVE its headline: a row of the act's own grid (`contents`), its mark
     /// in the gutter over the fold arrow and its sentence in the content column. The same
     /// quiet voice as a reply's ref, but the sentence holds references (some of them links),
@@ -2011,17 +2037,16 @@ module Style =
     /// brightening under the pointer and wearing the shared focus ring so a keyboard reaches
     /// it. `text-left` because a button centres its text by default and this is a quote.
     let replyRefJump =
-        cls [ "pl-8 flex items-baseline gap-1.5 text-small text-ink-faint w-full text-left"
+        cls [ replyRef; "w-full text-left"
               "bg-transparent border-0 p-0 cursor-pointer hover:text-ink"; focusRing ]
 
-    /// The mark itself, with nothing said about what it MEANS: a 7px bar sitting on the text's
-    /// baseline. Two marks wear it, and the ANIMATION is the whole difference between them —
-    /// which is the vocabulary this app already had and had stopped spending.
+    /// The mark's BOX, with nothing said about what it means: a 7px bar sitting on the text's
+    /// baseline, painted blue. Two marks wear it — the empty column's still one (`caretIdle`)
+    /// and the agent's pulsing one (`caretWorking`) — and the MOTION is the whole difference
+    /// between them, which is the vocabulary this app already had and had stopped spending.
+    /// The paint is named once here rather than appended per mark: a second `bg-*` beside this
+    /// one would be two utilities on one property, resolved by the cascade and not by this file.
     let private caretBar = "inline-block w-[7px] h-[15px] bg-blue align-[-2px] ml-0.5"
-
-    /// BLINKING: "text goes here". An invitation, and the terminal cursor everybody already
-    /// knows. Worn where nothing is happening and something could be.
-    let caret = caretBar + " animate-blink motion-reduce:animate-none"
 
     /// PULSING: "something is happening". ONE name for it, because the client reading what it
     /// kept and the agent writing into a message are the same statement made by the same mark.
@@ -2089,14 +2114,11 @@ module Style =
         let hash = seed |> Seq.fold (fun acc c -> (acc * 31 + int c) &&& 0x7fffffff) 7
         sprintf "--think-from:-%ds" (hash % thinkSlots * thinkSlotSeconds)
 
-    /// The empty timeline's own mark: the blinking caret, standing where the first message will
-    /// land. Dimmed on top of that, because it is an invitation rather than an event — a
-    /// full-strength caret in an empty room reads as something already happening.
-    ///
-    /// Aligned to the message grid's content column (20px avatar + 12px gutter) so the first
-    /// real message appears exactly where the caret was standing, rather than stepping sideways
-    /// as it replaces it.
-    let timelineIdle = "pl-8 max-md:pl-8"
+    /// The empty timeline's own mark, standing where the first message will land. On the
+    /// column's rail (`spacing-rail`), so the first real message appears exactly where the mark
+    /// was standing rather than stepping sideways as it replaces it. It said `pl-8 max-md:pl-8`
+    /// — the same length twice, once guarded by a breakpoint that could only ever restate it.
+    let timelineIdle = "pl-rail"
 
     // --- The ask card ---------------------------------------------------------------------
     // A band docked above the composer, in the queue's dock: somebody is asking, and here are
@@ -2154,8 +2176,23 @@ module Style =
     /// arrival reads as motion rather than a jump. `overflow-hidden` so the list inside is clipped
     /// to the growing height instead of spilling over the chat while it rises; the off-stage pane
     /// was already clipped by `askTrack`, and nothing else here reaches the card's edge.
+    ///
+    /// The share is a FLOOR, not a fraction. It was `h-[60%]`, and a share is only a share
+    /// while the column has room to share: at 844x390 — a phone on its side, which this
+    /// stylesheet says is still a phone — 60% of the conversation's room is about 167px, and
+    /// the question and the START row alone want more than that. So the field, the list and
+    /// CONNECT GITHUB were clipped to nothing by the `overflow-hidden` above, and a person on a
+    /// sideways phone with no GitHub connected could not reach the one control that would let
+    /// them answer the card at all. `max()` takes whichever is larger, `spacing-ask` names the
+    /// least room the card can be answered in — its question, its field, one row and its verb
+    /// — and `max-h-full` is what keeps the floor from ever exceeding the column: on a screen
+    /// too short for both, the card takes the column and the conversation is one × away, which
+    /// is the trade the floor is worth (docs/visual-design.md, Deciding: the floor is never
+    /// traded). The paddings come in a step on a phone for the same reason — every 8px there
+    /// is 8px the list does not get.
     let ask =
-        cls [ "relative shrink-0 h-[60%] flex flex-col pt-6 pb-6 bg-surface overflow-hidden"
+        cls [ "relative shrink-0 h-[max(60%,var(--spacing-ask))] max-h-full flex flex-col"
+              "pt-6 pb-6 phone:pt-4 phone:pb-4 bg-surface overflow-hidden"
               "animate-ask-rise motion-reduce:animate-none"; Stroke.dividerTop ]
 
     /// The blue lead, DRAWN rather than bordered — and it has to be, because a `border-l-2`
@@ -2251,7 +2288,11 @@ module Style =
     /// gutter, which is the column the ticks are in, so the head starts where they do and the
     /// words after it land on the reading edge by the gutter's own width.
     let askHead = cls [ askEdge; "pb-1" ]
-    let askHeadLine = cls [ askMeasure; "flex items-start gap-3" ]
+    /// `leading-4` states the head's FIRST line box once, so the mark that leads the line can
+    /// be one of it (`askWay`'s `h-[1lh]`) rather than a hand-guessed height nudged down by a
+    /// margin. The words set their own steps under it (`askSubtitle` is this same 16px,
+    /// `askQuestion` brings the heading step's), so nothing in the words moves.
+    let askHeadLine = cls [ askMeasure; "flex items-start gap-3 leading-4" ]
     /// The subtitle over the title. Both panes fill this slot — `session asks` over `which
     /// repository?`, the repo's name over `which branch?` — so the title sits at the same
     /// height on both and only the line above it changes.
@@ -2272,23 +2313,51 @@ module Style =
     /// the negative margins pay the growth back to the head, so the glyph and the words beside
     /// it stand where they do on a desktop. It was a 20px box, the one way out of a card that
     /// stood over half the screen.
+    ///
+    /// Its box is ONE LINE of the head (`h-[1lh]`, on the line `askHeadLine` states), which is
+    /// how every other mark in this file lands on the line it leads (`fold`, `causeMark`). It
+    /// was `h-5 mt-1`: a 20px box pushed 4px down over a 16px line sitting above a 32px one, so
+    /// the glyph spanned 4 to 24 and was centred on neither of the head's two lines — a mark on
+    /// no rail at all (docs/visual-design.md, Space: rows align on the text baseline).
     let askWay =
-        cls [ "w-5 h-5 shrink-0 mt-1 grid place-items-center bg-transparent border-0 cursor-pointer transition-colors"
-              "phone:w-11 phone:h-11 phone:-mx-3 phone:-mt-2 phone:-mb-3"
+        cls [ "w-5 h-[1lh] shrink-0 grid place-items-center bg-transparent border-0 cursor-pointer transition-colors"
+              "phone:w-11 phone:h-11 phone:-mx-3 phone:-my-3.5"
               "text-ink-faint hover:text-ink"; focusRing ]
 
     /// The navigation voice: the wordmark's family, lowercased, at the heading step. Not
     /// `heading`, which truncates — a question is allowed to take the second line it needs.
     let askQuestion = "font-extralight text-heading tracking-[-0.01em] lowercase text-ink min-w-0"
 
-    /// The way in that is not the list — a search, or a link pasted. A step quieter than the
-    /// question and flush with the table under it, whose first rule is this field's own
-    /// underline: in a box it read as a second question with a line drawn under it, and its
-    /// text began inside the box rather than on the edge everything else starts on. The focus
-    /// signal is the field face's — the rule goes blue.
-    let askSearch =
-        cls [ askInset; "w-full h-12 mt-6 bg-transparent outline-none appearance-none"; fieldType
-              Stroke.underline; Stroke.hair; Stroke.hoverRim; Stroke.focus ]
+    /// The way in that is not the list — a search, or a link pasted. Its BLOCK, on the card's
+    /// edge margin beside START, because what sits in it is a control with a rim and a rim held
+    /// one rail off one edge and the edge margin off the other is a slab pushed sideways rather
+    /// than a margin — the reason START sits here too (`askActions`).
+    let askField = cls [ askEdge; "mt-6 phone:mt-4" ]
+
+    /// And the field itself: THE field face, the one every input in the product wears — the
+    /// surface tone in a hairline ring that brightens under the hand and goes blue on focus.
+    ///
+    /// It used to be `Stroke.underline` with `outline-none` and no ring, which broke two rules
+    /// at once. `underline` is the one shape exception in the `Stroke` vocabulary and it
+    /// belongs to the session title, a heading that edits in place — a second wearer makes it a
+    /// variant, and a second way to draw a field is a bug rather than a variant (principle 5).
+    /// Worse, its focus was then a one-pixel colour change on a rule, with `outline-none`
+    /// cancelling any ring that might have been declared beside it: a field that opts out of
+    /// the product's one focus face is not keyboard-operable in the way the floor means, and
+    /// the cheap tier's "every input draws the one field face, or draws nothing" passed it only
+    /// because `border-0` made it read as bare.
+    ///
+    /// `phone:h-touch` is the growth every control takes under a thumb (docs/visual-design.md,
+    /// Space); the measure is the card's, because a search box run across a desktop column is
+    /// a line the eye loses its place returning from.
+    ///
+    /// `pl-rail` is what puts the TEXT in it on the card's rail while the BOX stands on the
+    /// card's edge: the rail is one `spacing-rail` in from that edge, so the gutter inside the
+    /// field is the same gutter every other line in the card has, and a reader sees one left
+    /// edge for the question, the placeholder and the names. It is the face's `px-3` written
+    /// longhand on one side rather than a second answer to it — Tailwind emits `pl-*` after
+    /// `px-*` by construction, and the trailing inset stays the face's.
+    let askSearch = cls [ field; readingColumn; "phone:h-touch pl-rail" ]
 
     /// A line the card says rather than one it offers — looking, cloning, a refusal, a clone
     /// that failed. Where the first row would have been, so an answer and the absence of one
@@ -2308,27 +2377,58 @@ module Style =
     let askRowHeld = "flex flex-col transition-colors bg-surface-2"
     /// The button is the whole row, so the whole row is the hit target; the LINE inside it is
     /// where the measure applies.
+    ///
+    /// `aria-disabled:` and not `disabled:`, because the attribute `disabled` does not exist in
+    /// this product (docs/visual-design.md, State) — a row with nothing to act on while the
+    /// clone it started runs stays in the layout and in focus order, and its press is refused
+    /// by the handler rather than by the user agent taking the control out of the document's
+    /// reach.
     let askRowButton =
         cls [ askInset; "w-full text-left flex h-12 bg-transparent border-0 cursor-pointer min-w-0"
-              "disabled:cursor-default"; focusRing ]
+              "aria-disabled:cursor-default"; focusRing ]
     let askRowLine = cls [ askMeasure; "flex items-center gap-3" ]
     /// The repo's name at the READING size, in the terminal face. It is the content of this
     /// surface, not chrome on it, and at the mono ramp's 12px — the step for output and ids —
     /// four of them read as a log rather than as the four things you are choosing between.
     let askRowName = "font-terminal text-body text-ink truncate min-w-0"
-    /// The tick, out in the MARGIN where the column's marks go: `-ml-8` against the button's
-    /// own `gap-3` is the 20px avatar and the 12px gutter `messageGroupHead` spends, so the
-    /// mark lands on the avatar's column and the name on the reading edge. Drawn on every row
-    /// and filled only on the held one — a cell that appeared with the tick would move every
-    /// name out from under the pointer that chose it.
-    let askRowMark = "-ml-8 w-5 shrink-0 self-center text-blue"
-    let askRowDescription = cls [ small; "truncate min-w-0 ml-auto max-w-[45%]" ]
-    /// The branch a held row will launch on, at its trailing edge, and the way into the pane
-    /// that changes it. Blue because it is a link; the chevron because it goes somewhere, and
-    /// that somewhere is to the right.
+    /// The tick, out in the MARGIN where the column's marks go: `-ml-rail` against the button's
+    /// own `gap-3` hangs it in the gutter the names are measured from, so the mark lands on the
+    /// avatar's column and the name on the reading edge — one rail, named by the token that
+    /// says where it is. Drawn on every row and filled only on the held one — a cell that
+    /// appeared with the tick would move every name out from under the pointer that chose it.
+    let askRowMark = "-ml-rail w-5 shrink-0 self-center text-blue"
+    /// What the provider said about the repository, when there is room for it. There is not, on
+    /// a phone: held to 45% of a 326px column it took 147px off a name that is the only thing
+    /// on the row anybody is choosing between, so the name was cut while its description kept
+    /// every character of its share. The name is the content; a phone shows the content.
+    let askRowDescription = cls [ small; "truncate min-w-0 ml-auto max-w-[45%] phone:hidden" ]
+    /// The branch a held row will launch on, and the way into the pane that changes it. Blue
+    /// because it is a link; the chevron because it goes somewhere, and that somewhere is to
+    /// the right.
+    ///
+    /// Its own LINE under the row's name, and a SIBLING of the row's button rather than a child
+    /// of it. It was inside it: a button within a button, which is not content a browser will
+    /// parse as written and which no keyboard can reach the inner half of — the floor, and
+    /// never traded (docs/visual-design.md, Deciding). Two controls side by side on the row's
+    /// one line would each have had to give up the other's width; stacked, the row keeps one
+    /// full-width hit target for "this is the one I mean" and the branch rides under it, on the
+    /// same rail the name stands on.
+    let askRowAside = cls [ askInset; "pb-2" ]
+    let askRowAsideLine = cls [ askMeasure; "flex items-center" ]
+    /// A bare verb has no edge, so it takes the height of its line and grows only its HIT AREA
+    /// on a phone (docs/visual-design.md, Space): `py-3.5` on a 16px caps line is the 44px
+    /// target, bought in padding rather than in a box.
+    let private askRowBranchBox =
+        "shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 phone:py-3.5"
     let askRowBranch =
-        cls [ caps; "ml-auto shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer"
+        cls [ caps; askRowBranchBox; "cursor-pointer"
               "text-blue hover:text-blue-up-1 transition-colors"; focusRing ]
+    /// The same link with nothing to act on — the clone it is a detail of is already under way.
+    /// `bareInkWaiting` is the bare weight's waiting face (docs/visual-design.md, State): one
+    /// role further back in ink, still legible, still in focus order, and with no hover promise.
+    /// An ALTERNATIVE to the face above and never a layer over it, so neither names a colour
+    /// the other also names.
+    let askRowBranchWaiting = cls [ caps; askRowBranchBox; bareInkWaiting; focusRing ]
     let askRowBranchName = "font-terminal text-small normal-case tracking-normal"
     /// What a branch row says about itself beside its name — the provider's default, or that
     /// this one does not exist yet.
@@ -2342,26 +2442,47 @@ module Style =
     /// On the card's edge margin rather than the reading rail. START is a control, not a line —
     /// it has a rim, and a rim held 48px off one edge and 16 off the other is not a margin, it
     /// is a slab pushed sideways. Full width on a phone, that asymmetry is the whole button.
-    let askActions = cls [ askEdge; "shrink-0 flex flex-wrap items-center gap-4 pt-6" ]
+    let askActions = cls [ askEdge; "shrink-0 pt-6 phone:pt-4" ]
+    /// At the card's own measure, like everything else on it. Without it the row was the band,
+    /// and the button that fills it on a phone (`askStartWidth`) filled 780px of an 844-wide
+    /// sideways phone — a slab, and the loudest thing on a card whose question it dwarfed.
+    let askActionsLine = cls [ askMeasure; "flex flex-wrap items-center gap-4" ]
     /// Full width on a phone, where a thumb is the pointer and the band is the screen; on a
-    /// desktop it takes the room its word needs.
-    let askStartWidth = "w-full md:w-auto"
-    /// The commit button, which is disabled until something is held — and looks it: the fill
-    /// and the rim recede to the waiting face's hairline and the type to faint, so the filled
-    /// state is one a held row visibly buys. On `btnPrimarySwap` rather than `btnPrimary`:
-    /// pressing it holds through
-    /// `Sent`/`Cloning` (`Launch.LaunchStage`), and "Start"/"starting…" share its box the same
-    /// way Create's two words do, so admission does not resize the one control the card asks
-    /// a thumb to find twice.
-    let askStart =
-        cls [ btnPrimarySwap; askStartWidth
-              // The fill is cancelled along with the rim while there is nothing to start:
-              // `disabled:text-ink-faint` over a blue fill is 1.05:1, and the floor is never
-              // traded (docs/visual-design.md, Deciding). The face this stands in for is
-              // `btnWaitingSwap`, which is what the `disabled` attribute itself gives way to.
-              "h-12 disabled:bg-transparent disabled:border-hair disabled:text-ink-faint"
-              "disabled:cursor-default" ]
-    let caretIdle = caret + " opacity-50"
+    /// desktop it takes the room its word needs. `phone:`, not `md:`: the card is the shell's
+    /// layout, and the shell's layout has ONE breakpoint, the question *is this a phone?*
+    /// (docs/visual-design.md, Phone and wide). `w-full md:w-auto` was the exact bug that pair
+    /// exists to stop — on a phone turned sideways both matched, so the widest thing on a card
+    /// too short to answer was the button that could not yet be pressed.
+    let askStartWidth = "phone:w-full"
+    /// The commit button: the card's one verb, and the only filled rectangle on this surface.
+    /// On `btnPrimarySwap` rather than `btnPrimary`: pressing it holds through `Sent`/`Cloning`
+    /// (`Launch.LaunchStage`), and "Start"/"starting…" share its box the same way Create's two
+    /// words do, so admission does not resize the one control the card asks a thumb to find
+    /// twice. No height of its own: `btnFace` is `h-control`, growing to `spacing-touch` under
+    /// a thumb, and the `h-12` this carried was a third height in a product that has two.
+    let askStart = cls [ btnPrimarySwap; askStartWidth ]
+    /// The same button with NOTHING HELD yet. `btnWaitingSwap` is the waiting face on the same
+    /// box-stable layout, so the one control a thumb has to find twice is one size waiting,
+    /// ready and held (docs/visual-design.md, State).
+    ///
+    /// A face, not an override. It was `disabled:bg-transparent disabled:border-hair
+    /// disabled:text-ink-faint` layered over the fill — three `disabled:` utilities each
+    /// fighting one the fill had already named, to stand in for a face that exists; and
+    /// `disabled` is an attribute this product does not have, which is why the override had to
+    /// exist at all. The border carries the waiting and the word stays legible, which is what
+    /// the face says and what `disabled:text-ink-faint` over a blue fill (1.05:1, had either
+    /// utility lost) did not.
+    let askStartWaiting = cls [ btnWaitingSwap; askStartWidth ]
+    /// The empty timeline's mark: the caret's box, STILL, and at full strength. It wore the
+    /// blinking caret with `opacity-50` over it, and that is nothing twice. `blink` is
+    /// `steps(1)` — gone for half of every second — and the opacity took what was left of the
+    /// other half under the floor, so a photograph of an empty session at any of the three
+    /// anchors caught a column saying nothing at all. Dimming is a role, never opacity
+    /// (docs/visual-design.md, Colour), and a blink has nothing to say where nothing is
+    /// happening and nobody has typed: the bar's JOB here is to stand where the first word
+    /// will land. Blue, because that place is interactive, and the one mark that moves on this
+    /// screen stays the agent's (`caretWorking`).
+    let caretIdle = caretBar
 
 
     /// Present to a screen reader, absent to everyone else. For a state whose whole expression
@@ -2373,10 +2494,12 @@ module Style =
     /// real `<button>` — so it is keyboard-operable and focus-ringed by construction rather
     /// than by a handler bolted onto a div.
     ///
-    /// It sits on the message grid's CONTENT column (`20px` avatar + `12px` gutter) so a run
-    /// of chips between two messages lines up with the prose rather than drifting under the
-    /// avatars. The palette stays `text-ink-dim`/`text-ink-faint` — chips are the busiest
-    /// thing the chat will carry, and they must read as texture next to what people said.
+    /// It starts on the column's RAIL (`pl-rail`), so a run of chips between two messages lines
+    /// up with the prose rather than drifting under the avatars. It said `pl-[32px]`, which is
+    /// the same length as the rail written as a number — the column had one rail by coincidence
+    /// and three places to change it. The palette stays `text-ink-dim`/`text-ink-faint` — chips
+    /// are the busiest thing the chat will carry, and they must read as texture next to what
+    /// people said.
     ///
     /// Disabled is a command the agent asked for whose terminal is not known yet: the chip
     /// stands where its block will be, with nothing yet to open, so it neither points nor
@@ -2384,7 +2507,7 @@ module Style =
     let private chatChipEnding (rightEdge: string) =
         cls [ "w-full bg-transparent cursor-pointer disabled:cursor-default text-left"
               readingColumn
-              "flex items-baseline gap-2 pl-[32px] py-0.5 phone:py-2.5"
+              "flex items-baseline gap-2 pl-rail py-0.5 phone:py-2.5"
               rightEdge
               "text-ink-dim enabled:hover:text-ink transition-colors duration-150 ease-out"
               focusRing ]
@@ -2396,16 +2519,32 @@ module Style =
     let chatChipCarded = chatChipEnding ""
     /// Who ran it — the same caps voice a message's author line wears, one step fainter.
     let chatChipWho = caps + " text-ink-faint shrink-0"
+    /// The `$` a queued command leads its line with, HUNG in the gutter left of the rail: a
+    /// mark that leads a line never pushes the words in (docs/visual-design.md, Space). It sat
+    /// on the rail, so a queued command began one glyph and one gap right of every other line
+    /// in the column. The voice is the prompt's own (`terminalPrompt`, composed at the use
+    /// site); this is only where it stands.
+    ///
+    /// The box is the WHOLE gutter and `-mr-2` pays back the row's own `gap-2`, so what follows
+    /// the mark begins on the rail rather than a gap past it — the one thing a hung mark must
+    /// not do is move the words it leads. `pr-3` then stands the glyph on the avatars' 20px
+    /// column, where every other mark this margin carries stands (`fold`, `replyRefMark`).
+    let chatChipPrompt = "-ml-rail -mr-2 w-rail pr-3 flex justify-center"
     /// Which terminal a queued command waits in. The same voice as `chatChipWho`, but it
     /// TRUNCATES, and is held to half the row: an agent's terminal is titled `[sandbox]
     /// reason…`, sixty characters of caps, and a name that will not shrink is wider than a
-    /// phone's column on its own — it took the whole conversation sideways with it. Capped
-    /// rather than merely shrinkable because the command beside it has a zero basis, so an
-    /// uncapped name would squeeze it to nothing before giving up a character of its own.
+    /// phone's column on its own — it took the whole conversation sideways with it.
     let chatChipSubject = caps + " text-ink-faint truncate min-w-0 max-w-[50%]"
     /// The command itself: mono, truncated to one line. A chip that wrapped to three would
     /// stop being a chip.
-    let chatChipCommand = "font-terminal text-code-sm text-ink-dim truncate min-w-0 flex-1"
+    ///
+    /// `flex-auto` and not `flex-1`, which is the same grow on a basis of ZERO: a zero basis
+    /// has nothing to give up, so the command was cut from its first character while the
+    /// terminal's caps name beside it kept every one of its own up to the cap — the command,
+    /// which is the content of the line, truncating before the chrome naming where it waits.
+    /// On its content's basis the two give way in proportion to what each is asking for, and
+    /// the name's cap is then a guarantee rather than the only thing holding it back.
+    let chatChipCommand = "font-terminal text-code-sm text-ink-dim truncate min-w-0 flex-auto"
     /// A ran command's line: "ran" and what ran, truncated together as one sentence.
     let chatChipLine = "truncate min-w-0 flex-1"
     /// "ran" — the act's voice, the step `actNoteText` gives "started sandbox".
@@ -2416,21 +2555,25 @@ module Style =
     /// A stretch item's sentence — prose, not mono: nothing was typed that we recorded.
     let chatChipText = "font-light text-small text-ink-dim truncate min-w-0 flex-1"
 
-    /// Where a turn stopped, and why: a SIGNPOST, not a message. It stands on the chip
-    /// column — the same rail the `$` chips and the tool runs stand on — with the mark in
-    /// the slot the prompt glyph takes, because it is one more line in the record of what
-    /// the turn did, and the last. Drawn as prose it was read as the agent's closing
-    /// sentence; the mark is what says "this is the machine's account".
-    let turnStop = cls [ "w-full"; readingColumn; "flex items-baseline gap-2 pl-[32px] py-0.5" ]
-    /// The mark: a stop. Colour is what carries the state in this set — the error colour a
-    /// failed chip's status wears for a turn the process could not carry on, the faint ink
-    /// for one a person stopped — and the screen-reader word beside it carries "stopped"
-    /// for anything that cannot see colour.
-    let turnStopMarkFailed = "shrink-0 text-err"
-    let turnStopMarkInterrupted = "shrink-0 text-ink-faint"
+    /// Where a turn stopped, and why: a SIGNPOST, not a message. It is one more line in the
+    /// record of what the turn did, and the last. Drawn as prose it was read as the agent's
+    /// closing sentence; the mark is what says "this is the machine's account".
+    ///
+    /// A ROW with a gutter (`foldRow`), because the stop mark LEADS this line: it hangs in the
+    /// gutter and the reason starts on the column's rail, with every other line. It used to pad
+    /// to the rail and then flex, so the mark stood on the rail and pushed the reason off it.
+    let turnStop = cls [ "w-full"; readingColumn; foldRow; "items-baseline py-0.5" ]
+    /// The mark: a stop, in the gutter, on the column the avatars and the fold arrows stand on.
+    /// Colour is what carries the state in this set — the error colour a failed chip's status
+    /// wears for a turn the process could not carry on, the faint ink for one a person stopped
+    /// — and the screen-reader word beside it carries "stopped" for anything that cannot see
+    /// colour.
+    let private turnStopMark = "col-start-1 justify-self-start w-5 flex justify-center"
+    let turnStopMarkFailed = turnStopMark + " text-err"
+    let turnStopMarkInterrupted = turnStopMark + " text-ink-faint"
     /// The reason, in the quiet small voice — and WRAPPING, unlike a chip's one line: a
     /// reason is the one thing here a reader must not lose the end of.
-    let turnStopText = "font-light text-small text-ink-dim min-w-0"
+    let turnStopText = cls [ foldContent; "font-light text-small text-ink-dim" ]
 
     /// A turn's tool calls (Plan 16): the same ground, column and gutter an act note has
     /// (`actNote`), because it IS the same thing on the timeline — one line with a fold on
