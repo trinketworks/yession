@@ -161,6 +161,10 @@ module Refusal =
     /// waits FOR the failure first, which the predicate-first order of `Wait.withRefusal`
     /// answers. The sentence is the Node tier's (`Peer.environmentRefusal`): a suite that runs a
     /// command on a box with no sandbox is told the same thing on either runtime.
+    ///
+    /// The per-page budget is real time on purpose: it bounds a call into a page that may never
+    /// return, and a page has no clock of its own for the case to turn.
+    [<Yession.Tests.Support.Waits>]
     let sandboxDidNotStart (pages: unit -> IPage list) : Refusal =
         // The question each page was last asked. Held while it is out, so the next tick finds a
         // page that has not answered and goes on to the next one.
@@ -236,6 +240,10 @@ module Wait =
     /// dismisses, a tab that crashed — and a loop that only looks at the clock between looks
     /// never reaches it. The wait then fails by its deadline and says a read was still out. A
     /// look that is abandoned is left to finish or be torn down with the case's contexts.
+    ///
+    /// The poll's pause and the deadline are real time on purpose: this is the wait every
+    /// browser case goes through, and Chromium runs on the real clock.
+    [<Yession.Tests.Support.Waits>]
     let withRefusal
         (refusal: Refusal)
         (limitMs: float)

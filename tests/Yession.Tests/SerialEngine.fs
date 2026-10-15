@@ -126,6 +126,7 @@ let private socatBinary (env: Map<string, string>) : string =
 /// dying, or the deadline. A socat that refused its arguments — or one that was never on this
 /// box to spawn — fails here in its own words rather than spending ten seconds and reporting
 /// a silence it never had.
+[<Yession.Tests.Support.Waits>]
 let private announcedPair () : Async<ChildProcess * string * string> =
     Async.FromContinuations (fun (cont, econt, _) ->
         let env = Sandboxes.ambientEnv ()

@@ -363,6 +363,21 @@ let internal watching (page: IPage) =
     // somewhere the page can see; `console.debug` in it is for a human with devtools open.
     ev
 
+/// What the page says of itself, for a red case's report, or why it cannot say. Bounded at 5s,
+/// because a page with a navigation that never commits never answers, and the failure must still
+/// reach the run. Real time on purpose: the bound is raced against a page that may never answer,
+/// and a page has no clock of its own for the case to turn.
+[<Yession.Tests.Support.Waits>]
+let private pageStateOrWhy (page: IPage) : Async<string list> =
+    async {
+        try
+            let asked = Async.StartAsTask (Probe.ask page Yession.App.Probes.pageState 0)
+            let! first = Async.AwaitTask (Task.WhenAny (asked :> Task, Task.Delay 5000))
+            if obj.ReferenceEquals (first, asked) then return! Async.AwaitTask asked
+            else return [ "unreadable: no answer in 5s" ]
+        with pe -> return [ "unreadable: " + pe.Message ]
+    }
+
 /// Run a case; if it throws, print what the page saw before letting the failure through.
 let internal reporting (label: string) (page: IPage) (ev: Evidence) (body: Async<unit>) : Async<unit> =
     async {
@@ -372,18 +387,8 @@ let internal reporting (label: string) (page: IPage) (ev: Evidence) (body: Async
             printfn "=== %s failed — what the page saw ===" label
             for line in ev.Lines do printfn "  %s" line
             // The page's own state, best-effort: on a navigation failure there is no page left
-            // to ask, and that answer is itself worth printing. Bounded, because a page with a
-            // navigation that never commits never answers, and the failure must still reach
-            // the run.
-            let! state =
-                async {
-                    try
-                        let asked = Async.StartAsTask (Probe.ask page Yession.App.Probes.pageState 0)
-                        let! first = Async.AwaitTask (Task.WhenAny (asked :> Task, Task.Delay 5000))
-                        if obj.ReferenceEquals (first, asked) then return! Async.AwaitTask asked
-                        else return [ "unreadable: no answer in 5s" ]
-                    with pe -> return [ "unreadable: " + pe.Message ]
-                }
+            // to ask, and that answer is itself worth printing.
+            let! state = pageStateOrWhy page
             for fact in state do printfn "  page %s" fact
             printfn "=== end %s ===" label
             raise e
@@ -864,7 +869,10 @@ let private pageStuckOnNavigation (contexts: Contexts) (server: Serving, asked: 
     }
 
 /// How a wait ended, or the failure of a wait that had not ended `graceMs` after its deadline —
-/// so a wait that outlives its deadline is a red case and not a run that never finishes.
+/// so a wait that outlives its deadline is a red case and not a run that never finishes. Real
+/// time on purpose: the wait under test keeps a real-time deadline, and only the same clock can
+/// say that it overran it.
+[<Yession.Tests.Support.Waits>]
 let private endedBy (limitMs: float) (waiting: Async<unit>) : Async<string> =
     async {
         let graceMs = 8000
@@ -1013,13 +1021,9 @@ let waitTests =
         // deadline is the wait's to keep, whatever the calls inside it do.
         testCaseAsync "a wait ends by its deadline when the read it was given never returns" <|
             async {
-                let never : Async<int> =
-                    async {
-                        // Never wakes, and is no pause: it stands in for a call into a page
-                        // that never returns, which is what this case is about.
-                        do! Async.Sleep Timeout.Infinite
-                        return 0
-                    }
+                // Never resumes, and no timer stands behind it: it is a call into a page that
+                // never returns, which is what this case is about.
+                let never : Async<int> = Async.FromContinuations (fun _ -> ())
                 let! said = endedBy 500.0 (Wait.within 500.0 "a read that never returns" (fun () -> never) (fun n -> n > 0))
                 Expect.stringContains said "timed out after 500ms" "the wait ended by its deadline"
             }
@@ -1059,6 +1063,14 @@ let waitTests =
                 Expect.stringContains said "srt sandbox failed: beside a stuck page" "the page that answered said why"
             }
     ]
+
+/// A moment of the real clock for something the page's own time released to arrive: a send goes
+/// out on the browser's network thread, which page time does not move, so turning the page clock
+/// cannot deliver it. Not arriving in the moment is no failure — the case goes on turning page
+/// time — so this answers nothing, and spends 250ms of real time at most.
+[<Yession.Tests.Support.Waits>]
+let private networkMoment (arrived: Task) : Async<unit> =
+    Async.AwaitTask (Task.WhenAny (arrived, Task.Delay 250)) |> Async.Ignore
 
 let tests =
     testList "Browser E2E" [
@@ -1977,11 +1989,10 @@ let tests =
                 while not offered.Task.IsCompleted && spent + window < cap do
                     do! awaitU (page.Clock.RunForAsync window)
                     spent <- spent + window
-                    // Real time, and not a wait: a send the window released goes out on the
-                    // browser's network thread, which page time does not move, so each window
-                    // is given a moment of the real clock to deliver it before the next one is
-                    // spent. Not arriving in it is no failure; the loop goes on to the cap.
-                    do! Async.AwaitTask (Task.WhenAny (offered.Task, Task.Delay 250)) |> Async.Ignore
+                    // Each window is given a moment of the real clock to deliver what it released
+                    // before the next one is spent; not arriving in it is no failure, and the loop
+                    // goes on to the cap.
+                    do! networkMoment offered.Task
                 // No page time passes from here, so only a send already made can still arrive.
                 do! Wait.within 10000.0
                         (sprintf "an offer posted inside %dms of page time, short of the %dms cap" spent cap)
@@ -8064,6 +8075,12 @@ type private DoorMiss =
     /// Takes the connection and never answers: an upstream that went quiet.
     | Stalls
 
+/// The front door's pause before it reads the registry again. A reconnect backoff in the
+/// fixture's own plumbing, on the real clock because what it reconnects to is a real socket with
+/// no clock of its own; nothing a case asserts waits on it.
+[<Yession.Tests.Support.Waits>]
+let private registryBackoff () : Async<unit> = Async.Sleep 100
+
 /// The operator's front door. `admits` says from which request on a session's route is live,
 /// given the session's id and how many requests for it the door has seen (this one included);
 /// `miss` says what the door does before then. A session is routed only while the registry
@@ -8078,8 +8095,7 @@ let private startFrontDoorWith (managerPort: int) (admits: string -> int -> bool
     let asked = System.Collections.Concurrent.ConcurrentDictionary<string, int> ()
     // The registry, read the way a reconciler reads it. Retried because the door has to be up
     // BEFORE the Manager — the Manager's public origin is this port, and its first session
-    // fetches OIDC discovery against it while booting. (This delay is a reconnect backoff in
-    // the fixture's plumbing; nothing the case asserts waits on a clock.)
+    // fetches OIDC discovery against it while booting.
     let rec watching () =
         async {
             try
@@ -8108,7 +8124,7 @@ let private startFrontDoorWith (managerPort: int) (admits: string -> int -> bool
                                 ports.[Yession.Domain.SessionId.value entry.Id] <- entry.Port
                         | Error reason -> printfn "front door: a registry frame it could not read: %s" reason
             with _ -> ()
-            do! Async.Sleep 100
+            do! registryBackoff ()
             return! watching ()
         }
     Async.Start (watching ())

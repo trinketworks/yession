@@ -117,6 +117,7 @@ let private start (children: ResizeArray<ChildProcess>) (args: string list) (tol
 /// stream, because which one a readiness line lands on is the child's business — or until the
 /// child dies, or until the deadline. Whichever gets there first is the answer, so a process
 /// that dies before printing fails here with its own words rather than as a timeout.
+[<Waits>]
 let private awaitPrinted
     (child: ChildProcess)
     (what: string)

@@ -41,6 +41,7 @@
     <Compile Include="EmitHome.fs" />
     <Compile Include="PageScripts.fs" />
     <Compile Include="BindingOnly.fs" />
+    <Compile Include="Sleeps.fs" />
     <Compile Include="DynamicAccess.fs" />
     <Compile Include="UncheckedCast.fs" />
     <Compile Include="ObjSignature.fs" />
