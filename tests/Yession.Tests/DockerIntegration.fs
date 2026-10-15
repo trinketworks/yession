@@ -95,9 +95,7 @@ let tests =
 
             // The counters a block's memory kill is read from (`MemoryEvents`). A fresh
             // container is its own cgroup, so it reads a file of its own with nothing
-            // killed in it yet. That the KERNEL then counts a kill at the container's own
-            // limit as `oom` and `oom_kill` together needs a container with a limit, which
-            // the docker backend cannot ask for yet (GAPS, "killed for memory").
+            // killed in it yet.
             testCaseAsync "a container reads its own memory counters, with nothing killed yet" (async {
                 let! _, sandbox = startOrFail alpineSpec
                 let! counters = sandbox.MemoryEvents ()
@@ -153,6 +151,21 @@ let tests =
                 Expect.equal overrun (SandboxExited 137) "the overrun was SIGKILLed by the kernel"
                 let! after, out, _ = runInSandbox sandbox "echo" [ "still-here" ] Map.empty None
                 Expect.equal (after, out.Trim ()) (SandboxExited 0, "still-here") "and the container runs the next command"
+                do! sandbox.Dispose ()
+            })
+
+            // What the counters say about that overrun: the kernel counted the kill AND the
+            // container reaching its own limit, which `MemoryEvents.killed` reads as case (a).
+            // The same 64m container and the same overrun as the case above, so the only
+            // memory it can take is its own.
+            testCaseAsync "an overrun at the container's own limit reads as its own limit" (async {
+                let spec = alpineSpec |> withContainer (fun c -> { c with Memory = Some (ContainerMemory.parse "64m" |> expect) })
+                let! _, sandbox = startOrFail spec
+                let! before = sandbox.MemoryEvents ()
+                let! _ = runInSandbox sandbox "sh" [ "-c"; "head -c 512m /dev/zero | tail" ] Map.empty None
+                let! after = sandbox.MemoryEvents ()
+                let said = Option.map2 MemoryEvents.killed before after |> Option.flatten
+                Expect.equal said (Some SandboxLimit) (sprintf "the counters went from %A to %A" before after)
                 do! sandbox.Dispose ()
             })
 

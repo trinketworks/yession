@@ -1120,7 +1120,8 @@ to whatever still reproduces once the fixes have landed.
         another cause killed with 137, while a sibling block was OOM-killed, reads as a memory
         kill.
       - The gate's commands, `setup:` and the session's own execs do not read the counters.
-      - Nothing tests case (b) for real: it needs the whole VM to run out of memory.
+      - The Docker tier pins case (a) with a 64m container. Nothing tests case (b) for real: it
+        needs the whole VM to run out of memory.
     - **No operator ceiling on a container's memory.** A repo's `memory:` is checked against
       what the daemon has, not against a share the operator chose. Six sessions that each
       declare most of the VM are each accepted.
