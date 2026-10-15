@@ -2711,27 +2711,6 @@ module ClientModel =
     let preview (model: ClientModel) : Preview option =
         model.Pane |> Option.bind PaneMode.preview
 
-    /// The terminal a person is LOOKING at in the pane: the column is open, its `all` page is
-    /// not up, and no preview covers it. What a list of terminals marks as current, so the
-    /// sidebar points at the terminal the strip's selected tab is showing, and at none while
-    /// the pane is shut — a choice kept for when it reopens is not something on the screen.
-    /// The newest command in a terminal that went wrong — failed, timed out, could not run, or
-    /// was refused — which is the one its scrollback says in the error red. Every older wrong
-    /// thing is a record by then, and wears a record's ink: a column of red exit codes is an
-    /// alarm about the past nobody can answer (docs/visual-design.md, "Colour").
-    let newestWrongBlock (view: TerminalView) : BlockId option =
-        view.Blocks
-        |> List.filter (fun block ->
-            match block.Status with
-            | BlockFinished (CommandSucceeded _)
-            | BlockFinished (CommandOutcomeUnknown _)
-            | BlockRunning
-            | BlockEnded _ -> false
-            | BlockFinished _
-            | BlockRejected _ -> true)
-        |> List.tryLast
-        |> Option.map (fun block -> block.BlockId)
-
     /// What closing a preview asks for. A command's settles it back into its place in its
     /// terminal's history (`ShowInTerminalMsg`), the tab switched first when it lives in
     /// another — the preview was that command lifted out, and its one control puts it back.
@@ -2746,6 +2725,10 @@ module ClientModel =
         | PreviewSubject.Stretch _
         | PreviewSubject.Content _ -> ClosePreviewMsg
 
+    /// The terminal a person is LOOKING at in the pane: the column is open, its `all` page is
+    /// not up, and no preview covers it. What a list of terminals marks as current, so the
+    /// sidebar points at the terminal the strip's selected tab is showing, and at none while
+    /// the pane is shut — a choice kept for when it reopens is not something on the screen.
     let shownTerminal (model: ClientModel) : TerminalId option =
         if model.TerminalsOpen && not model.Switcher && Option.isNone (preview model) then
             selectedTerminal model

@@ -1256,6 +1256,13 @@ let private marksIn (html: string) : string list =
     |> Seq.map (fun m -> m.Groups.[1].Value)
     |> List.ofSeq
 
+/// The voice each of those marks is drawn in, in document order — the class on the element
+/// carrying the mark, which is what says whether a row reads as wrong or as a record.
+let private voicesIn (html: string) : string list =
+    Text.RegularExpressions.Regex.Matches (html, "class=\"([^\"]*)\" " + Dom.Hooks.blockMark + "=")
+    |> Seq.map (fun m -> m.Groups.[1].Value)
+    |> List.ofSeq
+
 let private statusTests =
     testList "A block says how it ended, the same way everywhere" [
         testCase "a succeeded block says so in the pane and in the chat, with the same token" <| fun () ->
@@ -1277,10 +1284,14 @@ let private statusTests =
                 |> List.exactlyOne
             Expect.stringContains label "failed" "a screen reader hears that it failed"
 
-        // The one red word on a surface is the newest wrong thing; an older failure is a
-        // record by then (docs/visual-design.md, "Colour").
-        testCase "of two failed commands, the newer is the one a terminal holds as wrong" <| fun () ->
-            let model =
+        // A block's line is a repeated row, and a repeated row is a surface of its own, so
+        // each failed block keeps its own red word (docs/visual-design.md, "Colour"). This
+        // replaces a case that pinned the opposite — that a terminal holds only its NEWEST
+        // failure as wrong — written when the red word was counted per screen. What that
+        // bought was four failures out of five wearing the record's ink and not looking
+        // wrong at all, which is the honesty the rule exists for.
+        testCase "every failed command keeps its own red word, not only the newest" <| fun () ->
+            let html =
                 clientOf
                     [ at 1L 0.0 (opened terminalA "build")
                       at 2L 1.0 (started terminalA "1" byAda "false" 1)
@@ -1289,11 +1300,13 @@ let private statusTests =
                       at 5L 4.0 (completed terminalA "2" (CommandFailed 1) 6)
                       at 6L 5.0 (started terminalA "3" byAda "true" 7)
                       at 7L 6.0 (completed terminalA "3" (CommandSucceeded 0) 8) ]
-            let view = Projection.tryFind terminalA model.Terminals |> Option.get
+                |> Support.step (ShowInPaneMsg (Reading terminalA))
+                |> Support.render
             Expect.equal
-                (ClientModel.newestWrongBlock view |> Option.map BlockId.value)
-                (view.Blocks |> List.item 1 |> fun block -> Some (BlockId.value block.BlockId))
-                "the second, not the first, and a success after it changes nothing"
+                [ voicesIn (markupAt (Dom.attr Dom.Hooks.terminalBlock "b-1") html)
+                  voicesIn (markupAt (Dom.attr Dom.Hooks.terminalBlock "b-2") html) ]
+                [ [ Style.statusErr ]; [ Style.statusErr ] ]
+                "the older failure is not quieted into a record by the newer one"
 
         testCase "a failed block's mark is heard in words in the pane, not as a number" <| fun () ->
             let mark = textAt Dom.Hooks.blockMark (markupAt (Dom.attr Dom.Hooks.terminalBlock "b-1") (endedAs (CommandFailed 1)))

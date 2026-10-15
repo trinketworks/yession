@@ -1852,26 +1852,27 @@ module View =
     ///
     /// The glyph and the number are a picture; the words beside them are for whoever cannot
     /// see it (`terminalBlockStatusWord`). A mark that IS a word says it once.
-    let rec private terminalBlockStatus (model: ClientModel) (status: BlockStatus) : TemplateResult =
-        terminalBlockStatusIn true model status
-
-    /// The same, said as a RECORD when `current` is false: a wrong thing that is no longer the
-    /// newest one wears `ink-dim`, the record's ink, rather than the one red word the surface
-    /// keeps for the newest (`ClientModel.newestWrongBlock`).
-    and private terminalBlockStatusIn (current: bool) (model: ClientModel) (status: BlockStatus) : TemplateResult =
-        let wrong = if current then Style.statusErr else Style.statusWait
+    ///
+    /// A wrong block is red WHEREVER it is drawn, and however many of them a scrollback holds.
+    /// A block's line is a repeated row, and a repeated row is a surface of its own, so the one
+    /// red word each surface keeps is its own (docs/visual-design.md, "Colour"). This took a
+    /// `current` flag that quieted every failure but the newest to `statusWait`, counting the
+    /// red words per SCREEN — which read, at 390x844, as five wrong commands with one red word
+    /// between them: four failures wearing the record's ink and not looking wrong at all.
+    /// Honesty is second in the Deciding order and a hidden failure trades it away.
+    let private terminalBlockStatus (model: ClientModel) (status: BlockStatus) : TemplateResult =
         let token = terminalBlockStatusLabel status
         let pictured (voice: string) (mark: TemplateResult) =
             html $"""<span class="{voice}" data-block-mark="{token}"><span aria-hidden="true">{mark}</span><span class="{Style.srOnly}">{terminalBlockStatusWord model status}</span></span>"""
         match status with
         | BlockRunning -> pictured Style.statusOk (html $"""<span class="{Style.statusDotLive}"></span>""")
         | BlockFinished (CommandSucceeded code) -> pictured Style.statusDone (html $"""{Icon.checkSm} {code}""")
-        | BlockFinished (CommandFailed code) -> pictured wrong (html $"""{Icon.crossSm} {code}""")
+        | BlockFinished (CommandFailed code) -> pictured Style.statusErr (html $"""{Icon.crossSm} {code}""")
         | BlockFinished CommandTimedOut
         | BlockFinished (CommandExecutionFailed _)
         | BlockFinished (CommandNotRun _)
         | BlockFinished (CommandKilledForMemory _) ->
-            html $"""<span class="{wrong}" data-block-mark="{token}">{terminalBlockStatusWord model status}</span>"""
+            html $"""<span class="{Style.statusErr}" data-block-mark="{token}">{terminalBlockStatusWord model status}</span>"""
         // A record, not a wrong thing: nothing says it failed, so it is not red. Faint like
         // any other status with nothing to report, and the block's facts carry why it ended.
         | BlockFinished (CommandOutcomeUnknown _)
@@ -1883,9 +1884,9 @@ module View =
         // The session's own refusals name nobody: there is no person to name, and its token is
         // internal (`Dom.Text.blockRefusedPlain`).
         | BlockRejected ((ActorRef.Session | ActorRef.System), _) ->
-            html $"""<span class="{wrong}" data-block-mark="{token}">{Dom.Text.blockRefusedPlain}</span>"""
+            html $"""<span class="{Style.statusErr}" data-block-mark="{token}">{Dom.Text.blockRefusedPlain}</span>"""
         | BlockRejected (by, _) ->
-            html $"""<span class="{wrong}" data-block-mark="{token}">{Dom.Text.blockRefused} {Entity.render model by (EntityRef.Actor by)}</span>"""
+            html $"""<span class="{Style.statusErr}" data-block-mark="{token}">{Dom.Text.blockRefused} {Entity.render model by (EntityRef.Actor by)}</span>"""
 
     /// Whether this block is the one its terminal's loss left open (`Projection.openAtLoss`).
     let private openAtLoss (model: ClientModel) (terminal: TerminalId) (block: Block) : bool =
@@ -1897,13 +1898,13 @@ module View =
     let private terminalBlockTokenIn (model: ClientModel) (terminal: TerminalId) (block: Block) : string =
         if openAtLoss model terminal block then Dom.Text.blockUnknown else terminalBlockStatusLabel block.Status
 
-    /// `terminalBlockStatusIn`, for a block in its terminal: the one a loss left open says it
+    /// `terminalBlockStatus`, for a block in its terminal: the one a loss left open says it
     /// may have run, in words and without the pulse, rather than spinning for as long as the
     /// loss lasts. Waiting, not wrong — the banner says what to do about it.
-    let private terminalBlockStatusAt (current: bool) (model: ClientModel) (terminal: TerminalId) (block: Block) : TemplateResult =
+    let private terminalBlockStatusAt (model: ClientModel) (terminal: TerminalId) (block: Block) : TemplateResult =
         if openAtLoss model terminal block then
             html $"""<span class="{Style.statusWait}" data-block-mark="{Dom.Text.blockUnknown}">{Dom.Text.blockMayHaveRun}</span>"""
-        else terminalBlockStatusIn current model block.Status
+        else terminalBlockStatus model block.Status
 
     let private stretchEndLabel =
         function
@@ -2991,7 +2992,7 @@ module View =
                         aria-label="{Dom.Text.commandChip (BlockLabel.ofBlock block) (terminalBlockStatusWord model block.Status) where}"
                         @click={Ev(fun _ -> dispatch (OpenPreviewMsg (Preview.ofSubject (PreviewSubject.Block (terminalId, blockId)))))}>
                   <span class="{Style.chatChipLine}" title="{block.Command}"><span class="{Style.chatChipVerb}">{Dom.Text.ran}</span> {what}</span>
-                  <span class="shrink-0">{terminalBlockStatusAt true model terminalId block}</span>
+                  <span class="shrink-0">{terminalBlockStatusAt model terminalId block}</span>
                 </button>"""
         // A command the agent's call asked for, before its block exists — or when it never
         // will. The SAME chip the block will be, in the same place (`TimelineProjection`'s
@@ -3633,7 +3634,6 @@ module View =
         (model: ClientModel)
         (feed: TerminalFeed)
         (terminal: TerminalId)
-        (newestWrong: BlockId option)
         (showAuthor: bool)
         (block: Block)
         : TemplateResult =
@@ -3726,7 +3726,7 @@ module View =
               <div class="{Style.terminalBlockSummary}" data-terminal-block-command>
                 <div class="{Style.terminalBlockByline}" data-terminal-block-byline>
                   {author}
-                  <span class="{Style.terminalBlockWhen}">{ago}{terminalBlockStatusAt (newestWrong = Some block.BlockId) model terminal block}</span>
+                  <span class="{Style.terminalBlockWhen}">{ago}{terminalBlockStatusAt model terminal block}</span>
                 </div>
                 <span class="{Style.terminalBlockLine}">
                   <span class="{Style.terminalPrompt}">$</span>
@@ -3762,7 +3762,6 @@ module View =
         (model: ClientModel)
         (feed: TerminalFeed)
         (terminal: TerminalId)
-        (newestWrong: BlockId option)
         (leader: Block)
         (rest: Block list)
         : TemplateResult =
@@ -3804,7 +3803,7 @@ module View =
                   <span class="{Style.terminalBlockRunMark}">{Icon.rights}</span>
                 </summary>
                 <div class="{Style.terminalBlockRunBody}" data-terminal-block-run-body>
-                  {blocks |> List.map (terminalBlockView dispatch model feed terminal newestWrong false)}
+                  {blocks |> List.map (terminalBlockView dispatch model feed terminal false)}
                 </div>
               </details>
             </article>"""
@@ -4390,7 +4389,7 @@ module View =
                         <span class="{Style.terminalPrompt}">$</span>
                         <code class="{Style.terminalCommandText}">{block.Command}</code>
                       </span>
-                      <span class="ml-auto shrink-0">{terminalBlockStatusAt true model terminalId block}</span>
+                      <span class="ml-auto shrink-0">{terminalBlockStatusAt model terminalId block}</span>
                     </div>
                   </div>
                   {body}
@@ -5118,7 +5117,6 @@ module View =
                 </div>"""
         let terminalBody (view: TerminalView) =
             let feed = ClientModel.terminalFeed view.TerminalId model
-            let newestWrong = ClientModel.newestWrongBlock view
             let truncated =
                 if view.DroppedBytes > 0 then
                     html $"""<div class="{Style.terminalTruncated}" data-terminal-truncated="{string view.DroppedBytes}">{view.DroppedBytes} bytes dropped</div>"""
@@ -5134,8 +5132,8 @@ module View =
                 if not (List.isEmpty view.Blocks) then
                     BlockGroup.ofBlocks feed view.Blocks
                     |> List.map (function
-                        | BlockGroup.Alone block -> terminalBlockView dispatch model feed view.TerminalId newestWrong true block
-                        | BlockGroup.Run (leader, rest) -> terminalBlockRun dispatch model feed view.TerminalId newestWrong leader rest)
+                        | BlockGroup.Alone block -> terminalBlockView dispatch model feed view.TerminalId true block
+                        | BlockGroup.Run (leader, rest) -> terminalBlockRun dispatch model feed view.TerminalId leader rest)
                 elif view.IsOpen then []
                 else [ html $"""<div class="{Style.terminalOutputEmpty}"><span class="{Style.terminalPrompt}">$</span></div>""" ]
             // A terminal's two reads, and the ONE control between them (Plan 14, stage 7;
@@ -5407,7 +5405,7 @@ module View =
                             if terminalRead model view <> TerminalRead.Blocks && not (ClientModel.isRewound terminal model) then
                                 match Projection.runningBlock view |> Option.orElse (List.tryLast view.Blocks) with
                                 | Some block ->
-                                    html $"""<span class="contents" data-pane-subtitle="terminal"><code class="{Style.panePivotSubtitleCommand}" title="{block.Command}">{BlockLabel.ofBlock block}</code><span class="shrink-0">{terminalBlockStatusAt true model terminal block}</span></span>"""
+                                    html $"""<span class="contents" data-pane-subtitle="terminal"><code class="{Style.panePivotSubtitleCommand}" title="{block.Command}">{BlockLabel.ofBlock block}</code><span class="shrink-0">{terminalBlockStatusAt model terminal block}</span></span>"""
                                 | None -> Lit.nothing
                             elif not view.IsOpen then html $"""<span class="shrink-0">{Dom.Text.markClosed}</span>"""
                             elif Option.isSome (Projection.runningBlock view) then
