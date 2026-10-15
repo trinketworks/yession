@@ -1262,33 +1262,6 @@ let example (name: string) =
 
 let private hasAny (caps: Set<string>) names = names |> List.exists caps.Contains
 
-// Run the Fable-compiled test bundle on Node with a hard timeout, so a hung WebRTC connection
-// (or any hang) can never block the suite. Inherits stdio (output streams; env passes through,
-// incl. YESSION_TEST_CAPS and YESSION_TEST_BUDGET_MS) and forwards the suite's exit code.
-//
-// This is the LAST resort, not the working deadline. A single model wait fails at 30s
-// (`Support.Harness.waitForTimeoutMs`) and a case with its own deadline fails as itself
-// (`Support.settledWithin`), both naming the case. A kill here means something hung outside
-// both — so the message says what the budget was and what bought it, because the one thing this
-// failure cannot say is which test it was.
-let private runNodeSuite (target: string) (caps: string list) (timeoutMs: int) =
-    let psi = ProcessStartInfo "node"
-    psi.ArgumentList.Add target
-    psi.WorkingDirectory <- repoRoot
-    psi.UseShellExecute <- false
-    use p = Process.Start psi
-    if p.WaitForExit timeoutMs then
-        if p.ExitCode <> 0 then failwithf "tests failed (exit %d)" p.ExitCode
-    else
-        eprintfn
-            "tests: the Node suite outran this run's budget of %dms (capabilities: %s) — killing.\n\
-             A single wait fails at 30s and a case's own deadline fails as itself, so this is a hang\n\
-             outside both. Narrow with `check --only \"<part of a test name>\"` to find it."
-            timeoutMs
-            (if List.isEmpty caps then "none (cheap tier)" else String.concat " " caps)
-        p.Kill true
-        failwith "tests timed out"
-
 // Ask the box whether it really has a capability, by running the cheapest command that can
 // only succeed if it does. A missing binary, a non-zero exit and a hang all answer false.
 //
@@ -1659,8 +1632,9 @@ let private requireCapabilities (caps: string list) =
 // Ports/Native/Srt on this box) for the same reason `waitForTimeoutMs` is 30s against sub-9s
 // waits — this is a hang detector, and the sharp instruments are elsewhere.
 //
-// `Browser` buys nothing: the browser suite is a separate .NET CLR run. A capability that adds no
-// Node suite adds no time here, and one added later that does carries its own allowance in.
+// `Browser` buys nothing: the browser suites are the other run, on the .NET CLR, and
+// `clrBudgetMs` is theirs. A capability that adds no Node suite adds no time here, and one added
+// later that does carries its own allowance in.
 //
 // `Nix` bought nothing either, on the reasoning that the build happens after this process has
 // exited — which was true while `Nix` only ever rode along with every other capability, and stopped
@@ -1689,6 +1663,34 @@ let private nodeBudgetMs (caps: Set<string>) =
     // for, and cold CI is bounded by substitution rather than compute. An hour is the
     // hang detector's line, not an expectation.
     + allowing "Dogfood" 3_600_000
+
+// THE BROWSER SUITES' BUDGET, the .NET CLR run's, built the way `nodeBudgetMs` is: what each
+// capability's suites cost, and generous against it.
+//
+// Measured on CI, 12 green runs on 15 Oct 2026: six release `verify / browser` jobs (`Browser
+// Native Srt Caddy --runtime clr`) ran this suite in 390-453s, six pull-request `test` jobs
+// (which ask for Ports Serial Jumpstarter beside those, none of them a browser suite's) in
+// 351-447s. Of the slowest, 453s: the suites that need only `Browser` (the editor's 210 cases,
+// the 11 browser waits) took 251s, the `Native` ones 195s, the one `Caddy` case 5s. `bench`'s
+// `Client performance` (`Browser Bench`, narrowed to that suite) took 37-43s. Starting the run is
+// about 5s of it. A 4-core dev container, alone under a shared build lock, ran `Browser Native
+// Caddy` in 414s: 268s, 138s and 6s, with no `Srt` to admit the cases that need a sandbox.
+//
+// Each allowance is about two and a half times its share, for the reason `nodeBudgetMs` gives:
+// this is a hang detector, and the sharp instruments are elsewhere (`Wait.timeoutMs`). It is not
+// a deadline the slow runner should meet with a minute to spare. `Caddy`'s is one case, whose
+// share is mostly the noise of starting it, so it gets a round 30s. What this replaces is no
+// deadline at all, which let one hung Playwright call hold a release run for 48 minutes; the
+// release tier's 1110s ends a hang inside 19 minutes, saying which suite and why.
+//
+// A run whose cases each spend a full 30s wait failing is not a hang, but enough of them overrun
+// this too. Their failures are printed above the kill, as they ended.
+let private clrBudgetMs (caps: Set<string>) =
+    let allowing (name: string) (ms: int) = if caps.Contains name then ms else 0
+    allowing "Browser" 600_000
+    + allowing "Native" 480_000
+    + allowing "Caddy" 30_000
+    + allowing "Bench" 120_000
 
 // Build the installable from the WORKING TREE, which boots it: the derivation checks itself.
 //
@@ -1766,6 +1768,89 @@ let private preparing (caps: Set<string>) (runtime: Runtime option) : Target lis
           Target.Harness
           Target.ClrSuite ]
 
+/// One of the suite's two runs, as `runSuite` starts and bounds it: the Fable bundle on Node, or
+/// the browser suites on the .NET CLR. Everything the kill has to say is here, because a killed
+/// run cannot say anything for itself.
+type private SuiteRun =
+    { /// The run as a message names it.
+      Suite: string
+      Command: string
+      Arguments: string list
+      BudgetMs: int
+      /// What the budget rests on, said when it runs out: a number alone sends the reader to
+      /// tasks.fsx to learn whether it was ever meant to hold.
+      Basis: string
+      /// What already fails on its own inside this run, and so cannot be what hung.
+      Bounded: string }
+
+// Run a suite with a hard deadline, so a hung WebRTC connection, a Playwright call with no
+// deadline of its own, or any other hang can never hold the run. Inherits stdio (output streams;
+// env passes through, incl. YESSION_TEST_CAPS) and forwards the suite's exit code.
+//
+// This is the LAST resort, not the working deadline. A single wait fails at 30s on either runtime
+// (`Support.Harness.waitForTimeoutMs` on Node, `BrowserWait.Wait.timeoutMs` on the CLR) and a case
+// with its own deadline fails as itself (`Support.settledWithin`), each naming the case. A kill
+// here means something hung outside them — so the message says what the budget was and what
+// bought it, because the one thing this failure cannot say is which test it was. It can say where
+// to look: Pyxpecto runs one case at a time, in order, and prints a case's line when it ENDS.
+//
+// The CLR run had no deadline at all. One Playwright call that never answered held a release
+// run's browser tier for 48 minutes, until GitHub lost the runner, and no line said which suite
+// had hung or why. The kill takes the whole tree because that is where the hang lives: `dotnet
+// run` is a parent of the test host, which is a parent of the Playwright driver and Chromium.
+let private runSuite (caps: string list) (run: SuiteRun) =
+    let psi = ProcessStartInfo run.Command
+    run.Arguments |> List.iter psi.ArgumentList.Add
+    psi.WorkingDirectory <- repoRoot
+    psi.UseShellExecute <- false
+    // The suite is told its own budget, because a case's deadline is spent out of it: a wait
+    // that asks for more than the run can afford is refused at the call rather than taking the
+    // runner down later (`Support.settledWithin`). Told here, by the runner that enforces it,
+    // because each run has its own and they differ by minutes.
+    psi.Environment.["YESSION_TEST_BUDGET_MS"] <- string run.BudgetMs
+    progress (sprintf "running %s (budget %ds)" run.Suite (run.BudgetMs / 1000))
+    use p = Process.Start (accountsForItself psi)
+    if p.WaitForExit run.BudgetMs then
+        if p.ExitCode <> 0 then
+            let report = sprintf "tests: %s failed (exit %s)%s" run.Suite (diedOf p.ExitCode) (crashEvidence ())
+            raise (ChildFailed (Path.GetFileName run.Command, p.ExitCode, report))
+    else
+        let named = if List.isEmpty caps then "none (cheap tier)" else String.concat " " caps
+        eprintfn
+            "tests: %s outran this run's budget of %ds (capabilities: %s) — killing it and every process it started.\n\
+             The budget is %s.\n\
+             %s, so this is a hang outside them.\n\
+             Cases run one at a time and each prints its `Yession - …` line when it ENDS, so the case\n\
+             that hung is the one after the last such line above. Narrow to it with\n\
+             `check %s--only \"<part of its name>\"`."
+            run.Suite
+            (run.BudgetMs / 1000)
+            named
+            run.Basis
+            run.Bounded
+            (if List.isEmpty caps then "" else named + " ")
+        p.Kill true
+        failwithf "tests: %s timed out" run.Suite
+
+/// The Node run: the Fable bundle `Target.Suite` left at `suiteEntry`.
+let private nodeRun (caps: Set<string>) : SuiteRun =
+    { Suite = "the Node suite"
+      Command = "node"
+      Arguments = [ suiteEntry ]
+      BudgetMs = nodeBudgetMs caps
+      Basis = "a base for the cheap tier plus an allowance for each capability, generous against measured times (`nodeBudgetMs` in tasks.fsx)"
+      Bounded = "A single wait fails at 30s and a case's own deadline fails as itself" }
+
+/// The .NET CLR run: the browser suites, which `Target.ClrSuite` built beside the Fable
+/// compiles. Without `--no-build` this would build it again, alone, ahead of the first case.
+let private clrRun (caps: Set<string>) : SuiteRun =
+    { Suite = "the browser suite (.NET CLR)"
+      Command = "dotnet"
+      Arguments = [ "run"; "--project"; "tests/Yession.Tests/Yession.Tests.fsproj"; "--no-build"; "-c"; "Debug" ]
+      BudgetMs = clrBudgetMs caps
+      Basis = "an allowance for each capability, about two and a half times what its browser suites take on CI (`clrBudgetMs` in tasks.fsx has the measurements)"
+      Bounded = "Every browser wait fails by itself within 30s" }
+
 let private runCheckOnce (requested: string list) (runtime: Runtime option) =
     let caps = requested
     requireCapabilities caps
@@ -1781,13 +1866,8 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
     | Some Runtime.Neither when caps <> [ "NixBuild" ] ->
         failwith "check --runtime none: runs no suite, so NixBuild is the only thing it can be asked for"
     | _ -> ()
-    let budgetMs = nodeBudgetMs capSet
     Environment.SetEnvironmentVariable ("YESSION_TEST_CAPS", String.concat " " caps)
     underOwnProfile ()
-    // The suite is told its own budget, because a case's deadline is spent out of it: a wait
-    // that asks for more than the run can afford is refused at the call rather than taking the
-    // runner down later (`Support.settledWithin`).
-    Environment.SetEnvironmentVariable ("YESSION_TEST_BUDGET_MS", string budgetMs)
     progress (sprintf "capabilities: %s" (if List.isEmpty caps then "none (cheap tier)" else String.concat " " caps))
     runtime
     |> Option.iter (fun r ->
@@ -1798,9 +1878,7 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
 
     make (preparing capSet runtime)
 
-    if runsNode runtime then
-        progress (sprintf "running the Node suite (budget %ds)" (budgetMs / 1000))
-        runNodeSuite suiteEntry caps budgetMs
+    if runsNode runtime then runSuite caps (nodeRun capSet)
 
     // The .NET CLR (Playwright) path. No browser install step: Chromium comes from the
     // environment (PLAYWRIGHT_BROWSERS_PATH, set by devenv.nix from nixpkgs' playwright-driver),
@@ -1808,7 +1886,6 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
     // --with-deps`, which fetched from the network and installed system packages as root —
     // mid-test-run, and only ever workable on a CI image.
     if runsClr capSet runtime then
-        progress "running the browser suite (.NET CLR)"
         // The Microsoft.Playwright .NET package ships `node` as a stock glibc binary under
         // `.playwright/node/<rid>/`, and in a nixos/nix work sandbox — where an agent runs
         // this suite against its checkout — that binary's ELF loader (`/lib/ld-linux-*.so`)
@@ -1828,9 +1905,7 @@ let private runCheckOnce (requested: string list) (runtime: Runtime option) =
             |> Array.map (fun dir -> Path.Combine (dir, "node"))
             |> Array.tryFind File.Exists
             |> Option.iter (fun node -> Environment.SetEnvironmentVariable ("PLAYWRIGHT_NODEJS_PATH", node))
-        // `Target.ClrSuite` built it beside the Fable compiles; without `--no-build` this would
-        // build it again, alone, ahead of the first case.
-        exec "dotnet" [ "run"; "--project"; "tests/Yession.Tests/Yession.Tests.fsproj"; "--no-build"; "-c"; "Debug" ]
+        runSuite caps (clrRun capSet)
 
     // Last, because it is the long pole (a cold NuGet fetch plus the whole compile again,
     // offline, inside the sandbox) and because the suites are the sharper signal. `Nix` asserts
