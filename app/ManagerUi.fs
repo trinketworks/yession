@@ -440,7 +440,7 @@ let private mcpTemplate (views: ProcessManager.SessionView list) (declarations: 
                   <span class="{Style.fieldSelectMark}">{Icon.caret}</span>
                 </div>
               </div>
-              <button type="submit" class="{Style.btnPrimary}">Declare</button>
+              <button type="submit" class="{Style.btn}">Declare</button>
             </div>
             <p class="{Style.small}" data-mcp-error aria-live="polite"></p>
           </form>
