@@ -3239,6 +3239,89 @@ let private syncStatusTests =
             Expect.isFalse ((Support.render model).Contains Dom.Hooks.catchUp) "and nothing is shown"
     ]
 
+// --- every document a bin can serve --------------------------------------------------------
+//
+// "Chrome consistency" holds the floor over `pages`, a list somebody keeps, and a document added
+// tomorrow is in it only if they remember. So the product's source is read for every document it
+// can write. This product writes a document ONE way, whichever function does it: the text opens
+// with `<!doctype html>`. The session's shell and the Manager's page concatenate one, and the
+// standalone pages, the opening screen and the provider's callback page format one. That literal
+// is what is looked for, and the top-level function it stands in names the document. A PRIVATE
+// function is not one a test can call, so it is reached through the public functions that call
+// it, and those are the surfaces: the refusal page is what `standalonePage` writes.
+
+/// A document the product can write, by the public function a test calls to render it.
+type private DocumentSurface =
+    { /// `Module.function`, as a test spells the call.
+      Surface : string
+      /// Where its `<!doctype html>` is written, as `file:line`.
+      WrittenAt : string }
+
+/// A line that is code. A line that is only a comment calls nothing and writes nothing.
+let private isCode (line: string) : bool =
+    let trimmed = line.TrimStart ()
+    trimmed <> "" && not (trimmed.StartsWith "//") && not (trimmed.StartsWith "(*")
+
+/// A top-level function: a `let` at column 0, and whether it is private.
+let private topLevelLet =
+    System.Text.RegularExpressions.Regex @"^let\s+(?:(?:rec|inline)\s+)*(?:(private)\s+)?(?:(?:rec|inline)\s+)*([A-Za-z_][\w']*)"
+
+/// The top-level function line `at` stands in: the nearest `let` at column 0 at or above it,
+/// with whether it is private.
+let private enclosingFunction (lines: string array) (at: int) : (string * bool) option =
+    seq { at .. -1 .. 0 }
+    |> Seq.tryPick (fun k ->
+        let found = topLevelLet.Match lines.[k]
+        if found.Success then Some (found.Groups.[2].Value, found.Groups.[1].Value = "private") else None)
+
+/// The public functions of `lines` that reach `name`, and `name` itself when it is public.
+let rec private surfacesOf (lines: string array) (visited: Set<string>) (name: string, isPrivate: bool) : string list =
+    if not isPrivate then [ name ]
+    else
+        let called = System.Text.RegularExpressions.Regex (sprintf @"\b%s\b" (System.Text.RegularExpressions.Regex.Escape name))
+        [ for k in 0 .. lines.Length - 1 do
+              if isCode lines.[k] && called.IsMatch lines.[k] then
+                  match enclosingFunction lines k with
+                  | Some (caller, callerIsPrivate) when not (visited.Contains caller) ->
+                      yield! surfacesOf lines (visited.Add caller) (caller, callerIsPrivate)
+                  | _ -> () ]
+        |> List.distinct
+
+/// The product's F# sources as git would commit them: tracked, and untracked but not ignored,
+/// because a page written a minute ago and not yet added is the one this exists to catch.
+let private productSources () : string list =
+    let listed =
+        Fable.NodeExtras.SyncChildProcesses.execFileSync
+            "git"
+            [ "ls-files"; "-z"; "--cached"; "--others"; "--exclude-standard"; "--"; "app"; "src" ]
+            { Fable.NodeExtras.SyncOptions.none with MaxBuffer = Some (32 * 1024 * 1024) }
+    listed.Split [| '\u0000' |] |> Array.filter (fun path -> path.EndsWith ".fs") |> Array.distinct |> List.ofArray
+
+/// Every document the product's source can write, by the public function that renders it.
+let private documentSurfaces () : DocumentSurface list =
+    [ for file in productSources () do
+          let lines = (TestFiles.read file).Split '\n'
+          let inModule =
+              lines
+              |> Array.tryPick (fun line ->
+                  let declared = System.Text.RegularExpressions.Regex.Match (line, @"^module\s+([\w.]+)\s*$")
+                  if declared.Success then Some (declared.Groups.[1].Value.Split '.' |> Array.last) else None)
+          for at in 0 .. lines.Length - 1 do
+              if isCode lines.[at] && lines.[at].ToLowerInvariant().Contains "<!doctype" then
+                  let writtenAt = sprintf "%s:%d" file (at + 1)
+                  match inModule, enclosingFunction lines at with
+                  | Some inModule, Some (name, isPrivate) ->
+                      match surfacesOf lines (Set.singleton name) (name, isPrivate) with
+                      | [] -> failwithf "%s writes a document in `%s`, which nothing calls: delete it, or call it" writtenAt name
+                      | surfaces ->
+                          for surface in surfaces do
+                              yield { Surface = inModule + "." + surface; WrittenAt = writtenAt }
+                  | _ ->
+                      failwithf
+                          "%s writes a document outside a top-level function of a module, and this scan names a document by the function that writes it"
+                          writtenAt ]
+    |> List.distinct
+
 // The chrome's shared vocabulary (`Style.Stroke` and the phrases over it), asserted where it
 // is observable: the rendered markup. These are invariants about EVERY control of a kind, so
 // they catch the next surface that invents its own field or forgets a focus state — which is
@@ -3682,6 +3765,31 @@ let private chromeTests =
                     match titles with
                     | [] -> page, "it has no <title> in its <head>"
                     | (title, _) :: _ -> if Markup.text (fun _ -> false) title = "" then page, "its <title> is empty" ]
+
+        // `pages` is a list kept by hand, so a document added tomorrow is held to none of the
+        // floor above until somebody remembers it. So the product's source is read for every
+        // document it can write (`documentSurfaces`), and each must be one this suite builds:
+        // one called before `documents`, which is where `renders` and `pages` are made.
+        testCase "every document a bin can serve is one this suite renders" <| fun () ->
+            let lines = (TestFiles.read "tests/Yession.Tests/Acceptance.fs").Split '\n'
+            let opens = lines |> Array.findIndex (fun line -> line.TrimStart().StartsWith "testList \"Chrome consistency\"")
+            let built =
+                match lines |> Array.skip opens |> Array.tryFindIndex (fun line -> line.TrimStart().StartsWith "let documents =") with
+                | Some length -> lines |> Array.skip opens |> Array.take length |> Array.filter isCode |> String.concat "\n"
+                | None -> failwith "Chrome consistency has no `let documents =`, and what this case reads as rendered is what the suite builds before it"
+            refuse
+                "a document a bin can serve is not one this suite renders, so the floor is not held on it. Add a render of it to `pages` (a state of the session's shell goes in `renders` instead)"
+                [ for document in documentSurfaces () do
+                    let named = System.Text.RegularExpressions.Regex (sprintf @"\b%s\b" (System.Text.RegularExpressions.Regex.Escape document.Surface))
+                    if not (named.IsMatch built) then
+                        document.WrittenAt, sprintf "`%s` serves the document written here, and nothing in this suite renders it" document.Surface ]
+
+        // A scan that found nothing would pass the case above, so it is asked for the one
+        // document that cannot go away.
+        testCase "the scan for documents finds the session's shell" <| fun () ->
+            Expect.isTrue
+                (documentSurfaces () |> List.exists (fun document -> document.Surface = "Ssr.page"))
+                "the session's shell, among the documents the scan found"
     ]
 
 // What the session page must keep saying, whatever it comes to look like: one person wears
