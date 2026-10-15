@@ -875,16 +875,7 @@ let private startProviderServer (engine: Ports.SerialEngine) =
 
 /// Poll rather than sleep a fixed amount: what is being waited on is a round trip over
 /// loopback, and a fixed sleep is either flaky or slow.
-let private until (predicate: unit -> bool) : Async<bool> =
-    let rec loop (remaining: int) =
-        async {
-            if predicate () then return true
-            elif remaining <= 0 then return false
-            else
-                do! Async.Sleep 20
-                return! loop (remaining - 20)
-        }
-    loop 3000
+let private until (predicate: unit -> bool) : Async<bool> = Yession.Tests.Support.settledWithin 3000 predicate
 
 let private textOf (answer: Result<ToolAnswer, string>) =
     match answer with

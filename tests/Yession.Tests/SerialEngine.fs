@@ -235,16 +235,7 @@ let private startPair () : Async<Pair> =
 
 /// Poll rather than sleep a fixed amount: a tty round trip is fast but not instant, and a
 /// fixed sleep is either flaky or slow.
-let private until (predicate: unit -> bool) : Async<bool> =
-    let rec loop (remaining: int) =
-        async {
-            if predicate () then return true
-            elif remaining <= 0 then return false
-            else
-                do! Async.Sleep 20
-                return! loop (remaining - 20)
-        }
-    loop 5000
+let private until (predicate: unit -> bool) : Async<bool> = Yession.Tests.Support.settledWithin 5000 predicate
 
 let tests =
     testList "The serial engine, against a real tty" [

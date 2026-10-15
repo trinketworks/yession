@@ -2533,9 +2533,11 @@ let private sseStreamTests =
                     res.write "data: half a lo" |> ignore
                     // The gap is what makes this two reads rather than one: written back to back,
                     // the two pieces would reach the client in a single chunk and the case would
-                    // pin nothing.
+                    // pin nothing. The client's read of the first piece is not observable from
+                    // here (it dispatches nothing — that is the point), so the stub stays quiet
+                    // for long enough that it has happened.
                     Async.StartImmediate (async {
-                        do! Async.Sleep 100
+                        do! quietFor 100
                         res.write "af\n\n" |> ignore
                     })
 
@@ -3030,27 +3032,23 @@ let private notificationStreamTests =
 
                 // The subscription connects asynchronously and notifications are not
                 // buffered, so push until the first arrives (or a generous timeout).
-                let rec pump (remaining: int) =
-                    async {
-                        if not (List.isEmpty receivedA) || remaining <= 0 then return ()
-                        else
-                            hub.NotifySecret "secret-a" aDelivery
-                            do! Async.Sleep 50
-                            return! pump (remaining - 1)
-                    }
-                do! pump 60
+                let! _ =
+                    settledWithin 3000 (fun () ->
+                        if List.isEmpty receivedA then hub.NotifySecret "secret-a" aDelivery
+                        not (List.isEmpty receivedA))
 
                 Expect.isTrue (not (List.isEmpty receivedA)) "A received the notification pushed to its secret"
                 Expect.equal (List.head receivedA) aDelivery "the notification decoded correctly across the wire"
                 Expect.isTrue (List.isEmpty receivedB) "B never received a notification pushed to A's secret (per-session scoping)"
 
                 // Cancel closes the stream; the server unsubscribes the sink, so further
-                // pushes never arrive.
+                // pushes never arrive. Both windows are absences: what was in flight has
+                // landed, and then nothing more does.
                 cancelA.Stop ()
-                do! Async.Sleep 200
+                do! quietFor 200
                 let settled = List.length receivedA
                 hub.NotifySecret "secret-a" aDelivery
-                do! Async.Sleep 200
+                do! quietFor 200
                 Expect.equal (List.length receivedA) settled "after cancel, no further notifications arrive"
 
                 cancelB.Stop ()
@@ -3099,15 +3097,14 @@ let private hookDeliveryStreamTests =
 
                 // The stream connects asynchronously and nothing is buffered, so deliver
                 // until the first arrives (or a generous timeout) — the sibling suite's rule.
-                let rec pump (remaining: int) =
-                    async {
-                        if not (List.isEmpty received) || remaining <= 0 then return ()
-                        else
-                            let! _ = deliver ()
-                            do! Async.Sleep 50
-                            return! pump (remaining - 1)
-                    }
-                do! pump 60
+                let! _ =
+                    settledWithinAsync 3000 (fun () ->
+                        async {
+                            if List.isEmpty received then
+                                let! _ = deliver ()
+                                ()
+                            return not (List.isEmpty received)
+                        })
 
                 match received with
                 | WebhookDelivered (id, endpoint, _, delivered) :: _ ->
@@ -3121,7 +3118,7 @@ let private hookDeliveryStreamTests =
                 | Error e -> failwith e
                 let settled = List.length received
                 let! _ = deliver ()
-                do! Async.Sleep 200
+                do! quietFor 200
                 Expect.equal (List.length received) settled "after unsubscribing, deliveries stop"
 
                 cancel.Stop ()
@@ -3228,14 +3225,7 @@ let private mcpStreamTests =
                 let mutable received : McpServerSet list = []
                 let cancel = ControlClient.subscribeMcp url "secret-a" (fun s -> received <- received @ [ s ])
 
-                let rec waitFor (remaining: int) =
-                    async {
-                        if not (List.isEmpty received) || remaining <= 0 then return ()
-                        else
-                            do! Async.Sleep 50
-                            return! waitFor (remaining - 1)
-                    }
-                do! waitFor 60
+                let! _ = settledWithin 3000 (fun () -> not (List.isEmpty received))
                 Expect.equal
                     (List.tryHead received)
                     (Some { Servers = [ serialServer ] })
@@ -3243,24 +3233,19 @@ let private mcpStreamTests =
 
                 let before = List.length received
                 mcp.Publish sseSession { Servers = [ serialServer; printerServer ] }
-                let rec waitGrow (remaining: int) =
-                    async {
-                        if List.length received > before || remaining <= 0 then return ()
-                        else
-                            do! Async.Sleep 50
-                            return! waitGrow (remaining - 1)
-                    }
-                do! waitGrow 60
+                let! _ = settledWithin 3000 (fun () -> List.length received > before)
                 Expect.equal
                     (List.last received |> fun s -> List.length s.Servers)
                     2
                     "the change was pushed to the live subscriber"
 
+                // Both windows are absences: what was in flight has landed, and then nothing
+                // more does.
                 cancel.Stop ()
-                do! Async.Sleep 200
+                do! quietFor 200
                 let settled = List.length received
                 mcp.Publish sseSession McpServerSet.empty
-                do! Async.Sleep 200
+                do! quietFor 200
                 Expect.equal (List.length received) settled "after cancel, no further sets arrive"
 
                 server.close ignore
@@ -3647,14 +3632,7 @@ let private registryStreamTests =
                         [ Strategy.SubjectHeader, "serving-binding" ]
                         (sprintf "http://127.0.0.1:%d" pm.EndpointPort.Value)
                         (fun f -> if snapshot.IsNone then snapshot <- Some f)
-                let rec waitSnapshot (remaining: int) =
-                    async {
-                        if snapshot.IsSome || remaining <= 0 then return ()
-                        else
-                            do! Async.Sleep 50
-                            return! waitSnapshot (remaining - 1)
-                    }
-                do! waitSnapshot 100
+                let! _ = settledWithin 5000 (fun () -> snapshot.IsSome)
                 cancel.Stop ()
                 Expect.equal snapshot (Some { ControlWire.SessionRegistryFrame.Sessions = [] }) "an asserted identity gets the snapshot"
                 do! pm.StopAll ()

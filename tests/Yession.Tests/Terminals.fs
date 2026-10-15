@@ -3206,7 +3206,9 @@ let private schedulerTests =
                 // Queued exactly as the agent's capability queues one — same doc write.
                 SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.ofAuthor (Principal.Peer ada)) 1.0 "echo ok" false false None None
                 scheduler.Drain ()
-                do! Async.Sleep 20
+                // The entry leaves the doc once its start is on the record, so its leaving is
+                // what the drain's work having happened looks like from here.
+                let! _ = settledWithin 5000 (fun () -> Map.isEmpty (SyncedStateSync.ofDoc doc).Pending)
 
                 let! events = eventsOf log
                 let startedEvent =
@@ -3234,7 +3236,8 @@ let private schedulerTests =
                 let! _ = terminals.Close id ActorRef.System "killed"
                 SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.ofAuthor (Principal.Peer ada)) 1.0 "echo late" false false None None
                 scheduler.Drain ()
-                do! Async.Sleep 20
+                // Consumed only once the refusal is on the record.
+                let! _ = settledWithin 5000 (fun () -> Map.isEmpty (SyncedStateSync.ofDoc doc).Pending)
 
                 let! events = eventsOf log
                 let refused = events |> List.choose (function SessionEvent.TerminalCommandRejected r -> Some r | _ -> None)
@@ -3257,7 +3260,7 @@ let private schedulerTests =
                 let scheduler = TerminalScheduler.create doc terminals ignore Set.empty
                 SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (Principal.Peer ada)) 1.0 "echo hi" false false None None
                 scheduler.Drain ()
-                do! Async.Sleep 20
+                let! _ = settledWithin 5000 (fun () -> spawned.Count > 0)
                 Expect.equal (List.length (List.ofSeq spawned)) 1 "it ran, with nobody asked"
                 Expect.isTrue (Map.isEmpty (SyncedStateSync.ofDoc doc).Pending) "and nothing is left parked"
             }
@@ -3284,7 +3287,8 @@ let private schedulerTests =
                 SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.agentFor (Principal.Peer ada)) 1.0 "rm -rf /" false false None None
                 SyncedStateSync.enqueueTerminalCommand doc (queue "a2") id (Authority.ofAuthor (Principal.Peer ada)) 2.0 "echo ok" false false None None
                 scheduler.Drain ()
-                do! Async.Sleep 50
+                // The entry behind the refused one spawning is the last thing the drain does.
+                let! _ = settledWithin 5000 (fun () -> spawned.Count > 0)
                 let! events = eventsOf log
                 let refusal =
                     events |> List.pick (function SessionEvent.TerminalCommandRejected e -> Some e | _ -> None)
@@ -3323,7 +3327,7 @@ let private schedulerTests =
                 (doc.getText (BodyKey.terminalQueued (queue "a1"))).delete (0, 10)
                 (doc.getText (BodyKey.terminalQueued (queue "a1"))).insert (0, "echo final")
                 scheduler.Drain ()
-                do! Async.Sleep 20
+                let! _ = settledWithin 5000 (fun () -> asked.Count > 0)
                 match List.ofSeq asked with
                 | [ author, TerminalAct (terminal, command) ] ->
                     Expect.equal command "echo final" "the text as it stood when the drain took it"
@@ -3345,7 +3349,8 @@ let private schedulerTests =
                 let scheduler = TerminalScheduler.create doc terminals ignore (Set.singleton "q-a1")
                 SyncedStateSync.enqueueTerminalCommand doc (queue "a1") id (Authority.ofAuthor (Principal.Peer ada)) 1.0 "make" false false None None
                 scheduler.Drain ()
-                do! Async.Sleep 20
+                // A run that should not happen: only a window can show it did not.
+                do! quietFor 20
                 Expect.isEmpty (List.ofSeq spawned) "it does not run a second time"
                 let synced = SyncedStateSync.ofDoc doc
                 Expect.isTrue (Map.isEmpty synced.Pending) "and the leftover is cleaned out of the doc"
@@ -3721,6 +3726,14 @@ let private closureReasons (log: EventLog<SessionEvent>) =
         return events |> List.choose (function SessionEvent.TerminalClosed e -> Some e.Reason | _ -> None)
     }
 
+/// Until a closure is on the log, bounded — what a stream's end is followed by, some way off.
+/// Not a failure when none comes: the case's own assertion says what it expected instead.
+let private closureRecorded (log: EventLog<SessionEvent>) =
+    settledWithinAsync 5000 (fun () -> async {
+        let! reasons = closureReasons log
+        return not (List.isEmpty reasons) })
+    |> Async.Ignore
+
 let private sourceTests =
     testList "Foreign terminal sources" [
 
@@ -3829,7 +3842,7 @@ let private sourceTests =
                 let! opened = terminals.Open (PeerRef ada) (Attached { Ticket = deviceTicket; Renewable = false }) (TerminalTitle.fromProse "USB serial")
                 let id = opened |> expect
                 endStream (SandboxExited 0)
-                do! Async.Sleep 20
+                let! _ = settledWithin 5000 (fun () -> not (terminals.IsOpen id))
                 Expect.isFalse (terminals.IsOpen id) "the terminal goes with the stream that fed it"
             }
 
@@ -3846,7 +3859,7 @@ let private sourceTests =
                 let! opened = terminals.Open (PeerRef ada) (Attached { Ticket = deviceTicket; Renewable = false }) (TerminalTitle.fromProse "USB serial")
                 let _ = opened |> expect
                 endStream (SandboxExited 0)
-                do! Async.Sleep 20
+                do! closureRecorded log
                 let! reasons = closureReasons log
                 match reasons with
                 | [ reason ] ->
@@ -3865,7 +3878,7 @@ let private sourceTests =
                 let! opened = terminals.Open (PeerRef ada) (Attached { Ticket = codedTicket; Renewable = false }) (TerminalTitle.fromProse "remote shell")
                 let _ = opened |> expect
                 endStream (SandboxExited 7)
-                do! Async.Sleep 20
+                do! closureRecorded log
                 let! reasons = closureReasons log
                 Expect.equal reasons [ "the stream ended with code 7" ] "the code it declared it would have"
             }
@@ -3883,7 +3896,7 @@ let private sourceTests =
                 let! opened = terminals.Open (PeerRef ada) (Attached { Ticket = deviceTicket; Renewable = false }) (TerminalTitle.fromProse "USB serial")
                 let _ = opened |> expect
                 endStream (SandboxRunFailed "the exporter went away")
-                do! Async.Sleep 20
+                do! closureRecorded log
                 let! reasons = closureReasons log
                 Expect.equal reasons [ "the exporter went away" ] "carried through unchanged"
             }
@@ -3901,7 +3914,8 @@ let private sourceTests =
                 let id = opened |> expect
                 let! closed = terminals.Close id ActorRef.System "closed by a peer"
                 Expect.isOk closed "the hand close succeeds"
-                do! Async.Sleep 20
+                // A second closure is what must NOT come, and only a window can show that.
+                do! quietFor 20
                 let! reasons = closureReasons log
                 Expect.equal reasons [ "closed by a peer" ] "one closure, and it is the one a person asked for"
             }
@@ -5175,16 +5189,15 @@ let private refusalsOf (log: EventLog<SessionEvent>) =
 
 /// Wait, bounded, until `count` refusals are on the log.
 let private untilRefused (log: EventLog<SessionEvent>) (count: int) =
-    let rec look (left: int) =
-        async {
+    async {
+        let! held =
+            settledWithinAsync 2000 (fun () -> async {
+                let! refusals = refusalsOf log
+                return List.length refusals >= count })
+        if not held then
             let! refusals = refusalsOf log
-            if List.length refusals >= count then return ()
-            elif left = 0 then return failwithf "expected %d refusals, got %A" count refusals
-            else
-                do! Async.Sleep 10
-                return! look (left - 1)
-        }
-    look 200
+            failwithf "expected %d refusals, got %A" count refusals
+    }
 
 /// What a terminal that cannot run commands does with its queue, and with itself.
 let private cannotRunTests =
@@ -5267,17 +5280,11 @@ let private cannotRunTests =
                 do! waitUntil "the open block to be settled" (fun () -> not (terminals.Busy () |> Set.contains (TerminalId.value id)))
                 SyncedStateSync.enqueueTerminalCommand doc (queue "a4") id byAda 4.0 "echo four" false false None None
                 scheduler.Drain ()
-                let rec started (left: int) =
-                    async {
+                let! started =
+                    settledWithinAsync 2000 (fun () -> async {
                         let! events = eventsOf log
-                        if events |> List.exists (function SessionEvent.TerminalBlockStarted b -> b.QueueId = Some (queue "a4") | _ -> false) then
-                            return ()
-                        elif left = 0 then return failwith "the command queued after the prompt returned never started"
-                        else
-                            do! Async.Sleep 10
-                            return! started (left - 1)
-                    }
-                do! started 200
+                        return events |> List.exists (function SessionEvent.TerminalBlockStarted b -> b.QueueId = Some (queue "a4") | _ -> false) })
+                Expect.isTrue started "the command queued after the prompt returned started"
             }
 
         testCaseAsync "what the loss refused is not run when the prompt returns" <|

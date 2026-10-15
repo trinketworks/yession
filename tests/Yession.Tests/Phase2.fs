@@ -195,9 +195,11 @@ let private promiseAwaitTests =
                 // workflow onto a `setTimeout` every 2000 steps, so a real await lands here:
                 // after Node has already decided whether the rejection was handled. Nothing
                 // the workflow does later can undo that verdict, so the handler has to be
-                // attached by now.
+                // attached by now. Node reaches its verdict at the end of the turn the
+                // rejection happened in, so a turn — not a duration — is what puts the await
+                // after it, and a turn after the await is what any report would have come in.
                 let awaiting = Interop.awaitPromise (rejectedPromise "boom")
-                do! Async.Sleep 10
+                do! nextTurn ()
                 let! caught =
                     async {
                         try
@@ -205,7 +207,7 @@ let private promiseAwaitTests =
                             return "no error"
                         with ex -> return ex.Message
                     }
-                do! Async.Sleep 10
+                do! nextTurn ()
                 let unhandled = unhandledSoFar ()
                 stopWatching ()
                 Expect.equal caught "boom" "the rejection arrives as a catchable exception"
@@ -221,7 +223,7 @@ let private promiseAwaitTests =
             async {
                 let unhandledSoFar, stopWatching = watchUnhandledRejections ()
                 let awaiting = Interop.awaitPromise (rejectedWithNothing ())
-                do! Async.Sleep 10
+                do! nextTurn ()
                 let! caught =
                     async {
                         try
@@ -229,7 +231,7 @@ let private promiseAwaitTests =
                             return "no error"
                         with ex -> return ex.Message
                     }
-                do! Async.Sleep 10
+                do! nextTurn ()
                 let unhandled = unhandledSoFar ()
                 stopWatching ()
                 Expect.equal caught "promise rejected" "the reason it could not carry is named instead"

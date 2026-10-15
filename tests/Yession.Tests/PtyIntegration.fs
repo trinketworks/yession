@@ -78,10 +78,16 @@ let private runOnPty (executable: string) (arguments: string list) : Async<Resul
 /// own container) while this fixture defaulted to `bash` — so the suite proved stage 2d's
 /// properties under the one dialect nothing ships, and a `/bin/sh` that never emitted its
 /// prompt mark went unnoticed through every green run.
-let private withShellTerminal
+///
+/// `raw` is handed every byte the pty delivers, after the manager has had it: what the shell
+/// printed, marks and all, including what a gate holds back from the transcript. A case that
+/// has to let the shell act before it does the next thing waits for the shell to SAY it has
+/// (`untilPrinted`), because nothing else it can reach changes while the gate is shut.
+let private withTappedShellTerminal
     (shell: TerminalShell)
     (loans: SessionTerminals.BlockLoans)
     (prepare: SessionTerminals.SessionTerminals -> Async<unit>)
+    (raw: System.Text.StringBuilder)
     (name: string)
     (body: SessionTerminals.SessionTerminals
              -> TerminalId
@@ -115,7 +121,9 @@ let private withShellTerminal
                         async {
                             match sandbox.SpawnPty with
                             | None -> return Error "no pty"
-                            | Some spawn -> return! spawn exec cols rows onOutput
+                            | Some spawn ->
+                                // The manager first, so a byte `raw` holds is one it has read.
+                                return! spawn exec cols rows (fun data -> onOutput data; raw.Append data |> ignore)
                         }
                   Stop = fun () -> async { return () }
                   CurrentRef = fun () -> Some "host"
@@ -185,6 +193,26 @@ let private withShellTerminal
                 do! sandbox.Dispose ()
     }
 
+let private withShellTerminal shell loans prepare name body =
+    withTappedShellTerminal shell loans prepare (System.Text.StringBuilder ()) name body
+
+/// Wait until what the shell has printed since `mark` (a length of `raw` taken earlier)
+/// satisfies `printed`. A red one quotes what it DID print, control characters spelled out:
+/// the bytes are the only account of what the shell made of its line, and the transcript
+/// holds none of them while the gate is shut.
+let private untilPrinted (raw: System.Text.StringBuilder) (mark: int) (label: string) (printed: string -> bool) : Async<unit> =
+    async {
+        let since () = (string raw).Substring mark
+        let! held = settledWithin 5000 (fun () -> printed (since ()))
+        if not held then
+            let spelled = (since ()).Replace("\u001b", "\\e").Replace("\r", "\\r").Replace("\n", "\\n")
+            failwithf "timed out waiting for %s; the shell printed: %s" label spelled
+    }
+
+/// Our own mark kinds, as a shell prints them (`Marks`): the prompt's start, and a command's.
+let private promptMark = "\u001b]133;A"
+let private startMark = "\u001b]133;C"
+
 let private withPreparedTerminal prepare name body =
     withShellTerminal TerminalShell.bash SessionTerminals.BlockLoans.none prepare name body
 
@@ -249,16 +277,7 @@ let private agentEntry (terminal: TerminalId) (turnActor: Principal) (n: string)
 /// Poll until `condition` holds or the budget runs out. Bounded rather than a fixed sleep:
 /// a shell's timing is not ours to predict, and a test that sleeps long enough to be safe is
 /// a test that is slow every run.
-let private until (budgetMs: int) (condition: unit -> bool) : Async<bool> =
-    let rec go remaining =
-        async {
-            if condition () then return true
-            elif remaining <= 0 then return false
-            else
-                do! Async.Sleep 50
-                return! go (remaining - 50)
-        }
-    go budgetMs
+let private until (budgetMs: int) (condition: unit -> bool) : Async<bool> = settledWithin budgetMs condition
 
 /// Wait until a block has PRINTED `text` — the only evidence that the command is running.
 /// "Busy" is set before the line is even typed, and a keystroke sent on that alone can land
@@ -283,7 +302,8 @@ let private blockResults (log: EventLog<SessionEvent>) : Async<CommandResult lis
 let private integrationLostTests =
     testList "Integration lost over a real pty (Plan 13, stage 2f)" [
         testCaseAsync "a shell replaced mid-session is detected, and the terminal stays open and typeable" <|
-            withLiveTerminal "lost" (fun terminals id _ log reDrains advance ->
+            (let raw = System.Text.StringBuilder ()
+             withTappedShellTerminal TerminalShell.bash SessionTerminals.BlockLoans.none (fun _ -> async { return () }) raw "lost" (fun terminals id _ log reDrains advance ->
                 async {
                     let ada = Principal.Peer (PeerId.create "ada" |> expect)
                     // A genuinely long-running command must NOT trip the detector — the `C`
@@ -303,26 +323,33 @@ let private integrationLostTests =
                         // what makes it uninstrumented rather than accidentally inheriting
                         // anything, and `exec` is what makes `Exited` never fire: the pty
                         // stays open around a process we never bootstrapped.
+                        let typed = raw.Length
                         terminals.Input id (Principal.toActor ada) "exec bash --noprofile --norc -i\r" |> ignore
                         // Let the shell ACT on what was just typed before typing the next
                         // thing. The drain never has to: it awaits a block's `D` before
                         // starting the next, so the previous command's `C` has always landed.
                         // Typing in live mode and draining immediately is the one ordering
                         // that has no such barrier, and without this the `C` bash emits for
-                        // `exec cat` arrives inside the next block's window and looks like it.
-                        do! Async.Sleep 1000
+                        // the `exec` arrives inside the next block's window and looks like it.
+                        do! untilPrinted raw typed "the shell to mark the exec's start" (fun said -> said.Contains startMark)
                         match! terminals.Release id (Principal.toActor ada) with
                         | Error e -> failwith e
                         | Ok () ->
                             // A command written into the shell that is there now produces no
                             // `C`, because nothing instrumented it.
+                            let typed = raw.Length
                             let running = terminals.RunBlock id (queueEntry id ada "2") "echo after-exec" ignore
                             Async.StartImmediate running
                             // Let the shell RENDER the line before the clock is turned: what it
-                            // prints behind the gate is not observable from here (that is the
+                            // prints behind the gate is not in the transcript (that is the
                             // gate), and the fact below is asserted to carry it. The same
-                            // shape as the wait above, for the same reason.
-                            do! Async.Sleep 500
+                            // shape as the wait above, for the same reason: the output at the
+                            // start of a line, which the echo of the command never is (bash may
+                            // put its bracketed-paste reset between the two, so the line can
+                            // start at a `\r`).
+                            do!
+                                untilPrinted raw typed "the replaced shell to print the block's output" (fun said ->
+                                    said.Contains "\nafter-exec" || said.Contains "\rafter-exec")
                             // The block's line is typed once its anchor is durable, and the
                             // detector is armed beside it; the window is then the clock's to
                             // turn. Turned each look, because the arming is what is waited
@@ -360,7 +387,7 @@ let private integrationLostTests =
                                 Expect.isTrue
                                     (terminals.Input id (Principal.toActor ada) "echo still-here\r")
                                     "and what they type reaches the pty"
-                })
+                }))
 
     ]
 
@@ -555,15 +582,13 @@ let private liveModeTests =
                         }
                     // The exit is what closes the round trip, and the emulator applies writes
                     // asynchronously — so poll for it rather than assume it has landed.
-                    let rec settle remaining =
-                        async {
-                            let! seen = leaseEvents ()
-                            if List.length seen >= 2 || remaining <= 0 then return seen
-                            else
-                                do! Async.Sleep 50
-                                return! settle (remaining - 50)
-                        }
-                    let! seen = settle 5000
+                    let! _ =
+                        settledWithinAsync 5000 (fun () ->
+                            async {
+                                let! seen = leaseEvents ()
+                                return List.length seen >= 2
+                            })
+                    let! seen = leaseEvents ()
                     Expect.equal
                         seen
                         [ "taken", Principal.toActor ada; "released", Principal.toActor ada ]
@@ -676,15 +701,13 @@ let private agentLeaseTests =
                                     | SessionEvent.TerminalLeaseReleased r -> Some ("released", r.Was)
                                     | _ -> None)
                         }
-                    let rec settle remaining =
-                        async {
-                            let! seen = leaseEvents ()
-                            if List.length seen >= 2 || remaining <= 0 then return seen
-                            else
-                                do! Async.Sleep 50
-                                return! settle (remaining - 50)
-                        }
-                    let! seen = settle 5000
+                    let! _ =
+                        settledWithinAsync 5000 (fun () ->
+                            async {
+                                let! seen = leaseEvents ()
+                                return List.length seen >= 2
+                            })
+                    let! seen = leaseEvents ()
                     Expect.equal
                         seen
                         [ "taken", ActorRef.Agent; "released", ActorRef.Agent ]
@@ -1198,21 +1221,27 @@ let private leaseLoanTests =
             // line then produces none, and their output would be swallowed until somebody
             // ran a block.
             (let recorded = recordedLoans adasLoan
-             withLoansTerminal TerminalShell.bash recorded.Loans "lease-gate-bounded" (fun terminals id records _ _ advance ->
+             let raw = System.Text.StringBuilder ()
+             withTappedShellTerminal TerminalShell.bash recorded.Loans (fun _ -> async { return () }) raw "lease-gate-bounded" (fun terminals id records _ _ advance ->
                 async {
                     let bob = Principal.Peer (PeerId.create "bob" |> expect)
                     match! terminals.Take id (Principal.toActor ada) with
                     | Error e -> failwith e
                     | Ok () ->
+                        let typed = raw.Length
                         Expect.isTrue (terminals.Input id (Principal.toActor ada) "trap - DEBUG\r") "the start mark is unhooked"
                         // Let the shell reach its prompt again before the next holder's line
                         // goes in — the same barrier the lost-marks case above needs.
-                        do! Async.Sleep 1000
+                        do! untilPrinted raw typed "the shell's prompt after the unhooking" (fun said -> said.Contains promptMark)
+                        let lent = raw.Length
                         match! terminals.Take id (Principal.toActor bob) with
                         | Error e -> failwith e
                         | Ok () ->
                             Expect.equal recorded.Asked.Count 2 "bob was lent his own"
-                            do! Async.Sleep 500
+                            // And let it take bob's loan line, behind the gate, before the
+                            // clock gives up on the gate: the prompt that answers the line is
+                            // the shell saying it has.
+                            do! untilPrinted raw lent "the shell's prompt after the loan's line" (fun said -> said.Contains promptMark)
                             advance (System.TimeSpan.FromSeconds 3.0)
                             Expect.isTrue (terminals.Input id (Principal.toActor bob) "echo after-the-window\r") "bob types"
                             let! seen = printedOutput records "after-the-window"

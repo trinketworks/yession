@@ -135,17 +135,17 @@ let private startDev (granted: ResourceLeaf list) (spec: EnvironmentSpec) : Asyn
 /// /etc when the first exec lands (the race the product retries through — #402). The same
 /// brief patience here, so a case's red means its invariant and not the race.
 let private awaitReady (sandbox: Sandbox) : Async<unit> =
-    let rec go attempts =
-        async {
-            let! run, _, _ = runInSandbox sandbox "sh" [ "-c"; "true" ] Map.empty None
-            match run with
-            | SandboxExited 0 -> return ()
-            | outcome when attempts <= 1 -> return failwithf "the container never became execable: %A" outcome
-            | _ ->
-                do! Async.Sleep 500
-                return! go (attempts - 1)
-        }
-    go 20
+    async {
+        let mutable outcome = None
+        let! ready =
+            settledWithinAsync 10_000 (fun () ->
+                async {
+                    let! run, _, _ = runInSandbox sandbox "sh" [ "-c"; "true" ] Map.empty None
+                    outcome <- Some run
+                    return (match run with SandboxExited 0 -> true | _ -> false)
+                })
+        if not ready then failwithf "the container never became execable: %A" outcome
+    }
 
 /// One case's whole fixture lifecycle, cleaned up on RED as well as green: these suites
 /// used to dispose with trailing statements, so a failed assertion leaked a container

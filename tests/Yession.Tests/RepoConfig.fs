@@ -621,7 +621,7 @@ let foldTests =
                 // waits on a second the fold has not started), so we do NOT await it to a
                 // finish — we check that both declarations reached the gate.
                 let! _ = Async.StartChild (folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment)
-                do! Async.Sleep 200
+                let! _ = Support.settledWithin 5000 (fun () -> arrived >= 2)
                 Expect.equal arrived 2 "both sandboxes reached the gate before either finished; a sequential fold parks at one"
             }
 
@@ -675,9 +675,10 @@ let foldTests =
                     RepoSandboxes.create dir (cell (Some (reposOver dir [ r ]))) (cell WorkSandboxes.unavailable) holding (foldLog ()) noCapabilities
                 let ada = Principal.User (UserId.create "ada" |> expect)
                 let! first = Async.StartChild (folded.Fold (FoldCause.Booted boot) CredentialFor.Deployment)
-                do! Async.Sleep 20
+                do! Support.waitUntil "the first fold to be held at the gate" (fun () -> release.IsSome)
                 let! second = Async.StartChild (folded.Fold (FoldCause.Connected (CredentialFor.Person ada)) (CredentialFor.Person ada))
-                do! Async.Sleep 20
+                // What is asserted is that the second has NOT arrived, which only a window can show.
+                do! Support.quietFor 20
                 Expect.equal (List.ofSeq seen) [ None ] "the first is at the gate; the second has not reached it"
                 release.Value ()
                 do! first

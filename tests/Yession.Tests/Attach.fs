@@ -333,8 +333,14 @@ let startProvider () : JS.Promise<Provider> =
                 match routeOf req.url with
                 | "/abrupt" ->
                     // Upgraded, then dropped with nothing said. Nothing is read either: there is
-                    // no stream left to read by the time anybody could have written to it.
-                    JS.setTimeout (fun () -> socket.destroy ()) 30 |> ignore
+                    // no stream left to read by the time anybody could have written to it. Quiet
+                    // for a moment first, so the client has usually taken the upgrade — which
+                    // nothing it does tells this end — though the case accepts either order.
+                    Async.StartImmediate (
+                        async {
+                            do! Yession.Tests.Support.quietFor 30
+                            socket.destroy ()
+                        })
                 | route ->
                     greet socket route
                     readFrames socket)
@@ -362,16 +368,7 @@ let private ticket (port: int) (path: string) (capabilities: SourceCapabilities)
 
 /// Poll for a condition rather than sleeping a fixed amount: what is being waited on is a
 /// round trip over loopback, and a fixed sleep is either flaky or slow.
-let private until (predicate: unit -> bool) : Async<bool> =
-    let rec loop (remaining: int) =
-        async {
-            if predicate () then return true
-            elif remaining <= 0 then return false
-            else
-                do! Async.Sleep 20
-                return! loop (remaining - 20)
-        }
-    loop 3000
+let private until (predicate: unit -> bool) : Async<bool> = Yession.Tests.Support.settledWithin 3000 predicate
 
 /// Run `body` hearing what `console.warn` is told, the real one put back however the body ends
 /// (`ConsoleWarnings.overhearing`). `said` answers with what has been warned so far, one entry
