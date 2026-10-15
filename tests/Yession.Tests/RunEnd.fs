@@ -15,7 +15,7 @@ module Yession.Tests.RunEnd
 // leaves is proof of which one. Both are recorded here and said at the ending.
 //
 // This does NOT bound how long a case may take: a run that overruns is the other end of the
-// same worry, and `runNodeSuite` in tasks.fsx kills it and fails. What has no other reader is
+// same worry, and `runSuite` in tasks.fsx kills it and fails. What has no other reader is
 // a run that stops EARLY, quietly, and answers 0.
 
 open Fable.Core
