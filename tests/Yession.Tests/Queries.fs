@@ -11,7 +11,6 @@ module Yession.Tests.Queries
 //     thing that has to say so — nothing polls;
 //   * the door is shut: reading session state needs a session identity.
 
-open Fable.Core
 open Fable.NodeExtras
 open Fable.Pyxpecto
 open Yession.Domain
@@ -137,13 +136,11 @@ let private nameTests =
 
 /// Collect frames a subscription delivers. The registry's reads are `async`, and under
 /// Node an `async` that never awaits still resolves on a later microtask — so a collector
-/// plus a yield is the honest way to observe the burst, not a synchronous assertion.
+/// plus a turn of the event loop (`Support.nextTurn`) is the honest way to observe the burst,
+/// not a synchronous assertion.
 let private collect () =
     let frames = ResizeArray<QueryFrame> ()
     frames, (fun frame -> frames.Add frame)
-
-let private settle () : Async<unit> =
-    Async.FromContinuations (fun (cont, _, _) -> JS.setTimeout (fun () -> cont ()) 0 |> ignore)
 
 let private streamTests =
     testList "the multiplexed stream" [
@@ -160,7 +157,7 @@ let private streamTests =
                     |> expect
                 let frames, sink = collect ()
                 let subscription = registry.Subscribe sink
-                do! settle ()
+                do! Support.nextTurn ()
                 match List.ofSeq frames with
                 | QueriesDeclared defs :: values ->
                     Expect.equal
@@ -188,11 +185,11 @@ let private streamTests =
                     |> expect
                 let frames, sink = collect ()
                 let subscription = registry.Subscribe sink
-                do! settle ()
+                do! Support.nextTurn ()
                 frames.Clear ()
                 answer <- "after"
                 registry.Invalidate (name "repos")
-                do! settle ()
+                do! Support.nextTurn ()
                 Expect.equal
                     (List.ofSeq frames)
                     [ QueryValued (name "repos", ValueOf (CellText "after")) ]
@@ -211,10 +208,10 @@ let private streamTests =
                     |> expect
                 let frames, sink = collect ()
                 let subscription = registry.Subscribe sink
-                do! settle ()
+                do! Support.nextTurn ()
                 frames.Clear ()
                 registry.Invalidate (name "repos")
-                do! settle ()
+                do! Support.nextTurn ()
                 Expect.equal (List.ofSeq frames) [] "no frame carries a failure"
                 subscription.Stop ()
             }
@@ -233,13 +230,13 @@ let private streamTests =
                     |> expect
                 let frames, sink = collect ()
                 let subscription = registry.Subscribe sink
-                do! settle ()
+                do! Support.nextTurn ()
                 frames.Clear ()
                 // A SECOND repo appears. A delta protocol would send the new row; this
                 // sends both, which is what makes the frame self-sufficient.
                 rows <- rows @ [ [ "repo", CellText "octo/other"; "dirty", CellFlag true ] ]
                 registry.Invalidate (name "repos")
-                do! settle ()
+                do! Support.nextTurn ()
                 match List.ofSeq frames with
                 | [ QueryValued (_, RowsOf sent) ] ->
                     Expect.equal (List.length sent) 2 "the frame carries every row, not the one that changed"
@@ -252,11 +249,11 @@ let private streamTests =
                 let registry = Queries.create [ constant "repos" Value (ValueOf (CellText "x")) ] |> expect
                 let frames, sink = collect ()
                 let subscription = registry.Subscribe sink
-                do! settle ()
+                do! Support.nextTurn ()
                 subscription.Stop ()
                 frames.Clear ()
                 registry.Invalidate (name "repos")
-                do! settle ()
+                do! Support.nextTurn ()
                 Expect.equal (List.ofSeq frames) [] "teardown is real"
             }
     ]
@@ -377,29 +374,19 @@ let private startQueryRoutes (registry: Queries.QueryRegistry) (feed: Queries.Pa
 /// a push leg — there is nothing to poll and no completion to await — so the honest wait is
 /// on the CONDITION, never on a duration.
 let private awaitFrames (frames: ResizeArray<QueryFrame>) (predicate: QueryFrame list -> bool) : Async<QueryFrame list> =
-    let rec go attempts =
-        async {
-            let current = List.ofSeq frames
-            if predicate current then return current
-            elif attempts <= 0 then return failwithf "the stream never satisfied the condition; got %A" current
-            else
-                do! Async.Sleep 25
-                return! go (attempts - 1)
-        }
-    go 200
+    async {
+        let! held = Support.settledWithin 5000 (fun () -> predicate (List.ofSeq frames))
+        let current = List.ofSeq frames
+        return if held then current else failwithf "the stream never satisfied the condition; got %A" current
+    }
 
 /// `awaitFrames`, for the frames the stream actually carries.
 let private awaitReadFrames (frames: ResizeArray<Tools.ReadFrame>) (predicate: Tools.ReadFrame list -> bool) =
-    let rec go attempts =
-        async {
-            let current = List.ofSeq frames
-            if predicate current then return current
-            elif attempts <= 0 then return failwithf "the stream never satisfied the condition; got %A" current
-            else
-                do! Async.Sleep 25
-                return! go (attempts - 1)
-        }
-    go 200
+    async {
+        let! held = Support.settledWithin 5000 (fun () -> predicate (List.ofSeq frames))
+        let current = List.ofSeq frames
+        return if held then current else failwithf "the stream never satisfied the condition; got %A" current
+    }
 
 let private routeTests =
     testList "the /queries stream" [
@@ -566,7 +553,7 @@ let private panelFeedTests =
                 Queries.panels (fun identity -> async { return panelFor identity.Subject }) (fun i -> githubFor i.Subject)
             let seen = ResizeArray<ClaudePanel * GitHubPanel> ()
             let subscription = feed.Subscribe anyone seen.Add
-            do! settle ()
+            do! Support.nextTurn ()
             Expect.equal seen.Count 1 "the opening send IS the snapshot — nothing has to ask"
             subscription.Stop ()
         }
@@ -579,10 +566,10 @@ let private panelFeedTests =
                     (fun _ -> { githubFor "ada" with Owner = owner })
             let seen = ResizeArray<ClaudePanel * GitHubPanel> ()
             let subscription = feed.Subscribe anyone seen.Add
-            do! settle ()
+            do! Support.nextTurn ()
             owner <- OwnedByDeployment
             feed.Changed ()
-            do! settle ()
+            do! Support.nextTurn ()
             Expect.equal (seen |> Seq.last |> fst).Owner OwnedByDeployment "the frame carries what is true NOW"
             subscription.Stop ()
         }
@@ -594,9 +581,9 @@ let private panelFeedTests =
             let bob = ResizeArray<ClaudePanel * GitHubPanel> ()
             let a = feed.Subscribe { anyone with Subject = "alice" } alice.Add
             let b = feed.Subscribe { anyone with Subject = "bob" } bob.Add
-            do! settle ()
+            do! Support.nextTurn ()
             feed.Changed ()
-            do! settle ()
+            do! Support.nextTurn ()
             Expect.isTrue (alice |> Seq.forall (fun (c, _) -> toldAbout c = Some "alice")) "alice is told about alice"
             Expect.isTrue (bob |> Seq.forall (fun (c, _) -> toldAbout c = Some "bob")) "and bob about bob"
             a.Stop ()
@@ -607,10 +594,10 @@ let private panelFeedTests =
             let feed = Queries.panels (fun _ -> async { return panelFor "ada" }) (fun _ -> githubFor "ada")
             let seen = ResizeArray<ClaudePanel * GitHubPanel> ()
             let subscription = feed.Subscribe anyone seen.Add
-            do! settle ()
+            do! Support.nextTurn ()
             subscription.Stop ()
             feed.Changed ()
-            do! settle ()
+            do! Support.nextTurn ()
             Expect.equal seen.Count 1 "a closed drawer is not a listener"
         }
 

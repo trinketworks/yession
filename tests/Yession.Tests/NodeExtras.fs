@@ -50,17 +50,7 @@ let private utf8 = BufferEncoding.Utf8
 
 /// Poll for a condition rather than sleeping a fixed amount: what is being waited on is a
 /// child process exiting, and a fixed sleep is either flaky or slow.
-let private until (predicate: unit -> bool) : Async<bool> =
-    let rec loop (remaining: int) =
-        async {
-            if predicate () then return true
-            elif remaining <= 0 then return false
-            else
-                do! Async.Sleep 20
-                return! loop (remaining - 20)
-        }
-
-    loop 5000
+let private until (predicate: unit -> bool) : Async<bool> = Yession.Tests.Support.settledWithin 5000 predicate
 
 /// A fresh non-extractable AES-GCM key, imported exactly the way `app/SecretsCipher.fs` does:
 /// random bytes, through base64url, back to bytes.

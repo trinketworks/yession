@@ -224,10 +224,14 @@ let private startStack (timeoutMs: int) : Async<Stack> =
                 for child in children do
                     try child.kill "SIGTERM" with _ -> ()
 
-                // Time for the signal to land rather than a wait on each exit: what this owes
+                // Bounded by what a signal is owed to land, not by each exit: what this owes
                 // the next case is not leaving two processes behind it, and a half that will
-                // not go on SIGTERM is not one the next case could wait out either.
-                do! Async.Sleep 200
+                // not go on SIGTERM is not one the next case could wait out either. So the
+                // answer is not read — the wait only ends as soon as both have gone.
+                do!
+                    settledWithin 200 (fun () ->
+                        children |> Seq.forall (fun child -> (exitCode child).IsSome || (signalCode child).IsSome))
+                    |> Async.Ignore
             }
 
         return { Url = url; Stop = stop }
@@ -280,16 +284,7 @@ let private call (registries: ToolRegistry list) (tool: string) (args: string) =
 
 /// Poll rather than sleep: what is being waited on is a round trip through two processes and
 /// a device, and a fixed sleep is either flaky or slow.
-let private until (predicate: unit -> bool) : Async<bool> =
-    let rec loop (remaining: int) =
-        async {
-            if predicate () then return true
-            elif remaining <= 0 then return false
-            else
-                do! Async.Sleep 50
-                return! loop (remaining - 50)
-        }
-    loop 30000
+let private until (predicate: unit -> bool) : Async<bool> = settledWithin 30000 predicate
 
 let tests =
     testList "The jumpstarter provider (Plan 18)" [

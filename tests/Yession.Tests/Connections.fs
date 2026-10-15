@@ -1546,17 +1546,12 @@ let private awaitClaudePanel
                     | Ok (Panels (claude, _)) -> seen.Add claude
                     | Ok (Queried _)
                     | Error _ -> ())
-        let rec go attempts =
-            async {
-                if seen |> Seq.exists predicate then return ()
-                elif attempts <= 0 then
-                    return failwithf "the panel never settled; saw %d frame(s), last: %A" seen.Count (Seq.tryLast seen)
-                else
-                    do! Async.Sleep 200
-                    return! go (attempts - 1)
-            }
-        try do! go 50
-        finally subscription.Stop ()
+        try
+            let! settled = settledWithin 10_000 (fun () -> seen |> Seq.exists predicate)
+            if not settled then
+                failwithf "the panel never settled; saw %d frame(s), last: %A" seen.Count (Seq.tryLast seen)
+        finally
+            subscription.Stop ()
     }
 
 let private e2eTests =

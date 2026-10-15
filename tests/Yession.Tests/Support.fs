@@ -8,7 +8,10 @@ module Yession.Tests.Support
 
 // Shared test infrastructure: a headless Elmish runner with event-driven model waiters,
 // and a full-client connector (WebRTC channel + Yjs doc + withYlmish program + drivers)
-// parameterized by host, so every E2E suite composes the same way. No sleeps, no polling.
+// parameterized by host, so every E2E suite composes the same way. A model change is waited on
+// by event and never polled; what a model cannot show — a condition outside it, an absence, a
+// turn of the event loop — is waited on through the helpers under "Waiting on a signal that is
+// not a model change", never by a sleep.
 
 open System
 open Elmish
@@ -512,19 +515,17 @@ let private runBudgetMs () : int option =
         | true, ms when ms > 0 -> Some ms
         | _ -> None)
 
-/// Poll until the condition holds or `timeoutMs` elapses, ANSWERING which — for the few cases
-/// that have something to say about not settling (the live clone case prints what the session
-/// actually did before it fails). `waitUntilWithin` is this plus the failure, and is what
-/// almost every wait wants.
+/// `settledWithin`, for a condition that has to be ASKED rather than looked at: an event log is
+/// read, a container is exec'd into, a delivery is posted again until one arrives. It is the
+/// poll loop itself: `settledWithin` is this over a condition that answers at once.
 ///
-/// A case's deadline is spent out of the whole run's budget, so one that exceeds it is refused
-/// before it waits at all, naming both numbers. A 180s deadline under a 240s run budget once
-/// took the runner down four minutes later, killing every other suite and naming none of them —
-/// discovering that at the deadline rather than at the wait cost two red release runs.
-let settledWithin (timeoutMs: int) (condition: unit -> bool) : Async<bool> =
+/// The deadline counts looks, as `settledWithin`'s does, so a condition that takes time to
+/// answer stretches the wait rather than cutting it short: slower to fail, never flakier.
+let settledWithinAsync (timeoutMs: int) (condition: unit -> Async<bool>) : Async<bool> =
     let rec go (remaining: int) =
         async {
-            if condition () then return true
+            let! held = condition ()
+            if held then return true
             elif remaining <= 0 then return false
             else
                 do! Async.Sleep pollMs
@@ -540,6 +541,42 @@ let settledWithin (timeoutMs: int) (condition: unit -> bool) : Async<bool> =
                     budget
         | _ -> return! go (max 1 (timeoutMs / pollMs))
     }
+
+/// Poll until the condition holds or `timeoutMs` elapses, ANSWERING which — for the few cases
+/// that have something to say about not settling (the live clone case prints what the session
+/// actually did before it fails). `waitUntilWithin` is this plus the failure, and is what
+/// almost every wait wants.
+///
+/// A case's deadline is spent out of the whole run's budget, so one that exceeds it is refused
+/// before it waits at all, naming both numbers. A 180s deadline under a 240s run budget once
+/// took the runner down four minutes later, killing every other suite and naming none of them —
+/// discovering that at the deadline rather than at the wait cost two red release runs.
+let settledWithin (timeoutMs: int) (condition: unit -> bool) : Async<bool> =
+    settledWithinAsync timeoutMs (fun () -> async.Return (condition ()))
+
+/// Let `ms` pass, and nothing else: the one way a case can see that something did NOT happen.
+///
+/// An absence has no event to wait on. "The second fold has not reached the gate", "no further
+/// notification arrives after the cancel", "the retraction never went" are each true at the
+/// instant the action returns and are only worth asserting once whatever WOULD have broken them
+/// has had its chance — so a case waits on purpose, and says so by calling this rather than a
+/// sleep. A positive condition never comes here: that is `waitUntil`, which ends the moment it
+/// holds.
+///
+/// The window is the claim's whole width, so pick it from what a regression would take, not
+/// from what the green run takes: a fault slower than the window passes. The same is true of a
+/// stub that has to stay quiet between two things it says (two writes that must arrive as two
+/// reads), which is the other thing a real-time window is for.
+let quietFor (ms: int) : Async<unit> = Async.Sleep ms
+
+/// One turn of the event loop: everything already queued runs before the case goes on — the
+/// microtasks an `async` that never awaits resolves on, and a continuation Fable's trampoline
+/// moved onto a timer (timers due at once fire in the order they were set). Not a duration: no
+/// amount of time decides anything here, only the order of what is already queued.
+///
+/// It is also the honest way to make work REALLY asynchronous — an await that crosses a turn,
+/// for a case about what survives one.
+let nextTurn () : Async<unit> = Async.Sleep 0
 
 /// Poll until the condition holds, failing loudly with `label` if it never does.
 let waitUntilWithin (timeoutMs: int) (label: string) (condition: unit -> bool) : Async<unit> =

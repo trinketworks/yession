@@ -630,16 +630,7 @@ let private withTerminal
 
 /// Poll until `condition` holds or 20s pass — a confined shell on a loaded box starts when it
 /// starts, and a fixed sleep long enough to be safe is slow on every run.
-let private within (condition: unit -> bool) : Async<bool> =
-    let rec go remaining =
-        async {
-            if condition () then return true
-            elif remaining <= 0 then return false
-            else
-                do! Async.Sleep 50
-                return! go (remaining - 50)
-        }
-    go 20000
+let private within (condition: unit -> bool) : Async<bool> = settledWithin 20000 condition
 
 let terminals =
     testList "Srt terminals" [

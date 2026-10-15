@@ -784,11 +784,12 @@ let private srtTests =
             // A sampler can only ever MISS, never cry wolf — and against a local fixture it
             // gets a few hundred looks at a window that used to last the whole clone. It was
             // confirmed by regressing the rename and watching this go red.
+            // One look a turn, so the clone's own I/O runs between looks.
             let watch =
                 async {
                     while running do
                         if TestFiles.exists checkout && not (checkoutWhole checkout) then halfMade <- true
-                        do! Async.Sleep 1
+                        do! nextTurn ()
                 }
             let add =
                 async {

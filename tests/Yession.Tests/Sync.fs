@@ -753,7 +753,7 @@ let private draftSlotTests =
                 Body.write registry ada "words, then none"
                 Body.write registry ada ""
                 // Long enough for a retraction, which is a dispatch, to have landed if one went.
-                do! Async.Sleep 50
+                do! quietFor 50
                 Expect.isTrue (SyncedStateSync.hasDraft doc ada) "the file keeps the draft published with no words"
 
                 p.Dispatch (user (RemoveAttachmentMsg upload))
@@ -1433,8 +1433,10 @@ let private harnessTests =
                 do! waited
                 // Past the deadline, on a runner that keeps updating: a timer that fired now
                 // would be resuming a continuation that is already settled, which is exactly
-                // the bug an unguarded `setTimeout` would have.
-                do! Async.Sleep 120
+                // the bug an unguarded `setTimeout` would have. That timer is the runner's own
+                // and takes no clock, so the window it fires in is real time — and what is
+                // asserted is that nothing went wrong in it.
+                do! quietFor 120
                 p.Dispatch (user StartDraftMsg)
                 Expect.equal (p.Model ()).Composer Own "the model still works after the deadline passed"
             }

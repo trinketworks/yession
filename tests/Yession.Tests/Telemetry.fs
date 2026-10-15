@@ -411,12 +411,15 @@ let private spanTests =
             async {
                 let exporter = inMemorySpanExporter ()
                 let tracer = Telemetry.tracerTo exporter
+                // Each await crosses a turn of the event loop, which is what "across awaits"
+                // means: a span that only survived a synchronous continuation would pass
+                // without them.
                 let! answer =
                     Telemetry.span tracer "outer" [] (async {
-                        do! Async.Sleep 1
+                        do! Support.nextTurn ()
                         let! inner =
                             Telemetry.span tracer "inner" [] (async {
-                                do! Async.Sleep 1
+                                do! Support.nextTurn ()
                                 return 41 })
                         return inner + 1 })
                 Expect.equal answer 42 "the work's answer comes through unchanged"

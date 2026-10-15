@@ -523,8 +523,9 @@ let private feedTests =
                 let! page = Async.StartChild (feed None)
                 // Nothing has been released, so nothing has answered — and yet every
                 // address has been asked for. A feed that waited would have asked once.
-                do! Async.Sleep 20
-                let asked = started |> Seq.filter (fun u -> not (u.Contains "ahead")) |> List.ofSeq
+                let askedSoFar () = started |> Seq.filter (fun u -> not (u.Contains "ahead")) |> List.ofSeq
+                let! _ = settledWithin 5000 (fun () -> List.length (askedSoFar ()) >= List.length ranges)
+                let asked = askedSoFar ()
                 Expect.equal (List.length asked) (List.length ranges) "every address is in flight at once"
                 for (_, release) in List.ofSeq (Seq.map (fun (KeyValue (k, v)) -> k, v) gates) do release ()
                 let! first = page

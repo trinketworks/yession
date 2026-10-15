@@ -857,15 +857,7 @@ let private withPushSides (body: string -> string -> ResizeArray<string option> 
 /// The record is written after the answer has gone back to git, so a report of its loss can
 /// land after `git push` has already exited. Bounded rather than slept.
 let private untilReported (reported: ResizeArray<string>) : Async<bool> =
-    let rec go remaining =
-        async {
-            if reported.Count > 0 then return true
-            elif remaining <= 0 then return false
-            else
-                do! Async.Sleep 50
-                return! go (remaining - 50)
-        }
-    go 5000
+    settledWithin 5000 (fun () -> reported.Count > 0)
 
 let private pushTests =
     testList "a push through the gateway" [
