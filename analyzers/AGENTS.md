@@ -33,6 +33,20 @@ widening means. The rule fails by silence, and a closed list fails loudly.
 - Declare a dependency on the project that uses it. A reference costs `lint` seconds. Do not dodge one
   with `[<Emit>]`. If a population walk grows to an hour, fix the analyzer.
 
+## A justified exception
+
+Where a rule's remedy does not apply, end the one line with the analyzer SDK's own comment, and
+say why in the comment above it:
+
+```
+/// `EvaluateAsync` takes its argument as `object`; the key a call goes through types it.
+let run (page: IPage) (name: string) (args: obj array) : Async<unit> = // fsharpanalyzer: ignore-line YES017
+```
+
+The marker silences one code on one line. It never covers a block, a file or a project. A rule's
+fixture shows the CLI honours it. A rule that needs many markers has the wrong scope: change the
+rule.
+
 ## `lint` verdicts
 
 `lint` prints what each outcome means and what to do next. It takes its verdict from a SARIF report

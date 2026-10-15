@@ -77,8 +77,9 @@ So that red means what it says:
 
 - Assert observable behavior and contracts. Do not assert private state, call order, exact log text or
   incidental DOM structure. A refactor that keeps behavior must not break a green test.
-- Be deterministic. No real-time sleeps, no ordering luck, no reliance on anything a declared
-  capability does not provide. A flaky test is worse than none. It trains everyone to ignore red.
+- Be deterministic. No real-time sleeps (rule YES014 refuses one outside a `[<Waits>]` helper), no
+  ordering luck, no reliance on anything a declared capability does not provide. A flaky test is
+  worse than none. It trains everyone to ignore red.
 - Write a manual check of interesting behavior (a bug fix, a protocol edge, a rendering quirk) down as
   a lasting test. The manual run proves it once. Verify-once throwaways stay out.
 - Tag each suite with the MINIMUM capabilities it truly needs. It then runs in the cheapest tier that
@@ -86,10 +87,12 @@ So that red means what it says:
 
 ### Make a failure say why
 
-A failure that cannot say why is a failure you pay for repeatedly. The browser tier fails only by a wait
-that never settles, so its red names the wait and never the fault. Three unrelated defects in one
-feature once printed the same thirty-second timeout, and the page had said which was which. Instrument
-the boundary, and instrument it to STAY:
+A failure that cannot say why is a failure you pay for repeatedly. The browser tier fails mostly by a
+wait that never settles. A wait through `Wait` (`BrowserWait.fs`, the only kind "Playwright's own
+waits" admits) names what it waited for, and stops with the page's reason when the session's work
+sandbox did not start. Any other fault it cannot name. Three unrelated defects in one feature once
+printed the same thirty-second timeout, and the page had said which was which. Instrument the
+boundary, and instrument it to STAY:
 
 - Fixtures keep what the thing under test said (console, page errors, failed requests) and print it
   when a case fails. See `watching` and `reporting` in `tests/Yession.Tests/Browser.fs`. It costs
@@ -119,16 +122,15 @@ test that asserts what it LOOKS like. Until then its red says "your redesign is 
 Do not test any of these:
 
 - which element marks an empty state
-- what a style token's Tailwind string contains
 - whether a control recedes by border or by opacity
 - the presence of a decorative mark
 - the copy of a label that is not itself a promise
 
 Those are the design changing, which is what a design is FOR.
 
-Stop if the assertion quotes a class name, or would still pass if the surface rendered upside down in
-the dark. Both mean the test knows how the view is BUILT, not what it PROMISES. Write the promise, or
-write nothing.
+Stop if the assertion would still pass if the surface rendered upside down in the dark. It means the
+test knows how the view is BUILT, not what it PROMISES. Write the promise, or write nothing. A class
+name `Style.fs` composes is refused outright ("Tailwind in tests"), outside the two floor suites.
 
 ### Screenshot or test
 

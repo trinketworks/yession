@@ -238,13 +238,15 @@ introduce any of these, and remove them from code you are already changing:
   program (rule YES012 holds the suite's few fixed ones to `PageScript`). Nothing type-checks the
   string. Write F# through Fable, behind a binding project if it reaches an API we do not own; in
   the browser suite, a probe in `Yession.App.Probes`.
-- **Dynamic access: `?` and `?<-`.** `fs?readdirSync path` is one typo away from a silent
-  `undefined`. Bind the module. Key the map with a type.
-- **`unbox`, `!!`, `:?>` on a value you did not just construct.** They assert and do not check. A
-  `Y.Text` unboxed as `string` does not throw, and the fault surfaces somewhere else. Decode it, or
-  type whatever produced it.
-- **`obj` in a signature.** Both ends are free to disagree about the contract. If it crosses a
-  wire, use a codec. If it configures a binding, use that binding's options type.
+- **Dynamic access: `?` and `?<-`** (rule YES015 reports them). `fs?readdirSync path` is one typo
+  away from a silent `undefined`. Bind the module. Key the map with a type.
+- **`unbox`, `!!`, `:?>` on a value you did not just construct** (rule YES016 reports `unbox`,
+  `!!` and a `:?>` from `obj`; a downcast from a declared type is yours to judge). They assert and
+  do not check. A `Y.Text` unboxed as `string` does not throw, and the fault surfaces somewhere
+  else. Decode it, or type whatever produced it.
+- **`obj` in a signature** (rule YES017 reports it in a function's or a member's). Both ends are
+  free to disagree about the contract. If it crosses a wire, use a codec. If it configures a
+  binding, use that binding's options type.
 - **`createObj`, `==>` or `[<AllowNullLiteral>]` outside a binding project** (rule YES013 reports
   them). A hand-built object or a nullable interface in product code is a binding that never moved.
 - **A decode that cannot refuse.** `Option.defaultValue ""` over a field read makes absent, garbage
@@ -252,8 +254,9 @@ introduce any of these, and remove them from code you are already changing:
   in the code why the default is the right answer.
 
 The escape is one of three: a **binding project** (an API we do not own), a **codec** (a wire), a
-**typed options interface** (a bag). Where none applies, keep the cast on the line that needs it
-and give the result a type immediately. Never carry `obj` onward. Example: the DOM's
+**typed options interface** (a bag). Where none applies, keep the cast on the line that needs it,
+mark that line for its rule (`analyzers/AGENTS.md`, "A justified exception"), and give the result a
+type immediately. Never carry `obj` onward. Example: the DOM's
 `querySelector` answers `Element` and no other shape is available.
 
 ## Testing
