@@ -6280,6 +6280,33 @@ let editorTests =
                         List.isEmpty
             }
 
+        // A command the kernel killed for memory wears the cause, not a bare 137, wherever a
+        // block's status is drawn. The chip says it in the chat.
+        editorCase "a block killed for memory says so on its chip" <| fun page ->
+            async {
+                let chip = "#shell [data-chat-task-card] [data-chat-block='block-killed-memory']"
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card]")
+                do! awaitU (page.ClickAsync "#shell [data-chat-task-card] [data-fold]")
+                let! _ = await (page.WaitForSelectorAsync chip)
+                do! Wait.until "the chip to name the memory kill" (fun () -> Read.text page chip) (Option.exists (fun t -> t.Contains "killed: out of memory"))
+            }
+
+        // And the block in its terminal says which of the two causes it was. Reached the way
+        // a reader reaches it: the chip opens a preview, and closing the preview shows the
+        // command in its terminal, its run opened.
+        editorCase "a block killed for memory says in its terminal that the machine ran out" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card]")
+                do! awaitU (page.ClickAsync "#shell [data-chat-task-card] [data-fold]")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card] [data-chat-block='block-killed-memory']")
+                do! awaitU (page.ClickAsync "#shell [data-chat-task-card] [data-chat-block='block-killed-memory']")
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview-close]")
+                do! awaitU (page.ClickAsync "#shell [data-pane-preview-close]")
+                let fact = "#shell [data-terminal-block='block-killed-memory'] [data-terminal-block-memory='machine']"
+                let! _ = await (page.WaitForSelectorAsync fact)
+                do! Wait.until "the block to name the cause" (fun () -> Read.text page fact) (Option.exists (fun t -> t.Contains "the machine ran out of memory"))
+            }
+
         // A command and its status share a line only while the command keeps the line. With
         // "refused by <name>" beside it the command had a third of a phone's column and broke
         // mid-word in it; the status now goes under, and the command takes the width. What is

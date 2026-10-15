@@ -323,6 +323,18 @@ module Events =
                 | "stderr" -> Decode.succeed Stderr
                 | other -> Decode.fail (sprintf "Unknown output stream: %s" other)) }
 
+    let private memoryKill : Codec<MemoryKill> =
+        { Encode =
+            (function
+             | SandboxLimit -> Encode.string "sandboxLimit"
+             | MachineOutOfMemory -> Encode.string "machine")
+          Decode =
+            Decode.string
+            |> Decode.andThen (function
+                | "sandboxLimit" -> Decode.succeed SandboxLimit
+                | "machine" -> Decode.succeed MachineOutOfMemory
+                | other -> Decode.fail (sprintf "Unknown memory kill: %s" other)) }
+
     let commandResult : Codec<CommandResult> =
         { Encode =
             (fun r ->
@@ -334,12 +346,24 @@ module Events =
                     Encode.object [ "kind", Encode.string "executionFailed"; "reason", Encode.string reason ]
                 | CommandNotRun said -> Encode.object [ "kind", Encode.string "notRun"; "said", Encode.string said ]
                 | CommandOutcomeUnknown reason ->
-                    Encode.object [ "kind", Encode.string "outcomeUnknown"; "reason", Encode.string reason ])
+                    Encode.object [ "kind", Encode.string "outcomeUnknown"; "reason", Encode.string reason ]
+                // A failure with exit 137 and one optional field. A reader that does not know
+                // the field reads what the shell said; an event written before the field
+                // existed has none, and reads as the plain failure it was.
+                | CommandKilledForMemory kill ->
+                    Encode.object
+                        [ "kind", Encode.string "failed"
+                          "exitCode", Encode.int CommandResult.sigkillExit
+                          "outOfMemory", memoryKill.Encode kill ])
           Decode =
             Decode.field "kind" Decode.string
             |> Decode.andThen (function
                 | "succeeded" -> Decode.field "exitCode" Decode.int |> Decode.map CommandSucceeded
-                | "failed" -> Decode.field "exitCode" Decode.int |> Decode.map CommandFailed
+                | "failed" ->
+                    Decode.object (fun get ->
+                        match get.Optional.Field "outOfMemory" memoryKill.Decode with
+                        | Some kill -> CommandKilledForMemory kill
+                        | None -> CommandFailed (get.Required.Field "exitCode" Decode.int))
                 | "timedOut" -> Decode.succeed CommandTimedOut
                 | "executionFailed" -> Decode.field "reason" Decode.string |> Decode.map CommandExecutionFailed
                 | "notRun" -> Decode.field "said" Decode.string |> Decode.map CommandNotRun

@@ -1342,6 +1342,9 @@ module HostSandbox =
                                         return Pty.spawn exec.Executable exec.Arguments cwd env cols rows onOutput
                                     })
                           Shell = None
+                          // The host process is in the operator's own cgroup, not one of
+                          // the sandbox's: its counters would be somebody else's.
+                          MemoryEvents = fun () -> async { return None }
                           Dispose = fun () -> async { children.KillAll () } }
             }
 
@@ -1558,6 +1561,30 @@ module DockerSandbox =
         [| "sh"
            "-c"
            sprintf "%s\n%s\necho %s\n%s" materialiseEtc trustMounts startedMark own |]
+
+    /// The container's own memory counters, read with a bare exec of `cat`: no entrypoint,
+    /// no shell, so it costs one exec and nothing a devshell would add. A docker container
+    /// on cgroup v2 has a private cgroup namespace, so `MemoryEvents.path` is its own cgroup.
+    /// `None` for any failure: the counters only add a cause to a result, and a missing cause
+    /// leaves the result as the shell reported it.
+    let private memoryEvents (spawn: SandboxExec -> (OutputStream * string -> unit) -> Async<Result<SandboxProcessHandle, string>>) : Async<MemoryEvents option> =
+        async {
+            try
+                let said = System.Text.StringBuilder ()
+                let exec =
+                    { Executable = "cat"
+                      Arguments = [ MemoryEvents.path ]
+                      Env = Map.empty
+                      WorkingDirectory = None
+                      Via = Direct }
+                match! spawn exec (fun (stream, chunk) -> if stream = Stdout then said.Append chunk |> ignore) with
+                | Error _ -> return None
+                | Ok handle ->
+                    match! handle.Exited with
+                    | SandboxExited 0 -> return MemoryEvents.parse (said.ToString ())
+                    | _ -> return None
+            with _ -> return None
+        }
 
     /// Where each dialect's shell is on the far side of the entrypoint, by asking: one
     /// `sh -c "command -v …"` behind it, whose output is the paths found, one per line, in
@@ -2005,6 +2032,7 @@ module DockerSandbox =
                                   Spawn = spawn
                                   SpawnPty = Some spawnPty
                                   Shell = Some shell
+                                  MemoryEvents = fun () -> memoryEvents spawn
                                   Dispose = dispose }
                 with ex -> return Error (sprintf "docker sandbox failed: %s" ex.Message)
             }
@@ -2889,6 +2917,9 @@ module SrtSandbox =
                                                 with ex -> return Error ex.Message
                                             })
                                   Shell = None
+                                  // srt confines a process, not its memory: it makes no
+                                  // cgroup, so there are no counters of its own to read.
+                                  MemoryEvents = fun () -> async { return None }
                                   // The host goes with the sandbox: its manager — the proxies
                                   // and bridges every command here reached the network through
                                   // — confined this sandbox and nothing else.

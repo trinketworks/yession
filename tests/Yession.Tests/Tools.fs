@@ -273,6 +273,23 @@ let private sessionTests =
             Expect.isTrue (said.StartsWith "OUTCOME UNKNOWN") (sprintf "its own word: %s" said)
         }
 
+        // A SIGKILL from the OOM killer reads as the cause, not as a bare 137, and says which
+        // of the two it was: the answer to "use less" and to "try again later" is opposite.
+        test "a command killed at its sandbox's memory limit says so" {
+            let said =
+                AgentTools.renderOutcome
+                    { elidedAs OutputEnd.Whole None with Status = TerminalCommandRan (CommandKilledForMemory SandboxLimit); Output = "" }
+            Expect.isTrue (said.StartsWith "KILLED for memory") "the first word is the cause"
+            Expect.stringContains said "the sandbox reached its memory limit" "and it was this sandbox's own limit"
+        }
+
+        test "a command killed because the machine ran out says so" {
+            let said =
+                AgentTools.renderOutcome
+                    { elidedAs OutputEnd.Whole None with Status = TerminalCommandRan (CommandKilledForMemory MachineOutOfMemory); Output = "" }
+            Expect.stringContains said "the machine ran out of memory" "the cause was outside the sandbox"
+        }
+
         test "a command still running is told it can be typed into" {
             let said = AgentTools.renderOutcome { elided None with Status = TerminalCommandRunning; Output = "" }
             Expect.stringContains said "write_terminal" "the hand that answers a prompt or ends a stuck one"

@@ -1108,15 +1108,20 @@ to whatever still reproduces once the fixes have landed.
       live inside or beside the `container:` block. Under `srt` or `host`, there is nowhere to
       write one, instead of a refusal to explain. The exception is `dialect`, which is refused on a sandbox with no
       container because it reads as if it would apply.
-    - **A container killed for memory says only "exit 137".** Every container has a memory
-      ceiling (`ContainerMemory`), so an overrun is killed inside the container that made it.
-      Nothing yet tells the session that the kill was for memory. The evidence is cheap to
-      read: the container's cgroup counts every OOM kill in it, global or its own, as
-      `oom_kill` in `/sys/fs/cgroup/memory.events`, readable by a bare exec. Docker 29 also
-      sets the container's `State.OOMKilled` while it runs, but only as a flag that stays
-      set. What is missing is where to say it. A block's exit reaches the session through the
-      shell's instrumentation, not through an exec, so the counter would have to be read
-      around each block (`Terminals`) and the block outcome would need a case for it.
+    - **A memory kill is named only for a block that died from SIGKILL.** A terminal block reads
+      its container's `memory.events` before and after it runs (`MemoryWatch` in
+      `Terminals.fs`). When `oom_kill` went up and the block exited 137, the block says "killed:
+      out of memory". It also says if the container reached its own limit (`oom` went up too) or
+      if the machine ran out (`oom` did not go up). What it still cannot say:
+      - A block whose CHILD was killed, and which then exited with its own code, reports that
+        code. A build whose compiler process died exits 1. The counters went up, but the kill of
+        some other process in the same container looks the same, so the block does not guess.
+      - Two blocks that run at the same time in one container share the counters. A block that
+        another cause killed with 137, while a sibling block was OOM-killed, reads as a memory
+        kill.
+      - The gate's commands, `setup:` and the session's own execs do not read the counters.
+      - The Docker tier pins case (a) with a 64m container. Nothing tests case (b) for real: it
+        needs the whole VM to run out of memory.
     - **No operator ceiling on a container's memory.** A repo's `memory:` is checked against
       what the daemon has, not against a share the operator chose. Six sessions that each
       declare most of the VM are each accepted.

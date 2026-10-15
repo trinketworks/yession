@@ -70,6 +70,7 @@ type private Scripted () =
                 }
           SpawnPty = None
           Shell = None
+          MemoryEvents = fun () -> async { return None }
           Dispose = fun () -> async { this.Disposed <- true } }
 
 let private holding (volumes: (string * string) list) = { emptyPolicy with Volumes = volumes }

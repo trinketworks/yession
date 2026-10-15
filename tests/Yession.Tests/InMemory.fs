@@ -84,7 +84,8 @@ let private serving (lines: string list) (exits: int option) =
               Stop = fun () -> async { return () }
               CurrentRef = fun () -> Some "scripted"
               Shell = fun () -> None
-              Realisation = fun () -> [] }
+              Realisation = fun () -> []
+              MemoryEvents = fun () -> async { return None } }
         let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
         return host, finish
     }
@@ -699,7 +700,8 @@ let tests =
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some name
                       Shell = fun () -> None
-                      Realisation = fun () -> [] }
+                      Realisation = fun () -> []
+                      MemoryEvents = fun () -> async { return None } }
                 let makeSandboxes log =
                     async {
                         return!
@@ -763,7 +765,8 @@ let tests =
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
                       Shell = fun () -> None
-                      Realisation = fun () -> [] }
+                      Realisation = fun () -> []
+                      MemoryEvents = fun () -> async { return None } }
                 let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
                 let! a = connectInMemoryClient host "ada" "Ada"
                 let! b = connectInMemoryClient host "bob" "Bob"
@@ -850,7 +853,8 @@ let tests =
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
                       Shell = fun () -> None
-                      Realisation = fun () -> [] }
+                      Realisation = fun () -> []
+                      MemoryEvents = fun () -> async { return None } }
                 let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
                 // No terminal is open, so the FIRST call opens the agent's own — titled with
                 // what it is for, and in `AutoRun`, which is what keeps the agent's autonomy
@@ -924,7 +928,8 @@ let tests =
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
                       Shell = fun () -> None
-                      Realisation = fun () -> [] }
+                      Realisation = fun () -> []
+                      MemoryEvents = fun () -> async { return None } }
                 let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
                 let! held = host.Terminals.OpenAgentTerminal SandboxRef.defaultRef "holds"
                 let! frees = host.Terminals.OpenAgentTerminal SandboxRef.defaultRef "frees"
@@ -985,7 +990,8 @@ let tests =
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
                       Shell = fun () -> None
-                      Realisation = fun () -> [] }
+                      Realisation = fun () -> []
+                      MemoryEvents = fun () -> async { return None } }
                 let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
                 match!
                     host.TerminalCommands.Execute { CommandRequest.ofCommand "serve" with Background = true } agentActing with
@@ -1018,7 +1024,8 @@ let tests =
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
                       Shell = fun () -> None
-                      Realisation = fun () -> [] }
+                      Realisation = fun () -> []
+                      MemoryEvents = fun () -> async { return None } }
                 let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
                 match! host.Files.Read SandboxRef.defaultRef "shot.png" with
                 | Ok (FileContent.Image image) -> Expect.equal image.Type "image/png" "the picture, typed by its bytes"
@@ -1056,7 +1063,8 @@ let tests =
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
                       Shell = fun () -> None
-                      Realisation = fun () -> [] }
+                      Realisation = fun () -> []
+                      MemoryEvents = fun () -> async { return None } }
                 let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
                 let! read = host.Files.Read SandboxRef.defaultRef "$TMPDIR/manager.log"
                 Expect.equal read (Ok (FileContent.Text "/scratch/t/manager.log")) "the sandbox's own $TMPDIR, then the rest of the path"
@@ -1118,7 +1126,8 @@ let tests =
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
                       Shell = fun () -> None
-                      Realisation = fun () -> [] }
+                      Realisation = fun () -> []
+                      MemoryEvents = fun () -> async { return None } }
                 let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
                 let! a = connectInMemoryClient host "ada" "Ada"
                 a.Connection.Ask (OpenTerminal ("build", SandboxRef.defaultRef)) |> ignore
@@ -1163,7 +1172,8 @@ let tests =
                       Stop = fun () -> async { return () }
                       CurrentRef = fun () -> Some "scripted"
                       Shell = fun () -> None
-                      Realisation = fun () -> [] }
+                      Realisation = fun () -> []
+                      MemoryEvents = fun () -> async { return None } }
                 let! host = Host.startWithEnvironment None (Some (fun _ -> async { return WorkSandboxes.singleton "scripted" environment })) None (sid ()) 0
                 let! a = connectInMemoryClient host "ada" "Ada"
                 let request = { CommandRequest.ofCommand "cd /ws && rm -rf build" with Description = Some "Clean the build" }

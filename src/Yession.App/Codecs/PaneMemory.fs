@@ -32,7 +32,7 @@ module CommandTally =
     let ofView (view: TerminalView) : CommandTally =
         let failed =
             function
-            | BlockFinished (CommandFailed _ | CommandTimedOut | CommandExecutionFailed _ | CommandNotRun _)
+            | BlockFinished (CommandFailed _ | CommandTimedOut | CommandExecutionFailed _ | CommandNotRun _ | CommandKilledForMemory _)
             | BlockRejected _ -> true
             | BlockFinished (CommandSucceeded _)
             | BlockFinished (CommandOutcomeUnknown _)
