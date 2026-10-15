@@ -1170,6 +1170,7 @@ let private caller sessionId users local : Control.ControlCaller =
 /// kills every suite after it and reports `tests timed out` with no name on it. Here the
 /// same fault is one named failing case that says which frame it wanted and how many it
 /// saw instead — which is the difference between reading the answer and bisecting for it.
+[<Yession.Tests.Support.Waits>]
 let private watchingConnections (url: string) (secret: string) =
     let frames = ResizeArray<ConnectionStatusList> ()
     let waiter : (unit -> unit) option ref = ref None

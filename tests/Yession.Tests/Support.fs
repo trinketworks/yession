@@ -502,6 +502,15 @@ let withEnv (bindings: (string * string option) list) (body: unit -> Async<'a>) 
 // For the few signals a model waiter cannot see (a file appearing, an SSE frame arriving, a hub
 // publishing) — a model waiter is `Runner.WaitFor` and needs no polling.
 
+/// Marks a binding whose JOB is to wait in real time — or a module or type, for everything in
+/// it: a poll, a deadline raced against an event, a window an absence is seen in. `lint`
+/// refuses a real-time sleep anywhere else in the suite (YES014,
+/// `analyzers/Yession.Analyzers/Sleeps.fs`), so this is where waiting is spent, in plain sight.
+/// A case never wears it: a case says what it waits FOR by calling one of the helpers that do.
+[<AttributeUsage(AttributeTargets.Method ||| AttributeTargets.Property ||| AttributeTargets.Class)>]
+type WaitsAttribute () =
+    inherit Attribute ()
+
 let private pollMs = 50
 
 /// The whole run's budget, as `check` computed it from the capabilities this run declared
@@ -521,6 +530,7 @@ let private runBudgetMs () : int option =
 ///
 /// The deadline counts looks, as `settledWithin`'s does, so a condition that takes time to
 /// answer stretches the wait rather than cutting it short: slower to fail, never flakier.
+[<Waits>]
 let settledWithinAsync (timeoutMs: int) (condition: unit -> Async<bool>) : Async<bool> =
     let rec go (remaining: int) =
         async {
@@ -567,6 +577,7 @@ let settledWithin (timeoutMs: int) (condition: unit -> bool) : Async<bool> =
 /// from what the green run takes: a fault slower than the window passes. The same is true of a
 /// stub that has to stay quiet between two things it says (two writes that must arrive as two
 /// reads), which is the other thing a real-time window is for.
+[<Waits>]
 let quietFor (ms: int) : Async<unit> = Async.Sleep ms
 
 /// One turn of the event loop: everything already queued runs before the case goes on — the
@@ -576,6 +587,7 @@ let quietFor (ms: int) : Async<unit> = Async.Sleep ms
 ///
 /// It is also the honest way to make work REALLY asynchronous — an await that crosses a turn,
 /// for a case about what survives one.
+[<Waits>]
 let nextTurn () : Async<unit> = Async.Sleep 0
 
 /// Poll until the condition holds, failing loudly with `label` if it never does.

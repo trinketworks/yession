@@ -2661,6 +2661,7 @@ let private fixtures =
       // must stay silent over the same constructs.
       "YES013", "Yession.BindingOnlyFixture", [ "Product.fs" ]
       "YES013", "BindingOnlyInBindingFixture", [ "Binding.fs" ]
+      "YES014", "SleepFixture", [ "Sleeps.fs" ]
       // Two each for YES015, YES016 and YES017, on YES013's line between product and binding
       // (`Population.reach`): a Yession project, which must be reported, and one with nothing
       // Yession in reach, which must stay silent over the same constructs.

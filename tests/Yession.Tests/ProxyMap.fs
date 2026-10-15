@@ -47,6 +47,7 @@ let private spawnMap (args: string []) : Node.ChildProcess.ChildProcess =
 ///
 /// What comes back is the running process: `Said` is everything it has printed, for the
 /// failure report, and `Stop` is the SIGTERM and the wait for it to be over.
+[<Waits>]
 let private startMap
     (args: string [])
     (timeoutMs: int)
