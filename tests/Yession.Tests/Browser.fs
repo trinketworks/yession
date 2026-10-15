@@ -391,37 +391,17 @@ let internal reporting (label: string) (page: IPage) (ev: Evidence) (body: Async
 
 
 
-/// Open a terminal the way a person does (Plan 20, stage 1): press the strip's `+` — or, in an
-/// empty pane, its own button, which is the one door there (P1-4) — and take the choice if one
-/// is offered.
-///
-/// Whether one IS offered depends on the session — with one place to put a terminal the door
-/// makes one, and with a repo's sandbox up it opens a menu. So this reads the answer off the
-/// control rather than guessing or waiting to see: `aria-haspopup` is exactly the promise the
-/// door makes to a reader, which makes it the right thing for a test to believe too, and it is
-/// rendered before any press so there is no race to lose.
-let private openNewTerminal (page: IPage) : Async<unit> =
-    async {
-        let door = "[data-pane-new], [data-terminal-new]"
-        let! _ = await (page.WaitForSelectorAsync door)
-        let! popup = Read.attr page door "aria-haspopup"
-        let asks = popup = Some "menu"
-        do! awaitU (page.Locator(door).First.ClickAsync ())
-        if asks then
-            let! _ = await (page.WaitForSelectorAsync "[data-sandbox-new='default']")
-            do! awaitU (page.Locator("[data-sandbox-new='default']").First.ClickAsync ())
-    }
-
 /// Wait until some element matches a selector.
 let private waitPresent (what: string) (page: IPage) (selector: string) : Async<unit> =
     Wait.until what (fun () -> Read.count page selector) (fun n -> n > 0)
 
-/// Wait until some match is visible: what Playwright's own `WaitForSelectorAsync` waits for, but
-/// through `Wait`, which a session whose work sandbox did not start ends at once with its reason.
-/// A wait for something that only a running sandbox brings (a terminal, a command's block) is
-/// this and not Playwright's, which sits out its thirty seconds beside a page that already says
-/// why, and names the selector at best.
-let private waitVisible (what: string) (page: IPage) (selector: string) : Async<unit> =
+/// Wait until the first match is visible: what Playwright's own `WaitForSelectorAsync` waits for,
+/// but through `Wait`, which a session whose work sandbox did not start ends at once with its
+/// reason. Every wait for an element to come on screen is this and not Playwright's, which sits
+/// out its thirty seconds beside a page that already says why, and names the selector at best
+/// (the "Playwright's own waits" guard holds every file under `tests/` to it). Internal, because
+/// `Bench.fs` waits for its pages the same way.
+let internal waitVisible (what: string) (page: IPage) (selector: string) : Async<unit> =
     Wait.until what (fun () -> Read.visible page selector) id
 
 /// Wait until nothing matches a selector.
@@ -450,6 +430,27 @@ let private waitTextIn (what: string) (page: IPage) (selector: string) (text: st
 /// rendering the words perfectly the whole time.
 let private waitOwnText (what: string) (page: IPage) (selector: string) (text: string) : Async<unit> =
     Wait.until what (fun () -> Probe.ownTexts page selector) (List.contains text)
+
+/// Open a terminal the way a person does (Plan 20, stage 1): press the strip's `+` — or, in an
+/// empty pane, its own button, which is the one door there (P1-4) — and take the choice if one
+/// is offered.
+///
+/// Whether one IS offered depends on the session — with one place to put a terminal the door
+/// makes one, and with a repo's sandbox up it opens a menu. So this reads the answer off the
+/// control rather than guessing or waiting to see: `aria-haspopup` is exactly the promise the
+/// door makes to a reader, which makes it the right thing for a test to believe too, and it is
+/// rendered before any press so there is no race to lose.
+let private openNewTerminal (page: IPage) : Async<unit> =
+    async {
+        let door = "[data-pane-new], [data-terminal-new]"
+        do! waitVisible "the door to a new terminal" page door
+        let! popup = Read.attr page door "aria-haspopup"
+        let asks = popup = Some "menu"
+        do! awaitU (page.Locator(door).First.ClickAsync ())
+        if asks then
+            do! waitVisible "the default sandbox on the new terminal's menu" page "[data-sandbox-new='default']"
+            do! awaitU (page.Locator("[data-sandbox-new='default']").First.ClickAsync ())
+    }
 
 /// A block that ran and finished, whatever it ran.
 let private finishedBlock = "[data-terminal-block][data-terminal-block-status='ok']"
@@ -1014,6 +1015,8 @@ let waitTests =
             async {
                 let never : Async<int> =
                     async {
+                        // Never wakes, and is no pause: it stands in for a call into a page
+                        // that never returns, which is what this case is about.
                         do! Async.Sleep Timeout.Infinite
                         return 0
                     }
@@ -1110,7 +1113,7 @@ let tests =
                 // A types Markdown into its rich composer with REAL key events, so the input
                 // rules fire: "# " turns the block into a heading rendered live as an <h1> —
                 // the syntax itself is never left as literal text (Linear-style WYSIWYG).
-                let! _ = await (pageA.WaitForSelectorAsync composer)
+                do! waitVisible "A's composer" pageA composer
                 do! awaitU (pageA.ClickAsync composer)
                 do! awaitU (pageA.Keyboard.TypeAsync "# Heading one")
                 do! Wait.until "A's own typing to render as a heading"
@@ -1206,14 +1209,14 @@ let tests =
                 // The pane may already land on the list (a strip with nothing of B's in it), and
                 // its door toggles, so it is pressed only while the list is not down.
                 do! switcherDown pageB
-                let! _ = await (pageB.WaitForSelectorAsync "[data-content-list] [data-terminal-list-row]")
+                do! waitVisible "A's terminal in B's list" pageB "[data-content-list] [data-terminal-list-row]"
                 do! awaitU (pageB.Locator("[data-content-list] [data-terminal-list-row]").First.ClickAsync ())
                 do! waitPresent "the terminal in B's strip" pageB "[data-terminal-tab]"
 
                 // A types a command with REAL key events, so the input's binding is what
                 // writes the CRDT — one minimal edit per keystroke, not a wholesale replace.
                 let composerInput = "[data-terminal-input^='term-draft:']:not([readonly])"
-                let! _ = await (pageA.WaitForSelectorAsync composerInput)
+                do! waitVisible "A's command line" pageA composerInput
                 do! awaitU (pageA.ClickAsync composerInput)
                 do! awaitU (pageA.Keyboard.TypeAsync "echo hello-terminal")
 
@@ -1254,18 +1257,18 @@ let tests =
                 // The pane may already land on the list (a strip with nothing of B's in it), and
                 // its door toggles, so it is pressed only while the list is not down.
                 do! switcherDown pageB
-                let! _ = await (pageB.WaitForSelectorAsync "[data-content-list] [data-terminal-list-row]")
+                do! waitVisible "A's terminal in B's list" pageB "[data-content-list] [data-terminal-list-row]"
                 do! awaitU (pageB.Locator("[data-content-list] [data-terminal-list-row]").First.ClickAsync ())
                 do! waitPresent "the terminal in B's strip" pageB "[data-terminal-tab]"
 
                 // A takes the keyboard; B sees whose it is.
-                let! _ = await (pageA.WaitForSelectorAsync "[data-terminal-take]")
+                do! waitVisible "A's control to take the keyboard" pageA "[data-terminal-take]"
                 do! awaitU (pageA.Locator("[data-terminal-take]").First.ClickAsync ())
                 do! waitPresent "B to see the lease" pageB "[data-terminal-lease]"
 
                 // B writes the next command anyway, and sends it the way a person does.
                 let line = "[data-terminal-input^='term-draft:']:not([readonly])"
-                let! _ = await (pageB.WaitForSelectorAsync line)
+                do! waitVisible "B's command line" pageB line
                 do! awaitU (pageB.ClickAsync line)
                 do! awaitU (pageB.Keyboard.TypeAsync "echo queued-behind-a-lease")
                 do! awaitU (pageB.Keyboard.PressAsync "Enter")
@@ -1290,7 +1293,7 @@ let tests =
             async {
                 // A fresh session offers its launch card. Put it away the way a person who is
                 // not choosing a repo would; it stays away for the session.
-                let! _ = await (page.WaitForSelectorAsync "[data-repo-picker-dismiss]")
+                do! waitVisible "the launch card's way to put it away" page "[data-repo-picker-dismiss]"
                 do! awaitU (page.ClickAsync "[data-repo-picker-dismiss]")
                 do! waitAbsent "the launch card put away" page "[data-repo-picker]"
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
@@ -1300,9 +1303,9 @@ let tests =
                 do! awaitU (page.ClickAsync composerInput)
                 do! awaitU (page.Keyboard.TypeAsync "echo one")
                 do! awaitU (page.ClickAsync "[data-terminal-send]")
-                let! _ = await (page.WaitForSelectorAsync "[data-chat-block]")
+                do! waitVisible "the command's chip in the chat" page "[data-chat-block]"
                 do! awaitU (page.ClickAsync "[data-chat-block]")
-                let! _ = await (page.WaitForSelectorAsync "[data-pane-preview^='block:']")
+                do! waitVisible "the command's preview in the pane" page "[data-pane-preview^='block:']"
                 let! strip = terminalTabKeys page
                 Expect.equal
                     (strip |> List.map (fun key -> key.Split(':').[0]))
@@ -1317,7 +1320,7 @@ let tests =
         sessionCase "a reload brings back the strip, the selection and the open pane" <|
             fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "[data-repo-picker-dismiss]")
+                do! waitVisible "the launch card's way to put it away" page "[data-repo-picker-dismiss]"
                 do! awaitU (page.ClickAsync "[data-repo-picker-dismiss]")
                 do! waitAbsent "the launch card put away" page "[data-repo-picker]"
                 do! awaitU (page.Locator("[data-content-toggle='show']").First.ClickAsync ())
@@ -1345,9 +1348,9 @@ let tests =
                 do! awaitU (page.ClickAsync composerInput)
                 do! awaitU (page.Keyboard.TypeAsync "echo kept")
                 do! awaitU (page.ClickAsync "[data-terminal-send]")
-                let! _ = await (page.WaitForSelectorAsync "[data-chat-block]")
+                do! waitVisible "the command's chip in the chat" page "[data-chat-block]"
                 do! awaitU (page.ClickAsync "[data-chat-block]")
-                let! _ = await (page.WaitForSelectorAsync "[data-pane-preview]")
+                do! waitVisible "the command's preview, laid over the terminal" page "[data-pane-preview]"
 
                 // What was on top the FIRST moment the strip held all three again — recorded by
                 // the page itself, from before the reload paints anything, because the fault
@@ -1750,9 +1753,7 @@ let tests =
                 // Two presses: the first arms the kill, the second, on the same control,
                 // performs it (`KillArmed`).
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                do!
-                    await (page.WaitForSelectorAsync (sprintf "%s[data-terminal-close-armed='true']" kill))
-                    |> Async.Ignore
+                do! waitVisible "the kill, armed" page (sprintf "%s[data-terminal-close-armed='true']" kill)
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 do! waitAbsent "the killed terminal's row to go" page kill
                 do! Wait.until "focus on the next row in the list"
@@ -1809,7 +1810,7 @@ let tests =
                 do! awaitU (pageA.ClickAsync "[data-settings-toggle='open']")
                 // A session always has its default work sandbox, so this panel always has a
                 // record to write into — the arrangement cannot silently find nothing.
-                let! _ = await (pageA.WaitForSelectorAsync "[data-query-panel='work_sandboxes'] [data-query-row]")
+                do! waitVisible "the default work sandbox's row in its panel" pageA "[data-query-panel='work_sandboxes'] [data-query-row]"
                 let! overflowing = Probe.verdict pageA Yession.App.Probes.Measure.LongValueInLane
                 Expect.isEmpty
                     overflowing
@@ -1841,7 +1842,7 @@ let tests =
             fun pageA ->
             async {
                 do! awaitU (pageA.ClickAsync "[data-settings-toggle='open']")
-                let! _ = await (pageA.WaitForSelectorAsync "[data-query-panel='work_sandboxes'] [data-query-row]")
+                do! waitVisible "the default work sandbox's row in its panel" pageA "[data-query-panel='work_sandboxes'] [data-query-row]"
                 let! starved = Probe.verdict pageA Yession.App.Probes.Measure.LabelCostsValue
                 Expect.isEmpty
                     starved
@@ -1861,7 +1862,7 @@ let tests =
             fun pageA ->
             async {
                 do! awaitU (pageA.ClickAsync "[data-settings-toggle='open']")
-                let! _ = await (pageA.WaitForSelectorAsync "[data-model-note='unavailable']")
+                do! waitVisible "the model picker to say no model is available" pageA "[data-model-note='unavailable']"
                 let note = "[data-model-note]"
                 // The precondition, and the sentence a person actually read: this session
                 // has no credential, so the note says so and points at the panel above it.
@@ -1874,7 +1875,7 @@ let tests =
                 // when they sign in, and the one that used to leave the note behind.
                 do! awaitU (pageA.FillAsync ("[data-claude-token]", "sk-ant-oat01-browser-case"))
                 do! awaitU (pageA.ClickAsync "[data-claude-save-token]")
-                let! _ = await (pageA.WaitForSelectorAsync "[data-claude-connected='mine']")
+                do! waitVisible "the panel to say the account is connected" pageA "[data-claude-connected='mine']"
 
                 // Whatever the picker says now, it cannot still be that: an account IS
                 // connected. What it says instead is whatever the provider answered this
@@ -1930,7 +1931,7 @@ let tests =
                 // the contract — is what to click. (`data-settings-toggle="prompt"` marks the
                 // calls to action that also lead there; `open` is the pivot alone.)
                 do! awaitU (page.ClickAsync "[data-settings-toggle='open']")
-                let! _ = await (page.WaitForSelectorAsync "[data-claude-connect]")
+                do! waitVisible "the control that connects an account" page "[data-claude-connect]"
                 do! awaitU (page.ClickAsync "[data-claude-connect]")
 
                 // The flow settles either into the paste-the-code step (the broker minted a
@@ -1976,12 +1977,16 @@ let tests =
                 while not offered.Task.IsCompleted && spent + window < cap do
                     do! awaitU (page.Clock.RunForAsync window)
                     spent <- spent + window
+                    // Real time, and not a wait: a send the window released goes out on the
+                    // browser's network thread, which page time does not move, so each window
+                    // is given a moment of the real clock to deliver it before the next one is
+                    // spent. Not arriving in it is no failure; the loop goes on to the cap.
                     do! Async.AwaitTask (Task.WhenAny (offered.Task, Task.Delay 250)) |> Async.Ignore
                 // No page time passes from here, so only a send already made can still arrive.
-                do! Async.AwaitTask (Task.WhenAny (offered.Task, Task.Delay 10000)) |> Async.Ignore
-                Expect.isTrue
-                    offered.Task.IsCompleted
-                    (sprintf "an offer posted inside %dms of page time, short of the %dms cap" spent cap)
+                do! Wait.within 10000.0
+                        (sprintf "an offer posted inside %dms of page time, short of the %dms cap" spent cap)
+                        (fun () -> async.Return offered.Task.IsCompleted)
+                        id
             }
 
         // A connect that lasts is said, and said where a phone reader can see it. It used to be
@@ -2045,8 +2050,7 @@ let tests =
                 do! Wait.until "the session's answer to be applied"
                         (fun () -> Harness.read page Yession.App.Shims.answered) ((=) (Some true))
                 do! awaitU (page.Clock.FastForwardAsync 10000L)
-                do! Async.AwaitTask (Task.WhenAny (settled.Task, Task.Delay 10000)) |> Async.Ignore
-                Expect.isTrue settled.Task.IsCompleted "the handshake settled"
+                do! Wait.within 10000.0 "the handshake to settle" (fun () -> async.Return settled.Task.IsCompleted) id
                 Expect.stringContains settled.Task.Result "handshake unrouted" "an answered handshake that never opened is unrouted, not silent"
             }
     ]
@@ -2228,7 +2232,7 @@ let private stripOverflows (page: IPage) : Async<bool> =
 let private previewSettled (page: IPage) : Async<unit> =
     async {
         do! awaitU (page.ClickAsync "#shell [data-chat-block]")
-        let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview]")
+        do! waitVisible "the chip's preview in the pane" page "#shell [data-pane-preview]"
         do! Probe.settled page
     }
 
@@ -2268,7 +2272,7 @@ let private signInButtonHoldsStill (width: int) (height: int) =
     editorCaseIn width height (sprintf "opening a sign-in prompt's reason does not move its button at %dpx" width) <| fun page ->
         async {
             do! Harness.run page HarnessPage.signInLost
-            let! _ = await (page.WaitForSelectorAsync "#shell [data-signin-required] [data-signin-again]")
+            do! waitVisible "the sign-in prompt's button" page "#shell [data-signin-required] [data-signin-again]"
             // Settled first: the side panes slide into place as the shell lays out, and the
             // column between them — the prompt's width — is still changing until they land.
             do! Probe.settled page
@@ -2287,7 +2291,7 @@ let private signInButtonHoldsStill (width: int) (height: int) =
                 }
             let! closed = at ()
             do! awaitU (page.ClickAsync "#shell [data-signin-required] [data-detail] summary")
-            let! _ = await (page.WaitForSelectorAsync "#shell [data-signin-required] [data-detail][open]")
+            do! waitVisible "the prompt's reason, opened" page "#shell [data-signin-required] [data-detail][open]"
             do! Probe.settled page
             let! opened = at ()
             Expect.equal opened closed "the button's offset and size in the prompt (left,top,width,height)"
@@ -2353,7 +2357,7 @@ let private rewoundTall (page: IPage) : Async<unit> =
     async {
         do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
         do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
-        let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
+        do! waitVisible "the live terminal's screen" page "#shell [data-terminal-screen='term-live']"
         do! awaitU (page.ClickAsync "#shell [data-terminal-watch='watch']")
         // Landed: the still at the pin is up, so the player has its recording's size.
         do! waitTextIn "the rewound terminal to show the screen at its pin" page "#shell [data-pane-replay='terminal:term-live']" "earlier output"
@@ -2446,7 +2450,7 @@ let private columnHoldsStill (width: int) (height: int) (column: string) (rootCl
             do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
             // The shell, by its composer: a shut column is zero wide, which a visibility wait
             // on the column itself would read as never having arrived.
-            let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
+            do! waitVisible "the shell's composer" page "#shell [data-draft-editor]"
             // Settled first, so what is counted is what the toggle started. A pulse or a blink
             // never finishes and is not waited for.
             do! Probe.settled page
@@ -2485,7 +2489,7 @@ let private jumpShown (page: IPage) =
 /// for the control to be offered, and wait for it.
 let private scrolledAwayFromLatest (page: IPage) =
     async {
-        let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+        do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-body]"
         // The harness page is taller than the viewport, so the composer — and the tray on its
         // top edge, where the control is offered — is brought into view first; then the
         // conversation's scroll goes back to the start.
@@ -2594,7 +2598,7 @@ let private commandChipHolds (page: IPage) : Async<unit> =
                         |> List.map System.Math.Round
                 | _ -> return failwithf "nothing matches %s to measure" selector
             }
-        let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+        do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-body]"
         do! foldHarness page [
                 400L,
                 Yession.Domain.SessionEvent.ToolUseStarted
@@ -2604,7 +2608,7 @@ let private commandChipHolds (page: IPage) : Async<unit> =
                       Yession.Domain.Tools.ToolUseStarted.Name = Yession.Domain.Tools.SessionTool.ExecuteCommand
                       Yession.Domain.Tools.ToolUseStarted.Arguments =
                         Some """{"command":"dotnet fsi tasks.fsx build","description":"built the app"}""" } ]
-        let! _ = await (page.WaitForSelectorAsync callChip)
+        do! waitVisible "the call's chip in the chat" page callChip
         let! revealed = Probe.ask page Yession.App.Probes.reveal (callChip, "center")
         Expect.isTrue revealed "the call's chip is there to bring into view"
         let! before = rectOf callChip
@@ -2621,7 +2625,7 @@ let private commandChipHolds (page: IPage) : Async<unit> =
                       Yession.Domain.Terminals.TerminalBlockStarted.Background = false
                       Yession.Domain.Terminals.TerminalBlockStarted.Description = Some "built the app"
                       Yession.Domain.Terminals.TerminalBlockStarted.ToolUseId = Some call } ]
-        let! _ = await (page.WaitForSelectorAsync blockChip)
+        do! waitVisible "the block's chip in the chat, in place of the call's" page blockChip
         do! waitAbsent "the call's own chip to be gone" page callChip
         let! after = rectOf blockChip
         Expect.equal after before "the block's chip is the call's chip's box, not one moved below it"
@@ -2632,7 +2636,7 @@ let private commandChipHolds (page: IPage) : Async<unit> =
 let private paneOnBlocks (page: IPage) : Async<unit> =
     async {
         do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-        let! _ = await (page.WaitForSelectorAsync (tailSurface "blocks:term-harness"))
+        do! waitVisible "the harness terminal's blocks" page (tailSurface "blocks:term-harness")
         do! Wait.until "the column to finish opening"
                 (fun () -> Probe.animating page "#shell [data-content-panel]") ((=) (Some 0))
     }
@@ -2986,7 +2990,7 @@ let editorTests =
     testList "Editor rendering (browser)" [
         editorCase "Markdown typed in the rich editor renders formatted and round-trips to Markdown" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
+                do! waitVisible "the editor" page ".ProseMirror"
 
                 // Type Markdown with REAL key events so the input rules fire: "# " turns the
                 // block into a heading rendered live as <h1> — the syntax is never left literal.
@@ -3014,10 +3018,10 @@ let editorTests =
         // name, and Tab takes it.
         editorCase "Tab completes the hinted address" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
+                do! waitVisible "the editor" page ".ProseMirror"
                 do! awaitU (page.ClickAsync ".ProseMirror")
                 do! awaitU (page.Keyboard.TypeAsync "thanks @sw")
-                let! _ = await (page.WaitForSelectorAsync "[data-address-hint]")
+                do! waitVisible "the address the editor hints" page "[data-address-hint]"
                 do! awaitU (page.Keyboard.PressAsync "Tab")
                 let! md = Harness.ask page HarnessPage.md
                 Expect.equal (md.TrimEnd ()) "thanks @swift-heron" "the hinted name was taken"
@@ -3025,10 +3029,10 @@ let editorTests =
 
         editorCase "each Tab moves to the next name on offer" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
+                do! waitVisible "the editor" page ".ProseMirror"
                 do! awaitU (page.ClickAsync ".ProseMirror")
                 do! awaitU (page.Keyboard.TypeAsync "@")
-                let! _ = await (page.WaitForSelectorAsync "[data-address-hint]")
+                do! waitVisible "the address the editor hints" page "[data-address-hint]"
                 do! awaitU (page.Keyboard.PressAsync "Tab")
                 do! awaitU (page.Keyboard.PressAsync "Tab")
                 let! md = Harness.ask page HarnessPage.md
@@ -3038,10 +3042,10 @@ let editorTests =
         // For a keyboard where Tab is spoken for: the right arrow takes the hint too.
         editorCase "the right arrow completes the hinted address" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
+                do! waitVisible "the editor" page ".ProseMirror"
                 do! awaitU (page.ClickAsync ".ProseMirror")
                 do! awaitU (page.Keyboard.TypeAsync "@ag")
-                let! _ = await (page.WaitForSelectorAsync "[data-address-hint]")
+                do! waitVisible "the address the editor hints" page "[data-address-hint]"
                 do! awaitU (page.Keyboard.PressAsync "ArrowRight")
                 let! md = Harness.ask page HarnessPage.md
                 Expect.equal (md.TrimEnd ()) "@agent" "the arrow took the hint"
@@ -3051,7 +3055,7 @@ let editorTests =
         // would be a keyboard trap.
         editorCase "Tab leaves the composer when nothing is hinted" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
+                do! waitVisible "the editor" page ".ProseMirror"
                 do! awaitU (page.ClickAsync ".ProseMirror")
                 do! awaitU (page.Keyboard.TypeAsync "hello")
                 do! awaitU (page.Keyboard.PressAsync "Tab")
@@ -3060,7 +3064,7 @@ let editorTests =
 
         editorCase "Ctrl+Enter sends, Shift+Enter breaks the line, Enter opens a paragraph" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
+                do! waitVisible "the editor" page ".ProseMirror"
 
                 do! awaitU (page.ClickAsync ".ProseMirror")
                 do! awaitU (page.Keyboard.TypeAsync "first line")
@@ -3105,7 +3109,7 @@ let editorTests =
         // what is read is the hook the stylesheet reads.
         editorCase "an empty composer offers its prompt without it becoming content" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#host .ProseMirror [data-placeholder]")
+                do! waitVisible "the empty composer's prompt" page "#host .ProseMirror [data-placeholder]"
                 let! prompt = Read.attr page "#host .ProseMirror [data-placeholder]" "data-placeholder"
                 let! text = Read.text page "#host .ProseMirror"
                 Expect.equal prompt (Some Yession.App.Dom.Text.composerPlaceholder) "the empty composer carries its prompt"
@@ -3114,7 +3118,7 @@ let editorTests =
 
         editorCase "a composer written in stops offering its prompt" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#host .ProseMirror [data-placeholder]")
+                do! waitVisible "the empty composer's prompt" page "#host .ProseMirror [data-placeholder]"
                 do! awaitU (page.ClickAsync ".ProseMirror")
                 do! awaitU (page.Keyboard.TypeAsync "x")
                 do! waitAbsent "#host .ProseMirror [data-placeholder] to be gone" page "#host .ProseMirror [data-placeholder]"
@@ -3123,7 +3127,7 @@ let editorTests =
 
         editorCase "a remote peer's selection renders as a caret widget, label, and highlight" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync ".ProseMirror")
+                do! waitVisible "the editor" page ".ProseMirror"
 
                 // Give the editor some content, then select a RANGE (not a bare caret) so the
                 // reported selection has distinct anchor/head — the editor relays it via
@@ -3273,10 +3277,10 @@ let editorTests =
         editorCase "a recorded terminal replays in a real player, and prints what it printed" <| fun page ->
             async {
                 // The player took the mount and built its own DOM there.
-                let! _ = await (page.WaitForSelectorAsync "#replay .ap-player")
+                do! waitVisible "the player to take its mount" page "#replay .ap-player"
                 // …with the transport controls that ARE the audit-read affordance: a replay
                 // you cannot pause or seek is a video of a terminal, not a record of one.
-                let! _ = await (page.WaitForSelectorAsync "#replay .ap-control-bar")
+                do! waitVisible "the player's transport controls" page "#replay .ap-control-bar"
                 // …and the chapter marks (Plan 14, stage 4), which are what make a
                 // whole-terminal recording navigable by what ran in it. Asserted here
                 // because a marker option the player silently ignored would leave every
@@ -3286,7 +3290,7 @@ let editorTests =
                 // screen. This is the assertion that spans the whole stage: bytes the Session
                 // wrote, encoded as asciicast, rebuilt by `TranscriptReplay.cast`,
                 // and rendered by the player.
-                let! _ = await (page.WaitForSelectorAsync "#replay .ap-overlay-start")
+                do! waitVisible "the player's start button" page "#replay .ap-overlay-start"
                 do! awaitU (page.ClickAsync "#replay .ap-overlay-start")
                 do! Wait.until "#replay to say total 0" (fun () -> Read.text page "#replay") (Option.exists (fun t -> t.Contains "total 0"))
 
@@ -3306,7 +3310,7 @@ let editorTests =
         // `#replay` is that first mount here, as the first rewind of a session is in the app.
         editorCase "the first replay on a page is measured under its own stylesheet, and fits its host" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#replay .ap-player")
+                do! waitVisible "the player to take its mount" page "#replay .ap-player"
                 do! replayFitsWithin "the page's first replay to fit inside its host" page "#replay"
             }
 
@@ -3320,8 +3324,8 @@ let editorTests =
         // and a start position naming the far one. What each case asserts is its own.
         editorCase "a chapter past a long idle gap still reaches the chapter list" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#replay-gappy .ap-player")
-                let! _ = await (page.WaitForSelectorAsync "#replay-gappy .ap-overlay-start")
+                do! waitVisible "the player to take the gappy recording's mount" page "#replay-gappy .ap-player"
+                do! waitVisible "the gappy recording's start button" page "#replay-gappy .ap-overlay-start"
                 do! awaitU (page.ClickAsync "#replay-gappy .ap-overlay-start")
                 // Both of them. The player idle-compresses the EVENTS it loads, so a chapter
                 // list built on the recording's raw clock disagrees with them: the far chapter
@@ -3337,7 +3341,7 @@ let editorTests =
 
         editorCase "a watch that starts past a long idle gap lands there, not before it" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#replay-gappy .ap-overlay-start")
+                do! waitVisible "the gappy recording's start button" page "#replay-gappy .ap-overlay-start"
                 do! awaitU (page.ClickAsync "#replay-gappy .ap-overlay-start")
                 // The WAIT is the assertion, and the timeout is what makes it one: a start
                 // position the player honours puts this text on screen as fast as it can
@@ -3355,7 +3359,7 @@ let editorTests =
         // output into the next with nothing between them to say which was which.
         editorCase "a replay draws the command a block ran on the screen" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#replay .ap-overlay-start")
+                do! waitVisible "the player's start button" page "#replay .ap-overlay-start"
                 do! awaitU (page.ClickAsync "#replay .ap-overlay-start")
                 // Its output first, so the screen has been drawn when the command is looked for;
                 // the terminal's text rather than the mount's, which also holds the chapter's label.
@@ -3431,7 +3435,7 @@ let editorTests =
         // after each state, never inferred from a timeout.
         editorCase "every state the harness names draws one shell without an error" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation]")
+                do! waitVisible "the shell's conversation" page "#shell [data-conversation]"
                 let errors = ResizeArray<string> ()
                 page.PageError.Add (fun e -> lock errors (fun () -> errors.Add e))
                 let thrown () = lock errors (fun () -> String.concat "; " errors)
@@ -3457,7 +3461,7 @@ let editorTests =
         editorCase "a reference's name sits on the line's baseline" <| fun page ->
             async {
                 do! Harness.run page HarnessPage.acts
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-entity]")
+                do! waitVisible "a reference in an act's note" page "#shell [data-act-note] [data-entity]"
                 let! reading = Probe.reading page Yession.App.Probes.Measure.ReferenceBaseline
                 let drift = match reading with [ drift ] -> drift | _ -> infinity
                 Expect.isTrue (drift < 0.5) (sprintf "the name's baseline is the line's, it was %.2fpx off" drift)
@@ -3476,7 +3480,7 @@ let editorTests =
             async {
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
                 do! Harness.run page HarnessPage.acts
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-status=\"running\"] [data-act-running]")
+                do! waitVisible "a running act's mark" page "#shell [data-act-status=\"running\"] [data-act-running]"
                 let! misplaced = Probe.verdict page Yession.App.Probes.Measure.RunningMarkOnTitle
                 Expect.isEmpty misplaced "the running act's mark stands on its title's line"
             }
@@ -3491,7 +3495,7 @@ let editorTests =
         editorCase "every cause's head paints centred on its line" <| fun page ->
             async {
                 do! Harness.run page HarnessPage.acts
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-cause-ref] svg")
+                do! waitVisible "a cause's head" page "#shell [data-cause-ref] svg"
                 let! off = Probe.verdict page Yession.App.Probes.Measure.CauseHeadsOnLines
                 Expect.isEmpty off "each head sits on its line"
             }
@@ -3508,7 +3512,7 @@ let editorTests =
             async {
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
                 do! Harness.run page HarnessPage.acts
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-status=\"running\"] [data-cause-ref]")
+                do! waitVisible "a running act's cause" page "#shell [data-act-status=\"running\"] [data-cause-ref]"
                 let! off = Probe.verdict page Yession.App.Probes.Measure.RunningMarkOnCauseLine
                 Expect.isEmpty off "the mark hangs on the line"
             }
@@ -3527,7 +3531,7 @@ let editorTests =
         editorCase "every fold's arrow is on its own title's line, and all of them on one rail" <| fun page ->
             async {
                 do! Harness.run page HarnessPage.acts
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
+                do! waitVisible "a fold in an act's note" page "#shell [data-act-note] [data-fold]"
                 let! reading = Probe.reading page Yession.App.Probes.Measure.FoldArrowsOnRail
                 let off = Array.ofList reading
                 Expect.isTrue (off.[0] >= 2.0) (sprintf "the page must hold folds of both kinds, it held %.0f" off.[0])
@@ -3542,7 +3546,7 @@ let editorTests =
         editorCaseIn 390 844 "and on a phone, where a bled row could spend its bleed on the gutter" <| fun page ->
             async {
                 do! Harness.run page HarnessPage.acts
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
+                do! waitVisible "a fold in an act's note" page "#shell [data-act-note] [data-fold]"
                 let! reading = Probe.reading page Yession.App.Probes.Measure.FoldArrowsOnRail
                 let off = Array.ofList reading
                 Expect.isTrue (off.[0] >= 2.0) (sprintf "the page must hold folds of both kinds, it held %.0f" off.[0])
@@ -3558,7 +3562,7 @@ let editorTests =
         editorCase "every fold's arrow stands on its author's avatar column" <| fun page ->
             async {
                 do! Harness.run page HarnessPage.acts
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
+                do! waitVisible "a fold in an act's note" page "#shell [data-act-note] [data-fold]"
                 let! reading = Probe.reading page Yession.App.Probes.Measure.FoldArrowsOnAvatars
                 let off = Array.ofList reading
                 Expect.isTrue (off.[0] >= 1.0) "the page must hold a fold under an author line"
@@ -3572,7 +3576,7 @@ let editorTests =
         editorCase "unfolding an act shows its particulars, and folding hides them" <| fun page ->
             async {
                 do! Harness.run page HarnessPage.acts
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
+                do! waitVisible "a fold in an act's note" page "#shell [data-act-note] [data-fold]"
                 let visibility (what: string) (wanted: string) =
                     Wait.until what (fun () -> Probe.computed page "#shell [data-act-note] [data-fold-body]" "visibility") ((=) (Some wanted))
                 do! visibility "the particulars to start hidden" "hidden"
@@ -3593,7 +3597,7 @@ let editorTests =
         editorCase "tapping the row, not only the arrow, unfolds it and folds it back" <| fun page ->
             async {
                 do! Harness.run page HarnessPage.acts
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-act-note] [data-fold]")
+                do! waitVisible "a fold in an act's note" page "#shell [data-act-note] [data-fold]"
                 let visibility (what: string) (wanted: string) =
                     Wait.until what (fun () -> Probe.computed page "#shell [data-act-note] [data-fold-body]" "visibility") ((=) (Some wanted))
                 do! visibility "the particulars to start hidden" "hidden"
@@ -3764,24 +3768,24 @@ let editorTests =
                 do! openManyTerminals page
                 let! many = doors "more tabs than fit"
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                do! waitVisible "the all page" page "#shell [data-content-list]"
                 let! listing = doors "the all page"
                 do! awaitU (page.Keyboard.PressAsync "Escape")
                 do! waitAbsent "#shell [data-content-list] to be gone" page "#shell [data-content-list]"
                 // Chosen, so it is the one the reader is looking at when it ends, and it stays.
                 do! awaitU (page.Locator("#shell [data-pane-tab='terminal:term-live']").DispatchEventAsync "click")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab='terminal:term-live'][aria-selected=true]")
+                do! waitVisible "the live terminal's tab, chosen" page "#shell [data-pane-tab='terminal:term-live'][aria-selected=true]"
                 do! foldHarness page
                         [ for i, id in List.indexed [ "term-harness"; "term-live"; "term-more-0"; "term-more-1"; "term-more-2"; "term-more-3" ] ->
                               95L + int64 i, closed id ]
                 for left in 5 .. -1 .. 0 do
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab-dismiss]")
+                    do! waitVisible "a closed tab's way to put it away" page "#shell [data-pane-tab-dismiss]"
                     do! awaitU (page.ClickAsync "#shell [data-pane-tab-dismiss]")
                     do! waitCount (sprintf "%d tabs left" left) page "#shell [data-terminal-closed-tab]" left
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-new]")
+                do! waitVisible "the empty pane's way to make a terminal" page "#shell [data-terminal-new]"
                 let! empty = doors "an empty pane"
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                do! waitVisible "the all page, over an empty pane" page "#shell [data-content-list]"
                 let! emptyListing = doors "the all page over an empty pane"
                 let seen = [ many; listing; empty; emptyListing ]
                 Expect.equal seen (seen |> List.map (fun said -> said.Substring (0, said.LastIndexOf ':') + ": 1")) "one door in each"
@@ -3796,7 +3800,7 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 // Chosen, so it is the one the reader is looking at when it ends, and it stays.
                 do! awaitU (page.ClickAsync "#shell [data-pane-tab='terminal:term-harness']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab='terminal:term-harness'][aria-selected=true]")
+                do! waitVisible "the harness terminal's tab, chosen" page "#shell [data-pane-tab='terminal:term-harness'][aria-selected=true]"
                 do! foldHarness page
                         [ 95L,
                           Yession.Domain.SessionEvent.TerminalClosed
@@ -3804,7 +3808,7 @@ let editorTests =
                                 Yession.Domain.Terminals.TerminalClosed.Reason = "closed by a peer"
                                 Yession.Domain.Terminals.TerminalClosed.By = None } ]
                 let dismiss = "#shell [data-pane-tab-dismiss='term-harness']"
-                let! _ = await (page.WaitForSelectorAsync dismiss)
+                do! waitVisible "the closed tab's way to put it away" page dismiss
                 do! awaitU (page.FocusAsync dismiss)
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 do! waitAbsent "the closed tab to be gone" page "#shell [data-pane-tab='terminal:term-harness']"
@@ -3821,7 +3825,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-tab='terminal:term-harness']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-tab='terminal:term-harness'][aria-selected=true]")
+                do! waitVisible "the harness terminal's tab, chosen" page "#shell [data-pane-tab='terminal:term-harness'][aria-selected=true]"
                 let body =
                     foldBody
                         [ 95L,
@@ -3873,18 +3877,18 @@ let editorTests =
         editorCase "a chat chip opens a preview, and focus follows it" <| fun page ->
             async {
                 // The chip the harness model's one block puts in the chat.
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
+                do! waitVisible "the block's chip in the chat" page "#shell [data-chat-block]"
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
 
                 // A preview opened, showing that block.
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview^='block:']")
+                do! waitVisible "the block's preview in the pane" page "#shell [data-pane-preview^='block:']"
 
                 // Focus followed it into the pane.
                 do! Wait.until "focus on [data-pane-panel]" (fun () -> Read.focused page "[data-pane-panel]") id
 
                 // The block reads as TEXT. (Its recording was one press away here too; a
                 // command's recording is its terminal's to play now, from its toolbar.)
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-block] [data-terminal-output]")
+                do! waitVisible "the block's output in its preview" page "#shell [data-pane-block] [data-terminal-output]"
                 return ()
             }
 
@@ -3896,7 +3900,7 @@ let editorTests =
         // press could only ever edit the title. Hit-tested at the id's own centre.
         editorCaseIn 390 844 "on a phone a press on the session id reaches the id, not the title" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-session-id]")
+                do! waitVisible "the session id" page "#shell [data-session-id]"
                 let! id = Probe.seen page "#shell [data-session-id]"
                 let idPressable = id |> List.tryHead |> Option.exists (fun id -> id.Painted)
                 Expect.isTrue idPressable "a press on the session id reaches the id, so it can be selected"
@@ -3923,7 +3927,7 @@ let editorTests =
                 do! paneCovers "the pane to take the column" page
                 // …with the tab strip retained, which is what keeps phone and desktop one
                 // mental model rather than two surfaces that happen to share a codebase.
-                let! _ = await (page.WaitForSelectorAsync "#shell [role='tablist'] [data-pane-tab]")
+                do! waitVisible "the tab strip, kept over the pane" page "#shell [role='tablist'] [data-pane-tab]"
 
                 // Nothing overflows sideways.
                 let! overflows =
@@ -4007,7 +4011,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                do! waitVisible "the all page" page "#shell [data-content-list]"
                 do! Probe.settled page
                 let! doors =
                     Probe.paintedCount page "#shell [data-content-panel] [data-pane-new], #shell [data-content-panel] [data-terminal-new]"
@@ -4085,7 +4089,7 @@ let editorTests =
         // so there the baseline is not the promise and is not asserted.
         let edgeTabOnTheBand (desktop: bool) (page: IPage) =
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='show']")
+                do! waitVisible "the shut pane's edge tab" page "#shell [data-content-toggle='show']"
                 let! wrong = Probe.verdictWith page Yession.App.Probes.Measure.EdgeTabOnBand (if desktop then 1 else 0)
                 Expect.isEmpty wrong "the edge tab sits on the header band"
             }
@@ -4095,7 +4099,7 @@ let editorTests =
 
         editorCase "a hidden pane takes no Tab stops" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='show']")
+                do! waitVisible "the shut pane's edge tab" page "#shell [data-content-toggle='show']"
                 // What would be skipped has to be there to skip, or this passes over nothing.
                 let! held = Read.count page "#shell [data-content-panel] button, #shell [data-content-panel] [tabindex=\"0\"]"
                 Expect.isTrue (held > 0) "the shut pane still holds controls"
@@ -4122,7 +4126,7 @@ let editorTests =
         editorCase "hiding the pane puts focus on the way back in" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='hide']")
+                do! waitVisible "the control that hides the pane" page "#shell [data-content-toggle='hide']"
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='hide']")
                 do! Wait.until "focus on [data-content-toggle='show']" (fun () -> Read.focused page "[data-content-toggle='show']") id
                 return ()
@@ -4134,7 +4138,7 @@ let editorTests =
         // and a pointer press rightly earns none.
         editorCase "the tab panel's focus is visible" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
+                do! waitVisible "the block's chip in the chat" page "#shell [data-chat-block]"
                 do! awaitU (page.FocusAsync "#shell [data-chat-block]")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 do! Wait.until "focus on [data-pane-panel]" (fun () -> Read.focused page "[data-pane-panel]") id
@@ -4171,7 +4175,7 @@ let editorTests =
         // room below the shell stands in for that, and is the room the double scroll spent.
         editorCaseIn 390 844 "typing in the composer with the keyboard up never scrolls the page past the shell" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor] .ProseMirror")
+                do! waitVisible "the composer" page "#shell [data-draft-editor] .ProseMirror"
                 let! _ = Probe.verdictWith page Yession.App.Probes.Measure.RoomBelowShell 400
                 do! awaitU (page.ClickAsync "#shell [data-draft-editor] .ProseMirror")
                 let! cdp = await (page.Context.NewCDPSessionAsync page)
@@ -4200,7 +4204,7 @@ let editorTests =
 
                 // The fixture's wide message is present — otherwise this passes by rendering
                 // nothing that could have overflowed.
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body] pre")
+                do! waitVisible "the fixture's wide message" page "#shell [data-conversation] [data-message-body] pre"
                 let! timeline = Probe.scroll page "#shell [data-conversation]"
                 let sideways = timeline |> Option.exists Yession.App.Probes.Scroll.overflowsSideways
                 Expect.isFalse sideways "the conversation column does not scroll sideways"
@@ -4218,7 +4222,7 @@ let editorTests =
 
                 // The chip is on screen and carries the name — otherwise this passes by
                 // rendering nothing that could have overflowed.
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-chat-pending] [data-pending-subject]")
+                do! waitVisible "the queued command's terminal name" page "#shell [data-conversation] [data-chat-pending] [data-pending-subject]"
                 let! timeline = Probe.scroll page "#shell [data-conversation]"
                 let sideways = timeline |> Option.exists Yession.App.Probes.Scroll.overflowsSideways
                 Expect.isFalse sideways "the conversation column does not scroll sideways"
@@ -4248,7 +4252,7 @@ let editorTests =
 
                     // Where the conversation's words start, read off the page the harness
                     // loads with: the body's own box plus the avatar gutter it carries.
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+                    do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-body]"
                     let body = "#shell [data-conversation] [data-message-body]"
                     let! bodyBox = Probe.boxes page [ body ]
                     let! padding = Probe.computed page body "padding-left"
@@ -4260,9 +4264,9 @@ let editorTests =
                     // The same session before it began, with a row held — so the branch line
                     // inside a row is on screen as well as the lines outside them.
                     do! Harness.run1 page HarnessPage.launch true
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate]")
+                    do! waitVisible "a repository on the launch card" page "#shell [data-repo-picker] [data-repo-candidate]"
                     do! awaitU (page.ClickAsync "#shell [data-repo-picker] [data-repo-candidate]")
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate-branch]")
+                    do! waitVisible "the held row's branch" page "#shell [data-repo-picker] [data-repo-candidate-branch]"
 
                     // Two ways to ask where a line starts, because the card's blocks run edge
                     // to edge (so a row's ground can) and carry the reading inset as PADDING.
@@ -4308,7 +4312,7 @@ let editorTests =
                 (sprintf "at %dx%d nothing in the conversation is drawn that a press cannot reach" width height) <| fun page ->
                 async {
                     do! Harness.run page HarnessPage.launchOver
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
+                    do! waitVisible "the launch card's start button" page "#shell [data-repo-picker] [data-repo-picker-start]"
                     // The card RISES in (`animate-ask-rise`), growing its height over ~240ms, and
                     // while it does the chat's room is still changing underfoot — an item
                     // hit-tested mid-rise can be under a card that has not finished arriving. The
@@ -4357,7 +4361,7 @@ let editorTests =
                         }
                     // The instant before the repositories land: the card is up, still looking.
                     do! Harness.run page HarnessPage.launchLooking
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
+                    do! waitVisible "the launch card's start button" page "#shell [data-repo-picker] [data-repo-picker-start]"
                     let! looking = shape ()
                     // Ground truth that this IS the looking state and not the loaded one already:
                     // nothing to hold yet, so the case measures the step it means to.
@@ -4365,7 +4369,7 @@ let editorTests =
                     Expect.equal rows 0 "the looking state has no repositories in it yet"
                     // The repositories arrive.
                     do! Harness.run1 page HarnessPage.launch true
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate]")
+                    do! waitVisible "a repository on the launch card" page "#shell [data-repo-picker] [data-repo-candidate]"
                     let! loaded = shape ()
                     Expect.equal loaded looking
                         (sprintf "the card held neither its height nor START's place as the listing loaded: looking was height=%d start=%d, loaded is height=%d start=%d"
@@ -4378,7 +4382,7 @@ let editorTests =
         editorCaseIn 390 844 "on a phone the launch card's way out is a 44px target with a name" <| fun page ->
             async {
                 do! Harness.run1 page HarnessPage.launch true
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker-dismiss]")
+                do! waitVisible "the launch card's way out" page "#shell [data-repo-picker-dismiss]"
                 let! dismiss = boxesOf page [ "#shell [data-repo-picker-dismiss]" ]
                 let size = dismiss |> List.map (fun b -> [| px (Yession.App.Probes.Box.width b); px (Yession.App.Probes.Box.height b) |]) |> List.head
                 Expect.isTrue (size.[0] >= 44 && size.[1] >= 44) (sprintf "44px each way, got %dx%d" size.[0] size.[1])
@@ -4397,7 +4401,7 @@ let editorTests =
         editorCaseIn 390 844 "the start button is centred in the card, not shoved along the reading rail" <| fun page ->
             async {
                 do! Harness.run1 page HarnessPage.launch true
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
+                do! waitVisible "the launch card's start button" page "#shell [data-repo-picker] [data-repo-picker-start]"
                 let! measured = boxesOf page [ "#shell [data-repo-picker]"; "#shell [data-repo-picker] [data-repo-picker-start]" ]
                 let margins =
                     match measured with
@@ -4423,10 +4427,10 @@ let editorTests =
         editorCaseIn 390 844 "the branch pane is off to the right until it is asked for, and out of reach until then" <| fun page ->
             async {
                 do! Harness.run1 page HarnessPage.launch true
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate]")
+                do! waitVisible "a repository on the launch card" page "#shell [data-repo-picker] [data-repo-candidate]"
                 // Holding a row is what puts a branch on it to go and change.
                 do! awaitU (page.ClickAsync "#shell [data-repo-picker] [data-repo-candidate]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-candidate-branch]")
+                do! waitVisible "the held row's branch" page "#shell [data-repo-candidate-branch]"
 
                 let! cardAndBranch = boxesOf page [ "#shell [data-repo-picker]"; "#shell [data-repo-picker-pane=\"branch\"]" ]
                 let away =
@@ -4462,7 +4466,7 @@ let editorTests =
         editorCaseIn 390 844 "the listing pages as the reader reaches its foot, without a press" <| fun page ->
             async {
                 do! Harness.run1 page HarnessPage.launch true
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-candidate]")
+                do! waitVisible "a repository on the launch card" page "#shell [data-repo-picker] [data-repo-candidate]"
 
                 // Ground truth, both halves: the foot is below the card, and the page it
                 // stands for has not arrived. Without the first, this case passes on a foot
@@ -4486,7 +4490,7 @@ let editorTests =
                     ()
                 | None -> failwith "the card has no body to scroll"
 
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-candidate='octo/next-one']")
+                do! waitVisible "the next page of repositories" page "#shell [data-repo-candidate='octo/next-one']"
                 let! feet = Read.count page "#shell [data-repo-picker-foot]"
                 let ended = feet = 0
                 Expect.isTrue ended "and a page that carried no cursor is the end of the list, so the foot goes"
@@ -4503,7 +4507,7 @@ let editorTests =
         // a key event are not things a rendered string has.
         editorCaseIn 390 844 "Enter in the session title lets go of the field and keeps what was typed" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-session-title]")
+                do! waitVisible "the session title" page "#shell [data-session-title]"
                 do! awaitU (page.FocusAsync "#shell [data-session-title]")
                 do! awaitU (page.Keyboard.TypeAsync " on a phone")
                 // Ground truth: the field really is where the typing went, and it really is
@@ -4563,7 +4567,7 @@ let editorTests =
                 // Waited for on the CONTROL, never on the panel: a shut pane is `w-0`, which
                 // Playwright reports as hidden, so waiting for the panel to be visible before
                 // opening it waits for something that only happens afterwards.
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='show']")
+                do! waitVisible "the control that shows the pane" page "#shell [data-content-toggle='show']"
                 // This page carries two other fixtures ABOVE the shell — the editor host and
                 // the player — so the shell starts a viewport and a half down. Every control
                 // in it is reachable by scroll, which is fine for a person and a trap for a
@@ -4647,7 +4651,7 @@ let editorTests =
                 // screen shows what the program drew.
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
                 let screen = "#shell [data-terminal-screen='term-live']"
-                let! _ = await (page.WaitForSelectorAsync screen)
+                do! waitVisible "the live terminal's screen" page screen
                 do! waitTextIn "the screen to say vim ~/notes" page "#shell [data-terminal-screen='term-live']" "vim ~/notes"
 
                 // A press on it puts the keyboard there, because its whole purpose is having it.
@@ -4692,7 +4696,7 @@ let editorTests =
                 // in block mode, which is where somebody who wants to type is standing. Not
                 // clicked — activating the tab you are already on is the PIN gesture.
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-take='term-harness']")
+                do! waitVisible "the control that takes the harness terminal" page "#shell [data-terminal-take='term-harness']"
 
                 // The press that hands this peer the lease — and removes itself doing it.
                 do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
@@ -4713,7 +4717,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 let line = "#shell " + commandLine "term-harness"
-                let! _ = await (page.WaitForSelectorAsync line)
+                do! waitVisible "the harness terminal's command line" page line
                 do! awaitU (page.FocusAsync line)
                 do! Wait.until "focus on the harness terminal's command line" (fun () -> Read.focused page "[data-terminal-input^='term-draft:term-harness:']") id
 
@@ -4729,7 +4733,7 @@ let editorTests =
         editorCase "a terminal going live does not take the keyboard from what someone is writing" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-take='term-harness']")
+                do! waitVisible "the control that takes the harness terminal" page "#shell [data-terminal-take='term-harness']"
 
                 // Somebody's keyboard is somewhere else in the pane — on the splitter, which
                 // is rendered whatever the terminal is doing and survives this render.
@@ -4738,7 +4742,7 @@ let editorTests =
 
                 // The lease arrives on its own, as the alt-screen flip delivers it.
                 do! Harness.run1 page HarnessPage.take "term-harness"
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-harness']")
+                do! waitVisible "the harness terminal to go live" page "#shell [data-terminal-screen='term-harness']"
                 let! kept = Read.focused page "[data-term-resize]"
                 Expect.isTrue kept "a lease landing leaves focus that survived the render where it was"
             }
@@ -4752,7 +4756,7 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
                 let release = "#shell [data-terminal-release='term-harness']"
-                let! _ = await (page.WaitForSelectorAsync release)
+                do! waitVisible "the control that hands the terminal back" page release
                 // The press, then its answer: this page has no session, so the release arrives
                 // the way the session would send it.
                 do! awaitU (page.ClickAsync release)
@@ -4771,7 +4775,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 let commandLine = "#shell [data-terminal-input^='term-draft:']:not([readonly])"
-                let! _ = await (page.WaitForSelectorAsync commandLine)
+                do! waitVisible "the command line" page commandLine
                 do! awaitU (page.FocusAsync commandLine)
                 do!
                     foldHarness page [
@@ -4793,7 +4797,7 @@ let editorTests =
         editorCase "keys typed after a steal do not reach the terminal" <| fun page ->
             async {
                 do! stolenFromHarness page
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-stolen='term-harness']")
+                do! waitVisible "the notice that the terminal was taken" page "#shell [data-terminal-stolen='term-harness']"
                 do! awaitU (page.Keyboard.TypeAsync "pwd")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 let! typed = Harness.read page HarnessPage.typed
@@ -4817,7 +4821,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-harness'] [data-terminal-keys]")
+                do! waitVisible "the keyboard in the harness terminal's live screen" page "#shell [data-terminal-screen='term-harness'] [data-terminal-keys]"
                 // A line typed, then the cursor moved four cells back along it.
                 do! Harness.run5 page HarnessPage.snapshot "term-harness" 50 "$ echo hi\u001b[4D" (Some 80) (Some 24)
                 do! Wait.until "the caret on the o of echo"
@@ -4833,7 +4837,7 @@ let editorTests =
                 do! awaitU (page.TapAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.TapAsync "#shell [data-terminal-tab='term-live']")
                 let screen = "#shell [data-terminal-screen='term-live']"
-                let! _ = await (page.WaitForSelectorAsync screen)
+                do! waitVisible "the live terminal's screen" page screen
                 do! awaitU (page.TapAsync screen)
                 do! Wait.until "a text field inside the screen to hold focus"
                         (fun () -> Read.focused page "[data-terminal-screen='term-live'] textarea") id
@@ -4847,7 +4851,7 @@ let editorTests =
                 do! awaitU (page.TapAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.TapAsync "#shell [data-terminal-tab='term-live']")
                 let screen = "#shell [data-terminal-screen='term-live']"
-                let! _ = await (page.WaitForSelectorAsync screen)
+                do! waitVisible "the live terminal's screen" page screen
                 do! awaitU (page.TapAsync screen)
                 do! Wait.until "focus on [data-terminal-keys='term-live']" (fun () -> Read.focused page "[data-terminal-keys='term-live']") id
                 do! awaitU (page.Keyboard.InsertTextAsync "bob")
@@ -4884,7 +4888,7 @@ let editorTests =
             async {
                 do! awaitU (page.TapAsync "#shell [data-content-toggle='show']")
                 let line = "#shell " + commandLine "term-harness"
-                let! _ = await (page.WaitForSelectorAsync line)
+                do! waitVisible "the harness terminal's command line" page line
                 do! awaitU (page.TapAsync line)
                 do! awaitU (page.SetViewportSizeAsync (390, 544))
                 let run = sprintf "#shell :has(> %s) [data-terminal-send]" (commandLine "term-harness")
@@ -4912,7 +4916,7 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
                 let screen = "#shell [data-terminal-screen='term-live']"
-                let! _ = await (page.WaitForSelectorAsync screen)
+                do! waitVisible "the live terminal's screen" page screen
                 do! awaitU (page.FocusAsync (screen + " [data-terminal-keys]"))
                 do! Wait.until "focus on [data-terminal-keys='term-live']" (fun () -> Read.focused page "[data-terminal-keys='term-live']") id
 
@@ -4952,7 +4956,7 @@ let editorTests =
             editorCaseIn 390 844 "once refused, the agent's command is not shown as queued anywhere" <| fun page ->
                 async {
                     do! harnessReplaced page
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-refused='term-harness']")
+                    do! waitVisible "the chat to say the agent's command was refused" page "#shell [data-chat-refused='term-harness']"
                     let! chips = visibleCount page "#shell [data-chat-pending='queue-harness'], #shell [data-terminal-queued='queue-harness']"
                     Expect.equal chips 0 "no queued chip or card for a refused command"
                 }
@@ -4960,7 +4964,7 @@ let editorTests =
             editorCaseIn 390 844 "a refusal by the session names no internal actor" <| fun page ->
                 async {
                     do! harnessReplaced page
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-refused='term-harness']")
+                    do! waitVisible "the chat to say the agent's command was refused" page "#shell [data-chat-refused='term-harness']"
                     let! shown = await (page.Locator("#shell").InnerTextAsync ())
                     let text = shown.ToLowerInvariant ()
                     Expect.isFalse (text.Contains "session-process") "the session's token is not a name"
@@ -4969,7 +4973,7 @@ let editorTests =
                 async {
                     do! paneOnBlocks page
                     do! harnessReplaced page
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-lost='term-harness']")
+                    do! waitVisible "the banner over the lost terminal" page "#shell [data-terminal-lost='term-harness']"
                     let! listed = visibleCount page "#shell [data-terminal-lost='term-harness'] [data-terminal-refused='block-refused']"
                     Expect.equal listed 1 "the agent's refused command is on the banner, once"
                 }
@@ -4988,7 +4992,7 @@ let editorTests =
             editorCaseIn 390 844 "with the terminal out of sight, the chat says the agent's command was refused" <| fun page ->
                 async {
                     do! harnessReplaced page
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-refused='term-harness']")
+                    do! waitVisible "the chat to say the agent's command was refused" page "#shell [data-chat-refused='term-harness']"
                     let! said = visibleCount page "#shell [data-chat-refused='term-harness']"
                     Expect.equal said 1 "the conversation carries it, once"
                 }
@@ -5005,7 +5009,7 @@ let editorTests =
             editorCaseIn 390 844 "nothing on screen says marking or re-arm" <| fun page ->
                 async {
                     do! harnessReplaced page
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-refused='term-harness']")
+                    do! waitVisible "the chat to say the agent's command was refused" page "#shell [data-chat-refused='term-harness']"
                     let! shown = await (page.Locator("#shell").InnerTextAsync ())
                     let text = shown.ToLowerInvariant ()
                     Expect.isFalse (text.Contains "marking") "no marking"
@@ -5049,7 +5053,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
+                do! waitVisible "the live terminal's screen" page "#shell [data-terminal-screen='term-live']"
 
                 // Seeded at a seq past everything the fixture's feed holds, so what ends up on
                 // this screen is only what this case put there.
@@ -5093,7 +5097,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
+                do! waitVisible "the live terminal's screen" page "#shell [data-terminal-screen='term-live']"
 
                 // The size this client reported for the pane as it stands.
                 let reported () = Harness.read page HarnessPage.resized
@@ -5118,10 +5122,7 @@ let editorTests =
         editorCaseIn 1440 900 "a pane showing blocks measures itself, with no lease to report through" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                let! _ =
-                    await (
-                        page.WaitForSelectorAsync
-                            "#shell [data-terminal-scrollback][data-terminal-id='term-harness']")
+                do! waitVisible "the harness terminal's scrollback" page "#shell [data-terminal-scrollback][data-terminal-id='term-harness']"
 
                 // Nobody holds this terminal, so the holder's report never fires: this is the
                 // measurement the model kept, which is the one a command reads.
@@ -5144,7 +5145,7 @@ let editorTests =
         // rule standing over its message from one collapsed to nothing behind it.
         editorCaseIn 1440 900 "a chapter's rule stands above the message it opens, across the column" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-rule='msg-filler-8']")
+                do! waitVisible "the chapter's rule" page "#shell [data-chapter-rule='msg-filler-8']"
                 let rule = "#shell [data-chapter-rule='msg-filler-8']"
                 let item = "#shell [data-conversation] [data-message-id='msg-filler-8']"
                 let! ruleAndItem = boxesOf page [ rule; item ]
@@ -5184,7 +5185,7 @@ let editorTests =
         // every cheap tier that reads markup.
         editorCaseIn 1440 900 "the reply ref takes you to the message it answers, and lands the cursor on it" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-reply-jump][data-reply-ref='msg-harness']")
+                do! waitVisible "the reply's way to the message it answers" page "#shell [data-reply-jump][data-reply-ref='msg-harness']"
                 // To the bottom, where the reply sits, so its source is off the top and the jump is real.
                 match! Probe.scroll page "#shell [data-conversation]" with
                 | Some conversation ->
@@ -5208,7 +5209,7 @@ let editorTests =
         // works.
         editorCaseIn 1440 900 "a chapter in the contents takes you to it" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapters] [data-chapter-entry]")
+                do! waitVisible "a chapter in the contents" page "#shell [data-chapters] [data-chapter-entry]"
                 // Away from it first, so the jump has a real scroll to make.
                 match! Probe.scroll page "#shell [data-conversation]" with
                 | Some conversation ->
@@ -5237,7 +5238,7 @@ let editorTests =
         editorCaseIn 390 844 "a chapter reached from the phone's contents is not left behind the drawer" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapters] [data-chapter-entry]")
+                do! waitVisible "a chapter in the contents" page "#shell [data-chapters] [data-chapter-entry]"
                 let! reachable = Probe.hitAt page "#shell [data-conversation] [data-message-id='msg-harness']" 4.0
                 let covered = not reachable
                 Expect.isTrue covered "the drawer is over the conversation, which is what the phone's contents sit in"
@@ -5260,7 +5261,7 @@ let editorTests =
         editorCaseIn 390 844 "on a phone the contents' entries are single 44px rows with nothing between them" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapters] [data-chapter-entry]")
+                do! waitVisible "a chapter in the contents" page "#shell [data-chapters] [data-chapter-entry]"
                 let! entries = Probe.seen page "#shell [data-chapters] [data-chapter-entry]"
                 let boxes = entries |> List.map (fun e -> e.Box)
                 let heights = boxes |> List.map Yession.App.Probes.Box.height
@@ -5285,7 +5286,7 @@ let editorTests =
         // window a render is held for, and asks how many times the app drew.
         editorCaseIn 390 844 "pages that leave the client behind are folded but not drawn" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation]")
+                do! waitVisible "the shell's conversation" page "#shell [data-conversation]"
                 // 60 items of streamed replies is ~1,500 events: fifteen pages of a hundred,
                 // twenty-five milliseconds apart — three hundred and seventy-five of the five
                 // hundred a render is held for.
@@ -5311,7 +5312,7 @@ let editorTests =
         // scroll, and one with a stated destination to check against.
         editorCaseIn 390 844 "a scroll in progress is not taken away by the renders that land during it" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation]")
+                do! waitVisible "the shell's conversation" page "#shell [data-conversation]"
                 // Two hundred items, a record a frame for four hundred frames — the scroll has
                 // to reach the top well inside that, so every frame of it has a render in it.
                 do! Harness.run4 page HarnessPage.benchScrollBegin 200 400 16 true
@@ -5339,7 +5340,7 @@ let editorTests =
         // foot however it is aligned, and the case would pass for nothing.
         editorCaseIn 1440 1200 "a short conversation ends by the composer, not at the top of the column" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-id]")
+                do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-id]"
                 do! Harness.run4 page HarnessPage.benchScrollBegin 0 0 16 true
                 let! _ = Harness.ask page HarnessPage.benchScrollEnd
                 // Two frames before anything is measured: one for the render the empty
@@ -5371,7 +5372,7 @@ let editorTests =
         // back to the value the view writes.
         editorCaseIn 1440 900 "what you type on a chapter's rule is what the session calls it" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
+                do! waitVisible "the chapter's name on its rule" page "#shell [data-chapter-name='msg-filler-8']"
                 do! awaitU (page.ClickAsync "#shell [data-chapter-name='msg-filler-8']")
                 // To the end of what the field holds, so this adds rather than replacing — an
                 // edit against the text the session holds is what the field is for, and
@@ -5400,7 +5401,7 @@ let editorTests =
         // and no focus on it, and is still painted once focus lands.
         editorCaseIn 1440 900 "an unnamed chapter's field offers a name at rest, before any pointer" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
+                do! waitVisible "the chapter's name on its rule" page "#shell [data-chapter-name='msg-filler-8']"
                 let read () =
                     async {
                         match! Probe.reading page Yession.App.Probes.Measure.ChapterPlaceholder with
@@ -5432,7 +5433,7 @@ let editorTests =
         // exists to avoid.
         editorCaseIn 1440 900 "a collaborator's caret in a chapter's name stands in that name" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
+                do! waitVisible "the chapter's name on its rule" page "#shell [data-chapter-name='msg-filler-8']"
                 // A name to be IN. The rule of a chapter nobody has named is a plain divider
                 // with an empty field, and a caret at index 3 and at index 9 of nothing are
                 // the same place — so somebody names it first, as a person would.
@@ -5475,7 +5476,7 @@ let editorTests =
         // did not fit in it.
         editorCaseIn 1440 900 "where a peer is never runs off the side of the roster" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
+                do! waitVisible "the chapter's name on its rule" page "#shell [data-chapter-name='msg-filler-8']"
                 // The chapter whose name nobody has written, so what the roster says is the
                 // heuristic's guess at a whole line of somebody's message — the longest thing
                 // this slot can be asked to hold.
@@ -5499,7 +5500,7 @@ let editorTests =
         // wrapping line run underneath the dots, which is what shipped until this case existed.
         editorCaseIn 1440 900 "an item's actions never sit on the words" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-item-actions]")
+                do! waitVisible "an item's actions" page "#shell [data-conversation] [data-item-actions]"
                 do! awaitU (page.HoverAsync "#shell [data-conversation] [data-message-id='msg-filler-8']")
                 let item = "#shell [data-conversation] [data-message-id='msg-filler-8']"
                 let! dotsAndBody = boxesOf page [ item + " [data-item-actions]"; item + " [data-message-body]" ]
@@ -5515,7 +5516,7 @@ let editorTests =
         // screen reads as a card rather than as the row it is.
         editorCaseIn 390 844 "a message's ground reaches both edges of a phone screen" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-id]")
+                do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-id]"
                 let! spare =
                     groundSpare page
                 Expect.isTrue
@@ -5528,7 +5529,7 @@ let editorTests =
         // 1440px window would be announcing a line of text nobody could read back.
         editorCaseIn 1440 900 "a message's ground stops at the reading column, not the window" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-id]")
+                do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-id]"
                 let! spare = groundSpare page
                 Expect.isTrue
                     (spare > 100.0)
@@ -5543,7 +5544,7 @@ let editorTests =
         editorCaseIn 390 844 "on a phone the ways to stop a turn and to jump to the latest lie over none of the conversation" <| fun page ->
             async {
                 do! Harness.run page HarnessPage.agentTurn
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-interrupt-turn]")
+                do! waitVisible "the way to stop the turn" page "#shell [data-interrupt-turn]"
                 do! scrolledAwayFromLatest page
                 let! over = controlsOverConversation page
                 Expect.equal over "" "both controls are on screen and neither lies over the conversation"
@@ -5558,7 +5559,7 @@ let editorTests =
                     do! Harness.run page HarnessPage.agentTurn
                     let body = "#shell [data-conversation] [data-message-body]"
                     let mark = "#shell [data-interrupt-turn] > span"
-                    let! _ = await (page.WaitForSelectorAsync mark)
+                    do! waitVisible "interrupt's glyph" page mark
                     let px (v: string option) =
                         match v |> Option.filter (fun p -> p.EndsWith "px") with
                         | Some p -> float (p.Substring (0, p.Length - 2))
@@ -5581,11 +5582,11 @@ let editorTests =
         // the newest line under the strip.
         editorCaseIn 390 844 "on a phone a turn starting leaves a reader at the latest message at it" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+                do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-body]"
                 do! toTheEnd page "chat"
                 do! twoFrames page
                 do! Harness.run page HarnessPage.agentTurn
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-interrupt-turn]")
+                do! waitVisible "the way to stop the turn" page "#shell [data-interrupt-turn]"
                 do! twoFrames page
                 let! there = atItsEnd page "chat"
                 Expect.isTrue there "the reader is still at the end of the conversation"
@@ -5612,7 +5613,7 @@ let editorTests =
             // the line: measured on master, 80px short, the newest chip half under the composer.
             editorCaseIn 1440 900 "a reader at the end of the conversation sees the message that lands next" <| fun page ->
                 async {
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+                    do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-body]"
                     do! toTheEnd page "chat"
                     do! messageLands page 200L "tail-mark-chat, which has just been said"
                     let! shown = newestShown page "chat" "tail-mark-chat"
@@ -5658,7 +5659,7 @@ let editorTests =
                     do! paneOnBlocks page
                     do! Harness.run5 page HarnessPage.snapshot "term-harness" 50 (numberedLines "old" 300 + "\r\n") None None
                     do! awaitU (page.ClickAsync "#shell [data-terminal-take='term-harness']")
-                    let! _ = await (page.WaitForSelectorAsync (tailSurface "screen:term-harness"))
+                    do! waitVisible "the harness terminal's live screen" page (tailSurface "screen:term-harness")
                     do! toTheEnd page "screen:term-harness"
                     do! Harness.run4 page HarnessPage.record "term-harness" 51 "o" "one\r\ntwo\r\ntail-mark-screen\r\n"
                     let! shown = newestShown page "screen:term-harness" "tail-mark-screen"
@@ -5669,7 +5670,7 @@ let editorTests =
             // they were on.
             editorCaseIn 1440 900 "a reader who scrolled back through the conversation stays where they are as a message lands" <| fun page ->
                 async {
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+                    do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-body]"
                     do! toTheEnd page "chat"
                     do! toTheStart page "chat"
                     do! messageLands page 200L "tail-mark-chat, said while nobody was at the end"
@@ -5683,7 +5684,7 @@ let editorTests =
             // for every nudge of a thumb.
             editorCaseIn 1440 900 "a reader a few lines back from the latest message is not offered the way to it" <| fun page ->
                 async {
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+                    do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-body]"
                     do! toTheEnd page "chat"
                     match! Probe.scroll page "#shell [data-tail='chat']" with
                     | Some chat ->
@@ -5710,7 +5711,7 @@ let editorTests =
             // leave focus on `body`, so the next Tab started from the top of the page.
             editorCaseIn 1440 900 "the jump to the latest message lands at the end with the keyboard on the conversation" <| fun page ->
                 async {
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-body]")
+                    do! waitVisible "a message in the conversation" page "#shell [data-conversation] [data-message-body]"
                     do! toTheEnd page "chat"
                     do! toTheStart page "chat"
                     // The harness keeps other fixtures above the shell, so where the page
@@ -5719,7 +5720,7 @@ let editorTests =
                     // app's shell IS the page, so the control is brought into the window
                     // first and then asked whether it is painted.
                     let jump = "#shell [data-jump-to-latest='chat'] button"
-                    let! _ = await (page.WaitForSelectorAsync jump)
+                    do! waitVisible "the way to the latest message" page jump
                     do! awaitU (page.Locator(jump).ScrollIntoViewIfNeededAsync ())
                     do! Wait.until "the way to the latest message to be on screen" (fun () -> jumpOffered page "chat") id
                     do! awaitU (page.FocusAsync jump)
@@ -5752,9 +5753,9 @@ let editorTests =
         // landed on the control or nowhere at all.
         editorCaseIn 1440 900 "Escape closes an item's menu and hands focus back to what opened it" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-item-actions]")
+                do! waitVisible "an item's actions" page "#shell [data-conversation] [data-item-actions]"
                 do! awaitU (page.ClickAsync "#shell [data-conversation] [data-item-actions]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-item-menu]")
+                do! waitVisible "the item's menu" page "#shell [data-item-menu]"
 
                 // INTO the menu first. A press leaves focus on the control itself, so Escape
                 // from there has nowhere to strand it and the case passes with nothing
@@ -5773,9 +5774,9 @@ let editorTests =
         // and only one of them was putting the cursor back.
         editorCaseIn 1440 900 "choosing from an item's menu hands focus back to what opened it" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-item-actions]")
+                do! waitVisible "an item's actions" page "#shell [data-conversation] [data-item-actions]"
                 do! awaitU (page.ClickAsync "#shell [data-conversation] [data-item-actions]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-item-chapter]")
+                do! waitVisible "the menu's way to open a chapter here" page "#shell [data-item-chapter]"
 
                 do! awaitU (page.Keyboard.PressAsync "Tab")
                 do! Wait.until "focus on [data-item-chapter]" (fun () -> Read.focused page "[data-item-chapter]") id
@@ -5792,7 +5793,7 @@ let editorTests =
         // for a programmatic `focus()`.
         editorCaseIn 1440 900 "an item's actions show themselves to a keyboard that reaches them" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-item-actions]")
+                do! waitVisible "an item's actions" page "#shell [data-conversation] [data-item-actions]"
                 let mutable reached = false
                 let mutable steps = 0
                 while not reached && steps < 60 do
@@ -5820,7 +5821,7 @@ let editorTests =
         // a control under something else is a control a thumb cannot reach.
         editorCaseOnTouch 390 844 "on a phone every item's actions are on the screen and under the thumb" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-item-actions]")
+                do! waitVisible "an item's actions" page "#shell [data-conversation] [data-item-actions]"
                 let! noHover = Probe.media page "(hover: none)"
                 Expect.isTrue noHover "the page is laid out for a device that cannot hover"
                 let! asked = Read.count page "#shell [data-conversation] [data-item-actions]"
@@ -5866,9 +5867,9 @@ let editorTests =
                 // well-posed question once nothing is mid-cycle. `motion-reduce:animate-none`
                 // is what every mark here already carries.
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
+                do! waitVisible "the composer" page "#shell [data-draft-editor]"
                 do! Harness.run page HarnessPage.agentTurn
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
+                do! waitVisible "the agent's turn, in flight" page "#shell [data-agent-writing]"
                 // The shell into the viewport, then the timeline to its end — where a turn that
                 // has just started is. Both, because this harness page stacks its mounts and
                 // the shell is not the top of it: a mark below the fold is invisible for a
@@ -5908,9 +5909,9 @@ let editorTests =
             async {
                 // Held still, so the mark is measured at rest rather than mid-turn.
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
+                do! waitVisible "the composer" page "#shell [data-draft-editor]"
                 do! Harness.run page HarnessPage.agentTurn
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
+                do! waitVisible "the agent's turn, in flight" page "#shell [data-agent-writing]"
                 let! misplaced = Probe.verdict page Yession.App.Probes.Measure.AgentCaretOnLetters
                 Expect.isEmpty misplaced "the caret stands where the next word lands"
                 return ()
@@ -5924,9 +5925,9 @@ let editorTests =
         // animations paused and stepped together, against the mark's own box as drawn.
         editorCaseIn 390 844 "the agent's thinking mark never paints outside its box through any move" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
+                do! waitVisible "the composer" page "#shell [data-draft-editor]"
                 do! Harness.run page HarnessPage.agentThinks
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
+                do! waitVisible "the agent to start thinking" page "#shell [data-agent-writing]"
                 let! outside = Probe.verdict page Yession.App.Probes.Measure.ThinkingMarkInsideBox
                 Expect.isEmpty outside "the thinking mark stays inside the box it is placed by"
                 return ()
@@ -5939,9 +5940,9 @@ let editorTests =
         // what the browser drew, with the arrival paused at its start.
         editorCaseIn 390 844 "the first word takes the agent's mark from where the turn began" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
+                do! waitVisible "the composer" page "#shell [data-draft-editor]"
                 do! Harness.run page HarnessPage.agentThinks
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-writing]")
+                do! waitVisible "the agent to start thinking" page "#shell [data-agent-writing]"
                 // Remembered, said and measured in one evaluation, so the arrival is caught at its
                 // start however slow the round trip to the page is.
                 let! apart = Probe.verdict page Yession.App.Probes.Measure.FirstWordFromOpening
@@ -5954,9 +5955,9 @@ let editorTests =
         // gone exactly when it is wanted.
         editorCaseIn 390 844 "a turn starting never costs the composer its line or its send" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-draft-editor]")
+                do! waitVisible "the composer" page "#shell [data-draft-editor]"
                 do! Harness.run page HarnessPage.agentTurn
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-interrupt-turn]")
+                do! waitVisible "the way to stop the turn" page "#shell [data-interrupt-turn]"
                 let! window = Probe.window page
                 let! controls = Probe.boxes page [ "#shell [data-draft-input]"; "#shell [data-send-draft]"; "#shell [data-interrupt-turn]" ]
                 let whole =
@@ -5978,7 +5979,7 @@ let editorTests =
             async {
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
                 let line = """#shell [data-draft-input] .ProseMirror"""
-                let! _ = await (page.WaitForSelectorAsync line)
+                do! waitVisible "the composer's draft line" page line
                 // In the document's coordinates: reaching the line can scroll the page.
                 let where () =
                     async {
@@ -5988,7 +5989,7 @@ let editorTests =
                 let! empty = where ()
                 do! awaitU (page.ClickAsync line)
                 do! awaitU (page.Keyboard.TypeAsync "s")
-                let! _ = await (page.WaitForSelectorAsync """#shell [data-send-draft][data-send-ready="yes"]""")
+                do! waitVisible "Send, ready for the draft" page """#shell [data-send-draft][data-send-ready="yes"]"""
                 let! drafted = where ()
                 Expect.equal drafted empty "the draft line, the picker and the composer's edge stand where they stood"
             }
@@ -5997,7 +5998,7 @@ let editorTests =
         // reaches whatever is under it, never the control.
         editorCaseIn 390 844 "on a phone an empty composer offers no Send to press" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync """#shell [data-send-draft][data-send-ready="no"]""")
+                do! waitVisible "Send, with nothing to send" page """#shell [data-send-draft][data-send-ready="no"]"""
                 let! send = Probe.seen page "#shell [data-send-draft]"
                 Expect.isFalse (send |> List.exists (fun s -> s.Painted)) "a press where Send will stand does not reach it"
             }
@@ -6016,10 +6017,10 @@ let editorTests =
             async {
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
                 let line = """#shell [data-draft-input] .ProseMirror"""
-                let! _ = await (page.WaitForSelectorAsync line)
+                do! waitVisible "the composer's draft line" page line
                 do! awaitU (page.ClickAsync line)
                 do! awaitU (page.Keyboard.TypeAsync "something to send")
-                let! _ = await (page.WaitForSelectorAsync """#shell [data-send-draft][data-send-ready="yes"]""")
+                do! waitVisible "Send, ready for the draft" page """#shell [data-send-draft][data-send-ready="yes"]"""
                 // The shell into the viewport first: this harness page stacks its mounts and
                 // the shell is not the top of it, so the composer sits below the fold and a
                 // hit-test in VIEWPORT coordinates answers null for a reason this case is
@@ -6066,7 +6067,7 @@ let editorTests =
             async {
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
                 let line = """#shell [data-draft-input] .ProseMirror"""
-                let! _ = await (page.WaitForSelectorAsync line)
+                do! waitVisible "the composer's draft line" page line
                 let height () =
                     async {
                         let! box = boxesOf page [ "#shell [data-draft-input]" ]
@@ -6098,11 +6099,11 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
+                do! waitVisible "the live terminal's screen" page "#shell [data-terminal-screen='term-live']"
 
                 // Watching replaces the live screen with the recording, in a real player.
                 do! awaitU (page.ClickAsync "#shell [data-terminal-watch='watch']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-replay='terminal:term-live'] .ap-player")
+                do! waitVisible "the recording's player, in place of the live screen" page "#shell [data-pane-replay='terminal:term-live'] .ap-player"
                 do! waitAbsent "#shell [data-terminal-screen='term-live'] to be gone" page "#shell [data-terminal-screen='term-live']"
 
                 // One control in one slot, relabelled — so the press KEEPS its own focus.
@@ -6123,15 +6124,15 @@ let editorTests =
                 // rewind by itself. Nobody pressed anything, so this is the one case that
                 // still hands focus on — the player being read is unmounted under the reader.
                 do! awaitU (page.ClickAsync "#shell [data-pane-replay='terminal:term-live'] .ap-overlay-start")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
+                do! waitVisible "the live screen, back" page "#shell [data-terminal-screen='term-live']"
                 do! waitAbsent "#shell [data-pane-replay='terminal:term-live'] to be gone" page "#shell [data-pane-replay='terminal:term-live']"
                 do! Wait.until "focus on [data-terminal-watch='watch']" (fun () -> Read.focused page "[data-terminal-watch='watch']") id
 
                 // And by hand too: watch again, live again — the same control both times.
                 do! awaitU (page.ClickAsync "#shell [data-terminal-watch='watch']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-replay='terminal:term-live'] .ap-player")
+                do! waitVisible "the recording's player, in place of the live screen" page "#shell [data-pane-replay='terminal:term-live'] .ap-player"
                 do! awaitU (page.ClickAsync "#shell [data-terminal-watch='live']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-screen='term-live']")
+                do! waitVisible "the live screen, back" page "#shell [data-terminal-screen='term-live']"
                 do! waitAbsent "#shell [data-pane-replay='terminal:term-live'] to be gone" page "#shell [data-pane-replay='terminal:term-live']"
                 return ()
             }
@@ -6145,7 +6146,7 @@ let editorTests =
         editorCase "pressing play on a rewind carries on from where it landed" <| fun page ->
             async {
                 do! rewoundTall page
-                let! _ = await (page.WaitForSelectorAsync (rewoundMount + " .ap-overlay-start"))
+                do! waitVisible "the rewound player's start button" page (rewoundMount + " .ap-overlay-start")
                 let! without = Probe.verdict page Yession.App.Probes.Measure.PlayCarriesOn
                 Expect.isEmpty without "every frame, before and after the press, holds the screen it landed on"
             }
@@ -6175,13 +6176,13 @@ let editorTests =
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-terminal-tab='term-live']")
                 let line = "#shell " + commandLine "term-live"
-                let! _ = await (page.WaitForSelectorAsync line)
+                do! waitVisible "the live terminal's command line" page line
                 do! awaitU (page.ClickAsync line)
                 do! awaitU (page.Keyboard.TypeAsync "git sta")
                 do! waitCommandLine page line "git sta"
 
                 do! awaitU (page.ClickAsync "#shell [data-terminal-watch='watch']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-rewound='term-live']")
+                do! waitVisible "the bar that says the terminal is rewound" page "#shell [data-terminal-rewound='term-live']"
                 let! onScreen = Read.count page "#shell [data-terminal-input]:not([readonly])"
                 Expect.equal onScreen 0 "no command line to type into while watching a recording"
 
@@ -6202,8 +6203,7 @@ let editorTests =
         editorCase "a long output keeps its command in view" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                let! _ =
-                    await (page.WaitForSelectorAsync "#shell [data-terminal-scrollback][data-terminal-id='term-harness']")
+                do! waitVisible "the harness terminal's scrollback" page "#shell [data-terminal-scrollback][data-terminal-id='term-harness']"
                 // The column OPENS: its width transitions from nothing while the pane inside it
                 // is already its full width, so for 200ms the scrollback is clipped by the column
                 // and its middle is off the right edge of the window — where a hit-test finds
@@ -6234,8 +6234,7 @@ let editorTests =
         editorCase "plain output costs a block a handful of nodes, however many lines it has" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                let! _ =
-                    await (page.WaitForSelectorAsync "#shell [data-terminal-scrollback][data-terminal-id='term-harness']")
+                do! waitVisible "the harness terminal's scrollback" page "#shell [data-terminal-scrollback][data-terminal-id='term-harness']"
                 do! Harness.run4 page HarnessPage.record "term-harness" 2 "o" (numberedLines "line" 1500)
                 // Drawn by the frame's end, not necessarily before the call returns: the page
                 // draws at most once a frame (`Render.setState`).
@@ -6255,9 +6254,9 @@ let editorTests =
         // could quietly lose to.
         editorCase "showing a command in its terminal scrolls the history to it" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-block]")
+                do! waitVisible "the block's chip in the chat" page "#shell [data-chat-block]"
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview-close]")
+                do! waitVisible "the preview's way back to its terminal" page "#shell [data-pane-preview-close]"
                 do! awaitU (page.ClickAsync "#shell [data-pane-preview-close]")
 
                 // The pane moved to the terminal's own text.
@@ -6285,11 +6284,11 @@ let editorTests =
         // inside the scroller's box and its mark playing.
         editorCase "showing a folded command in its terminal opens its run and marks it" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card]")
+                do! waitVisible "the task card in the chat" page "#shell [data-chat-task-card]"
                 do! awaitU (page.ClickAsync "#shell [data-chat-task-card] [data-fold]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card] [data-chat-block='block-burst-failed']")
+                do! waitVisible "the folded command's chip, its run opened" page "#shell [data-chat-task-card] [data-chat-block='block-burst-failed']"
                 do! awaitU (page.ClickAsync "#shell [data-chat-task-card] [data-chat-block='block-burst-failed']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview-close]")
+                do! waitVisible "the preview's way back to its terminal" page "#shell [data-pane-preview-close]"
                 do! awaitU (page.ClickAsync "#shell [data-pane-preview-close]")
 
                 // One reading, so a red names every part that did not hold rather than the
@@ -6306,9 +6305,9 @@ let editorTests =
         editorCase "a block killed for memory says so on its chip" <| fun page ->
             async {
                 let chip = "#shell [data-chat-task-card] [data-chat-block='block-killed-memory']"
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card]")
+                do! waitVisible "the task card in the chat" page "#shell [data-chat-task-card]"
                 do! awaitU (page.ClickAsync "#shell [data-chat-task-card] [data-fold]")
-                let! _ = await (page.WaitForSelectorAsync chip)
+                do! waitVisible "the killed block's chip, its run opened" page chip
                 do! Wait.until "the chip to name the memory kill" (fun () -> Read.text page chip) (Option.exists (fun t -> t.Contains "killed: out of memory"))
             }
 
@@ -6317,14 +6316,14 @@ let editorTests =
         // command in its terminal, its run opened.
         editorCase "a block killed for memory says in its terminal that the machine ran out" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card]")
+                do! waitVisible "the task card in the chat" page "#shell [data-chat-task-card]"
                 do! awaitU (page.ClickAsync "#shell [data-chat-task-card] [data-fold]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card] [data-chat-block='block-killed-memory']")
+                do! waitVisible "the killed block's chip, its run opened" page "#shell [data-chat-task-card] [data-chat-block='block-killed-memory']"
                 do! awaitU (page.ClickAsync "#shell [data-chat-task-card] [data-chat-block='block-killed-memory']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview-close]")
+                do! waitVisible "the preview's way back to its terminal" page "#shell [data-pane-preview-close]"
                 do! awaitU (page.ClickAsync "#shell [data-pane-preview-close]")
                 let fact = "#shell [data-terminal-block='block-killed-memory'] [data-terminal-block-memory='machine']"
-                let! _ = await (page.WaitForSelectorAsync fact)
+                do! waitVisible "the block's word on what ran out of memory" page fact
                 do! Wait.until "the block to name the cause" (fun () -> Read.text page fact) (Option.exists (fun t -> t.Contains "the machine ran out of memory"))
             }
 
@@ -6336,7 +6335,7 @@ let editorTests =
         editorCaseIn 390 844 "a refused block's command keeps its row's width on a phone" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-block='block-refused-long'] [data-block-mark]")
+                do! waitVisible "the refused block's mark" page "#shell [data-terminal-block='block-refused-long'] [data-block-mark]"
                 let row = "#shell [data-terminal-block=block-refused-long] [data-terminal-block-command]"
                 let! measured = boxesOf page [ row; row + " code" ]
                 let r, c = measured.[0], measured.[1]
@@ -6354,16 +6353,16 @@ let editorTests =
         editorCase "a run opened by hand is still open after the terminal is shown again" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-block-run='block-burst-ok'] summary")
+                do! waitVisible "the finished run's summary" page "#shell [data-terminal-block-run='block-burst-ok'] summary"
                 do! awaitU (page.ClickAsync "#shell [data-terminal-block-run='block-burst-ok'] summary")
                 do! waitPresent "the run to open" page "#shell [data-terminal-block-run='block-burst-ok'] details[open]"
 
                 // Away to a preview, which takes the history out of the document, and back.
                 do! awaitU (page.ClickAsync "#shell [data-chat-block='block-harness']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview-close]")
+                do! waitVisible "the preview's way back to its terminal" page "#shell [data-pane-preview-close]"
                 do! waitAbsent "#shell [data-terminal-block-run='block-burst-ok'] to be gone" page "#shell [data-terminal-block-run='block-burst-ok']"
                 do! awaitU (page.ClickAsync "#shell [data-pane-preview-close]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-block-run='block-burst-ok'] details")
+                do! waitVisible "the run, back in the terminal's history" page "#shell [data-terminal-block-run='block-burst-ok'] details"
 
                 do! Probe.frames page 1
                 let! opened = Read.count page "#shell [data-terminal-block-run='block-burst-ok'] details[open]"
@@ -6407,7 +6406,7 @@ let editorTests =
                 do! Harness.run4 page HarnessPage.record "term-harness" 2 "o" (numberedLines "line" 300)
                 let block = sprintf "%s [data-terminal-block='block-burst-running']" (tailSurface "blocks:term-harness")
                 let expand = block + " [data-terminal-output-expand]"
-                let! _ = await (page.WaitForSelectorAsync expand)
+                do! waitVisible "the block's way to show all its lines" page expand
                 do! toTheEnd page "blocks:term-harness"
                 do! scrollToTop page expand
                 let! before = topOf page (block + " + *")
@@ -6467,7 +6466,7 @@ let editorTests =
         // the answer would be the half of this that quietly does not work.
         editorCase "a queued command says what it will run, and opens the terminal it waits in" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-pending]")
+                do! waitVisible "the queued command's chip" page "#shell [data-chat-pending]"
                 do! Wait.until "#shell [data-chat-pending] to say npm run lint" (fun () -> Read.text page "#shell [data-chat-pending]") (Option.exists (fun t -> t.Contains "npm run lint"))
 
                 do! awaitU (page.ClickAsync "#shell [data-chat-pending]")
@@ -6479,7 +6478,7 @@ let editorTests =
                 // where a terminal takes what they type.
                 do! Wait.until "focus on the harness's command line" (fun () -> Read.focused page (commandLine "term-harness")) id
                 // And what they arrived at is the card that can answer it.
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-queued='queue-harness']")
+                do! waitVisible "the queued command's card in its terminal" page "#shell [data-terminal-queued='queue-harness']"
                 return ()
             }
 
@@ -6494,7 +6493,7 @@ let editorTests =
                 let countTabs () = Read.count page "#shell [data-terminal-tab], #shell [data-terminal-closed-tab]"
                 let! before = countTabs ()
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview]")
+                do! waitVisible "the chip's preview in the pane" page "#shell [data-pane-preview]"
                 let! during = countTabs ()
                 Expect.equal during before "the strip holds the same terminals, and no tab for the preview"
                 do! focusReachedPane page
@@ -6508,7 +6507,7 @@ let editorTests =
         editorCase "a preview's close returns focus to the chip" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-chat-block]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-preview-close]")
+                do! waitVisible "the preview's close" page "#shell [data-pane-preview-close]"
                 do! focusReachedPane page
                 do! awaitU (page.Locator("#shell [data-pane-preview-close]").First.PressAsync "Enter")
                 do! waitAbsent "the preview to be gone" page "#shell [data-pane-preview]"
@@ -6598,7 +6597,7 @@ let editorTests =
                 let! named = Read.text page "#shell [data-pane-preview-name]"
                 let name = named |> Option.map (fun n -> n.Trim ()) |> Option.defaultWith (fun () -> failwith "the preview has no name")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                do! waitVisible "the all page" page "#shell [data-content-list]"
                 let! shown = Probe.shows page "#shell [data-content-panel]" name
                 Expect.isFalse shown (sprintf "%s is not on the all page" name)
             }
@@ -6615,14 +6614,14 @@ let editorTests =
         editorCase "the strip's door opens a menu over the pane, and gives focus back when it shuts" <| fun page ->
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [role='tablist']")
+                do! waitVisible "the pane's tab strip" page "#shell [role='tablist']"
 
                 do! awaitU (page.Locator("#shell [data-pane-new]").First.PressAsync "Enter")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-new-menu]")
+                do! waitVisible "the menu of things to open" page "#shell [data-pane-new-menu]"
 
                 // OVER the pane, not instead of it: the tabs are still there and still a
                 // tablist, which is exactly how this differs from the list.
-                let! _ = await (page.WaitForSelectorAsync "#shell [role='tablist']")
+                do! waitVisible "the pane's tab strip, under the menu" page "#shell [role='tablist']"
                 do! waitAbsent "#shell [data-content-list] to be gone" page "#shell [data-content-list]"
 
                 // Its entries are real controls a keyboard can reach.
@@ -6653,10 +6652,10 @@ let editorTests =
                           Yession.Domain.Terminals.TerminalClosed.By = None }
                 do! foldHarness page [ 90L, closed "term-harness"; 91L, closed "term-live" ]
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-new]")
+                do! waitVisible "the empty pane's way to make a terminal" page "#shell [data-terminal-new]"
 
                 do! awaitU (page.Locator("#shell [data-terminal-new]").First.PressAsync "Enter")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-new-menu]")
+                do! waitVisible "the menu of things to open" page "#shell [data-pane-new-menu]"
                 do! awaitU (page.Locator("#shell [data-sandbox-new]").First.FocusAsync ())
 
                 do! awaitU (page.Keyboard.PressAsync "Escape")
@@ -6685,7 +6684,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-new]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-new-menu]")
+                do! waitVisible "the menu of things to open" page "#shell [data-pane-new-menu]"
 
                 // The note is what can push it wide, so a fixture that stopped carrying a long
                 // one would make this pass over nothing. A NAME can push it too, by about
@@ -6719,7 +6718,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                do! waitVisible "the all page" page "#shell [data-content-list]"
 
                 let rows = "#shell [data-content-list] [role='listitem']"
                 let! marks = Read.attrs page (rows + " [data-pane-mark]") "data-pane-mark"
@@ -6751,12 +6750,12 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                do! waitVisible "the all page" page "#shell [data-content-list]"
 
                 // Every terminal the session has is reachable here, whether or not the strip
                 // would have carried it — the closed ones one press away, under their fold.
                 do! awaitU (page.ClickAsync "#shell [data-list-closed-fold][aria-expanded='false']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-list-closed-fold][aria-expanded='true']")
+                do! waitVisible "the closed terminals' fold, opened" page "#shell [data-list-closed-fold][aria-expanded='true']"
                 let! rows = Read.count page "#shell [data-content-list] [data-terminal-list-row]"
                 Expect.equal rows 3 "every terminal the harness has, the closed one included"
 
@@ -6843,7 +6842,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-close]")
+                do! waitVisible "a row's close on the all page" page "#shell [data-content-list] [data-terminal-close]"
                 let verbs = "#shell [data-content-list] [role=listitem] button:not([data-terminal-list-row])"
                 let! verbsOffered = Probe.controls page verbs
                 let offered = verbsOffered |> List.map (fun verb -> verb.Opening)
@@ -6884,13 +6883,15 @@ let editorTests =
                 do! awaitU (page.FocusAsync "#shell [data-content-list] [data-terminal-list-row='term-done']")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 // Opened, it is either playing already or one press from it.
-                let! _ =
-                    await (page.WaitForSelectorAsync
-                        "#shell [data-pane-replay='terminal:term-done'], #shell [data-terminal-watch='watch']")
+                do!
+                    waitVisible
+                        "the closed terminal's replay, or the way to watch it"
+                        page
+                        "#shell [data-pane-replay='terminal:term-done'], #shell [data-terminal-watch='watch']"
                 match! Read.count page "#shell [data-terminal-watch='watch']" with
                 | 0 -> ()
                 | _ -> do! awaitU (page.ClickAsync "#shell [data-terminal-watch='watch']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-replay='terminal:term-done']")
+                do! waitVisible "the closed terminal's replay" page "#shell [data-pane-replay='terminal:term-done']"
                 return ()
             }
 
@@ -6901,12 +6902,13 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let! sheet = await (page.WaitForSelectorAsync "#shell #pane-sheet")
-                let! box = await (sheet.BoundingBoxAsync ())
+                let sheet = "#shell #pane-sheet"
+                do! waitVisible "the list's sheet" page sheet
+                let! box = await (page.Locator(sheet).BoundingBoxAsync ())
                 let! pane = await (page.Locator("#shell [data-content-panel]").BoundingBoxAsync ())
                 Expect.isTrue (box.Y + box.Height < pane.Y + pane.Height - 20.0f) "pane showing under the sheet, or this proves nothing"
                 do! awaitU (page.Mouse.ClickAsync (pane.X + pane.Width / 2.0f, pane.Y + pane.Height - 10.0f))
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-pane-switcher][aria-expanded='false']")
+                do! waitVisible "the switcher, shut" page "#shell [data-pane-switcher][aria-expanded='false']"
                 return ()
             }
 
@@ -6916,7 +6918,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-list-row][aria-current='true']")
+                do! waitVisible "the row the pane is about" page "#shell [data-content-list] [data-terminal-list-row][aria-current='true']"
                 let! sizes =
                     Probe.controls
                         page
@@ -6935,7 +6937,7 @@ let editorTests =
             async {
                 do! awaitU (page.ClickAsync "#shell [data-content-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-pane-switcher]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-list-row][aria-current='false']")
+                do! waitVisible "a row the pane is not about" page "#shell [data-content-list] [data-terminal-list-row][aria-current='false']"
                 let! others =
                     Probe.controls
                         page
@@ -6949,7 +6951,7 @@ let editorTests =
         editorCase "the switcher's shortcut opens it from the chat" <| fun page ->
             async {
                 do! awaitU (page.Keyboard.PressAsync "Control+Backquote")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                do! waitVisible "the all page" page "#shell [data-content-list]"
                 return ()
             }
 
@@ -6978,7 +6980,7 @@ let editorTests =
                 let! all = Probe.seen page "#shell [data-pane-switcher]"
                 Expect.isTrue (all |> List.exists (fun a -> a.Painted)) "all is on screen, whatever the tabs beside it"
                 do! awaitU (page.Locator("#shell [data-pane-switcher]").DispatchEventAsync "click")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list]")
+                do! waitVisible "the all page" page "#shell [data-content-list]"
                 let! rows = Read.attrs page "#shell [data-content-list] [data-terminal-list-row]" "data-terminal-list-row"
                 let listed = rows |> List.choose id |> Set.ofList
                 for id in hidden do
@@ -6997,7 +6999,7 @@ let editorTests =
                 let! rect = await (page.Locator(kill).BoundingBoxAsync ())
                 let x, y = rect.X + rect.Width / 2.0f, rect.Y + rect.Height / 2.0f
                 do! awaitU (page.Mouse.ClickAsync (x, y))
-                let! _ = await (page.WaitForSelectorAsync (kill + "[data-terminal-close-armed='true']"))
+                do! waitVisible "the kill, armed" page (kill + "[data-terminal-close-armed='true']")
                 // Hit-tested, not compared by rectangle: what matters is what a press at that
                 // point would reach, which is whatever is painted there.
                 let! under = Probe.attrAt page (float x) (float y) "[data-terminal-close]" "data-terminal-close-armed"
@@ -7055,9 +7057,9 @@ let editorTests =
                 let kill = "#shell [data-content-list] [data-terminal-close='term-harness']"
                 do! awaitU (page.FocusAsync kill)
                 do! awaitU (page.Keyboard.PressAsync "Enter")
-                let! _ = await (page.WaitForSelectorAsync (kill + "[data-terminal-close-armed='true']"))
+                do! waitVisible "the kill, armed" page (kill + "[data-terminal-close-armed='true']")
                 do! awaitU (page.Keyboard.PressAsync "Escape")
-                let! _ = await (page.WaitForSelectorAsync (kill + "[data-terminal-close-armed='false']"))
+                do! waitVisible "the kill, taken back" page (kill + "[data-terminal-close-armed='false']")
                 let! focused = Read.focused page "[data-terminal-close='term-harness']"
                 Expect.isTrue focused "focus stays on the kill"
                 let! sent = Harness.read page HarnessPage.closed
@@ -7103,7 +7105,7 @@ let editorTests =
                               Yession.Domain.Terminals.TerminalOpened.Title = Yession.Domain.Terminals.TerminalTitle.fromProse "bare"
                               Yession.Domain.Terminals.TerminalOpened.Sandbox = None
                               Yession.Domain.Terminals.TerminalOpened.Renewable = false })
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-content-list] [data-terminal-close='term-bare']")
+                do! waitVisible "the bare terminal's kill on the all page" page "#shell [data-content-list] [data-terminal-close='term-bare']"
                 let rows () =
                     async {
                         let items = "#shell [data-content-list] [role=listitem]:has([data-terminal-list-row])"
@@ -7119,7 +7121,7 @@ let editorTests =
                 do! fold 92L (closed "term-bare")
                 // Landed: a closed terminal offers no kill, and one with nothing kept says so.
                 do! waitAbsent "#shell [data-terminal-close='term-harness'], #shell [data-terminal-close='term-bare'] to be gone" page "#shell [data-terminal-close='term-harness'], #shell [data-terminal-close='term-bare']"
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-terminal-list-gone='term-bare']")
+                do! waitVisible "the bare terminal's row to say nothing was kept" page "#shell [data-terminal-list-gone='term-bare']"
                 let! after = rows ()
                 Expect.equal after before "every row where it was, the size it was"
             }
@@ -7145,7 +7147,7 @@ let editorTests =
                 do! awaitU (page.EmulateMediaAsync (PageEmulateMediaOptions (ReducedMotion = ReducedMotion.Reduce)))
                 // The timeline's one fold (`data-fold`), same as every other disclosure here:
                 // a real button, keyboard-operable and announced without a role of our own.
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-chat-task-card]")
+                do! waitVisible "the task card in the chat" page "#shell [data-chat-task-card]"
                 do! awaitU (page.FocusAsync "#shell [data-chat-task-card] [data-fold]")
                 do! awaitU (page.Keyboard.PressAsync "Enter")
                 do! Wait.until "#shell [data-chat-task-card] [data-fold-body] to have data-fold-open yes" (fun () -> Read.attr page "#shell [data-chat-task-card] [data-fold-body]" "data-fold-open") ((=) (Some "yes"))
@@ -7175,7 +7177,7 @@ let editorTests =
         // to 16px or more, or this fails HERE rather than on somebody's phone.
         editorCaseIn 390 844 "no field a phone can focus renders under 16px" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell")
+                do! waitVisible "the shell" page "#shell"
                 // Settings' own fields (the Claude/GitHub panels, the model picker moved out
                 // in Plan "dock send/model/interrupt", but a token input is still exactly
                 // this case) live behind settings, and settings lives behind the sidebar —
@@ -7184,7 +7186,7 @@ let editorTests =
                 // model's and a class set by hand would last only until the next render.
                 do! awaitU (page.ClickAsync "#shell [data-nav-toggle='show']")
                 do! awaitU (page.ClickAsync "#shell [data-settings-toggle='open']")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-claude-panel]")
+                do! waitVisible "the Claude panel in settings" page "#shell [data-claude-panel]"
 
                 let! fields = Probe.controls page "#shell input, #shell select, #shell textarea, #shell [contenteditable='true']"
                 let undersized =
@@ -7226,7 +7228,7 @@ let editorTests =
         let thumbSized (width: int) (height: int) =
             editorCaseIn width height (sprintf "no control a phone can press is smaller than a thumb at %dx%d" width height) <| fun page ->
                 async {
-                    let! _ = await (page.WaitForSelectorAsync "#shell [data-content-toggle='show']")
+                    do! waitVisible "the control that shows the pane" page "#shell [data-content-toggle='show']"
                     let undersized (face: string) =
                         async {
                             let pressable = [ "button"; "[role=tab]"; "a[href]"; "select"; "input:not([type=hidden])" ]
@@ -7281,7 +7283,7 @@ let editorTests =
         let noAgentRow (page: IPage) =
             async {
                 do! Harness.run page HarnessPage.noAgent
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-agent-presence='absent'] [data-no-agent-connect]")
+                do! waitVisible "the verb that connects an absent agent" page "#shell [data-agent-presence='absent'] [data-no-agent-connect]"
                 return ()
             }
         editorCaseIn 1440 900 "the verb that connects an absent agent stands inside the agent's own row" <| fun page ->
@@ -7299,7 +7301,7 @@ let editorTests =
             async {
                 do! noAgentRow page
                 do! awaitU (page.ClickAsync "#shell [data-no-agent-connect]")
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-claude-panel]")
+                do! waitVisible "the Claude panel in settings" page "#shell [data-claude-panel]"
                 return ()
             }
         editorCaseIn 390 844 "on a phone the verb that connects an absent agent is a 44px target" <| fun page ->
@@ -7328,10 +7330,10 @@ let editorTests =
         // at the extremes the 44px floor demands around whatever line the ramp gives it.
         editorCaseIn 390 844 "on a phone the notice's disclosure presses as a thumb's target" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation]")
+                do! waitVisible "the shell's conversation" page "#shell [data-conversation]"
                 do! Harness.run1 page HarnessPage.state "degraded"
                 let summary = "#shell [data-detail='degraded'] summary"
-                let! _ = await (page.WaitForSelectorAsync summary)
+                do! waitVisible "the notice's disclosure" page summary
                 let! boxes = Probe.boxes page [ summary ]
                 let word =
                     match boxes with
@@ -7381,7 +7383,7 @@ let editorTests =
         // person reading it gets is the room, whatever drew it.
         editorCaseIn 844 390 "a phone on its side keeps the chat the width of the screen" <| fun page ->
             async {
-                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation]")
+                do! waitVisible "the shell's conversation" page "#shell [data-conversation]"
                 let! conversation = boxesOf page [ "#shell [data-conversation]" ]
                 let width = Yession.App.Probes.Box.width conversation.Head
                 Expect.isTrue (width >= 600.0) (sprintf "the chat is not squeezed between two columns: %.0fpx of 844" width)
@@ -7628,7 +7630,7 @@ let private offlineReopen (name: string) (make: IPage -> Async<unit>) (check: IP
                     // The page loaded at all — the whole of what the worker adds, and the
                     // precondition every case here is really about rather than the thing it
                     // asserts.
-                    let! _ = await (page.WaitForSelectorAsync "[data-conversation]")
+                    do! waitVisible "the reloaded page's conversation" page "[data-conversation]"
 
                     do! check page
                     }
@@ -7710,7 +7712,7 @@ let mountedTests =
                         // belongs where it actually holds — and proving it here is the point of
                         // path-mounting rather than an accident of it.
                         let composerSel = """[data-rich-readonly="false"] .ProseMirror"""
-                        let! _ = await (page.WaitForSelectorAsync composerSel)
+                        do! waitVisible "the composer" page composerSel
                         do! awaitU (page.ClickAsync composerSel)
                         do! awaitU (page.Keyboard.TypeAsync "persisted across the wipe")
                         let hasDraft (what: string) =
@@ -7750,7 +7752,7 @@ let mountedTests =
                 async {
                     // Say something, so there is history to lose.
                     let composerSel = """[data-rich-readonly="false"] .ProseMirror"""
-                    let! _ = await (page.WaitForSelectorAsync composerSel)
+                    do! waitVisible "the composer" page composerSel
                     do! awaitU (page.ClickAsync composerSel)
                     do! awaitU (page.Keyboard.TypeAsync saidInTimeline)
                     do! awaitU (page.Locator("[data-send-draft]").First.ClickAsync ())
@@ -7913,8 +7915,8 @@ let mountedTests =
                         do! awaitU (page.Clock.InstallAsync ())
                         let! _ = await (page.ReloadAsync ())
                         // The probe is out, and held: its deadline is armed before it is sent.
-                        let! asked = Async.AwaitTask (Task.WhenAny (stalled.Task, Task.Delay 20000))
-                        Expect.isTrue (obj.ReferenceEquals (asked, stalled.Task)) "the reloaded page asked who it is, and the question was held"
+                        do! Wait.within 20000.0 "the reloaded page to ask who it is, and the question to be held"
+                                (fun () -> async.Return stalled.Task.IsCompleted) id
                         do! awaitU (page.Clock.FastForwardAsync (int64 Yession.App.Client.Probe.deadline.TotalMilliseconds))
                         do! Wait.until "the offer to reopen, once the probe has been given up on"
                                 (fun () -> Read.count page (Sel.hook Yession.App.Dom.Hooks.sessionReopen)) (fun n -> n > 0)
@@ -8251,7 +8253,7 @@ let frontDoorTests =
                         // Pressed, not POSTed: the whole fault lives in what the browser does with
                         // the answer, so the browser has to be the thing that asks.
                         let create = sprintf "[%s] button[type=submit]" Yession.App.Dom.Manager.createSession
-                        let! _ = await (page.WaitForSelectorAsync create)
+                        do! waitVisible "Create, on the Manager's page" page create
                         do! awaitU (page.ClickAsync create)
 
                         // THE promise: pressing Create puts you in the session it created. One
@@ -8346,7 +8348,7 @@ let private keepThenStop (door: Serving) (hold: bool -> unit) (page: IPage) : As
         let! _ = await (page.GotoAsync (door.At keptShell))
         do! waitConnected page
         let composerSel = """[data-rich-readonly="false"] .ProseMirror"""
-        let! _ = await (page.WaitForSelectorAsync composerSel)
+        do! waitVisible "the composer" page composerSel
         do! awaitU (page.ClickAsync composerSel)
         do! awaitU (page.Keyboard.TypeAsync saidInTimeline)
         do! awaitU (page.Locator("[data-send-draft]").First.ClickAsync ())
@@ -8564,7 +8566,7 @@ let frontedTests =
                                 landing.Status
                                 (body.Trim ())
                         let create = sprintf "[%s] button[type=submit]" Yession.App.Dom.Manager.createSession
-                        let! _ = await (page.WaitForSelectorAsync create)
+                        do! waitVisible "Create, on the Manager's page" page create
                         do! awaitU (page.ClickAsync create)
 
                         // One promise, read off the page: the address names a session, the shell
@@ -8667,7 +8669,7 @@ let filterTests =
                         do! reporting "filter history" page evidence <| async {
                         let! _ = await (page.GotoAsync (manager.At "/"))
                         let archived = sprintf "[%s=\"show-archived\"]" Yession.App.Dom.Manager.filter
-                        let! _ = await (page.WaitForSelectorAsync archived)
+                        do! waitVisible "the filter that shows archived sessions" page archived
                         do! awaitU (page.ClickAsync archived)
 
                         // Both halves of one click, read off the page: the address carries the
@@ -8736,7 +8738,7 @@ let installedAppTests =
                                 |> ignore))
                         let! _ = await (page.GotoAsync (manager.At "/"))
                         let row = sprintf "[%s]" Yession.App.Dom.Manager.openLink
-                        let! _ = await (page.WaitForSelectorAsync row)
+                        do! waitVisible "a session's row on the Manager" page row
                         do! awaitU (page.Locator(row).First.ClickAsync ())
                         do! Wait.until "this window to have gone to the session" (fun () -> Read.url page) (fun url -> url.AbsolutePath.EndsWith "/open")
                         Expect.equal page.Context.Pages.Count 1 "and no second window was opened"
@@ -8850,7 +8852,7 @@ let private withHeldCreate
                             if route.Request.Method = "POST" then Async.Start (holding route)
                             else route.ContinueAsync () |> ignore))
                     let! _ = await (page.GotoAsync (manager.At "/"))
-                    let! _ = await (page.WaitForSelectorAsync createButton)
+                    do! waitVisible "Create, on the Manager's page" page createButton
                     try
                         do! body manager contexts page hold
                     finally
