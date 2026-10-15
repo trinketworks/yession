@@ -3736,8 +3736,12 @@ module Style =
         cls [ "shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer p-0 no-underline"
               "font-ui font-light lowercase whitespace-nowrap"
               "transition-colors duration-150 ease-out motion-reduce:transition-none"; focusRingFar ]
-    /// An act as a word at the body's size, where it ends a line of the body's own type.
-    let paneAct = cls [ paneActBase; "text-body text-ink-dim hover:text-ink" ]
+    /// There are THREE faces below and no more, one per kind of line a bare verb ends: the
+    /// toolbar's caps, a band line's body, and the empty pane's one door. A fourth, `paneAct`,
+    /// stood here with nothing wearing it — it was "show in <terminal>"'s, and that act went
+    /// when the row became the way in (#1308). A face with no wearer is a face the next author
+    /// reaches for by accident, so it is deleted rather than kept for symmetry.
+    ///
     /// An act in the toolbar: its mark and its word in the caps voice, the face the agent's
     /// interrupt wears — a verb about the whole thing on screen, not a word in a sentence.
     let paneToolbarAct =
@@ -3803,10 +3807,35 @@ module Style =
     /// the screen; two lines so the command is still recognisable there. The wrap is `!`
     /// because the player's sheet sets `nowrap` outside any cascade layer, which beats every
     /// utility in one whatever its specificity.
+    ///
+    /// The last three lines are the vendored sheet being held to this product's finish, and
+    /// every one of them is `!` for that same reason — an unlayered declaration beats a
+    /// layered one however specific, and an important layered one beats it back.
+    ///
+    ///   * SHARP corners. The sheet rounds the player by 4px, its tooltip by 4 and the played
+    ///     part of its scrub bar by 3. A rounded rectangle is a hybrid of the two primitives
+    ///     and does not exist here (docs/visual-design.md, Form). Its marker dots stay round:
+    ///     a point is round, and those are points.
+    ///   * NO shadow. The play mark carried a `drop-shadow`, which is the one thing "Honest
+    ///     materials" forbids outright — nothing but the brand mark may look lit. The mark
+    ///     itself needs nothing done to it: the glyph is a filled polygon with a triangle
+    ///     masked out of it, which renders as the outline triangle the icon rule asks for.
+    ///   * The player's GROUND and ink are this product's, by name. They were `#000000` and
+    ///     `#ffffff` written into the sheet as its own `--term-color-*` pair — the same two
+    ///     colours `bg` and `ink` hold today, and tokens that cannot follow them tomorrow.
+    ///
+    /// What is NOT reachable from here, and so is not fixed: the sheet maps all sixteen of its
+    /// ANSI slots to the foreground, so a recording replays monochrome where the live screen
+    /// renders `--color-term-*`. That is sixteen more properties and a picture of a replay to
+    /// check them against, which is its own change.
     let replayStage =
         "h-full min-h-24 [&_.ap-player]:min-w-full [&_.ap-term]:mx-auto "
         + "[&_.ap-tooltip]:w-max [&_.ap-tooltip]:max-w-48 [&_.ap-tooltip]:whitespace-normal! "
-        + "[&_.ap-tooltip]:wrap-anywhere [&_.ap-tooltip]:line-clamp-2"
+        + "[&_.ap-tooltip]:wrap-anywhere [&_.ap-tooltip]:line-clamp-2 "
+        + "[&_.ap-player]:rounded-none! [&_.ap-tooltip]:rounded-none! [&_.ap-gutter-full]:rounded-none! "
+        + "[&_.ap-play-button_svg]:filter-none! "
+        + "[&_.ap-player]:[--term-color-background:var(--color-bg)]! "
+        + "[&_.ap-player]:[--term-color-foreground:var(--color-ink)]!"
     /// A stretch's facts, above whatever renders its recording.
     let paneFacts = "shrink-0 flex flex-col gap-1 px-3 py-3 " + Stroke.dividerBottom
 
