@@ -4602,10 +4602,11 @@ module View =
     ///
     /// The verbs are rendered from `Affordances` and from nothing else — a row wears exactly
     /// the controls its terminal's state allows, and a control that does not apply is ABSENT
-    /// rather than disabled. They are the row's, not the page's: shown at rest only on the
-    /// row the pane is about and on one whose kill is armed, and on any other under the
-    /// pointer or the keyboard (`Style.terminalListVerbsAtRest`). The same pair of words
-    /// down every row was a third of a phone's width saying nothing about any one of them.
+    /// rather than disabled. They are the row's, not the page's, and every row wears them at
+    /// rest (`Style.terminalListVerbs`): what a control is doing is visible at rest and a
+    /// thumb has no hover (docs/visual-design.md, principle 4). They were shown only on the
+    /// selected row, on an armed one, and elsewhere under the pointer; the saved width cost
+    /// every reader without a pointer the verbs altogether.
     /// A closed row's verbs are its recording's (`replay`) and its tab's (`put away`), where
     /// an open one's are its rewind and its kill. A row's state is the mark the pivot wears
     /// for it (`terminalMark`), whoever holds its keyboard is their own colour beside it, and
@@ -4663,11 +4664,6 @@ module View =
                         <button type="button" class="{Style.terminalListAct}" data-terminal-list-dismiss="{id}"
                                 aria-label="{Dom.Text.dismissTab name}" title="{Dom.Text.dismissTab name}"
                                 @click={Ev(fun _ -> dispatch (DismissTabMsg view.TerminalId))}>{Dom.Text.putAway}</button>"""
-            // The verbs are worn at rest on the row the pane is about, and on one a press from
-            // gone: an armed kill that faded out would be a confirm nobody could see.
-            let verbs =
-                if selected = Some view.TerminalId || model.KillArmed = Some view.TerminalId then Style.terminalListVerbs
-                else Style.terminalListVerbsAtRest
             let nameClass = if view.IsOpen then Style.terminalListName else Style.terminalListNameClosed
             let killWord = html $"""{Icon.stop}{Dom.Text.kill}"""
             // What it is doing or last did, and where, under the name: nine rows of `term N`
@@ -4699,7 +4695,7 @@ module View =
                     </span>
                     {subtitle}
                   </button>
-                  <span class="{verbs}">{reattach}{putAway}{killControl dispatch model Style.terminalListKill Style.btnKillArmed killWord view}</span>
+                  <span class="{Style.terminalListVerbs}">{reattach}{putAway}{killControl dispatch model Style.terminalListKill Style.btnKillArmed killWord view}</span>
                 </div>"""
         // A file's row, in the same shape as a terminal's. Reachability is the whole point of
         // it: a file is otherwise findable only by its chip in a message, so one shared two
