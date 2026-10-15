@@ -59,17 +59,22 @@ module private Col =
     /// The rail BOTH tables hang their verbs on, which is what the sentence at the top of this
     /// module claims and what it now does: the session rail is its widest row and not a pixel
     /// more, plus the cell's 16px left gutter. MEASURED: an active row is Stop (43px) and the
-    /// 24px archive icon, 10px apart (its 44px hit area overhangs the box by 10, into that gap
-    /// and the page's gutter) — 93px; an archived row is Unarchive alone (87px rendered at
-    /// 390px, no icon), unclipped at 100px. It was 128px, sized as if one row could hold
+    /// 24px archive icon, 10px apart — 93px; an archived row is Unarchive alone (87px rendered
+    /// at 390px, no icon), unclipped at 100px. It was 128px, sized as if one row could hold
     /// Unarchive AND the icon, which none can, and on a phone that was a 35px hole in front of
     /// Stop that the name could have had.
+    ///
+    /// On a PHONE the icon's box really is a thumb's target (`Style.btnIconBareTouch`: 44px,
+    /// grown leftward out of its own padding) rather than an overlay that took no room, so the
+    /// row is 43 + 10 + 44 + 16 = 113 and the rail carries it. It is the name that pays the 20px,
+    /// and the name is the column that has room: a verb whose target the layout does not
+    /// reserve is a target the next row's name is clipped by.
     ///
     /// The MCP table's Withdraw used to have a 128px column of its own, because it was a
     /// bordered button stretched full-bleed across it. A verb riding a listed row is bare
     /// (docs/visual-design.md, Hierarchy of controls), and bare it is a word narrower than
     /// Unarchive — so the two tables agree on one width rather than on nearly one.
-    let rail = "w-[100px]"
+    let rail = "w-[100px] phone:w-[113px]"
 
 /// The row's second line: the session's state, and beside it the one line the session says
 /// about ITSELF. Plain small text, at every width — this is the answer to the question the
@@ -168,7 +173,7 @@ let private nameText (view: ProcessManager.SessionView) : TemplateResult =
             | ProcessManager.LaunchFailed _
             | ProcessManager.Exited _ -> Style.recordLinkQuiet
         html
-            $"""<span class="{face}">{view.Record.DisplayName}<span class="{Style.recordLinkMark}" aria-hidden="true">↗</span></span>"""
+            $"""<span class="{face}">{view.Record.DisplayName}<span class="{Style.recordLinkMark}">{Icon.leavesSm}</span></span>"""
 
 /// The row's controls: Stop, while the session runs, and — where the session is not already
 /// archived — the quiet way to retire it. There is no Launch: opening IS launching, and the
@@ -344,10 +349,15 @@ let private tableTemplate
     // spends no chrome anywhere else on the page. When last-activity or a summary arrives, its
     // header becomes the second one of these and nothing here has to be redesigned.
     let sortHref = sprintf "?%s" (SessionQuery.toQueryString (SessionQuery.reversed query))
+    // The direction is a MARK, not a text glyph: `↑`/`↓` are carried by no face this build
+    // ships, so each rendered as whatever the reader's system substituted — and a glyph where
+    // an `Icon` mark exists is the second way one job gets drawn (docs/visual-design.md,
+    // principle 5). The marks carry their own `aria-hidden`; what states the sort is the
+    // `aria-sort` on the `<th>` around this.
     let sortMark, sortedBy =
         match query.Order with
-        | NewestFirst -> "↓", "descending"
-        | OldestFirst -> "↑", "ascending"
+        | NewestFirst -> Icon.downSm, "descending"
+        | OldestFirst -> Icon.upSm, "ascending"
     // Create sits on the section's own header line, at the right: the list and the one act
     // that adds to it are one thing, and this is the page's one FILLED rectangle — its one
     // verb — so it does not need a section of its own to be found. It takes nothing but the
@@ -383,7 +393,7 @@ let private tableTemplate
                 <th scope="col" class="{Style.tableHead}">name</th>
                 <th scope="col" class="{Style.tableHead} {Col.id}">id</th>
                 <th scope="col" class="{Style.tableHead} {Col.created}" aria-sort="{sortedBy}">
-                  <a class="{Style.sortHeader}" href="{sortHref}" data-filter="sort">created <span aria-hidden="true">{sortMark}</span></a>
+                  <a class="{Style.sortHeader}" href="{sortHref}" data-filter="sort">created {sortMark}</a>
                 </th>
                 <th scope="col" class="{Style.tableHeadRail} {Col.rail}"><span class="sr-only">actions</span></th>
               </tr>

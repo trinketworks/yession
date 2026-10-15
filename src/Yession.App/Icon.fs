@@ -156,6 +156,12 @@ module Icon =
     /// download. Deliberately not a downward arrow — the arrow is the CONTROL's to wear, and
     /// this is a statement about what the thing is.
     let private filePath = "M4 2.5 L9.5 2.5 L12 5 L12 13.5 L4 13.5 Z M9.5 2.5 L9.5 5 L12 5"
+    /// A link that LEAVES: an arrow out of the corner it points at, drawn as the diagonal and
+    /// the two legs back from its tip. It was the text glyph `↗`, carried by no face this
+    /// build ships, so it rendered as whatever the reader's system had — the same defect
+    /// `replyPath` below records, and the same remedy (principle 5: a glyph where a mark
+    /// exists is the second way).
+    let private leavesPath = "M4.5 11.5 L11.5 4.5 M7 4.5 L11.5 4.5 L11.5 9"
     /// What a reply answers: a line that comes down from where the parent was said and turns
     /// back, with the head on the turn. It was the text glyph `↩`, which is a CURVE — a shape
     /// this vocabulary does not have — carried by no face this build ships, so it rendered as
@@ -239,6 +245,14 @@ module Icon =
     /// What a detached reply answers (`Style.replyRefMark`), hanging in the gutter left of the
     /// column's rail. The small box, because the quote it leads is set in `text-small`.
     let replySm = strokedInline "align-[-2px]" replyPath
+    /// The direction a column is sorted in, riding its caps head (`Style.sortHeader`): the
+    /// same two arrows as `up`/`down` above, in the box a mark takes beside a word. One axis,
+    /// one pair of marks — a sort that pointed with its own glyphs would be the second way.
+    let upSm = strokedInline "align-[-2px]" upPath
+    let downSm = strokedInline "align-[-2px]" downPath
+    /// The mark on the name of a record whose link LEAVES this page (`Style.recordLinkMark`).
+    /// Inline beside a body line, like the marks above it.
+    let leavesSm = strokedInline "align-[-1px]" leavesPath
     /// The repository mark at the size an entity wears inline in a sentence: the same box
     /// as a person's small avatar, so a repo and a person referenced side by side sit on one
     /// line at one height.

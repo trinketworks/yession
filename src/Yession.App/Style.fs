@@ -48,7 +48,9 @@ module Style =
     //            its rows are bands in the composer's dock (see `queueItem`).
     //   `underline` — the single exception, and it is a shape not a third width: a heading
     //            that edits in place (the session title), where a rectangle drawn round
-    //            28px type reads as a box rather than a field.
+    //            28px type reads as a box rather than a field. It has exactly one wearer
+    //            (`titleInput`), which is what keeps it a shape; a second would make it a
+    //            variant, and principle 5 does not admit one.
     //
     // Two rules keep the states honest, and they are opposites on purpose:
     //   * A RING answers to INTERACTION. It brightens on hover and goes blue while
@@ -70,6 +72,14 @@ module Style =
         /// bare `border-transparent` at those sites would be the bare utility this module
         /// exists to stop.
         let clear = "border-transparent"
+        /// The one SHAPE in this vocabulary rather than a width: the bottom edge alone, for the
+        /// session title (`titleInput`) — a heading that edits in place, where a rectangle drawn
+        /// round 28px type reads as a box rather than a field. `border-0` first, so the shape is
+        /// stated and not inherited from whatever the UA gives an `<input>`.
+        ///
+        /// ONE wearer, and that is the whole of what keeps it a shape and not a third width
+        /// (principle 5). `askSearch` wore it once and wears `field` now, which is why the
+        /// comment there says a second wearer would make this a variant.
         let underline = "border-0 border-b"
 
         // Tones at rest. `hair` is the quiet separator, `rim` a step brighter for a
@@ -638,9 +648,11 @@ module Style =
     let recordLinkQuiet =
         cls [ bodyDim; "no-underline hover:text-blue hover:underline decoration-1 underline-offset-4"; focusRing ]
 
-    /// The mark that says a record link LEAVES (the session serves its own origin). Faint
-    /// and small: it is a signpost, not a second status.
-    let recordLinkMark = "text-code text-ink-faint ml-1 align-[1px]"
+    /// The mark that says a record link LEAVES (the session serves its own origin). Faint:
+    /// it is a signpost, not a second status. The gap and the ink are all this carries —
+    /// `Icon.leavesSm` is the mark, and a drawn mark brings its own box and its own place on
+    /// the line, so the `text-code` that used to size a text glyph here sized nothing.
+    let recordLinkMark = "text-ink-faint ml-1"
 
     /// The hit area for a listed record's whole cell — name line and state line both, not
     /// just the name's own glyphs. `block` so the link's box is the cell's full width rather
@@ -717,7 +729,8 @@ module Style =
     /// box for the control height to govern — the height it occupies is the ROW's, and a
     /// 32px box inside a 24px row would push the row open to make room for a verb that is
     /// supposed to be riding it. What a phone needs instead is a bigger HIT area, which
-    /// `btnIconBareTouch` grows without moving the box.
+    /// `hitTouch` below grows by padding the box out and handing the height straight back —
+    /// so the glyph does not move and the row does not open.
     let private btnIconBareBase =
         cls [ "w-6 h-6 shrink-0 grid place-items-center transition-colors"; bareBox; "p-0"
               focusRing ]
@@ -758,19 +771,42 @@ module Style =
     /// short rather than allowed to push the row's name out of its column.
     let killArmedRunning =
         "font-terminal text-code normal-case tracking-normal truncate max-w-[7rem]"
-    /// The same verb where it is the only control a row offers a thumb — the Manager's
-    /// archive, which on a phone is the one per-row target there is. 24px is WCAG 2.5.8's
-    /// minimum exactly and far under a comfortable touch target, so the HIT area is
-    /// `spacing-touch` while the glyph, the box and the row stay as they were: an empty
-    /// `::before` reaches 10px past the box on every side, and a press on a pseudo-element is
-    /// a press on its element. The box itself stays 24px on purpose — it is what the focus
-    /// ring is drawn round, and a ring round the 44px area crowded the verb beside it and the
-    /// screen's edge. Not the default, because the other bare icons ride in pairs (the queue's
-    /// up and down) whose areas would overlap; a site wearing this keeps 10px clear of its
-    /// neighbour so the area it grows never lands on one.
-    let btnIconBareTouch =
-        cls [ btnIconBareBase; "relative before:absolute before:-inset-2.5 before:content-['']"
-              bareInk ]
+    /// A bare verb's thumb target, on a phone and only there: the box pads out to
+    /// `spacing-touch`, so the BORDER box is 44px — which is what a finger lands on and what
+    /// the focus ring is drawn round — while the glyph, centred in the content box the padding
+    /// leaves, does not move. The doctrine asks for precisely this: a control with an edge
+    /// grows on a phone, a bare verb grows only its hit area (docs/visual-design.md, Space).
+    ///
+    /// It grows LEFT and DOWN, never right, and that asymmetry is the whole of what is
+    /// delicate here. Every verb this is worn by sits at the trailing edge of something — a
+    /// message's handle in the timeline's right gutter, the queue's delete at its row's, the
+    /// Manager's archive at its rail's — so a box that grew rightward reached past the gutter
+    /// it was parked in and gave the conversation column a sideways scroll at 390, which two
+    /// browser cases pin and which is how that was caught. Twenty pixels of `pl` against
+    /// nothing on the right keeps the right edge exactly where it was.
+    ///
+    /// Sideways the box really grows, and vertically it only pretends to: `-my` hands the
+    /// vertical padding straight back, so the row it rides keeps the height it had, which is
+    /// what the doctrine's "a bare verb takes the height of its row" is about. Across the row
+    /// there is nothing to protect — a verb 44px wide simply sits beside the next one, and
+    /// targets that tile are the point.
+    ///
+    /// ONE way to grow a hit area (principle 5). There was a second, worn by the Manager's
+    /// archive under this same name: an empty `::before` reaching 10px past a box left at 24.
+    /// This box form is what the two folded into, for two reasons the overlay cannot answer —
+    /// the overlay's box is not the target, so the focus ring drew a 24px square around a 44px
+    /// press; and an overlay reaches onto whatever is beside it, so a row of three could not
+    /// tile, while boxes in flow simply sit next to each other. What the fold costs is FLOW: a
+    /// rail measured against growth that took no room pays the 20px for real
+    /// (`ManagerUi.Col.rail`).
+    ///
+    /// Private, because the thing a site wears is a FACE and not a hit area. Every wearer below
+    /// composes it into one, so no view can grow a target without also saying which verb it is.
+    let private hitTouch = "phone:w-touch phone:h-touch phone:pl-5 phone:py-2.5 phone:-my-2.5"
+
+    /// A bare icon verb with that target — the queue's reorder, the Manager's archive, every
+    /// icon that is the only thing a row offers a thumb.
+    let btnIconBareTouch = cls [ btnIconBare; hitTouch ]
 
     /// The borderless verb as a WORD rather than an icon, for a row whose verb has no glyph
     /// that says it (stop, unarchive). Same rule, same box height, same ink as the icon form;
@@ -839,19 +875,21 @@ module Style =
         // the last included, so a tracked word's ink ends 0.16em before its box does and the
         // D stopped 2px short of the gutter the draft's text keeps from the same edge.
         cls [ "h-10 pl-3 pr-[calc(0.75rem-var(--tracking-caps))] shrink-0 inline-flex items-center justify-center font-ui"
-              // No colour tween on a phone: there is no hover there, so the only colour change
-              // is waiting → ready, which arrives with the row's fade (`draftCommit`), and two
-              // tweens at once read as the word blooming from grey through teal to blue.
-              bareBox; capsLg; "transition-colors max-md:transition-none"; focusRing
-              // On a phone, the one item of its row that takes part in baseline alignment, so
-              // the row's baseline is Send's word (`draftActionsRow`). Without it the row
-              // reported the baseline of its FIRST item — the presence span, usually empty,
-              // whose synthesized baseline is its bottom edge — and the word sat 5px under
-              // the picker's.
-              "max-md:self-baseline" ]
-    /// Send's own hit area, grown past its 40px box the way `btnIconBareTouch` grows a bare
-    /// icon's: an empty `::before` reaching past the word on three sides, a press on the
-    /// pseudo-element landing on the element. Only three sides, not four — Send is the
+              // ONE breakpoint's worth of answers and no second one: this box carried a
+              // `max-md:transition-none` (no colour tween where there is no hover, so the
+              // waiting → ready change would not run beside the row's own fade) and a
+              // `max-md:self-baseline` (be the item the row takes its baseline from). The
+              // first outlived its reason — `draftCommit` has no fade left to collide with —
+              // and the second is now said by that row for every item at once
+              // (`draftCommit`'s `phone:items-baseline`). A `max-md:` is a reading column's
+              // WIDTH and nothing else (docs/visual-design.md, Phone and wide), so neither
+              // belongs here once it has stopped doing anything.
+              bareBox; capsLg; "transition-colors"; focusRing ]
+    /// Send's own hit area, grown past its 40px box: an empty `::before` reaching past the
+    /// word on three sides, a press on the pseudo-element landing on the element. An OVERLAY
+    /// and not `hitTouch`'s padded box, because this control is a WORD — a 44px square would
+    /// crush the one it says, and the growth it wants is a few pixels past a box whose width
+    /// the word sets. Only three sides, not four — Send is the
     /// TRAILING control in this row, and `draftEditors` sits to its left across one `gap-1`;
     /// growing left would widen onto that presence display rather than onto nothing.
     let private btnComposerSendTouch =
@@ -1713,7 +1751,10 @@ module Style =
     /// 13/16 it was a 16px-tall target on the surface a phone reader meets first. The area is
     /// an empty `::before` reaching 14px above and below the line and 4px past each end — 44px
     /// tall and wider than the word — and a press on a pseudo-element is a press on its
-    /// element, the mechanism `btnIconBareTouch` uses for the same reason. The box, the word
+    /// element. An OVERLAY and not `hitTouch`'s padded box, and this is the one site that has
+    /// a reason: the notice's height is a number the panes reserve
+    /// (`degradedBarHeight`), so a box that really grew would move every pane that
+    /// subtracts it. The box, the word
     /// and the focus ring drawn round it all stay exactly where they were, so the notice's
     /// height is still the number the panes reserve (`degradedBarHeight`).
     let detailNote = "min-w-0"
@@ -1738,12 +1779,45 @@ module Style =
     /// two chevrons leave rather than sizing to an input's default 20 characters.
     let titleWrap = "relative flex flex-col min-w-0 ml-8 phone:ml-3 phone:flex-1"
 
-    /// The title itself: the heading, worn by a text input — and worn as a HEADING at rest.
-    /// It used to carry a dotted underline whose job was to say "this edits"; a rule under 28px
-    /// type is a rule, and it said it whether or not anyone was going to type. So the field
-    /// says it the way the composer band does instead: the surface lifts a tone under the
-    /// pointer and while focused, and the heading becomes a box you are typing in exactly when
-    /// you are typing in it. The 8px padding is spent OUTWARD (`-mx-2`), so the glyphs do not
+    /// The title itself: the heading, worn by a text input — and it says SO AT REST, with the
+    /// one shape the `Stroke` vocabulary keeps for it (`Stroke.underline` in `Stroke.rim`).
+    ///
+    /// It carried that rule once, lost it to an argument that a rule "said it whether or not
+    /// anyone was going to type", and was left saying it only under a pointer
+    /// (`hover:bg-surface-2`). That argument is the one principle 4 refuses: what a thing is —
+    /// here, that it edits — is visible at rest, because a thumb has no hover and a reader has
+    /// no tooltip. A heading nobody hovers is a heading nobody learns is a field. So the rule
+    /// is back, and `Stroke.underline` has its wearer again.
+    ///
+    /// What does NOT come back is the DASH. It was `border-dotted border-ink-faint` over this
+    /// same `border-0 border-b`, and the dash had a name in the vocabulary (`Stroke.dotted`,
+    /// "dotted until you are in it, then solid blue") that #1372 deleted along with the
+    /// solid-on-focus half of it. A stroke here has a width, a tone and an answer to
+    /// interaction, and never a pattern — so what is left of that rule is the shape, which is
+    /// the one the `Stroke` header keeps for this control, in the tone that header gives a
+    /// control at rest (`rim`, a step brighter than the quiet separator).
+    ///
+    /// `phone:border-b-0`, and this is a measurement rather than a preference. On a wide screen
+    /// the box is the title's line alone, so the rule lands at y=68 with the id starting at 71:
+    /// a heading with a rule under it, which is what it is. On a phone the box reaches down over
+    /// the id (below), so the rule lands at 53-54 — flush under the id's own text box, which
+    /// ends at 54, and one pixel of black above the band's hairline at 55-56. That draws a rule
+    /// under the thing that does NOT edit, and puts a second hairline beside the one the
+    /// doctrine runs across every column at one height (Space). Measured live at 390x844.
+    ///
+    /// So the phone keeps the fill and the ring and gains nothing at rest, which is the finding
+    /// (S1-7) still open for a thumb. It does not close here because the band has no room: the
+    /// rule belongs under the title's 24px line, and the 44px the floor asks of the field is
+    /// what puts its bottom edge 20px further down. Moving it would mean moving the id out of
+    /// the field's box, and a 56px band has nowhere to put it.
+    ///
+    /// ONE tone, and no hover or focus tone of its own, which is the opposite of what a `ring`
+    /// does — because here the rule answers a different question from the fill. The rule says
+    /// *this edits*; the fill and the ring say *you are editing it*. Giving the rule a second
+    /// voice would be two mechanisms for the one requirement, which is what the `Stroke`
+    /// header's interaction rule is for on a control whose only mark IS its border.
+    ///
+    /// The 8px padding is spent OUTWARD (`-mx-2`), so the glyphs do not
     /// move when the fill appears — the box grows around the text already on screen. Sideways
     /// only: a phone's band seats the id 2px under the title's line box, and vertical padding
     /// put the fill and its ring through it.
@@ -1762,10 +1836,12 @@ module Style =
     /// its last 20 of them padding (`pb-5`) that the id hangs in (`titleId`), and the same 20
     /// paid back to the flow (`-mb-5`), so the row lays out the 24px line it always did. The
     /// text sits in the top 24, where it was; the fill and the ring go round the title and its
-    /// id together, though a press on the id's own text is the id's, so it can be selected. `Render.placeInputCursor`'s marker
-    /// subtracts the padding, so a collaborator's caret stays the height of the line.
+    /// id together, though a press on the id's own text is the id's, so it can be selected.
+    /// `Render.placeInputCursor`'s marker subtracts the padding and the border off the live box,
+    /// so a collaborator's caret stays the height of the line.
     let titleInput =
-        cls [ "w-full min-w-0 bg-transparent border-0 px-2 -mx-2 py-0 phone:h-11 phone:pb-5 phone:-mb-5"
+        cls [ "w-full min-w-0 bg-transparent px-2 -mx-2 py-0 phone:h-11 phone:pb-5 phone:-mb-5"
+              Stroke.underline; Stroke.rim; "phone:border-b-0"
               "hover:bg-surface-2 focus:bg-surface-2 transition-colors"; focusRing
               "font-extralight text-heading phone:text-pivot tracking-[-0.01em] lowercase text-ink"
               "placeholder:text-ink-faint truncate relative wide:top-[2px]" ]
@@ -2718,35 +2794,6 @@ module Style =
 
     // --- Chapters: where the session divides ------------------------------------------
 
-    /// A bare icon verb's thumb target, on a phone and only there: the box pads out to
-    /// `spacing-touch`, so the BORDER box is 44px — which is what a finger lands on, and what
-    /// the focus ring is drawn round — while the glyph, centred in the content box the
-    /// padding leaves, does not move. The doctrine asks for precisely this: a control with an
-    /// edge grows on a phone, a bare verb grows only its hit area (docs/visual-design.md,
-    /// Space).
-    ///
-    /// It grows LEFT and DOWN, never right, and that asymmetry is the whole of what is
-    /// delicate here. Every verb this is worn by sits at the trailing edge of something — a
-    /// message's handle in the timeline's right gutter, the queue's delete at its row's — so
-    /// a box that grew rightward reached past the gutter it was parked in and gave the
-    /// conversation column a sideways scroll at 390, which two browser cases pin and which is
-    /// how this was caught. Twenty pixels of `pl` against nothing on the right keeps the
-    /// right edge exactly where it was.
-    ///
-    /// Sideways the box really grows, and vertically it only pretends to: `-my` hands the
-    /// vertical padding straight back, so the row it rides keeps the height it had, which is
-    /// what the doctrine's "a bare verb takes the height of its row" is about. Across the row
-    /// there is nothing to protect — a verb 44px wide simply sits beside the next one, and
-    /// targets that tile are the point. Growing the box instead of overlaying a `::before`
-    /// is what lets a trio of them do that.
-    ///
-    /// Its home is really the button vocabulary, beside `btnIconBareTouch` — which grows the
-    /// same 44px with a `::before` overlay instead, for a verb whose neighbours are far
-    /// enough away that an overlay can reach past the box without landing on one. The two are
-    /// one job drawn two ways, which principle 5 does not admit; this pass may not edit that
-    /// section, so the fold-back is left said rather than done.
-    let private hitTouch = "phone:w-touch phone:h-touch phone:pl-5 phone:py-2.5 phone:-my-2.5"
-
     /// The rule a chapter draws across the transcript.
     ///
     /// This replaced a RAIL: hairlines in the timeline's left padding, each placed by
@@ -2819,25 +2866,34 @@ module Style =
 
     /// The name, worn by a text input for the reason the session title is: it is editable
     /// text, and a control that only becomes editable once you have pressed it is a control
-    /// nobody presses. The same arrangement as `titleInput` — transparent at rest, the
-    /// surface lifting under the pointer and while focused, so the line becomes a box you are
-    /// typing in exactly when you are typing in it.
+    /// nobody presses. Interaction is said as `titleInput` says it — the surface lifting under
+    /// the pointer and while focused, so the line becomes a box you are typing in exactly when
+    /// you are typing in it. What it says AT REST is its own, and the last paragraph says why.
     ///
     /// `truncate` rather than wrap: a rule is one line, and a name long enough to wrap has
     /// stopped being a name. `touchType` because a keyboard is coming, and a phone zooms into
     /// anything under 16px it focuses and never zooms back out.
     ///
-    /// The placeholder of a chapter nobody has named is invisible at rest — the divider is a
-    /// clean line until somebody reaches for it — and `ink-faint` under the pointer or the
-    /// keyboard's focus, which is when an invitation to name it is wanted. Ink and not
-    /// opacity, so the contrast floor holds on the lifted surface it appears over.
+    /// The placeholder of a chapter nobody has named is drawn AT REST, in `ink-faint`. It used
+    /// to be `text-transparent` until the pointer or the keyboard arrived, which kept the
+    /// divider a clean line — and kept the field a secret from everyone who never hovered it.
+    /// A thumb has no hover (principle 4), so an invitation nobody can see is not an
+    /// invitation; the Deciding order puts honesty above less, and this is that trade made the
+    /// way it says. Ink and not opacity, so the contrast floor holds on the lifted surface it
+    /// appears over.
+    ///
+    /// NOT `Stroke.underline`, which is what the session title wears for the same requirement
+    /// (`titleInput`). Two reasons, and either is enough: that shape keeps one wearer or it
+    /// stops being a shape (principle 5), and this control sits under the chapter's own
+    /// hairline (`chapterRule`'s `border-t`), so a rule of its own would be a second hairline
+    /// a few pixels below the first. The word is the affordance here.
     let chapterName =
         // `-ml-1.5` takes the padding back out on the left, so the WORDS start on the content
         // column's edge and only the lifted surface reaches into the gutter.
         cls [ "col-start-2 -ml-1.5 min-w-0 bg-transparent border-0 px-1.5 py-0.5"
               "hover:bg-surface-2 focus:bg-surface-2 transition-colors"; focusRing
               "font-ui font-light text-small text-ink-dim focus:text-ink truncate"
-              "placeholder:text-transparent hover:placeholder:text-ink-faint focus:placeholder:text-ink-faint"
+              "placeholder:text-ink-faint"
               touchType ]
 
     /// What a person can DO to one item, behind an ellipsis at its top-right.
@@ -3198,10 +3254,13 @@ module Style =
     /// Its HEIGHT asks the shell's own question (`phone:`), and spends the touch token rather
     /// than a number: a thumb's row is a thumb's row however the phone is held, and `max-md:`
     /// said no at 844x390, where the strip's two controls were 32px under a finger.
-    /// Its GUTTER is still `max-md:`, and deliberately for now: it is not a question of its
-    /// own but an echo of `timeline`'s, so the word stands on the rail the messages above it
-    /// start on, and the two have to move together or not at all. The timeline is another
-    /// section's to move.
+    /// Its GUTTER is `max-md:`, and stays: it is not a question of its own but an echo of
+    /// `timeline`'s, so the word stands on the rail the messages above it start on. That
+    /// column's inset IS a width question, which is the one thing `max-md:` is for
+    /// (docs/visual-design.md, Phone and wide) — and it is not one inset but a family, every
+    /// full-bleed `-mx-4` in the conversation measured against it. The two answers have to
+    /// agree, so this one follows the column rather than asking the shell's question beside
+    /// it.
     let composerTray =
         cls [ "shrink-0 flex items-center h-8 phone:h-touch pl-8 pr-4 max-md:pl-4 bg-panel"
               "transition-[translate,opacity] starting:translate-y-1 starting:opacity-0"; Motion.pace ]
@@ -3301,7 +3360,7 @@ module Style =
 
     /// Move-up and move-down. A verb riding a listed row, so bare, and a thumb's target on a
     /// phone without the band moving to make room for it.
-    let queueVerb = cls [ btnIconBare; hitTouch ]
+    let queueVerb = btnIconBareTouch
 
     /// Extra clearance before Delete, on top of the gap the row already spends between
     /// Move-up and Move-down. Reorder and delete used to sit in one evenly-spaced row of
@@ -4789,8 +4848,9 @@ module Style =
     let tableCellRail = "py-3 pl-4 align-top"
     /// The verbs inside a rail cell: at the row's trailing edge, on its first line — 24px, the
     /// name's own line box, so a verb arriving or leaving moves nothing. 10px apart rather than
-    /// 8: a bare icon's hit area reaches 10px past its box (`btnIconBareTouch`), and at 8 its
-    /// first two pixels would sit over the word beside it.
+    /// 8: the gap used to be what an icon's hit area overhung its box by, and it is now plain
+    /// clearance — `btnIconBareTouch` grows its BOX on a phone (`hitTouch`), so the targets sit
+    /// side by side in flow instead of reaching onto the word beside them.
     let tableRailVerbs = "flex items-center justify-end gap-2.5 h-6"
 
     /// What a table says over nothing, where the table stays because its heads carry a control
