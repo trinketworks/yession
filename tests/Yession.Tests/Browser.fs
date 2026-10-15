@@ -5386,13 +5386,19 @@ let editorTests =
                 return ()
             }
         // The divider of a chapter nobody has named shows no name — the opening message is
-        // right under it — so the empty field is how it still invites one. The invitation
-        // is a promise only a painted page can settle: the placeholder is a pseudo-element
-        // whose ink is whatever the cascade resolves, so the markup carries the attribute
-        // identically whether it shows at rest, never, or only for a pointer. It must be
-        // absent at rest (a clean line), and present for the keyboard's focus, which has no
-        // hover to stand in for it.
-        editorCaseIn 1440 900 "an unnamed chapter's field offers a name only when focused or hovered" <| fun page ->
+        // right under it — so the empty field is how it invites one. The invitation is a
+        // promise only a painted page can settle: the placeholder is a pseudo-element whose
+        // ink is whatever the cascade resolves, so the markup carries the attribute
+        // identically whether it shows at rest, never, or only for a pointer.
+        //
+        // It must show AT REST. This case used to pin the opposite — absent until a pointer
+        // or the keyboard arrived, for a clean divider — and that was the old look pinned as
+        // if it were an invariant. The doctrine's principle 4 is the invariant: what a
+        // control is, is visible at rest, because a thumb has no hover. An invitation that
+        // only a mouse can find is one every touch reader is simply never offered, so what
+        // is checked here is that the placeholder is painted with no pointer over the field
+        // and no focus on it, and is still painted once focus lands.
+        editorCaseIn 1440 900 "an unnamed chapter's field offers a name at rest, before any pointer" <| fun page ->
             async {
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-chapter-name='msg-filler-8']")
                 let read () =
@@ -5401,16 +5407,17 @@ let editorTests =
                         | [ empty; offered; shown ] -> return empty = 1.0, offered = 1.0, shown = 1.0
                         | _ -> return failwith "the chapter's name field is not there"
                     }
-                // Away from the field, and not focused: the line is clean.
+                // Away from the field, and not focused: what a thumb and a first glance get.
                 do! awaitU (page.Mouse.MoveAsync (700.0f, 10.0f))
                 let! empty, offered, atRest = read ()
                 Expect.isTrue (empty && offered) "the field is empty and has something to offer, so the next two readings mean something"
-                Expect.isFalse atRest "at rest the divider shows no placeholder"
-                // The keyboard's own way in: focus with no pointer over the field.
+                Expect.isTrue atRest "at rest the divider offers the name, where a thumb can see it"
+                // And it does not go away once the keyboard arrives — the invitation is still
+                // what the empty field is for while you are standing in it.
                 do! awaitU (page.FocusAsync "#shell [data-chapter-name='msg-filler-8']")
                 do! awaitU (page.Mouse.MoveAsync (700.0f, 10.0f))
                 let! _, _, focused = read ()
-                Expect.isTrue focused "keyboard focus on the empty field shows the placeholder"
+                Expect.isTrue focused "focus on the empty field keeps the placeholder"
                 return ()
             }
         // A collaborator's caret in that same name. Nothing in the markup can settle where a
