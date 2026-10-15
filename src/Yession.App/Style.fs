@@ -63,6 +63,13 @@ module Style =
         // Widths.
         let ring = "border"
         let lead = "border-l-2"
+        /// A ring that paints nothing. It holds the border BOX so a bare control and a
+        /// bordered one are the same size, and choosing between them moves no text. This was
+        /// deleted as dead vocabulary while this file had no wearer for it (#1372, finding
+        /// S1-34); the filled and bare faces below are its wearers, so it is live again. A
+        /// bare `border-transparent` at those sites would be the bare utility this module
+        /// exists to stop.
+        let clear = "border-transparent"
         let underline = "border-0 border-b"
 
         // Tones at rest. `hair` is the quiet separator, `rim` a step brighter for a
