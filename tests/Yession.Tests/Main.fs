@@ -168,6 +168,9 @@ let all =
         // its own deadline, and none through Playwright's own waits. Read from the source, so
         // it needs no browser.
         Tag.needs "Playwright's own waits" [] (fun () -> PlaywrightWaits.tests)
+        // That a test asserts through hooks and never through a Tailwind string: every literal in
+        // the suite, read against the classes Style.fs composes.
+        Tag.needs "Tailwind in tests" [] (fun () -> TailwindInTests.tests)
         // The PreToolUse hook that keeps agents on the task verbs, spawned with payloads on stdin
         // the way the harness runs it. Cheap: a shell and the devshell's `jq`, which `check` runs inside.
         Tag.needs "Direct tool hook" [] (fun () -> DirectToolHook.tests)
