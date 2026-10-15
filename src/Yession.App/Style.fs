@@ -3695,11 +3695,21 @@ module Style =
     /// the column and there is nothing to divide.
     ///
     /// Inside the panel rather than straddling the divider, because the panel clips its
-    /// overflow — which also rules out an outline for focus, so focus is the same blue the
-    /// hover shows, at full strength.
+    /// overflow — which also rules out an outline for focus, so the focus signal is the fill.
+    ///
+    /// AT REST it paints nothing, and that is not a hidden control: what the pointer aims at
+    /// is the column's own divider (`contentPanel`'s `Stroke.dividerLeft`), drawn under this
+    /// strip at the same place and always there. The strip is that hairline's hit area, so
+    /// principle 4's screenshot shows a separator where a separator is.
+    ///
+    /// ONE interaction tone, `blue`, for the hand and for the keyboard alike. It was
+    /// `blue/50` under the hand and `blue` focused — a half-strength hue is dimming by
+    /// opacity, which the doctrine forbids (Colour) and which no role here replaces: there is
+    /// no half-blue in `app/tokens.css` and a separator does not need two interaction tones
+    /// to tell a reader it can be dragged.
     let terminalResize =
         cls [ "phone:hidden absolute left-0 inset-y-0 w-1.5 z-50 cursor-col-resize"
-              "bg-transparent hover:bg-blue/50 focus-visible:bg-blue focus-visible:outline-none"
+              "bg-transparent hover:bg-blue focus-visible:bg-blue focus-visible:outline-none"
               "transition-colors motion-reduce:transition-none" ]
 
     /// The pane's left edge on a phone: a strip of the chat left showing, under a scrim, and
@@ -3871,8 +3881,12 @@ module Style =
         cls [ "shrink-0 inline-flex items-center gap-1.5 bg-transparent border-0 cursor-pointer p-0 no-underline"
               "font-ui font-light lowercase whitespace-nowrap"
               "transition-colors duration-150 ease-out motion-reduce:transition-none"; focusRingFar ]
-    /// An act as a word at the body's size, where it ends a line of the body's own type.
-    let paneAct = cls [ paneActBase; "text-body text-ink-dim hover:text-ink" ]
+    /// There are THREE faces below and no more, one per kind of line a bare verb ends: the
+    /// toolbar's caps, a band line's body, and the empty pane's one door. A fourth, `paneAct`,
+    /// stood here with nothing wearing it — it was "show in <terminal>"'s, and that act went
+    /// when the row became the way in (#1308). A face with no wearer is a face the next author
+    /// reaches for by accident, so it is deleted rather than kept for symmetry.
+    ///
     /// An act in the toolbar: its mark and its word in the caps voice, the face the agent's
     /// interrupt wears — a verb about the whole thing on screen, not a word in a sentence.
     let paneToolbarAct =
@@ -3904,10 +3918,10 @@ module Style =
     /// the list and "show in terminal" all put focus HERE, and without a ring of its own the
     /// panel wore the browser's — a 1px near-black outline on a near-black column, which is
     /// focus nobody can see. Drawn INSIDE the edge, because the column clips at its own
-    /// border and a ring held outside it would be cut away on every side but none.
-    let panePanel =
-        paneBody
-        + " focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue focus-visible:-outline-offset-2"
+    /// border and a ring held outside it would be cut away on every side but none — which is
+    /// `focusRingInset`, composed rather than spelled out: the ring had been written here as
+    /// its four utilities, a second way to draw the one ring the product has (principle 5).
+    let panePanel = cls [ paneBody; focusRingInset ]
     /// The panel under a command's preview, on its lifted ground (`paneToolbarLifted`).
     let panePanelLifted = cls [ panePanel; "bg-surface-2 shadow-[inset_2px_0_0_var(--color-ink)]" ]
     /// A read-only region: a player's own mount, or text shown rather than typed into. The
@@ -3938,10 +3952,35 @@ module Style =
     /// the screen; two lines so the command is still recognisable there. The wrap is `!`
     /// because the player's sheet sets `nowrap` outside any cascade layer, which beats every
     /// utility in one whatever its specificity.
+    ///
+    /// The last three lines are the vendored sheet being held to this product's finish, and
+    /// every one of them is `!` for that same reason — an unlayered declaration beats a
+    /// layered one however specific, and an important layered one beats it back.
+    ///
+    ///   * SHARP corners. The sheet rounds the player by 4px, its tooltip by 4 and the played
+    ///     part of its scrub bar by 3. A rounded rectangle is a hybrid of the two primitives
+    ///     and does not exist here (docs/visual-design.md, Form). Its marker dots stay round:
+    ///     a point is round, and those are points.
+    ///   * NO shadow. The play mark carried a `drop-shadow`, which is the one thing "Honest
+    ///     materials" forbids outright — nothing but the brand mark may look lit. The mark
+    ///     itself needs nothing done to it: the glyph is a filled polygon with a triangle
+    ///     masked out of it, which renders as the outline triangle the icon rule asks for.
+    ///   * The player's GROUND and ink are this product's, by name. They were `#000000` and
+    ///     `#ffffff` written into the sheet as its own `--term-color-*` pair — the same two
+    ///     colours `bg` and `ink` hold today, and tokens that cannot follow them tomorrow.
+    ///
+    /// What is NOT reachable from here, and so is not fixed: the sheet maps all sixteen of its
+    /// ANSI slots to the foreground, so a recording replays monochrome where the live screen
+    /// renders `--color-term-*`. That is sixteen more properties and a picture of a replay to
+    /// check them against, which is its own change.
     let replayStage =
         "h-full min-h-24 [&_.ap-player]:min-w-full [&_.ap-term]:mx-auto "
         + "[&_.ap-tooltip]:w-max [&_.ap-tooltip]:max-w-48 [&_.ap-tooltip]:whitespace-normal! "
-        + "[&_.ap-tooltip]:wrap-anywhere [&_.ap-tooltip]:line-clamp-2"
+        + "[&_.ap-tooltip]:wrap-anywhere [&_.ap-tooltip]:line-clamp-2 "
+        + "[&_.ap-player]:rounded-none! [&_.ap-tooltip]:rounded-none! [&_.ap-gutter-full]:rounded-none! "
+        + "[&_.ap-play-button_svg]:filter-none! "
+        + "[&_.ap-player]:[--term-color-background:var(--color-bg)]! "
+        + "[&_.ap-player]:[--term-color-foreground:var(--color-ink)]!"
     /// A stretch's facts, above whatever renders its recording.
     let paneFacts = "shrink-0 flex flex-col gap-1 px-3 py-3 " + Stroke.dividerBottom
 
@@ -3976,10 +4015,13 @@ module Style =
     /// pane, and opaque, because rows read over a terminal's text are rows nobody can read; its
     /// rim is at the foot, where it ends over the terminal. As tall as it needs and no taller
     /// than the pane, scrolling inside itself.
+    ///
+    /// Its focus ring is `focusRingInset` — inset because the sheet scrolls and clips, and
+    /// composed because there is one ring in this product: it had been written here as its
+    /// four utilities, which is a second way to draw it (principle 5).
     let allSheet =
         cls [ "absolute inset-x-0 top-0 max-h-full z-30 overflow-y-auto overscroll-contain"
-              "bg-surface border-b border-edge shadow-[0_12px_32px_rgb(0_0_0/0.5)]"
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue focus-visible:-outline-offset-2" ]
+              "bg-surface border-b border-edge shadow-[0_12px_32px_rgb(0_0_0/0.5)]"; focusRingInset ]
 
     /// What the sheet is laid over, dimmed: the pane goes on showing under it, a step back.
     /// Under the sheet in the stack and over everything else the pane has.
@@ -4046,27 +4088,22 @@ module Style =
     let terminalListAct = cls [ terminalListActBase; "text-ink-dim hover:text-ink" ]
     let terminalListKill = cls [ terminalListActBase; "text-ink-dim hover:text-err" ]
 
-    /// The row's verbs, at its right edge, WORN: on the row the pane is about, and on one whose
-    /// kill is armed — a confirm that faded out would be a confirm nobody could see. Which rows
-    /// wear them is the view's to say (`View.allPage`); the rest wear `terminalListVerbsAtRest`.
+    /// The row's verbs, at its right edge, WORN — on EVERY row, at rest.
+    ///
+    /// They used to come up under the pointer and be `sr-only` where nothing can hover, with
+    /// a second name (`terminalListVerbsAtRest`) carrying the fade. #1308 made them worn and
+    /// left the second name an alias of this one: two names for one value, which is a second
+    /// way to draw one thing (principle 5), and two comments still arguing for a reveal the
+    /// code no longer did. Both are gone, and the rule they were breaking is why they do not
+    /// come back: state is worn, not hinted, and a thumb has no hover
+    /// (docs/visual-design.md, principle 4) — a kill reachable only by a pointer is a kill
+    /// half the readers of this page cannot see at all.
     ///
     /// On a phone each is at least a 44px box with its word centred (`[&>*]`): the 24px line
     /// is WCAG 2.5.8's floor for the MARK, never for the target, and a kill 4px from a rewind
     /// is a kill pressed by a thumb aiming at the rewind.
     let terminalListVerbs =
         "ml-auto self-center flex items-center gap-4 shrink-0 phone:gap-2 phone:[&>*]:min-w-11 phone:[&>*]:min-h-11"
-
-    /// Every other row's verbs: there, but not shown, until they are wanted. Under the pointer
-    /// or the keyboard anywhere in the row they come up (`group/row`, and `focus-within` so Tab
-    /// reaches them visibly) — `opacity`, never `hidden`, so they never leave the tab order.
-    ///
-    /// A thumb has no hover, so on a device that cannot hover they are not merely see-through
-    /// but out of the way (`sr-only` until focus is inside them): a see-through kill at a
-    /// row's edge is a kill a thumb can press without seeing, and the width they kept was the
-    /// width the command under the name was cut short by. There, the row is how to reach them:
-    /// it opens its terminal, whose own surface carries every one of these, and the row it was
-    /// opened from wears them when the reader comes back.
-    let terminalListVerbsAtRest = terminalListVerbs
 
     /// The one row the closed terminals fold under: the section voice, its count, and the
     /// fold's mark at the far edge, turned while it is open. The row is the press — a
@@ -4219,7 +4256,21 @@ module Style =
     /// and than the command it heads.
     let terminalAuthorSquare = "w-3.5 h-3.5 shrink-0 @min-[40rem]:w-5 @min-[40rem]:h-5"
 
-    let terminalPrompt = "shrink-0 font-terminal text-code text-green select-none"
+    /// The `$` that leads a command wherever a command is RECORDED — a block in the
+    /// scrollback, a chip in the chat, an empty output. It is a mark that leads a line
+    /// (docs/visual-design.md, Space), so it hangs quieter than the command it heads and says
+    /// nothing about state.
+    ///
+    /// `ink-faint`, not green. Every one of these was green, the agent's and the finished
+    /// ones alike, and green means two things this glyph is neither of: LIVE, which a command
+    /// that exited is not, and the PEOPLE, which an agent's command is not (Colour). Nor may
+    /// it be an attribution — people are told apart by their square, never by a colour, and
+    /// the byline above carries that square already.
+    ///
+    /// The one green `$` left is the live one: the placeholder of the command line itself
+    /// (`terminalCommand`), where a command will actually run. Two tones of one glyph, and
+    /// the difference is exactly the fact — this prompt is a record, that one is live.
+    let terminalPrompt = "shrink-0 font-terminal text-code text-ink-faint select-none"
     /// A command breaks where a shell would let you: at its spaces. `anywhere` is the last resort
     /// for a single token wider than the column (a long path), which must wrap rather than push
     /// the page sideways, and it is also what lets a flex item holding one shrink below that
@@ -4391,6 +4442,10 @@ module Style =
     /// A phone has no column beside it to agree with, and a thumb to hold: 44px there, with
     /// room at the trailing edge for the 44px Run (`btnInField`) — and the message composer
     /// stands at 44 there too (`draftInput`'s `phone:pt-3`).
+    ///
+    /// Its `$` is the one GREEN prompt in the pane, and the only one: this is the live edge of
+    /// a live terminal, which is what green says (docs/visual-design.md, Colour). Every
+    /// recorded command's `$` is a mark on a record and wears `ink-faint` (`terminalPrompt`).
     let terminalCommand =
         cls [ "w-full"; fieldBare
               "font-terminal text-code text-ink px-3 py-3 pr-10 phone:py-3.5 phone:pr-13 placeholder:text-green"; touchType ]
@@ -4478,25 +4533,41 @@ module Style =
         | IndexedColour 15 -> "bg-term-white-bright"
         | _ -> ""
 
-    /// A span's colours, resolved with `Inverse` already applied — the flag is a render-time
-    /// swap, which is exactly why the parser leaves it as a flag rather than pre-swapping
-    /// colours it does not know the defaults for. A background fill also forces the
-    /// foreground to the page ground, so inverted text stays readable when only one side of
-    /// the pair was ever set.
+    /// A span's colours, resolved with `Inverse` and `Dim` already applied — both are
+    /// render-time swaps, which is exactly why the parser leaves them as flags rather than
+    /// pre-swapping colours it does not know the defaults for. A background fill also forces
+    /// the foreground to the page ground, so inverted text stays readable when only one side
+    /// of the pair was ever set.
+    ///
+    /// DIM (SGR 2) is resolved HERE, as a colour, because dimming is a role and never opacity
+    /// (docs/visual-design.md, Colour): opacity breaks the contrast floor, and the floor is
+    /// first in the Deciding order. `opacity-75` stood here on the argument that dim text is
+    /// decoration — it is not, it is output, and 75% of a colour pinned at 4.5:1 is a colour
+    /// pinned at nothing.
+    ///
+    /// The role a faint run reads in is index 0, which this palette defines as `ink-faint`
+    /// (app/tokens.css) — the quietest ink that still keeps AA on every surface, which Phase4
+    /// pins. So faint is one colour rather than a shade of each of the 256: there is no step
+    /// below a colour already held at the floor that is still at the floor, and a run cannot
+    /// wear the red role and the faint role at once. A program asking for faint is asking for
+    /// the quietest thing on this ground, and that is what it gets.
+    ///
+    /// Faint has nowhere to go against a FILL, where contrast is the pair's and the program
+    /// set both halves of it, so a filled run keeps the foreground it was given.
     let private ansiColours (style: AnsiStyle) : AnsiColour * AnsiColour =
-        if style.Inverse then
-            (match style.Background with DefaultColour -> IndexedColour 0 | c -> c),
-            (match style.Foreground with DefaultColour -> IndexedColour 7 | c -> c)
-        else style.Foreground, style.Background
+        let foreground, background =
+            if style.Inverse then
+                (match style.Background with DefaultColour -> IndexedColour 0 | c -> c),
+                (match style.Foreground with DefaultColour -> IndexedColour 7 | c -> c)
+            else style.Foreground, style.Background
+        if style.Dim && background = DefaultColour then IndexedColour 0, background
+        else foreground, background
 
-    /// The utility classes for a styled run.
+    /// The utility classes for a styled run. Intensity is not here: bold is the weight the
+    /// mono face ships (600), and faint is a colour `ansiColours` has already resolved.
     let ansiClasses (style: AnsiStyle) : string =
         let foreground, background = ansiColours style
         [ if style.Bold then "font-semibold"
-          // Dim is opacity, not a colour: it has to compose with whatever colour is set,
-          // and it must not drop text below the contrast floor — 75% of a colour that
-          // clears 4.5:1 on this ground still clears 3:1, and dim text is decoration.
-          if style.Dim then "opacity-75"
           if style.Italic then "italic"
           if style.Underline then "underline"
           ansiFgClass foreground
