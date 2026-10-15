@@ -501,8 +501,9 @@ let withEnv (bindings: (string * string option) list) (body: unit -> Async<'a>) 
 
 let private pollMs = 50
 
-/// The whole Node run's budget, as `check` computed it from the capabilities this run declared
-/// (`tasks.fsx` `nodeBudgetMs`). Read per call rather than at module init so a test can drive it.
+/// The whole run's budget, as `check` computed it from the capabilities this run declared
+/// (`tasks.fsx` `nodeBudgetMs` on Node, `clrBudgetMs` on the CLR). Read per call rather than at
+/// module init so a test can drive it.
 /// `None` when the bundle was started by hand, which is not an error — nothing is being spent.
 let private runBudgetMs () : int option =
     getEnvRaw "YESSION_TEST_BUDGET_MS"
@@ -534,7 +535,7 @@ let settledWithin (timeoutMs: int) (condition: unit -> bool) : Async<bool> =
         | Some budget when timeoutMs >= budget ->
             return
                 failwithf
-                    "a case asked to wait up to %dms, but this whole Node run's budget is %dms — reaching that deadline would kill every other suite with it. Narrow the run (`check --only \"<part of a test name>\"`), or give the tier a bigger allowance in tasks.fsx."
+                    "a case asked to wait up to %dms, but this whole run's budget is %dms — reaching that deadline would kill every other suite with it. Narrow the run (`check --only \"<part of a test name>\"`), or give the tier a bigger allowance in tasks.fsx."
                     timeoutMs
                     budget
         | _ -> return! go (max 1 (timeoutMs / pollMs))
