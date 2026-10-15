@@ -113,7 +113,11 @@ follow the same geometry: square caps, no curves, no fills, and a stroke weight 
 the type it sits beside.
 
 The brand mark (`Brand.mark`) is the one lit object. It is a picture, not a surface. The
-"Honest materials" rule does not govern it. Nothing else may look lit.
+"Honest materials" rule does not govern it. The exemption is that object, not that one
+value. A picture of the mark's object may carry the mark's shading in any place. The
+agent's thinking cube (`Style.agentThinking`) is the mark's cube as it turns, so the cube
+keeps its shaded faces. A picture holds no words and takes no press. Nothing else may look
+lit.
 
 ### Stroke
 
@@ -147,6 +151,10 @@ A mark that leads a line hangs in the gutter to the left of the rail. A prompt, 
 fold arrow and a dot are such marks. A mark never pushes the words in.
 *Test: draw a vertical line on one column's rail. Every first letter in that column touches the
 line. Then make the screen a phone. The line keeps its distance from the column's inset.*
+
+The rhythm governs a line box and a position. A mark's own size is neither, and a type size
+is neither. A mark takes its size from the type beside it, and its position still derives
+from the grid.
 
 A column is drawn only while it has room for one of its items. One item is the shortest item
 the column holds, plus whatever the column pins above its items. A column with less room than
