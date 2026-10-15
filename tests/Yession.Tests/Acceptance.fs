@@ -594,6 +594,15 @@ let private renderRunningBy (author: ActorRef) : string =
           Woke = None; CausedBy = None }
     Support.render { representativeModel with Conversation = { representativeModel.Conversation with Recent = List.rev ([ running ]) } }
 
+/// What the theme paints the fixtures' green (SGR 32) as: the classes a themed run wears, named
+/// through `Style` so that no case here knows their Tailwind string. A run the theme gave NO class
+/// would be painted by the escape, or not at all, and every `Contains` of an empty string is true,
+/// so that is refused here rather than passed.
+let private themedGreen () : string =
+    match Style.ansiClasses { AnsiStyle.plain with Foreground = IndexedColour 2 } with
+    | "" -> failwith "Style.ansiClasses gives SGR 32 no class: a green run would wear no theme token"
+    | classes -> classes
+
 let private uiChecklistTests =
     testList "UI checklist" [
         // Pinned ONCE, over the whole shell, rather than remembered at each control: the
@@ -744,7 +753,7 @@ let private uiChecklistTests =
                   "terminal output", Dom.Hooks.terminalOutput
                   // The output is ANSI-coloured, and the colour is a THEME token — a raw
                   // ANSI colour would not clear the contrast floor on this ground.
-                  "terminal output colour is a theme token", "text-term-green"
+                  "terminal output colour is a theme token", themedGreen ()
                   "terminal output text", "total 0"
                   "queued terminal command", Dom.attr Dom.Hooks.terminalQueued "queue-ui-term"
                   "terminal composer input", Dom.attr Dom.Hooks.terminalInput "term-draft:term-ui:ada"
@@ -1256,7 +1265,7 @@ let private uiChecklistTests =
             Expect.isTrue (watching.Contains "vim ~/notes") "with what the program drew"
             // ANSI through the same theme tokens a block's output uses — a raw ANSI colour
             // would not clear the contrast floor on this ground.
-            Expect.isTrue (watching.Contains "text-term-green") "coloured by the theme, not by the escape"
+            Expect.isTrue (watching.Contains (themedGreen ())) "coloured by the theme, not by the escape"
             Expect.isFalse
                 (watching.Contains (Dom.attr Dom.Hooks.terminalBlock (BlockId.value blockId)))
                 "and the block history gives way to it"

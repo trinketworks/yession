@@ -147,6 +147,9 @@
     <!-- That a browser case waits through `Wait` and never through Playwright's own waits:
          a scan of the files git would commit under tests/, the way RepoLayout reads its tree. -->
     <Compile Include="PlaywrightWaits.fs" />
+    <!-- That no test knows a class the style module composes: a source scan of the suite's own
+         literals against Style.fs, cheap for the reason RepoLayout is. -->
+    <Compile Include="TailwindInTests.fs" />
     <!-- The hook that keeps agents on the task verbs (.claude/direct-tool-hook.sh), spawned with
          payloads. Beside RepoLayout, whose allowlist it is the reason for. -->
     <Compile Include="DirectToolHook.fs" />
