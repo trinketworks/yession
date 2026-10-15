@@ -849,7 +849,7 @@ to whatever still reproduces once the fixes have landed.
 - **E-3** (honesty) — The branch pane never ticks the branch START will launch on
 - **F-4** (honesty) — Move up on the head row is offered and does nothing
 - **G-1** (honesty) — Running dot pulses through 25% opacity and is caught dim at rest
-- **X-4** (honesty) — More than one red word on a screen
+- **X-4** (honesty) — More than one red word on a surface
 - **C-6** (one verb) — A status phrased as the button's verb
 - **C-13** (vocabulary) — The Claude and GitHub connect flows are two arrangements of the
   same parts

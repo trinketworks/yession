@@ -375,8 +375,10 @@ module Style =
     // because "some have borders" is how two conventions breed a third:
     //
     //   * FILLED — a solid `blue` rectangle with its text in `bg`. *The* verb of a surface,
-    //     and at most one of them on screen. While a flow is under way, the step it waits on
-    //     wears the fill and every other verb on that surface drops a weight.
+    //     and at most one of them per SURFACE — the count is per surface and not per screen,
+    //     because a screen holds several and each has its own one verb (docs/visual-design.md,
+    //     principle 3). While a flow is under way, the step it waits on wears the fill and
+    //     every other verb on that surface drops a weight.
     //   * BORDERED — ONE face, and only one: `ring` in the `edge` tone with `ink` text, and
     //     interaction brightens the ring. A STANDALONE act on the ground — it begins or ends
     //     something of its own (connect, interrupt, sign in, open the terminal list). A Metro
@@ -389,17 +391,24 @@ module Style =
     //     label step, `ink-dim` at rest, because the thing it rides is the subject.
     //   * TEXT — a status, not pressable at all. Those are the `status*` values above.
     //
-    // Two STATES cut across all four, and neither of them is `disabled`, which does not
+    // Three STATES cut across all four, and none of them is `disabled`, which does not
     // exist in this product (docs/visual-design.md, State):
     //
     //   * WAITING — nothing to act on YET. It stays in the layout and in focus order, its
     //     border drops to the quiet hairline, and its word stays legible. `btnWaiting` and
-    //     `btnWaitingSwap` are the bordered box's; `bareInkWaiting` is a bare verb's.
+    //     `btnWaitingSwap` are the bordered box's; `bareInkWaiting` is a bare verb's, one
+    //     role back from the `ink-dim` a bare verb rests in, so a verb you can press and one
+    //     you cannot are two pictures and not one.
     //   * HELD — the act has been pressed and is still landing. That is the `pressed:`
     //     variant every face below carries: `:active` OR `aria-busy` in ONE variant
     //     (app/tailwind.css), so a face cannot fill for the finger and forget the hold. A
     //     site adopts it by setting `aria-busy` from the model, and `whenReady`/`whenBusy`
     //     swap the word inside it.
+    //   * ARMED — a destructive act one press from done. ONE way, whatever weight it arms
+    //     from: the `err` FILL at rest (`btnIconBareDangerArmed`, `btnKillArmed`). A touch
+    //     has no hover, so the state a phone must see is worn rather than revealed. The fill
+    //     is not the surface's verb, so principle 3 does not count it, and it is a fill and
+    //     not a red WORD, so the one-red-word budget is untouched either.
     //
     // Nothing in this section writes two utilities on ONE property. Which of them wins is
     // stylesheet order rather than authoring order, so a base that sets a background, a
@@ -441,6 +450,12 @@ module Style =
     ///   * `bareInkWaiting` — nothing to act on: one role further back in ink, still
     ///     legible, still in focus order, and with no hover promise, because a control that
     ///     brightens under the hand promises something it cannot do.
+    ///
+    /// `ink-dim` at rest and `ink-faint` waiting are one step apart on purpose, and the step
+    /// is the whole of what the waiting face says (docs/visual-design.md, State). Both tones
+    /// rested at `ink-faint` until #1373, so waiting and ready were one picture and
+    /// principle 4's screenshot could not tell a verb you can press from one you cannot. Do
+    /// not bring the rest tone back down to meet the waiting one.
     ///
     /// They are ALTERNATIVES, never layers: each one names the same two properties, so a
     /// site picks exactly one of the three.
@@ -513,7 +528,7 @@ module Style =
               Stroke.hoverErr; "hover:text-err pressed:bg-err pressed:text-bg" ]
 
     /// The FILL: a solid `blue` rectangle with its text in `bg` — *the* verb of this
-    /// surface, and at most one on screen (docs/visual-design.md, Hierarchy of controls).
+    /// surface, and at most one on that surface (docs/visual-design.md, Hierarchy of controls).
     /// `btnPrimary` is the doctrine's own word for it: each surface has one PRIMARY act, and
     /// only that act wears the fill.
     ///
@@ -688,19 +703,28 @@ module Style =
     /// Un-arms itself back to `btnIconBareDanger` on its own (`armedMs`), so a
     /// press nobody confirms cannot leave a row looking primed for ever.
     let btnIconBareDangerArmed = cls [ btnIconBareBase; "cursor-pointer bg-err text-bg" ]
-    /// A terminal's kill, ARMED (`View.killControl`): a second press away from ending it, which
-    /// it says by being in the error red AT REST — a touch has no hover to hold the warning up —
-    /// and by saying what it will end: `kill`, then what is running there. A sentence in the
-    /// pane's light lowercase rather than a red slab of capitals: the red alone is the alarm,
-    /// and it is the one red word on screen because it is the one press nobody can take back.
-    /// The command after it is what tells it from the unarmed word reddening under the
-    /// pointer, in the weight a step up from it. The row verb's height, so the row does not move;
-    /// wider, growing leftwards from its right edge, so the second press lands where the
-    /// first did.
+    /// A terminal's kill, ARMED (`View.killControl`): the same state as the one above, so the
+    /// same way of drawing it — the `err` FILL at rest (docs/visual-design.md, State). A touch
+    /// has no hover to hold the warning up, so what a phone has to see is worn.
+    ///
+    /// It was a red WORD on a transparent box, which made two armed faces for one state: a
+    /// fill on the queue's delete, a reddened word here. Principle 5 allows one way per job,
+    /// and the doctrine names which — so the word's box fills. The reason to avoid the fill is
+    /// also gone: #1376 settled that an armed `err` fill is a different mark from the
+    /// surface's blue verb, which principle 3 counts alone; and a fill is not a red word, so
+    /// the one-red-word budget it used to spend is handed back to the surface.
+    ///
+    /// What it still says is what it will end: `kill`, then what is running there, in the
+    /// pane's light lowercase rather than a slab of capitals, because the fill is the alarm
+    /// and the sentence inside it is only the fact. The command after it is what tells it
+    /// from the unarmed word reddening under the pointer. The row verb's height, so the row
+    /// does not move; wider, growing leftwards from its right edge, so the second press lands
+    /// where the first did. `px-2` and not the unarmed verb's `px-1`: a fill has an edge, and
+    /// a word 4px from a painted edge reads as a word that overflowed it.
     let btnKillArmed =
-        cls [ "h-6 shrink-0 inline-flex items-center gap-1.5 px-1 cursor-pointer"; bareBox
-              "font-ui font-normal text-body lowercase whitespace-nowrap text-err transition-colors"
-              focusRing ]
+        cls [ "h-6 shrink-0 inline-flex items-center gap-1.5 px-2 cursor-pointer"; bareBox
+              "font-ui font-normal text-body lowercase whitespace-nowrap"
+              "bg-err text-bg transition-colors"; focusRing ]
     /// What the armed kill says is running, inside it: the command as typed — case kept — cut
     /// short rather than allowed to push the row's name out of its column.
     let killArmedRunning =
