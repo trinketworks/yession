@@ -1465,6 +1465,9 @@ module HttpClient =
 /// One header on a response this host writes. Closed, so each name is spelled once — here —
 /// rather than as a string at every call site, where `"cache-contol"` is a header nobody reads
 /// and nothing says so.
+///
+/// `x-content-type-options` has no case. Every response carries `nosniff` (`wire`, below), so
+/// a caller has nothing to say about it, and so nothing to get wrong.
 [<RequireQualifiedAccess>]
 type ResponseHeader =
     | CacheControl of string
@@ -1473,8 +1476,6 @@ type ResponseHeader =
     | ContentLength of int64
     | ContentSecurityPolicy of string
     | ContentType of string
-    /// `x-content-type-options`.
-    | ContentTypeOptions of string
     | ETag of string
     | Location of string
     | SetCookie of string
@@ -1491,7 +1492,6 @@ module ResponseHeader =
         | ResponseHeader.ContentLength _ -> "content-length"
         | ResponseHeader.ContentSecurityPolicy _ -> "content-security-policy"
         | ResponseHeader.ContentType _ -> "content-type"
-        | ResponseHeader.ContentTypeOptions _ -> "x-content-type-options"
         | ResponseHeader.ETag _ -> "etag"
         | ResponseHeader.Location _ -> "location"
         | ResponseHeader.SetCookie _ -> "set-cookie"
@@ -1503,11 +1503,25 @@ module ResponseHeader =
         | ResponseHeader.ContentDisposition v
         | ResponseHeader.ContentSecurityPolicy v
         | ResponseHeader.ContentType v
-        | ResponseHeader.ContentTypeOptions v
         | ResponseHeader.ETag v
         | ResponseHeader.Location v
         | ResponseHeader.SetCookie v -> v
         | ResponseHeader.ContentLength bytes -> string bytes
+
+    /// The head as it goes on the wire, name and value: the headers the writer named, and
+    /// `x-content-type-options: nosniff`, whatever it named.
+    ///
+    /// On every response, and decided HERE rather than by whoever writes a refusal. Most
+    /// refusals are `text/plain`, and several say back text the caller sent ("… is not a
+    /// session id: <what was sent>"). A browser that sniffs reads such a body as whatever it
+    /// looks like, which can be markup, running as this process's own origin. When each writer
+    /// had to remember the header, one route in thirty did.
+    ///
+    /// What `nosniff` costs is that a script or a stylesheet served under the wrong type is
+    /// refused rather than guessed at. `AssetFile.describe` gives each of those its type, for
+    /// that reason.
+    let wire (headers: ResponseHeader list) : (string * string) list =
+        ("x-content-type-options", "nosniff") :: [ for header in headers -> name header, value header ]
 
 /// The response this process's server is writing. `Writable` because it is where an upstream
 /// body is piped, and what gets destroyed when that body cannot finish.
@@ -1537,17 +1551,24 @@ module ResponseHeads =
 
     type ServerResponse with
 
-        /// Send the status line and these headers.
+        /// Send the status line and these headers, as `ResponseHeader.wire` puts them.
         member this.writeHead (statusCode: int, headers: ResponseHeader list) : unit =
             this.writeHeadWith (
                 statusCode,
-                OutgoingHeaders.ofPairs
-                    [ for header in headers -> ResponseHeader.name header, HeaderValue.Single (ResponseHeader.value header) ]
+                OutgoingHeaders.ofPairs [ for name, value in ResponseHeader.wire headers -> name, HeaderValue.Single value ]
             )
 
         /// Send the status line with an upstream's headers as they came (`headerEntries`,
         /// filtered): a proxy relays names it has no case for, and a value that repeated —
         /// a second `set-cookie` — goes out repeated.
+        ///
+        /// Not through `ResponseHeader.wire`, so this process adds no `nosniff` of its own. A
+        /// relayed head is somebody else's word about a body this process pipes and never
+        /// reads: github.com's answer to a sandbox's git (`GitGateway`), or a provider's API
+        /// answering a sandbox's `gh` (`CredentialProxy`). What the upstream said about
+        /// sniffing goes down with the rest, as it said it, so the client reads the answer it
+        /// would have had with nothing in between. Ours would be a claim about bytes nobody
+        /// here looked at. No product response is relayed: each one is written by `writeHead`.
         member this.relayHead (statusCode: int, headers: (string * HeaderValue)[]) : unit =
             this.writeHeadWith (statusCode, OutgoingHeaders.ofPairs headers)
 
