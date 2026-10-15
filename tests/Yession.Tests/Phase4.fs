@@ -1889,6 +1889,47 @@ let private openStoppedTests =
             }
     ]
 
+/// The floor under every address the Manager does not claim.
+///
+/// A browser that follows a stale bookmark or mistypes a path is holding a DOCUMENT, and the
+/// bare `text/plain` this used to fall through to is one with no viewport meta, no rail and no
+/// way back — a phone renders it at 980px, zoomed out, with nothing to press. What decides is
+/// what the request ASKED FOR rather than what its path looks like, so both halves are pinned:
+/// the reader that accepts HTML gets a page, and the one that does not still gets the line it
+/// reads. Neither launches anything — an unclaimed path is answered before any session exists.
+let private unroutedTests =
+    testList "An address the Manager does not claim" [
+        testCaseAsync "a browser navigating to one is answered with a page, and a way back" <|
+            async {
+                let! pm = managerWithUi "unrouted-page"
+                let at = sprintf "http://127.0.0.1:%d/not-a-route" pm.EndpointPort.Value
+                let! answer = TestHttp.getNoStore [ "accept", "text/html" ] at
+                do! pm.StopAll ()
+                Expect.equal answer.Status 404 "the status the address deserves"
+                Expect.stringContains
+                    (TestHttp.requiredHeader "content-type" answer)
+                    "text/html"
+                    "a document, because a browser handed text/plain may not show it at all"
+                Expect.stringContains
+                    answer.Body
+                    (sprintf "href=\"%s\"" (ManagerRoute.path ManagerRoute.Home))
+                    "and the way back to the page that can do something about it"
+            }
+
+        testCaseAsync "anything else is answered with the line its reader reads" <|
+            async {
+                let! pm = managerWithUi "unrouted-line"
+                let at = sprintf "http://127.0.0.1:%d/not-a-route" pm.EndpointPort.Value
+                let! answer = TestHttp.getNoStore [ "accept", "application/json" ] at
+                do! pm.StopAll ()
+                Expect.equal answer.Status 404 "the same status"
+                Expect.stringContains
+                    (TestHttp.requiredHeader "content-type" answer)
+                    "text/plain"
+                    "no page for a reader that never asked for one"
+            }
+    ]
+
 let private uiFlowTests =
     testList "Management UI flow (Step 25)" [
         testCaseAsync "create -> launch -> open -> stop -> resume -> crash, all over the management endpoint, with live status pushed on the rows stream" <|
@@ -3655,6 +3696,8 @@ let tests =
         Tag.needs "A hook delivery across the control channel (the relay end to end)" [ Tag.Ports ] (fun () -> hookDeliveryStreamTests)
         Tag.needs "MCP server set over SSE (reverse control leg)" [ Tag.Ports ] (fun () -> mcpStreamTests)
         Tag.needs "Session registry stream over SSE (Plan 09)" [ Tag.Ports; Tag.Native ] (fun () -> registryStreamTests)
+        // `Ports` only: an unclaimed address is answered before anything is launched.
+        Tag.needs "An address the Manager does not claim" [ Tag.Ports ] (fun () -> unroutedTests)
         Tag.needs "Management UI flow (Step 25)" [ Tag.Ports; Tag.Native ] (fun () -> uiFlowTests)
         Tag.needs "Archiving over the process boundary" [ Tag.Ports; Tag.Native ] (fun () -> archiveFlowTests)
         Tag.needs "Is the session reachable yet (Plan 11)" [ Tag.Ports; Tag.Native ] (fun () -> readinessTests)

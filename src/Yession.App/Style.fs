@@ -224,9 +224,10 @@ module Style =
     /// suite can pin.
     let bodyDim = "font-light text-body text-ink-dim"
     let small = "font-light text-small text-ink-faint"
-    /// `small` in the err tone: a status line whose word is a fault. The one status on the
-    /// Manager's list that keeps a colour — running and stopped are plain text, and what tells
-    /// them apart is the name above them.
+    /// `small` in the err tone: a CAPTION whose subject is a fault — the exception `paneSays`
+    /// names, for a line a person has to do something about. It is not a status: a status is
+    /// the caps voice with a dot (`statusErr`), which is what the Manager's registry wears now
+    /// that its states speak in that voice rather than in a sentence's.
     let smallErr = "font-light text-small text-err"
     /// The caps voice — one size, one tracking, semibold — worn by every label, status,
     /// button, and author line. Colour composes at the use site.
@@ -278,6 +279,23 @@ module Style =
 
     let mono = "font-terminal text-code text-ink"
     let monoOut = "font-terminal text-code-sm text-ink-faint whitespace-pre-wrap"
+    /// The mono face as PLUMBING: a minted id, an address, a timestamp — a machine's string
+    /// beside a human's name, so it recedes to the faintest ink that still means something.
+    /// Written once because the Manager's three tables spelled it out at six sites, each free
+    /// to drift a step (principle 5: one way per job).
+    let monoFaint = "font-terminal text-code text-ink-faint"
+
+    /// The body voice in the err tone: the one wrong thing on a surface said as a SENTENCE
+    /// rather than as a status — a refusal page's reason, the opening screen's giving up.
+    /// `statusErr` is the caps voice and is for a WORD; a sentence set in capitals is the
+    /// wall of text the caps rule above warns about.
+    let bodyErr = "font-light text-body text-err"
+
+    /// A count beside a label — how many MCP servers, how many hook endpoints: the label's
+    /// own voice and ink, with the figures on one width so a changing number does not move
+    /// the words. The two sites that needed it had each hand-written the caps voice, one of
+    /// them at a tracking the ramp does not have.
+    let labelCount = label + " tabular-nums"
 
     // --- Statuses: text only — never filled, never boxed --------------------------------
 
@@ -1109,6 +1127,13 @@ module Style =
     /// caps voice of the word around it is undone here rather than composed.
     let startStatusId = "font-terminal text-code text-ink-dim normal-case tracking-normal"
     let startLinks = "mt-10 " + body
+    /// What the screen says when it gives up: a SENTENCE — why it stopped waiting and what to
+    /// look at — so the body voice in the err tone and not the caps status voice of the word it
+    /// replaces. The caps voice is for a short label, and a stack of it is a wall of text
+    /// (docs/visual-design.md, Type); this line is two sentences long when a proxy has not
+    /// mapped the session. Centred on the screen's one column, and held to the measure, because
+    /// the thing it replaces was one word wide.
+    let startFailed = cls [ bodyErr; "mt-7 max-w-measure text-center" ]
 
     // --- Workspace regions ---------------------------------------------------------------
     // Two bits live on the root <html> element, outside `#app`, so a re-render never fights the
@@ -4174,3 +4199,107 @@ module Style =
     /// The app's own stylesheet is neither, and a page that deferred it would paint unstyled.
     let deferredHeadTags (styleSheetUrl: string) (hook: string) =
         sprintf "<link rel=\"stylesheet\" href=\"%s\" media=\"not all\" %s>" styleSheetUrl hook
+
+    // --- The Manager's pages: the band, the rail and the registry tables ------------------
+    //
+    // The management surface is a DOCUMENT rather than a shell — a band, then sections of
+    // tables on one rail — and it is the only surface in the product that lists records in a
+    // table. It used to spell all of that in raw utilities at forty-odd sites, which is how it
+    // came to be a second design beside the session's: a band of its own height that stayed
+    // 88px on a phone, rows with their own rule and hover tone, heads in no voice at all, and
+    // a layout switched on a reading column's breakpoint while the band was switched on
+    // nothing. These are the values it wears instead, and nothing here is a second way to draw
+    // something the sections above already draw — a table row is not a `rowBase` row (that is
+    // a surface with a leading edge), and the band is this file's only other wearer of
+    // `spacing-band`.
+
+    /// The band every Manager page shares: `spacing-band` tall, `spacing-band-phone` on a
+    /// phone, its contents standing on the band's bottom edge so the lockup sits where the
+    /// shell's wordmark does (docs/visual-design.md, Space). The hairline under it runs the
+    /// width of the viewport; only what is IN it keeps to the rail.
+    ///
+    /// OPAQUE, and sticky over a registry that scrolls under it. It wore the `acrylic` for a
+    /// while, which made the one band in the product that is frosted grey where every other
+    /// is black — and, because `acrylic`'s rim is a border COLOUR for all four sides, it also
+    /// put two `border-*` colours on one element and left which one painted the hairline to
+    /// stylesheet order. The blur is for a surface that floats over another; this is the page's
+    /// own head.
+    ///
+    /// `phone:`, not a width: a phone turned sideways is still a phone, and this is the shell's
+    /// layout question rather than a reading column's (docs/visual-design.md, Phone and wide).
+    let pageBand =
+        cls [ "h-band phone:h-band-phone shrink-0 sticky top-0 z-ground bg-bg"
+              "flex items-end pb-5 phone:items-center phone:pb-0"
+              Stroke.dividerBottom ]
+
+    /// The lockup in that band. On a phone the band is one thumb-sized row, which cannot hold
+    /// 32px type beside a 56px mark — so the mark steps down to the row and the wordmark goes,
+    /// exactly as the session's own phone band drops it (`header`). What is left says the same
+    /// two things: whose product this is, and which page.
+    let pageBandMark = lockupMark + " phone:w-8 phone:h-8 phone:mb-0"
+
+    /// The page's content rail: the registry's measure, centred, with `spacing-rail` between
+    /// its text and the page's edge and the shell's own narrower gutter on a phone. Worn by
+    /// the band's CONTENTS and by the sections under it, as one value, so the lockup and the
+    /// table's left edge cannot drift apart.
+    ///
+    /// The measure is the registry's, not a reading column's: `name` is the only elastic
+    /// column and it gets whatever the fixed ones leave, so at the 896px this used to be every
+    /// session rendered as a letter and an ellipsis.
+    let pageRail = "max-w-6xl w-full mx-auto px-rail phone:px-4"
+
+    /// The foot of a Manager page: the build, on the same rail, under whatever the page holds
+    /// (`buildMark`).
+    let pageFoot = cls [ pageRail; "shrink-0 pb-6" ]
+
+    /// A standalone page's one column — a refusal, a 404: the reading measure on the page's
+    /// rail, with the band above it and the build below, so a page that says no is the same
+    /// product as the registry.
+    let pageProse =
+        cls [ "max-w-measure w-full mx-auto px-rail phone:px-4 py-10 flex flex-col gap-3" ]
+
+    /// The way off a standalone page, and the way back from the opening screen: the one
+    /// hyperlink face (`proseLink`) with the product's focus ring on it — a link with none is
+    /// a control the keyboard cannot see, and the floor is never traded — and a thumb's target
+    /// on a phone, where the words alone are 24px of glass.
+    let pageWayBack = cls [ proseLink; focusRing; "inline-flex items-center phone:min-h-touch" ]
+
+    /// The hairline that tells one listed record from the next, and the only rule these tables
+    /// draw: under the heads, and under every row (principle 2 — chrome shows structure).
+    let tableRule = Stroke.dividerBottom
+
+    /// A row you can act on: the same hairline, and the surface lifts a tone while the pointer
+    /// is in it — the lift says "this row", the edge says nothing, which is the rule every
+    /// other listed thing in this file follows (`rowLift`). A row that is a RECORD and nothing
+    /// more wears `tableRule` alone: a surface that brightens under the hand promises a press
+    /// that is not there.
+    let tableRow = cls [ tableRule; "hover:bg-surface transition-colors"; Motion.quick ]
+
+    /// A column's head: the label voice, which is the one voice this product has for a head.
+    /// Both of these wear it, including the one that is also the sort control — `sortHeader`
+    /// composes the same voice, and the two sat 2px apart for as long as only one of them did.
+    let tableHead = cls [ label; "py-2 pr-4 align-baseline" ]
+    /// The head over the rail of verbs, whose padding is on the other side.
+    let tableHeadRail = cls [ label; "py-2 pl-4 align-baseline" ]
+
+    /// A cell. Its first line of text stands on the row's baseline — never box-centred, which
+    /// is what left a one-line cell aligned to neither line of the two-line one beside it
+    /// (docs/visual-design.md, Space: rows align on the text baseline).
+    let tableCell = "py-3 pr-4 align-baseline"
+    /// A cell whose content is several lines of its own (a hook endpoint's secrets): there is
+    /// no single line for it to stand on, so it starts at the top of the row.
+    let tableCellTop = "py-3 pr-4 align-top"
+    /// The last cell, on the table's right rail, holding the row's verbs: aligned to the top,
+    /// because the verbs ride the row's FIRST line (`tableRailVerbs`) rather than the middle
+    /// of however many lines the row has.
+    let tableCellRail = "py-3 pl-4 align-top"
+    /// The verbs inside a rail cell: at the row's trailing edge, on its first line — 24px, the
+    /// name's own line box, so a verb arriving or leaving moves nothing. 10px apart rather than
+    /// 8: a bare icon's hit area reaches 10px past its box (`btnIconBareTouch`), and at 8 its
+    /// first two pixels would sit over the word beside it.
+    let tableRailVerbs = "flex items-center justify-end gap-2.5 h-6"
+
+    /// What a table says over nothing, where the table stays because its heads carry a control
+    /// (the registry's sort): one line in the small voice with room around it. The only cell in
+    /// these tables that is not on a row's baseline, because there is no row.
+    let tableEmpty = cls [ small; "py-10 text-center" ]
