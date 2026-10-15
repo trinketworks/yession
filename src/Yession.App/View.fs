@@ -766,18 +766,21 @@ module View =
                            autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
                            .value={claude.Code}
                            @input={EvVal(fun v -> dispatch (ClaudeCodeTyped v))} />
-                    <div class="flex gap-2">
+                    <div class="{Style.settingsActions}">
                       <button type="button" class="{Style.btn}" data-claude-complete @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Complete))}>Complete</button>
                       <button type="button" class="{Style.btn}" data-claude-cancel @click={Ev(fun _ -> dispatch (ClaudeFlowMsg ClaudeIdle))}>Cancel</button>
                     </div>"""
             | ClaudeIdle ->
                 html $"""
                     <label class="{Style.label}" for="claude-scope">sign in for</label>
-                    <select id="claude-scope" class="{Style.field}" data-claude-scope aria-label="Sign-in scope"
-                            @change={EvVal(fun v -> dispatch (ClaudeScopeChosen v))}>
-                      <option value="mine" ?selected={claude.Scope = "mine"}>{sharedScopeLabel (claude.Status |> Option.map (fun panel -> panel.Owner))}</option>
-                      <option value="session" ?selected={claude.Scope = "session"}>This session only</option>
-                    </select>
+                    <div class="{Style.fieldSelectWrap}">
+                      <select id="claude-scope" class="{Style.fieldSelect}" data-claude-scope aria-label="Sign-in scope"
+                              @change={EvVal(fun v -> dispatch (ClaudeScopeChosen v))}>
+                        <option value="mine" ?selected={claude.Scope = "mine"}>{sharedScopeLabel (claude.Status |> Option.map (fun panel -> panel.Owner))}</option>
+                        <option value="session" ?selected={claude.Scope = "session"}>This session only</option>
+                      </select>
+                      <span class="{Style.fieldSelectMark}">{Icon.caret}</span>
+                    </div>
                     <button type="button" class="{Style.btn}" data-claude-connect @click={Ev(fun _ -> dispatch (ClaudePressedMsg ClaudePress.Connect))}>Connect Claude</button>
                     <label class="{Style.label} pt-2" for="claude-token">setup token / api key</label>
                     <input id="claude-token" type="password" class="{Style.field}" data-claude-token placeholder="sk-ant-…"
@@ -840,18 +843,21 @@ module View =
                               aria-label="{if justCopied then "Device code copied" else "Copy the device code"}"
                               @click={Ev(fun _ -> dispatch (CopyMsg (Dom.Hooks.githubUserCode, userCode)))}>{if justCopied then Icon.check else Icon.copy}</button>
                     </div>
-                    <div class="flex gap-2">
+                    <div class="{Style.settingsActions}">
                       <a class="{Style.btnPrimary}" href="{verificationUri}" target="_blank" rel="noreferrer" data-github-authorize>Approve on github.com</a>
                       <button type="button" class="{Style.btn}" data-github-cancel @click={Ev(fun _ -> dispatch (GitHubFlowMsg GitHubIdle))}>Cancel</button>
                     </div>"""
             | GitHubIdle ->
                 html $"""
                     <label class="{Style.label}" for="github-scope">sign in for</label>
-                    <select id="github-scope" class="{Style.field}" data-github-scope aria-label="GitHub sign-in scope"
-                            @change={EvVal(fun v -> dispatch (GitHubScopeChosen v))}>
-                      <option value="mine" ?selected={github.Scope = "mine"}>{sharedScopeLabel (github.Status |> Option.map (fun panel -> panel.Owner))}</option>
-                      <option value="session" ?selected={github.Scope = "session"}>This session only</option>
-                    </select>
+                    <div class="{Style.fieldSelectWrap}">
+                      <select id="github-scope" class="{Style.fieldSelect}" data-github-scope aria-label="GitHub sign-in scope"
+                              @change={EvVal(fun v -> dispatch (GitHubScopeChosen v))}>
+                        <option value="mine" ?selected={github.Scope = "mine"}>{sharedScopeLabel (github.Status |> Option.map (fun panel -> panel.Owner))}</option>
+                        <option value="session" ?selected={github.Scope = "session"}>This session only</option>
+                      </select>
+                      <span class="{Style.fieldSelectMark}">{Icon.caret}</span>
+                    </div>
                     <button type="button" class="{Style.btn}" data-github-connect @click={Ev(fun _ -> dispatch (GitHubPressedMsg GitHubPress.Connect))}>Connect GitHub</button>
                     <label class="{Style.label} pt-2" for="github-token">personal access token</label>
                     <input id="github-token" type="password" class="{Style.field}" data-github-token placeholder="github_pat_…"
@@ -1407,7 +1413,7 @@ module View =
                 // follows through. One mis-tap next to reorder used to be irreversible; now
                 // it is a press that does nothing but ask again.
                 let armed = model.QueueDeleteArmed = Some id
-                let deleteFace = if armed then Style.btnIconBareDangerArmed else Style.btnIconBareDanger
+                let deleteFace = if armed then Style.queueVerbDeleteArmed else Style.queueVerbDelete
                 let deleteLabel = if armed then "Confirm delete" else "Delete"
                 let onDelete = if armed then DeleteQueuedMsg id else ArmQueueDeleteMsg (Some id)
                 html $"""
@@ -1415,9 +1421,9 @@ module View =
                       <span class="{Style.cls [ Style.avatarSm; Entity.actorMark model (PeerRef entry.Author) ]}"></span>
                       <div class="{Style.queueInput}" data-rich-body="{BodyKey.queued id}" data-rich-readonly="false" data-queue-input="{QueueId.value id}"></div>
                       <div class="{Style.queueTools}">
-                        <button type="button" class="{Style.btnIconBare}" aria-label="Move up" data-queue-up="{QueueId.value id}" @click={Ev(fun _ -> match QueueOrder.moveUp synced.Queue id with Some o -> dispatch (ReorderQueuedMsg (id, o)) | None -> ())}>{Icon.up}</button>
-                        <button type="button" class="{Style.btnIconBare}" aria-label="Move down" data-queue-down="{QueueId.value id}" @click={Ev(fun _ -> match QueueOrder.moveDown synced.Queue id with Some o -> dispatch (ReorderQueuedMsg (id, o)) | None -> ())}>{Icon.down}</button>
-                        <button type="button" class="{Style.cls [ deleteFace; Style.queueDeleteGap ]}" aria-label="{deleteLabel}" data-queue-delete="{QueueId.value id}" data-queue-delete-armed="{if armed then "true" else "false"}" @click={Ev(fun _ -> dispatch onDelete)}>{Icon.close}</button>
+                        <button type="button" class="{Style.queueVerb}" aria-label="Move up" data-queue-up="{QueueId.value id}" @click={Ev(fun _ -> match QueueOrder.moveUp synced.Queue id with Some o -> dispatch (ReorderQueuedMsg (id, o)) | None -> ())}>{Icon.up}</button>
+                        <button type="button" class="{Style.queueVerb}" aria-label="Move down" data-queue-down="{QueueId.value id}" @click={Ev(fun _ -> match QueueOrder.moveDown synced.Queue id with Some o -> dispatch (ReorderQueuedMsg (id, o)) | None -> ())}>{Icon.down}</button>
+                        <button type="button" class="{deleteFace}" aria-label="{deleteLabel}" data-queue-delete="{QueueId.value id}" data-queue-delete-armed="{if armed then "true" else "false"}" @click={Ev(fun _ -> dispatch onDelete)}>{Icon.close}</button>
                       </div>
                     </article>""")
         let band = if List.isEmpty entries then Style.queueEmpty else Style.queue
@@ -1619,17 +1625,18 @@ module View =
             // blocked, they just have not typed yet. The weight is the signal; the control
             // stays whole. `Resilience.fs` pins the same promise from the other direction.
             //
-            // Same place in FOCUS order always, even where it is not the same place on
-            // screen: on a phone (`Style.draftCommit`) this row leaves the line and sits
-            // below it, and stands only once there is a draft for it to act on.
+            // Same place in FOCUS order always, and now the same place on SCREEN always: on a
+            // phone (`Style.draftBox`) this row leaves the line and sits below it, and it
+            // stands there whether or not there is a draft. The weight is what changes.
+            //
+            // The row used to come and go with the draft, so the one verb the composer is for
+            // was off a phone's screen until the message was already written. Two earlier
+            // tries at this are why the comment is long: revealing it on `focus-within` made
+            // it unreachable (focus leaves on the tap that reaches for it, and iOS gives a
+            // button no focus at all), and fading it with the draft left it in the tab order
+            // while invisible. Standing is the answer both of those were circling.
             let sendClass =
                 if hasContent then Style.btnComposerSend else Style.btnComposerSendWaiting
-            // The row follows the draft rather than the composer's focus, and that is this
-            // control's whole reachability: a row revealed by `focus-within` is withdrawn by
-            // the very press that reaches for it, wherever a button does not take focus from
-            // a tap. See `Style.draftCommit` for what that cost.
-            let commitClass =
-                if hasContent then Style.draftCommitReady else Style.draftCommit
             let author =
                 if target = myPeer then Lit.nothing
                 else html $"""<span class="{Style.draftAuthor}">{ClientModel.nameOf target model}'s message</span>"""
@@ -1710,7 +1717,7 @@ module View =
                                 aria-label="{Dom.Text.attachNamed}" @click={Ev(choose)}>{Dom.Text.attach}</button>
                       </span>
                     </div>
-                    <div class="{commitClass}">
+                    <div class="{Style.draftCommit}">
                       <span class="{Style.draftEditors}">{editors target}</span>
                       <button type="button" class="{sendClass}" aria-keyshortcuts="Control+Enter"
                               title="{Dom.Text.composerKeys}"

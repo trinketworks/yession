@@ -2646,6 +2646,24 @@ module Style =
 
     // --- Chapters: where the session divides ------------------------------------------
 
+    /// A bare icon verb's thumb target, on a phone and only there: the box pads out to
+    /// `spacing-touch` and pays the padding straight back as margin, so the BORDER box is
+    /// 44px — which is what a finger lands on, and what the focus ring is drawn round — while
+    /// the box the flow sees, and the glyph centred in it, are exactly where they were. The
+    /// doctrine asks for precisely this: a control with an edge grows on a phone, a bare verb
+    /// grows only its hit area (docs/visual-design.md, Space).
+    ///
+    /// Two such verbs side by side must keep 20px between their boxes, or their targets
+    /// overlap and the later one in the document steals the other's edge. `queueTools` spends
+    /// that gap; `itemActions` has no neighbour to clear.
+    ///
+    /// Its home is really the button vocabulary, beside `btnIconBareTouch` — which grows the
+    /// same 44px with a `::before` overlay instead, for a verb whose neighbours are far
+    /// enough away that an overlay can reach past the box without landing on one. The two are
+    /// one job drawn two ways, which principle 5 does not admit; this pass may not edit that
+    /// section, so the fold-back is left said rather than done.
+    let private hitTouch = "phone:w-touch phone:h-touch phone:p-2.5 phone:-m-2.5"
+
     /// The rule a chapter draws across the transcript.
     ///
     /// This replaced a RAIL: hairlines in the timeline's left padding, each placed by
@@ -2773,8 +2791,15 @@ module Style =
     /// `opacity-60`, lifted by hover — and a phone never hovers, so on the one device where
     /// this is the only way to the menu it sat at a dimming the doctrine does not allow
     /// (dimming is a role, never opacity).
+    ///
+    /// On a phone its HIT AREA is `spacing-touch`, and only its hit area: a bare verb takes
+    /// the height of what it rides and grows the target instead (docs/visual-design.md,
+    /// Space). `hitTouch` is that growth — padding out to 44px, paid straight back as margin,
+    /// so the glyph stays on the first line it is centred on, and nothing in the flow moves.
+    /// 24px is WCAG 2.5.8's minimum exactly, and on a phone this is the only way to a
+    /// message's actions, so the minimum is not where it should rest.
     let private itemActionsBase =
-        cls [ "absolute w-6 h-6 flex items-center justify-center"
+        cls [ "absolute w-6 h-6 flex items-center justify-center"; hitTouch
               "bg-transparent cursor-pointer text-ink-faint hover:text-ink transition-colors duration-150 ease-out"
               focusRing ]
     let itemActions = cls [ itemActionsBase; "right-1 top-2" ]
@@ -2915,9 +2940,12 @@ module Style =
     /// why) so it paints centred on the one-pixel line of the cause it hangs under, rather
     /// than half a pixel to its side. Its motion is a beat — one dip in scale and a rest —
     /// on the tempo the agent's cube keeps, so the two read as the same kind of statement.
+    /// Where the beat is refused, the mark steps back a ROLE rather than fading: dimming is
+    /// `ink-dim` → `ink-faint`, never an opacity, which breaks the contrast floor and is what
+    /// this used to spend (`motion-reduce:opacity-60`) — docs/visual-design.md, Colour.
     let actNoteRunningOther =
         "inline-block mark-round rounded-full bg-ink-dim "
-        + "animate-beat motion-reduce:animate-none motion-reduce:opacity-60"
+        + "animate-beat motion-reduce:animate-none motion-reduce:bg-ink-faint"
     /// Sentence case, deliberately. This wore the caps LABEL voice, and a label voice is for
     /// two or three words: `STARTED SANDBOX WORK (DOCKER), FORWARDING ANTHROPIC_API_KEY FROM
     /// ADA` is a line nobody reads, because uppercase flattens the word shapes a reader scans
@@ -3083,8 +3111,16 @@ module Style =
     /// the newest line re-pinned twelve times over, which the cold-open bench measured as six
     /// times the paints of a strip that simply arrived. Opacity and translation move nothing
     /// else on the page.
+    ///
+    /// Its HEIGHT asks the shell's own question (`phone:`), and spends the touch token rather
+    /// than a number: a thumb's row is a thumb's row however the phone is held, and `max-md:`
+    /// said no at 844x390, where the strip's two controls were 32px under a finger.
+    /// Its GUTTER is still `max-md:`, and deliberately for now: it is not a question of its
+    /// own but an echo of `timeline`'s, so the word stands on the rail the messages above it
+    /// start on, and the two have to move together or not at all. The timeline is another
+    /// section's to move.
     let composerTray =
-        cls [ "shrink-0 flex items-center h-8 max-md:h-11 pl-8 pr-4 max-md:pl-4 bg-panel"
+        cls [ "shrink-0 flex items-center h-8 phone:h-touch pl-8 pr-4 max-md:pl-4 bg-panel"
               "transition-[translate,opacity] starting:translate-y-1 starting:opacity-0"; Motion.pace ]
 
     /// The label voice (`caps`), not Send's step up: these are controls for the timeline
@@ -3147,27 +3183,55 @@ module Style =
     /// A full-bleed band on the composer's gutter. The surface tone is what marks it (the
     /// timeline's ground is `bg`, the dock's bands are `surface`), and interaction lifts the
     /// surface exactly as every other actionable row here does.
+    ///
+    /// A FLOOR height, not a fixed one. It was `h-10`, and a queued message is a message:
+    /// at 390 the second one in the fixture ("check the phone layout too — the pane was
+    /// clipped last time") wrapped, and its second line was painted under the next band,
+    /// unreadable. A queue you cannot read is a queue you cannot edit, which is the one
+    /// thing it is for. `py-2` holds the one-line row at exactly the 40px it was — the
+    /// verbs' 24px box plus 16 — and every further line simply makes the band taller.
     let queueItem =
-        cls [ "group flex items-center gap-3 h-10 px-4 bg-surface transition-colors"; rowLift ]
+        cls [ "group flex items-center gap-3 min-h-10 py-2 px-4 bg-surface transition-colors"; rowLift ]
 
     /// `focus-within`, not `focus`: the caret lands in the editor MOUNTED INSIDE this host,
     /// so `focus:` on the host never fires and the brightening never happened.
+    ///
+    /// `min-h-5`, never `h-5`: the fixed line was the other half of the clipping above — a
+    /// 20px host cannot report a two-line draft's height to the band around it, so the band
+    /// had nothing to grow by and the words left the box.
     let queueInput =
-        cls [ "flex-1 min-w-0 self-center h-5"; fieldBare
+        cls [ "flex-1 min-w-0 self-center min-h-5"; fieldBare
               messageVoice false
               "text-small leading-5 text-ink-dim focus-within:text-ink"; touchType ]
 
-    let queueTools =
-        "flex gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 max-md:opacity-100 transition-opacity"
+    /// The row's verbs, AT REST. They used to be `opacity-0` until the pointer or the caret
+    /// reached the row, with a `max-md:` case putting them back for a touch screen — and that
+    /// case asked the wrong question: `max-md` is a width, so a phone turned sideways (844
+    /// wide) answered no, and the only way to reorder or drop a queued message was not drawn
+    /// at all on a device with no hover to reveal it. Worn, not hinted (docs/visual-design.md,
+    /// principle 4), and the doctrine already names the rest a row's verb keeps: bare, in
+    /// `ink-dim`, which is what `btnIconBare` rests at.
+    ///
+    /// `phone:gap-5` is what the grown targets need (`hitTouch`): 20px between the boxes is
+    /// exactly 44px of pitch, so three verbs in a row tile their targets instead of stealing
+    /// each other's edges.
+    let queueTools = "flex gap-1 phone:gap-5"
 
-    /// Extra clearance before Delete, on top of the `gap-1` the row already spends between
+    /// Move-up and move-down. A verb riding a listed row, so bare, and a thumb's target on a
+    /// phone without the band moving to make room for it.
+    let queueVerb = cls [ btnIconBare; hitTouch ]
+
+    /// Extra clearance before Delete, on top of the gap the row already spends between
     /// Move-up and Move-down. Reorder and delete used to sit in one evenly-spaced row of
     /// three — a destructive control 4px from a frequent one, with nothing between them but
-    /// the icon each wears. This does not grow the HIT area (that trick, `btnIconBareTouch`,
-    /// is for a row whose icon has no neighbour to overlap; delete has one on each side of
-    /// it in spirit even though reorder is the only real neighbour) — it grows the DISTANCE
-    /// a thumb has to travel wrong to reach it instead.
-    let queueDeleteGap = "ml-2"
+    /// the icon each wears. This is not the hit area (that is `hitTouch`, which every verb
+    /// here now wears) — it grows the DISTANCE a thumb has to travel wrong to reach the one
+    /// that destroys.
+    let private queueDeleteGap = "ml-2"
+    /// Delete, and delete ARMED — a second press from dropping the message, which it says by
+    /// wearing the err fill at rest, because a touch has no hover to hold a warning up.
+    let queueVerbDelete = cls [ btnIconBareDanger; hitTouch; queueDeleteGap ]
+    let queueVerbDeleteArmed = cls [ btnIconBareDangerArmed; hitTouch; queueDeleteGap ]
 
     // --- Composer: the one gradient in the product lives on its focus edge --------------------
     // A COMPOSER IS A BAND, not a box on a ground. It used to be a bordered box inside a padded
@@ -3231,10 +3295,16 @@ module Style =
     ///
     /// Carries no fill and no edge of its own any more: the band it sits in is the surface.
     ///
-    /// `max-md:flex-col`, added since: on a phone the row becomes a column, Send and
-    /// Discard (`draftCommit`, below) drop under the text instead of squeezing it, and
-    /// the text gets the width back. Above `md` the row shape stands as written above.
-    let draftBox = "relative flex items-end max-md:flex-col max-md:items-stretch"
+    /// `phone:flex-col`, added since: on a phone the row becomes a column, the verbs
+    /// (`draftActionsRow`, below) drop under the text instead of squeezing it, and the text
+    /// gets the width back. On a wide screen the row shape stands as written above.
+    ///
+    /// The question is `phone:`, not `max-md:`, and the comment above this one used to say
+    /// "on a phone" while asking about width. A phone turned sideways is 844 wide, so it was
+    /// given the wide screen's row while `draftInput` inside it was already drawing a phone's
+    /// paddings — one composer answering two different questions about the same screen
+    /// (docs/visual-design.md, Phone and wide).
+    let draftBox = "relative flex items-end phone:flex-col phone:items-stretch"
 
     /// Chrome-less by construction (`fieldBare`): the band carries the tone and the rule, and
     /// the focus signal is the gradient growing across it.
@@ -3304,95 +3374,90 @@ module Style =
     /// were 32px squares and needed 4px under them to reach that centre — the correction went
     /// out with the glyphs (`btnComposerBox`, above, is the line's own height).
     ///
-    /// On a phone this row leaves the line entirely, same as before, but no longer owns a
-    /// full line of its own: it shares one with the model picker (`draftActionsRow`, below)
-    /// rather than stacking under it as a second line — `max-md:w-full max-md:justify-end`
-    /// used to push its buttons to the far edge of a line THIS row had entirely to itself;
-    /// now the picker is the other half of that line, so sizing to its own content and
-    /// letting the row's `justify-between` do the push is what keeps it at the trailing
-    /// edge without claiming width the picker needs. It sits BELOW the text (`draftBox`'s
-    /// `max-md:flex-col` puts it there in document order). A row that was always there
-    /// spent a band of every phone screen on a control a thumb reaches once per message, so
-    /// it comes and goes — and WHAT it comes and goes with is the whole of this bug's story.
+    /// On a phone this row leaves the line entirely, but no longer owns a full line of its
+    /// own: it shares one with the model picker (`draftActionsRow`, below) rather than
+    /// stacking under it as a second line — `phone:w-full phone:justify-end` used to push its
+    /// buttons to the far edge of a line THIS row had entirely to itself; now the picker is
+    /// the other half of that line, so sizing to its own content and letting the row's
+    /// `justify-between` do the push is what keeps it at the trailing edge without claiming
+    /// width the picker needs. It sits BELOW the text (`draftBox`'s `phone:flex-col` puts it
+    /// there in document order).
     ///
-    /// It used to be `group-focus-within`, and that could not work. `focus-within` is false
-    /// the instant focus leaves the composer, and pressing a button is how focus leaves: on
-    /// iOS Safari a `<button>` takes no focus from a tap at all, so the editor's blur lands
-    /// FIRST, the row goes `pointer-events-none` under the finger, and the press arrives at
-    /// whatever was behind it — the timeline. Measured: with a draft typed and the editor
-    /// blurred, `elementFromPoint` at Send's own centre answered the `<article>` behind it.
-    /// Send did nothing, the composer collapsed, and that was the whole of what a person saw.
+    /// And it STANDS. It used to come and go with the draft — clear and deaf to presses while
+    /// there was nothing to send — so on a phone at rest the composer offered a model, an
+    /// attach, and no verb at all: the one control the surface is FOR was off the screen
+    /// until you had already written the message. That is not a control waiting, it is a
+    /// control leaving, and a state has to be visible at rest (docs/visual-design.md,
+    /// principle 4). Send waits where it stands instead, at the weight of a thing with
+    /// nothing to do (`btnComposerSendWaiting`), which is the face the doctrine names for
+    /// exactly this and which Send already wore on every screen wide enough to keep it.
+    /// Nothing is gated here any more, so there is one value rather than a pair.
     ///
-    /// So the row follows the DRAFT, not the focus: it stands exactly while there is
-    /// something for it to do (`draftCommitReady`), which is the rule Send's two faces are
-    /// already computed from. Nothing about a press can retract it, because a press cannot
-    /// empty the draft before the press lands. An empty composer still gives the room back,
-    /// which is what the coming-and-going was for; it simply no longer offers a control with
-    /// nothing to act on.
+    /// The fade it waited behind took the row out of the picture and left it in the TAB
+    /// order — `opacity-0` hides nothing from a keyboard — so a keyboard reached a control
+    /// nobody could see. The doctrine's waiting face has no such gap: it stays in the layout
+    /// and in focus order because it is still there to be pressed.
+    ///
+    /// Before the fade it was `group-focus-within`, and that could not work either.
+    /// `focus-within` is false the instant focus leaves the composer, and pressing a button is
+    /// how focus leaves: on iOS Safari a `<button>` takes no focus from a tap at all, so the
+    /// editor's blur lands FIRST, the row goes `pointer-events-none` under the finger, and the
+    /// press arrives at whatever was behind it — the timeline. Measured: with a draft typed
+    /// and the editor blurred, `elementFromPoint` at Send's own centre answered the
+    /// `<article>` behind it. Send did nothing, the composer collapsed, and that was the whole
+    /// of what a person saw.
     ///
     /// Interrupt rode this row for a while, which gave it a second reason to stand (a turn
-    /// running). It stands in the composer's tray now (`composerTray`), so the draft is the
-    /// row's only reason again.
+    /// running). It stands in the composer's tray now (`composerTray`), so the draft is
+    /// Send's own business and the row has no reason to move at all.
     ///
-    /// It used to go GONE (`max-h-0`) as well as clear, back when the row had a line to
-    /// itself and an invisible row of buttons was two thirds of a collapsed composer. The
-    /// picker shares the line now and holds its height, so clear is all gone needs to be.
-    let private draftCommitBase =
-        cls [ "shrink-0 flex items-center gap-1 pr-1"
-              // Opacity alone on a phone, never height. The row shares its line with the model
-              // picker (`draftActionsRow`), which holds that line at 40px whether Send shows or
-              // not — so growing this row (it used to go `max-h-0` → `max-h-12` and gain a
-              // `pt-1`) moved nothing it needed to and four things it should not: measured
-              // frame by frame, the first character typed lifted the draft line 4px, the
-              // picker 2px, and dropped Send 2px before it rose again, and emptying the draft
-              // put all of it back in one frame.
-              "max-md:transition-opacity max-md:duration-150"
-              // `max-md:` on the reduced-motion variant too, and not for symmetry: Tailwind
-              // orders the stylesheet by variant, so a bare `motion-reduce:transition-none`
-              // is EMITTED ABOVE the `max-md:` transition it is meant to cancel and loses to
-              // it at exactly the widths that have one.
-              "max-md:motion-reduce:transition-none" ]
+    /// So this is a box and nothing else: no gate, no fade, no height to animate, and no
+    /// second value for the state it used to have. Whether there is anything to send is said
+    /// by the WORD inside it, which is the only place it was ever legible — the row carried
+    /// `max-md:opacity-0 max-md:pointer-events-none` (and before that `max-h-0`) and three
+    /// `max-md:` transition rules to settle how that fade moved the line it shares. All of
+    /// it was arranging the disappearance of a control the doctrine says should stay.
+    ///
+    /// `phone:items-baseline`: on a phone this box is one half of a row aligned on its text
+    /// baseline (`draftActionsRow`), and a flex container lends its parent the baseline of
+    /// its first baseline-aligned item. With nothing aligned on one, that was the presence
+    /// span beside Send — usually empty, and an empty box's synthesized baseline is its
+    /// bottom edge, so Send's word sat five pixels under the picker's. Aligning this box's
+    /// own items puts Send's word in the group, which is the baseline the row then reads.
+    let draftCommit = "shrink-0 flex items-center phone:items-baseline gap-1 pr-1"
 
-    /// Nothing to act on. The row takes no presses — `pointer-events-none` beside the fade,
-    /// because a control nobody can see is not one a thumb should find — and keeps its box,
-    /// so the line it shares stands still when it comes back.
-    let draftCommit =
-        cls [ draftCommitBase; "max-md:opacity-0 max-md:pointer-events-none" ]
-
-    /// There is a draft: the same box, seen.
-    let draftCommitReady = draftCommitBase
-
-    /// The model picker's own row-mate, standing beside `draftCommit`/`draftCommitReady`
-    /// rather than inside either: choosing a model has nothing to do with whether there is
-    /// a draft to send or a turn to stop, so it carries none of that pair's `max-md:` gating
-    /// — no `max-h-0`, no `opacity-0`, no transition. It was inside `draftCommitBase` for one
-    /// revision (riding `View.drafts`' `commitClass`) and that was the bug, twice over: on a
-    /// phone with an empty draft the picker was invisible along with Send, so nobody could
-    /// choose a model before writing a word; and because the row it rode DOES transition
-    /// (`max-md:transition-[max-height,opacity]`), a tap landing while that transition was
-    /// still settling opened the platform's OWN popup anchored to a rect that kept moving
-    /// under it — a native menu a phone drew in the wrong place for a reason no amount of
-    /// styling the menu itself could reach, because the bug was never the popup's.
-    /// `shrink-0` matches `draftCommitBase`'s own, so the two sit side by side on desktop
+    /// The model picker's own row-mate, standing beside `draftCommit` rather than inside it:
+    /// choosing a model has nothing to do with whether there is a draft to send or a turn to
+    /// stop. It was inside the commit row for one
+    /// revision (riding a gated `commitClass` in `View.drafts`) and that was the bug, twice
+    /// over: on a phone with an empty draft the picker was invisible along with Send, so
+    /// nobody could choose a model before writing a word; and because the row it rode
+    /// transitioned, a tap landing while that transition was still settling opened the
+    /// platform's OWN popup anchored to a rect that kept moving under it — a native menu a
+    /// phone drew in the wrong place for a reason no amount of styling the menu itself could
+    /// reach, because the bug was never the popup's. Both halves are moot now that nothing
+    /// about this row comes or goes, and the separation is kept because the two controls are
+    /// still two different claims on the line.
+    /// `shrink-0` matches `draftCommit`'s own, so the two sit side by side on a wide screen
     /// without either claiming space the other needs.
     ///
-    /// `md:order-first`: on desktop, `draftBox`'s row (`draftBody`, this, `commitClass`, in
-    /// that document order) otherwise lands the picker pressed up against Send at the row's
-    /// trailing edge — the two controls that most need telling apart end up the two closest
-    /// together. Reordering it to the LEAD edge (the original proposal's own layout: model
-    /// beside the future `+`, Send alone at the trailing edge) puts a sentence's worth of
-    /// text between them instead. `md:` only: on a phone `draftBox` is already a column
-    /// (`max-md:flex-col`), where `order` would lift the picker above the text entirely
-    /// rather than sideways past it — a bigger move than asked for, and the one place this
-    /// row already read correctly (the picker stands flush to ITS row's own leading edge,
-    /// `draftCommitBase`'s `max-md:justify-end` pushing Send to the opposite one below it).
-    /// `pl-4` matches `draftInput`'s own left gutter, on EVERY width, not just `md:` — on a
-    /// phone `draftBox`'s `max-md:items-stretch` stretches this row to the full width same as
-    /// `draftInput` above it, and nothing else gives it a left inset: unlike `draftCommitBase`,
+    /// `wide:order-first`: on a wide screen, `draftBox`'s row (`draftBody`, this, the commit
+    /// row, in that document order) otherwise lands the picker pressed up against Send at the
+    /// row's trailing edge — the two controls that most need telling apart end up the two
+    /// closest together. Reordering it to the LEAD edge (the original proposal's own layout:
+    /// model beside the future `+`, Send alone at the trailing edge) puts a sentence's worth
+    /// of text between them instead. `wide:` only: on a phone `draftBox` is already a column
+    /// (`phone:flex-col`), where `order` would lift the picker above the text entirely rather
+    /// than sideways past it — a bigger move than asked for, and the one place this row
+    /// already read correctly (the picker stands flush to ITS row's own leading edge, the
+    /// shared row's `justify-between` pushing Send to the opposite one).
+    /// `pl-4` matches `draftInput`'s own left gutter, on EVERY screen, not just a wide one —
+    /// on a phone `draftBox`'s `phone:items-stretch` stretches this row to the full width same
+    /// as `draftInput` above it, and nothing else gives it a left inset: unlike `draftCommit`,
     /// whose gutter comes free from its buttons' own `px-3`, this row is the model control
     /// alone, so the row itself has to carry it. Without it the picker sits flush against the
     /// viewport edge, outside the gutter every other line in the composer keeps.
-    let draftLead = "shrink-0 flex items-center gap-4 pl-4 md:order-first"
+    let draftLead = "shrink-0 flex items-center gap-4 pl-4 wide:order-first"
     /// The composer's way to attach a file, beside the model picker on `draftLead`: the
     /// picker's own voice (`modelSelectFace`) and height (`modelSelectWrap`), so the row reads
     /// as one set of controls rather than a label beside a word of the message.
@@ -3408,31 +3473,37 @@ module Style =
     let draftFileName = "min-w-0 max-w-[16rem] truncate font-ui font-light text-small text-ink"
     let draftFileSize = "shrink-0 font-ui font-light text-small text-ink-faint tabular-nums"
 
-    /// The picker (`draftLead`) and Send's row (`draftCommit`/`draftCommitReady`) ride
-    /// together as ONE line on a phone, not two: `draftBox`'s `max-md:flex-col` makes every
-    /// direct child its own row, and the two used to be siblings there, so "Provider's
-    /// default" sat on a line by itself with SEND stacked on a second line under it —
-    /// readable, but not the "dock at the bottom" the picker and Send were both asked for.
-    /// Wrapping them in one element makes them ONE child of that column, hence one row.
+    /// The picker (`draftLead`) and Send's row (`draftCommit`) ride together as ONE line on a
+    /// phone, not two: `draftBox`'s `phone:flex-col` makes every direct child its own row, and
+    /// the two used to be siblings there, so "Provider's default" sat on a line by itself with
+    /// SEND stacked on a second line under it — readable, but not the "dock at the bottom" the
+    /// picker and Send were both asked for. Wrapping them in one element makes them ONE child
+    /// of that column, hence one row.
     ///
-    /// `md:contents`: above `md`, this wrapper must get entirely out of the way rather than
-    /// become a fourth flex item — `draftBox` there is a plain row of `draftBody`, `draftLead`
-    /// (reordered to the front by its own `md:order-first`) and the commit row as three
-    /// direct siblings, and `draftLead`'s reordering only makes sense among THOSE three. A
-    /// wrapper that stayed a real box at `md:` would turn that into `draftBody` beside a
+    /// `wide:contents`: on a wide screen this wrapper must get entirely out of the way rather
+    /// than become a fourth flex item — `draftBox` there is a plain row of `draftBody`,
+    /// `draftLead` (reordered to the front by its own `wide:order-first`) and the commit row
+    /// as three direct siblings, and `draftLead`'s reordering only makes sense among THOSE
+    /// three. A wrapper that stayed a real box would turn that into `draftBody` beside a
     /// two-item box, and reordering inside the box could no longer put the picker ahead of
-    /// `draftBody` — exactly what `draftLead`'s own `md:order-first` is for. `display:
+    /// `draftBody` — exactly what `draftLead`'s own `wide:order-first` is for. `display:
     /// contents` removes the wrapper's own box without touching its children: they rejoin
-    /// `draftBox`'s flex context directly, so desktop is unchanged by this wrapper existing.
+    /// `draftBox`'s flex context directly, so a wide screen is unchanged by this wrapper
+    /// existing.
     ///
-    /// `max-md:justify-between` is what used to be `draftCommitBase`'s own `justify-end` on
-    /// a line it had to itself: with the picker as the row's other half now, pushing Send to
-    /// the trailing edge is this shared row's job, not the commit box's.
+    /// `phone:justify-between` is what used to be the commit row's own `justify-end` on a line
+    /// it had to itself: with the picker as the row's other half now, pushing Send to the
+    /// trailing edge is this shared row's job, not the commit box's.
     ///
-    /// `max-md:items-baseline`: the picker speaks the 11px caps label and Send the 13px one,
+    /// `phone:items-baseline`: the picker speaks the 11px caps label and Send the 13px one,
     /// so centring the two boxes put their words on two lines, a pixel and a half apart.
     /// The doctrine aligns a row on its text baseline (Space), and so does this one.
-    let draftActionsRow = "max-md:flex max-md:items-baseline max-md:w-full max-md:justify-between md:contents"
+    ///
+    /// The pair is the shell's own breakpoint and not a width. It was `max-md:`/`md:`, and a
+    /// phone turned sideways is 844 wide: it took the wide screen's single row while the
+    /// composer's line above it was already wearing `phone:` paddings, which is the exact
+    /// mismatch the pair exists to stop (docs/visual-design.md, Phone and wide).
+    let draftActionsRow = "phone:flex phone:items-baseline phone:w-full phone:justify-between wide:contents"
 
     let draftAuthor = "pl-4 pt-2 " + caps + " text-ink-faint truncate"
 
@@ -3479,6 +3550,18 @@ module Style =
     /// and all, so the band's rule does not come and go as the faces turn.
     let settingsHead = sideHead
     let settingsTitle = "font-extralight text-heading tracking-[-0.01em] lowercase text-ink"
+
+    /// Two acts of a flow side by side in a lane — approve and cancel, complete and cancel.
+    ///
+    /// It WRAPS, and that is the whole of this value. A button's label cannot wrap inside its
+    /// box (`btnFace` is one fixed height, so it is `whitespace-nowrap`), which leaves the ROW
+    /// as the only thing that can give: at 390 the sidebar is a 280px drawer, and APPROVE ON
+    /// GITHUB.COM in the caps voice is wider than what a Cancel beside it leaves — so Cancel
+    /// was clipped to "CAN" at the column's edge. Wrapped, the second verb takes the next
+    /// line, which costs 40px on one screen of one flow and costs nothing anywhere else.
+    /// The two rows that wear it spelled `flex gap-2` inline, which is also why only one of
+    /// them was ever looked at.
+    let settingsActions = "flex flex-wrap gap-2"
 
     // --- The agent's absence -------------------------------------------------------------------
     // Said ONCE, in the section that lists who is in this session, because that is where a
