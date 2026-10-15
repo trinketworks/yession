@@ -19,6 +19,9 @@ namespace Fable.NodeExtras
 // against it in the page's own terms (`typeof`), so a value of another kind arrives as
 // `Unexpected` rather than as an `unbox` that asserted.
 //
+// The same holds for the one thing asked of the browser over plain HTTP: which page to connect
+// to (`pageOn`), read off the list of targets it serves the same way an answer is read.
+//
 // Only what the camera uses is declared. The bar for a new command is that something calls it.
 //
 // Here and not in a project of its own because the socket a session speaks over is
@@ -246,6 +249,29 @@ module Cdp =
                 | Frame.Text text -> session.Receive text)
 
             socket.onOpen (fun () -> resolve session))
+
+    // --- Finding a page to connect to -------------------------------------------------------
+
+    /// One entry of the list a browser serves at `/json/list`: a target it offers a debugger.
+    /// The address is absent from a target that cannot take one.
+    type internal Target =
+        abstract ``type``: string
+        abstract webSocketDebuggerUrl: string option
+
+    [<Emit("JSON.parse($0)")>]
+    let internal parseTargets (text: string) : Target array = jsNative
+
+    /// The address `connect` wants for a page of the browser debugging on `port` (the first
+    /// line of the `DevToolsActivePort` file it writes into its profile), read off the targets
+    /// it lists; nothing while it lists no page. A browser not listening yet rejects, as any
+    /// refused fetch does, so a caller polling a fresh one retries both.
+    let pageOn (port: string) : JS.Promise<string option> =
+        Fetch.fetchUnsafe $"http://127.0.0.1:%s{port}/json/list" []
+        |> Promise.bind (fun listed -> listed.text ())
+        |> Promise.map (fun text ->
+            parseTargets text
+            |> Array.tryFind (fun target -> target.``type`` = "page")
+            |> Option.bind (fun page -> page.webSocketDebuggerUrl))
 
     // --- The commands -----------------------------------------------------------------------
 

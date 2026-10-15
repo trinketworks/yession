@@ -20,7 +20,9 @@
        The rest is the platform it drives Chromium over: `Fable.Fetch` for the Manager's
        routes, `Fable.NodeExtras` for the CDP session and the process environment, and
        `Fable.BrowserExtras` for reading the path back off the address the Manager answered
-       with — `URL` being a global on Node as much as in a browser. -->
+       with — `URL` being a global on Node as much as in a browser. And Thoth, the codec its
+       own instrument's answers are read with and its `log.json` is written with: Thoth.Json
+       under Fable, Thoth.Json.Net for the .NET type-check, the split the App declares. -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>Exe</OutputType>
@@ -34,6 +36,8 @@
     <PackageReference Include="Fable.Node" />
     <PackageReference Include="Fable.Promise" />
     <PackageReference Include="Fable.Fetch" />
+    <PackageReference Include="Thoth.Json" />
+    <PackageReference Include="Thoth.Json.Net" />
   </ItemGroup>
 
   <ItemGroup>

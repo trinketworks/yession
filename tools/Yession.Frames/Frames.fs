@@ -102,16 +102,15 @@ module Yession.Frames
 
 open System
 open Fable.Core
-open Fable.Core.JsInterop
 open Yession.Domain
 open Yession.App
+#if FABLE_COMPILER
+open Thoth.Json
+#else
+open Thoth.Json.Net
+#endif
 
 // --- Node --------------------------------------------------------------------------------------
-
-let private fs : obj = importAll "node:fs"
-let private os : obj = importAll "node:os"
-let private nodePath : obj = importAll "node:path"
-let private crypto : obj = importAll "node:crypto"
 
 /// A screencast frame's bytes. CDP hands them over base64 in the JSON, and what `writeFileSync`
 /// wants is a Buffer — `Fable.Node`'s own `Buffer.from`, rather than the global spelled again.
@@ -146,17 +145,25 @@ let private abort (message: string) : 'a =
 /// This process's arguments, its executable and script dropped — what `Cli` parses.
 let private argv () : string array = Node.Api.``process``.argv |> Seq.skip 2 |> Seq.toArray
 
-let private pretty (value: 'a) : string = JS.JSON.stringify (value, space = 1)
-
 let private say (line: string) : unit = JS.console.log line
 
+// The files and paths, through `Fable.Node`'s own bindings to `node:fs` and `node:path`, which
+// type every call made here. `writeFileSync` takes text or bytes alike, and these are the two
+// this camera writes, so each has its own name rather than one over anything.
+let private joinTwo (a: string) (b: string) : string = Node.Api.path.join (a, b)
+let private writeText (path: string) (text: string) : unit = Node.Api.fs.writeFileSync (path, box text)
+let private writeBytes (path: string) (bytes: Node.Buffer.Buffer) : unit = Node.Api.fs.writeFileSync (path, box bytes)
+let private readText (path: string) : string = Node.Api.fs.readFileSync (path, "utf8")
+let private readDir (path: string) : string array = Node.Api.fs.readdirSync (U2.Case1 path) |> Seq.toArray
+let private exists (path: string) : bool = Node.Api.fs.existsSync (U2.Case1 path)
+let private isDirectory (path: string) : bool = try (Node.Api.fs.statSync (U2.Case1 path)).isDirectory () with _ -> false
+let private realPath (path: string) : string = try Node.Api.fs.realpathSync (U2.Case1 path) with _ -> path
 
-let private joinTwo (a: string) (b: string) : string = nodePath?join (a, b) |> unbox
-let private writeFile (path: string) (content: obj) : unit = fs?writeFileSync (path, content) |> ignore
-let private readDir (path: string) : string array = fs?readdirSync path |> unbox
-let private exists (path: string) : bool = fs?existsSync path |> unbox
-let private isDirectory (path: string) : bool = try (fs?statSync path)?isDirectory () |> unbox with _ -> false
-let private realPath (path: string) : string = try fs?realpathSync path |> unbox with _ -> path
+/// A frame's picture as a digest, which is how a repeated picture is told from a new one.
+let private sha1Of (text: string) : string =
+    let digester = Fable.NodeExtras.Digests.hash "sha1"
+    digester.update(text, Node.Buffer.BufferEncoding.Utf8).digest Fable.NodeExtras.BinaryToTextEncoding.Hex
+
 let private escapeHtml (s: string) = s.Replace("&", "&amp;").Replace ("<", "&lt;")
 
 // --- Chromium ----------------------------------------------------------------------------------
@@ -215,7 +222,7 @@ let private launch
     (extra: string list)
     : JS.Promise<Node.ChildProcess.ChildProcess * string> =
     promise {
-        let profile : string = fs?mkdtempSync (joinTwo (os?tmpdir () |> unbox) "yession-frames-") |> unbox
+        let profile = Node.Api.fs.mkdtempSync (joinTwo (Node.Api.os.tmpdir ()) "yession-frames-")
         // `--no-sandbox` as root, as Playwright passes it: Chromium refuses to start as uid 0
         // with its own sandbox on, and an agent's work sandbox runs as root. The suite never
         // met this because it launches through Playwright; this camera met it as a browser
@@ -262,8 +269,7 @@ let private launch
         let mutable waited = 0
         while port = "" && exited.Value.IsNone && unspawned.Value.IsNone && waited < 100 do
             if exists portFile then
-                let lines : string = fs?readFileSync (portFile, "utf8") |> unbox
-                port <- lines.Split('\n').[0].Trim ()
+                port <- (readText portFile).Split('\n').[0].Trim ()
             if port = "" then
                 do! delay 100
                 waited <- waited + 1
@@ -277,10 +283,9 @@ let private launch
         waited <- 0
         while target = "" && waited < 50 do
             try
-                let! listed = Fetch.fetchUnsafe (sprintf "http://127.0.0.1:%s/json/list" port) []
-                let! json = listed.json<obj array> ()
-                match json |> Array.tryFind (fun t -> t?``type`` = "page") with
-                | Some page -> target <- page?webSocketDebuggerUrl |> unbox
+                let! page = Cdp.pageOn port
+                match page with
+                | Some address -> target <- address
                 | None -> ()
             with _ -> ()
             if target = "" then
@@ -458,6 +463,60 @@ let private spec =
     |> Cli.accepts sizeOption
     |> Cli.accepts measureOption
 
+// --- what the page answers ---------------------------------------------------------------------
+
+// What the instrument and the analyzer leave in the page comes back as JSON text, and is read
+// here with a codec: the shape each is written in is above, and this is the one place that
+// says what it is read as.
+
+/// The layout summary the instrument takes after a render (`look`): each key, in the order it
+/// wrote them, with the value as it came. Open rather than declared field by field, because the
+/// instrument decides what is worth reading, and this side only diffs it and passes it on.
+type private Layout = (string * JsonValue) list
+
+/// A client render the instrument logged: its number, when it landed on the document's clock,
+/// and the layout it left — absent when the log was read before the microtask that takes it.
+type private Render = { N: int; T: int; After: Layout option }
+
+/// One line of the instrument's `__log`, by what it recorded. The class changes and the panes
+/// added or removed are only passed on into `log.json`, so they are kept as they came.
+type private Logged =
+    | Rendered of Render
+    | ClassChanged of JsonValue
+    | PaneChanged of JsonValue
+    | Resized
+
+let private logged: Decoder<Logged> =
+    // Present only on its own kind of line, so a field's presence says which line it is.
+    let marked (field: string) (kind: JsonValue -> Logged) =
+        Decode.field field Decode.string |> Decode.andThen (fun _ -> Decode.value) |> Decode.map kind
+
+    Decode.oneOf
+        [ Decode.object (fun get ->
+              Rendered
+                  { N = get.Required.Field "n" Decode.int
+                    T = get.Required.Field "t" Decode.int
+                    After = get.Optional.Field "after" (Decode.keyValuePairs Decode.value) })
+          marked "attr" ClassChanged
+          marked "pane" PaneChanged
+          Decode.field "resize" (Decode.array Decode.int) |> Decode.map (fun _ -> Resized) ]
+
+/// What the pixel diff says of one frame: how many pixels changed from the frame before (`-1`
+/// for the first of the run), and the box around them in CSS px when any did.
+type private Diff = { Changed: int; Box: int array option }
+
+let private diff: Decoder<Diff> =
+    Decode.object (fun get ->
+        { Changed = get.Required.Field "changed" Decode.int
+          Box = get.Optional.Field "box" (Decode.array Decode.int) })
+
+/// What the page answered, read as `decoder` says. The JSON is this file's own instrument's,
+/// so an answer it cannot read is a fault in this file, and the run stops on it.
+let private decoded (what: string) (decoder: Decoder<'T>) (json: string) : 'T =
+    match Decode.fromString decoder json with
+    | Ok value -> value
+    | Error why -> failwithf "%s did not decode: %s" what why
+
 // --- the run -----------------------------------------------------------------------------------
 
 type private Frame =
@@ -467,23 +526,26 @@ type private Frame =
       Data: string
       /// On the final document's clock; negative for frames painted before it began.
       T: int
-      Renders: (obj * string list) list
+      Renders: (Render * string list) list
       Changed: int
       Box: int array option }
 
 let private frameName (f: Frame) = sprintf "frames/f%04d.png" f.Index
 
 /// The layout summary's diff against the previous render's, one line per key that moved.
-let private changes (before: obj option) (after: obj) : string list =
+let private changes (before: Layout option) (after: Layout) : string list =
     match before with
     | None -> [ "(first)" ]
     | Some before ->
-        JS.Constructors.Object.keys after
-        |> Seq.choose (fun key ->
-            let x = JS.JSON.stringify (before?(key))
-            let y = JS.JSON.stringify (after?(key))
-            if x <> y then Some (sprintf "%s: %s → %s" key x y) else None)
-        |> Seq.toList
+        after
+        |> List.choose (fun (key, value) ->
+            let was = before |> List.tryPick (fun (k, v) -> if k = key then Some (Encode.toString 0 v) else None)
+            let now = Encode.toString 0 value
+
+            match was with
+            | Some was when was = now -> None
+            | Some was -> Some (sprintf "%s: %s → %s" key was now)
+            | None -> Some (sprintf "%s: (absent) → %s" key now))
 
 let private run () =
     promise {
@@ -500,7 +562,7 @@ let private run () =
             | None -> abort "yession-frames needs --manager: the Manager the session lives on (or --page with a full address)"
         let seconds = Cli.valueOf secondsOption args |> Option.map int |> Option.defaultValue 8
         let minPx = Cli.valueOf minPxOption args |> Option.map int |> Option.defaultValue 400
-        let out : string = nodePath?resolve (Cli.valueOf outOption args |> Option.defaultValue "frames") |> unbox
+        let out = Node.Api.path.resolve (Cli.valueOf outOption args |> Option.defaultValue "frames")
         let still = Cli.isSet stillOption args
         let page = Cli.valueOf pageOption args
         // A desktop is the stylesheet's `wide` screen: not a phone. The question is asked once,
@@ -623,7 +685,7 @@ let private run () =
             | None -> ()
             let! shot = Cdp.Page.captureScreenshot cdp
             let picture = joinTwo out "still.png"
-            writeFile picture (bytesOfBase64 shot)
+            writeBytes picture (bytesOfBase64 shot)
             say (sprintf "wrote %s (%dx%d)" picture width height)
             cdp.Close ()
             child.kill () |> ignore
@@ -659,9 +721,9 @@ let private run () =
         let! originAnswer = evaluateNumber cdp "__origin"
         let origin = answered "__origin, the instrument's clock" originAnswer
         let! logAnswer = evaluateText cdp "JSON.stringify(__log)"
-        let log : obj array = JS.JSON.parse (answered "__log, the instrument's renders" logAnswer) |> unbox
+        let log = decoded "__log, the instrument's renders" (Decode.list logged) (answered "__log, the instrument's renders" logAnswer)
         let! rafsAnswer = evaluateText cdp "JSON.stringify(__frames)"
-        let rafsJson = answered "__frames, the instrument's frames" rafsAnswer
+        let rafs = decoded "__frames, the instrument's frames" Decode.value (answered "__frames, the instrument's frames" rafsAnswer)
         let! sessionUrlAnswer = evaluateText cdp "location.href"
         let sessionUrl = answered "location.href" sessionUrlAnswer
 
@@ -676,7 +738,7 @@ let private run () =
                 | _ -> None)
             |> Seq.mapi (fun i (data, epoch) ->
                 { Index = i; EpochMs = epoch * 1000.0
-                  Hash = (crypto?createHash "sha1")?update(data)?digest("hex") |> unbox
+                  Hash = sha1Of data
                   Data = data; T = int (System.Math.Round (epoch * 1000.0 - origin)); Renders = []; Changed = -1; Box = None })
             |> Seq.toList
         let distinct = frames |> List.fold (fun acc f -> match acc with | prev :: _ when prev.Hash = f.Hash -> acc | _ -> f :: acc) [] |> List.rev
@@ -696,24 +758,21 @@ let private run () =
             |> Seq.toList
 
         // The client's side: renders, each with what it changed.
-        let renders = log |> Array.filter (fun e -> not (isNull e?n)) |> Array.toList
+        let renders = log |> List.choose (function Rendered r -> Some r | _ -> None)
         let rendersWithChanges =
             renders
             |> List.fold (fun (acc, prev) r ->
-                let after = r?after
-                let lines = if isNull after then [] else changes prev after
-                let prev' = if isNull after then prev else Some after
-                ((r, lines) :: acc, prev')) ([], None)
+                match r.After with
+                | Some after -> ((r, changes prev after) :: acc, Some after)
+                | None -> ((r, []) :: acc, prev)) ([], None)
             |> fst |> List.rev
-        let renderTime (r: obj) : int = unbox r?t
-        let renderNo (r: obj) : int = unbox r?n
 
         // Each frame carries the renders that landed since the previous distinct frame; a
         // render after the last frame is listed on its own.
         let attributedRev, trailing =
             distinct
-            |> List.fold (fun (done_, pending: (obj * string list) list) f ->
-                let mine, later = pending |> List.partition (fun (r, _) -> renderTime r <= f.T)
+            |> List.fold (fun (done_, pending: (Render * string list) list) f ->
+                let mine, later = pending |> List.partition (fun (r, _) -> r.T <= f.T)
                 ({ f with Renders = mine } :: done_, later)) ([], rendersWithChanges)
         let attributed = List.rev attributedRev
 
@@ -721,33 +780,32 @@ let private run () =
         // does, or when a render landed in it. The instrument comes out first, or the analyzer
         // and the sheets would wear a stamp of their own.
         do! Cdp.Page.removeScriptToEvaluateOnNewDocument cdp installed
-        writeFile (joinTwo out "analyze.html") (box analyzer)
+        writeText (joinTwo out "analyze.html") analyzer
         do! Cdp.Page.navigate cdp (sprintf "file://%s" (joinTwo out "analyze.html"))
         do! delay 500
         // In batches: one `Runtime.evaluate` carrying every frame of a long run as data URLs
         // is tens of megabytes of expression, and the browser never answers it.
         let batches = attributed |> List.chunkBySize 32
-        let diffs = ResizeArray<obj> ()
+        let diffs = ResizeArray<Diff> ()
         for batch in batches do
             let urls = batch |> List.map (fun f -> "data:image/png;base64," + f.Data) |> List.toArray
             let! diffsAnswer = evaluateText cdp (sprintf "__analyze(%s)" (JS.JSON.stringify urls))
-            let these : obj array = JS.JSON.parse (answered "__analyze, the pixel diff" diffsAnswer) |> unbox
-            diffs.AddRange these
+            diffs.AddRange (decoded "__analyze, the pixel diff" (Decode.array diff) (answered "__analyze, the pixel diff" diffsAnswer))
         let analyzed =
             attributed
             |> List.mapi (fun i f ->
                 let d = diffs.[i]
-                { f with Changed = unbox d?changed; Box = (match d?box |> unbox<int array option> with | Some b -> Some b | None -> None) })
+                { f with Changed = d.Changed; Box = d.Box })
         let shown = analyzed |> List.filter (fun f -> f.Index = 0 || f.Changed >= minPx || not (List.isEmpty f.Renders))
-        for f in shown do writeFile (joinTwo out (frameName f)) (bytesOfBase64 f.Data)
+        for f in shown do writeBytes (joinTwo out (frameName f)) (bytesOfBase64 f.Data)
 
         // The report.
-        let renderLines (r: obj, lines: string list) =
-            lines |> List.map (fun c -> sprintf "<code>#%d %s</code>" (renderNo r) (escapeHtml c)) |> String.concat ""
+        let renderLines (r: Render, lines: string list) =
+            lines |> List.map (fun c -> sprintf "<code>#%d %s</code>" r.N (escapeHtml c)) |> String.concat ""
         let card (f: Frame) =
             let renderList =
                 if List.isEmpty f.Renders then "<i>no render</i>"
-                else sprintf "renders %s" (f.Renders |> List.map (fun (r, _) -> sprintf "#%d" (renderNo r)) |> String.concat " ")
+                else sprintf "renders %s" (f.Renders |> List.map (fun (r, _) -> sprintf "#%d" r.N) |> String.concat " ")
             let boxHtml =
                 match f.Box with
                 | Some b -> sprintf "<div class=box style=\"left:%dpx;top:%dpx;width:%dpx;height:%dpx\"></div>" (b.[0] / 2) (b.[1] / 2) (b.[2] / 2) (b.[3] / 2)
@@ -761,7 +819,7 @@ let private run () =
                 (width / 2 + 4)
         let allRenders =
             rendersWithChanges
-            |> List.map (fun (r, lines) -> sprintf "<code>#%d t=%d %s</code>" (renderNo r) (renderTime r) (escapeHtml (if List.isEmpty lines then "(no layout change)" else String.concat " ; " lines)))
+            |> List.map (fun (r, lines) -> sprintf "<code>#%d t=%d %s</code>" r.N r.T (escapeHtml (if List.isEmpty lines then "(no layout change)" else String.concat " ; " lines)))
             |> String.concat ""
         let report =
             String.concat "\n"
@@ -772,26 +830,42 @@ let private run () =
                   sprintf "<h2>Frames</h2>%s" (shown |> List.map card |> String.concat "\n")
                   (if List.isEmpty trailing then "" else sprintf "<h2>Renders after the last frame</h2>%s" (trailing |> List.map renderLines |> String.concat ""))
                   sprintf "<h2>All renders</h2>%s" allRenders ]
-        writeFile (joinTwo out "report.html") (box report)
-        // Anonymous records, which Fable writes as object literals: the file's keys are these
-        // names, spelled where the compiler can see them. A key left out of `after` or `box` is
-        // an `undefined`, which `JSON.stringify` omits.
+        writeText (joinTwo out "report.html") report
+        // Written with the codec that read it, keys in alphabetical order, which is the order the
+        // file has always had. A key with nothing to say is left out rather than written empty:
+        // a frame with no box, a render the log has no layout for.
         let logOut =
-            {| sessionUrl = sessionUrl
-               origin = origin
-               requests = List.toArray requests
-               renders =
-                   rendersWithChanges
-                   |> List.map (fun (r, lines) -> {| n = renderNo r; t = renderTime r; after = r?after; changes = List.toArray lines |})
-                   |> List.toArray
-               html = log |> Array.filter (fun e -> not (isNull e?attr))
-               panes = log |> Array.filter (fun e -> not (isNull e?pane))
-               rafs = JS.JSON.parse rafsJson
-               frames =
-                   analyzed
-                   |> List.map (fun f -> {| i = f.Index; t = f.T; changed = f.Changed; box = f.Box; renders = f.Renders |> List.map (fun (r, _) -> renderNo r) |> List.toArray |})
-                   |> List.toArray |}
-        writeFile (joinTwo out "log.json") (box (pretty logOut))
+            Encode.object
+                [ "frames",
+                  analyzed
+                  |> List.map (fun f ->
+                      Encode.object
+                          [ match f.Box with
+                            | Some b -> yield "box", Encode.array (Array.map Encode.int b)
+                            | None -> ()
+                            yield "changed", Encode.int f.Changed
+                            yield "i", Encode.int f.Index
+                            yield "renders", Encode.list (f.Renders |> List.map (fun (r, _) -> Encode.int r.N))
+                            yield "t", Encode.int f.T ])
+                  |> Encode.list
+                  "html", Encode.list (log |> List.choose (function ClassChanged line -> Some line | _ -> None))
+                  "origin", Encode.float origin
+                  "panes", Encode.list (log |> List.choose (function PaneChanged line -> Some line | _ -> None))
+                  "rafs", rafs
+                  "renders",
+                  rendersWithChanges
+                  |> List.map (fun (r, lines) ->
+                      Encode.object
+                          [ match r.After with
+                            | Some after -> yield "after", Encode.object after
+                            | None -> ()
+                            yield "changes", Encode.list (List.map Encode.string lines)
+                            yield "n", Encode.int r.N
+                            yield "t", Encode.int r.T ])
+                  |> Encode.list
+                  "requests", Encode.list (List.map Encode.string requests)
+                  "sessionUrl", Encode.string sessionUrl ]
+        writeText (joinTwo out "log.json") (Encode.toString 1 logOut)
 
         // Contact sheets, by the same Chrome: eight frames a page, at a size the Read tool reads.
         let cols, rows = 4, 2
@@ -804,16 +878,16 @@ let private run () =
                 sprintf "<!doctype html><meta charset=utf-8>%s<style>body{display:grid;grid-template-columns:repeat(%d,%dpx);grid-auto-rows:%dpx}figure{margin:0;overflow:hidden}</style>%s"
                     style cols cw ch (page |> List.map card |> String.concat "\n")
             let sheet = joinTwo out (sprintf "sheet-%d.html" p)
-            writeFile sheet (box html)
+            writeText sheet html
             do! Cdp.Page.navigate cdp (sprintf "file://%s" sheet)
             do! delay 800
             let! shot = Cdp.Page.captureScreenshot cdp
-            writeFile (joinTwo out (sprintf "sheet-%d.png" p)) (bytesOfBase64 shot)
+            writeBytes (joinTwo out (sprintf "sheet-%d.png" p)) (bytesOfBase64 shot)
 
         say (sprintf "frames %d distinct %d shown %d renders %d; %s" (List.length frames) (List.length distinct) (List.length shown) (List.length renders) (joinTwo out "report.html"))
         for r in requests do say r
         for (r, lines) in rendersWithChanges do
-            if not (List.isEmpty lines) then say (sprintf "#%d t=%d %s" (renderNo r) (renderTime r) (String.concat " ; " lines))
+            if not (List.isEmpty lines) then say (sprintf "#%d t=%d %s" r.N r.T (String.concat " ; " lines))
 
         cdp.Close ()
         child.kill () |> ignore
