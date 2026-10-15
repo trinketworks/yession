@@ -164,6 +164,10 @@ let all =
         // Where things live, read from the files git would commit: the root AGENTS.md within
         // what a session reads, the allowed helper scripts, no docs/plans, examples standalone.
         Tag.needs "Repo layout" [] (fun () -> RepoLayout.tests)
+        // That every browser case waits through `Wait`, which asks the case's refusal and keeps
+        // its own deadline, and none through Playwright's own waits. Read from the source, so
+        // it needs no browser.
+        Tag.needs "Playwright's own waits" [] (fun () -> PlaywrightWaits.tests)
         // The PreToolUse hook that keeps agents on the task verbs, spawned with payloads on stdin
         // the way the harness runs it. Cheap: a shell and the devshell's `jq`, which `check` runs inside.
         Tag.needs "Direct tool hook" [] (fun () -> DirectToolHook.tests)

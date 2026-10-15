@@ -268,7 +268,7 @@ let tests =
                 let body =
                     reporting "Client performance" page evidence <| async {
                         let! _ = await (page.GotoAsync (server.At "/"))
-                        let! _ = await (page.WaitForSelectorAsync "#peer-b .ProseMirror")
+                        do! waitVisible "the co-editor's editor" page "#peer-b .ProseMirror"
 
                         let collected = ResizeArray<Series> ()
                         // What the typing burst at each size actually did (keydowns seen, frames
@@ -336,7 +336,7 @@ let tests =
                                         HasTouch = true)))
                         let! phonePage = await (phoneContext.NewPageAsync ())
                         let! _ = await (phonePage.GotoAsync (server.At "/"))
-                        let! _ = await (phonePage.WaitForSelectorAsync "#shell [data-conversation]")
+                        do! waitVisible "the phone's conversation" phonePage "#shell [data-conversation]"
 
                         // The open, first and unthrottled: what it records is mostly counts
                         // and distances, which a slower main thread does not change, and the
