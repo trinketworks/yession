@@ -879,13 +879,20 @@ module Style =
     // never the chrome. `fieldFace` therefore sets no width and no font — those belong to
     // the caller, and baking them in is how the three drifted apart in the first place.
 
-    /// Built exactly as `btnBase` is, and from the same `h-control`: the box sets the height
+    /// Built exactly as `btnFace` is, and from the same `h-control`: the box sets the height
     /// and the content is centred in it. It used to set `py-2` and let the line box decide,
     /// which made an input 42px, a select 40px and a button 32px — three heights in one row.
-    /// `inline-flex` is what centres the content of the one field that is not an input: the
-    /// device code is a `span`, and a span does not centre itself in a fixed height.
+    /// `inline-flex` centres whatever the box holds against a height the box sets rather than
+    /// the line box — which an `<input>` does for itself and a `<select>` does not.
+    ///
+    /// On a phone it grows to `spacing-touch`, for the reason `btnFace` does and from the same
+    /// token: a field has an EDGE, and on a phone a control with an edge grows to the touch
+    /// target (docs/visual-design.md, Space). Without it every input, select and token box in
+    /// the settings drawer stood 32px under a thumb while the buttons beside them stood 44 —
+    /// two heights in one column, and the shorter one below the floor the Deciding order never
+    /// trades. `phone:` and not a width, because a phone turned sideways is still a phone.
     let fieldFace =
-        cls [ "bg-surface outline-none appearance-none h-control px-3 transition-colors"
+        cls [ "bg-surface outline-none appearance-none h-control phone:h-touch px-3 transition-colors"
               "inline-flex items-center"
               Stroke.ring; Stroke.hair; Stroke.hoverRim; Stroke.focus ]
 
@@ -944,7 +951,13 @@ module Style =
     /// its longest label. The face is ordinary text, so the wrapper is as wide as what it
     /// says and the select, filling the wrapper, is exactly as wide as the face. Transparent
     /// text rather than `opacity-0`, so the focus ring the select wears still paints.
-    let modelSelectWrap = "relative shrink-0 h-10 inline-flex items-center gap-1.5 min-w-0"
+    ///
+    /// The wrapper's HEIGHT is the select's hit area, because the select fills it (`inset-0`),
+    /// and that is the one thing about this control a thumb has to reach: the face is text and
+    /// the box paints nothing. 40px is the composer row's own line; on a phone it grows to
+    /// `spacing-touch`, which is what every control does there (docs/visual-design.md, Space)
+    /// and all the growth costs is 4px of a row that already seats a 44px Send.
+    let modelSelectWrap = "relative shrink-0 h-10 phone:h-touch inline-flex items-center gap-1.5 min-w-0"
     let modelSelectFace = cls [ caps; "text-ink-dim truncate pointer-events-none" ]
     let modelSelect =
         cls [ "absolute inset-0 w-full h-full p-0 bg-transparent border-0 appearance-none cursor-pointer"
@@ -955,14 +968,30 @@ module Style =
     /// screen, so one glyph meant "go to the newest" and "open this list" a few pixels apart.
     let modelSelectMark = "pointer-events-none text-ink-faint"
 
-    /// A field with a VERB at its trailing edge, built exactly as the terminal composer's is
+    /// A CODE to read and copy — the GitHub device flow's eight characters — with the verb
+    /// that copies it at its trailing edge, built as the terminal composer's trail is
     /// (`terminalCommandWrap` / `terminalCommandTrail`): the wrapper carries the width, the
-    /// field reserves the room, and the control sits INSIDE the box it acts on rather than
+    /// box reserves the room, and the control sits INSIDE the box it acts on rather than
     /// beside it. The select's caret above is the other half of the pattern and deliberately
     /// not this — a mark takes no pointer events, a button is the thing you press.
-    let fieldActionWrap = "relative w-full"
-    let fieldWithAction = cls [ fieldFace; fieldType; "w-full pr-10" ]
-    let fieldAction = cls [ btnInField; "absolute right-1 top-1/2 -translate-y-1/2 text-ink-faint hover:text-ink" ]
+    ///
+    /// It is NOT a field, and it used to be drawn as one — `fieldFace` plus `fieldType`, so a
+    /// ring on all four sides in the UI sans. Both halves of that were wrong. `ring` is for
+    /// what you type in or press (docs/visual-design.md, Stroke) and nobody types in here: the
+    /// code is minted by github.com and the one thing anybody does with it is take it away.
+    /// And an identifier wears MONO everywhere else in the product — the session id under the
+    /// title, the id on the starting screen, the build in the column's foot — so a device code
+    /// in the chrome's own face was the one identifier set in a voice that is not for
+    /// identifiers. `Stroke.clear` holds the border box while painting nothing on it, so the
+    /// code stands exactly as tall and as wide as the fields above it and the row costs the
+    /// same; `select-all` because taking it away is the whole point, and `buildMark` already
+    /// says that is how a copyable identifier behaves.
+    let codeBoxWrap = "relative w-full"
+    let codeBox =
+        cls [ "bg-surface h-control phone:h-touch px-3 w-full pr-10 phone:pr-13"
+              "inline-flex items-center"; Stroke.clear
+              "font-terminal text-code text-ink select-all truncate" ]
+    let codeBoxAction = cls [ btnInField; "absolute right-1 top-1/2 -translate-y-1/2 text-ink-faint hover:text-ink" ]
 
     /// The chrome-LESS field: an input whose CONTAINER already carries the stroke (the
     /// composer's box, a listed row's leading edge), so the control itself must draw
@@ -1231,11 +1260,26 @@ module Style =
 
     /// The shared header band (`--spacing-band`): baselines align across the sidebar/main
     /// hairline because all three heads compose the same token.
-    /// The hairline under it is the band's, and the only rule in the column: groups below it
-    /// are told apart by the space between them and by their heads, not by a line each.
+    /// The hairline under it is the band's OWN, and the only rule in the column: groups below
+    /// it are told apart by the space between them and by their heads, not by a line each.
+    /// That is what keeps it at ONE height — it used to be the first group's top border, so
+    /// the rule sat a pixel below the header's and moved down the column whenever a connection
+    /// notice took the first slot (docs/visual-design.md, Space: the hairline under the band
+    /// runs across every column at one height).
+    ///
+    /// BREAKS the second half of that rule, and says so here rather than pretending: on a
+    /// phone the band is `spacing-band-phone` and this head is still `spacing-band`, so a
+    /// drawer open over the conversation shows two hairlines 32px apart. It cannot take the
+    /// phone band as it stands — the head holds the lockup, whose mark is 56px with its foot
+    /// 15px below the wordmark's line box, and no bottom padding seats 71px of object inside
+    /// 56px of band. The fix is a phone step on `lockup`/`lockupMark`/`wordmark` (Typography),
+    /// after which this is one `phone:h-band-phone` and a smaller `pb`.
     let sideHead = "h-band shrink-0 flex items-end justify-between pb-5 " + Stroke.dividerBottom
+    /// A group in the column: its head, then its rows. There is one of these and not two —
+    /// a `sideSectionFirst` stood beside it, byte for byte the same value, left over from when
+    /// the first group carried the rule the head now owns. A second name for one way of
+    /// drawing something is a second way waiting to happen (principle 5).
     let sideSection = "flex flex-col gap-2 pt-6"
-    let sideSectionFirst = "flex flex-col gap-2 pt-6"
     let sideRow = "flex items-baseline justify-between gap-2"
     /// A roster row aligns on the TEXT BASELINE, so the 11px caps ("you", a status) sit on
     /// the 13px name's baseline instead of floating box-centred beside it.
@@ -1423,9 +1467,16 @@ module Style =
     ///
     /// On a wide screen the stack stays: the header and the sidebar wordmark share one bottom edge
     /// (`h-band`, `items-end`), and that shared baseline is the whole reason the band exists.
+    ///
+    /// Both heights are the band's TOKEN — `h-band` wide, `h-band-phone` on a phone
+    /// (docs/visual-design.md, Space: the band is `spacing-band`, and on a phone it is
+    /// `spacing-band-phone`). The phone one was the literal `h-14`, which is the same 56px
+    /// said in a second place, and a second place is where two heads come to disagree: the
+    /// column's own head is still 88px under a thumb, so the two hairlines a drawer shows at
+    /// once sit 32px apart (see `sideHead`).
     let header =
         "relative h-band shrink-0 flex items-end gap-4 px-8 pb-5 "
-        + "phone:h-14 phone:items-center phone:gap-2 phone:px-4 phone:pb-[11px] "
+        + "phone:h-band-phone phone:items-center phone:gap-2 phone:px-4 phone:pb-[11px] "
         + Stroke.dividerBottom
 
     /// A slow catch-up's progress, drawn ON the header's bottom rule: the rule is the one
@@ -1467,10 +1518,27 @@ module Style =
     /// sidebar column (which holds the real call to action) is collapsed or off-canvas — which
     /// on a phone is most of the time. Never both at once, so it is a relocation, not a repeat.
     /// Same visibility rule as `navReopen`, for the same reason.
+    ///
+    /// A STATUS, which is what it says, so it is drawn as one: `statusWait`'s voice with a
+    /// beating dot in front of it. "No agent yet" is one of the waits the doctrine names by
+    /// name, a wait is `ink-dim` text, and a wait still under way beats its dot
+    /// (docs/visual-design.md, Colour). It used to be a BUTTON wearing a bare `caps` in
+    /// `ink-dim` with no mark at all, and at 390 that made it the brightest word in the band —
+    /// brighter than `terminals`, the pressable thing beside it — leading with nothing. Which
+    /// is the doctrine's test read backwards twice over: a caps word with a dot is a status, a
+    /// caps word without one can be pressed, and a verb never leads with a mark. So the dot
+    /// goes on and the control comes off.
+    ///
+    /// What it cost: the band no longer takes you to settings. It never should have — a status
+    /// is not pressable (Hierarchy of controls) — and the call to action it stood in for is
+    /// still in the column, on the agent's own roster row (`rosterVerb`, `connect`), one press
+    /// of the chevron at the other end of this same band away. What the band owes a reader is
+    /// that there is no agent, and that it now says with a mark rather than with volume.
+    /// `inline` and not a flex box, so the dot keeps the seat `discLead` gives it on every
+    /// other status in the product: in the gutter to the left of the word, on its baseline.
     let headerNoAgent =
-        "bg-transparent border-0 cursor-pointer " + caps + " text-ink-dim hover:text-ink transition-colors "
-        + focusRing + " "
-        + "hidden wide:[.nav-alt_&]:block phone:block phone:[.nav-alt_&]:hidden phone:py-3.5"
+        cls [ statusWait; "shrink-0 whitespace-nowrap"
+              "hidden wide:[.nav-alt_&]:inline phone:inline phone:[.nav-alt_&]:hidden" ]
 
     /// The nav column's own mount of the connection report. Hidden on a phone, where the bar
     /// above every pane carries it — the two mounts are complementary by construction, so
@@ -1583,9 +1651,21 @@ module Style =
     ///
     /// A real `<details>`/`<summary>`, like every other disclosure in the product: the
     /// browser's own, so it arrives keyboard-operable and correctly announced.
+    ///
+    /// It is a BARE verb — a word, no rectangle — so on a phone it grows its HIT AREA to the
+    /// touch target and not its box (docs/visual-design.md, Space). Which matters most here of
+    /// anywhere: this one word is the only way to read why a connection dropped, and at
+    /// 13/16 it was a 16px-tall target on the surface a phone reader meets first. The area is
+    /// an empty `::before` reaching 14px above and below the line and 4px past each end — 44px
+    /// tall and wider than the word — and a press on a pseudo-element is a press on its
+    /// element, the mechanism `btnIconBareTouch` uses for the same reason. The box, the word
+    /// and the focus ring drawn round it all stay exactly where they were, so the notice's
+    /// height is still the number the panes reserve (`degradedBarHeight`).
     let detailNote = "min-w-0"
     let detailSummary =
         cls [ small; "cursor-pointer list-none"
+              "phone:relative phone:before:absolute phone:before:content-['']"
+              "phone:before:-inset-y-3.5 phone:before:-inset-x-1"
               "hover:text-ink-dim transition-colors duration-150 ease-out"
               focusRing ]
     /// The words inside, on the summary's own column so they read as its continuation.

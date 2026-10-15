@@ -380,7 +380,7 @@ module View =
         // to read off the page at all.)
         let quiet = offer.IsNone && report.IsNone && not showsCatchUp
         let shape =
-            if quiet then Style.navLane1 else Style.cls [ Style.sideSectionFirst; Style.navLane1 ]
+            if quiet then Style.navLane1 else Style.cls [ Style.sideSection; Style.navLane1 ]
         html $"""
             <section class="{shape}"
                      data-feed="{feedToken consumer.Feed}" data-connection="{connectionLabel model.Connection}">
@@ -834,9 +834,9 @@ module View =
                 let justCopied = copied |> Option.exists (fun copy -> copy.Box = Dom.Hooks.githubUserCode)
                 html $"""
                     <span class="{Style.label}">code for github.com</span>
-                    <div class="{Style.fieldActionWrap}">
-                      <span class="{Style.fieldWithAction}" data-github-user-code aria-live="polite">{if justCopied then Dom.Text.copied else userCode}</span>
-                      <button type="button" class="{Style.fieldAction}" data-github-copy-code
+                    <div class="{Style.codeBoxWrap}">
+                      <span class="{Style.codeBox}" data-github-user-code aria-live="polite">{if justCopied then Dom.Text.copied else userCode}</span>
+                      <button type="button" class="{Style.codeBoxAction}" data-github-copy-code
                               aria-label="{if justCopied then "Device code copied" else "Copy the device code"}"
                               @click={Ev(fun _ -> dispatch (CopyMsg (Dom.Hooks.githubUserCode, userCode)))}>{if justCopied then Icon.check else Icon.copy}</button>
                     </div>
@@ -1281,12 +1281,19 @@ module View =
 
     /// The agent's absence, said in the header only while the sidebar — where the real call to
     /// action lives — is off screen. A phone's sidebar is off-canvas by default, so without this
-    /// the one prompt would be one a phone never sees; the CSS in `Style.headerNoAgent` makes the
+    /// the one report would be one a phone never sees; the CSS in `Style.headerNoAgent` makes the
     /// two mutually exclusive, so it is never said twice.
-    let private agentAbsence (dispatch: ClientMsg -> unit) (claude: ClaudeViewState) : TemplateResult =
+    ///
+    /// A STATUS and not a control: a wait, leading with a beating dot, in the voice every other
+    /// wait in the product speaks (docs/visual-design.md, Colour — "no agent yet" is one of the
+    /// named waits). It was a button here, which made the band's one unpressable word its
+    /// brightest and left the pressable one beside it leading with nothing. The way to do
+    /// something about it is the column's own roster row (`connect`), which this reports the
+    /// absence FOR rather than duplicating.
+    let private agentAbsence (claude: ClaudeViewState) : TemplateResult =
         match claude.Status |> Option.map (fun panel -> panel.AgentAvailable) with
         | Some false ->
-            html $"""<button type="button" class="{Style.headerNoAgent}" data-settings-toggle="prompt" @click={Ev(fun _ -> dispatch ToggleSettingsMsg)}>no agent</button>"""
+            html $"""<span class="{Style.headerNoAgent}"><span class="{Style.statusDotBeat}"></span>no agent</span>"""
         | _ -> Lit.nothing
 
     /// What this session's pull requests amount to, in the header band — the same line the
@@ -1377,7 +1384,7 @@ module View =
               </div>
               <div class="{Style.headerAside}">
                 {prStrip dispatch model}
-                {agentAbsence dispatch model.Claude}
+                {agentAbsence model.Claude}
                 {contentReopen dispatch model}
               </div>
               {catchUpBar model}
