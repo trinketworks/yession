@@ -336,18 +336,35 @@ against each other. The last section holds trust boundaries as sharp as the firs
     stand-in process whose streams are live immediately. It joins the real child to them when the
     wrap resolves. This is plumbing, not policy. The `Srt` suite drives it end to end (stdin in,
     stdout out, exit code) instead of trusting it.
-- **The strict confinement profile needs a nested user namespace, which an unprivileged container
-  refuses.** srt's seccomp helper creates one inside bubblewrap's to drop capabilities and mount a
-  fresh `/proc`. Docker's default (and this repo's dev container) denies it.
+- **The strict confinement profile mounts a fresh `/proc`, which a container can refuse.** Both
+  profiles run the command in bubblewrap's user namespace. Both also nest a second one inside it
+  for srt's seccomp helper, unless the policy grants a unix socket, which turns the helper off.
+  Only strict mounts a fresh `/proc` for the command. A container runtime covers some `/proc`
+  paths and makes others read-only (Docker's default does). The kernel then refuses the fresh
+  mount: "bwrap: Can't mount proc on /proc: Operation not permitted".
 
-  `YESSION_NESTED_SANDBOX=weak` is srt's documented answer. With it, the host's `/proc` stays
-  visible and capabilities are not dropped, so the confinement is genuinely weaker. It is
-  therefore CONFIGURED, not fallen back to. An unset value means strict, and a session on a host
-  that cannot host it fails at boot instead of quietly running wide open.
+  `YESSION_NESTED_SANDBOX=weak` is srt's documented answer. With it, the command sees the host's
+  `/proc` instead of its own, so the confinement is genuinely weaker. It is therefore CONFIGURED,
+  not fallen back to. An unset value means strict, and a session on a host that cannot host it
+  fails at boot instead of quietly running wide open.
 
-  An unprivileged container needs `weak`, which is now on the default path rather than an opt-in
-  one. `check` probes whichever profile the run configures before it declares the `Sandbox`
-  capability. `Srt`, which is confinement under test, is refused under `weak`.
+  The two profiles hold the same capabilities. A non-root caller's command holds none. Under the
+  helper, a root caller's command holds a full set inside the helper's namespace, which maps to
+  the caller's uid 0.
+
+  `weak` does not help where neither profile runs:
+  - A root caller without `CAP_SETFCAP` in its bounding set. The kernel refuses the uid map of
+    each namespace: "bwrap: setting up uid map: Operation not permitted". The Docker backend's
+    work container, run as root, is one: it adds back only `CHOWN`, `FOWNER` and
+    `DAC_OVERRIDE`. A non-root caller does not need the capability.
+  - A host that strips capabilities from a new user namespace. srt's README names Ubuntu
+    24.04's default (`kernel.apparmor_restrict_unprivileged_userns=1`), and `pr.yaml` clears it.
+
+  A Claude Code container runs strict. It is a VM, and `check` runs there as root, with
+  `CAP_SETFCAP` and an uncovered `/proc`. What Docker's default seccomp and AppArmor profiles
+  add is not measured. `check` asks srt's own command line to run the profile the run
+  configures before it declares the `Sandbox` capability. `Srt`, which is confinement under
+  test, is refused under `weak`.
 - **The Docker backend runs through the `dockerode` SDK and is integration-tested in the verify
   gate.** The session id (a Crockford base32 id, always a valid Docker object name) names the
   containers and a per-sandbox named workspace volume. `EnvironmentSpec` is fully interpreted:
