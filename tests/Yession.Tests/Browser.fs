@@ -5336,6 +5336,14 @@ let editorTests =
                 let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation] [data-message-id]")
                 do! Harness.run4 page HarnessPage.benchScrollBegin 0 0 16 true
                 let! _ = Harness.ask page HarnessPage.benchScrollEnd
+                // Two frames before anything is measured: one for the render the empty
+                // scenario asks for, one for it to have landed — the same wait the states walk
+                // takes, for the same reason. Without it this reads the conversation the
+                // harness opened WITH, which is long enough to fill the column, so `fits`
+                // fails and says the layout chose wrongly when nothing had been laid out yet.
+                // It only ever lost that race when the suite was busy, which is the worst way
+                // for a case to be wrong: green alone, red beside the cases it ships with.
+                do! Probe.frames page 2
                 let conversation = "#shell [data-conversation]"
                 let! measured = boxesOf page [ conversation; conversation + " > :last-child" ]
                 let! padding = Probe.computed page conversation "padding-bottom"
@@ -7183,11 +7191,13 @@ let editorTests =
         // control a person can press in the surfaces held to it — never per surface, so the
         // next control in any of them is held without anybody remembering to.
         //
-        // Held: the header, the nav drawer's workspace face, the pane, and the chat's terminal
-        // chips. NOT yet the rest of the chat — a message's actions, a fold's toggle, a
-        // chapter's name, a reply's ref — nor the settings face, whose fields and buttons are
-        // the 32px control height: each is under 44 on a phone today. They join by widening
-        // `held` (or, for settings, by adding its face below), and the case says what is
+        // Held: the header, the nav drawer's BOTH faces — the workspace one and settings — the
+        // pane, and the chat's terminal chips. Settings joined when `fieldFace` grew to
+        // `spacing-touch` on a phone the way `btnFace` already had: until then every input and
+        // select in that drawer stood 32px under a thumb beside a 44px button, two heights in
+        // one column and the shorter one below the floor. NOT yet the rest of the chat — a
+        // message's actions, a fold's toggle, a chapter's name, a reply's ref — each still
+        // under 44 on a phone today. They join by widening `held`, and the case says what is
         // short the day they do.
         //
         // What counts is what a thumb can REACH: a control is measured when the point at its
@@ -7242,7 +7252,10 @@ let editorTests =
                     let! preview = onFace "a preview" "#shell [data-chat-block]"
                     let! _ = onFace "" "#shell [data-content-toggle='hide']"
                     let! nav = onFace "the nav" "#shell [data-nav-toggle='show']"
-                    let all = List.concat [ chat; pane; list; preview; nav ]
+                    // The column's other face, reached the way a person reaches it — the nav
+                    // is already open, and settings is one press of its own pivot away.
+                    let! settings = onFace "settings" "#shell [data-settings-toggle='open']"
+                    let all = List.concat [ chat; pane; list; preview; nav; settings ]
                     Expect.isEmpty all
                         (sprintf "these controls are under 44px on a phone: %s" (String.Join (", ", all)))
                 }
@@ -7288,6 +7301,40 @@ let editorTests =
         // A phone on its side is still a phone (`phone:` in app/tailwind.css): the same
         // controls, the same floor.
         thumbSized 844 390
+
+        // The same floor for the one control the case above cannot see: a `<summary>` is not
+        // in its `pressable` list, and deliberately — a bare verb has no rectangle, so what it
+        // grows on a phone is its HIT AREA and not its box (docs/visual-design.md, Space). The
+        // box has to stay put: the notice's height is a number the panes reserve
+        // (`degradedBarHeight`), so a disclosure that grew would move the header under it.
+        //
+        // Worth a case of its own because of what this particular word is: the ONLY way to
+        // read why a connection dropped, on the one mount a phone reader gets, at 13/16 — a
+        // 16px target on the surface a phone meets first. An area that paints nothing can only
+        // be asked about by hit-testing, so that is what this does, above and below the word,
+        // at the extremes the 44px floor demands around whatever line the ramp gives it.
+        editorCaseIn 390 844 "on a phone the notice's disclosure presses as a thumb's target" <| fun page ->
+            async {
+                let! _ = await (page.WaitForSelectorAsync "#shell [data-conversation]")
+                do! Harness.run1 page HarnessPage.state "degraded"
+                let summary = "#shell [data-detail='degraded'] summary"
+                let! _ = await (page.WaitForSelectorAsync summary)
+                let! boxes = Probe.boxes page [ summary ]
+                let word =
+                    match boxes with
+                    | [ Some box ] -> box
+                    | _ -> failwith "the degraded notice draws no disclosure"
+                let line = Yession.App.Probes.Box.height word
+                // Half a pixel inside each extreme of the 44px the floor asks for, so the
+                // reading is a hit rather than a boundary.
+                let reach = (43.5 - line) / 2.0
+                Expect.isTrue (reach > 0.0) (sprintf "the word is already %.1fpx, so there is nothing to grow" line)
+                let! above = Probe.hitAt page summary -reach
+                let! below = Probe.hitAt page summary (line + reach)
+                Expect.isTrue (above && below)
+                    (sprintf "a press %.1fpx above and below a %.1fpx word reaches the disclosure (above: %b, below: %b)"
+                        reach line above below)
+            }
 
         // Opening the nav on a phone shows the nav. The drawer and the pane are both sheets
         // over the chat there, at one layer, and the pane is later in the document — so the
