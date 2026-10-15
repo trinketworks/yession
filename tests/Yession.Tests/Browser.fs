@@ -4293,9 +4293,19 @@ let editorTests =
         // Every item rather than the last, because what is covered is a band at the foot, and
         // which items fall in it depends on the column's height; walking them all means the
         // case does not have to know.
+        //
+        // The SIDEWAYS phone is the anchor the rest of the rule was written for. There the
+        // card's floor leaves the column less room than one item, and what the doctrine asks
+        // for is absence: the conversation is not drawn, and the card's way out brings it back
+        // (docs/visual-design.md, Space). Measured before that rule landed, the column was a
+        // 24px strip with 608px of extent under it and all fourteen of its items pressed
+        // through to the author line pinned over them — a column that scrolled and could not be
+        // touched. The two legs are one promise, and the probe holds whichever of them this
+        // viewport is in; a case per leg would be two names for one thing nobody can choose
+        // between.
         let launchCardCoversNothingCase width height =
             editorCaseIn width height
-                (sprintf "at %dpx every item in the conversation can be scrolled clear of the launch card" width) <| fun page ->
+                (sprintf "at %dx%d nothing in the conversation is drawn that a press cannot reach" width height) <| fun page ->
                 async {
                     do! Harness.run page HarnessPage.launchOver
                     let! _ = await (page.WaitForSelectorAsync "#shell [data-repo-picker] [data-repo-picker-start]")
@@ -4305,18 +4315,14 @@ let editorTests =
                     // promise is about where things land once it has, so wait for the entrance to
                     // settle (finite animations only; the carets pulse forever).
                     do! Probe.settled page
-                    // Ground truth: the column has more than it can show, so some items start
-                    // out of view and bringing them in is something the case has to do.
-                    let! conversation = Probe.scroll page "#shell [data-conversation]"
-                    let overflows = conversation |> Option.exists (fun c -> c.Height > c.ClientHeight + 1.0)
-                    Expect.isTrue overflows "the conversation scrolls, so where it ends is a question"
                     let! hidden = Probe.verdict page Yession.App.Probes.Measure.ItemsClearOfCard
                     Expect.isEmpty
                         hidden
-                        (sprintf "every item, scrolled into view, is the thing under a press in its middle; these were not: %s"
+                        (sprintf "a conversation the card leaves room for is one every press reaches, and one it does not is not drawn; this was neither: %s"
                             (String.Join (" | ", hidden)))
                 }
         launchCardCoversNothingCase 390 844
+        launchCardCoversNothingCase 844 390
         launchCardCoversNothingCase 1440 900
         // The card reserves the room its list will want, so repositories ARRIVING do not change
         // its height. The card is docked at the column's foot; sized to its content it stood only

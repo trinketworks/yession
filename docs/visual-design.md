@@ -143,6 +143,16 @@ fold arrow and a dot are such marks. A mark never pushes the words in.
 *Test: draw a vertical line on one column's rail. Every first letter in that column touches the
 line. Then make the screen a phone. The line keeps its distance from the column's inset.*
 
+A column is drawn only while it has room for one of its items. One item is the shortest item
+the column holds, plus whatever the column pins above its items. A column with less room than
+that is not drawn. A column that scrolls and cannot be touched promises what it cannot give.
+Absence is the honest answer.
+
+Nothing is drawn in its place. The surface that took the room carries the way back, and the
+way back is one control. A person who cannot see the column must still be able to reach it.
+*Test: shorten the screen until a column has less room than one item. The column is gone, and
+one press on the surface over it brings the column back.*
+
 The header band is `spacing-band` tall. On a phone it is `spacing-band-phone`. Every head on a
 surface shares the band. The hairline under it runs across every column at one height.
 

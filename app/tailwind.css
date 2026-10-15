@@ -265,6 +265,32 @@
   }
 }
 
+/* ROOM: has this column enough of it to show one of its items? A column too short to show one
+   is not drawn, because a column that scrolls and cannot be touched promises what it cannot
+   give (docs/visual-design.md, Space). At 844x390 — a phone on its side — the ask card's floor
+   leaves the conversation 24px, and all fourteen of its items were under the author line the
+   column pins. The strip scrolled 608px of extent that nothing could reach.
+
+   Asked of the COLUMN, not of the screen, so it is a container query and not a media one. The
+   room a column has is the screen less the header, the composer and whatever surface is
+   standing in the column beside it, and no media query knows any of that. The column declares
+   itself a size container (`room-for-items`) and the rule reads the height it was actually
+   given.
+
+   72px is one item: the author line the column pins over its items (28px as drawn) plus the
+   shortest item under it (40px), on the 4px rhythm. It is written here rather than held as a
+   token because a container query resolves no `var()` — the same reason the pair above spells
+   `500px`. The shortest item is what the number is, because a column that cannot show the
+   shortest can show none. */
+@utility room-for-items {
+  container: column / size;
+}
+@custom-variant too-short {
+  @container column (height < 72px) {
+    @slot;
+  }
+}
+
 /* A round mark that has to sit on a one-pixel line (`Style.actNoteRunningOther`, under a cause's
    corner): an `1ex` disc overshot as a round letter is, its diameter rounded to an ODD number
    of pixels. A browser paints a box by rounding each edge to the pixel grid on its own, so a

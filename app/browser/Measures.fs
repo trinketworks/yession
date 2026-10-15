@@ -287,15 +287,58 @@ let private askCardColumn (column: int) : string list =
             | Some left -> Some (sprintf "%s starts at %dpx, the conversation at %dpx" what left column)
             | None -> Some (sprintf "%s is missing" what))
 
+/// Nothing the conversation DRAWS is out of a press's reach, and a column with less room than
+/// one item is not drawn at all (docs/visual-design.md, Space).
+///
+/// Two legs, because at 844x390 the ask card's floor leaves the column less room than one of
+/// its items and the rule's answer there is absence. Either leg alone passes over a bug: a
+/// column drawn over items no press reaches is the lie the rule exists to forbid, and a column
+/// absent with nothing to bring it back is a conversation nobody can return to.
+///
+/// What is NOT drawn is skipped rather than failed, which is the whole of the first leg: an
+/// item inside a column the browser is not drawing has a zero box at the origin, and hit-testing
+/// that would report every item in an honestly absent column as unreachable.
 let private itemsClearOfCard () : string list =
-    all Root.Document "#shell [data-conversation] [data-message-id]"
-    |> List.choose (fun item ->
-        // To the middle, as far as the scroll allows: the column pins its author line at the
-        // top, and an item scrolled only to the nearest edge stops under that instead.
-        Scrolling.intoView item "center"
-        let box = item.getBoundingClientRect ()
-        if paintedAt item (box.left + box.width / 2.0) (box.top + box.height / 2.0) then None
-        else Some (sprintf "%s is not what a press in its middle lands on" (item.getAttribute "data-message-id")))
+    let items = all Root.Document "#shell [data-conversation] [data-message-id]"
+    let drawn =
+        items
+        |> List.filter (fun item ->
+            let box = item.getBoundingClientRect ()
+            box.width > 0.0 && box.height > 0.0)
+    match items, drawn with
+    // Anti-vacuity: a card standing over nothing cannot say where the conversation went.
+    | [], _ -> [ "there is no conversation behind the card, so nothing here is a question" ]
+    | _, [] ->
+        // The column had less room than one item, so it is not drawn. What took the room owes
+        // the way back, and the way back has to be a press that lands.
+        match first Root.Document "#shell [data-repo-picker-dismiss]" with
+        | None -> [ "the conversation is not drawn and nothing offers a way back to it" ]
+        | Some way ->
+            // Into view first, exactly as an item is: this page carries the editor fixtures
+            // above the shell, so a control the shell draws on its own first screen can still
+            // be below the window — which is the harness's doing and not the card's.
+            Scrolling.intoView way "center"
+            let box = way.getBoundingClientRect ()
+            if paintedAt way (box.left + box.width / 2.0) (box.top + box.height / 2.0) then []
+            else [ "the conversation is not drawn and a press does not reach the way back to it" ]
+    | _ ->
+        // Anti-vacuity for the other leg: a column showing everything it holds is one no card
+        // could have covered the end of.
+        let shows =
+            first Root.Document "#shell [data-conversation]"
+            |> Option.filter (fun column -> column.scrollHeight <= column.clientHeight + 1.0)
+            |> Option.map (fun _ -> "the conversation shows all it holds, so where it ends is not a question")
+            |> Option.toList
+        let unreached =
+            drawn
+            |> List.choose (fun item ->
+                // To the middle, as far as the scroll allows: the column pins its author line at
+                // the top, and an item scrolled only to the nearest edge stops under that instead.
+                Scrolling.intoView item "center"
+                let box = item.getBoundingClientRect ()
+                if paintedAt item (box.left + box.width / 2.0) (box.top + box.height / 2.0) then None
+                else Some (sprintf "%s is not what a press in its middle lands on" (item.getAttribute "data-message-id")))
+        shows @ unreached
 
 let private hideFixturesAboveShell () : string list =
     for id in [ "host"; "replay" ] do
