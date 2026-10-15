@@ -23,6 +23,10 @@ module PagePatches =
     /// Replace the global constructor `name` with one that builds the original and hands each
     /// instance to `made` before the page sees it. The replacement keeps the original's
     /// prototype, so `instanceof` and every static still answer as before.
+    ///
+    /// `made` takes the instance as the type the caller names, which is the type of what the
+    /// constructor `name` builds: the two are one fact, said once at the call, and this is the
+    /// binding that turns a global looked up by name into a typed value.
     [<Emit("""(function (name, made) {
         const Native = globalThis[name]
         const Patched = function (...args) { const built = new Native(...args); made(built); return built }
@@ -30,7 +34,7 @@ module PagePatches =
         Object.setPrototypeOf(Patched, Native)
         globalThis[name] = Patched
       })($0, $1)""")>]
-    let constructed (name: string) (made: obj -> unit) : unit = jsNative
+    let constructed<'instance> (name: string) (made: 'instance -> unit) : unit = jsNative
 
     /// Wrap the asynchronous method `methodName` of the global class `className` so `after`
     /// runs once the original's promise has settled successfully, for every instance.

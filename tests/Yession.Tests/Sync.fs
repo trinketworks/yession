@@ -67,7 +67,10 @@ let private syncBoth (a: Y.Doc) (b: Y.Doc) =
 /// straight onto the doc, under no origin anything here owns. The cases that use it write what
 /// no build of ours writes — that is the point — so writing it by hand is the only way to ask
 /// what the reader makes of it.
-let private entryIn (doc: Y.Doc) (root: string) (key: string) (fields: (string * obj) list) : unit =
+///
+/// So a field's value is `obj`: any value Yjs can hold, of whatever kind the case needs to be
+/// wrong, which is what a peer we do not control may have written.
+let private entryIn (doc: Y.Doc) (root: string) (key: string) (fields: (string * obj) list) : unit = // fsharpanalyzer: ignore-line YES017
     let entry : Y.Map<obj> = Y.Map.Create ()
     (doc.getMap root : Y.Map<obj>).set (key, box entry) |> ignore
     fields |> List.iter (fun (field, value) -> entry.set (field, value) |> ignore)

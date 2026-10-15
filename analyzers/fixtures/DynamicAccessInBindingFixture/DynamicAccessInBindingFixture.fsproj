@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The other half of YES015: a binding project, with nothing Yession in its reach, may reach a
+    member by name, because that is how a binding reaches what it binds. Every construct below is
+    one Yession.DynamicAccessFixture is reported for, and nothing here is marked. A finding would
+    mean the rule had started rejecting the src/Fable.* projects, the serial example and the
+    other fixtures.
+
+    Not in Yession.slnx, for the reason no fixture is.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Binding.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+  </ItemGroup>
+
+</Project>

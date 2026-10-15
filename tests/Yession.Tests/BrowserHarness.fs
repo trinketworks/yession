@@ -19,7 +19,11 @@ module Harness =
     /// An argument as the page should see it. Playwright serializes an F# option as the object
     /// it is in .NET; the page's F# reads `None` as null and `Some x` as `x`, so it crosses as
     /// those.
-    let private arg (value: obj) : obj =
+    ///
+    /// This and the two below are `obj` because they are the last step before Playwright, whose
+    /// `EvaluateAsync` takes `object`: an argument has already been typed by the key it is
+    /// passed through (`run1`, `ask3` and the rest), and here it is only marshalled.
+    let private arg (value: obj) : obj = // fsharpanalyzer: ignore-line YES017
         match value with
         | null -> null
         | v when v.GetType().IsGenericType && v.GetType().GetGenericTypeDefinition () = typedefof<option<_>> ->
@@ -27,10 +31,10 @@ module Harness =
             if fields.Length = 0 then null else fields.[0]
         | v -> v
 
-    let private call (page: IPage) (name: string) (args: obj list) : Async<unit> =
+    let private call (page: IPage) (name: string) (args: obj list) : Async<unit> = // fsharpanalyzer: ignore-line YES017
         PageScript.run page name (args |> List.map arg |> Array.ofList)
 
-    let private answer<'T> (page: IPage) (name: string) (args: obj list) : Async<'T> =
+    let private answer<'T> (page: IPage) (name: string) (args: obj list) : Async<'T> = // fsharpanalyzer: ignore-line YES017
         PageScript.call<'T> page name (args |> List.map arg |> Array.ofList)
 
     // --- Calls whose answer is nothing ----------------------------------------------------

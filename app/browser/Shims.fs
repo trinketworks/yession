@@ -16,10 +16,9 @@ open Thoth.Json.Net
 
 let private gatheringNeverEnds () =
     PageGlobal.set Shims.candidates 0
-    PagePatches.constructed "RTCPeerConnection" (fun made ->
+    PagePatches.constructed "RTCPeerConnection" (fun (peer: RTCPeerConnection) ->
         // Its listeners go on in the constructor, before the page can set a handler of its own,
         // so they are heard first and can stop the event there.
-        let peer = made :?> RTCPeerConnection
         peer.addEventListener ("icecandidate", fun e ->
             let ice = e :?> RTCPeerConnectionIceEvent
             if Option.isNone ice.candidate then e.stopImmediatePropagation ()

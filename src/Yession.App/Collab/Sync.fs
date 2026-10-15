@@ -580,8 +580,8 @@ module SyncedStateSync =
     // class's static member rather than the module beside it, and finds no `tryOf`.
     open Yjs
 
-    /// The map's keys, drained from the iterator Yjs answers with.
-    let private mapKeys (m: Yjs.Y.Map<obj>) : string[] =
+    /// The map's keys, drained from the iterator Yjs answers with, whatever the map holds.
+    let private mapKeys (m: Yjs.Y.Map<'value>) : string[] =
         JS.Constructors.Array.from (m.keys ())
 
     /// Yjs materializes root types created by a *remote* update as untyped placeholders
@@ -953,22 +953,28 @@ module DocSync =
     let private toBase64 = Lib0.Buffer.toBase64
     let private fromBase64 = Lib0.Buffer.fromBase64
 
-    /// Register a doc listener and get back the way to stop it. ONE verb, because
-    /// `offUpdate` only removes a listener when handed the very `UpdateHandler` instance
-    /// `onUpdate` was given — a caller who kept the handler and remembered to pass it again
-    /// is a caller who can forget. The disposer closes over it, so there is nothing left to
-    /// get wrong.
-    let private onUpdate (doc: Y.Doc) (handler: JS.Uint8Array -> obj -> unit) : unit -> unit =
-        let registered = Y.UpdateHandler (fun update origin _ _ -> handler update origin)
-        doc.onUpdate registered
-        fun () -> doc.offUpdate registered
-
     /// The origin tag under which remote payloads are applied, letting the local-update
     /// broadcast tell relayed changes from locally-originated ones. An IDENTITY, told apart
     /// by reference: it was a string once, compared with `===`, which is a value comparison
     /// for a string — so any origin that happened to spell the same words was "remote". A
     /// fresh object is a tag nobody else can mint.
     let private remoteOrigin : obj = obj ()
+
+    /// Register a doc listener and get back the way to stop it. ONE verb, because
+    /// `offUpdate` only removes a listener when handed the very `UpdateHandler` instance
+    /// `onUpdate` was given — a caller who kept the handler and remembered to pass it again
+    /// is a caller who can forget. The disposer closes over it, so there is nothing left to
+    /// get wrong.
+    ///
+    /// The handler is told each update and whether `applyRemote` applied it. Yjs hands the
+    /// listener the update's origin as whatever its writer tagged it with; asking it the one
+    /// question anything here has of it, here beside the tag, keeps that untyped value out of
+    /// every handler.
+    let private onUpdate (doc: Y.Doc) (handler: JS.Uint8Array -> bool -> unit) : unit -> unit =
+        let registered =
+            Y.UpdateHandler (fun update origin _ _ -> handler update (obj.ReferenceEquals (origin, remoteOrigin)))
+        doc.onUpdate registered
+        fun () -> doc.offUpdate registered
 
     /// The full current doc state as one wire payload. Full-state updates are idempotent
     /// and order-independent, so this is the safe initial exchange.
@@ -987,8 +993,7 @@ module DocSync =
     /// a leak with a symptom nobody attributes: the doc keeps calling a listener whose
     /// channel is shut, and every local update walks one more of them per reconnect.
     let onLocalUpdate (doc: Y.Doc) (send: string -> unit) : unit -> unit =
-        onUpdate doc (fun update origin ->
-            if not (obj.ReferenceEquals (origin, remoteOrigin)) then send (toBase64 update))
+        onUpdate doc (fun update fromRemote -> if not fromRemote then send (toBase64 update))
 
     /// Invoke `handle` after every doc update, however it originated.
     let onAnyUpdate (doc: Y.Doc) (handle: unit -> unit) : unit =

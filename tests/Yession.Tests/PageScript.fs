@@ -18,12 +18,13 @@ module PageScript =
 
     /// Call the function the page publishes under `name`, answering what it answered — a
     /// promise awaited for what it settles to. The arguments cross as Playwright serializes
-    /// them.
-    let call<'T> (page: IPage) (name: string) (args: obj array) : Async<'T> =
+    /// them, which is why they are `obj`: `EvaluateAsync` takes its argument as `object`, and
+    /// what types a call is the key it is made through (`BrowserHarness`), not this line.
+    let call<'T> (page: IPage) (name: string) (args: obj array) : Async<'T> = // fsharpanalyzer: ignore-line YES017
         Async.AwaitTask (page.EvaluateAsync<'T> (invoking, [| box name; box args |]))
 
-    /// Call it for what it does, not for an answer.
-    let run (page: IPage) (name: string) (args: obj array) : Async<unit> =
+    /// Call it for what it does, not for an answer. Its arguments are `obj` for `call`'s reason.
+    let run (page: IPage) (name: string) (args: obj array) : Async<unit> = // fsharpanalyzer: ignore-line YES017
         page.EvaluateAsync (invoking, [| box name; box args |]) |> Async.AwaitTask |> Async.Ignore
 
     /// What the page holds under `name`, or null.

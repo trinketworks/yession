@@ -84,8 +84,9 @@ module InMemoryEventLog =
     let DefaultPageSize = 100
 
     /// Run `f` under the gate. On .NET this is a real lock so concurrent appends stay
-    /// monotonic; under Fable (single-threaded JS) no lock is needed.
-    let inline private withLock (gate: obj) (f: unit -> 'a) : 'a =
+    /// monotonic; under Fable (single-threaded JS) no lock is needed. The gate is any object a
+    /// lock can be taken on, which is all the type says.
+    let inline private withLock<'gate, 'a when 'gate: not struct> (gate: 'gate) (f: unit -> 'a) : 'a =
 #if FABLE_COMPILER
         ignore gate
         f ()
