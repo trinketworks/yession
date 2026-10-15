@@ -1126,9 +1126,11 @@ to whatever still reproduces once the fixes have landed.
       what the daemon has, not against a share the operator chose. Six sessions that each
       declare most of the VM are each accepted.
     - **A `cgroup-parent` is the repo's to name, and the host's to make.** Nothing in yession
-      creates the parent cgroup or gives it a limit. Docker makes a missing parent with no
-      limit, which changes nothing. A `memory:` is also not checked against the parent's limit,
-      only against the daemon's total.
+      creates the parent cgroup or gives it a limit. On this repo's host, the Colima start
+      wrapper in the nix-darwin config makes `/yession` at every boot, with a limit of the VM's
+      RAM less 768 MiB. Where the parent is missing, Docker makes it with no limit, which
+      changes nothing. A `memory:` is also not checked against the parent's limit, only against
+      the daemon's total.
     - **No `${VAR}` in an entrypoint.** compose interpolates from the host's environment at parse
       time. That is the wrong environment here: the sandbox's is the one that means something.
       Nothing has needed it. The string form is read into words and nothing else. A value that
@@ -1274,12 +1276,15 @@ to whatever still reproduces once the fixes have landed.
   300 KB tarball, so npm fetches it. The *first* install therefore needs network and disk. The
   SDK's own resolution finds the binary afterward, so `YESSION_BIN_CLAUDE` is not needed.
 - **Build slots count only this repository's own heavy verbs.** `tasks.fsx` serialises its
-  dotnet/Fable builds and suites across every sandbox on a daemon (`withBuildSlot`, one slot
-  while the Colima VM is 5 GiB). A `dotnet` or `node` run by hand, another repository's build, or
-  a `dev` watch takes no slot, and can still push the shared VM into the kernel's OOM killer,
-  which then picks the largest process in ANY session. The slot is admission, not a limit: what
-  bounds one container is a per-container memory limit (#1312), and what keeps the daemon itself
-  out of reach is a pool cgroup, which nothing sets yet.
+  dotnet/Fable builds and suites across every sandbox on a daemon (`withBuildSlot`, two slots of
+  3 GiB in the ~7 GiB pool of the 8 GiB Colima VM). A `dotnet` or `node` run by hand, another
+  repository's build, or a `dev` watch takes no slot, and can still push the pool into the
+  kernel's OOM killer, which then picks the largest process in ANY session. The slot is
+  admission, not a limit: what bounds one container is a per-container memory limit (#1312), and
+  what keeps the daemon itself out of reach is the pool cgroup, `cgroup-parent: /yession`. The
+  host's Colima start wrapper (in the nix-darwin config) makes that pool at every boot, not
+  yession. Where it is missing, Docker makes `/yession` with no limit, and the daemon is again
+  in reach.
 - **The composition E2E and install smoke run on Linux/CI.** Other platforms' npm resolution rides
   npm's own optional-dependency machinery, unverified per-commit.
 - **No per-platform build matrix for the npm route, no code signing.** Release CI ships one

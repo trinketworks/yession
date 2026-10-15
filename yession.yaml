@@ -60,17 +60,23 @@ sandboxes:
       entrypoint: nix develop --impure --command
       # 3 GiB, not the default of three quarters of the daemon's memory. Three quarters
       # is room for one build, and the VM must also hold the other sessions' containers,
-      # and two builds once `TASKS_BUILD_SLOTS` is 2. A build that needs more than 3 GiB
+      # and two builds (`TASKS_BUILD_SLOTS` is 2). A build that needs more than 3 GiB
       # is killed in its own container, which is the point. Measured
       # with six MSBuild nodes: a build's `memory.peak` was 3.6-4.2 GB, but that
       # includes page cache, which the kernel reclaims at the ceiling before it kills.
       # The largest single process killed was a dotnet at 1.84 GB.
       #
       # `oom-score-adj` (500) and `pids-limit` (4096) are not written here: the backend's
-      # standard values are the ones this repo wants. No `cgroup-parent`: the VM has no
-      # `/yession` cgroup until the host's operator makes one with a limit, and a parent
-      # with no limit changes nothing.
+      # standard values are the ones this repo wants.
       memory: 3g
+      # The pool: one cgroup that holds every session's containers, with a limit below the
+      # VM's total, so that an overrun of the sum stays inside it and the daemon lives.
+      # yession does not make it. The host's Colima start wrapper (in the nix-darwin
+      # config) makes `/sys/fs/cgroup/yession` at every boot, with memory.max = VM RAM -
+      # 768 MiB (~7 GiB of the 8 GiB VM) and pids.max = 32768. A path, because the daemon
+      # uses the cgroupfs driver. Where the pool is missing, docker makes the cgroup itself
+      # with no limit, and the containers run as if no parent was named.
+      cgroup-parent: /yession
     # Wishes, not needs. `github` is the operator's GitHub connection, so `git push` works
     # from a terminal where one is offered. Where the operator offers a warm nix store
     # volume under `nix-container-store`, the container mounts it and the first build
@@ -113,11 +119,12 @@ sandboxes:
       # unauthenticated; nothing here refuses.
       GH_REPO: trinketworks/yession
       # How many heavy builds (`check`, `build`, `compile`, `lint`, …) may run at once across
-      # EVERY sandbox on this docker daemon; the rest wait, and say who they wait for. One,
-      # because two dotnet/Fable builds do not fit a 5 GiB VM and the OOM killer then takes
-      # either session's build. The lock is on the shared `/nix` volume, so it does nothing
-      # where the operator offers no `nix-container-store`. See `withBuildSlot` in tasks.fsx.
-      TASKS_BUILD_SLOTS: "1"
+      # EVERY sandbox on this docker daemon; the rest wait, and say who they wait for. Two,
+      # because two 3 GiB builds fit the ~7 GiB pool (`cgroup-parent` above) of the 8 GiB
+      # VM. A third does not, and the OOM killer then takes any session's build. The lock
+      # is on the shared `/nix` volume, so it does nothing where the operator offers no
+      # `nix-container-store`. See `withBuildSlot` in tasks.fsx.
+      TASKS_BUILD_SLOTS: "2"
 
   # `verify` is minutes long. A second sandbox on the same configuration means the gate
   # runs beside interactive work instead of holding the shell.
@@ -129,6 +136,7 @@ sandboxes:
       image: nixos/nix
       entrypoint: nix develop --impure --command
       memory: 3g   # as in `dev`
+      cgroup-parent: /yession   # as in `dev`: the host's pool
     wants: [ github, nix-container-store ]
 
     # The same reasons as `dev`; `like:` does not exist yet, so both are written twice.
@@ -140,4 +148,4 @@ sandboxes:
         build-users-group =
         sandbox = false
       CONTAINER_DEVENV_DOTFILE: /root/.devenv   # as in `dev`: one per container
-      TASKS_BUILD_SLOTS: "1"                    # as in `dev`: the same slots, shared
+      TASKS_BUILD_SLOTS: "2"                    # as in `dev`: the same slots, shared

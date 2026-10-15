@@ -42,14 +42,14 @@ already assembled the devshell. `check`, `build` and the other tasks are on PATH
 nothing in front of them. Do NOT install devenv, because the devshell exists. Do NOT run
 `.claude/setup.sh`, because it targets Claude Code containers.
 
-**Heavy verbs take a build slot.** Every session's sandboxes share one container VM, and two
+**Heavy verbs take a build slot.** Every session's sandboxes share one container VM, and three
 dotnet/Fable builds at once do not fit it. So `check`, `verify`, `build`, `compile`, `stage`,
 `package`, `lint`, `bench`, `example` and `crash-repro` (and the build step of `start`, `probe`
 and `frames`) first lock a slot under `/nix/var/yession/build-slots`, on the `/nix` volume that
 all sandboxes share. When every slot is held, the verb prints `build slot: waiting for another
 session's build (held by …) …` and waits. That is not a hang. Do not kill it or retry it. A
 killed holder releases its slot at once. `yession.yaml` sets `TASKS_BUILD_SLOTS` (the slot
-count, 1) for `dev` and `gate`. Where it is unset (a laptop, CI), nothing waits.
+count, 2) for `dev` and `gate`. Where it is unset (a laptop, CI), nothing waits.
 `TASKS_BUILD_SLOTS=0` builds now without a slot. `TASKS_BUILD_SLOT_TIMEOUT` is the wait in
 minutes before the verb fails (default 60). See `withBuildSlot` in `tasks.fsx`.
 
