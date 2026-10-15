@@ -331,6 +331,21 @@ let private routeTests =
                 do! stop ()
             }
 
+        testCaseAsync "a refusal is plain text a browser may not sniff" <|
+            async {
+                // The 401 above is `text/plain`, written by a route that names no sniffing
+                // header of its own, and read here off a real session server's wire. Plenty
+                // of refusals say back what the caller sent, which a sniffing browser would
+                // render as markup if it looked like some.
+                let! _, _, at, stop = serving [ version "secret.png" 0, "the bytes" ]
+                let! reply = TestHttp.getNoStore [] (at (ArtifactRef.content (version "secret.png" 0)))
+                Expect.equal
+                    (TestHttp.requiredHeader "x-content-type-options" reply)
+                    "nosniff"
+                    "the text is read as text, whatever it looks like"
+                do! stop ()
+            }
+
         testCaseAsync "an address the store does not hold is a 404, whichever form it takes" <|
             async {
                 let! _, _, at, stop = serving [ version "chart.png" 0, "bytes" ]

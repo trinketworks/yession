@@ -249,6 +249,23 @@ let tests =
 
         testCase "a number thrown describes as its digits" <| fun () ->
             Expect.equal (Thrown.describe (box 7)) "7" "the digits a person reads"
+
+        // `writeHead` sends exactly what `ResponseHeader.wire` answers, so the head a browser
+        // reads is pinned here, without a socket. The input names nothing at all: `nosniff`
+        // is not something a writer asks for, so it is there when the writer asked for nothing.
+        testCase "a response head says nosniff when its writer named no header" <| fun () ->
+            Expect.equal
+                (ResponseHeader.wire [] |> List.tryFind (fun (name, _) -> name = "x-content-type-options") |> Option.map snd)
+                (Some "nosniff")
+                "a browser is never left to guess what a body is"
+
+        // The header is added, never swapped in: what the writer named still goes out.
+        testCase "a response head carries every header its writer named beside nosniff" <| fun () ->
+            let named = [ ResponseHeader.ContentType "text/plain"; ResponseHeader.CacheControl "no-store" ]
+            Expect.equal
+                (ResponseHeader.wire named |> List.filter (fun (name, _) -> name <> "x-content-type-options"))
+                [ "content-type", "text/plain"; "cache-control", "no-store" ]
+                "the writer's headers, by name and value, in its order"
     ]
 
 // --- Spawning, and the members of a child Fable.Node does not declare ------------------------

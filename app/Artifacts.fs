@@ -428,10 +428,11 @@ let private containedIn (artifactsDir: string) (path: string) : bool =
 ///
 /// An artifact is a file somebody else chose the contents of, served from the session's OWN
 /// origin, which is where every cookie and every peer token in this session lives. So the type
-/// is the one the store recorded and never a sniffed one (`nosniff`), anything this build does
-/// not claim to know is an `octet-stream` download rather than a guess, and the sandboxing CSP
-/// is what makes an SVG — markup that can carry script, and the one image type that can —
-/// inert if somebody navigates straight at it instead of letting the pane draw it.
+/// is the one the store recorded and never a sniffed one (`writeHead` says `nosniff` on every
+/// response), anything this build does not claim to know is an `octet-stream` download rather
+/// than a guess, and the sandboxing CSP is what makes an SVG — markup that can carry script,
+/// and the one image type that can — inert if somebody navigates straight at it instead of
+/// letting the pane draw it.
 let private headersFor (ref: ArtifactRef) (bytes: int64) =
     let name = ArtifactRef.name ref
     let contentType, disposition =
@@ -442,7 +443,6 @@ let private headersFor (ref: ArtifactRef) (bytes: int64) =
       ResponseHeader.ContentLength bytes
       ResponseHeader.ContentDisposition disposition
       ResponseHeader.CacheControl CachePolicy.contentVersion
-      ResponseHeader.ContentTypeOptions "nosniff"
       ResponseHeader.ContentSecurityPolicy "default-src 'none'; sandbox" ]
 
 let private notFound (res: ServerResponse) =
