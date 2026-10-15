@@ -100,6 +100,11 @@ principle 2 blurs the screen.
 Dimming is a role (`ink-dim`, `ink-faint`), never opacity. Opacity breaks the contrast floor
 and dims the focus ring with it.
 
+Dimming has a limit. In a palette where every colour is already at the floor, no colour has a
+dimmer one that still passes. A dim variant of that palette takes the quiet role (`ink-faint`)
+for every colour. It does not dim each colour. Where ink sits on a fill and not on the ground,
+the pair sets the contrast, so the ink keeps the colour its author chose.
+
 ### Form
 
 Two primitives. The **rectangle** is always sharp-cornered. The **point** is always round.
