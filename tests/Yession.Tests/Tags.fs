@@ -44,7 +44,7 @@ type Need =
     | NixBuild    // consent to BUILD the installable from the working tree and boot it: minutes of
                   // sandboxed compile. No suite needs it; `check` runs the build (tasks.fsx).
     | Sandbox     // a work sandbox to RUN a command in: srt under either nesting profile (strict, or
-                  // weak where the box cannot nest). The suite does not assert the boundary holds
+                  // weak where a fresh /proc is refused). The suite does not assert the boundary holds
     | Srt         // CONFINEMENT under test (the escape probes): srt's STRICT profile only, bubblewrap +
                   // socat on Linux, Seatbelt on macOS. A granted `Srt` also grants `Sandbox`
     | Pty         // the native `node-pty` addon — a real pseudo-terminal, not a pipe

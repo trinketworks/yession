@@ -175,11 +175,12 @@ jobs:
       # value read at the gate step, and a per-tier setup would be three arrangements to keep in
       # step with one file's worth of reasons. A daemon the `nix` tier never asks for costs it
       # nothing.
-      # The confining sandbox backend needs a NESTED user namespace for its strict profile, and
-      # Ubuntu 24.04's `kernel.apparmor_restrict_unprivileged_userns=1` forbids one — without
-      # this the release gate drops the `Srt` capability and the escape probes never run. The
-      # runner is an ephemeral VM; nothing about the product changes.
-      - name: Permit nested user namespaces (the sandbox escape probes need them)
+      # Ubuntu 24.04 ships `kernel.apparmor_restrict_unprivileged_userns=1`, which strips the
+      # capabilities from a new user namespace. Both of srt's profiles run a command in one, so
+      # neither runs here without this (docs/GAPS.md), and `check` refuses `Srt`, quoting srt,
+      # instead of running the escape probes. The runner is an ephemeral VM; nothing about the
+      # product changes.
+      - name: Let unprivileged user namespaces keep their capabilities (srt needs them)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Verification gate
         env:

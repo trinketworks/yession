@@ -61,8 +61,8 @@ type [<AllowNullLiteral>] RuntimeConfig =
     abstract bwrapPath : string with get, set
     abstract socatPath : string with get, set
     abstract ripgrep : RipgrepConfig with get, set
-    /// The host's `/proc` kept and capabilities not dropped — what an unprivileged container,
-    /// which cannot nest a user namespace, is left with.
+    /// The host's `/proc` kept instead of a fresh one mounted, which a container that covers
+    /// part of `/proc` refuses. The user namespaces and capabilities are strict's (docs/GAPS.md).
     abstract enableWeakerNestedSandbox : bool with get, set
 
 /// The platform's `AbortSignal`, as `wrapWithSandboxArgv` takes one to cancel a wrap in

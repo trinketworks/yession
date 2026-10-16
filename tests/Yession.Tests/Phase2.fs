@@ -1114,7 +1114,7 @@ let private sandboxPolicyTests =
                  |> expect
                  |> fun t -> t.Nesting)
                 Sandboxes.WeakNesting
-                "an unprivileged container asks for the weaker profile explicitly"
+                "a host that refuses strict's fresh /proc asks for the weaker profile explicitly"
             Expect.isError
                 (Sandboxes.SrtSandbox.toolsFrom (Map.ofList [ "YESSION_NESTED_SANDBOX", "off" ]))
                 "and anything else is a loud error, not a guess at which way to err"
