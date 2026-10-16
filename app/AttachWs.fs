@@ -347,7 +347,7 @@ let private connect
         // disagree.
         socket.onError ignore
 
-        socket.onClose (fun () ->
+        socket.onClose (fun _ ->
             if not settled then
                 settled <- true
                 resolve (Error ("could not attach to " + describing ticket))

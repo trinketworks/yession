@@ -290,6 +290,16 @@ type Frame =
     | Text of string
     | Binary of JS.ArrayBuffer
 
+/// How a socket closed, as its `close` event says. `reason` is what a peer that closed on
+/// purpose sent, and is often empty. `code` 1006 is an ABNORMAL closure, and it is all a
+/// connection that never opened reports: a refused port, an address that is not a WebSocket
+/// endpoint and a connection dropped on the way all read the same (Node 24, measured: an empty
+/// `reason`, and an `error` event before it whose error has no message).
+type CloseEvent =
+    abstract code : int
+    abstract reason : string
+    abstract wasClean : bool
+
 /// Node 22+ ships the WHATWG `WebSocket` as a global; the repo pins 24. No package this
 /// repository references types it — not Fable.Browser.Dom, not transitively — so the slice
 /// `app/AttachWs.fs` speaks is declared here: construction, the two sends, close, and the
@@ -326,7 +336,7 @@ type WebSocket =
     abstract onError : handler: (unit -> unit) -> unit
 
     [<Emit("$0.addEventListener('close', $1)")>]
-    abstract onClose : handler: (unit -> unit) -> unit
+    abstract onClose : handler: (CloseEvent -> unit) -> unit
 
 [<AutoOpen>]
 module WebSockets =
