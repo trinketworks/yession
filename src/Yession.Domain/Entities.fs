@@ -67,10 +67,14 @@ module EntityRef =
         // in a fold draw as one chip.
         | EntityRef.Content ref -> ContentRef.url ref
 
-/// One piece of a sentence: words, or a thing the words are about.
+/// One piece of a sentence: words, the deed the words are about, or a thing they name.
 [<RequireQualifiedAccess>]
 type Segment =
     | Text of string
+    /// What was done — "started", "ran", "shared". Its own segment so every headline's
+    /// verb is drawn by one rule (`Entity.verb`), and the thing it was done to reads
+    /// brighter beside it however either is styled next.
+    | Verb of string
     | Ref of EntityRef
 
 /// A sentence, as the fold hands it to its readers.
@@ -82,6 +86,9 @@ module Phrase =
     /// family is given references.
     let text (words: string) : Phrase = [ Segment.Text words ]
 
+    /// A verb and what it was done to: "started sandbox dev", "shared serial tools".
+    let deed (verb: string) (what: Phrase) : Phrase = Segment.Verb verb :: Segment.Text " " :: what
+
     /// The sentence as prose. Concatenation and nothing else: the fold has already put the
     /// spaces where they go, so this reader adds none and a screen rendering the same
     /// segments adds none either.
@@ -89,7 +96,8 @@ module Phrase =
         phrase
         |> List.map (fun segment ->
             match segment with
-            | Segment.Text words -> words
+            | Segment.Text words
+            | Segment.Verb words -> words
             | Segment.Ref entity -> EntityRef.said entity)
         |> String.concat ""
 
@@ -99,7 +107,8 @@ module Phrase =
         |> List.choose (fun segment ->
             match segment with
             | Segment.Ref entity -> Some entity
-            | Segment.Text _ -> None)
+            | Segment.Text _
+            | Segment.Verb _ -> None)
 
 /// A stretch of time as a person says it at a glance: the largest unit that fits. One
 /// spelling for every sentence that says how long, so the gap a resumed session names and the

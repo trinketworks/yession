@@ -169,7 +169,7 @@ and RepoConfigWarned =
 
 module RepoAdded =
 
-    let phrase (r: RepoAdded) : Phrase = [ Segment.Text "added repo "; Segment.Ref (EntityRef.Repo r.Repo) ]
+    let phrase (r: RepoAdded) : Phrase = Phrase.deed "added" [ Segment.Text "repo "; Segment.Ref (EntityRef.Repo r.Repo) ]
 
     /// Said to a reader that is not a screen, which sees no running mark: the add is not a
     /// checkout yet.
@@ -178,27 +178,27 @@ module RepoAdded =
 /// The same headline as the add it resolves, because to a reader it is the same act, finished.
 module RepoCloned =
 
-    let phrase (r: RepoCloned) : Phrase = [ Segment.Text "added repo "; Segment.Ref (EntityRef.Repo r.Repo) ]
+    let phrase (r: RepoCloned) : Phrase = Phrase.deed "added" [ Segment.Text "repo "; Segment.Ref (EntityRef.Repo r.Repo) ]
 
     let particulars (r: RepoCloned) : Phrase list = [ Phrase.text (sprintf "on branch %s" r.Branch) ]
 
 module RepoCloneFailed =
 
-    let phrase (r: RepoCloneFailed) : Phrase = [ Segment.Text "could not clone repo "; Segment.Ref (EntityRef.Repo r.Repo) ]
+    let phrase (r: RepoCloneFailed) : Phrase = Phrase.deed "could not clone" [ Segment.Text "repo "; Segment.Ref (EntityRef.Repo r.Repo) ]
 
     let particulars (r: RepoCloneFailed) : Phrase list = [ Phrase.text r.Reason ]
 
 module RepoRemoved =
 
-    let phrase (r: RepoRemoved) : Phrase = [ Segment.Text "removed repo "; Segment.Ref (EntityRef.Repo r.Repo) ]
+    let phrase (r: RepoRemoved) : Phrase = Phrase.deed "removed" [ Segment.Text "repo "; Segment.Ref (EntityRef.Repo r.Repo) ]
 
 module RepoBranchSwitched =
 
     let phrase (r: RepoBranchSwitched) : Phrase =
         if r.Created then
-            [ Segment.Text (sprintf "created branch %s in " r.Branch); Segment.Ref (EntityRef.Repo r.Repo) ]
+            Phrase.deed "created" [ Segment.Text (sprintf "branch %s in " r.Branch); Segment.Ref (EntityRef.Repo r.Repo) ]
         else
-            [ Segment.Text "switched "; Segment.Ref (EntityRef.Repo r.Repo); Segment.Text (sprintf " to branch %s" r.Branch) ]
+            Phrase.deed "switched" [ Segment.Ref (EntityRef.Repo r.Repo); Segment.Text (sprintf " to branch %s" r.Branch) ]
 
 module RepoCapabilitiesChanged =
 
@@ -208,9 +208,9 @@ module RepoCapabilitiesChanged =
     /// have" — which needs the whole of it.
     let phrase (c: RepoCapabilitiesChanged) : Phrase =
         match c.Granted with
-        | [] -> Phrase.text "asked for nothing"
-        | [ one ] -> Phrase.text (sprintf "asked for %s" one)
-        | granted -> Phrase.text (sprintf "asked for %d capabilities" (List.length granted))
+        | [] -> Phrase.deed "asked for" (Phrase.text "nothing")
+        | [ one ] -> Phrase.deed "asked for" (Phrase.text one)
+        | granted -> Phrase.deed "asked for" (Phrase.text (sprintf "%d capabilities" (List.length granted)))
 
     /// The whole set, never a count on its own: the sentence the agent reads carries every
     /// grant. A screen lays the same set out as one fact per grant (`View`), rather than
@@ -225,7 +225,7 @@ module RepoCapabilitiesChanged =
 module RepoCapabilitiesApproved =
 
     let phrase (a: RepoCapabilitiesApproved) : Phrase =
-        [ Segment.Text "approved what "; Segment.Ref (EntityRef.Repo a.Repo); Segment.Text " asks for" ]
+        Phrase.deed "approved" [ Segment.Text "what "; Segment.Ref (EntityRef.Repo a.Repo); Segment.Text " asks for" ]
 
 module RepoConfigRefused =
 
@@ -236,7 +236,7 @@ module RepoConfigRefused =
     /// which is also why it is the headline there and not a particular under one.
     let phrase (r: RepoConfigRefused) : Phrase =
         match r.Sandbox with
-        | Some sandbox -> [ Segment.Text "could not start sandbox "; Segment.Ref (EntityRef.Sandbox sandbox) ]
+        | Some sandbox -> Phrase.deed "could not start" [ Segment.Text "sandbox "; Segment.Ref (EntityRef.Sandbox sandbox) ]
         | None -> Phrase.text r.Reason
 
     let particulars (r: RepoConfigRefused) : Phrase list =

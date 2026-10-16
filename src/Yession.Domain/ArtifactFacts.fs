@@ -36,9 +36,11 @@ module ArtifactShared =
     /// chat draws the same chip it draws for a repo or a sandbox, and the agent's prose gets the
     /// `file:///` address it can quote straight back into a tool.
     let phrase (a: ArtifactShared) : Phrase =
-        [ Segment.Text (verb a + " artifact ")
-          Segment.Ref (EntityRef.Content (ArtifactRef.content a.Ref))
-          Segment.Text (sprintf " (%s)" (ContentSize.render a.Bytes)) ]
+        Phrase.deed
+            (verb a)
+            [ Segment.Text "artifact "
+              Segment.Ref (EntityRef.Content (ArtifactRef.content a.Ref))
+              Segment.Text (sprintf " (%s)" (ContentSize.render a.Bytes)) ]
 
     /// What the headline holds back: which version this is, and only when it is not the first —
     /// "version 1" said of a first share is a fact nobody was wondering about. The old versions

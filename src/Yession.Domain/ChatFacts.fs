@@ -117,22 +117,24 @@ and SessionResumed =
 
 module SessionStarted =
 
-    let phrase : Phrase = Phrase.text "session started"
+    let phrase : Phrase = [ Segment.Text "session "; Segment.Verb "started" ]
 
 module SessionResumed =
 
     /// Said with the gap, which only the envelope's time can give: this record holds one end.
     let phrase (resumedAt: System.DateTimeOffset) (r: SessionResumed) : Phrase =
-        Phrase.text (sprintf "session resumed after being stopped for %s" (Elapsed.describe (resumedAt - r.LastHeardAt)))
+        [ Segment.Text "session "
+          Segment.Verb "resumed"
+          Segment.Text (sprintf " after being stopped for %s" (Elapsed.describe (resumedAt - r.LastHeardAt))) ]
 
 module CommandRefused =
 
-    let phrase (c: CommandRefused) : Phrase = Phrase.text (sprintf "refused %s" c.Summary)
+    let phrase (c: CommandRefused) : Phrase = Phrase.deed "refused" (Phrase.text c.Summary)
 
     let particulars (c: CommandRefused) : Phrase list = c.Reason |> Option.map Phrase.text |> Option.toList
 
 module GatedCommandFailed =
 
-    let phrase (c: GatedCommandFailed) : Phrase = Phrase.text (sprintf "failed %s" c.Summary)
+    let phrase (c: GatedCommandFailed) : Phrase = Phrase.deed "failed" (Phrase.text c.Summary)
 
     let particulars (c: GatedCommandFailed) : Phrase list = [ Phrase.text c.Reason ]
