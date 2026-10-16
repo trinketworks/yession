@@ -654,13 +654,60 @@ module Style =
     /// the line, so the `text-code` that used to size a text glyph here sized nothing.
     let recordLinkMark = "text-ink-faint ml-1"
 
-    /// The hit area for a listed record's whole cell — name line and state line both, not
-    /// just the name's own glyphs. `block` so the link's box is the cell's full width rather
-    /// than the text it wraps; colour and hover stay on the name text itself (`recordLink` /
-    /// `recordLinkQuiet`, worn by a span inside), so hovering the state line below does not
-    /// blue it — only the name was ever styled to look like a link, this just widens what you
+    /// The hit area for a listed record's whole cell — the state word beside the name
+    /// included, not just the name's own glyphs. `block` so the link's box is the cell's full
+    /// width rather than the text it wraps; colour and hover stay on the name text itself
+    /// (`recordLink` / `recordLinkQuiet`, worn by a span inside), so hovering the state word
+    /// does not blue it — only the name was ever styled to look like a link, this just widens what you
     /// can press to get it.
     let recordRowLink = cls [ "block no-underline"; focusRing ]
+
+    /// A listed record's line. On a PHONE it is one line: the name, then the state at the
+    /// line's trailing edge. Elsewhere it stays two, 24px of name over 16px of state.
+    ///
+    /// The phone is where the second line cost something. Four rows of a five-row list said
+    /// "stopped" under four names, a column of one word spending a fifth of the list's height
+    /// to repeat what the name's own ink already says. A wide screen has the room, and there
+    /// the state keeps its own line because the name column is wide enough that a state at its
+    /// trailing edge lands under the ID head beside it and reads as the id.
+    ///
+    /// Centred on a phone, and `items-baseline` is the one thing it may not be. The doctrine's
+    /// baseline rule is about one row against the next; this is two runs on ONE line, and a
+    /// flex item that clips (`recordRowName` carries `truncate`, so `overflow` is not
+    /// `visible`) synthesizes its baseline from its margin box instead of its text. Aligning
+    /// to that baseline would hang the state word off the BOTTOM of the name. Centred, the two
+    /// line boxes share a centre and the clipping cannot move them.
+    let recordRowLine = "phone:flex phone:items-center phone:gap-3"
+
+    /// The name inside that line. `min-w-0` is load-bearing on a phone: a flex child's
+    /// `min-width` is `auto`, so without it the name refuses to shrink below its longest word,
+    /// pushes the state off the row, and takes the page wider than the phone it is on. Both
+    /// utilities do nothing to the block this is on a wide screen.
+    let recordRowName = "flex-1 min-w-0 truncate"
+
+    /// The state. On a wide screen it starts a line, so its dot hangs in the gutter left of
+    /// the rail (`-ml-3` is the mark's 6px and the 6px after it) and the word stands on the
+    /// same rail as the name above it. On a phone it rides the END of the name's line, where
+    /// there is no rail to hang off: the mark leads the word it belongs to, and the words it
+    /// would have pushed in are the name's, which sit before it. It does not shrink, so the
+    /// name is what clips — a clipped name still says which row it is, a clipped state does
+    /// not (docs/visual-design.md, Space).
+    ///
+    /// The WORD stays on a phone, where the first instinct is to drop it and let the dot carry
+    /// the state. The dot cannot. `stopped`, `archived`, `failed to start` and `exited` all
+    /// draw one solid dot, and the last two draw it in one colour, so without the word two
+    /// states are one picture and the rest differ by colour alone (WCAG 2.0 SC 1.4.1). What
+    /// the phone drops instead is the TAIL (`recordRowAside`).
+    let recordRowState = cls [ small; "truncate shrink-0 -ml-3 phone:ml-0" ]
+
+    /// The tail after a state word: a running session's own summary. Shown where there is
+    /// width for it, and dropped on a phone, where it would spend the name's room on a
+    /// nicety.
+    ///
+    /// A failed launch's REASON does not wear this. `display:none` takes a thing out of the
+    /// accessibility tree as well as off the screen, and the reason is the one tail that is
+    /// the content — it is why a reader is on that row. A failed row clips its name instead.
+    let recordRowAside = "hidden wide:inline"
 
     /// A filter over a listed registry — which archive states the management page is showing.
     /// Real links, because the filter IS the page's location, so these are chips only in how
