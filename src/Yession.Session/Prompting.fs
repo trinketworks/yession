@@ -72,6 +72,18 @@ module Prompting =
           Text =
             $"Use {ToolName.ReadFile} to read a file, {ToolName.EditFile} to change part of a file, and {ToolName.WriteFile} to write a whole file. Do not use cat, sed, awk, head, tail or heredocs in {ToolName.ExecuteCommand} for this. The file tools record which file you read and what you changed. Shell text does not." }
 
+    /// A repo's own `.agents/skills/<name>/SKILL.md` names a process or convention it wants
+    /// followed for a kind of work -- this very repository's contributing-changes skill is
+    /// one. The turn's context (`skillsText`, conditioned on `HasSkills`) lists every one a
+    /// repo in the session declares, by name and description alone, never its body: reading
+    /// the whole file every turn would cost context nobody asked to spend, so a turn reads
+    /// a skill's file for itself, with `ToolName.ReadFile`, only once its description matches
+    /// what it is doing -- the same progressive disclosure Claude's own skill format uses.
+    let skills =
+        { Name = "skills"
+          Text =
+            $"A repo can declare a skill at `.agents/skills/<name>/SKILL.md`: a process or convention it wants followed for a kind of work. The turn's context lists the skills a repo in this session declares, by name and description. Read a skill's file with {ToolName.ReadFile} when its description matches what you are doing, before you act on it." }
+
     /// Every tool description says how to reach each sandbox, and none can say which to
     /// prefer. A runtime is not assured in the default sandbox: python is a stub on a Mac
     /// without Xcode tools and absent on a minimal host, and an agent that found a binary on
@@ -152,7 +164,7 @@ module Prompting =
 
     /// Every product section, in the order a strategy that takes them all reads them.
     let sections : Section list =
-        [ role; addressing; environments; files; shell; scratch; background; communication; reporting; scope; care ]
+        [ role; addressing; environments; files; skills; shell; scratch; background; communication; reporting; scope; care ]
 
     /// Everything a strategy reads for one turn. Data only: the decisions are the rules'.
     [<RequireQualifiedAccess>]
@@ -182,6 +194,8 @@ module Prompting =
         | HasTerminalActivity
         /// A repo in the session has an AGENTS.md at its root.
         | HasRepoNotes
+        /// A repo in the session declares a skill under `.agents/skills/`.
+        | HasSkills
         /// The session has a repo.
         | HasRepos
         /// The turn can call a tool another server declared (an MCP server's).
@@ -239,6 +253,7 @@ module Prompting =
              | Occasion.Asked _ -> false)
         | Condition.HasTerminalActivity -> not (List.isEmpty context.Terminals)
         | Condition.HasRepoNotes -> context.Repos |> List.exists (fun repo -> repo.AgentsMd.IsSome)
+        | Condition.HasSkills -> context.Repos |> List.exists (fun repo -> not (List.isEmpty repo.Skills))
         | Condition.HasRepos -> not (List.isEmpty context.Repos)
         | Condition.HasForeignTools -> context.Tools |> List.exists (fun tool -> tool.Foreign)
 
@@ -365,6 +380,18 @@ module Prompting =
              |> List.map render
              |> String.concat "\n\n")
 
+    /// Every repo's skill menu: name and description alone, never a body (`skills`,
+    /// Section, says why). One header per repo, which matters once a session holds more
+    /// than one -- a bare list would leave a skill's repo to be guessed from its name.
+    let private skillsText (context: Context) =
+        let render (repo: RepoRef, skills: SkillSummary list) =
+            let lines = skills |> List.map (fun s -> sprintf "- %s: %s" s.Name s.Description) |> String.concat "\n"
+            sprintf "Skills in %s:\n%s" (RepoRef.value repo) lines
+        context.Repos
+        |> List.choose (fun r -> if List.isEmpty r.Skills then None else Some (r.Repo, r.Skills))
+        |> List.map render
+        |> String.concat "\n\n"
+
     let private askText (context: Context) =
         match context.Occasion with
         | Occasion.Asked message ->
@@ -458,11 +485,12 @@ module Prompting =
         let conversation = Rule.Turn ("conversation", Condition.Always, conversationText >> Some)
         let terminals = Rule.Turn ("terminals", Condition.HasTerminalActivity, terminalActivity >> Some)
         let repoNotes = Rule.Turn ("repo-notes", Condition.HasRepoNotes, repoNotesText >> Some)
+        let skillsMenu = Rule.Turn ("skills-menu", Condition.HasSkills, skillsText >> Some)
         let ask = Rule.Turn ("ask", Condition.Asked, askText)
         let wake = Rule.Turn ("wake", Condition.Woken, wakeText)
 
         let rules : Rule list =
-            (sections |> List.map section) @ [ operator; clock; conversation; terminals; repoNotes; ask; wake ]
+            (sections |> List.map section) @ [ operator; clock; conversation; terminals; repoNotes; skillsMenu; ask; wake ]
 
     /// Claude Code's prompt architecture over this product's rules. The product sections, and
     /// Claude Code's rule to look at a UI change (`looking`), are the prefix every turn on
@@ -481,6 +509,7 @@ module Prompting =
         let clock = Rule.Turn ("clock", Condition.Always, reminding clockLine)
         let repos = Rule.Turn ("repos", Condition.HasRepos, reminding reposText)
         let repoNotes = Rule.Turn ("repo-notes", Condition.HasRepoNotes, reminding repoNotesText)
+        let skillsMenu = Rule.Turn ("skills-menu", Condition.HasSkills, reminding skillsText)
         let terminals = Rule.Turn ("terminals", Condition.HasTerminalActivity, reminding terminalActivity)
         let conversation = Rule.Turn ("conversation", Condition.Always, conversationText >> Some)
         let ask = Rule.Turn ("ask", Condition.Asked, askText)
@@ -488,7 +517,7 @@ module Prompting =
 
         let rules : Rule list =
             (sections |> List.map section)
-            @ [ looking; foreignTools; operator; clock; repos; repoNotes; terminals; conversation; ask; wake ]
+            @ [ looking; foreignTools; operator; clock; repos; repoNotes; skillsMenu; terminals; conversation; ask; wake ]
 
     /// Every strategy's rules. The one place a new strategy has to be named.
     let rulesOf (strategy: PromptStrategy) : Rule list =

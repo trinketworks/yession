@@ -2,6 +2,14 @@ namespace Yession.Domain.Repos
 
 open Yession.Domain
 
+/// One skill a repo's `.agents/skills/<name>/SKILL.md` declares — its frontmatter, and
+/// nothing of its body. Enough to menu it: the agent reads the file itself
+/// (`ToolName.ReadFile`) when a description matches what it is doing, so nothing here needs
+/// to hold more than what a menu line says.
+type SkillSummary =
+    { Name : string
+      Description : string }
+
 /// The facts a repo records. They sit BELOW `SessionEvent` because the union names them,
 /// and the projections that fold that union sit above it — so a feature spans the event
 /// spine rather than living on one side of it. What this buys is that `Repo` and `Branch`
@@ -44,7 +52,15 @@ and RepoCloned =
       /// like everything else this system remembers -- read again only when the repo is
       /// re-added, which is this system's cache-with-explicit-invalidation, never a
       /// per-turn re-read.
-      AgentsMd : string option }
+      AgentsMd : string option
+      /// Every skill under `.agents/skills/` this checkout declared, read at the same
+      /// moment and for the same reason `AgentsMd` is: a skill's file is repo-authored, so
+      /// the moment of a landed clone is the one moment it is trustworthy, and re-reading it
+      /// every turn would be a re-fetch of something that only changes when the repo is
+      /// re-added. A directory with no `SKILL.md`, or one whose frontmatter does not parse,
+      /// contributes nothing -- a malformed skill is not a reason to fail an otherwise-
+      /// successful clone, the same tolerance `AgentsMd` already has.
+      Skills : SkillSummary list }
 
 /// The clone a `RepoAdded` began did not land, and why — in the words the failure used.
 /// Nothing was put in place: the clone runs in a staging area that is cleared on failure.

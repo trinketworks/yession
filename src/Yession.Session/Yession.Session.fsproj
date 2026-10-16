@@ -9,6 +9,8 @@
     <!-- What a repo (`yession.yaml`) and an operator (`resources.yaml`) write, read into the
          domain's declarations. -->
     <Compile Include="ConfigFile.fs" />
+    <!-- A repo's `.agents/skills/<name>/SKILL.md`, on `ConfigFile`'s own terms. -->
+    <Compile Include="SkillFile.fs" />
     <Compile Include="OperatorProfile.fs" />
     <Compile Include="ToolJson.fs" />
     <!-- The `yession` namespace's registry, built from a turn's capabilities, and the

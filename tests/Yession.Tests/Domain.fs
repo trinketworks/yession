@@ -406,7 +406,7 @@ let private frameSerializationTests =
                   CommandCompleted { CommandId = CommandId.create "cmd-1" |> expect; Result = CommandTimedOut }
                   CommandCompleted { CommandId = CommandId.create "cmd-1" |> expect; Result = CommandExecutionFailed "denied" }
                   RepoAdded { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Actor = PeerRef peerId }
-                  RepoCloned { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Branch = "main"; Actor = PeerRef peerId; AgentsMd = None }
+                  RepoCloned { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Branch = "main"; Actor = PeerRef peerId; AgentsMd = None; Skills = [] }
                   RepoCloneFailed { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Reason = "not found"; Actor = PeerRef peerId }
                   RepoRemoved { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Actor = ActorRef.Agent }
                   RepoBranchSwitched { MessageId = messageId; Repo = RepoRef.create "octo/hello" |> expect; Branch = "feature/x"; Created = true; Actor = UserRef (UserId.create "alice" |> expect) }
@@ -927,20 +927,33 @@ let private repoTests =
             let repo = RepoRef.create "octo/hello" |> expect
             let ada = PeerId.create "ada" |> expect
             let folded =
-                [ RepoCloned { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = PeerRef ada; AgentsMd = Some "say hi to every reviewer" }
+                [ RepoCloned
+                    { MessageId = msg "r1"
+                      Repo = repo
+                      Branch = "main"
+                      Actor = PeerRef ada
+                      AgentsMd = Some "say hi to every reviewer"
+                      Skills = [ { Name = "contributing-changes"; Description = "split the work" } ] }
                   RepoBranchSwitched { MessageId = msg "r2"; Repo = repo; Branch = "feature/x"; Created = true; Actor = ActorRef.Agent }
                   MessageSent { MessageId = msg "m"; QueueId = None; Author = Principal.Peer ada; Body = "hi" } ]
                 |> List.fold ReposProjection.applyEvent ReposProjection.empty
             Expect.equal
                 folded.Repos
-                [ { Repo = repo; Branch = "feature/x"; AddedBy = PeerRef ada; AgentsMd = Some "say hi to every reviewer" } ]
-                "one repo, on the switched branch, carrying what its AGENTS.md said at add time"
-            // Re-add with no file this time: the newest add wins, notes  a repoincluded 
-            // that removed its AGENTS.md between adds is not still quoted from the last one.
-            let readded = ReposProjection.applyEvent folded (RepoCloned { MessageId = msg "r3"; Repo = repo; Branch = "main"; Actor = ActorRef.Agent; AgentsMd = None })
+                [ { Repo = repo
+                    Branch = "feature/x"
+                    AddedBy = PeerRef ada
+                    AgentsMd = Some "say hi to every reviewer"
+                    Skills = [ { Name = "contributing-changes"; Description = "split the work" } ] } ]
+                "one repo, on the switched branch, carrying what its AGENTS.md and skills said at add time"
+            // Re-add with no file this time: the newest add wins, notes a repo included that
+            // removed its AGENTS.md and skills between adds is not still quoted from the last one.
+            let readded =
+                ReposProjection.applyEvent
+                    folded
+                    (RepoCloned { MessageId = msg "r3"; Repo = repo; Branch = "main"; Actor = ActorRef.Agent; AgentsMd = None; Skills = [] })
             Expect.equal
                 readded.Repos
-                [ { Repo = repo; Branch = "main"; AddedBy = ActorRef.Agent; AgentsMd = None } ]
+                [ { Repo = repo; Branch = "main"; AddedBy = ActorRef.Agent; AgentsMd = None; Skills = [] } ]
                 "re-add replaces in place, notes and all"
             let removed = ReposProjection.applyEvent readded (RepoRemoved { MessageId = msg "r4"; Repo = repo; Actor = PeerRef ada })
             Expect.equal removed.Repos [] "removed"
@@ -957,7 +970,9 @@ let private repoTests =
                 ReposProjection.applyEvent adding (RepoCloneFailed { MessageId = msg "r1"; Repo = repo; Reason = "not found"; Actor = ActorRef.Agent })
             Expect.equal failed.Repos [] "nor is one whose clone failed"
             let cloned =
-                ReposProjection.applyEvent adding (RepoCloned { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = ActorRef.Agent; AgentsMd = None })
+                ReposProjection.applyEvent
+                    adding
+                    (RepoCloned { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = ActorRef.Agent; AgentsMd = None; Skills = [] })
             Expect.equal (cloned.Repos |> List.map (fun r -> r.Repo)) [ repo ] "the clone landing is what puts it here"
 
         testCase "an add is ONE item: running at once, then resolved in place by its clone's outcome" <| fun () ->
@@ -983,7 +998,9 @@ let private repoTests =
                 Expect.equal (noteDetail item) (Some "cloning") "and telling a reader with no running mark that it is not a checkout yet"
             | other -> failwithf "one item expected, got %A" other
             let cloned =
-                foldOf [ added; RepoCloned { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = PeerRef ada; AgentsMd = None } ]
+                foldOf
+                    [ added
+                      RepoCloned { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = PeerRef ada; AgentsMd = None; Skills = [] } ]
             match cloned.Items with
             | [ item ] ->
                 Expect.equal item.Status Complete "the clone landing completes the same item"
@@ -1009,7 +1026,7 @@ let private repoTests =
                   Offset = EventOffset.create 1L |> expect
                   Actor = ActorRef.Session
                   Timestamp = DateTimeOffset(2026, 8, 8, 10, 0, 0, TimeSpan.Zero)
-                  Event = RepoCloned { MessageId = MessageId.create "r1" |> expect; Repo = repo; Branch = "main"; Actor = ActorRef.Agent; AgentsMd = None } }
+                  Event = RepoCloned { MessageId = MessageId.create "r1" |> expect; Repo = repo; Branch = "main"; Actor = ActorRef.Agent; AgentsMd = None; Skills = [] } }
             match (ConversationProjection.applyEvents None [ envelope ] ConversationProjection.empty |> fst).Items with
             | [ item ] ->
                 Expect.equal item.Status Complete "complete"
@@ -1022,7 +1039,7 @@ let private repoTests =
             let sessionId = SessionId.create "repo-session" |> expect
             let ada = PeerId.create "ada" |> expect
             let envelopes =
-                [ RepoCloned { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = PeerRef ada; AgentsMd = None }
+                [ RepoCloned { MessageId = msg "r1"; Repo = repo; Branch = "main"; Actor = PeerRef ada; AgentsMd = None; Skills = [] }
                   RepoBranchSwitched { MessageId = msg "r2"; Repo = repo; Branch = "fix/y"; Created = false; Actor = ActorRef.Agent }
                   RepoRemoved { MessageId = msg "r3"; Repo = repo; Actor = PeerRef ada } ]
                 |> List.mapi (fun i event ->
@@ -1094,7 +1111,8 @@ let private repoTests =
                               Repo = RepoRef.create "octo/hello" |> expect
                               Branch = "main"
                               Actor = ActorRef.Agent
-                              AgentsMd = None })
+                              AgentsMd = None
+                              Skills = [] })
                   Status = Complete
                   Offset = EventOffset.create 1L |> expect
                   Woke = None; CausedBy = None }
@@ -3344,6 +3362,35 @@ let private variants : (string * SandboxRequest) list =
                             { ContainerSpec.defaults with
                                 Build = Some { ContextPath = "."; DockerfilePath = Some "Dockerfile.ci" } } } } ]
 
+// -----------------------------------------------------------------------------
+// `.agents/skills/<name>/SKILL.md`: the frontmatter and the decoder, both parser-free.
+// -----------------------------------------------------------------------------
+
+let private skillFileTests =
+    testList "SKILL.md frontmatter" [
+
+        testCase "frontmatter is the text between the first two fences" <| fun () ->
+            Expect.equal
+                (SkillFile.frontmatterOf "---\nname: x\ndescription: y\n---\n\n# Body\n")
+                (Some "name: x\ndescription: y")
+                "the fences themselves and everything after are not part of it"
+
+        testCase "a file with no opening fence has no frontmatter" <| fun () ->
+            Expect.equal (SkillFile.frontmatterOf "# Just a heading\n") None "nothing to extract"
+
+        testCase "an opening fence with no closing one has no frontmatter" <| fun () ->
+            Expect.equal (SkillFile.frontmatterOf "---\nname: x\n") None "unterminated is not a block"
+
+        testCase "name and description decode; other keys are read past" <| fun () ->
+            let decoded =
+                SkillFile.decode """{ "name": "contributing-changes", "description": "split the work", "allowed-tools": [ "Bash" ] }"""
+            Expect.equal decoded (Ok { Name = "contributing-changes"; Description = "split the work" }) "the two fields the menu needs"
+
+        testCase "a missing name or description refuses" <| fun () ->
+            Expect.isError (SkillFile.decode """{ "description": "split the work" }""") "no name"
+            Expect.isError (SkillFile.decode """{ "name": "contributing-changes" }""") "no description"
+    ]
+
 let private sandboxRequestTests =
     testList "the same sandbox, or a different one (Plan 27)" [
 
@@ -4349,6 +4396,7 @@ let tests =
         launchTests
         shellWordsTests
         configTests
+        skillFileTests
         sandboxRequestTests
         modelTests
         authorityTests

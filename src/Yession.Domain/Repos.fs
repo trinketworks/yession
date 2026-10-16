@@ -18,7 +18,10 @@ type SessionRepo =
       /// The checkout's root `AGENTS.md`, as read when this repo was added -- repo-
       /// authored convention info, not something the projection or the operator wrote.
       /// `None` when the checkout had none, or a re-add's read found none.
-      AgentsMd : string option }
+      AgentsMd : string option
+      /// The checkout's `.agents/skills/`, as read when this repo was added -- same
+      /// provenance and same re-add-to-refresh rule as `AgentsMd`.
+      Skills : SkillSummary list }
 
 type ReposProjection =
     { Repos : SessionRepo list }
@@ -33,7 +36,7 @@ module ReposProjection =
     let applyEvent (proj: ReposProjection) (event: SessionEvent) : ReposProjection =
         match event with
         | RepoCloned r ->
-            let entry = { Repo = r.Repo; Branch = r.Branch; AddedBy = r.Actor; AgentsMd = r.AgentsMd }
+            let entry = { Repo = r.Repo; Branch = r.Branch; AddedBy = r.Actor; AgentsMd = r.AgentsMd; Skills = r.Skills }
             if proj.Repos |> List.exists (fun s -> s.Repo = r.Repo) then
                 { Repos = proj.Repos |> List.map (fun s -> if s.Repo = r.Repo then entry else s) }
             else

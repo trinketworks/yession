@@ -527,6 +527,30 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                         Some text
                 with _ -> None
 
+        /// Every skill a checkout's `.agents/skills/` declares, read at the same moment and
+        /// for the same reason `agentsMdOf` is: right after the staging rename, the one
+        /// moment a repo-authored file is trustworthy. A directory with no `SKILL.md`, one
+        /// with no frontmatter, or frontmatter that does not decode contributes nothing --
+        /// malformed is not a reason to fail an otherwise-successful clone, the same
+        /// tolerance `agentsMdOf` already has. Sorted by name, so the menu reads the same on
+        /// every clone whatever order the filesystem happens to answer in.
+        let skillsOf (repo: RepoRef) : SkillSummary list =
+            let skillsDir = sprintf "%s/.agents/skills" (pathOf repo)
+            if not (Fs.exists skillsDir) then []
+            else
+                Fable.NodeExtras.Files.entries skillsDir
+                |> Array.filter (fun entry -> entry.isDirectory ())
+                |> Array.choose (fun entry ->
+                    let path = sprintf "%s/%s/SKILL.md" skillsDir entry.name
+                    if not (Fs.exists path) then None
+                    else
+                        try
+                            SkillFile.frontmatterOf (Fs.readText path)
+                            |> Option.bind (fun yaml -> SkillFile.decode (Fable.Yaml.Plain.json (Fable.Yaml.parse yaml)) |> Result.toOption)
+                        with _ -> None)
+                |> Array.sortBy (fun skill -> skill.Name)
+                |> Array.toList
+
         let listingOf (repo: RepoRef) : Async<Result<RepoListing, string>> =
             async {
                 match! runOk confined None [ "-C"; pathOf repo; "rev-parse"; "--abbrev-ref"; "HEAD" ] with
@@ -644,7 +668,8 @@ let create (config: ReposConfig) : Result<ReposService, string> =
                                       Repo = repo
                                       Branch = listing.Branch
                                       Actor = caller.Actor
-                                      AgentsMd = agentsMdOf repo }))
+                                      AgentsMd = agentsMdOf repo
+                                      Skills = skillsOf repo }))
                     return Ok { Recorded.Answer = listing; Recorded.RecordedAs = Some messageId }
             }
 

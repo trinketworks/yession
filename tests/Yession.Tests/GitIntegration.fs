@@ -288,6 +288,22 @@ let private makeBareFixtureWithAgentsMd (root: string) (name: string) (agentsMd:
     hostGit [ "clone"; "--bare"; work; bare ] fixtures
     bare
 
+/// The same fixture, with a `.agents/skills/<name>/SKILL.md` committed alongside the
+/// README -- what exercises `skillsOf`'s read at clone time without touching the plain
+/// fixture's other callers.
+let private makeBareFixtureWithSkill (root: string) (name: string) (skillName: string) (frontmatter: string) : string =
+    let fixtures = fixturesIn root
+    let work = sprintf "%s/work-%s" fixtures name
+    TestFiles.ensureDir work
+    hostGit [ "init"; "-b"; "main" ] work
+    TestFiles.write (sprintf "%s/README.md" work) "fixture\n"
+    TestFiles.write (sprintf "%s/.agents/skills/%s/SKILL.md" work skillName) (sprintf "---\n%s\n---\n\n# %s\n" frontmatter skillName)
+    hostGit [ "add"; "." ] work
+    hostGit [ "commit"; "-m"; "seed" ] work
+    let bare = sprintf "%s/%s.git" fixtures name
+    hostGit [ "clone"; "--bare"; work; bare ] fixtures
+    bare
+
 /// The service, with the git it runs, the credential it spends, and somewhere to record a
 /// network failure. The credential and the recorder are the caller's because whether a verb
 /// spent a credential is exactly what decides whether a failure says anything about one.
@@ -543,6 +559,44 @@ let private srtTests =
                     cloned.AgentsMd
                     (Some "Reply to every message in iambic pentameter.")
                     "the checkout's own AGENTS.md landed on the fact, read once at clone time"
+            | other -> failwithf "expected one add and its clone, got %A" other
+        }
+
+        testCaseAsync "a repo's .agents/skills ride on the add" <| async {
+            let root = mkdtemp ()
+            makeBareFixtureWithSkill
+                root
+                "hello"
+                "contributing-changes"
+                "name: contributing-changes\ndescription: Split the work into stand-alone PRs."
+            |> ignore
+            let log = freshLog ()
+            let service = serviceIn root log
+            let repo = RepoRef.create "octo/hello" |> expect
+            let! listing = service.AddRepo caller repo
+            expect listing |> ignore
+            let! events = eventsOf log
+            match events with
+            | [ SessionEvent.RepoAdded _; SessionEvent.RepoCloned cloned ] ->
+                Expect.equal
+                    cloned.Skills
+                    [ { Name = "contributing-changes"; Description = "Split the work into stand-alone PRs." } ]
+                    "the checkout's own skill landed on the fact, read once at clone time"
+            | other -> failwithf "expected one add and its clone, got %A" other
+        }
+
+        testCaseAsync "a checkout with no .agents/skills declares none" <| async {
+            let root = mkdtemp ()
+            makeBareFixture root "hello" |> ignore
+            let log = freshLog ()
+            let service = serviceIn root log
+            let repo = RepoRef.create "octo/hello" |> expect
+            let! listing = service.AddRepo caller repo
+            expect listing |> ignore
+            let! events = eventsOf log
+            match events with
+            | [ SessionEvent.RepoAdded _; SessionEvent.RepoCloned cloned ] ->
+                Expect.equal cloned.Skills [] "no .agents/skills at this fixture's root"
             | other -> failwithf "expected one add and its clone, got %A" other
         }
 
