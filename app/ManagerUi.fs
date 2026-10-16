@@ -44,8 +44,9 @@ module private Col =
     /// face made them 6px too wide for it. The first thing to go on a phone.
     let id = "w-[210px] phone:hidden"
     /// The MCP table's audience column. It was the session table's status column too, until
-    /// status moved under the name (`stateLine`) — where it has the name's whole width instead
-    /// of a 100px cell on a phone, which was the word and nothing else.
+    /// status moved in with the name (`stateLine`) — where it has the name's whole width on a
+    /// wide screen and the end of the name's line on a phone, instead of a 100px cell on a
+    /// phone holding the word and nothing else.
     let reaches = "w-[256px] max-xl:w-[100px]"
     /// `2026-08-18 09:12Z` in the 12px mono face, plus the cell's gutter. MEASURED like the
     /// id beside it: 17 characters of 12px Monaspace Neon is 123px, and the caps header over
@@ -110,13 +111,12 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
     let nothing = html $""""""
     // ONE shape for every state, so no state can arrive wearing a voice of its own: the status
     // word in its role's face, leading with its dot, then whatever this row has to add in the
-    // line's own small voice. The dot hangs in the gutter to the LEFT of the rail — `-ml-3` is
-    // the mark's 6px and the 6px of clearance after it — so the status word stands on the same
-    // rail as the name above it and the mark never pushes the words in (docs/visual-design.md,
-    // Space).
+    // line's own small voice. Where it starts a line its dot hangs in the gutter left of the
+    // rail, and where it rides the end of the name's line it does not — `Style.recordRowState`
+    // holds both, and says why (docs/visual-design.md, Space).
     let line (face: string) (dot: string) (hook: string) (word: string) (rest: TemplateResult) =
         html
-            $"""<div class="{Style.small} truncate -ml-3"><span class="{face}" data-status="{hook}"><span class="{dot}" aria-hidden="true"></span>{word}</span>{rest}</div>"""
+            $"""<div class="{Style.recordRowState}"><span class="{face}" data-status="{hook}"><span class="{dot}" aria-hidden="true"></span>{word}</span>{rest}</div>"""
     match view.Record.ArchivedAt, view.Status with
     // An operator's decision, not a process state — but it belongs on this line, because
     // "archived" is the answer a reader wants here and "stopped" for a session that can no
@@ -133,14 +133,17 @@ let private stateLine (view: ProcessManager.SessionView) : TemplateResult =
         // has no work in flight to describe.
         let summary =
             match view.Summary with
-            | Some said -> html $"""<span data-session-summary> · {said}</span>"""
+            | Some said -> html $"""<span class="{Style.recordRowAside}" data-session-summary> · {said}</span>"""
             | None -> nothing
         line Style.statusOk Style.statusDotLiveLead Dom.Manager.statusRunning "running" summary
     | None, ProcessManager.Launching ->
         line Style.statusWait Style.statusDotBeat Dom.Manager.statusStarting "starting" nothing
     | None, ProcessManager.LaunchFailed reason ->
         // The reason stays in the line's own voice: the red is the WORD's, and a sentence set
-        // in it would be the red statement the doctrine allows one of, twice.
+        // in it would be the red statement the doctrine allows one of, twice. It is NOT the
+        // tail a phone drops (`recordRowAside`), unlike a running session's summary: the
+        // reason is why a reader is on this row, and `display:none` would take it out of the
+        // accessibility tree as well as off the screen. The name clips instead.
         line
             Style.statusErr
             Style.statusDot
@@ -242,15 +245,21 @@ let private createdView (at: System.DateTimeOffset) : TemplateResult =
 /// One session row — an action's swap unit: a stop replaces it wholesale, so the markup is
 /// always a pure function of the Manager's current view. (Live status replaces the whole table
 /// instead; see the rows stream.) The human name leads (content is the interface), with the
-/// state under it; the minted id is plumbing, faint mono, and yields on narrow screens with
-/// the created column. Actions anchor the right edge so the row reads name → state → verb.
+/// state under it, or at the end of its line on a phone; the minted id is plumbing, faint
+/// mono, and yields on narrow screens with the created column. Actions anchor the right edge,
+/// so the row reads name → state → verb.
 ///
-/// A row is TWO lines and the same height whatever its state: 24px of name over 16px of state,
-/// and the state line is rendered in every arm, so a row with nothing to add still keeps its
-/// second line. The table is fixed-layout (`Col`), each text cell clips rather than wraps, and
-/// the rail holds nothing taller than its 24px verbs. Rows that jump as processes start and
-/// stop make a list you cannot keep your place in, and put a control under a pointer that was
-/// aimed at its neighbour.
+/// A row is the same height whatever its state, and on a PHONE it is ONE line: the name, then
+/// the state word at the line's trailing edge. It was two lines everywhere, 24px of name over
+/// 16px of state, which on a phone spent a fifth of the list's height on a column of the word
+/// "stopped" under four names whose own ink already said so. A wide screen keeps the two,
+/// because there the name column is wide enough that a state at its trailing edge lands under
+/// the ID head and reads as the id (`Style.recordRowLine`). Either way the state is rendered
+/// in every arm, so no row is shorter for having nothing to add. The table is fixed-layout
+/// (`Col`), each text cell clips rather than wraps, and the rail holds nothing taller than its
+/// 24px verbs. Rows that jump as
+/// processes start and stop make a list you cannot keep your place in, and put a control
+/// under a pointer that was aimed at its neighbour.
 ///
 /// The id is stated ONCE. An unnamed session's name IS its id (`SessionRecord.isNamed`), so
 /// it is already on the row as the name cell's link, and the id cell beside it is left empty
@@ -258,15 +267,17 @@ let private createdView (at: System.DateTimeOffset) : TemplateResult =
 /// two facts. A named session shows both, because then they are two. The cell stays, empty:
 /// the table is fixed-layout, and a row that dropped a cell would move every one after it.
 ///
-/// The cell's hit area is the WHOLE cell, name line and state line both, not just the name's
-/// own glyphs — one `<a>` (`Style.recordRowLink`) wraps both when there is somewhere to go,
-/// same open route the name always linked to. An archived row has no way in (`/open` refuses
+/// The cell's hit area is the WHOLE cell, the state word beside the name included, not just
+/// the name's own glyphs — one `<a>` (`Style.recordRowLink`) wraps the line when there is
+/// somewhere to go, same open route the name always linked to. An archived row has no way in (`/open` refuses
 /// it, and a link whose only outcome is a refusal is worse than no link), so its cell stays
 /// unwrapped, exactly as it was.
 let private rowTemplate (view: ProcessManager.SessionView) : TemplateResult =
     let id = SessionId.value view.Record.SessionId
     let idCell = if SessionRecord.isNamed view.Record then id else ""
-    let cell = html $"""<div class="truncate">{nameText view}</div>{stateLine view}"""
+    let cell =
+        html
+            $"""<div class="{Style.recordRowLine}"><div class="{Style.recordRowName}">{nameText view}</div>{stateLine view}</div>"""
     let nameCell =
         match view.Record.ArchivedAt with
         | Some _ -> cell

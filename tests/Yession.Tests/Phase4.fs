@@ -665,6 +665,42 @@ let private uiRenderTests =
             Expect.isFalse (crashed.Contains Dom.Manager.stop) "nor has an exited one"
             Expect.isFalse (crashed.Contains "data-launch") "and it too relaunches by its name"
 
+        // The FLOOR, and the reason the state keeps a word at every width. A row says its
+        // state with a dot and a word. Drop the word and four of the six states are one
+        // solid dot — stopped, archived, failed to start and exited — and the last two draw
+        // that dot in one colour, so two states become one picture and the rest differ by
+        // colour alone (WCAG 2.0 SC 1.4.1).
+        //
+        // What is pinned is that the state is SAID, not which words say it. The copy is the
+        // design and will move; that a reader who cannot tell the dots apart still learns the
+        // state is what this holds.
+        testCase "every state says itself in words, not in its dot alone" <| fun () ->
+            let saidInWords (row: string) =
+                let opened = row.IndexOf "data-status=\""
+                if opened < 0 then "" else
+                let bodyAt = row.IndexOf (">", opened) + 1
+                // Past the dot's own closing tag, so what is left is the status span's text.
+                let dotShut = row.IndexOf ("</span>", bodyAt) + "</span>".Length
+                let shut = row.IndexOf ("</span>", dotShut)
+                let inner = row.Substring (bodyAt, shut - bodyAt)
+                System.Text.RegularExpressions.Regex.Replace(inner, "<[^>]*>", "").Trim ()
+            let row status record =
+                ManagerUi.sessionRow { Record = record; Status = status; Summary = None } |> saidInWords
+            let archivedAt = System.DateTimeOffset (2026, 2, 3, 4, 5, 6, System.TimeSpan.Zero)
+            let states =
+                [ "stopped", row ProcessManager.NotRunning uiRecord
+                  "running", row (ProcessManager.Running (8199, 42, None)) uiRecord
+                  "starting", row ProcessManager.Launching uiRecord
+                  "failed to start", row (ProcessManager.LaunchFailed "no sandbox") uiRecord
+                  "exited", row (ProcessManager.Exited (Some 1)) uiRecord
+                  "archived", row ProcessManager.NotRunning { uiRecord with ArchivedAt = Some archivedAt } ]
+            let silent = states |> List.filter (fun (_, said) -> said = "") |> List.map fst
+            Expect.equal
+                silent
+                []
+                (sprintf "a state drawn by its dot alone rests on colour — these say nothing: %s"
+                    (String.concat ", " silent))
+
         // Which of six sessions wants me is the roster's whole job, and until a session could
         // say something about itself the answer was always "open them and see".
         testCase "a running session's row shows the line it said about itself" <| fun () ->
