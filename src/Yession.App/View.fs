@@ -5349,8 +5349,7 @@ module View =
         // action row at the column's foot, under the composer, a long way from the name of
         // what its verbs act on. The `all` page has its verbs on its rows, and no toolbar.
         //
-        // Under a preview the row is the PREVIEW's (F3): its name, where it lives when the
-        // strip does not say so, its acts, and its close.
+        // Under a preview the row is the PREVIEW's (F3): its name, its acts, and its close.
         // A preview's close. A command's settles it back into its place in its terminal — the
         // tab switched first when it lives in another — and highlighted there, as a MORPH: the
         // preview and the command are named alike (`Style.liftedName`), so the browser moves
@@ -5364,23 +5363,11 @@ module View =
             | Some preview, _ ->
                 let key = PreviewSubject.key preview.Subject
                 let label, hint = previewLabel preview.Subject
-                // Where the command lives, said only where the strip does not already say it:
-                // a command of a terminal the reader put away is laid over whichever terminal
-                // they are on, whose tab is the selected one, so the strip names the wrong
-                // terminal and this is the only place the right one is.
-                let whereabouts =
-                    match preview.Subject with
-                    | PreviewSubject.Block (terminal, _) when Some terminal <> selected ->
-                        let name = Entity.terminalName model terminal |> Option.defaultValue (TerminalId.value terminal)
-                        html $"""<span class="{Style.panePreviewWhere}" data-pane-preview-where="{TerminalId.value terminal}"
-                                       title="{Dom.Text.inTerminal name}">{Dom.Text.inTerminal name}</span>"""
-                    | PreviewSubject.Block _ | PreviewSubject.Stretch _ | PreviewSubject.Content _ -> Lit.nothing
                 html $"""
                     <div class="{if lifted preview then Style.paneToolbarLifted else Style.paneToolbar}">
                       <div class="{Style.panePreviewHead}" data-pane-subtitle="preview">
                         <span class="{Style.panePreviewName}" id="{Dom.panePreviewNameId}" data-pane-preview-name="{key}"
                               title="{hint}">{label}</span>
-                        {whereabouts}
                       </div>
                       {paneActionsView key (previewVerbs preview)}
                       <button type="button" class="{Style.paneStripAct}" data-pane-preview-close

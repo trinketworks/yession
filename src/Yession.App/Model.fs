@@ -4885,18 +4885,11 @@ module ClientModel =
             // carries across, so six chips tapped are one preview over the terminal the
             // reader was on, and back returns to that terminal where they left it.
             //
-            // Except a CLOSED terminal with no tab: the reader put it away (`DismissTabMsg`),
-            // or never had it, and a chip is a glance at one of its commands rather than
-            // asking for the recording back — which it used to do, at the END of the strip
-            // (F2). That preview is laid over whatever is up, as a file's is, and the strip
-            // is left exactly as it was. The list is where a recording is opened again.
-            let current = model.Pane |> Option.bind PaneMode.subject
-            let putAway =
-                PreviewSubject.terminal preview.Subject
-                |> Option.exists (fun terminal ->
-                    not (List.contains terminal model.Tabs)
-                    && Projection.tryFind terminal model.Terminals |> Option.exists (fun view -> not view.IsOpen))
-            let under = if putAway then current else underFor preview.Subject current
+            // A closed terminal's tab comes back too, even one the reader put away: a preview
+            // is always within a tab, and a command laid over some OTHER terminal's tab is a
+            // pane whose strip names the wrong thing. `withTab` puts it back in the place it
+            // opened in, never at the end (F2).
+            let under = underFor preview.Subject (model.Pane |> Option.bind PaneMode.subject)
             { model with
                 Tabs =
                     match under with

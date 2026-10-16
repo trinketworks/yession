@@ -4006,9 +4006,6 @@ module Style =
     /// that names what is on screen, and the action row's verbs under it are never louder
     /// than the name of what they act on.
     let panePreviewHead = "min-w-0 flex-1 flex items-center gap-1.5 font-ui text-body"
-    /// Where a previewed command lives, beside its name when the strip does not say it: a
-    /// caption, faint and small, and the first thing to give up its room.
-    let panePreviewWhere = "min-w-0 shrink-[4] truncate text-small text-ink-faint"
     /// The preview's name, cut short rather than pushing its close off the line.
     let panePreviewName = "min-w-0 truncate text-ink"
     /// Its close: a bare ×, neutral rather than red — closing a preview ends nothing — and a
