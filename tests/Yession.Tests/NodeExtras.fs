@@ -495,7 +495,8 @@ let socketTests =
 // names and parameter keys a command writes, and the keys an answer and an event are read by —
 // and it is checked here against the protocol's own spelling, written out beside each case.
 // The socket under `Cdp.connect` is the WebSocket binding, which `socketTests` drives, and
-// `connect` itself over a socket that fails.
+// `connect` itself over a socket that fails. Whether a real Chromium agrees with the spelling
+// is `CdpChromium`'s question, behind the `Chromium` capability.
 
 /// A session over nothing, and every frame it has transmitted.
 let private cdpSession () : Cdp.Session * ResizeArray<string> =
@@ -519,13 +520,16 @@ let private wireForm (frame: string) : string * Map<string, string> =
 /// The answer a browser gives the command it numbered `id`.
 let private answerTo (id: int) (result: string) : string = sprintf """{"id":%d,"result":%s}""" id result
 
-let private wireCases : (string * (Cdp.Session -> JS.Promise<unit>) * string * (string * string) list) list =
+/// Every command, as it is sent and as it should go out. `CdpChromium` sends the same list to a
+/// real Chromium, so each is written with arguments a browser would act on, and a command added
+/// here is one both suites ask about.
+let internal wireCases : (string * (Cdp.Session -> JS.Promise<unit>) * string * (string * string) list) list =
     [ "Page.enable", Cdp.Page.enable, "Page.enable", []
       "Runtime.enable", Cdp.Runtime.enable, "Runtime.enable", []
       "Network.enable", Cdp.Network.enable, "Network.enable", []
       "Page.stopScreencast", Cdp.Page.stopScreencast, "Page.stopScreencast", []
       "Emulation.clearDeviceMetricsOverride", Cdp.Emulation.clearDeviceMetricsOverride, "Emulation.clearDeviceMetricsOverride", []
-      "Page.navigate", (fun cdp -> Cdp.Page.navigate cdp "http://x/"), "Page.navigate", [ "url", "\"http://x/\"" ]
+      "Page.navigate", (fun cdp -> Cdp.Page.navigate cdp "about:blank"), "Page.navigate", [ "url", "\"about:blank\"" ]
       "Page.startScreencast",
       (fun cdp -> Cdp.Page.startScreencast cdp 1 780 1688),
       "Page.startScreencast",
@@ -543,9 +547,9 @@ let private wireCases : (string * (Cdp.Session -> JS.Promise<unit>) * string * (
       "Emulation.setTouchEmulationEnabled",
       [ "enabled", "true"; "maxTouchPoints", "5" ]
       "Page.addScriptToEvaluateOnNewDocument",
-      (fun cdp -> Cdp.Page.addScriptToEvaluateOnNewDocument cdp "1" |> Promise.map ignore),
+      (fun cdp -> Cdp.Page.addScriptToEvaluateOnNewDocument cdp "" |> Promise.map ignore),
       "Page.addScriptToEvaluateOnNewDocument",
-      [ "source", "\"1\"" ] ]
+      [ "source", "\"\"" ] ]
 
 /// What `Runtime.evaluate` is sent for an expression: the expression, awaited, by value.
 let private evaluateParameters = [ "expression", "\"1\""; "awaitPromise", "true"; "returnByValue", "true" ]

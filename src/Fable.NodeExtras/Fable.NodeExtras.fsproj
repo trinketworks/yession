@@ -26,6 +26,11 @@
     <Compile Include="NodeExtras.fs" />
     <!-- After NodeExtras.fs, whose `WebSockets` a CDP session speaks over. -->
     <Compile Include="Cdp.fs" />
+    <!-- Plain F# that references nothing, so that `tasks.fsx` can `#load` it as well: the one
+         rule for where Chromium is, which the capability's probe, the launcher below and the
+         CLR browser suite share. The one file here that also RUNS on .NET, which is what its
+         `#if !FABLE_COMPILER` half is for. -->
+    <Compile Include="ChromiumExecutable.fs" />
     <!-- After Cdp.fs, whose `pageOn` names the page a launched browser hands over. -->
     <Compile Include="Chromium.fs" />
   </ItemGroup>

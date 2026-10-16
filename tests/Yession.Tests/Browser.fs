@@ -48,71 +48,18 @@ let private urlIn (line: string) =
 
 // --- Chromium discovery -----------------------------------------------------------------
 //
-// The browser comes from `PLAYWRIGHT_BROWSERS_PATH` — nixpkgs' playwright-driver, pinned by
-// the same lock as the toolchain (devenv.nix) — and its layout is Playwright's, which differs
-// per platform and has changed name across builds:
-//
-//   x86_64-linux    chrome-linux64/chrome
-//   aarch64-linux   chrome-linux/chrome
-//   aarch64-darwin  chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/…
-//
-// So the executable is found by NAME, from a known set, under the `chromium-<revision>`
-// directory. Nothing here may hardcode a revision: it moves with every Playwright bump, and a
-// stale one would fail as "no Chromium" long after the browser arrived.
-//
-// There is deliberately no fallback to a system Chrome. The revision is pinned so the browser
-// matches the client driving it; silently launching whatever `/usr/bin/google-chrome` happens
-// to be would make the suite's meaning depend on the host, which is the opposite of what
-// pinning is for. `CHROMIUM_PATH` remains as the explicit override for someone who means it.
-let private chromiumExecutableNames =
-    set [ "chrome"; "Google Chrome for Testing"; "Chromium" ]
+// The rule is `Fable.NodeExtras.ChromiumExecutable`'s, which says where the browser comes from
+// and why there is no fallback to a system Chrome. The Node launcher and `check Chromium`'s
+// probe ask the same rule, so this suite and those cannot come to disagree about which browser
+// is the pinned one.
 
 /// `internal` from here down wherever the benchmark suite (`Bench.fs`) shares it: one browser
 /// fixture serves both, rather than a second copy of the same launch/serve/listen scaffolding
 /// free to drift from this one.
 let internal chromiumPath () : string =
-    let env name =
-        match Environment.GetEnvironmentVariable name with
-        | null | "" -> None
-        | v -> Some v
-    match env "CHROMIUM_PATH" with
-    | Some p -> p
-    | None ->
-        match env "PLAYWRIGHT_BROWSERS_PATH" with
-        | None ->
-            failwith
-                "no Chromium: PLAYWRIGHT_BROWSERS_PATH is unset (devenv.nix sets it; outside \
-                 the dev shell, set CHROMIUM_PATH)"
-        | Some root ->
-            // `chromium-*` and not `chromium*`: `chromium_headless_shell-<rev>` sits beside it
-            // and is a different, cut-down browser. The underscore is what separates them.
-            let revisions =
-                if Directory.Exists root then
-                    try Directory.GetDirectories (root, "chromium-*") |> Array.toList |> List.sort
-                    with _ -> []
-                else []
-            // Each revision directory is a symlink into the store, and .NET's recursive
-            // enumeration does not descend one — resolve it rather than depend on that.
-            let resolve (dir: string) =
-                match Directory.ResolveLinkTarget (dir, true) with
-                | null -> dir
-                | target -> target.FullName
-            let executables =
-                revisions
-                |> List.collect (fun dir ->
-                    try
-                        Directory.EnumerateFiles (resolve dir, "*", SearchOption.AllDirectories)
-                        |> Seq.filter (fun f -> chromiumExecutableNames.Contains (Path.GetFileName f))
-                        |> Seq.toList
-                    with _ -> [])
-            match executables |> List.tryFind File.Exists with
-            | Some c -> c
-            | None ->
-                failwithf
-                    "no Chromium under %s (looked in %d chromium-* revision(s) for %s); set CHROMIUM_PATH"
-                    root
-                    (List.length revisions)
-                    (String.Join (", ", chromiumExecutableNames))
+    match Fable.NodeExtras.ChromiumExecutable.find Fable.NodeExtras.ChromiumExecutable.dotnetMachine with
+    | Ok executable -> executable
+    | Error why -> failwith why
 
 // Task -> Async adapters (this whole file is CLR-only, so Async.AwaitTask is available).
 let internal await (t: Task<'a>) : Async<'a> = Async.AwaitTask t

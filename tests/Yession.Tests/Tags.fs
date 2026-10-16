@@ -34,6 +34,8 @@ open Fable.Pyxpecto.Model
 /// are pure availability flags the run declares through `YESSION_TEST_CAPS`.
 type Need =
     | Browser     // a real browser via the Microsoft.Playwright .NET driver -> pins the .NET CLR
+    | Chromium    // a real Chromium on NODE, started by the launcher the camera uses
+                  // (`Fable.NodeExtras.Chromium`) and spoken to over CDP. Not `Browser`: no Playwright
     | Ports       // binds TCP ports / spawns processes (HTTP, topology)
     | Native      // the native `node-datachannel` WebRTC addon (loaded by the real Session)
     | Docker      // a reachable Docker daemon
@@ -73,11 +75,12 @@ let private getEnv (name: string) : string =
 // first substitutes, which is tens of minutes buying a proof the gate already has piecewise —
 // it is asked for by name (`check Docker Dogfood`, or a `verify.yml` dispatch naming both) when
 // the container environment story changes.
-let allNeeds = [ Browser; Ports; Native; Docker; LiveAgent; LiveGitHub; Keyring; Nix; NixBuild; Sandbox; Srt; Pty; Serial; Jumpstarter; Caddy ]
+let allNeeds = [ Browser; Chromium; Ports; Native; Docker; LiveAgent; LiveGitHub; Keyring; Nix; NixBuild; Sandbox; Srt; Pty; Serial; Jumpstarter; Caddy ]
 
 let parseNeed (s: string) : Need option =
     match s.Trim().ToLowerInvariant () with
     | "browser"   -> Some Browser
+    | "chromium"  -> Some Chromium
     | "ports"     -> Some Ports
     | "native"    -> Some Native
     | "docker"    -> Some Docker
@@ -108,7 +111,7 @@ let withImplied (asked: Need list) : Need list =
     |> List.collect (fun need ->
         match need with
         | Srt -> [ Srt; Sandbox ]
-        | Browser | Ports | Native | Docker | LiveAgent | LiveGitHub | Keyring | Nix | NixBuild
+        | Browser | Chromium | Ports | Native | Docker | LiveAgent | LiveGitHub | Keyring | Nix | NixBuild
         | Sandbox | Pty | Serial | Jumpstarter | Caddy | Bench | Dogfood -> [ need ])
     |> List.distinct
 

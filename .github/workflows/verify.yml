@@ -182,8 +182,8 @@ jobs:
       # The Docker integration suite talks to the daemon (dockerode over the local socket). This
       # job runs on the VM host (no `container:` key), so the preinstalled daemon is reachable
       # directly — and the `node` tier asks for Docker, so an unreachable one fails that tier
-      # rather than skipping. The `browser` tier's `check Browser` provisions Chromium itself, so
-      # no separate Chromium step is needed either.
+      # rather than skipping. Chromium comes with the dev shell, for the `browser` tier's `Browser`
+      # and the `node` tier's `Chromium` alike, so no separate Chromium step is needed either.
       #
       # Every step here runs for every tier, deliberately: which tier this job is, is a matrix
       # value read at the gate step, and a per-tier setup would be three arrangements to keep in

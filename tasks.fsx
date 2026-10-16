@@ -26,6 +26,11 @@ open System.Text.RegularExpressions
 #load "src/Yession.App/AssetFile.fs"
 open Yession.App
 
+// The one rule for where Chromium is (`src/Fable.NodeExtras/ChromiumExecutable.fs`), loaded for
+// the same reason: the `Chromium` capability's probe asks the rule the launcher finds the browser
+// by, so `check` admits exactly the boxes its suite can launch one on.
+#load "src/Fable.NodeExtras/ChromiumExecutable.fs"
+
 let repoRoot = Path.GetFullPath __SOURCE_DIRECTORY__
 let dist = Path.Combine (repoRoot, "dist")
 let pkg = Path.Combine (dist, "npm")
@@ -1449,6 +1454,19 @@ let private jumpstarterAvailable () =
 // cheapest thing that only a runnable caddy answers; the dev shell provides one.
 let private caddyAvailable () = probeSucceeds "caddy" [ "version" ]
 
+// A Chromium the Node launcher (`Fable.NodeExtras.Chromium`) can start: found by the rule it
+// finds one by (`ChromiumExecutable`, loaded above), reading this machine through the .NET view
+// declared beside the rule, and then RUN, because a path that names something that will not
+// execute is a box the suite cannot launch on either. `--version` answers without starting a
+// browser, as root too.
+let private chromiumProblem () : string option =
+    let found = Fable.NodeExtras.ChromiumExecutable.find Fable.NodeExtras.ChromiumExecutable.dotnetMachine
+    match found with
+    | Error why -> Some why
+    | Ok executable ->
+        probeFailure 30000 executable [ "--version" ]
+        |> Option.map (sprintf "%s did not answer --version: %s" executable)
+
 /// A capability a run can ask `check` for: something a box may or may not be able to host.
 ///
 /// THE ONE TABLE of them. `requireCapabilities` probes it, `verify` asks for the `Gated` rows,
@@ -1503,6 +1521,10 @@ let private capabilities : Capability list =
         Needs = "Chromium, on the .NET CLR. Probe: none."
         Gated = true
         Refusal = unprobed }
+      { Name = "Chromium"
+        Needs = "Chromium on Node, for the CDP client. Probe: the launcher's own rule finds it, and it answers --version."
+        Gated = true
+        Refusal = because "Chromium: no Chromium the Node launcher can start" chromiumProblem }
       { Name = "Ports"
         Needs = "TCP ports and child processes. Probe: none."
         Gated = true
@@ -1663,6 +1685,12 @@ let private nodeBudgetMs (caps: Set<string>) =
     + allowing "Pty" 45_000
     + allowing "Serial" 45_000
     + allowing "Jumpstarter" 90_000
+    // `Chromium` is one browser for one suite. Measured on a 4-core dev container: twenty cases
+    // in 2.1s, the launch inside the first of them (0.4s warm). A COLD launch took 26s there,
+    // and the launcher allows a still-running browser 60s for its port and 10s for its page. So
+    // the allowance is the launcher's own deadlines and then some: a launch that fails says why
+    // itself, before this budget kills the run.
+    + allowing "Chromium" 90_000
     // The self-hosting run substitutes a devshell closure and then runs this whole suite
     // again inside the container: ~11 minutes measured warm on the machine it was built
     // for, and cold CI is bounded by substitution rather than compute. An hour is the
