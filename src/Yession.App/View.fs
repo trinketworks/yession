@@ -3477,13 +3477,15 @@ module View =
             match rows, items, model.HistoryRead with
             // Nothing here, and this client has not looked yet — which after the local store
             // (Plan 20) is the ordinary cold open. The idle caret would say "nothing was ever
-            // said here", so it says the opposite of what is known. A pulse says the true
-            // thing: someone is reading. `role="status"` because it is a state, not a mark —
-            // a reader that cannot see the pulse is told in words.
+            // said here", so it says the opposite of what is known. But this is not the agent
+            // writing, so it does not wear the agent's blue caret either (docs/visual-design.md,
+            // Colour: blue is never a status) — it is `statusWait` with a beating dot, the same
+            // vocabulary "queued" and "catching up" already wear elsewhere. `role="status"`
+            // because it is a state, and the text is visible rather than only `srOnly`: a dot
+            // alone reaches nobody who cannot see it beat.
             | [], [], false ->
                 [ html $"""<div class="{Style.timelineIdle}" role="status" data-history-loading>
-                       <span class="{Style.caretWorking}"></span>
-                       <span class="{Style.srOnly}">{Dom.Text.readingHistory}</span>
+                       <span class="{Style.statusWait}"><span class="{Style.statusDotBeat}"></span>{Dom.Text.readingHistory}</span>
                      </div>""" ]
             // Looked, and there is genuinely nothing: the caret now only ever means what it
             // has always said, which is why it can stay wordless and decorative. Unless what
