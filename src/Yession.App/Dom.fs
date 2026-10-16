@@ -831,8 +831,10 @@ module Dom =
         let composerPlaceholder = "write a message"
         /// What a screen reader hears while an @ is hinted: the whole name, and the key.
         let addressHintSpoken (name: string) = sprintf "%s, Tab to complete" name
-        /// What the timeline's pulse means, for a reader who cannot see it pulse (Plan 20).
-        let readingHistory = "Reading this session's history"
+        /// The cold-open wait (Plan 20): what is coming, not just that something is. Same
+        /// direction "catching up" already gives the network wait (`catchingUp` below) — this
+        /// one is the local store instead, so it says which.
+        let readingHistory = "Catching up on this session's history"
         /// The floating "jump to latest" control's accessible name, since it carries only a down
         /// chevron (`Icon.down`), so this is the whole of what a screen reader says it does.
         let jumpToLatest = "Jump to latest message"
