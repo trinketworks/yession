@@ -485,9 +485,6 @@ module Dom =
         /// the pivot itself: a preview is a layer OF the terminal it is laid over (F3), whose
         /// own tab stays the selected item, not a sibling tab beside it.
         let panePreviewName = "data-pane-preview-name"
-        /// Where a previewed command lives, in the same line, carrying its terminal's id —
-        /// present only when the strip's selected tab is not that terminal.
-        let panePreviewWhere = "data-pane-preview-where"
         /// The preview's close, in the same line, after its name.
         let panePreviewClose = "data-pane-preview-close"
         /// A tab's × on its pivot item, carrying its id: it puts the tab away
@@ -725,8 +722,7 @@ module Dom =
         let inYourDraft = "in your message"
         let inDraftOf (name: string) : string = "in " + name + "'s message"
         let editingQueued = "in the queue"
-        /// In a terminal, named when the terminal is known to this client — and where a
-        /// previewed command lives, beside its name.
+        /// In a terminal, named when the terminal is known to this client.
         let inTerminal (title: string) : string = "in " + title
         let atSomeTerminal = "at a terminal"
         /// Writing a chapter's name, named when this client knows the chapter.

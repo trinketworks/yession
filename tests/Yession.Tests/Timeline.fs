@@ -3517,25 +3517,9 @@ let private tabTests =
                 |> List.ofSeq
             Expect.equal selectedTabs [ "terminal:term-a" ] "the terminal under the preview, and only it"
 
-        // Replaces "a preview's way back is the terminal it is laid over". The way back was
-        // the selected tab's press again, landing where the preview's close lands, so it
-        // went; the tab is the way back. What the line still owes a reader is the terminal's
-        // name when no tab gives it: a command of a terminal put away is laid over another.
-        testCase "a preview of a put-away terminal's command says which terminal it is in" <| fun () ->
-            let model =
-                heardOf
-                    [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (started terminalA "1" byAda "ls" 1)
-                      at 3L 2.0 (opened terminalB "logs") ]
-                |> Support.step (ShowInPaneMsg (Reading terminalB))
-                |> thenFolded [ at 4L 3.0 (closedNow terminalA) ]
-                |> Support.step (DismissTabMsg terminalA)
-                |> Support.step (chip terminalA "1")
-            Expect.stringContains
-                (Support.render model)
-                (Dom.attr Dom.Hooks.panePreviewWhere (TerminalId.value terminalA))
-                "in term-a, under term-b's tab"
-
-        testCase "a chip of a closed terminal that was put away does not bring its tab back" <| fun () ->
+        // A preview is always within a tab: the command's own terminal's, even one the reader
+        // put away — never laid over another terminal's tab that would name the wrong thing.
+        testCase "a chip of a closed terminal that was put away brings its tab back, in its place" <| fun () ->
             let model =
                 heardOf
                     [ at 1L 0.0 (opened terminalA "build"); at 2L 1.0 (started terminalA "1" byAda "ls" 1)
@@ -3546,8 +3530,8 @@ let private tabTests =
                 |> Support.step (chip terminalA "1")
             Expect.equal
                 (stripKeys model, model.Pane)
-                ([ "terminal:term-b" ], Some (Previewing (Preview.ofSubject (PreviewSubject.Block (terminalA, block "1")), Some (Reading terminalB))))
-                "a glance, laid over the terminal I was on"
+                ([ "terminal:term-a"; "terminal:term-b" ], Some (Previewing (Preview.ofSubject (PreviewSubject.Block (terminalA, block "1")), Some (Reading terminalA))))
+                "laid over its own terminal's tab, back where it opened"
 
         testCase "a terminal put away and opened again from the list comes back in its place" <| fun () ->
             let model =
